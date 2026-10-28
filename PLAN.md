@@ -10,7 +10,7 @@ In: accounts and providers, multi-repo sidebar with fetch/pull all, branch manag
 remote), smart checkout, side-by-side and unified diff, file browsing (tree, viewer, quick open,
 find in files, browse at any ref), the keymap in [docs/KEYMAP.md](docs/KEYMAP.md), open in Zed.
 
-Out (milestone 2 or later): commit, staging, push UI, commit graph, blame, MR/PR view, merge tool,
+Out (milestone 2 or later; further ideas in [docs/BACKLOG.md](docs/BACKLOG.md)): commit, staging, push UI, commit graph, blame, MR/PR view, merge tool,
 GitHub OAuth, file-system watcher, notarization. M2 keymap rows bind nothing.
 
 ## Stack
