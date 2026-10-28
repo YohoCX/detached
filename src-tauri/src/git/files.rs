@@ -9,7 +9,7 @@ use ignore::WalkBuilder;
 
 use crate::env::{self, Env};
 use crate::error::{Error, Result};
-use crate::git::diff::check_rev;
+use crate::git::arg;
 use crate::git::runner::{Kind, out};
 use crate::git::status;
 use crate::types::{FileChange, FileEntry};
@@ -32,7 +32,7 @@ pub fn paths(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<String>> {
         Some(rev) => out(
             env,
             repo,
-            &["ls-tree", "-r", "-z", "--name-only", check_rev(rev)?],
+            &["ls-tree", "-r", "-z", "--name-only", arg(rev)?],
             Kind::Read,
         )?
         .split('\0')

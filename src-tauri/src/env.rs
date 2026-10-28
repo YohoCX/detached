@@ -1,7 +1,11 @@
+use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use crate::git::runner::Kind;
 use crate::types::EnvInfo;
 
 const MARK: &str = "__WB__";
@@ -25,11 +29,8 @@ impl Env {
     }
 
     pub fn info(&self) -> EnvInfo {
-        let version = Command::new(&self.git)
-            .arg("--version")
-            .env("PATH", &self.path)
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        let version = crate::git::runner::out(self, Path::new("/"), &["--version"], Kind::Read)
+            .map(|v| v.trim().to_string())
             .unwrap_or_default();
         EnvInfo {
             git_path: self.git.display().to_string(),
@@ -45,6 +46,7 @@ fn fallback_path() -> String {
 }
 
 /// Interactive login shell, so `.zshrc` additions (nvm, fnm) count; rc files may print, hence markers.
+/// Stops at the closing marker: a job the rc files disowned can hold the pipe open forever.
 fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
     let mut child = Command::new(shell)
         .args([
@@ -57,18 +59,39 @@ fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while child.try_wait().ok()?.is_none() {
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            return None;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0; 4096];
+        while let Ok(n @ 1..) = stdout.read(&mut buf) {
+            if tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
         }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let out = child.wait_with_output().ok()?;
-    parse_marked(&String::from_utf8_lossy(&out.stdout))
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut out = Vec::new();
+    let path = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(b) => {
+                out.extend(b);
+                if let Some(p) = parse_marked(&String::from_utf8_lossy(&out)) {
+                    break Some(p);
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break None,
+            Err(RecvTimeoutError::Timeout) => {
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                break None;
+            }
+        }
+    };
+    std::thread::spawn(move || child.wait());
+    path
 }
 
 fn parse_marked(out: &str) -> Option<String> {
@@ -103,5 +126,19 @@ mod tests {
         let zdotdir = dir.path().to_str().unwrap();
         let path = login_path("/bin/zsh", &[("ZDOTDIR", zdotdir)]).unwrap();
         assert!(path.split(':').any(|p| p == "/wb-test-bin"), "{path}");
+    }
+
+    #[test]
+    fn a_disowned_rc_job_holding_stdout_does_not_block() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".zshrc"), "sleep 30 &!\n").unwrap();
+        let start = Instant::now();
+        let zdotdir = dir.path().to_str().unwrap();
+        assert!(login_path("/bin/zsh", &[("ZDOTDIR", zdotdir)]).is_some());
+        assert!(
+            start.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

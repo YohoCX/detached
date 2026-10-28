@@ -11,7 +11,7 @@ use ignore::overrides::OverrideBuilder;
 
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::git::diff::check_rev;
+use crate::git::arg;
 use crate::git::files::walker;
 use crate::git::runner::{Kind, Opts, run};
 use crate::state::Cancel;
@@ -177,12 +177,13 @@ fn at_rev(env: &Env, find: &Find, repo: &str, rev: &str, q: &FindQuery) -> Resul
         [
             (!q.case_sensitive, "-i"),
             (q.whole_word, "-w"),
-            (true, if q.regex { "-E" } else { "-F" }),
+            // PCRE, close to the Rust regex syntax the working-tree search uses.
+            (true, if q.regex { "-P" } else { "-F" }),
         ]
         .into_iter()
         .filter_map(|(on, flag)| on.then_some(flag)),
     );
-    args.extend(["-e", &q.text, check_rev(rev)?, "--"]);
+    args.extend(["-e", &q.text, arg(rev)?, "--"]);
     let specs: Vec<String> = globs(q.glob.as_deref())
         .map(|g| {
             g.strip_prefix('!')
@@ -190,22 +191,12 @@ fn at_rev(env: &Env, find: &Find, repo: &str, rev: &str, q: &FindQuery) -> Resul
         })
         .collect();
     args.extend(specs.iter().map(String::as_str));
-    // Network is the only kind the runner lets the user cancel; grep never writes stderr, hence no silence limit.
-    let opts = Opts {
-        cancel: Some(find.cancel),
-        silence: Some(std::time::Duration::MAX),
-        ..Default::default()
-    };
-    let o = run(env, Path::new(repo), &args, Kind::Network, opts)?;
-    if o.code > 1 {
-        return o.ok().map(drop);
-    }
     let prefix = format!("{rev}:");
     // `<rev>:<path>\0<line>\0<text>`
-    for l in o.stdout.split(|&b| b == b'\n') {
+    let on_line = |l: &[u8]| {
         let mut f = l.splitn(3, |&b| b == 0);
         let (Some(name), Some(line), Some(text)) = (f.next(), f.next(), f.next()) else {
-            continue;
+            return true;
         };
         let name = String::from_utf8_lossy(name);
         let path = name.strip_prefix(&prefix).unwrap_or(&name);
@@ -213,9 +204,16 @@ fn at_rev(env: &Env, find: &Find, repo: &str, rev: &str, q: &FindQuery) -> Resul
             .ok()
             .and_then(|n| n.parse().ok())
             .unwrap_or(0);
-        if !find.hit(repo, path, line, text) {
-            break;
-        }
+        find.hit(repo, path, line, text)
+    };
+    let opts = Opts {
+        cancel: Some(find.cancel),
+        lines: Some(&on_line),
+        ..Default::default()
+    };
+    let o = run(env, Path::new(repo), &args, Kind::Read, opts)?;
+    if o.code > 1 {
+        return o.ok().map(drop);
     }
     Ok(())
 }
@@ -445,5 +443,20 @@ mod tests {
         );
         let n = events.into_inner().unwrap();
         assert!(n < 50, "{n} events after cancel");
+    }
+
+    #[test]
+    fn regex_means_the_same_in_the_tree_and_at_a_rev() {
+        let r = repo(&[("a.txt", "v12 Plan\nnothing\nPLAN v3\n")]);
+        r.sb.git(Path::new(&r.path), &["add", "."]);
+        r.sb.git(Path::new(&r.path), &["commit", "-qm", "a"]);
+        let q = FindQuery {
+            regex: true,
+            case_sensitive: true,
+            ..query(r"(?i)plan\b|v\d+")
+        };
+        let tree = hits(&r, None, &q);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(hits(&r, Some("HEAD"), &q), tree);
     }
 }

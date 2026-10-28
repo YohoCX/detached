@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use super::*;
 use crate::accounts::store::MemoryStore;
 use crate::env::{Env, which};
-use crate::git::runner::Opts;
+use crate::git::runner::{self, Kind, Opts};
 use crate::settings::Settings;
 use crate::types::Provider;
 
@@ -369,9 +369,11 @@ fn repo_accounts_groups_remotes_by_host() {
         ("ssh", "git@github.com:x/y.git"),
         ("fork", "https://me@github.com/me/y.git"),
         ("lab", "https://gitlab.com/x/y.git"),
+        ("short", "gh:x/z.git"),
     ] {
         git(&["remote", "add", name, url]);
     }
+    git(&["config", "url.https://github.com/.insteadOf", "gh:"]);
     let host = |host: &str, remotes: &[&str], account_id: Option<&str>, ambiguous| HostAccount {
         host: host.into(),
         remotes: remotes.iter().map(|r| r.to_string()).collect(),
@@ -381,7 +383,7 @@ fn repo_accounts_groups_remotes_by_host() {
     assert_eq!(
         repo_accounts(&state, repo.path()).unwrap(),
         [
-            host("github.com", &["origin", "fork"], Some("a"), false),
+            host("github.com", &["fork", "origin", "short"], Some("a"), false),
             host("gitlab.com", &["lab"], None, true)
         ]
     );

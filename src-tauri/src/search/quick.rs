@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -13,52 +12,23 @@ use crate::error::Result;
 use crate::git::files;
 use crate::types::FileMatch;
 
-/// Older lists are still served, and rebuilt in the background for the next query.
-const FRESH: Duration = Duration::from_secs(10);
-
 type Key = (String, Option<String>);
 
-struct List {
-    paths: Arc<Vec<String>>,
-    built: Instant,
-    rebuilding: bool,
-}
-
-static CACHE: LazyLock<Mutex<HashMap<Key, List>>> = LazyLock::new(Default::default);
-
-fn store(key: Key, paths: Arc<Vec<String>>) {
-    let list = List {
-        paths,
-        built: Instant::now(),
-        rebuilding: false,
-    };
-    CACHE.lock().unwrap().insert(key, list);
-}
-
-fn build(env: &Env, key: &Key) -> Result<Arc<Vec<String>>> {
-    Ok(Arc::new(files::paths(
-        env,
-        Path::new(&key.0),
-        key.1.as_deref(),
-    )?))
-}
+/// Cleared per repo by `invalidate` on every status refresh (after each operation and on focus).
+static CACHE: LazyLock<Mutex<HashMap<Key, Arc<Vec<String>>>>> = LazyLock::new(Default::default);
 
 pub fn paths(env: &Env, repo: &str, rev: Option<&str>) -> Result<Arc<Vec<String>>> {
     let key = (repo.to_string(), rev.map(String::from));
-    if let Some(list) = CACHE.lock().unwrap().get_mut(&key) {
-        if list.built.elapsed() > FRESH && !list.rebuilding {
-            list.rebuilding = true;
-            let (env, key) = (env.clone(), key.clone());
-            std::thread::spawn(move || match build(&env, &key) {
-                Ok(p) => store(key, p),
-                Err(_) => drop(CACHE.lock().unwrap().remove(&key)),
-            });
-        }
-        return Ok(list.paths.clone());
+    if let Some(p) = CACHE.lock().unwrap().get(&key) {
+        return Ok(p.clone());
     }
-    let p = build(env, &key)?;
-    store(key, p.clone());
+    let p = Arc::new(files::paths(env, Path::new(repo), rev)?);
+    CACHE.lock().unwrap().insert(key, p.clone());
     Ok(p)
+}
+
+pub fn invalidate(repo: &str) {
+    CACHE.lock().unwrap().retain(|(r, _), _| r != repo);
 }
 
 /// The best `limit` matches across `lists` of `(repo, paths)`; ties go to the shorter path.
@@ -104,6 +74,7 @@ pub fn rank(lists: &[(&str, Arc<Vec<String>>)], query: &str, limit: usize) -> Ve
 mod tests {
     use super::*;
     use crate::git::testutil::Sandbox;
+    use std::time::{Duration, Instant};
 
     fn list(paths: &[&str]) -> Arc<Vec<String>> {
         Arc::new(paths.iter().map(|p| p.to_string()).collect())
@@ -162,11 +133,14 @@ mod tests {
         );
         assert_eq!(*paths(&env, repo, Some("HEAD~1")).unwrap(), ["f"]);
         std::fs::write(work.join("later.txt"), "").unwrap();
-        assert!(
-            !paths(&env, repo, None)
+        let has_later = || {
+            paths(&env, repo, None)
                 .unwrap()
                 .contains(&"later.txt".to_string())
-        );
+        };
+        assert!(!has_later());
+        invalidate(repo);
+        assert!(has_later());
     }
 
     #[test]

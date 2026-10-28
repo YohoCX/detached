@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
-use crate::git::runner::{self, Cred, Kind};
+use crate::git::runner::Cred;
 use crate::providers;
 use crate::state::AppState;
 use crate::types::{Account, AccountInput, HostAccount, VerifyResult};
@@ -113,33 +113,21 @@ pub fn verify(state: &AppState, id: &str) -> Result<VerifyResult> {
 
 /// Remote names grouped by https host, with the account each host resolves to.
 pub fn repo_accounts(state: &AppState, repo: &Path) -> Result<Vec<HostAccount>> {
-    let args = ["config", "--get-regexp", r"^remote\..*\.url$"];
-    let out = runner::run(&state.env(), repo, &args, Kind::Read, Default::default())?;
-    // Exit 1: no remotes.
-    let text = if out.code == 1 {
-        String::new()
-    } else {
-        out.ok()?.text()
-    };
-    let remotes: Vec<(&str, &str)> = text
-        .lines()
-        .filter_map(|l| {
-            let (key, url) = l.split_once(' ')?;
-            Some((key.strip_prefix("remote.")?.strip_suffix(".url")?, url))
-        })
-        .collect();
+    // Same URLs as `credentials` gets: `insteadOf` applied, push URLs included.
+    let remotes = crate::git::remotes::remotes(&state.env(), repo)?;
     let accounts = load(&state.config_dir)?;
     let over = repo_override(state, repo);
     let mut hosts: Vec<HostAccount> = vec![];
-    for (name, url) in remotes {
+    for (name, url) in &remotes {
         let Some((host, account, ambiguous)) = resolve(&accounts, over.as_deref(), url) else {
             continue;
         };
         match hosts.iter_mut().find(|h| h.host == host) {
-            Some(h) => h.remotes.push(name.into()),
+            Some(h) if h.remotes.contains(name) => {}
+            Some(h) => h.remotes.push(name.clone()),
             None => hosts.push(HostAccount {
                 host,
-                remotes: vec![name.into()],
+                remotes: vec![name.clone()],
                 account_id: account.map(|a| a.id.clone()),
                 ambiguous,
             }),

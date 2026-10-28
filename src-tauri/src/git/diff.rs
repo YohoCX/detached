@@ -4,22 +4,14 @@ use std::fs;
 use std::path::Path;
 
 use crate::env::Env;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::git::remotes::lfs_cred;
 use crate::git::runner::{Kind, Opts, out, run};
-use crate::git::status;
+use crate::git::{arg, status};
 use crate::state::AppState;
 use crate::types::{Content, FileChange, FileDiff, Side};
 
 const MAX_SIZE: u64 = 5 * 1024 * 1024;
-
-/// A leading `-` would make a rev an option (`git diff --output=…`).
-pub fn check_rev(rev: &str) -> Result<&str> {
-    if rev.is_empty() || rev.starts_with('-') {
-        return Err(Error::Other(format!("invalid revision: {rev:?}")));
-    }
-    Ok(rev)
-}
 
 fn tree(side: &Side) -> Option<&str> {
     match side {
@@ -50,19 +42,19 @@ pub fn list_changes(env: &Env, repo: &Path, from: &Side, to: &Side) -> Result<Ve
     }
     let mut args = vec!["diff", "--name-status", "-z", "-M"];
     match (tree(from), tree(to)) {
-        (Some(a), Some(b)) => args.extend([check_rev(a)?, check_rev(b)?]),
+        (Some(a), Some(b)) => args.extend([arg(a)?, arg(b)?]),
         (Some(a), None) => {
             if *to == Index {
                 args.push("--cached");
             }
-            args.push(check_rev(a)?);
+            args.push(arg(a)?);
         }
         (None, Some(b)) => {
             args.push("-R");
             if *from == Index {
                 args.push("--cached");
             }
-            args.push(check_rev(b)?);
+            args.push(arg(b)?);
         }
         (None, None) => args.push("-R"),
     }
@@ -134,7 +126,7 @@ pub fn content(state: &AppState, repo: &Path, side: &Side, path: &str) -> Result
             _ => Ok(Content::Missing),
         };
     }
-    let rev = check_rev(tree(side).unwrap_or_default())?;
+    let rev = arg(tree(side).unwrap_or_default())?;
     let o = run(
         &env,
         repo,

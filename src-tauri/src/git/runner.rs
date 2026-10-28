@@ -20,7 +20,7 @@ const TICK: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// 30 s limit, `GIT_OPTIONAL_LOCKS=0`.
+    /// 30 s limit, `GIT_OPTIONAL_LOCKS=0`, cancellable.
     Read,
     /// `--progress`, cancelled after 120 s of stderr silence or on cancel.
     Network,
@@ -43,7 +43,11 @@ pub struct Opts<'a> {
     pub progress: Option<&'a (dyn Fn(&str) + Sync)>,
     /// Stderr silence that cancels a network call; 120 s when None.
     pub silence: Option<Duration>,
+    /// Gets each stdout line as it arrives instead of collecting stdout; `false` stops git.
+    pub lines: Option<LineFn<'a>>,
 }
+
+pub type LineFn<'a> = &'a (dyn Fn(&[u8]) -> bool + Sync);
 
 #[derive(Debug)]
 pub struct Output {
@@ -103,12 +107,25 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
     drain(child.stderr.take().unwrap(), tx, Chunk::Err);
 
     let (mut stdout, mut stderr, mut line) = (Vec::new(), Vec::new(), Vec::new());
+    let mut stopped = false;
     let start = Instant::now();
     let mut heard = start;
     let mut exit: Option<(i32, Instant)> = None;
     loop {
         match rx.recv_timeout(TICK) {
-            Ok(Chunk::Out(b)) => stdout.extend(b),
+            Ok(Chunk::Out(b)) => {
+                stdout.extend(b);
+                if let Some(f) = opts.lines.filter(|_| !stopped) {
+                    while let Some(i) = stdout.iter().position(|&c| c == b'\n') {
+                        let l: Vec<u8> = stdout.drain(..=i).collect();
+                        if !f(&l[..i]) {
+                            stopped = true;
+                            unsafe { libc::killpg(group, libc::SIGKILL) };
+                            break;
+                        }
+                    }
+                }
+            }
             Ok(Chunk::Err(b)) => {
                 heard = Instant::now();
                 if let Some(p) = opts.progress {
@@ -142,6 +159,11 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
         let cancelled = opts.cancel.is_some_and(|c| c.load(Ordering::SeqCst));
         let silence = opts.silence.unwrap_or(SILENCE);
         match kind {
+            Kind::Read if cancelled => {
+                unsafe { libc::killpg(group, libc::SIGKILL) };
+                let _ = child.wait();
+                return Err(Error::Cancelled);
+            }
             Kind::Read if start.elapsed() > READ_LIMIT => {
                 unsafe { libc::killpg(group, libc::SIGKILL) };
                 let _ = child.wait();
@@ -164,6 +186,16 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
             }
             _ => {}
         }
+    }
+    if stopped {
+        return Ok(Output {
+            code: 0,
+            stdout: vec![],
+            stderr: String::new(),
+        });
+    }
+    if let (Some(f), false) = (opts.lines, stdout.is_empty()) {
+        f(&std::mem::take(&mut stdout));
     }
     Ok(Output {
         code: exit.map_or(-1, |(c, _)| c),

@@ -4,9 +4,9 @@ use std::path::Path;
 
 use crate::env::Env;
 use crate::error::Result;
-use crate::git::locked;
 use crate::git::remotes::lfs_cred;
 use crate::git::runner::{Kind, Opts, Output, out, run};
+use crate::git::{arg, locked};
 use crate::state::AppState;
 use crate::types::{CheckoutResult, CheckoutTarget};
 
@@ -19,8 +19,10 @@ pub fn checkout(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Resul
 fn smart(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Result<CheckoutResult> {
     let env = state.env();
     let (name, to, track) = match target {
-        CheckoutTarget::Local { name } => (name, name.clone(), false),
-        CheckoutTarget::Remote { remote, name } => (name, format!("{remote}/{name}"), true),
+        CheckoutTarget::Local { name } => (arg(name)?, name.clone(), false),
+        CheckoutTarget::Remote { remote, name } => {
+            (arg(name)?, format!("{}/{name}", arg(remote)?), true)
+        }
     };
     let args = if track {
         vec!["switch", "--track", &to]

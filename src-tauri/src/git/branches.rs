@@ -2,10 +2,10 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::git::checkout::checkout;
-use crate::git::locked;
 use crate::git::remotes::network;
 use crate::git::runner::{Kind, Opts, out, run};
 use crate::git::status::{commits, parse_commit};
+use crate::git::{arg, locked};
 use crate::state::{AppState, Cancel};
 use crate::types::*;
 
@@ -68,6 +68,12 @@ pub fn list(state: &AppState, repo: &Path) -> Result<Branches> {
 }
 
 pub fn create(state: &AppState, repo: &Path, name: &str, start: &str, switch: bool) -> Result<()> {
+    let env = state.env();
+    let valid = ["check-ref-format", "--branch", arg(name)?];
+    if run(&env, repo, &valid, Kind::Read, Opts::default())?.code != 0 {
+        return Err(Error::Other(format!("{name:?} is not a valid branch name")));
+    }
+    arg(start)?;
     locked(state, repo, || {
         out(&state.env(), repo, &["branch", name, start], Kind::Write)
     })?;
@@ -93,7 +99,11 @@ pub fn set_upstream(
     branch: &str,
     upstream: Option<&str>,
 ) -> Result<()> {
-    let set = upstream.map(|u| format!("--set-upstream-to={u}"));
+    arg(branch)?;
+    let set = upstream
+        .map(arg)
+        .transpose()?
+        .map(|u| format!("--set-upstream-to={u}"));
     let flag = set.as_deref().unwrap_or("--unset-upstream");
     locked(state, repo, || {
         out(&state.env(), repo, &["branch", flag, branch], Kind::Write)
@@ -102,6 +112,7 @@ pub fn set_upstream(
 }
 
 pub fn delete(state: &AppState, repo: &Path, name: &str, force: bool) -> Result<DeleteResult> {
+    arg(name)?;
     let env = state.env();
     locked(state, repo, || {
         let flag = if force { "-D" } else { "-d" };
@@ -137,7 +148,7 @@ pub fn delete_remote(
     cancel: &Cancel,
     progress: &(dyn Fn(&str) + Sync),
 ) -> Result<()> {
-    let args = ["push", remote, "--delete", name];
+    let args = ["push", arg(remote)?, "--delete", arg(name)?];
     locked(state, repo, || {
         network(state, repo, &args, Some(remote), cancel, progress)
     })?;
@@ -322,6 +333,22 @@ mod tests {
         assert_eq!(
             names(&list(&sb.state, &work).unwrap()).1,
             ["origin/main", "origin/two"]
+        );
+    }
+
+    #[test]
+    fn names_that_git_would_read_as_options_are_rejected() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        sb.git(&work, &["branch", "feature"]);
+        assert!(create(&sb.state, &work, "-D", "feature", false).is_err());
+        assert!(create(&sb.state, &work, "a..b", "main", false).is_err());
+        assert!(delete(&sb.state, &work, "-f", false).is_err());
+        assert!(set_upstream(&sb.state, &work, "feature", Some("--unset-upstream")).is_err());
+        assert!(
+            names(&list(&sb.state, &work).unwrap())
+                .0
+                .contains(&"feature".to_string())
         );
     }
 }

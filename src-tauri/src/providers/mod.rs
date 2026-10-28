@@ -16,6 +16,8 @@ pub fn verify(provider: &Provider, base_url: &str, token: &str) -> VerifyResult 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .http_status_as_error(false)
+        // A redirect would carry PRIVATE-TOKEN to whatever host it names.
+        .max_redirects(0)
         .build()
         .into();
     let req = agent.get(format!("{}/user", api_base(provider, base_url)));
@@ -129,6 +131,23 @@ mod tests {
         let req = req.join().unwrap().to_ascii_lowercase();
         assert!(req.starts_with("get /api/v3/user "), "{req}");
         assert!(req.contains("authorization: bearer ghp_x"), "{req}");
+    }
+
+    #[test]
+    fn redirects_are_not_followed() {
+        let (base, req) = serve("302 Found\r\nLocation: http://127.0.0.1:9/elsewhere", "{}");
+        let r = verify(&Provider::GitlabSelfHosted, &base, "glpat-x");
+        assert!(
+            matches!(
+                r,
+                VerifyResult::Failed {
+                    status: Some(302),
+                    ..
+                }
+            ),
+            "{r:?}"
+        );
+        req.join().unwrap();
     }
 
     #[test]

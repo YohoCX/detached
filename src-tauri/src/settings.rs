@@ -23,11 +23,17 @@ pub struct Settings {
 const FILE: &str = "settings.json";
 
 impl Settings {
+    /// A file that doesn't parse is moved to `settings.json.bad`, so the next save can't destroy it.
     pub fn load(dir: &Path) -> Settings {
-        std::fs::read(dir.join(FILE))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        let path = dir.join(FILE);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Settings::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            eprintln!("settings.json is invalid ({e}); moved to settings.json.bad");
+            let _ = std::fs::rename(&path, dir.join(format!("{FILE}.bad")));
+            Settings::default()
+        })
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
@@ -144,5 +150,16 @@ mod tests {
         assert_eq!(Settings::load(dir.path()), s);
         std::fs::write(dir.path().join(FILE), r#"{"folders":["/b"]}"#).unwrap();
         assert_eq!(Settings::load(dir.path()).folders, vec!["/b".to_string()]);
+    }
+
+    #[test]
+    fn invalid_file_is_kept_aside_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = r#"{"folders":["/keep"],"gitPath":5}"#;
+        std::fs::write(dir.path().join(FILE), bad).unwrap();
+        assert_eq!(Settings::load(dir.path()), Settings::default());
+        Settings::default().save(dir.path()).unwrap();
+        let kept = std::fs::read_to_string(dir.path().join(format!("{FILE}.bad"))).unwrap();
+        assert_eq!(kept, bad);
     }
 }

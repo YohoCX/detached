@@ -86,7 +86,11 @@ pub struct Branches {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum CheckoutTarget {
     Local {
         name: String,
@@ -99,13 +103,17 @@ pub enum CheckoutTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum CheckoutResult {
     /// Plain switch; local changes, if any, carried by git.
     Switched { warning: Option<String> },
     /// Stashed, switched, re-applied cleanly.
     Carried { warning: Option<String> },
-    /// Switched but the stash did not apply; it is kept.
+    /// The stash did not apply and is kept; `on_original_branch` says whether the switch happened.
     StashKept {
         stash: String,
         stash_message: String,
@@ -118,7 +126,11 @@ pub enum CheckoutResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum DeleteResult {
     Deleted,
     /// `-d` refused; these commits would be lost with `force`.
@@ -128,7 +140,11 @@ pub enum DeleteResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum PullResult {
     UpToDate,
     FastForwarded { from: String, to: String },
@@ -170,7 +186,11 @@ pub struct AccountInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum VerifyResult {
     Ok { user: String },
     Failed { status: Option<u16>, error: String },
@@ -187,7 +207,11 @@ pub struct HostAccount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Side {
     Head,
     Index,
@@ -196,7 +220,11 @@ pub enum Side {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Content {
     Text { text: String },
     Binary,
@@ -242,7 +270,11 @@ pub struct FindQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum FindEvent {
     Match {
         query_id: u64,
@@ -269,4 +301,44 @@ pub struct EnvInfo {
     pub git_path: String,
     pub git_version: String,
     pub path: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, to_value};
+
+    // Pins the field names src/lib/api.ts reads.
+    #[test]
+    fn variant_fields_are_camel_case_on_the_wire() {
+        let e = FindEvent::Done {
+            query_id: 7,
+            truncated: true,
+        };
+        assert_eq!(
+            to_value(e).unwrap(),
+            json!({"kind": "done", "queryId": 7, "truncated": true})
+        );
+        let r = CheckoutResult::StashKept {
+            stash: "abc".into(),
+            stash_message: "m".into(),
+            conflicts: vec![],
+            on_original_branch: true,
+            error: "e".into(),
+        };
+        assert_eq!(
+            to_value(r).unwrap(),
+            json!({"kind": "stashKept", "stash": "abc", "stashMessage": "m", "conflicts": [],
+                   "onOriginalBranch": true, "error": "e"})
+        );
+        let t: CheckoutTarget =
+            serde_json::from_value(json!({"kind": "remote", "remote": "o", "name": "b"})).unwrap();
+        assert_eq!(
+            t,
+            CheckoutTarget::Remote {
+                remote: "o".into(),
+                name: "b".into()
+            }
+        );
+    }
 }

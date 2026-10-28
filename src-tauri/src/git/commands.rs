@@ -27,6 +27,7 @@ fn op<T>(
 
 #[tauri::command(async)]
 pub fn repo_status(state: State<'_, AppState>, repo: String) -> Result<RepoStatus> {
+    crate::search::quick::invalidate(&repo);
     status::status(&state.env(), Path::new(&repo))
 }
 
