@@ -60,9 +60,13 @@ git binary. The resolved git path and version show in Settings.
 
 **Git runner.** One function runs `git -C <repo>` with that PATH, `GIT_TERMINAL_PROMPT=0`,
 `GIT_OPTIONAL_LOCKS=0` for reads and `LC_ALL=C` so stderr can be matched. Each child starts in its
-own process group, so a kill reaches remote helpers and LFS filters too. Every call for a repo gets
-that repo's credential arguments (see Accounts), since LFS downloads during switch, merge and
-`cat-file --filters`, not only during fetch. The runner returns exit code, stdout and stderr.
+own process group, so a kill reaches remote helpers and LFS filters too. The runner returns exit
+code, stdout and stderr as soon as git exits, after at most 1 s more of reading: a hook's background
+job can inherit the pipes and keep them open forever. Credential arguments (see Accounts) go to
+network calls, and to switch, merge and `cat-file --filters` only in repos that use LFS
+(`filter=lfs` in `.gitattributes`), where those calls download objects. Hooks inherit git's
+environment, so this keeps the token out of post-checkout and post-merge hooks in every other repo;
+in an LFS repo they can see it.
 Limits:
 - reads (status, for-each-ref, cat-file, ls-tree): 30 s, then SIGKILL to the group;
 - network (fetch, `push --delete`): run with `--progress`, so the server reports progress even while
@@ -218,8 +222,9 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
   no token;
 - pull all: one fast-forward repo, one diverged repo, one with a broken remote;
 - runner: cancelling a fetch leaves no git process in its group and no `.lock` file; a fetch whose
-  server stays silent past 120 s is cancelled; a hook that leaves a background job does not hold
-  the repo lock;
+  server stays silent past 120 s is cancelled; a post-checkout hook that starts `sleep 300 &` with
+  stderr inherited neither holds the repo lock nor delays the result past 1 s; a switch in a repo
+  without LFS runs its hook with no `WB_TOKEN_*` in the environment;
 - pull: a diverged branch reports "diverged" even with a post-merge hook installed;
 - environment: PATH from a temp `.zshrc` that prints text and adds a directory;
 - discovery: depth 3, a worktree `.git` file, an excluded repo, a skipped `node_modules`.
