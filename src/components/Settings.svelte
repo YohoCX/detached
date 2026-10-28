@@ -113,6 +113,7 @@
     position: fixed; z-index: 31; top: 8vh; left: 50%; transform: translateX(-50%);
     width: min(720px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
     background: var(--popup); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+    -webkit-user-select: text;
     user-select: text;
   }
   header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }

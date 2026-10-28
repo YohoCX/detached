@@ -63,12 +63,15 @@ body {
   color: var(--fg);
   font: 13px/1.4 var(--font);
   -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
   cursor: default;
 }
 
 button { font: inherit; color: inherit; }
+
+input, textarea { -webkit-user-select: text; user-select: text; }
 
 input {
   font: inherit;

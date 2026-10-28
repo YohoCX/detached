@@ -34,7 +34,7 @@
   .title { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
   .title span { flex: 1; }
   .title .icon-btn { height: 18px; min-width: 18px; }
-  pre { margin: 4px 0 0; font: 12px/1.4 var(--font); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; user-select: text; }
+  pre { margin: 4px 0 0; font: 12px/1.4 var(--font); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; -webkit-user-select: text; user-select: text; }
   ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 200px; overflow-y: auto; }
   li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
   li span { flex: 1; min-width: 0; }

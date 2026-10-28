@@ -182,6 +182,7 @@
     border: 1px solid var(--line);
     border-radius: 4px;
     padding: 4px 6px;
+    -webkit-user-select: text;
     user-select: text;
   }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
