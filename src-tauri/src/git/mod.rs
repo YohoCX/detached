@@ -1,7 +1,9 @@
 pub mod branches;
 pub mod checkout;
 pub mod commands;
+pub mod diff;
 pub mod discovery;
+pub mod files;
 pub mod pull;
 pub mod remotes;
 pub mod runner;

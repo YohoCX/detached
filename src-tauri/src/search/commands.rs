@@ -1,60 +1,58 @@
-// Scaffold: fixture data. Agent D replaces the bodies; signatures are the contract with api.ts.
+// Signatures are the contract with api.ts.
 
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::error::Result;
+use crate::search::{find, quick};
 use crate::state::AppState;
 use crate::types::*;
 
+/// Repos whose list fails (a rev missing there) are skipped, unless every one fails.
 #[tauri::command(async)]
 pub fn quick_open(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repos: Vec<String>,
     rev: Option<String>,
     query: String,
     limit: u32,
 ) -> Result<Vec<FileMatch>> {
-    let _ = (rev, query, limit);
-    Ok(repos
-        .into_iter()
-        .map(|repo| FileMatch {
-            repo,
-            path: "src/App.svelte".into(),
-            score: 100,
-            indices: vec![4, 5, 6],
-        })
-        .collect())
+    let env = state.env();
+    let mut lists = vec![];
+    let mut error = None;
+    for repo in &repos {
+        match quick::paths(&env, repo, rev.as_deref()) {
+            Ok(p) => lists.push((repo.as_str(), p)),
+            Err(e) => error = Some(e),
+        }
+    }
+    match error {
+        Some(e) if lists.is_empty() => Err(e),
+        _ => Ok(quick::rank(&lists, &query, limit as usize)),
+    }
 }
 
 #[tauri::command(async)]
 pub fn find_in_files(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repos: Vec<String>,
     rev: Option<String>,
     query: FindQuery,
     query_id: u64,
     events: Channel<FindEvent>,
 ) -> Result<()> {
-    let _ = rev;
-    for repo in repos {
-        events
-            .send(FindEvent::Match {
-                query_id,
-                repo,
-                path: "src/main.ts".into(),
-                line: 3,
-                text: format!("const x = '{}'", query.text),
-                ranges: vec![(11, 11 + query.text.len() as u32)],
-            })
-            .ok();
-    }
-    events
-        .send(FindEvent::Done {
-            query_id,
-            truncated: false,
-        })
-        .ok();
+    let cancel = state.ops.start(query_id);
+    let emit = |e| drop(events.send(e));
+    find::find(
+        &state.env(),
+        &repos,
+        rev.as_deref(),
+        &query,
+        query_id,
+        &cancel,
+        &emit,
+    );
+    state.ops.finish(query_id);
     Ok(())
 }
 
