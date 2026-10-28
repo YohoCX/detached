@@ -43,6 +43,7 @@ pub fn run() {
             settings::set_repo_account,
             settings::set_git_path,
             settings::env_info,
+            settings::keymap_overrides,
             git::commands::repo_status,
             git::commands::list_branches,
             git::commands::checkout,

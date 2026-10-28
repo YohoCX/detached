@@ -108,6 +108,15 @@ pub fn set_git_path(state: State<'_, AppState>, path: Option<String>) -> Result<
     Ok(info)
 }
 
+/// User overrides from `keymap.json`: action id -> chord, e.g. `"file.goto": "Cmd+Shift+N"`.
+#[tauri::command(async)]
+pub fn keymap_overrides(state: State<'_, AppState>) -> BTreeMap<String, String> {
+    std::fs::read(state.config_dir.join("keymap.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
 #[tauri::command(async)]
 pub fn env_info(state: State<'_, AppState>) -> EnvInfo {
     state.env().info()

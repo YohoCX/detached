@@ -114,6 +114,7 @@ export const api = {
     invoke<Settings>('set_repo_account', { repo, accountId }),
   setGitPath: (path: string | null) => invoke<EnvInfo>('set_git_path', { path }),
   envInfo: () => invoke<EnvInfo>('env_info'),
+  keymapOverrides: () => invoke<Record<string, string>>('keymap_overrides'),
 
   repoStatus: (repo: string) => invoke<RepoStatus>('repo_status', { repo }),
   listBranches: (repo: string) => invoke<Branches>('list_branches', { repo }),
