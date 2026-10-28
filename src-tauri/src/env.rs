@@ -48,20 +48,25 @@ fn fallback_path() -> String {
 /// Interactive login shell, so `.zshrc` additions (nvm, fnm) count; rc files may print, hence markers.
 /// Stops at the closing marker: a job the rc files disowned can hold the pipe open forever.
 fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
-    let mut child = Command::new(shell)
-        .args([
-            "-l",
-            "-i",
-            "-c",
-            &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
-        ])
-        .envs(envs.iter().copied())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .ok()?;
+    let mut cmd = Command::new(shell);
+    cmd.args([
+        "-l",
+        "-i",
+        "-c",
+        &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
+    ])
+    .envs(envs.iter().copied())
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    // A new session, not just a group: `zsh -i` in a background group of the app's tty stops on SIGTTOU.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        })
+    };
+    let mut child = cmd.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
