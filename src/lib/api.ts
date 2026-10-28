@@ -110,6 +110,7 @@ export const api = {
   addFolder: (path: string) => invoke<RepoInfo[]>('add_folder', { path }),
   removeFolder: (path: string) => invoke<RepoInfo[]>('remove_folder', { path }),
   excludeRepo: (path: string) => invoke<RepoInfo[]>('exclude_repo', { path }),
+  includeRepo: (path: string) => invoke<RepoInfo[]>('include_repo', { path }),
   setRepoAccount: (repo: string, accountId: string | null) =>
     invoke<Settings>('set_repo_account', { repo, accountId }),
   setGitPath: (path: string | null) => invoke<EnvInfo>('set_git_path', { path }),

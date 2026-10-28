@@ -22,6 +22,7 @@ chord is kept free, nothing is bound.
 | `diff.show` | Show diff | Cmd+D | M1 |
 | `diff.next` / `diff.prev` | Next / previous change | F7 / Shift+F7 | M1 |
 | `vcs.rollback` | Rollback | Cmd+Alt+Z | M2 |
+| `app.settings` | Settings (accounts, removed repos, git) | Cmd+, | M1 |
 
 Monaco bindings removed or re-pointed so these win: Cmd+K chords, Cmd+D (add selection to next
 match), Cmd+L (expand line selection), Cmd+E, Cmd+[ / Cmd+] (outdent/indent), F7 (accessible diff

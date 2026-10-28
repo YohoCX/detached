@@ -30,6 +30,7 @@ export const app = $state({
   palette: null as PaletteMode | null,
   paletteAll: false,
   branches: null as BranchesView | null,
+  settings: false,
 })
 
 /** RepoStatus, or the error text when status failed. */
@@ -220,6 +221,7 @@ export function registerActions(): () => void {
     register('nav.back', nav.back),
     register('nav.forward', nav.forward),
     register('panel.project', () => (app.tool = app.tool === 'files' ? null : 'files')),
+    register('app.settings', () => (app.settings = true)),
     register('vcs.update', () => syncOne('pull', cur())),
     register('vcs.fetch', () => syncOne('fetch', cur())),
     register('vcs.fetchAll', () => syncRepos('fetch')),

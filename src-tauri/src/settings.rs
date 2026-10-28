@@ -84,6 +84,12 @@ pub fn exclude_repo(state: State<'_, AppState>, path: String) -> Result<Vec<Repo
 }
 
 #[tauri::command(async)]
+pub fn include_repo(state: State<'_, AppState>, path: String) -> Result<Vec<RepoInfo>> {
+    update(&state, |s| s.excluded_repos.retain(|p| *p != path))?;
+    Ok(list_repos(state))
+}
+
+#[tauri::command(async)]
 pub fn set_repo_account(
     state: State<'_, AppState>,
     repo: String,

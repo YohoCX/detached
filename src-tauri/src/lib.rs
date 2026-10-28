@@ -40,6 +40,7 @@ pub fn run() {
             settings::add_folder,
             settings::remove_folder,
             settings::exclude_repo,
+            settings::include_repo,
             settings::set_repo_account,
             settings::set_git_path,
             settings::env_info,

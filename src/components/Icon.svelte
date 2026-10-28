@@ -14,6 +14,7 @@
     chevron: 'M6 4l4 4-4 4',
     down: 'M4 6l4 4 4-4',
     zed: 'M4 4h8L4 12h8',
+    gear: 'M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4',
   }
   let { name, size = 16 }: { name: keyof typeof paths; size?: number } = $props()
 </script>

@@ -5,6 +5,7 @@
   import Icon from './components/Icon.svelte'
   import Notices from './components/Notices.svelte'
   import Palette from './components/Palette.svelte'
+  import Settings from './components/Settings.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import StatusBar from './components/StatusBar.svelte'
   import TopBar from './components/TopBar.svelte'
@@ -36,6 +37,7 @@
       <button class="icon-btn" class:on={app.sidebar} title="Repositories" onclick={() => (app.sidebar = !app.sidebar)}><Icon name="repo" /></button>
       <button class="icon-btn" class:on={app.tool === 'files'} title="Project {chordFor('panel.project')}" onclick={() => tool('files')}><Icon name="tree" /></button>
       <button class="icon-btn" class:on={app.tool === 'changes'} title="Changes" onclick={() => tool('changes')}><Icon name="changes" /></button>
+      <button class="icon-btn settings" title="Settings {chordFor('app.settings')}" onclick={() => (app.settings = true)}><Icon name="gear" /></button>
     </nav>
     {#if app.sidebar}<aside class="repos"><Sidebar /></aside>{/if}
     {#if app.tool}
@@ -49,12 +51,14 @@
 </div>
 <Notices />
 {#if app.palette}<Palette />{/if}
+{#if app.settings}<Settings />{/if}
 
 <style>
   .app { display: flex; flex-direction: column; height: 100%; }
   .body { display: flex; flex: 1; min-height: 0; }
   .strip { display: flex; flex-direction: column; gap: 4px; width: 40px; padding: 6px; flex: none; background: var(--surface); border-right: 1px solid var(--line); }
   .strip .icon-btn { width: 28px; height: 28px; justify-content: center; color: var(--muted); }
+  .strip .settings { margin-top: auto; }
   .strip .on { background: var(--selected); color: var(--fg); }
   aside { flex: none; min-width: 0; border-right: 1px solid var(--line); background: var(--bg); }
   .repos { width: 280px; }

@@ -15,6 +15,7 @@ export const defaults: Record<string, string> = {
   'diff.show': 'Cmd+D',
   'diff.next': 'F7',
   'diff.prev': 'Shift+F7',
+  'app.settings': 'Cmd+,',
 }
 
 /** M2 rows: the chords stay free, nothing is bound. */

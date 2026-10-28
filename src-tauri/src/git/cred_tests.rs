@@ -32,7 +32,10 @@ fn setup(sb: &Sandbox, hook: &str) -> (PathBuf, PathBuf) {
     sb.hook(
         &work,
         hook,
-        &format!("{{ echo ran; env | grep '^WB_'; }} >> '{}'; true", log.display()),
+        &format!(
+            "{{ echo ran; env | grep '^WB_'; }} >> '{}'; true",
+            log.display()
+        ),
     );
     (work, log)
 }

@@ -32,6 +32,7 @@ const defs: Action[] = [
   { id: 'diff.next', title: 'Next Change', group: 'diff' },
   { id: 'diff.prev', title: 'Previous Change', group: 'diff' },
   { id: 'file.openInZed', title: 'Open in Zed', group: 'navigate' },
+  { id: 'app.settings', title: 'Settings…', group: 'view' },
 ]
 
 export const actions = new Map(defs.map((a) => [a.id, a]))

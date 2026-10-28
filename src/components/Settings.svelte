@@ -1,0 +1,126 @@
+<script lang="ts">
+  import { onMount } from 'svelte'
+  import { api, type Account, type EnvInfo, type HostAccount } from '../lib/api'
+  import { app, loadRepos, nameOf, say } from '../lib/app.svelte'
+  import Accounts from './Accounts.svelte'
+  import Icon from './Icon.svelte'
+
+  let accounts = $state<Account[]>([])
+  let hosts = $state<HostAccount[]>([])
+  let excluded = $state<string[]>([])
+  let env = $state<EnvInfo | null>(null)
+  let gitPath = $state('')
+
+  const repo = $derived(app.current)
+  const close = () => (app.settings = false)
+
+  async function attempt(f: () => Promise<unknown>) {
+    try {
+      await f()
+    } catch (e) {
+      say(String(e), true)
+    }
+  }
+
+  async function reload() {
+    const s = await api.getSettings()
+    excluded = s.excludedRepos
+    gitPath = s.gitPath ?? ''
+    accounts = await api.listAccounts()
+    hosts = repo ? await api.repoAccounts(repo) : []
+  }
+
+  onMount(() => {
+    attempt(reload)
+    api.envInfo().then((e) => (env = e))
+  })
+
+  const setAccount = (id: string) =>
+    attempt(async () => {
+      await api.setRepoAccount(repo!, id || null)
+      await reload()
+    })
+
+  const restore = (path: string) =>
+    attempt(async () => {
+      await loadRepos(await api.includeRepo(path))
+      await reload()
+    })
+
+  const saveGitPath = () => attempt(async () => (env = await api.setGitPath(gitPath.trim() || null)))
+</script>
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
+
+<div class="backdrop" onclick={close} role="presentation"></div>
+<div class="dialog" role="dialog" aria-label="Settings">
+  <header>
+    <h2>Settings</h2>
+    <button class="icon-btn" title="Close" onclick={close}><Icon name="close" /></button>
+  </header>
+  <div class="body">
+    <section onfocusin={() => attempt(reload)}>
+      <h3>Accounts</h3>
+      <Accounts />
+    </section>
+
+    {#if repo}
+      <section>
+        <h3>Account for {nameOf(repo)}</h3>
+        {#each hosts as h (h.host)}
+          <label class="row">
+            <span class="mono">{h.host}</span>
+            <span class="muted">{h.remotes.join(', ')}</span>
+            <select value={h.accountId ?? ''} onchange={(e) => setAccount(e.currentTarget.value)}>
+              <option value="">{h.ambiguous ? 'Choose an account' : 'Automatic'}</option>
+              {#each accounts.filter((a) => a.baseUrl.includes(h.host)) as a (a.id)}
+                <option value={a.id}>{a.label || a.username}</option>
+              {/each}
+            </select>
+          </label>
+        {:else}
+          <p class="muted">No https remotes; git uses your own credentials (ssh agent, keychain).</p>
+        {/each}
+      </section>
+    {/if}
+
+    <section>
+      <h3>Removed repositories</h3>
+      {#each excluded as path (path)}
+        <div class="row">
+          <span class="mono ellipsis">{path}</span>
+          <button class="btn" onclick={() => restore(path)}>Restore</button>
+        </div>
+      {:else}
+        <p class="muted">None.</p>
+      {/each}
+    </section>
+
+    <section>
+      <h3>Git</h3>
+      {#if env}<p class="muted mono">{env.gitVersion} · {env.gitPath}</p>{/if}
+      <div class="row">
+        <input placeholder="git binary (empty: from your shell PATH)" bind:value={gitPath} />
+        <button class="btn" onclick={saveGitPath}>Apply</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<style>
+  .backdrop { position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / 0.2); }
+  .dialog {
+    position: fixed; z-index: 31; top: 8vh; left: 50%; transform: translateX(-50%);
+    width: min(720px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
+    background: var(--popup); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+    user-select: text;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 14px; margin: 0; }
+  h3 { font-size: 12px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .body { overflow: auto; padding: 14px; display: grid; gap: 20px; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .row input { flex: 1; }
+  .row .mono { min-width: 0; }
+  p { margin: 0; }
+</style>
