@@ -4,13 +4,16 @@
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
-  type Row = { folder: string; repo?: undefined } | { repo: RepoInfo; folder?: undefined }
+  type Row = { folder: string; repo?: undefined } | { repo: RepoInfo; solo: boolean; folder?: undefined }
 
   const rows = $derived.by(() => {
     const out: Row[] = []
     for (const folder of new Set([...app.folders, ...app.repos.map((r) => r.folder)])) {
-      out.push({ folder })
-      for (const repo of app.repos) if (repo.folder === folder) out.push({ repo })
+      const repos = app.repos.filter((r) => r.folder === folder)
+      // A folder that is itself the only repo needs no header; removing the repo removes the folder.
+      const solo = repos.length === 1 && repos[0].path === folder
+      if (!solo) out.push({ folder })
+      for (const repo of repos) out.push({ repo, solo })
     }
     return out
   })
@@ -50,7 +53,8 @@
               {#if st?.changes.length}<span class="dirty" title="Changed files">{st.changes.length}</span>{/if}
               <button class="icon-btn hover" title="Remove from list" onclick={(e) => {
                 e.stopPropagation()
-                excludeRepo(r.repo.path)
+                if (r.solo) removeFolder(r.repo.path)
+                else excludeRepo(r.repo.path)
               }}>
                 <Icon name="close" size={12} />
               </button>
