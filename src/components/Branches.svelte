@@ -120,8 +120,10 @@
   const create = (start: string) =>
     text.trim() &&
     act(async () => {
-      await api.createBranch(repo!, text.trim(), start, andCheckout)
-      say(`Created branch ${text.trim()}`)
+      const name = text.trim()
+      await api.createBranch(repo!, name, start, false)
+      say(`Created branch ${name}`)
+      if (andCheckout) checkout(repo!, { kind: 'local', name })
     }, 'close')
 
   const del = (branch: string, force = false) =>
