@@ -2,6 +2,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import type { RepoInfo } from '../lib/api'
   import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses } from '../lib/app.svelte'
+  import { folderMenu, repoMenu } from '../lib/menu'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
@@ -60,7 +61,8 @@
       {#snippet row(r)}
         {#if r.folder !== undefined}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}>
+          <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}
+            oncontextmenu={() => folderMenu(r.folder, collapsed.has(r.folder), () => toggle(r.folder))}>
             <span class="chevron" class:open={!collapsed.has(r.folder)}><Icon name="chevron" size={12} /></span>
             <Icon name="folder" /><span class="label ellipsis">{base(r.folder)}</span>
             <button class="icon-btn hover" title="Remove folder" onclick={(e) => {
@@ -79,6 +81,10 @@
             class:selected={app.current === r.repo.path}
             title={st?.lastCommit ? `${r.repo.path}\n${st.lastCommit.subject}` : r.repo.path}
             onclick={() => (app.current = r.repo.path)}
+            oncontextmenu={() => {
+              app.current = r.repo.path
+              repoMenu(r.repo.path, r.solo)
+            }}
           >
             <div class="line">
               {#if r.worktrees}

@@ -130,6 +130,12 @@ pub fn keymap_overrides(state: State<'_, AppState>) -> BTreeMap<String, String> 
 }
 
 #[tauri::command(async)]
+pub fn open_in_finder(path: String) -> Result<()> {
+    std::process::Command::new("open").arg(&path).spawn()?;
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn env_info(state: State<'_, AppState>) -> EnvInfo {
     state.env().info()
 }

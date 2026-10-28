@@ -116,6 +116,7 @@ export const api = {
   setGitPath: (path: string | null) => invoke<EnvInfo>('set_git_path', { path }),
   envInfo: () => invoke<EnvInfo>('env_info'),
   keymapOverrides: () => invoke<Record<string, string>>('keymap_overrides'),
+  openInFinder: (path: string) => invoke<void>('open_in_finder', { path }),
 
   repoStatus: (repo: string) => invoke<RepoStatus>('repo_status', { repo }),
   listBranches: (repo: string) => invoke<Branches>('list_branches', { repo }),

@@ -131,16 +131,15 @@ export const cancelOp = (id: number) => api.cancelOp(id).catch((e) => say(String
 const fetchRepo = (repo: string) => runOp(repo, 'Fetch', (id, p) => api.fetch(repo, id, p))
 const pullRepo = (repo: string) => runOp(repo, 'Pull', (id, p) => api.pull(repo, id, p))
 
-async function syncOne(kind: 'fetch' | 'pull', repo: string | null) {
+export async function syncOne(kind: 'fetch' | 'pull', repo: string | null) {
   if (!repo) return
   const [o] = await syncAll([repo], kind === 'fetch' ? fetchRepo : pullRepo)
   outcomes.set(repo, o)
   say(`${nameOf(repo)}: ${o.text}`, !o.ok)
 }
 
-export async function syncRepos(kind: 'fetch' | 'pull') {
+export async function syncRepos(kind: 'fetch' | 'pull', repos = app.repos.map((r) => r.path)) {
   if (app.sync) return
-  const repos = app.repos.map((r) => r.path)
   app.sync = { kind, done: 0, total: repos.length }
   const sync = app.sync
   const results = await syncAll(repos, kind === 'fetch' ? fetchRepo : pullRepo, (o) => {

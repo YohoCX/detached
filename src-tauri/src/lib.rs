@@ -45,6 +45,7 @@ pub fn run() {
             settings::set_git_path,
             settings::env_info,
             settings::keymap_overrides,
+            settings::open_in_finder,
             git::commands::repo_status,
             git::commands::list_branches,
             git::commands::checkout,
