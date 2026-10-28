@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { FileChange } from '../lib/api'
+  import { api, type CompareBase, type FileChange } from '../lib/api'
   import { refresh, statuses } from '../lib/app.svelte'
   import { baseName, dirName, groupChanges, statusOf } from '../lib/files'
   import { open } from '../lib/nav'
-  import { showDiff, view } from '../lib/view.svelte'
+  import { compare, showDiff, view } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
@@ -14,9 +14,32 @@
   let collapsed = $state<Record<string, boolean>>({})
   let list = $state<{ reveal(i: number): void }>()
   const status = $derived(repo ? statuses.get(repo) : undefined)
-  const changes = $derived(typeof status === 'object' ? status.changes : [])
+  const base = $derived(repo ? compare.get(repo) : undefined)
+  let cmp = $state<{ repo: string; info: CompareBase; changes: FileChange[] } | { repo: string; error: string } | null>(null)
+  let branches = $state<string[]>([])
+
+  // Reloads when the repo's status refreshes (after operations and on focus) or the base changes.
+  $effect(() => {
+    if (!repo || base === undefined) return
+    void status
+    const r = repo
+    api.compareBase(r, base || null).then(
+      async (info) => (cmp = { repo: r, info, changes: await api.listChanges(r, { kind: 'rev', rev: info.mergeBase }, { kind: 'worktree' }) }),
+      (e) => (cmp = { repo: r, error: String(e) }),
+    )
+    api.listBranches(r).then((b) => (branches = [...b.local.map((l) => l.name), ...b.remote.map((x) => `${x.remote}/${x.name}`)]), () => {})
+  })
+  const cur = $derived(cmp?.repo === repo ? cmp : null)
+  const info = $derived(cur && 'info' in cur ? cur.info : null)
+  const groups = $derived(
+    base === undefined
+      ? groupChanges(typeof status === 'object' ? status.changes : [])
+      : info && cur && 'changes' in cur
+        ? [{ title: `Changes since ${info.base}`, items: [...cur.changes].sort((a, b) => a.path.localeCompare(b.path)) }]
+        : [],
+  )
   const rows = $derived(
-    groupChanges(changes).flatMap((g): Row[] => [
+    groups.flatMap((g): Row[] => [
       { title: g.title, count: g.items.length },
       ...(collapsed[g.title] ? [] : g.items.map((c) => ({ c }))),
     ]),
@@ -26,7 +49,7 @@
   function select(c: FileChange, diff = true) {
     if (!repo) return
     view.change = { repo, change: c }
-    if (diff) showDiff(repo, c.path, c.origPath)
+    if (diff) showDiff(repo, c.path, c.origPath, info && base !== undefined ? { kind: 'rev', rev: info.mergeBase } : { kind: 'head' })
   }
 
   const openFile = (c: FileChange) => repo && open({ repo, ref: null, path: c.path, line: null })
@@ -51,14 +74,32 @@
 <section data-changes>
   <header>
     <span class="title">Changes</span>
+    {#if repo}
+      <div class="seg">
+        <button class:on={base === undefined} onclick={() => compare.delete(repo)}>Local</button>
+        <button class:on={base !== undefined} title="Changes since this branch left a base branch, like a merge request"
+          onclick={() => compare.set(repo, compare.get(repo) ?? '')}>Compare</button>
+      </div>
+    {/if}
     <button class="icon-btn" title="Refresh" onclick={() => repo && refresh(repo)}><Icon name="refresh" /></button>
   </header>
+  {#if repo && base !== undefined}
+    <div class="base">
+      <span class="muted">with</span>
+      <input list="compare-bases" placeholder={info?.base ?? 'default branch'} value={base}
+        onchange={(e) => compare.set(repo, e.currentTarget.value.trim())} />
+      <datalist id="compare-bases">{#each branches as b (b)}<option value={b}></option>{/each}</datalist>
+      {#if info}<span class="muted ab" title="Commits on this branch / on {info.base} since they split">↑{info.ahead} ↓{info.behind}</span>{/if}
+    </div>
+  {/if}
   {#if !repo}
     <div class="empty muted">No repository</div>
   {:else if typeof status === 'string'}
     <div class="empty error">{status}</div>
+  {:else if base !== undefined && cur && 'error' in cur}
+    <div class="empty error">{cur.error}</div>
   {:else if !rows.length}
-    <div class="empty muted">No local changes</div>
+    <div class="empty muted">{base === undefined ? 'No local changes' : info ? `No changes since ${info.base}` : 'Comparing…'}</div>
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="rows" tabindex="0" role="listbox" {onkeydown}>
@@ -89,6 +130,12 @@
   section { display: flex; flex-direction: column; height: 100%; }
   header { display: flex; align-items: center; height: 32px; padding: 0 6px 0 10px; flex: none; }
   .title { flex: 1; font-weight: 600; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-right: 4px; }
+  .seg button { border: 0; background: none; padding: 1px 8px; font-size: 12px; color: var(--muted); }
+  .seg button.on { background: var(--selected); color: var(--fg); }
+  .base { display: flex; align-items: center; gap: 6px; padding: 0 10px 6px; flex: none; font-size: 12px; }
+  .base input { flex: 1; min-width: 0; }
+  .ab { white-space: nowrap; }
   .rows { flex: 1; min-height: 0; outline: none; }
   .empty { padding: 12px; }
   .error { color: var(--error); white-space: pre-wrap; }

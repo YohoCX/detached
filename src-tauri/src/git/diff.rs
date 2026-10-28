@@ -4,12 +4,12 @@ use std::fs;
 use std::path::Path;
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::git::remotes::lfs_cred;
 use crate::git::runner::{Kind, Opts, out, run};
 use crate::git::{arg, status};
 use crate::state::AppState;
-use crate::types::{Content, FileChange, FileDiff, Side};
+use crate::types::{CompareBase, Content, FileChange, FileDiff, Side};
 
 const MAX_SIZE: u64 = 5 * 1024 * 1024;
 
@@ -23,6 +23,63 @@ fn tree(side: &Side) -> Option<&str> {
 
 fn literal(path: &str) -> String {
     format!(":(literal){path}")
+}
+
+/// `base`, or the remote's default branch, with its merge base against HEAD.
+pub fn compare_base(env: &Env, repo: &Path, base: Option<&str>) -> Result<CompareBase> {
+    let exists = |r: &str| {
+        let o = run(
+            env,
+            repo,
+            &["rev-parse", "-q", "--verify", r],
+            Kind::Read,
+            Opts::default(),
+        );
+        o.is_ok_and(|o| o.code == 0)
+    };
+    let base = match base {
+        Some(b) => arg(b)?.to_string(),
+        None => {
+            let head = ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"];
+            let origin = run(env, repo, &head, Kind::Read, Opts::default())?;
+            Some(origin.text().trim().to_string())
+                .filter(|b| !b.is_empty())
+                .or_else(|| {
+                    [
+                        "origin/dev",
+                        "origin/main",
+                        "origin/master",
+                        "dev",
+                        "main",
+                        "master",
+                    ]
+                    .into_iter()
+                    .find(|b| exists(b))
+                    .map(String::from)
+                })
+                .ok_or_else(|| {
+                    Error::Other("no default branch found; type one to compare with".into())
+                })?
+        }
+    };
+    let merge_base = out(env, repo, &["merge-base", &base, "HEAD"], Kind::Read)?
+        .trim()
+        .to_string();
+    let range = format!("{base}...HEAD");
+    let counts = out(
+        env,
+        repo,
+        &["rev-list", "--left-right", "--count", &range],
+        Kind::Read,
+    )?;
+    let mut n = counts.split_whitespace().map(|n| n.parse().unwrap_or(0));
+    let (behind, ahead) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
+    Ok(CompareBase {
+        base,
+        merge_base,
+        ahead,
+        behind,
+    })
 }
 
 pub fn list_changes(env: &Env, repo: &Path, from: &Side, to: &Side) -> Result<Vec<FileChange>> {
@@ -459,5 +516,33 @@ mod tests {
             content(&sb.state, &repo, &Side::Head, "a").unwrap(),
             Content::Missing
         );
+    }
+
+    #[test]
+    fn compare_base_finds_the_default_branch_and_lists_only_this_branchs_changes() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        let other = sb.clone_pair("other");
+        sb.git(&work, &["switch", "-qc", "feature"]);
+        sb.commit(&work, "a", "1\n", "a");
+        sb.commit(&work, "b", "1\n", "b");
+        sb.commit(&other, "on-main", "1\n", "main moves on");
+        sb.git(&other, &["push", "-q", "origin", "main"]);
+        sb.git(&work, &["fetch", "-q"]);
+        std::fs::write(work.join("a"), "2\n").unwrap();
+
+        let env = sb.state.env();
+        let c = compare_base(&env, &work, None).unwrap();
+        assert_eq!((c.base.as_str(), c.ahead, c.behind), ("origin/main", 2, 1));
+        let rev = Side::Rev { rev: c.merge_base };
+        let mut paths: Vec<String> = list_changes(&env, &work, &rev, &Side::Worktree)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.path)
+            .collect();
+        paths.sort();
+        assert_eq!(paths, ["a", "b"]);
+        assert!(compare_base(&env, &work, Some("-x")).is_err());
+        assert!(compare_base(&env, &work, Some("nope")).is_err());
     }
 }

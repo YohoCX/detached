@@ -142,6 +142,15 @@ pub fn list_changes(
 }
 
 #[tauri::command(async)]
+pub fn compare_base(
+    state: State<'_, AppState>,
+    repo: String,
+    base: Option<String>,
+) -> Result<CompareBase> {
+    diff::compare_base(&state.env(), Path::new(&repo), base.as_deref())
+}
+
+#[tauri::command(async)]
 pub fn file_diff(
     state: State<'_, AppState>,
     repo: String,

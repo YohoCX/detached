@@ -70,6 +70,7 @@ export type Content =
   | { kind: 'submodule'; commit: string }
   | { kind: 'conflicted'; text: string }
 export interface FileDiff { left: Content; right: Content }
+export interface CompareBase { base: string; mergeBase: string; ahead: number; behind: number }
 export interface FileEntry { path: string; change: FileChange | null }
 export interface FileMatch { repo: string; path: string; score: number; indices: number[] }
 export interface FindQuery {
@@ -138,6 +139,7 @@ export const api = {
   cancelOp: (opId: number) => invoke<void>('cancel_op', { opId }),
 
   listChanges: (repo: string, from: Side, to: Side) => invoke<FileChange[]>('list_changes', { repo, from, to }),
+  compareBase: (repo: string, base: string | null) => invoke<CompareBase>('compare_base', { repo, base }),
   fileDiff: (repo: string, path: string, origPath: string | null, left: Side, right: Side) =>
     invoke<FileDiff>('file_diff', { repo, path, origPath, left, right }),
   listFiles: (repo: string, rev: string | null) => invoke<FileEntry[]>('list_files', { repo, rev }),

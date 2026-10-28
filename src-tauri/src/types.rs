@@ -236,6 +236,17 @@ pub enum Content {
     Conflicted { text: String },
 }
 
+/// What `compare_base` resolved: diff `merge_base` against the working tree for an MR-like view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareBase {
+    pub base: String,
+    pub merge_base: String,
+    /// Commits on HEAD since the merge base, and on `base` since it.
+    pub ahead: u32,
+    pub behind: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileDiff {

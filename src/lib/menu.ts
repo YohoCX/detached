@@ -3,6 +3,7 @@
 import { Menu, PredefinedMenuItem } from '@tauri-apps/api/menu'
 import { api } from './api'
 import { app, excludeRepo, removeFolder, say, syncOne, syncRepos } from './app.svelte'
+import { compare } from './view.svelte'
 
 type Item = { text: string; action: () => unknown; enabled?: boolean } | 'separator'
 
@@ -28,6 +29,11 @@ export function repoMenu(repo: string, solo: boolean) {
     { text: 'Fetch', action: () => syncOne('fetch', repo) },
     { text: 'Pull', action: () => syncOne('pull', repo) },
     'separator',
+    { text: 'Compare with Base Branch', action: () => {
+      app.current = repo
+      app.tool = 'changes'
+      compare.set(repo, compare.get(repo) ?? '')
+    } },
     { text: 'Branches…', action: () => branches('checkout') },
     { text: 'New Branch…', action: () => branches('new') },
     'separator',

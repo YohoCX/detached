@@ -58,6 +58,7 @@ pub fn run() {
             git::commands::pull,
             git::commands::cancel_op,
             git::commands::list_changes,
+            git::commands::compare_base,
             git::commands::file_diff,
             git::commands::list_files,
             git::commands::read_file,

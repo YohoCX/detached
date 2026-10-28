@@ -13,6 +13,9 @@ export const view = $state({
   find: false,
 })
 
+/** Repos whose Changes panel compares with a base branch; '' means the default branch. */
+export const compare = new SvelteMap<string, string>()
+
 /** The ref each repo's tree browses; absent is the working tree. */
 export const refs = new SvelteMap<string, string>()
 export const refOf = (repo: string | null) => (repo && refs.get(repo)) || null
