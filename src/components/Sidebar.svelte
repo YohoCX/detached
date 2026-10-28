@@ -1,10 +1,30 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
   import type { RepoInfo } from '../lib/api'
   import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses } from '../lib/app.svelte'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
-  type Row = { folder: string; repo?: undefined } | { repo: RepoInfo; solo: boolean; worktree: boolean; folder?: undefined }
+  type Row =
+    | { folder: string; repo?: undefined }
+    | { repo: RepoInfo; solo: boolean; worktree: boolean; worktrees: number; folder?: undefined }
+
+  // Collapsed folders and repos (by path), remembered across launches.
+  const KEY = 'sidebar.collapsed'
+  const collapsed = new SvelteSet<string>(load())
+  function load(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) ?? '[]')
+    } catch {
+      return []
+    }
+  }
+  function toggle(path: string) {
+    if (!collapsed.delete(path)) collapsed.add(path)
+    try {
+      localStorage.setItem(KEY, JSON.stringify([...collapsed]))
+    } catch {}
+  }
 
   const rows = $derived.by(() => {
     const out: Row[] = []
@@ -15,9 +35,11 @@
       // A folder that is itself the only repo needs no header; removing the repo removes the folder.
       const solo = repos.length === 1 && repos[0].path === folder
       if (!solo) out.push({ folder })
+      if (!solo && collapsed.has(folder)) continue
       for (const repo of repos) {
-        out.push({ repo, solo, worktree: false })
-        for (const wt of app.repos) if (wt.worktreeOf === repo.path) out.push({ repo: wt, solo: false, worktree: true })
+        const wts = app.repos.filter((wt) => wt.worktreeOf === repo.path)
+        out.push({ repo, solo, worktree: false, worktrees: wts.length })
+        if (!collapsed.has(repo.path)) for (const wt of wts) out.push({ repo: wt, solo: false, worktree: true, worktrees: 0 })
       }
     }
     return out
@@ -37,9 +59,14 @@
     <VirtualList items={rows} height={40}>
       {#snippet row(r)}
         {#if r.folder !== undefined}
-          <div class="folder" title={r.folder}>
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}>
+            <span class="chevron" class:open={!collapsed.has(r.folder)}><Icon name="chevron" size={12} /></span>
             <Icon name="folder" /><span class="ellipsis">{base(r.folder)}</span>
-            <button class="icon-btn hover" title="Remove folder" onclick={() => removeFolder(r.folder)}><Icon name="minus" /></button>
+            <button class="icon-btn hover" title="Remove folder" onclick={(e) => {
+              e.stopPropagation()
+              removeFolder(r.folder)
+            }}><Icon name="minus" /></button>
           </div>
         {:else}
           {@const s = statuses.get(r.repo.path)}
@@ -54,6 +81,14 @@
             onclick={() => (app.current = r.repo.path)}
           >
             <div class="line">
+              {#if r.worktrees}
+                <button class="chevron toggle" class:open={!collapsed.has(r.repo.path)}
+                  title="{collapsed.has(r.repo.path) ? 'Show' : 'Hide'} {r.worktrees} worktree{r.worktrees > 1 ? 's' : ''}"
+                  onclick={(e) => {
+                    e.stopPropagation()
+                    toggle(r.repo.path)
+                  }}><Icon name="chevron" size={12} /></button>
+              {/if}
               <span class="name ellipsis">{r.worktree ? base(r.repo.path) : r.repo.name}</span>
               {#if st?.inProgress}<span class="badge">{badge[st.inProgress]}</span>{/if}
               {#if st?.changes.length}<span class="dirty" title="Changed files">{st.changes.length}</span>{/if}
@@ -92,9 +127,13 @@
   section { display: flex; flex-direction: column; height: 100%; min-width: 0; }
   header { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 6px 0 12px; flex: none; }
   .title { flex: 1; font-weight: 600; }
-  .folder { display: flex; align-items: flex-end; gap: 6px; height: 100%; padding: 0 6px 4px 12px; color: var(--muted); font-size: 12px; }
+  .folder { display: flex; align-items: flex-end; gap: 6px; height: 100%; padding: 0 6px 4px 4px; color: var(--muted); font-size: 12px; }
+  .chevron { display: inline-flex; color: var(--muted); transition: transform 0.1s; }
+  .chevron.open { transform: rotate(90deg); }
+  .toggle { position: absolute; left: 10px; border: 0; background: none; padding: 2px; border-radius: 3px; }
+  .toggle:hover { background: var(--hover); }
   .folder span { flex: 1; }
-  .repo { height: 100%; padding: 3px 6px 3px 28px; border-radius: 4px; margin: 0 4px; }
+  .repo { position: relative; height: 100%; padding: 3px 6px 3px 28px; border-radius: 4px; margin: 0 4px; }
   .repo:hover { background: var(--hover); }
   .repo.selected { background: var(--selected); }
   .repo.worktree { padding-left: 44px; }
