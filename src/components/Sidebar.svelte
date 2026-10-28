@@ -62,7 +62,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}>
             <span class="chevron" class:open={!collapsed.has(r.folder)}><Icon name="chevron" size={12} /></span>
-            <Icon name="folder" /><span class="ellipsis">{base(r.folder)}</span>
+            <Icon name="folder" /><span class="label ellipsis">{base(r.folder)}</span>
             <button class="icon-btn hover" title="Remove folder" onclick={(e) => {
               e.stopPropagation()
               removeFolder(r.folder)
@@ -128,11 +128,11 @@
   header { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 6px 0 12px; flex: none; }
   .title { flex: 1; font-weight: 600; }
   .folder { display: flex; align-items: flex-end; gap: 6px; height: 100%; padding: 0 6px 4px 4px; color: var(--muted); font-size: 12px; }
-  .chevron { display: inline-flex; color: var(--muted); transition: transform 0.1s; }
+  .chevron { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--muted); transition: transform 0.1s; }
   .chevron.open { transform: rotate(90deg); }
   .toggle { position: absolute; left: 10px; border: 0; background: none; padding: 2px; border-radius: 3px; }
   .toggle:hover { background: var(--hover); }
-  .folder span { flex: 1; }
+  .folder .label { flex: 1; }
   .repo { position: relative; height: 100%; padding: 3px 6px 3px 28px; border-radius: 4px; margin: 0 4px; }
   .repo:hover { background: var(--hover); }
   .repo.selected { background: var(--selected); }
