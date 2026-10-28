@@ -1,6 +1,8 @@
 pub mod branches;
 pub mod checkout;
 pub mod commands;
+#[cfg(test)]
+mod cred_tests;
 pub mod discovery;
 pub mod pull;
 pub mod remotes;
