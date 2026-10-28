@@ -54,7 +54,7 @@
             onclick={() => (app.current = r.repo.path)}
           >
             <div class="line">
-              <span class="name ellipsis">{r.repo.name}</span>
+              <span class="name ellipsis">{r.worktree ? base(r.repo.path) : r.repo.name}</span>
               {#if st?.inProgress}<span class="badge">{badge[st.inProgress]}</span>{/if}
               {#if st?.changes.length}<span class="dirty" title="Changed files">{st.changes.length}</span>{/if}
               <button class="icon-btn hover" title="Remove from list" onclick={(e) => {
