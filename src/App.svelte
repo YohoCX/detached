@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import Changes from './components/Changes.svelte'
   import FileTree from './components/FileTree.svelte'
+  import FindInFiles from './components/FindInFiles.svelte'
   import Icon from './components/Icon.svelte'
   import Notices from './components/Notices.svelte'
   import Palette from './components/Palette.svelte'
@@ -13,6 +14,7 @@
   import { api } from './lib/api'
   import { app, loadRepos, refreshAll, registerActions, run } from './lib/app.svelte'
   import { chordFor, install, setOverrides } from './lib/keymap'
+  import { view } from './lib/view.svelte'
 
   onMount(() => {
     loadRepos()
@@ -52,6 +54,7 @@
 <Notices />
 {#if app.palette}<Palette />{/if}
 {#if app.settings}<Settings />{/if}
+{#if view.find}<FindInFiles />{/if}
 
 <style>
   .app { display: flex; flex-direction: column; height: 100%; }

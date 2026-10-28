@@ -3,7 +3,9 @@ pub mod checkout;
 pub mod commands;
 #[cfg(test)]
 mod cred_tests;
+pub mod diff;
 pub mod discovery;
+pub mod files;
 pub mod pull;
 pub mod remotes;
 pub mod runner;

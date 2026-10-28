@@ -1,4 +1,4 @@
-// Names and signatures are the contract with api.ts. Agent D replaces the diff, files and Zed bodies.
+// Names and signatures are the contract with api.ts.
 
 use std::path::Path;
 
@@ -6,7 +6,7 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::error::Result;
-use crate::git::{branches, checkout as smart, pull as pulls, status};
+use crate::git::{branches, checkout as smart, diff, files, pull as pulls, status};
 use crate::state::{AppState, Cancel};
 use crate::types::*;
 
@@ -132,70 +132,53 @@ pub fn cancel_op(state: State<'_, AppState>, op_id: u64) {
 
 #[tauri::command(async)]
 pub fn list_changes(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     from: Side,
     to: Side,
 ) -> Result<Vec<FileChange>> {
-    let _ = (from, to);
-    Ok(repo_status(_state, repo)?.changes)
+    diff::list_changes(&state.env(), Path::new(&repo), &from, &to)
 }
 
 #[tauri::command(async)]
 pub fn file_diff(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     path: String,
     orig_path: Option<String>,
     left: Side,
     right: Side,
 ) -> Result<FileDiff> {
-    let _ = (repo, path, orig_path, left, right);
-    Ok(FileDiff {
-        left: Content::Text {
-            text: "<h1>Hello</h1>\n".into(),
-        },
-        right: Content::Text {
-            text: "<h1>Hello, world</h1>\n".into(),
-        },
-    })
+    let repo = Path::new(&repo);
+    diff::file_diff(&state, repo, &path, orig_path.as_deref(), &left, &right)
 }
 
 #[tauri::command(async)]
 pub fn list_files(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     rev: Option<String>,
 ) -> Result<Vec<FileEntry>> {
-    let _ = (repo, rev);
-    Ok(["README.md", "src/App.svelte", "src/main.ts"]
-        .map(|p| FileEntry {
-            path: p.into(),
-            change: None,
-        })
-        .into())
+    files::list_files(&state.env(), Path::new(&repo), rev.as_deref())
 }
 
 #[tauri::command(async)]
 pub fn read_file(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     rev: Option<String>,
     path: String,
 ) -> Result<Content> {
-    let _ = (repo, rev);
-    Ok(Content::Text {
-        text: format!("// {path}\nconsole.log('fixture')\n"),
-    })
+    let side = rev.map_or(Side::Worktree, |rev| Side::Rev { rev });
+    diff::content(&state, Path::new(&repo), &side, &path)
 }
 
 #[tauri::command(async)]
 pub fn open_in_zed(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     path: String,
     line: Option<u32>,
 ) -> Result<()> {
-    let _ = (repo, path, line);
-    Ok(())
+    files::open_in_zed(&state.env(), Path::new(&repo), &path, line)
 }

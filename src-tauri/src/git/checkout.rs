@@ -417,19 +417,21 @@ mod tests {
         let work = setup(&sb, "a\n", "b\n");
         let ticks = sb.path("ticks");
         let body = format!(
-            "( for i in 1 2 3 4 5 6 7 8 9 10; do echo \"tick $i\" >&2 && echo $i >> '{}'; sleep 0.5; done ) &",
+            "( for i in $(seq 20); do echo \"tick $i\" >&2 && echo $i >> '{}'; sleep 0.5; done ) &",
             ticks.display()
         );
         sb.hook(&work, "post-checkout", &body);
+        // git itself lingers a few seconds on the hook's output; the job runs 10 s.
         let start = Instant::now();
         assert_eq!(go(&sb, &work, "other"), Switched { warning: None });
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            start.elapsed()
-        );
+        let took = start.elapsed();
+        assert!(took < Duration::from_secs(7), "{took:?}");
         assert!(sb.state.locks.get(&work).try_lock().is_ok());
-        std::thread::sleep(Duration::from_secs(6));
-        assert_eq!(std::fs::read_to_string(&ticks).unwrap().lines().count(), 10);
+        let count = || std::fs::read_to_string(&ticks).map_or(0, |t| t.lines().count());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while count() < 20 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert_eq!(count(), 20);
     }
 }

@@ -5,6 +5,7 @@
   import { filter, segments } from '../lib/fuzzy'
   import { chordFor } from '../lib/keymap'
   import { nav, open, type FileRef } from '../lib/nav'
+  import { refOf } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
 
   type Entry =
@@ -28,7 +29,8 @@
   let listEl: HTMLDivElement
   const mode = $derived(app.palette!)
   const close = () => (app.palette = null)
-  const toEntry = (m: FileMatch): Entry => ({ kind: 'file', f: { repo: m.repo, ref: null, path: m.path }, indices: m.indices })
+  const toEntry = (ref: string | null) => (m: FileMatch): Entry =>
+    ({ kind: 'file', f: { repo: m.repo, ref, path: m.path }, indices: m.indices })
 
   let seq = 0
   $effect(() => {
@@ -40,9 +42,11 @@
       files = []
       return
     }
-    api.quickOpen(repos, null, q, mode === 'file' ? 50 : 10).then(
+    // One repo browses its tree's ref; across repos, the working trees.
+    const ref = app.paletteAll ? null : refOf(app.current)
+    api.quickOpen(repos, ref, q, mode === 'file' ? 50 : 10).then(
       (r) => {
-        if (id === seq) files = r.map(toEntry)
+        if (id === seq) files = r.map(toEntry(ref))
       },
       () => {
         if (id === seq) files = []

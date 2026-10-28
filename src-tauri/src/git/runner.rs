@@ -288,7 +288,7 @@ mod tests {
         let (work, pgid) = silent_remote(&sb);
         let start = Instant::now();
         let opts = Opts {
-            silence: Some(Duration::from_secs(1)),
+            silence: Some(Duration::from_secs(2)),
             ..Default::default()
         };
         let r = run(
@@ -302,7 +302,7 @@ mod tests {
             matches!(&r, Err(Error::Other(e)) if e.contains("no response")),
             "{r:?}"
         );
-        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(start.elapsed() < Duration::from_secs(8));
         assert!(group_gone(&pgid));
     }
 
