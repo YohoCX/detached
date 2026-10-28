@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::Manager;
 
-use crate::accounts::store::MemoryStore;
+use crate::accounts::store::KeychainStore;
 use crate::env::Env;
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -30,7 +30,7 @@ pub fn run() {
                 env: RwLock::new(env),
                 ops: Default::default(),
                 locks: Default::default(),
-                tokens: Arc::new(MemoryStore::default()),
+                tokens: Arc::new(KeychainStore),
             });
             Ok(())
         })
