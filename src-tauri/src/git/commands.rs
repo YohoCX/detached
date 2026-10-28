@@ -1,172 +1,127 @@
-// Scaffold: every command returns fixture data. Agents A (status, branches, checkout, fetch, pull)
-// and D (diff, files, Zed) replace the bodies; names and signatures are the contract with api.ts.
+// Names and signatures are the contract with api.ts. Agent D replaces the diff, files and Zed bodies.
+
+use std::path::Path;
 
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::error::Result;
-use crate::state::AppState;
+use crate::git::{branches, checkout as smart, pull as pulls, status};
+use crate::state::{AppState, Cancel};
 use crate::types::*;
 
-fn commit(subject: &str) -> CommitSummary {
-    CommitSummary {
-        sha: "4f2a9c1e5b7d4e8a9c217d4e5f6a8b90c1d2e3f4".into(),
-        subject: subject.into(),
-        author: "Fixture".into(),
-        time: 1_761_600_000,
-    }
+/// Runs a cancellable operation under `op_id`, forwarding progress lines to the UI.
+fn op<T>(
+    state: &AppState,
+    op_id: u64,
+    progress: Channel<String>,
+    f: impl FnOnce(&Cancel, &(dyn Fn(&str) + Sync)) -> Result<T>,
+) -> Result<T> {
+    let cancel = state.ops.start(op_id);
+    let r = f(&cancel, &|l: &str| {
+        let _ = progress.send(l.into());
+    });
+    state.ops.finish(op_id);
+    r
 }
 
 #[tauri::command(async)]
-pub fn repo_status(_state: State<'_, AppState>, repo: String) -> Result<RepoStatus> {
-    let dirty = repo.ends_with("web");
-    Ok(RepoStatus {
-        branch: Some("main".into()),
-        head: Some(commit("").sha),
-        upstream: Some("origin/main".into()),
-        ahead: u32::from(dirty),
-        behind: 2,
-        changes: if dirty {
-            vec![FileChange {
-                path: "src/App.svelte".into(),
-                orig_path: None,
-                index: '.',
-                worktree: 'M',
-                conflicted: false,
-            }]
-        } else {
-            vec![]
-        },
-        last_commit: Some(commit("Fix login redirect")),
-        in_progress: None,
-    })
+pub fn repo_status(state: State<'_, AppState>, repo: String) -> Result<RepoStatus> {
+    status::status(&state.env(), Path::new(&repo))
 }
 
 #[tauri::command(async)]
-pub fn list_branches(_state: State<'_, AppState>, repo: String) -> Result<Branches> {
-    let _ = repo;
-    let local = |name: &str, current| LocalBranch {
-        name: name.into(),
-        upstream: Some(format!("origin/{name}")),
-        upstream_gone: false,
-        ahead: 0,
-        behind: 0,
-        current,
-        last_commit: commit("Fixture commit"),
-    };
-    Ok(Branches {
-        local: vec![local("main", true), local("feature/login", false)],
-        remote: vec![RemoteBranch {
-            remote: "origin".into(),
-            name: "release/1.2".into(),
-            last_commit: commit("Release 1.2"),
-        }],
-    })
+pub fn list_branches(state: State<'_, AppState>, repo: String) -> Result<Branches> {
+    branches::list(&state, Path::new(&repo))
 }
 
 #[tauri::command(async)]
 pub fn checkout(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     target: CheckoutTarget,
 ) -> Result<CheckoutResult> {
-    let _ = (repo, target);
-    Ok(CheckoutResult::Switched { warning: None })
+    smart::checkout(&state, Path::new(&repo), &target)
 }
 
 #[tauri::command(async)]
 pub fn create_branch(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     name: String,
     start: String,
     checkout: bool,
 ) -> Result<()> {
-    let _ = (repo, name, start, checkout);
-    Ok(())
+    branches::create(&state, Path::new(&repo), &name, &start, checkout)
 }
 
 #[tauri::command(async)]
 pub fn set_upstream(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     branch: String,
     upstream: Option<String>,
 ) -> Result<()> {
-    let _ = (repo, branch, upstream);
-    Ok(())
+    branches::set_upstream(&state, Path::new(&repo), &branch, upstream.as_deref())
 }
 
 #[tauri::command(async)]
 pub fn delete_branch(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     name: String,
     force: bool,
 ) -> Result<DeleteResult> {
-    let _ = (repo, name);
-    Ok(if force {
-        DeleteResult::Deleted
-    } else {
-        DeleteResult::NotMerged {
-            commits: vec![commit("Unmerged work")],
-        }
-    })
+    branches::delete(&state, Path::new(&repo), &name, force)
 }
 
 #[tauri::command(async)]
 pub fn delete_remote_branch(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     remote: String,
     name: String,
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    let _ = (repo, remote, name, op_id, progress);
-    Ok(())
+    op(&state, op_id, progress, |c, p| {
+        branches::delete_remote(&state, Path::new(&repo), &remote, &name, c, p)
+    })
 }
 
 #[tauri::command(async)]
 pub fn prune(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    let _ = (repo, op_id, progress);
-    Ok(())
+    op(&state, op_id, progress, |c, p| {
+        branches::prune(&state, Path::new(&repo), c, p)
+    })
 }
 
 #[tauri::command(async)]
 pub fn fetch(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    let _ = (repo, op_id);
-    progress
-        .send("Receiving objects: 100% (12/12), done.".into())
-        .ok();
-    Ok(())
+    op(&state, op_id, progress, |c, p| {
+        pulls::fetch(&state, Path::new(&repo), c, p)
+    })
 }
 
 #[tauri::command(async)]
 pub fn pull(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     repo: String,
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<PullResult> {
-    let _ = (op_id, progress);
-    Ok(if repo.ends_with("web") {
-        PullResult::Diverged {
-            ahead: 1,
-            behind: 2,
-        }
-    } else {
-        PullResult::UpToDate
+    op(&state, op_id, progress, |c, p| {
+        pulls::pull(&state, Path::new(&repo), c, p)
     })
 }
 
