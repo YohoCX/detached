@@ -62,9 +62,13 @@ git binary. The resolved git path and version show in Settings.
 `GIT_OPTIONAL_LOCKS=0` for reads and `LC_ALL=C` so stderr can be matched. Each child starts in its
 own process group, so a kill reaches remote helpers and LFS filters too. The runner returns exit
 code, stdout and stderr as soon as git exits, after at most 1 s more of reading: a hook's background
-job can inherit the pipes and keep them open forever. Credential arguments (see Accounts) go to
-network calls, and to switch, merge and `cat-file --filters` only in repos that use LFS
-(`filter=lfs` in `.gitattributes`), where those calls download objects. Hooks inherit git's
+job can inherit the pipes and keep them open forever. The reader threads keep draining (and
+discarding) until EOF, so that job never writes into a closed pipe. Credential arguments (see
+Accounts) go to network calls, and to switch, merge and `cat-file --filters` only when LFS is in
+play, since those calls download objects. LFS is in play when `filter=lfs` appears in
+`.git/info/attributes` or in any `.gitattributes` at HEAD or at the target commit
+(`git grep -q filter=lfs <rev> -- ':(glob)**/.gitattributes'`): checkout smudges under the target's
+attributes, so the first pull that adds LFS still gets the token. Hooks inherit git's
 environment, so this keeps the token out of post-checkout and post-merge hooks in every other repo;
 in an LFS repo they can see it.
 Limits:
@@ -222,9 +226,11 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
   no token;
 - pull all: one fast-forward repo, one diverged repo, one with a broken remote;
 - runner: cancelling a fetch leaves no git process in its group and no `.lock` file; a fetch whose
-  server stays silent past 120 s is cancelled; a post-checkout hook that starts `sleep 300 &` with
-  stderr inherited neither holds the repo lock nor delays the result past 1 s; a switch in a repo
-  without LFS runs its hook with no `WB_TOKEN_*` in the environment;
+  server stays silent past 120 s is cancelled; a post-checkout hook whose background job inherits
+  stderr and writes a line every 500 ms for 5 s gets its result back within 2 s of git's exit,
+  releases the repo lock, and the job still writes every line; a switch in a repo without LFS
+  runs its hook with no `WB_TOKEN_*` in the environment; a fast-forward to a commit that first adds
+  `filter=lfs` gets the credential arguments;
 - pull: a diverged branch reports "diverged" even with a post-merge hook installed;
 - environment: PATH from a temp `.zshrc` that prints text and adds a directory;
 - discovery: depth 3, a worktree `.git` file, an excluded repo, a skipped `node_modules`.
