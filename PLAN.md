@@ -60,25 +60,28 @@ git binary. The resolved git path and version show in Settings.
 
 **Git runner.** One function runs `git -C <repo>` with that PATH, `GIT_TERMINAL_PROMPT=0`,
 `GIT_OPTIONAL_LOCKS=0` for reads and `LC_ALL=C` so stderr can be matched. Each child starts in its
-own process group, and every signal goes to the group, so `git pull`'s child fetch, remote helpers
-and LFS filters stop with it. The runner returns exit code, stdout and stderr, and takes an optional
-credential argument set (see Accounts). Limits:
+own process group, so a kill reaches remote helpers and LFS filters too. Every call for a repo gets
+that repo's credential arguments (see Accounts), since LFS downloads during switch, merge and
+`cat-file --filters`, not only during fetch. The runner returns exit code, stdout and stderr.
+Limits:
 - reads (status, for-each-ref, cat-file, ls-tree): 30 s, then SIGKILL to the group;
-- network (fetch, `push --delete`): no wall-clock limit, so a slow transfer that keeps moving
-  finishes. A stalled https transfer is ended by git itself
-  (`-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60`). User cancel sends SIGTERM to the group,
-  SIGKILL 5 s later; git removes its lock files on SIGTERM;
+- network (fetch, `push --delete`): run with `--progress`, so the server reports progress even while
+  it prepares the pack, over https and ssh alike. No wall-clock limit: the call is cancelled when
+  stderr is silent for 120 s, or when the user cancels. Cancel sends SIGTERM to the group, SIGKILL
+  5 s later; git removes its lock files on SIGTERM. Progress lines show in the UI;
 - local writes (switch, stash, branch, merge): no limit and no cancel, so git is never killed
   mid-write.
 
-A repo's lock is released only after its whole process group has exited. A per-repo lock serializes
-mutating operations; reads do not take it. Fetch/pull all runs at most 4 repos at once and reports
-each repo's result separately; one failure does not stop the rest.
+A per-repo lock serializes mutating operations; reads do not take it. It is released when the git
+process exits; descendants it leaves behind (a credential-cache daemon, a hook's background job) are
+left alone. Fetch/pull all runs at most 4 repos at once and reports each repo's result separately;
+one failure does not stop the rest.
 
-**Hooks.** A failing post-checkout or post-merge hook makes git exit non-zero after HEAD has moved.
-After any non-zero switch or merge the runner reads `git symbolic-ref -q HEAD` (or `rev-parse HEAD`
-when detached): if HEAD reached the target, the operation counts as done and the hook's stderr shows
-as a warning.
+**Hooks.** A failing post-checkout hook makes `git switch` exit non-zero after HEAD has moved. After
+a non-zero switch the runner reads `git symbolic-ref -q HEAD` (or `rev-parse HEAD` for a detached
+target): if it is the target and was not before, the switch counts as done and the hook's stderr
+shows as a warning. post-merge cannot change a merge's exit code, so a non-zero merge is always a
+failure.
 
 **Discovery.** No built-in repos. The user adds folders (a repo, or a folder of repos) through a
 folder picker; they are saved in `settings.json`. Each folder is walked up to 3 levels below it.
@@ -214,7 +217,10 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
   `git credential approve` for `H` does not reach it; `fill` for another host does reach it and gets
   no token;
 - pull all: one fast-forward repo, one diverged repo, one with a broken remote;
-- runner: cancelling a fetch leaves no git process in its group and no `.lock` file;
+- runner: cancelling a fetch leaves no git process in its group and no `.lock` file; a fetch whose
+  server stays silent past 120 s is cancelled; a hook that leaves a background job does not hold
+  the repo lock;
+- pull: a diverged branch reports "diverged" even with a post-merge hook installed;
 - environment: PATH from a temp `.zshrc` that prints text and adds a directory;
 - discovery: depth 3, a worktree `.git` file, an excluded repo, a skipped `node_modules`.
 
