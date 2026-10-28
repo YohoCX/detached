@@ -33,7 +33,7 @@ pub fn invalidate(repo: &str) {
 
 /// The best `limit` matches across `lists` of `(repo, paths)`; ties go to the shorter path.
 pub fn rank(lists: &[(&str, Arc<Vec<String>>)], query: &str, limit: usize) -> Vec<FileMatch> {
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
     let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
     let mut buf = vec![];
     let mut hits: Vec<(u32, &str, &str)> = vec![];

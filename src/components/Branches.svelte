@@ -222,7 +222,7 @@
               <div class="header">{it.label}</div>
             {:else}
               <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-              <div class="item" class:selected={i === sel} onmousemove={() => (sel = i)} onclick={() => choose(it)}>
+              <div class="item" class:selected={i === sel} onmousemove={(e) => (e.movementX || e.movementY) && (sel = i)} onclick={() => choose(it)}>
                 {#if it.kind === 'new'}
                   <Icon name="plus" size={14} /><span class="label">New Branch…</span>
                 {:else if it.kind === 'prune'}
@@ -259,7 +259,7 @@
     </div>
     {#each menu(it) as [label, run], i (label)}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <div class="item" class:selected={i === menuSel} onmousemove={() => (menuSel = i)} onclick={run}><span class="label">{label}</span></div>
+      <div class="item" class:selected={i === menuSel} onmousemove={(e) => (e.movementX || e.movementY) && (menuSel = i)} onclick={run}><span class="label">{label}</span></div>
     {/each}
   {:else if sub.kind === 'new'}
     {@const start = sub.start}
@@ -276,7 +276,7 @@
     <div class="scroll">
       {#each tracking as m, i (rname(m.item))}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="item" class:selected={i === menuSel} onmousemove={() => (menuSel = i)} onclick={() => setTracking(branch, rname(m.item))}>
+        <div class="item" class:selected={i === menuSel} onmousemove={(e) => (e.movementX || e.movementY) && (menuSel = i)} onclick={() => setTracking(branch, rname(m.item))}>
           <Icon name="branch" size={14} /><span class="label ellipsis">{@render hl(rname(m.item), m.indices)}</span>
         </div>
       {/each}

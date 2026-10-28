@@ -168,7 +168,7 @@
         {:else}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div class="match mono" class:selected={i === sel} role="option" aria-selected={i === sel} tabindex="-1"
-            onmousemove={() => (sel = i)} onclick={() => choose(i)}>
+            onmousemove={(e) => (e.movementX || e.movementY) && (sel = i)} onclick={() => choose(i)}>
             <span class="no muted">{r.m.line}</span>
             <span class="ellipsis">{#each highlight(r.m.text, r.m.ranges) as s, k (k)}<span class:hit={s.hit}>{s.text}</span>{/each}</span>
           </div>
