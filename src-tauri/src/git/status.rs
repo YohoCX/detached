@@ -30,7 +30,13 @@ pub fn commits(env: &Env, repo: &Path, args: &[&str]) -> Result<Vec<CommitSummar
 }
 
 pub fn status(env: &Env, repo: &Path) -> Result<RepoStatus> {
-    let args = ["status", "--porcelain=v2", "--branch", "-z"];
+    let args = [
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-z",
+        "--untracked-files=all",
+    ];
     let mut st = parse_status(&out(env, repo, &args, Kind::Read)?);
     if st.head.is_some() {
         st.last_commit = commits(env, repo, &["-1"])?.pop();
