@@ -72,12 +72,28 @@ export async function refresh(repo: string) {
   }
 }
 
+function setRepos(list: RepoInfo[]) {
+  app.repos = list
+  const paths = new Set(list.map((r) => r.path))
+  for (const repo of [...statuses.keys()]) if (!paths.has(repo)) statuses.delete(repo)
+  for (const repo of [...outcomes.keys()]) if (!paths.has(repo)) outcomes.delete(repo)
+  if (!app.current || !paths.has(app.current)) app.current = list[0]?.path ?? null
+}
+
 let refreshing = false
+let again = false
+/** Rescans the folders first: repos and worktrees come and go on disk. */
 export async function refreshAll() {
-  if (refreshing) return
+  if (refreshing) return void (again = true)
   refreshing = true
   try {
-    await pool(app.repos.map((r) => r.path), 8, refresh)
+    do {
+      again = false
+      setRepos(await api.listRepos())
+      await pool(app.repos.map((r) => r.path), 8, refresh)
+    } while (again)
+  } catch (e) {
+    say(String(e), true)
   } finally {
     refreshing = false
   }
@@ -85,12 +101,11 @@ export async function refreshAll() {
 
 export async function loadRepos(list?: RepoInfo[]) {
   try {
-    app.repos = list ?? (await api.listRepos())
+    if (list) setRepos(list)
     app.folders = (await api.getSettings()).folders
   } catch (e) {
     return say(String(e), true)
   }
-  if (!app.repos.some((r) => r.path === app.current)) app.current = app.repos[0]?.path ?? null
   await refreshAll()
 }
 
