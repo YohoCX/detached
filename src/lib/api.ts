@@ -2,7 +2,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core'
 
-export interface RepoInfo { path: string; name: string; folder: string }
+export interface RepoInfo { path: string; name: string; folder: string; worktreeOf: string | null }
 export interface CommitSummary { sha: string; subject: string; author: string; time: number }
 export interface FileChange {
   path: string

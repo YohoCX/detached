@@ -26,14 +26,22 @@ fn walk(
     if excluded.contains(&path) {
         return;
     }
-    if dir.join(".git").exists() {
+    let dot_git = dir.join(".git");
+    if dot_git.exists() {
+        // Named by its path below the folder, so nested `a/api` and `b/api` stay apart.
         let name = dir
-            .file_name()
-            .map_or(path.clone(), |n| n.to_string_lossy().into());
+            .strip_prefix(folder)
+            .ok()
+            .and_then(|p| p.to_str())
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into()))
+            .unwrap_or_else(|| path.clone());
         out.entry(path.clone()).or_insert(RepoInfo {
             path,
             name,
             folder: folder.into(),
+            worktree_of: worktree_of(dir, &dot_git),
         });
         return;
     }
@@ -53,6 +61,27 @@ fn walk(
             walk(&e.path(), depth + 1, folder, excluded, out);
         }
     }
+}
+
+/// A linked worktree's `.git` file reads `gitdir: <main>/.git/worktrees/<name>`.
+fn worktree_of(dir: &Path, dot_git: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dot_git).ok()?;
+    let gitdir = dir.join(text.strip_prefix("gitdir:")?.trim());
+    let common = gitdir
+        .parent()
+        .filter(|p| p.ends_with("worktrees"))?
+        .parent()?;
+    let main = common.parent().filter(|_| common.ends_with(".git"))?;
+    // Lexically, since `gitdir` may be relative (`git worktree add --relative-paths`).
+    let mut norm = std::path::PathBuf::new();
+    for c in main.components() {
+        match c {
+            std::path::Component::ParentDir => drop(norm.pop()),
+            std::path::Component::CurDir => {}
+            c => norm.push(c),
+        }
+    }
+    Some(norm.to_string_lossy().into())
 }
 
 #[cfg(test)]
@@ -104,5 +133,49 @@ mod tests {
         let repos = discover(std::slice::from_ref(&f), &[]);
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0].path, f);
+    }
+
+    #[test]
+    fn names_are_paths_below_the_folder_and_worktrees_point_at_their_main_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("app/api/.git/worktrees/wt")).unwrap();
+        fs::create_dir_all(root.join("app/web/.git")).unwrap();
+        fs::create_dir_all(root.join("api-wt")).unwrap();
+        let abs = root.join("app/api/.git/worktrees/wt");
+        fs::write(
+            root.join("api-wt/.git"),
+            format!("gitdir: {}\n", abs.display()),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("rel-wt")).unwrap();
+        fs::write(
+            root.join("rel-wt/.git"),
+            "gitdir: ../app/api/.git/worktrees/wt\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(
+            root.join("sub/.git"),
+            "gitdir: ../app/web/.git/modules/sub\n",
+        )
+        .unwrap();
+
+        let root_s = root.to_str().unwrap().to_string();
+        let api = format!("{root_s}/app/api");
+        let got: Vec<(String, Option<String>)> = discover(std::slice::from_ref(&root_s), &[])
+            .into_iter()
+            .map(|r| (r.name, r.worktree_of))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("api-wt".into(), Some(api.clone())),
+                ("app/api".into(), None),
+                ("app/web".into(), None),
+                ("rel-wt".into(), Some(api)),
+                ("sub".into(), None),
+            ]
+        );
     }
 }

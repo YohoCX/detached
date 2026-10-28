@@ -4,16 +4,21 @@
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
-  type Row = { folder: string; repo?: undefined } | { repo: RepoInfo; solo: boolean; folder?: undefined }
+  type Row = { folder: string; repo?: undefined } | { repo: RepoInfo; solo: boolean; worktree: boolean; folder?: undefined }
 
   const rows = $derived.by(() => {
     const out: Row[] = []
+    const listed = new Set(app.repos.map((r) => r.path))
     for (const folder of new Set([...app.folders, ...app.repos.map((r) => r.folder)])) {
-      const repos = app.repos.filter((r) => r.folder === folder)
+      // Worktrees sit under their main repo when it is listed, wherever they were found.
+      const repos = app.repos.filter((r) => r.folder === folder && !(r.worktreeOf && listed.has(r.worktreeOf)))
       // A folder that is itself the only repo needs no header; removing the repo removes the folder.
       const solo = repos.length === 1 && repos[0].path === folder
       if (!solo) out.push({ folder })
-      for (const repo of repos) out.push({ repo, solo })
+      for (const repo of repos) {
+        out.push({ repo, solo, worktree: false })
+        for (const wt of app.repos) if (wt.worktreeOf === repo.path) out.push({ repo: wt, solo: false, worktree: true })
+      }
     }
     return out
   })
@@ -43,6 +48,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div
             class="repo"
+            class:worktree={r.worktree}
             class:selected={app.current === r.repo.path}
             title={st?.lastCommit ? `${r.repo.path}\n${st.lastCommit.subject}` : r.repo.path}
             onclick={() => (app.current = r.repo.path)}
@@ -91,6 +97,7 @@
   .repo { height: 100%; padding: 3px 6px 3px 28px; border-radius: 4px; margin: 0 4px; }
   .repo:hover { background: var(--hover); }
   .repo.selected { background: var(--selected); }
+  .repo.worktree { padding-left: 44px; }
   .line { display: flex; align-items: center; gap: 5px; height: 17px; font-size: 12px; }
   .line:first-child { font-size: 13px; }
   .name { flex: 1; }

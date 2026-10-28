@@ -10,6 +10,8 @@ pub struct RepoInfo {
     pub name: String,
     /// The added folder it was found under.
     pub folder: String,
+    /// For a linked worktree, the main repo's path.
+    pub worktree_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
