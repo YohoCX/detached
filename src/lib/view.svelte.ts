@@ -11,6 +11,8 @@ export const view = $state({
   /** The selected row in Changes, for Show Diff. */
   change: null as { repo: string; change: FileChange } | null,
   find: false,
+  /** Bumped to move keyboard focus into the diff once it has loaded. */
+  focusDiff: 0,
 })
 
 /** Repos whose Changes panel compares with a base branch; '' means the default branch. */

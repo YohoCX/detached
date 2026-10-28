@@ -75,6 +75,10 @@
       key = k
     }
     mode = 'diff'
+    if (focusPending) {
+      focusPending = false
+      diff.getModifiedEditor().focus()
+    }
     if (reveal) {
       const sub = diff.onDidUpdateDiff(() => {
         sub.dispose()
@@ -200,6 +204,11 @@
       editor.dispose()
       diff.dispose()
     }
+  })
+
+  let focusPending = false
+  $effect(() => {
+    if (view.focusDiff) focusPending = true
   })
 
   let last: Shown | null = null

@@ -46,10 +46,12 @@
   )
   const selected = $derived(view.change?.repo === repo ? view.change?.change.path : null)
 
-  function select(c: FileChange, diff = true) {
+  /** Like JetBrains: click previews the diff, double-click or Enter also focuses it; Cmd+Down opens the file. */
+  function select(c: FileChange, diff = true, focus = false) {
     if (!repo) return
     view.change = { repo, change: c }
     if (diff) showDiff(repo, c.path, c.origPath, info && base !== undefined ? { kind: 'rev', rev: info.mergeBase } : { kind: 'head' })
+    if (focus) view.focusDiff++
   }
 
   const openFile = (c: FileChange) => repo && open({ repo, ref: null, path: c.path, line: null })
@@ -65,7 +67,7 @@
         select(next)
         list?.reveal(rows.findIndex((r) => r.c === next))
       }
-    } else if (e.key === 'Enter' && files[i]) select(files[i])
+    } else if (e.key === 'Enter' && files[i]) select(files[i], true, true)
     else return
     e.preventDefault()
   }
@@ -109,7 +111,7 @@
             {@const c = r.c}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div class="item {statusOf(c)}" class:selected={c.path === selected} role="option" aria-selected={c.path === selected}
-              tabindex="-1" onclick={() => select(c)} ondblclick={() => openFile(c)}
+              tabindex="-1" onclick={() => select(c)} ondblclick={() => select(c, true, true)}
               title={c.origPath ? `${c.origPath} → ${c.path}` : c.path}>
               <span class="name">{baseName(c.path)}</span>
               <span class="muted ellipsis">{dirName(c.path)}</span>
