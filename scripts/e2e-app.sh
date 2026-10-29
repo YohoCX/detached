@@ -1,14 +1,14 @@
 #!/bin/sh
-# Builds Workbench.app and runs its --self-test launched through LaunchServices, as Finder does.
+# Builds Detached.app and runs its --self-test launched through LaunchServices, as Finder does.
 # Extra arguments go to `open`, e.g. --env SHELL=/usr/bin/false to break the PATH probe.
 set -eu
 cd "$(dirname "$0")/.."
 
-if security find-identity -v -p codesigning | grep -q '"Workbench Dev"'; then
-  echo "Signing with \"Workbench Dev\"."
+if security find-identity -v -p codesigning | grep -q '"Detached Dev"'; then
+  echo "Signing with \"Detached Dev\"."
   pnpm tauri build --bundles app
 else
-  echo "No valid \"Workbench Dev\" identity (see make sign-setup): signing ad-hoc."
+  echo "No valid \"Detached Dev\" identity (see make sign-setup): signing ad-hoc."
   pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
 fi
 
@@ -18,7 +18,7 @@ trap 'rm -rf "$tmp"' EXIT
 shell=$(dscl . -read "/Users/$USER" UserShell | sed 's/^UserShell: //')
 env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL="$shell" \
   TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  open -n -W "$@" src-tauri/target/release/bundle/macos/Workbench.app --args --self-test "$tmp/report.json"
+  open -n -W "$@" src-tauri/target/release/bundle/macos/Detached.app --args --self-test "$tmp/report.json"
 if [ ! -f "$tmp/report.json" ]; then
   echo "FAIL: the app wrote no report." >&2
   exit 1

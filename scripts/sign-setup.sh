@@ -1,9 +1,9 @@
 #!/bin/sh
-# Creates a self-signed "Workbench Dev" code-signing identity once, so every build carries the
+# Creates a self-signed "Detached Dev" code-signing identity once, so every build carries the
 # same signature and Keychain access survives rebuilds. Usage: scripts/sign-setup.sh [keychain]
 set -eu
 
-NAME="Workbench Dev"
+NAME="Detached Dev"
 KEYCHAIN="${1:-$HOME/Library/Keychains/login.keychain-db}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -31,8 +31,8 @@ EOF
   /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$tmp/cert.cnf" \
     -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
   /usr/bin/openssl pkcs12 -export -name "$NAME" -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
-    -passout pass:workbench -out "$tmp/id.p12"
-  security import "$tmp/id.p12" -k "$KEYCHAIN" -P workbench -T /usr/bin/codesign >/dev/null
+    -passout pass:detached -out "$tmp/id.p12"
+  security import "$tmp/id.p12" -k "$KEYCHAIN" -P detached -T /usr/bin/codesign >/dev/null
   echo "Created identity \"$NAME\" in $KEYCHAIN."
 fi
 

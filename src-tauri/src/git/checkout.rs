@@ -71,7 +71,7 @@ fn smart(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Result<Check
             .trim()
             .into(),
     };
-    let message = format!("workbench: {from} -> {to} {}", now());
+    let message = format!("detached: {from} -> {to} {}", now());
     let old = stash_ref(&env, repo)?;
     let push = ["stash", "push", "--include-untracked", "-m", &message];
     run(&env, repo, &push, Kind::Write, Opts::default())?;
@@ -291,7 +291,7 @@ mod tests {
         );
         assert!(error.contains("CONFLICT"), "{error}");
         assert!(
-            stash_message.starts_with("workbench: main -> other "),
+            stash_message.starts_with("detached: main -> other "),
             "{stash_message}"
         );
         assert_eq!(sb.git(&work, &["rev-parse", "refs/stash"]), stash);

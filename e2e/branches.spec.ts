@@ -16,9 +16,9 @@ test('checkout over conflicting local changes keeps the stash and names it', asy
   await page.keyboard.press('Enter')
   const notice = page.locator('.notice.error')
   await expect(notice.locator('.title span')).toHaveText('Checked out other, your changes did not apply cleanly')
-  await expect(notice.locator('pre')).toContainText('Stash kept: workbench: main -> other')
+  await expect(notice.locator('pre')).toContainText('Stash kept: detached: main -> other')
   await expect(notice.locator('li .mono')).toHaveText(['README.md'])
-  expect(fx.git(fx.repo('app'), 'stash', 'list')).toContain('workbench: main -> other')
+  expect(fx.git(fx.repo('app'), 'stash', 'list')).toContain('detached: main -> other')
 })
 
 test('deleting an unmerged branch lists its commits and asks first', async ({ page, fx }) => {

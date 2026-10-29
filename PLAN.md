@@ -1,6 +1,6 @@
-# Workbench — milestone 1 plan
+# Detached — milestone 1 plan
 
-Working name `workbench`. A native-feeling, read-only git GUI over many repos with the JetBrains
+Detached (formerly the working name `workbench`). A native-feeling, read-only git GUI over many repos with the JetBrains
 git features and macOS keymap. Decisions come from the handoff of 2026-10-28; this file is how
 milestone 1 gets built.
 
@@ -135,7 +135,7 @@ done when HEAD reached the target (see Hooks), whatever its exit code.
    Done: finish.
 2. Refused with "your local changes to the following files would be overwritten": record
    `git rev-parse -q --verify refs/stash`, run
-   `git stash push --include-untracked -m "workbench: <from> -> <to> <timestamp>"`, and read
+   `git stash push --include-untracked -m "detached: <from> -> <to> <timestamp>"`, and read
    `refs/stash` again. The new value is the stash id. Unchanged (nothing was saved): report the
    original error and stop.
 3. `git switch <branch>`. Not done: `git stash apply --index <id>` back on the original branch, drop
@@ -212,7 +212,7 @@ overrides by action id. Double Shift is two Shift keydowns within 300 ms with no
 
 **Signing.** Keychain access is tied to the app's code signature, and ad-hoc signatures change every
 build, which would prompt for each token read. `make sign-setup` creates a local self-signed
-"Workbench Dev" code-signing identity once; `bundle.macOS.signingIdentity` uses it for every build.
+"Detached Dev" code-signing identity once; `bundle.macOS.signingIdentity` uses it for every build.
 
 ## Build order
 
@@ -285,4 +285,4 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
 
 ## Open questions
 
-- App name: `workbench` is a working name; the bundle id follows the final name.
+- App name: settled as Detached (`dev.wdevs.detached`, 2026-10-29). The Keychain service stays `workbench`, and settings move once from the old identifier's folder.

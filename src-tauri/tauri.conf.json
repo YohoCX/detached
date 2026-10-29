@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Workbench",
+  "productName": "Detached",
   "version": "0.1.0",
-  "identifier": "dev.wdevs.workbench",
+  "identifier": "dev.wdevs.detached",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Workbench",
+        "title": "Detached",
         "width": 1400,
         "height": 900,
         "resizable": true,
@@ -40,7 +40,7 @@
       "icons/icon.icns"
     ],
     "macOS": {
-      "signingIdentity": "Workbench Dev"
+      "signingIdentity": "Detached Dev"
     }
   }
 }

@@ -26,6 +26,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            // Settings written under the app's former identifier move over once.
+            let old = config_dir.with_file_name("dev.wdevs.workbench");
+            if !config_dir.exists() && old.exists() {
+                let _ = std::fs::rename(&old, &config_dir);
+            }
             let settings = Settings::load(&config_dir);
             let (env, _) = Env::detect(settings.git_path.as_deref());
             app.manage(AppState {

@@ -41,7 +41,7 @@ struct Tool {
 pub fn run(dest: &Path) -> bool {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("gitconfig");
-    let identity = "[user]\n\tname = Workbench\n\temail = workbench@localhost\n";
+    let identity = "[user]\n\tname = Detached\n\temail = detached@localhost\n";
     std::fs::write(&config, identity).unwrap();
     // Still single-threaded: keeps the user's global and system git config out of the temp repo.
     unsafe {

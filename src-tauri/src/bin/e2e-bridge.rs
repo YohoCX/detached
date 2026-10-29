@@ -8,14 +8,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use detached_lib::accounts::{self, store::MemoryStore};
+use detached_lib::env::{Env, which};
+use detached_lib::git::{branches, checkout, diff, files, pull};
+use detached_lib::settings::Settings;
+use detached_lib::state::AppState;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use workbench_lib::accounts::{self, store::MemoryStore};
-use workbench_lib::env::{Env, which};
-use workbench_lib::git::{branches, checkout, diff, files, pull};
-use workbench_lib::settings::Settings;
-use workbench_lib::state::AppState;
 
 static STATE: RwLock<Option<Arc<AppState>>> = RwLock::new(None);
 
@@ -110,7 +110,7 @@ fn arg<T: DeserializeOwned>(args: &Value, k: &str) -> Result<T, String> {
         .map_err(|e| format!("{k}: {e}"))
 }
 
-fn ok<T: Serialize>(r: workbench_lib::error::Result<T>) -> Result<Value, String> {
+fn ok<T: Serialize>(r: detached_lib::error::Result<T>) -> Result<Value, String> {
     r.map(|v| json!(v)).map_err(|e| e.to_string())
 }
 

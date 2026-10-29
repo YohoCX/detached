@@ -13,7 +13,8 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self, id: &str) -> Result<()>;
 }
 
-/// macOS Keychain generic passwords: service `workbench`, account = account id.
+/// macOS Keychain generic passwords: service `workbench` (the app's former name, kept so saved tokens
+/// still resolve), account = account id.
 pub struct KeychainStore;
 
 const SERVICE: &str = "workbench";
