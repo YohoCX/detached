@@ -216,7 +216,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={close}></div>
-<div class="popup" role="dialog" tabindex="-1" bind:this={popup} {onkeydown}>
+<div class="popup glass" role="dialog" tabindex="-1" bind:this={popup} {onkeydown}>
   {#if !repo}
     <p class="pad muted">Select a repository first.</p>
   {:else if sub.kind === 'list'}
@@ -227,8 +227,8 @@
     {:else if !data}
       <p class="pad muted">Loading…</p>
     {:else}
-      <div class="list" style:height="{Math.min(items.length * 24, 440)}px">
-        <VirtualList bind:this={list} {items}>
+      <div class="list" style:height="{Math.min(items.length * 28, 448)}px">
+        <VirtualList bind:this={list} {items} height={28}>
           {#snippet row(it, i)}
             {#if it.kind === 'header'}
               <div class="header">{it.label}</div>
@@ -271,7 +271,7 @@
     </div>
     {#each menu(it) as [label, run], i (label)}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <div class="item" class:selected={i === menuSel} onmousemove={(e) => (e.movementX || e.movementY) && (menuSel = i)} onclick={run}><span class="label">{label}</span></div>
+      <div class="item" class:selected={i === menuSel} onmousemove={(e) => (e.movementX || e.movementY) && (menuSel = i)} onclick={run}><span class="label ellipsis" title={label}>{label}</span></div>
     {/each}
   {:else if sub.kind === 'new'}
     {@const start = sub.start}
@@ -320,30 +320,26 @@
 
 <style>
   .backdrop { position: fixed; inset: 0; z-index: 10; }
-  .popup {
-    position: absolute; top: 100%; left: 0; z-index: 11; width: 440px; margin-top: 4px;
-    background: var(--popup); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
-    padding: 6px 0; outline: none;
-  }
-  .search { width: calc(100% - 12px); margin: 0 6px 4px; }
-  .list { max-height: 440px; }
+  .popup { position: absolute; top: 100%; left: 0; z-index: 11; width: 440px; margin-top: 8px; padding: 8px 0; outline: none; }
+  .search { width: calc(100% - 16px); height: 36px; margin: 0 8px 6px; font-size: 14px; }
+  .list { max-height: 448px; }
   .scroll { max-height: 300px; overflow-y: auto; }
-  .header { padding: 6px 12px 0; font-size: 11px; color: var(--muted); }
-  .item { display: flex; align-items: center; gap: 6px; height: 24px; margin: 0 6px; padding: 0 6px; border-radius: 4px; }
-  .item.selected { background: var(--selected); }
+  .header { display: flex; align-items: flex-end; height: 100%; padding: 0 18px 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .item { display: flex; align-items: center; gap: 8px; height: 28px; margin: 0 8px; padding: 0 8px 0 10px; border-radius: 9px; }
+  .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .label { flex: 1; min-width: 0; }
-  .current { color: var(--accent); font-weight: 600; }
-  .gone { font-size: 10px; padding: 0 4px; border-radius: 3px; border: 1px solid var(--warning); color: var(--warning); }
+  .current { color: var(--accent); font-weight: 800; }
+  .gone { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; border: 1px solid var(--warning); color: var(--warning); }
   .up { max-width: 140px; font-size: 12px; }
-  .more { height: 18px; min-width: 18px; visibility: hidden; }
+  .more { height: 20px; min-width: 20px; visibility: hidden; }
   .item.selected .more { visibility: visible; }
-  .title { display: flex; align-items: center; gap: 6px; padding: 2px 12px 6px; font-weight: 600; min-width: 0; }
-  .title .muted { font-weight: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pad { padding: 6px 12px; margin: 0; }
-  .form { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-  .form input:not([type]) { width: 100%; }
-  .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-  .commits { border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+  .title { display: flex; align-items: center; gap: 6px; padding: 2px 16px 8px; font-weight: 800; min-width: 0; }
+  .title .muted { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pad { padding: 6px 16px; margin: 0; }
+  .form { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .form input:not([type]) { width: 100%; height: 34px; }
+  .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  .commits { border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; }
   .commit { display: flex; gap: 6px; font-size: 12px; }
   .err { color: var(--error); }
 </style>

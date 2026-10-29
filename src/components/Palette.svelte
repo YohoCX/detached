@@ -125,8 +125,8 @@
 {/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onclick={close}></div>
-<div class="palette" role="dialog">
+<div class="backdrop scrim" onclick={close}></div>
+<div class="palette glass" role="dialog">
   <div class="head">
     <span class="mode">{titles[mode]}</span>
     {#if mode === 'file' || mode === 'everywhere'}
@@ -162,23 +162,19 @@
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; z-index: 20; background: rgb(0 0 0 / 0.08); }
-  .palette {
-    position: fixed; top: 12%; left: 50%; transform: translateX(-50%); z-index: 21; width: min(680px, 90vw);
-    background: var(--popup); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
-    display: flex; flex-direction: column; overflow: hidden;
-  }
-  .head { display: flex; align-items: center; gap: 12px; padding: 8px 12px 4px; }
-  .mode { font-weight: 600; flex: 1; }
-  .head label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
-  .query { margin: 4px 10px 6px; padding: 6px 8px; font-size: 14px; }
-  .list { max-height: 420px; overflow-y: auto; padding: 0 6px 6px; }
-  .item { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 4px; }
-  .item.selected { background: var(--selected); }
-  .name { white-space: nowrap; }
+  .backdrop { z-index: 20; }
+  .palette { position: fixed; top: 12%; left: 50%; transform: translateX(-50%); z-index: 21; width: min(680px, 90vw); border-radius: 18px; display: flex; flex-direction: column; overflow: hidden; }
+  .head { display: flex; align-items: center; gap: 12px; padding: 12px 16px 6px; }
+  .mode { font-size: 14px; font-weight: 800; flex: 1; }
+  .head label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .query { height: 40px; margin: 4px 10px 8px; padding: 0 12px; font-size: 14px; border-radius: 12px; }
+  .list { max-height: 420px; overflow-y: auto; padding: 0 8px 8px; }
+  .item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: 9px; }
+  .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
+  .name { font-weight: 600; white-space: nowrap; }
   .dir { flex: 1; min-width: 0; font-size: 12px; }
   .item > .name.ellipsis { flex: 1; min-width: 0; }
   .detail { flex: none; font-size: 12px; }
   .spacer { width: 14px; flex: none; }
-  .empty { padding: 12px 8px; }
+  .empty { padding: 14px 10px; }
 </style>

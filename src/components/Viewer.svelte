@@ -177,7 +177,7 @@
       scrollBeyondLastLine: false,
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'),
       fontSize: 13,
-      theme: dark.matches ? 'vs-dark' : 'vs',
+      theme: dark.matches ? 'wb-dark' : 'wb-light',
     }
     editor = monaco.editor.create(editorHost, common)
     diff = monaco.editor.createDiffEditor(diffHost, {
@@ -187,7 +187,7 @@
       useInlineViewWhenSpaceIsLimited: false,
       ignoreTrimWhitespace: false,
     })
-    const onTheme = () => monaco.editor.setTheme(dark.matches ? 'vs-dark' : 'vs')
+    const onTheme = () => monaco.editor.setTheme(dark.matches ? 'wb-dark' : 'wb-light')
     dark.addEventListener('change', onTheme)
     const offs = [
       register('diff.next', () => mode === 'diff' && diff.goToDiff('next')),
@@ -230,12 +230,12 @@
       <span class="muted ellipsis">
         {nameOf(shown.repo)}
         {#if shown.kind === 'file' && shown.ref} @ {shown.ref}{/if}
-        {#if shown.kind === 'diff'} · {sideName(shown.left)} ↔ {sideName(shown.right)}{/if}
       </span>
+      {#if shown.kind === 'diff'}<span class="pill ellipsis">{sideName(shown.left)} ↔ {sideName(shown.right)}</span>{/if}
       <span class="spacer"></span>
       {#if mode === 'diff'}
-        <button class="icon-btn" title="Previous change {chordFor('diff.prev')}" onclick={() => diff.goToDiff('previous')}>↑</button>
-        <button class="icon-btn" title="Next change {chordFor('diff.next')}" onclick={() => diff.goToDiff('next')}>↓</button>
+        <button class="icon-btn" title="Previous change {chordFor('diff.prev')}" onclick={() => diff.goToDiff('previous')}><Icon name="up" /></button>
+        <button class="icon-btn" title="Next change {chordFor('diff.next')}" onclick={() => diff.goToDiff('next')}><Icon name="next" /></button>
         <div class="seg">
           <button class:on={sideBySide} onclick={() => toggleSideBySide(true)}>Side-by-side</button>
           <button class:on={!sideBySide} onclick={() => toggleSideBySide(false)}>Unified</button>
@@ -275,18 +275,15 @@
 
 <style>
   .viewer { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); flex: none; }
-  .name { font-weight: 600; white-space: nowrap; }
+  header { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); flex: none; }
+  .name { font-size: 14px; font-weight: 800; white-space: nowrap; }
   .dir { min-width: 0; }
+  .pill { flex: none; max-width: 40%; font-size: 12px; color: var(--muted); background: var(--hover); border-radius: 999px; padding: 2px 10px; }
   .spacer { flex: 1; }
-  .seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
-  .seg button { border: 0; background: none; padding: 2px 8px; font-size: 12px; }
-  .seg button.on { background: var(--selected); }
-  .bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: color-mix(in srgb, var(--conflict) 12%, var(--surface)); border-bottom: 1px solid var(--line); }
-  .bar .btn { height: 22px; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 6px 16px; background: color-mix(in srgb, var(--conflict) 14%, transparent); border-bottom: 1px solid var(--line); }
   .editors { position: relative; flex: 1; min-height: 0; }
   .host { position: absolute; inset: 0; }
   .hidden { display: none; }
-  .placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
-  .goto { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; width: 220px; box-shadow: var(--shadow); }
+  .placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  .goto { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; width: 220px; box-shadow: var(--shadow); }
 </style>

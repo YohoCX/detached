@@ -21,7 +21,7 @@
 </footer>
 
 <style>
-  footer { display: flex; align-items: center; gap: 12px; height: 24px; padding: 0 10px; font-size: 12px; background: var(--surface); border-top: 1px solid var(--line); min-width: 0; }
+  footer { display: flex; align-items: center; gap: 12px; height: 20px; padding: 0 8px; font-size: 12px; color: var(--muted); min-width: 0; flex: none; }
   .message { border: 0; background: none; padding: 0; text-align: left; min-width: 0; max-width: 50%; }
   .err { color: var(--error); }
   .fill { flex: 1; }

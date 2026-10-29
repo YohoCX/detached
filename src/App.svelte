@@ -35,15 +35,15 @@
 <div class="app">
   <TopBar />
   <div class="body">
-    <nav class="strip">
+    <nav class="strip panel">
       <button class="icon-btn" class:on={app.sidebar} title="Repositories" onclick={() => (app.sidebar = !app.sidebar)}><Icon name="repo" /></button>
       <button class="icon-btn" class:on={app.tool === 'files'} title="Project {chordFor('panel.project')}" onclick={() => tool('files')}><Icon name="tree" /></button>
       <button class="icon-btn" class:on={app.tool === 'changes'} title="Changes" onclick={() => tool('changes')}><Icon name="changes" /></button>
       <button class="icon-btn settings" title="Settings {chordFor('app.settings')}" onclick={() => (app.settings = true)}><Icon name="gear" /></button>
     </nav>
-    {#if app.sidebar}<aside class="repos"><Sidebar /></aside>{/if}
+    {#if app.sidebar}<aside class="repos panel"><Sidebar /></aside>{/if}
     {#if app.tool}
-      <aside class="tool">
+      <aside class="tool panel">
         {#if app.tool === 'files'}<FileTree repo={app.current} />{:else}<Changes repo={app.current} />{/if}
       </aside>
     {/if}
@@ -57,14 +57,14 @@
 {#if view.find}<FindInFiles />{/if}
 
 <style>
-  .app { display: flex; flex-direction: column; height: 100%; }
-  .body { display: flex; flex: 1; min-height: 0; }
-  .strip { display: flex; flex-direction: column; gap: 4px; width: 40px; padding: 6px; flex: none; background: var(--surface); border-right: 1px solid var(--line); }
-  .strip .icon-btn { width: 28px; height: 28px; justify-content: center; color: var(--muted); }
+  .app { display: flex; flex-direction: column; gap: 10px; height: 100%; padding: 10px 10px 6px; }
+  .body { display: flex; gap: 10px; flex: 1; min-height: 0; }
+  .strip { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 48px; padding: 8px 0; flex: none; }
+  .strip .icon-btn { width: 34px; height: 34px; justify-content: center; border-radius: 10px; }
   .strip .settings { margin-top: auto; }
-  .strip .on { background: var(--selected); color: var(--fg); }
-  aside { flex: none; min-width: 0; border-right: 1px solid var(--line); background: var(--bg); }
+  .strip .on { background: var(--selected); color: var(--fg); box-shadow: 0 0 18px var(--selected); }
+  aside { flex: none; min-width: 0; overflow: hidden; }
   .repos { width: 280px; }
   .tool { width: 300px; }
-  main { flex: 1; min-width: 0; background: var(--surface); }
+  main { flex: 1; min-width: 0; overflow: hidden; border-radius: 14px; background: var(--code); border: 1px solid var(--line); box-shadow: var(--panel-shadow); }
 </style>

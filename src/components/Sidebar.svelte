@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import type { RepoInfo } from '../lib/api'
+  import type { RepoInfo, RepoStatus } from '../lib/api'
   import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses } from '../lib/app.svelte'
   import { folderMenu, repoMenu } from '../lib/menu'
   import Icon from './Icon.svelte'
@@ -48,6 +48,13 @@
 
   const badge = { merge: 'MERGING', rebase: 'REBASING', cherryPick: 'CHERRY-PICKING', revert: 'REVERTING', bisect: 'BISECTING' }
   const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
+  const tone = (s: RepoStatus | string | undefined) =>
+    typeof s === 'string' ? 'error'
+    : !s ? null
+    : s.changes.length || s.inProgress ? 'warning'
+    : s.ahead || s.behind ? 'accent'
+    : s.branch && !s.upstream ? 'deleted'
+    : 'success'
 </script>
 
 <section>
@@ -105,6 +112,7 @@
               }}>
                 <Icon name="close" size={12} />
               </button>
+              {#if tone(s)}<span class="dot" style:color="var(--{tone(s)})"></span>{/if}
             </div>
             <div class="line muted">
               {#if typeof s === 'string'}
@@ -130,24 +138,24 @@
 </section>
 
 <style>
-  section { display: flex; flex-direction: column; height: 100%; min-width: 0; }
-  header { display: flex; align-items: center; gap: 2px; height: 34px; padding: 0 6px 0 12px; flex: none; }
-  .title { flex: 1; font-weight: 600; }
-  .folder { display: flex; align-items: flex-end; gap: 6px; height: 100%; padding: 0 6px 4px 4px; color: var(--muted); font-size: 12px; }
+  section { display: flex; flex-direction: column; height: 100%; min-width: 0; padding-bottom: 6px; }
+  header { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 16px; flex: none; }
+  .title { flex: 1; font-size: 14px; font-weight: 800; }
+  .folder { display: flex; align-items: flex-end; gap: 6px; height: 100%; padding: 0 8px 6px 8px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .chevron { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--muted); transition: transform 0.1s; }
   .chevron.open { transform: rotate(90deg); }
-  .toggle { position: absolute; left: 10px; border: 0; background: none; padding: 2px; border-radius: 3px; }
+  .toggle { position: absolute; left: 8px; border: 0; background: none; padding: 2px; border-radius: 4px; }
   .toggle:hover { background: var(--hover); }
   .folder .label { flex: 1; }
-  .repo { position: relative; height: 100%; padding: 3px 6px 3px 28px; border-radius: 4px; margin: 0 4px; }
+  .repo { position: relative; height: 100%; padding: 3px 10px 3px 28px; border-radius: 10px; margin: 0 6px; }
   .repo:hover { background: var(--hover); }
-  .repo.selected { background: var(--selected); }
+  .repo.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .repo.worktree { padding-left: 44px; }
   .line { display: flex; align-items: center; gap: 5px; height: 17px; font-size: 12px; }
-  .line:first-child { font-size: 13px; }
+  .line:first-child { font-size: 13px; font-weight: 600; }
   .name { flex: 1; }
-  .badge { font-size: 10px; padding: 0 4px; border-radius: 3px; background: var(--warning); color: var(--accent-fg); }
-  .dirty { color: var(--modified); font-size: 11px; }
+  .badge { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; background: var(--warning); color: var(--accent-fg); }
+  .dirty { color: var(--warning); font-size: 11px; font-weight: 700; }
   .ab { color: var(--fg); }
   .outcome { margin-left: auto; }
   .err { color: var(--error); }

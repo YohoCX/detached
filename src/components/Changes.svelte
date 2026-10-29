@@ -54,6 +54,8 @@
     if (focus) view.focusDiff++
   }
 
+  const letter: Record<string, string> = { modified: 'M', renamed: 'R', added: 'A', deleted: 'D', untracked: 'U', conflict: 'C' }
+
   const openFile = (c: FileChange) => repo && open({ repo, ref: null, path: c.path, line: null })
 
   function onkeydown(e: KeyboardEvent) {
@@ -105,7 +107,7 @@
   {:else}
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="rows" tabindex="0" role="listbox" {onkeydown}>
-      <VirtualList bind:this={list} items={rows} height={24}>
+      <VirtualList bind:this={list} items={rows} height={28}>
         {#snippet row(r)}
           {#if r.c}
             {@const c = r.c}
@@ -113,6 +115,7 @@
             <div class="item {statusOf(c)}" class:selected={c.path === selected} role="option" aria-selected={c.path === selected}
               tabindex="-1" onclick={() => select(c)} ondblclick={() => select(c, true, true)}
               title={c.origPath ? `${c.origPath} → ${c.path}` : c.path}>
+              <span class="st">{letter[statusOf(c)]}</span>
               <span class="name">{baseName(c.path)}</span>
               <span class="muted ellipsis">{dirName(c.path)}</span>
             </div>
@@ -129,28 +132,31 @@
 </section>
 
 <style>
-  section { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; align-items: center; height: 32px; padding: 0 6px 0 10px; flex: none; }
-  .title { flex: 1; font-weight: 600; }
-  .seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-right: 4px; }
-  .seg button { border: 0; background: none; padding: 1px 8px; font-size: 12px; color: var(--muted); }
-  .seg button.on { background: var(--selected); color: var(--fg); }
-  .base { display: flex; align-items: center; gap: 6px; padding: 0 10px 6px; flex: none; font-size: 12px; }
+  section { display: flex; flex-direction: column; height: 100%; padding-bottom: 6px; }
+  header { display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px 0 16px; flex: none; }
+  .title { flex: 1; font-size: 14px; font-weight: 800; }
+  .base { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; flex: none; font-size: 12px; }
   .base input { flex: 1; min-width: 0; }
   .ab { white-space: nowrap; }
   .rows { flex: 1; min-height: 0; outline: none; }
-  .empty { padding: 12px; }
+  .empty { padding: 12px 16px; }
   .error { color: var(--error); white-space: pre-wrap; }
-  .group { display: flex; align-items: center; gap: 4px; width: 100%; height: 24px; padding: 0 8px; border: 0; background: none; font-weight: 600; text-align: left; }
+  .group { display: flex; align-items: center; gap: 4px; width: 100%; height: 26px; padding: 0 12px; border: 0; background: none; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); text-align: left; }
+  .group .muted { letter-spacing: 0; text-transform: none; }
   .chev { display: inline-flex; transition: transform 0.1s; }
   .chev.open { transform: rotate(90deg); }
-  .item { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 28px; white-space: nowrap; }
+  .item { display: flex; align-items: center; gap: 8px; height: 28px; margin: 0 6px; padding: 0 8px 0 14px; border-radius: 9px; white-space: nowrap; }
+  .item:hover { background: var(--hover); }
   .item.selected { background: var(--selected-inactive); }
-  .rows:focus-within .item.selected { background: var(--selected); }
-  .modified, .renamed { color: var(--modified); }
-  .added { color: var(--added); }
-  .deleted { color: var(--deleted); }
-  .untracked { color: var(--untracked); }
-  .conflict { color: var(--conflict); }
+  .rows:focus-within .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
+  .name { font-weight: 600; }
+  .st { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono); color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
+  .modified, .renamed { --c: var(--modified); }
+  .added { --c: var(--added); }
+  .deleted { --c: var(--deleted); }
+  .deleted .name { text-decoration: line-through; color: var(--muted); }
+  .untracked { --c: var(--untracked); }
+  .conflict { --c: var(--conflict); }
+  .conflict .name { color: var(--conflict); }
   .item .muted { min-width: 0; }
 </style>

@@ -150,53 +150,22 @@
 </section>
 
 <style>
-  .accounts { display: flex; flex-direction: column; gap: 8px; padding: 12px; color: var(--fg); }
+  .accounts { display: flex; flex-direction: column; gap: 10px; color: var(--fg); }
   header { display: flex; align-items: center; justify-content: space-between; }
-  h2 { font-size: 14px; margin: 0; }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 10px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
+  h2 { font-size: 14px; font-weight: 800; margin: 0; }
+  .row, form { padding: 10px 12px; background: var(--hover); border: 1px solid var(--line); border-radius: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; }
   .info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
   .info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .actions { display: flex; gap: 6px; }
-  form {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 10px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
-  label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); }
-  input, select {
-    font: inherit;
-    color: var(--fg);
-    background: var(--bg);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 4px 6px;
-    -webkit-user-select: text;
-    user-select: text;
-  }
-  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  form { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
   input:disabled { color: var(--muted); }
-  button {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 3px 10px;
-  }
+  button { height: 28px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--input); font-weight: 700; }
   button:disabled { opacity: 0.5; }
-  .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .danger { color: var(--conflict); }
+  .primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+  .danger { color: var(--error); }
   .muted { color: var(--muted); }
   .ok { color: var(--added); }
-  .error { color: var(--conflict); margin: 0; }
+  .error { color: var(--error); margin: 0; }
 </style>

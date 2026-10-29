@@ -135,8 +135,8 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onclick={close}></div>
-<div class="find" role="dialog">
+<div class="backdrop scrim" onclick={close}></div>
+<div class="find glass" role="dialog">
   <div class="head">
     <span class="title">Find in Files</span>
     <span class="muted">
@@ -181,30 +181,26 @@
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; z-index: 20; background: rgb(0 0 0 / 0.08); }
-  .find {
-    position: fixed; top: 10%; left: 50%; transform: translateX(-50%); z-index: 21; width: min(820px, 92vw); height: min(560px, 80vh);
-    background: var(--popup); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
-    display: flex; flex-direction: column; overflow: hidden;
-  }
-  .head { display: flex; align-items: center; gap: 12px; padding: 8px 12px 4px; }
-  .title { font-weight: 600; }
+  .backdrop { z-index: 20; }
+  .find { position: fixed; top: 10%; left: 50%; transform: translateX(-50%); z-index: 21; width: min(860px, 92vw); height: min(580px, 80vh); border-radius: 20px; display: flex; flex-direction: column; overflow: hidden; }
+  .head { display: flex; align-items: center; gap: 12px; padding: 12px 16px 6px 18px; }
+  .title { font-size: 14px; font-weight: 800; }
   .spacer { flex: 1; }
-  .head label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
-  .line { display: flex; align-items: center; gap: 4px; padding: 3px 10px; }
-  .text { flex: 1; font-size: 14px; padding: 5px 8px; }
-  .glob { width: 260px; font-size: 12px; }
+  .head label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .line { display: flex; align-items: center; gap: 4px; padding: 4px 12px; }
+  .text { flex: 1; height: 40px; padding: 0 12px; font: 14px var(--mono); border-radius: 12px; }
+  .glob { width: 280px; font-size: 12px; }
   .scope { flex: 1; text-align: right; font-size: 12px; }
-  .toggle { width: 30px; height: 26px; border: 1px solid transparent; border-radius: 4px; background: none; }
+  .toggle { min-width: 32px; height: 30px; border: 0; border-radius: 8px; background: none; font-weight: 700; color: var(--muted); }
   .toggle:hover { background: var(--hover); }
-  .toggle.on { background: var(--selected); border-color: var(--accent); }
-  .list { flex: 1; min-height: 0; margin-top: 4px; border-top: 1px solid var(--line); }
-  .file { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; white-space: nowrap; }
-  .file .name { font-weight: 600; }
+  .toggle.on { background: var(--selected); color: var(--fg); box-shadow: inset 0 0 0 1px var(--selected-ring); }
+  .list { flex: 1; min-height: 0; margin-top: 6px; padding: 4px 0; border-top: 1px solid var(--line); background: var(--code); }
+  .file { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 16px; white-space: nowrap; }
+  .file .name { font-weight: 700; }
   .file .ellipsis { flex: 1; min-width: 0; }
-  .match { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px 0 22px; white-space: pre; }
-  .match.selected { background: var(--selected); }
+  .match { display: flex; align-items: center; gap: 8px; height: 24px; margin: 0 8px; padding: 0 8px 0 20px; border-radius: 7px; white-space: pre; }
+  .match.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .no { width: 40px; flex: none; text-align: right; }
-  .note { padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--warning); }
+  .note { padding: 8px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--warning); }
   .note.error { color: var(--error); }
 </style>

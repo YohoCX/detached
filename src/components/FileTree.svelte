@@ -136,17 +136,18 @@
 </section>
 
 <style>
-  section { display: flex; flex-direction: column; height: 100%; }
-  header { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 10px; flex: none; }
-  .title { flex: 1; font-weight: 600; }
-  .ref { width: 140px; height: 24px; font-size: 12px; }
-  .ref.at { border-color: var(--accent); }
+  section { display: flex; flex-direction: column; height: 100%; padding-bottom: 6px; }
+  header { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 8px 0 16px; flex: none; }
+  .title { flex: 1; font-size: 14px; font-weight: 800; }
+  .ref { width: 140px; height: 26px; font-size: 12px; }
+  .ref.at { border-color: var(--selected-ring); }
   .rows { flex: 1; min-height: 0; outline: none; }
   .empty { padding: 12px; }
   .error { color: var(--error); white-space: pre-wrap; }
-  .item { display: flex; align-items: center; gap: 4px; height: 24px; padding-right: 8px; white-space: nowrap; }
+  .item { display: flex; align-items: center; gap: 4px; height: 24px; margin: 0 6px; padding-right: 8px; border-radius: 7px; white-space: nowrap; }
+  .item:hover { background: var(--hover); }
   .item.selected { background: var(--selected-inactive); }
-  .rows:focus-within .item.selected { background: var(--selected); }
+  .rows:focus-within .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .chev { display: inline-flex; width: 12px; flex: none; color: var(--muted); transition: transform 0.1s; }
   .chev.open { transform: rotate(90deg); }
   .modified, .renamed { color: var(--modified); }

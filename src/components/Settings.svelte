@@ -52,8 +52,8 @@
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && close()} />
 
-<div class="backdrop" onclick={close} role="presentation"></div>
-<div class="dialog" role="dialog" aria-label="Settings">
+<div class="backdrop scrim" onclick={close} role="presentation"></div>
+<div class="dialog glass" role="dialog" aria-label="Settings">
   <header>
     <h2>Settings</h2>
     <button class="icon-btn" title="Close" onclick={close}><Icon name="close" /></button>
@@ -108,18 +108,17 @@
 </div>
 
 <style>
-  .backdrop { position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / 0.2); }
+  .backdrop { z-index: 30; }
   .dialog {
     position: fixed; z-index: 31; top: 8vh; left: 50%; transform: translateX(-50%);
-    width: min(720px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
-    background: var(--popup); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+    width: min(720px, 92vw); max-height: 84vh; display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;
     -webkit-user-select: text;
     user-select: text;
   }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  h2 { font-size: 14px; margin: 0; }
-  h3 { font-size: 12px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .body { overflow: auto; padding: 14px; display: grid; gap: 20px; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 12px 20px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 15px; font-weight: 800; margin: 0; }
+  h3 { font-size: 11px; font-weight: 700; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .body { overflow: auto; padding: 18px 20px; display: grid; gap: 22px; }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .row input { flex: 1; }
   .row .mono { min-width: 0; }
