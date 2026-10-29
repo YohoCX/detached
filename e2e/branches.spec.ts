@@ -47,3 +47,11 @@ test('a new branch named -D is refused and its start branch survives', async ({ 
   await expect(page.locator('.notice.error')).toContainText('invalid name: "-D"')
   expect(fx.git(fx.repo('app'), 'branch', '--list', 'other')).toContain('other')
 })
+
+test('Enter right after pasting a query checks out the first match, even before branches load', async ({ page, fx }) => {
+  await open(page, 'lib')
+  await page.getByTitle('Branches').click()
+  await page.keyboard.insertText('main')
+  await page.keyboard.press('Enter')
+  await expect.poll(() => fx.git(fx.repo('lib'), 'branch', '--show-current')).toBe('main')
+})

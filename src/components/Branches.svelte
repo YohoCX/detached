@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { api, type Branches, type CommitSummary, type LocalBranch, type RemoteBranch } from '../lib/api'
   import { app, checkout, nameOf, notify, recentOf, refresh, runOp, say, statusOf } from '../lib/app.svelte'
   import { filter, segments } from '../lib/fuzzy'
@@ -43,7 +44,6 @@
     if (!repo) return
     try {
       data = await api.listBranches(repo)
-      sel = firstSel()
     } catch (e) {
       error = String(e)
     }
@@ -80,6 +80,16 @@
       }
   }
   const firstSel = () => Math.max(0, items.findIndex((it) => it.kind !== 'header'))
+  // After the list changes (query typed or pasted, branches loaded), never before it.
+  let enterPending = false
+  $effect(() => {
+    void items
+    sel = untrack(firstSel)
+    if (enterPending && data) {
+      enterPending = false
+      untrack(() => items[sel] && choose(items[sel]))
+    }
+  })
   const go = (s: Sub) => {
     menuSel = 0
     text = ''
@@ -179,6 +189,7 @@
     } else if (sub.kind === 'list') {
       const it = items[sel]
       if (vertical) move(e.key === 'ArrowDown' ? 1 : -1)
+      else if (e.key === 'Enter' && !data) enterPending = true
       else if (e.key === 'Enter' && it) choose(it)
       else if (e.key === 'ArrowRight' && (it?.kind === 'local' || it?.kind === 'remote')) go({ kind: 'menu', item: it })
       else return
@@ -209,7 +220,7 @@
     <p class="pad muted">Select a repository first.</p>
   {:else if sub.kind === 'list'}
     <input class="search" placeholder={intent === 'delete' ? 'Delete branch…' : 'Search branches'} bind:this={focus} bind:value={query}
-      oninput={() => (sel = firstSel())} />
+ />
     {#if error}
       <p class="pad err">{error}</p>
     {:else if !data}
