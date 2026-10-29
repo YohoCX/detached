@@ -3,16 +3,21 @@
   import { chordFor } from '../lib/keymap'
   import Branches from './Branches.svelte'
   import Icon from './Icon.svelte'
+  import RepoSwitcher from './RepoSwitcher.svelte'
 
   const st = $derived(statusOf(app.current))
+  let switcher = $state(false)
 </script>
 
 <!-- Only elements carrying the attribute drag the window, so empty space gets it too. -->
 <header class="panel" data-tauri-drag-region>
-  <button class="widget repo" title="Repositories" onclick={() => (app.sidebar = !app.sidebar)}>
-    <span class="strong ellipsis">{app.current ? nameOf(app.current) : 'No repository'}</span>
-    <Icon name="down" size={12} />
-  </button>
+  <div class="anchor">
+    <button class="widget repo" title="Switch repository" disabled={!app.repos.length} onclick={() => (switcher = !switcher)}>
+      <span class="strong ellipsis">{app.current ? nameOf(app.current) : 'No repository'}</span>
+      <Icon name="down" size={12} />
+    </button>
+    {#if switcher}<RepoSwitcher onclose={() => (switcher = false)} />{/if}
+  </div>
   <div class="anchor">
     <button class="widget" title="Branches" disabled={!app.current} onclick={() => (app.branches = app.branches ? null : 'checkout')}>
       <span class="accent"><Icon name="branch" size={14} /></span>
@@ -47,7 +52,7 @@
   .repo { background: var(--input); border: 1px solid var(--line); max-width: 320px; }
   .strong { font-weight: 700; }
   .accent { display: inline-flex; color: var(--accent); }
-  .anchor { position: relative; }
+  .anchor { position: relative; min-width: 0; }
   .fill { flex: 1; text-align: left; }
   .search { display: flex; align-items: center; gap: 8px; width: 240px; height: 30px; padding: 0 10px 0 12px; border: 0; border-radius: 999px; background: var(--hover); color: var(--muted); }
   kbd { font: inherit; font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }

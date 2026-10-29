@@ -1,7 +1,7 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
-  import type { RepoInfo, RepoStatus } from '../lib/api'
-  import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses } from '../lib/app.svelte'
+  import type { RepoInfo } from '../lib/api'
+  import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses, toneOf } from '../lib/app.svelte'
   import { folderMenu, repoMenu } from '../lib/menu'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
@@ -48,13 +48,6 @@
 
   const badge = { merge: 'MERGING', rebase: 'REBASING', cherryPick: 'CHERRY-PICKING', revert: 'REVERTING', bisect: 'BISECTING' }
   const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
-  const tone = (s: RepoStatus | string | undefined) =>
-    typeof s === 'string' ? 'error'
-    : !s ? null
-    : s.changes.length || s.inProgress ? 'warning'
-    : s.ahead || s.behind ? 'accent'
-    : s.branch && !s.upstream ? 'deleted'
-    : 'success'
 </script>
 
 <section>
@@ -112,7 +105,7 @@
               }}>
                 <Icon name="close" size={12} />
               </button>
-              {#if tone(s)}<span class="dot" style:color="var(--{tone(s)})"></span>{/if}
+              {#if toneOf(s)}<span class="dot" style:color="var(--{toneOf(s)})"></span>{/if}
             </div>
             <div class="line muted">
               {#if typeof s === 'string'}

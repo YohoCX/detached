@@ -13,6 +13,7 @@
     changes: 'M3 3h10v10H3zM6 8h4M8 6v4',
     chevron: 'M6 4l4 4-4 4',
     down: 'M4 6l4 4 4-4',
+    check: 'M3.5 8.5l3 3 6-7',
     up: 'M8 13V3M4 7l4-4 4 4',
     next: 'M8 3v10M4 9l4 4 4-4',
     zed: 'M4 4h8L4 12h8',

@@ -43,6 +43,14 @@ export const statusOf = (repo: string | null) => {
   const s = repo ? statuses.get(repo) : undefined
   return typeof s === 'object' ? s : null
 }
+/** The status dot's color token: error, local changes, diverged from upstream, no upstream, in sync. */
+export const toneOf = (s: RepoStatus | string | undefined) =>
+  typeof s === 'string' ? 'error'
+  : !s ? null
+  : s.changes.length || s.inProgress ? 'warning'
+  : s.ahead || s.behind ? 'accent'
+  : s.branch && !s.upstream ? 'deleted'
+  : 'success'
 export const recentOf = (repo: string) => recentBranches.get(repo) ?? []
 
 /** Runs an action, or says it isn't available when no component registered it yet. */
