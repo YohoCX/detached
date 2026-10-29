@@ -246,7 +246,8 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
   remote.
 - Pull over https to a GitHub repo and a self-hosted GitLab repo works with a token from the app,
   from the bundled app started in Finder; afterwards `security find-internet-password -s <host>`
-  shows no entry written by the pull.
+  shows no entry written by the pull. Checked by hand; `make e2e-app` checks the Finder-launched
+  PATH and git it relies on.
 - For a changed file, the diff shows both sides in side-by-side and inline modes; at another ref the
   tree lists that ref's files and the viewer shows their content.
 - Quick open finds a file by a fuzzy query in under 100 ms on a repo with 50,000 files.
@@ -255,7 +256,10 @@ Every git test runs with `HOME` set to a temp dir, `GIT_CONFIG_GLOBAL` pointing 
 - Open in Zed opens the file at the right line.
 - Every M1 row in docs/KEYMAP.md fires the action described under Actions and palette, double Shift
   included, in the viewer and outside it.
-- From the bundled app started in Finder, a checkout runs a husky hook that calls `node`.
+- From the bundled app started in Finder, a checkout runs a husky hook that calls `node`. Checked by
+  `make e2e-app`: it builds the app, launches it through LaunchServices with Finder's environment
+  and `--self-test`, which runs the smart checkout in a temp repo whose post-checkout hook calls
+  `node`, and fails if PATH came from the fallback instead of the login shell.
 
 ## Open questions
 
