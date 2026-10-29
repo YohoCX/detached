@@ -4,6 +4,7 @@ pub mod error;
 pub mod git;
 pub mod providers;
 pub mod search;
+pub mod selftest;
 pub mod settings;
 pub mod state;
 pub mod types;
@@ -18,12 +19,15 @@ use crate::settings::Settings;
 use crate::state::AppState;
 
 pub fn run() {
+    if let Some(dest) = std::env::args().skip_while(|a| a != "--self-test").nth(1) {
+        std::process::exit(if selftest::run(dest.as_ref()) { 0 } else { 1 });
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let settings = Settings::load(&config_dir);
-            let env = Env::detect(settings.git_path.as_deref());
+            let (env, _) = Env::detect(settings.git_path.as_deref());
             app.manage(AppState {
                 config_dir,
                 settings: Mutex::new(settings),
