@@ -4,6 +4,11 @@ Working name `workbench`. A native-feeling, read-only git GUI over many repos wi
 git features and macOS keymap. Decisions come from the handoff of 2026-10-28; this file is how
 milestone 1 gets built.
 
+**Status (2026-10-29): closed.** Every Done-when item passed, with two gaps the owner accepted: the
+token pull was checked by hand in the dev build against a self-hosted GitLab only (no GitHub, not the
+Finder-started bundle), and `make sign-setup` has not run yet. Bugs found from now on go to
+[docs/TECHDEBT.md](docs/TECHDEBT.md).
+
 ## Scope
 
 In: accounts and providers, multi-repo sidebar with fetch/pull all, branch management (local and
