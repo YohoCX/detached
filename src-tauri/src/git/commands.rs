@@ -7,28 +7,29 @@ use tauri::ipc::Channel;
 
 use crate::error::Result;
 use crate::git::{branches, checkout as smart, diff, files, pull as pulls, status};
-use crate::state::{AppState, Cancel};
+use crate::state::AppState;
 use crate::types::*;
 
-/// Runs a cancellable operation under `op_id`, forwarding progress lines to the UI.
-fn op<T>(
-    state: &AppState,
-    op_id: u64,
-    progress: Channel<String>,
-    f: impl FnOnce(&Cancel, &(dyn Fn(&str) + Sync)) -> Result<T>,
-) -> Result<T> {
-    let cancel = state.ops.start(op_id);
-    let r = f(&cancel, &|l: &str| {
-        let _ = progress.send(l.into());
-    });
-    state.ops.finish(op_id);
-    r
+impl AppState {
+    pub fn repo_status(&self, repo: &str) -> Result<RepoStatus> {
+        crate::search::quick::invalidate(repo);
+        status::status(&self.env(), Path::new(repo))
+    }
+
+    pub fn read_file(&self, repo: &str, rev: Option<String>, path: &str) -> Result<Content> {
+        let side = rev.map_or(Side::Worktree, |rev| Side::Rev { rev });
+        diff::content(self, Path::new(repo), &side, path)
+    }
+}
+
+/// Progress lines to the UI.
+fn send(c: &Channel<String>) -> impl Fn(&str) + Sync + '_ {
+    |l| drop(c.send(l.into()))
 }
 
 #[tauri::command(async)]
 pub fn repo_status(state: State<'_, AppState>, repo: String) -> Result<RepoStatus> {
-    crate::search::quick::invalidate(&repo);
-    status::status(&state.env(), Path::new(&repo))
+    state.repo_status(&repo)
 }
 
 #[tauri::command(async)]
@@ -85,8 +86,9 @@ pub fn delete_remote_branch(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    op(&state, op_id, progress, |c, p| {
-        branches::delete_remote(&state, Path::new(&repo), &remote, &name, c, p)
+    let p = send(&progress);
+    state.op(op_id, |c| {
+        branches::delete_remote(&state, Path::new(&repo), &remote, &name, c, &p)
     })
 }
 
@@ -97,8 +99,8 @@ pub fn prune(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    op(&state, op_id, progress, |c, p| {
-        branches::prune(&state, Path::new(&repo), c, p)
+    state.op(op_id, |c| {
+        branches::prune(&state, Path::new(&repo), c, &send(&progress))
     })
 }
 
@@ -109,8 +111,8 @@ pub fn fetch(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    op(&state, op_id, progress, |c, p| {
-        pulls::fetch(&state, Path::new(&repo), c, p)
+    state.op(op_id, |c| {
+        pulls::fetch(&state, Path::new(&repo), c, &send(&progress))
     })
 }
 
@@ -121,8 +123,8 @@ pub fn pull(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<PullResult> {
-    op(&state, op_id, progress, |c, p| {
-        pulls::pull(&state, Path::new(&repo), c, p)
+    state.op(op_id, |c| {
+        pulls::pull(&state, Path::new(&repo), c, &send(&progress))
     })
 }
 
@@ -179,8 +181,7 @@ pub fn read_file(
     rev: Option<String>,
     path: String,
 ) -> Result<Content> {
-    let side = rev.map_or(Side::Worktree, |rev| Side::Rev { rev });
-    diff::content(&state, Path::new(&repo), &side, &path)
+    state.read_file(&repo, rev, &path)
 }
 
 #[tauri::command(async)]

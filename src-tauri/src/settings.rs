@@ -45,54 +45,107 @@ impl Settings {
     }
 }
 
-fn update(state: &AppState, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
-    let mut s = state.settings.lock().unwrap();
-    f(&mut s);
-    s.save(&state.config_dir)?;
-    Ok(s.clone())
+impl AppState {
+    pub fn get_settings(&self) -> Settings {
+        self.settings.lock().unwrap().clone()
+    }
+
+    fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+        let mut s = self.settings.lock().unwrap();
+        f(&mut s);
+        s.save(&self.config_dir)?;
+        Ok(s.clone())
+    }
+
+    pub fn list_repos(&self) -> Vec<RepoInfo> {
+        let s = self.get_settings();
+        discovery::discover(&s.folders, &s.excluded_repos)
+    }
+
+    pub fn add_folder(&self, path: String) -> Result<Vec<RepoInfo>> {
+        self.update(|s| {
+            if !s.folders.contains(&path) {
+                s.folders.push(path);
+            }
+        })?;
+        Ok(self.list_repos())
+    }
+
+    pub fn remove_folder(&self, path: String) -> Result<Vec<RepoInfo>> {
+        self.update(|s| s.folders.retain(|f| *f != path))?;
+        Ok(self.list_repos())
+    }
+
+    pub fn exclude_repo(&self, path: String) -> Result<Vec<RepoInfo>> {
+        self.update(|s| {
+            if !s.excluded_repos.contains(&path) {
+                s.excluded_repos.push(path);
+            }
+        })?;
+        Ok(self.list_repos())
+    }
+
+    pub fn include_repo(&self, path: String) -> Result<Vec<RepoInfo>> {
+        self.update(|s| s.excluded_repos.retain(|p| *p != path))?;
+        Ok(self.list_repos())
+    }
+
+    pub fn set_repo_account(&self, repo: String, account_id: Option<String>) -> Result<Settings> {
+        self.update(|s| match account_id {
+            Some(id) => {
+                s.repo_accounts.insert(repo, id);
+            }
+            None => {
+                s.repo_accounts.remove(&repo);
+            }
+        })
+    }
+
+    pub fn set_git_path(&self, path: Option<String>) -> Result<EnvInfo> {
+        let s = self.update(|s| s.git_path = path)?;
+        let env = Env::detect(s.git_path.as_deref());
+        let info = env.info();
+        *self.env.write().unwrap() = env;
+        Ok(info)
+    }
+
+    /// User overrides from `keymap.json`: action id -> chord, e.g. `"file.goto": "Cmd+Shift+N"`.
+    pub fn keymap_overrides(&self) -> BTreeMap<String, String> {
+        std::fs::read(self.config_dir.join("keymap.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
 }
 
 #[tauri::command(async)]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings.lock().unwrap().clone()
+    state.get_settings()
 }
 
 #[tauri::command(async)]
 pub fn list_repos(state: State<'_, AppState>) -> Vec<RepoInfo> {
-    let s = state.settings.lock().unwrap().clone();
-    discovery::discover(&s.folders, &s.excluded_repos)
+    state.list_repos()
 }
 
 #[tauri::command(async)]
 pub fn add_folder(state: State<'_, AppState>, path: String) -> Result<Vec<RepoInfo>> {
-    update(&state, |s| {
-        if !s.folders.contains(&path) {
-            s.folders.push(path);
-        }
-    })?;
-    Ok(list_repos(state))
+    state.add_folder(path)
 }
 
 #[tauri::command(async)]
 pub fn remove_folder(state: State<'_, AppState>, path: String) -> Result<Vec<RepoInfo>> {
-    update(&state, |s| s.folders.retain(|f| *f != path))?;
-    Ok(list_repos(state))
+    state.remove_folder(path)
 }
 
 #[tauri::command(async)]
 pub fn exclude_repo(state: State<'_, AppState>, path: String) -> Result<Vec<RepoInfo>> {
-    update(&state, |s| {
-        if !s.excluded_repos.contains(&path) {
-            s.excluded_repos.push(path);
-        }
-    })?;
-    Ok(list_repos(state))
+    state.exclude_repo(path)
 }
 
 #[tauri::command(async)]
 pub fn include_repo(state: State<'_, AppState>, path: String) -> Result<Vec<RepoInfo>> {
-    update(&state, |s| s.excluded_repos.retain(|p| *p != path))?;
-    Ok(list_repos(state))
+    state.include_repo(path)
 }
 
 #[tauri::command(async)]
@@ -101,32 +154,17 @@ pub fn set_repo_account(
     repo: String,
     account_id: Option<String>,
 ) -> Result<Settings> {
-    update(&state, |s| match account_id {
-        Some(id) => {
-            s.repo_accounts.insert(repo, id);
-        }
-        None => {
-            s.repo_accounts.remove(&repo);
-        }
-    })
+    state.set_repo_account(repo, account_id)
 }
 
 #[tauri::command(async)]
 pub fn set_git_path(state: State<'_, AppState>, path: Option<String>) -> Result<EnvInfo> {
-    let s = update(&state, |s| s.git_path = path)?;
-    let env = Env::detect(s.git_path.as_deref());
-    let info = env.info();
-    *state.env.write().unwrap() = env;
-    Ok(info)
+    state.set_git_path(path)
 }
 
-/// User overrides from `keymap.json`: action id -> chord, e.g. `"file.goto": "Cmd+Shift+N"`.
 #[tauri::command(async)]
 pub fn keymap_overrides(state: State<'_, AppState>) -> BTreeMap<String, String> {
-    std::fs::read(state.config_dir.join("keymap.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    state.keymap_overrides()
 }
 
 #[tauri::command(async)]

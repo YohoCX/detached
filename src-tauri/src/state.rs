@@ -20,6 +20,14 @@ impl AppState {
     pub fn env(&self) -> Env {
         self.env.read().unwrap().clone()
     }
+
+    /// Runs `f` as the cancellable operation `id`.
+    pub fn op<T>(&self, id: u64, f: impl FnOnce(&Cancel) -> T) -> T {
+        let cancel = self.ops.start(id);
+        let r = f(&cancel);
+        self.ops.finish(id);
+        r
+    }
 }
 
 /// Cancellation flag for one running operation.
