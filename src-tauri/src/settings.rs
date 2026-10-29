@@ -114,7 +114,7 @@ pub fn set_repo_account(
 #[tauri::command(async)]
 pub fn set_git_path(state: State<'_, AppState>, path: Option<String>) -> Result<EnvInfo> {
     let s = update(&state, |s| s.git_path = path)?;
-    let env = Env::detect(s.git_path.as_deref());
+    let (env, _) = Env::detect(s.git_path.as_deref());
     let info = env.info();
     *state.env.write().unwrap() = env;
     Ok(info)

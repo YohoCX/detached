@@ -18,14 +18,17 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn detect(git_override: Option<&str>) -> Env {
+    /// Also says whether PATH came from the login shell rather than the fallback.
+    pub fn detect(git_override: Option<&str>) -> (Env, bool) {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let path = login_path(&shell, &[]).unwrap_or_else(fallback_path);
+        let probed = login_path(&shell, &[]);
+        let from_shell = probed.is_some();
+        let path = probed.unwrap_or_else(fallback_path);
         let git = git_override
             .map(PathBuf::from)
             .or_else(|| which("git", &path))
             .unwrap_or_else(|| PathBuf::from("/usr/bin/git"));
-        Env { path, git }
+        (Env { path, git }, from_shell)
     }
 
     pub fn info(&self) -> EnvInfo {
