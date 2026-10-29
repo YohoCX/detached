@@ -39,7 +39,7 @@ pub fn run() {
                 env: RwLock::new(env),
                 ops: Default::default(),
                 locks: Default::default(),
-                tokens: Arc::new(KeychainStore),
+                tokens: Arc::new(KeychainStore::default()),
             });
             Ok(())
         })
