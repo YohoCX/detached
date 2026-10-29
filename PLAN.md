@@ -24,7 +24,7 @@ GitHub OAuth, file-system watcher, notarization. M2 keymap rows bind nothing.
 | Search | `ignore` walker + `grep-searcher`/`grep-regex` for the working tree; `git grep` for a ref |
 | Fuzzy match | `nucleo-matcher` in Rust |
 | Secrets | `security-framework` generic passwords (macOS Keychain) |
-| Tests | `cargo test` against temp repos with a bare repo as remote; `vitest` for UI logic |
+| Tests | `cargo test` against temp repos with a bare repo as remote; `vitest` for UI logic; `make e2e` (Playwright in WebKit, the real UI over an HTTP bridge to the real commands); `make e2e-app` (the bundled app's `--self-test`, launched like Finder) |
 
 ## Layout
 
@@ -33,6 +33,8 @@ src-tauri/src/
   lib.rs                 app setup; registers each module's `commands!` list
   env.rs                 login-shell PATH, git binary
   settings.rs            folders, excluded repos, per-repo account overrides
+  selftest.rs            `--self-test`: PATH, node and a node hook inside the bundled app
+  bin/e2e-bridge.rs      HTTP bridge to the commands for `make e2e` (feature `e2e`)
   git/                   runner, discovery, status, branches, checkout, diff, tree, grep
   accounts/              accounts.json, token store, account matching, credential args
   providers/             Provider trait: GitHub, GitHub Enterprise, GitLab.com, self-hosted GitLab
@@ -43,6 +45,7 @@ src/
   lib/keymap.ts          parsing, matching, double-Shift detection
   components/            Sidebar, Branches, Changes, FileTree, Viewer, Palette, Accounts
 docs/KEYMAP.md           default keymap
+e2e/                     Playwright specs, IPC shim, git fixtures
 Makefile                 `make check`: fmt, clippy -D warnings, cargo test, svelte-check, vitest
 ```
 

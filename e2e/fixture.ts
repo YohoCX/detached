@@ -15,11 +15,9 @@ const lines = (n: number, edit: Record<number, string> = {}) =>
  * and lib (on feature); `solo` is a repo added as its own folder. All clone the bare `origin.git`.
  */
 export class Fixture {
-  // realpath: git records worktrees under /private/var, not the /var symlink.
-  root = mkdtempSync(join(realpathSync(tmpdir()), 'wb-e2e-'))
-  home = join(this.root, 'home')
-  ws = join(this.root, 'ws')
-  solo = join(this.root, 'solo')
+  get home() { return join(this.root, 'home') }
+  get ws() { return join(this.root, 'ws') }
+  get solo() { return join(this.root, 'solo') }
   repo = (name: string) => join(this.ws, name)
 
   // HOME and global config in the fixture, so the developer's git config never applies.
@@ -42,8 +40,8 @@ export class Fixture {
     this.git(repo, 'commit', '-qm', msg)
   }
 
-  constructor() {
-    const { root, git: g } = this
+  constructor(public root: string) {
+    const g = this.git
     mkdirSync(this.home)
     writeFileSync(join(this.home, '.gitconfig'), '[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n')
     mkdirSync(join(this.ws, 'group'), { recursive: true })
@@ -99,15 +97,20 @@ export const test = base.extend<{ fx: Fixture }, { shim: string }>({
   ],
   fx: [
     async ({ page, shim }, use) => {
-      const fx = new Fixture()
-      const r = await fetch(`${bridge}/reset`, { method: 'POST', body: JSON.stringify({ root: fx.root }) })
-      expect(await r.text()).toContain('"ok"')
-      await page.addInitScript((cfg) => Object.assign(window, { __E2E__: cfg }), { bridge, pick: [fx.ws, fx.solo] })
-      await page.addInitScript({ content: shim })
-      page.on('pageerror', (e) => console.log('page error:', e))
-      await page.goto('/')
-      await use(fx)
-      rmSync(fx.root, { recursive: true, force: true })
+      // realpath: git records worktrees under /private/var, not the /var symlink.
+      const root = mkdtempSync(join(realpathSync(tmpdir()), 'wb-e2e-'))
+      try {
+        const fx = new Fixture(root)
+        const r = await fetch(`${bridge}/reset`, { method: 'POST', body: JSON.stringify({ root: fx.root }) })
+        expect(await r.text()).toContain('"ok"')
+        await page.addInitScript((cfg) => Object.assign(window, { __E2E__: cfg }), { bridge, pick: [fx.ws, fx.solo] })
+        await page.addInitScript({ content: shim })
+        page.on('pageerror', (e) => console.log('page error:', e))
+        await page.goto('/')
+        await use(fx)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
     },
     { auto: true },
   ],

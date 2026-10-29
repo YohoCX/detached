@@ -124,9 +124,44 @@ fn invoke(
 ) -> Result<Value, String> {
     let st = |k| arg::<String>(a, k);
     let opt = |k| arg::<Option<String>>(a, k);
-    let repo = st("repo").unwrap_or_default();
+    // Required where the real command takes them, as Tauri rejects a missing key; an empty repo would
+    // also make `git -C ""` run in the bridge's cwd, the project checkout.
+    let takes = |names: &[&str]| names.contains(&cmd);
+    let no_repo = [
+        "get_settings",
+        "list_repos",
+        "add_folder",
+        "remove_folder",
+        "exclude_repo",
+        "include_repo",
+        "env_info",
+        "keymap_overrides",
+        "cancel_op",
+        "list_accounts",
+        "save_account",
+        "remove_account",
+        "verify_account",
+        "quick_open",
+        "find_in_files",
+        "cancel_find",
+    ];
+    let repo = if takes(&no_repo) {
+        String::new()
+    } else {
+        st("repo")?
+    };
     let rp = Path::new(&repo);
-    let op_id = arg(a, "opId").unwrap_or_default();
+    let op_id = if takes(&[
+        "delete_remote_branch",
+        "prune",
+        "fetch",
+        "pull",
+        "cancel_op",
+    ]) {
+        arg(a, "opId")?
+    } else {
+        0
+    };
     let progress = |l: &str| emit(json!(l));
     match cmd {
         "get_settings" => Ok(json!(s.get_settings())),

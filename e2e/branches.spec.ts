@@ -50,6 +50,11 @@ test('a new branch named -D is refused and its start branch survives', async ({ 
 
 test('Enter right after pasting a query checks out the first match, even before branches load', async ({ page, fx }) => {
   await open(page, 'lib')
+  // Hold list_branches back so Enter surely arrives before the branches do.
+  await page.route('**/invoke', async (route) => {
+    if (route.request().postDataJSON()?.cmd === 'list_branches') await new Promise((r) => setTimeout(r, 800))
+    await route.continue()
+  })
   await page.getByTitle('Branches').click()
   await page.keyboard.insertText('main')
   await page.keyboard.press('Enter')

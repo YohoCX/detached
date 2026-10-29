@@ -81,6 +81,7 @@
   }
   const firstSel = () => Math.max(0, items.findIndex((it) => it.kind !== 'header'))
   // After the list changes (query typed or pasted, branches loaded), never before it.
+  // An Enter pressed before load applies once loaded, unless the query changed since.
   let enterPending = false
   $effect(() => {
     void items
@@ -220,7 +221,7 @@
     <p class="pad muted">Select a repository first.</p>
   {:else if sub.kind === 'list'}
     <input class="search" placeholder={intent === 'delete' ? 'Delete branch…' : 'Search branches'} bind:this={focus} bind:value={query}
- />
+ oninput={() => (enterPending = false)} />
     {#if error}
       <p class="pad err">{error}</p>
     {:else if !data}
