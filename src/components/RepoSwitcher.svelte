@@ -9,6 +9,7 @@
   let input: HTMLInputElement
   let list: HTMLDivElement
 
+  const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
   const items = $derived(filter(app.repos, query, (r) => r.name))
   $effect(() => input.focus())
 
@@ -40,7 +41,8 @@
       <div class="item" class:selected={i === sel} role="option" aria-selected={r.path === app.current} tabindex="-1" title={r.path}
         onmousemove={(e) => (e.movementX || e.movementY) && (sel = i)} onclick={() => choose(r.path)}>
         <span class="check">{#if r.path === app.current}<Icon name="check" size={14} />{/if}</span>
-        <span class="name ellipsis">{#each segments(r.name, indices) as seg, k (k)}<span class:hit={seg.hit}>{seg.text}</span>{/each}</span>
+        <span class="name ellipsis">{#each segments(r.name, indices) as seg, k (k)}<span class:hit={seg.hit}>{seg.text}</span>{/each}
+          {#if r.folder !== r.path}<span class="muted folder">{base(r.folder)}</span>{/if}</span>
         <span class="muted ellipsis branch">
           {#if typeof s === 'string'}{s}{:else if s}{s.branch ?? 'detached'}{s.ahead ? ` ↑${s.ahead}` : ''}{s.behind ? ` ↓${s.behind}` : ''}{/if}
         </span>
@@ -61,6 +63,7 @@
   .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .check { display: inline-flex; flex: none; width: 14px; color: var(--accent); }
   .name { flex: 1; min-width: 0; font-weight: 600; }
+  .folder { margin-left: 4px; font-size: 12px; font-weight: 500; }
   .branch { max-width: 45%; font-size: 12px; }
   .empty { margin: 0; padding: 8px 18px; }
 </style>

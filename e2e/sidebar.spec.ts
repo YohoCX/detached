@@ -50,6 +50,8 @@ test('the repository button opens a switcher: type, Enter selects', async ({ pag
   await open(page, 'app')
   await page.getByTitle('Switch repository').click()
   await expect(page.getByRole('option', { selected: true })).toHaveAttribute('title', /\/app$/)
+  await expect(page.getByRole('option').filter({ hasText: 'group/api' }).locator('.folder')).toHaveText('ws')
+  await expect(page.getByRole('option').filter({ hasText: 'solo' }).locator('.folder')).toHaveCount(0)
   await page.keyboard.type('lib')
   await page.keyboard.press('Enter')
   await expect(page.getByRole('dialog', { name: 'Switch repository' })).toHaveCount(0)
