@@ -38,7 +38,7 @@
       {@const s = statuses.get(r.path)}
       {@const tone = toneOf(s)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div class="item" class:selected={i === sel} role="option" aria-selected={r.path === app.current} tabindex="-1" title={r.path}
+      <div class="item" class:selected={i === sel} role="option" aria-selected={i === sel} tabindex="-1" title={r.path}
         onmousemove={(e) => (e.movementX || e.movementY) && (sel = i)} onclick={() => choose(r.path)}>
         <span class="check">{#if r.path === app.current}<Icon name="check" size={14} />{/if}</span>
         <span class="name ellipsis">{#each segments(r.name, indices) as seg, k (k)}<span class:hit={seg.hit}>{seg.text}</span>{/each}

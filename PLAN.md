@@ -4,7 +4,7 @@ Detached (formerly the working name `workbench`). A native-feeling, read-only gi
 git features and macOS keymap. Decisions come from the handoff of 2026-10-28; this file is how
 milestone 1 gets built.
 
-**Status (2026-10-29): closed.** Every Done-when item passed, with two gaps the owner accepted: the
+**Status (2026-10-29): closed.** Every Done-when item passed, with one gap the owner accepted: the
 token pull was checked by hand in the dev build against a self-hosted GitLab only (no GitHub, not the
 Finder-started bundle). `make sign-setup` ran on 2026-10-29. Bugs found from now on go to
 [docs/TECHDEBT.md](docs/TECHDEBT.md).

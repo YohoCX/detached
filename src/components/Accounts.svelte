@@ -66,7 +66,7 @@
 <section class="accounts">
   <header>
     <h2>Accounts</h2>
-    <button onclick={() => edit()} disabled={!!form}>Add account</button>
+    <button class="btn" onclick={() => edit()} disabled={!!form}>Add account</button>
   </header>
 
   {#if error}<p class="error">{error}</p>{/if}
@@ -86,13 +86,13 @@
         {/if}
       </div>
       <div class="actions">
-        <button onclick={() => check(a.id)} disabled={c === 'checking'}>Check token</button>
-        <button onclick={() => edit(a)} disabled={!!form}>Edit</button>
+        <button class="btn" onclick={() => check(a.id)} disabled={c === 'checking'}>Check token</button>
+        <button class="btn" onclick={() => edit(a)} disabled={!!form}>Edit</button>
         {#if removing === a.id}
-          <button class="danger" onclick={() => remove(a.id)}>Confirm remove</button>
-          <button onclick={() => (removing = null)}>Cancel</button>
+          <button class="btn danger" onclick={() => remove(a.id)}>Confirm remove</button>
+          <button class="btn" onclick={() => (removing = null)}>Cancel</button>
         {:else}
-          <button onclick={() => (removing = a.id)}>Remove</button>
+          <button class="btn" onclick={() => (removing = a.id)}>Remove</button>
         {/if}
       </div>
     </div>
@@ -142,8 +142,8 @@
         />
       </label>
       <div class="actions">
-        <button type="submit" class="primary">Save</button>
-        <button type="button" onclick={() => (form = null)}>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+        <button class="btn" type="button" onclick={() => (form = null)}>Cancel</button>
       </div>
     </form>
   {/if}
@@ -161,11 +161,6 @@
   form { display: grid; grid-template-columns: 1fr; gap: 10px; }
   label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
   input:disabled { color: var(--muted); }
-  button { height: 28px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--input); font-weight: 700; }
-  button:disabled { opacity: 0.5; }
-  .primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
-  .danger { color: var(--error); }
-  .muted { color: var(--muted); }
   .ok { color: var(--added); }
   .error { color: var(--error); margin: 0; }
 </style>
