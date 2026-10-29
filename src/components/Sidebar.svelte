@@ -112,7 +112,7 @@
                 <span class="err ellipsis">{s}</span>
               {:else if st}
                 <Icon name="branch" size={12} />
-                <span class="ellipsis">{st.branch ?? `${st.head?.slice(0, 8) ?? '?'} (detached)`}</span>
+                <span class="ellipsis branch">{st.branch ?? `${st.head?.slice(0, 8) ?? '?'} (detached)`}</span>
                 {#if st.ahead}<span class="ab">↑{st.ahead}</span>{/if}
                 {#if st.behind}<span class="ab">↓{st.behind}</span>{/if}
                 {#if o}<span class="ellipsis outcome" class:err={!o.ok} title={o.text}>{o.text}</span>{/if}
@@ -150,7 +150,8 @@
   .badge { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; background: var(--warning); color: var(--accent-fg); }
   .dirty { color: var(--warning); font-size: 11px; font-weight: 700; }
   .ab { color: var(--fg); }
-  .outcome { margin-left: auto; }
+  .branch { flex: none; max-width: 75%; }
+  .outcome { margin-left: auto; min-width: 0; }
   .err { color: var(--error); }
   .hover { visibility: hidden; height: 18px; min-width: 18px; padding: 0 2px; }
   .repo:hover .hover, .folder:hover .hover { visibility: visible; }
