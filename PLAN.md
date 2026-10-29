@@ -6,7 +6,7 @@ milestone 1 gets built.
 
 **Status (2026-10-29): closed.** Every Done-when item passed, with two gaps the owner accepted: the
 token pull was checked by hand in the dev build against a self-hosted GitLab only (no GitHub, not the
-Finder-started bundle), and `make sign-setup` has not run yet. Bugs found from now on go to
+Finder-started bundle). `make sign-setup` ran on 2026-10-29. Bugs found from now on go to
 [docs/TECHDEBT.md](docs/TECHDEBT.md).
 
 ## Scope

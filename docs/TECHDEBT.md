@@ -4,5 +4,4 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
-| Token pull not checked against GitHub or from the Finder-started bundle | accounts, `make build` | Same code path as the GitLab check; run once with a GitHub PAT after `make sign-setup`. |
-| `make sign-setup` trust step never run | `scripts/sign-setup.sh` | |
+| Token pull not checked against GitHub or from the Finder-started bundle | accounts, `make build` | Same code path as the GitLab check; run once with a GitHub PAT. |
