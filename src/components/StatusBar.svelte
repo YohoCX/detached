@@ -3,13 +3,13 @@
   import Icon from './Icon.svelte'
 </script>
 
-<footer>
+<div class="status" data-tauri-drag-region>
   {#if app.message}
     <button class="message ellipsis" class:err={app.message.error} title={app.message.text} onclick={() => (app.message = null)}>
       {app.message.text}
     </button>
   {/if}
-  <span class="fill"></span>
+  <span class="fill" data-tauri-drag-region></span>
   {#each app.ops as op (op.id)}
     <span class="op" title={op.line}>
       <span class="spinner"></span>
@@ -18,10 +18,10 @@
       <button class="icon-btn cancel" title="Cancel" onclick={() => cancelOp(op.id)}><Icon name="close" size={10} /></button>
     </span>
   {/each}
-</footer>
+</div>
 
 <style>
-  footer { display: flex; align-items: center; gap: 12px; height: 20px; padding: 0 8px; font-size: 12px; color: var(--muted); min-width: 0; flex: none; }
+  .status { display: flex; align-items: center; gap: 12px; flex: 1; align-self: stretch; padding: 0 8px; font-size: 12px; color: var(--muted); min-width: 0; }
   .message { border: 0; background: none; padding: 0; text-align: left; min-width: 0; max-width: 50%; }
   .err { color: var(--error); }
   .fill { flex: 1; }

@@ -8,7 +8,6 @@
   import Palette from './components/Palette.svelte'
   import Settings from './components/Settings.svelte'
   import Sidebar from './components/Sidebar.svelte'
-  import StatusBar from './components/StatusBar.svelte'
   import TopBar from './components/TopBar.svelte'
   import Viewer from './components/Viewer.svelte'
   import { api } from './lib/api'
@@ -49,7 +48,6 @@
     {/if}
     <main><Viewer /></main>
   </div>
-  <StatusBar />
 </div>
 <Notices />
 {#if app.palette}<Palette />{/if}
@@ -57,7 +55,7 @@
 {#if view.find}<FindInFiles />{/if}
 
 <style>
-  .app { display: flex; flex-direction: column; gap: 10px; height: 100%; padding: 10px 10px 6px; }
+  .app { display: flex; flex-direction: column; gap: 10px; height: 100%; padding: 10px; }
   .body { display: flex; gap: 10px; flex: 1; min-height: 0; }
   .strip { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 48px; padding: 8px 0; flex: none; }
   .strip .icon-btn { width: 34px; height: 34px; justify-content: center; border-radius: 10px; }

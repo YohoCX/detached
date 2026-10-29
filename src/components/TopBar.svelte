@@ -4,6 +4,7 @@
   import Branches from './Branches.svelte'
   import Icon from './Icon.svelte'
   import RepoSwitcher from './RepoSwitcher.svelte'
+  import StatusBar from './StatusBar.svelte'
 
   const st = $derived(statusOf(app.current))
   let switcher = $state(false)
@@ -28,7 +29,7 @@
     </button>
     {#key app.branches}{#if app.branches}<Branches />{/if}{/key}
   </div>
-  <span class="fill" data-tauri-drag-region></span>
+  <StatusBar />
   <button class="search" onclick={() => run('search.everywhere')}>
     <Icon name="search" size={14} /><span class="fill">Search everywhere</span><kbd>{chordFor('search.everywhere')}</kbd>
   </button>
@@ -46,7 +47,7 @@
 </header>
 
 <style>
-  header { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 84px; flex: none; }
+  header { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 90px; flex: none; }
   .widget { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px; border: 0; border-radius: 10px; background: none; min-width: 0; }
   .widget:hover { background: var(--hover); }
   .repo { background: var(--input); border: 1px solid var(--line); max-width: 320px; }
