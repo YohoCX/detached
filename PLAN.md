@@ -94,12 +94,19 @@ failure.
 **Discovery.** No built-in repos. The user adds folders (a repo, or a folder of repos) through a
 folder picker; they are saved in `settings.json`. Each folder is walked up to 3 levels below it.
 A directory with a `.git` dir or `.git` file (a linked worktree) is a repo; the walk does not
-descend into a repo, `node_modules` or dot dirs. Submodules are not listed separately. Removing a
-repo adds its path to `excluded_repos`, so the next walk skips it.
+descend into a repo, `node_modules` or dot dirs. Submodules are not listed separately. A repo is
+named by its path below the folder (`group/api`). A linked worktree's `.git` file
+names its main repo (`gitdir: <main>/.git/worktrees/<name>`), so the sidebar lists it indented
+under that repo when the repo is listed. Every refresh rescans first (a few ms), so repos and
+worktrees created or deleted on disk appear and drop out. Removing a repo adds its path to
+`excluded_repos`, so the next walk skips it; Settings lists them for restoring.
 
 **Sidebar data.** Per repo: branch (or detached SHA), upstream, ahead/behind, dirty count, last
 commit subject and date, and an in-progress state (merge, rebase, cherry-pick) read from `.git`.
-Refreshed on window focus, after every operation, and on demand.
+Refreshed on window focus, after every operation, and on demand. Folders and worktree groups
+collapse (remembered per viewer); a folder that is itself the only repo shows no header. Right-click
+gives a native menu: fetch, pull, compare with base branch, branches, new branch, open in Finder or
+Zed, copy path, remove (a folder adds fetch/pull all in folder).
 
 **Pull.** Pull is two runner calls: `git fetch <upstream remote>` (network, cancellable), then
 `git merge --ff-only @{u}` (local write, not cancellable). Pull all does the same per repo. A branch
@@ -167,11 +174,18 @@ Monaco read-only with language from the extension; Cmd+L goes to a line. Open in
 the login PATH, else `/Applications/Zed.app/Contents/MacOS/cli`, with `<path>:<line>`; at a ref other
 than the working tree it opens the working-tree file.
 
-**Quick open and find in files.** Rust keeps a file list per repo and ref, rebuilt on refresh, and
-ranks with `nucleo-matcher` (scope: current repo, toggle to all repos). Find in files streams matches
+**Changes and compare.** Click previews a change's diff, double-click or Enter shows it with focus,
+Cmd+Down opens the file (as in JetBrains). Compare mode diffs the merge base with a base branch
+(default `origin/HEAD`, else `origin/dev|main|master`, else local) against the working tree, like a
+merge request: only this branch's changes, with commits ahead/behind.
+
+**Quick open and find in files.** Rust keeps a file list per repo and ref, cleared on every status
+refresh, and ranks case-insensitively with `nucleo-matcher` (scope: current repo, toggle to all
+repos). Find in files streams matches
 over a Tauri `Channel` tagged with a query id; a new query cancels the old search, and the UI drops
-messages with a stale id. Results stop at 10,000 matches with a "results truncated" notice. Options:
-case, whole word, regex, path glob.
+messages with a stale id. At a ref it streams `git grep -P` (PCRE, matching the working tree's Rust
+regex syntax) through a cancellable read. Results stop at 10,000 matches with a "results truncated"
+notice. Options: case, whole word, regex, path glob.
 
 **Actions and palette.** Every command is an action `{id, title, group, run}` in one registry
 (`src/lib/actions.ts`); the keymap binds action ids. One palette component serves five keymap rows:
