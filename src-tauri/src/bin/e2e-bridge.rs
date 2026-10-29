@@ -1,0 +1,213 @@
+//! Serves the app's commands over HTTP for the Playwright suite in `e2e/`.
+//! `POST /reset {"root"}` starts a fresh state on a fixture dir; `POST /invoke {"cmd","args"}` answers
+//! with NDJSON: `{"event"}` per channel message as it is sent, then `{"ok"}` or `{"err"}`.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use workbench_lib::accounts::{self, store::MemoryStore};
+use workbench_lib::env::{Env, which};
+use workbench_lib::git::{branches, checkout, diff, files, pull};
+use workbench_lib::settings::Settings;
+use workbench_lib::state::AppState;
+
+static STATE: RwLock<Option<Arc<AppState>>> = RwLock::new(None);
+
+fn main() {
+    let port = std::env::args().nth(1).unwrap_or("1521".into());
+    let listener = TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+    for stream in listener.incoming().flatten() {
+        std::thread::spawn(|| serve(stream));
+    }
+}
+
+fn serve(stream: TcpStream) {
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    let _ = reader.read_line(&mut line);
+    let mut len = 0;
+    loop {
+        let mut h = String::new();
+        if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+            break;
+        }
+        if let Some((k, v)) = h.split_once(':')
+            && k.eq_ignore_ascii_case("content-length")
+        {
+            len = v.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0; len];
+    let _ = reader.read_exact(&mut body);
+    let out = Mutex::new(&stream);
+    let _ = out.lock().unwrap().write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+          Access-Control-Allow-Origin: *\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+    );
+    let send = |v: Value| {
+        let line = format!("{v}\n");
+        let mut s = out.lock().unwrap();
+        let _ = write!(s, "{:x}\r\n{line}\r\n", line.len()).and_then(|_| s.flush());
+    };
+    let req: Value = serde_json::from_slice(&body).unwrap_or_default();
+    let r = match line.split(' ').nth(1).unwrap_or_default() {
+        "/reset" => reset(Path::new(req["root"].as_str().unwrap_or_default())),
+        "/invoke" => match STATE.read().unwrap().clone() {
+            Some(s) => invoke(
+                &s,
+                req["cmd"].as_str().unwrap_or_default(),
+                &req["args"],
+                &|e| send(json!({ "event": e })),
+            ),
+            None => Err("no fixture: POST /reset first".into()),
+        },
+        _ => Ok(Value::Null),
+    };
+    send(match r {
+        Ok(v) => json!({ "ok": v }),
+        Err(e) => json!({ "err": e }),
+    });
+    let _ = out.lock().unwrap().write_all(b"0\r\n\r\n");
+}
+
+/// Git runs through a wrapper with HOME and global config in the fixture, like `git::testutil`.
+fn reset(root: &Path) -> Result<Value, String> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let real = which("git", &path).ok_or("git not found")?;
+    let git = root.join("git");
+    let h = root.join("home");
+    let h = h.display();
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nexport HOME='{h}' GIT_CONFIG_GLOBAL='{h}/.gitconfig' GIT_CONFIG_NOSYSTEM=1\n\
+             unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .and_then(|_| std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)))
+    .map_err(|e| e.to_string())?;
+    let config_dir: PathBuf = root.join("config");
+    *STATE.write().unwrap() = Some(Arc::new(AppState {
+        settings: Mutex::new(Settings::load(&config_dir)),
+        config_dir,
+        env: RwLock::new(Env { path, git }),
+        ops: Default::default(),
+        locks: Default::default(),
+        tokens: Arc::new(MemoryStore::default()),
+    }));
+    Ok(Value::Null)
+}
+
+fn arg<T: DeserializeOwned>(args: &Value, k: &str) -> Result<T, String> {
+    serde_json::from_value(args.get(k).cloned().unwrap_or_default())
+        .map_err(|e| format!("{k}: {e}"))
+}
+
+fn ok<T: Serialize>(r: workbench_lib::error::Result<T>) -> Result<Value, String> {
+    r.map(|v| json!(v)).map_err(|e| e.to_string())
+}
+
+/// The same calls the Tauri commands make. Open in Finder/Zed and the git path setting are left
+/// out: they start other apps or a login shell.
+fn invoke(
+    s: &AppState,
+    cmd: &str,
+    a: &Value,
+    emit: &(dyn Fn(Value) + Sync),
+) -> Result<Value, String> {
+    let st = |k| arg::<String>(a, k);
+    let opt = |k| arg::<Option<String>>(a, k);
+    let repo = st("repo").unwrap_or_default();
+    let rp = Path::new(&repo);
+    let op_id = arg(a, "opId").unwrap_or_default();
+    let progress = |l: &str| emit(json!(l));
+    match cmd {
+        "get_settings" => Ok(json!(s.get_settings())),
+        "list_repos" => Ok(json!(s.list_repos())),
+        "add_folder" => ok(s.add_folder(st("path")?)),
+        "remove_folder" => ok(s.remove_folder(st("path")?)),
+        "exclude_repo" => ok(s.exclude_repo(st("path")?)),
+        "include_repo" => ok(s.include_repo(st("path")?)),
+        "set_repo_account" => ok(s.set_repo_account(repo, opt("accountId")?)),
+        "env_info" => Ok(json!(s.env().info())),
+        "keymap_overrides" => Ok(json!(s.keymap_overrides())),
+        "repo_status" => ok(s.repo_status(&repo)),
+        "list_branches" => ok(branches::list(s, rp)),
+        "checkout" => ok(checkout::checkout(s, rp, &arg(a, "target")?)),
+        "create_branch" => ok(branches::create(
+            s,
+            rp,
+            &st("name")?,
+            &st("start")?,
+            arg(a, "checkout")?,
+        )),
+        "set_upstream" => ok(branches::set_upstream(
+            s,
+            rp,
+            &st("branch")?,
+            opt("upstream")?.as_deref(),
+        )),
+        "delete_branch" => ok(branches::delete(s, rp, &st("name")?, arg(a, "force")?)),
+        "delete_remote_branch" => {
+            let (remote, name) = (st("remote")?, st("name")?);
+            ok(s.op(op_id, |c| {
+                branches::delete_remote(s, rp, &remote, &name, c, &progress)
+            }))
+        }
+        "prune" => ok(s.op(op_id, |c| branches::prune(s, rp, c, &progress))),
+        "fetch" => ok(s.op(op_id, |c| pull::fetch(s, rp, c, &progress))),
+        "pull" => ok(s.op(op_id, |c| pull::pull(s, rp, c, &progress))),
+        "cancel_op" => Ok(json!(s.ops.cancel(op_id))),
+        "list_changes" => ok(diff::list_changes(
+            &s.env(),
+            rp,
+            &arg(a, "from")?,
+            &arg(a, "to")?,
+        )),
+        "compare_base" => ok(diff::compare_base(&s.env(), rp, opt("base")?.as_deref())),
+        "file_diff" => {
+            let (left, right) = (arg(a, "left")?, arg(a, "right")?);
+            ok(diff::file_diff(
+                s,
+                rp,
+                &st("path")?,
+                opt("origPath")?.as_deref(),
+                &left,
+                &right,
+            ))
+        }
+        "list_files" => ok(files::list_files(&s.env(), rp, opt("rev")?.as_deref())),
+        "read_file" => ok(s.read_file(&repo, opt("rev")?, &st("path")?)),
+        "list_accounts" => ok(accounts::load(&s.config_dir)),
+        "save_account" => ok(accounts::save(s, arg(a, "input")?)),
+        "remove_account" => ok(accounts::remove(s, &st("id")?)),
+        "verify_account" => ok(accounts::verify(s, &st("id")?)),
+        "repo_accounts" => ok(accounts::repo_accounts(s, rp)),
+        "quick_open" => {
+            let repos: Vec<String> = arg(a, "repos")?;
+            ok(s.quick_open(
+                &repos,
+                opt("rev")?.as_deref(),
+                &st("query")?,
+                arg(a, "limit")?,
+            ))
+        }
+        "find_in_files" => {
+            let repos: Vec<String> = arg(a, "repos")?;
+            let (query, id) = (arg(a, "query")?, arg(a, "queryId")?);
+            s.find_in_files(&repos, opt("rev")?.as_deref(), &query, id, &|e| {
+                emit(json!(e))
+            });
+            Ok(Value::Null)
+        }
+        "cancel_find" => Ok(json!(s.ops.cancel(arg(a, "queryId")?))),
+        _ => Err(format!("{cmd} is not served by the e2e bridge")),
+    }
+}

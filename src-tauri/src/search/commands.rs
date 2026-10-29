@@ -8,7 +8,44 @@ use crate::search::{find, quick};
 use crate::state::AppState;
 use crate::types::*;
 
-/// Repos whose list fails (a rev missing there) are skipped, unless every one fails.
+impl AppState {
+    /// Repos whose list fails (a rev missing there) are skipped, unless every one fails.
+    pub fn quick_open(
+        &self,
+        repos: &[String],
+        rev: Option<&str>,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<FileMatch>> {
+        let env = self.env();
+        let mut lists = vec![];
+        let mut error = None;
+        for repo in repos {
+            match quick::paths(&env, repo, rev) {
+                Ok(p) => lists.push((repo.as_str(), p)),
+                Err(e) => error = Some(e),
+            }
+        }
+        match error {
+            Some(e) if lists.is_empty() => Err(e),
+            _ => Ok(quick::rank(&lists, query, limit as usize)),
+        }
+    }
+
+    pub fn find_in_files(
+        &self,
+        repos: &[String],
+        rev: Option<&str>,
+        query: &FindQuery,
+        query_id: u64,
+        emit: &(dyn Fn(FindEvent) + Sync),
+    ) {
+        self.op(query_id, |c| {
+            find::find(&self.env(), repos, rev, query, query_id, c, emit)
+        })
+    }
+}
+
 #[tauri::command(async)]
 pub fn quick_open(
     state: State<'_, AppState>,
@@ -17,19 +54,7 @@ pub fn quick_open(
     query: String,
     limit: u32,
 ) -> Result<Vec<FileMatch>> {
-    let env = state.env();
-    let mut lists = vec![];
-    let mut error = None;
-    for repo in &repos {
-        match quick::paths(&env, repo, rev.as_deref()) {
-            Ok(p) => lists.push((repo.as_str(), p)),
-            Err(e) => error = Some(e),
-        }
-    }
-    match error {
-        Some(e) if lists.is_empty() => Err(e),
-        _ => Ok(quick::rank(&lists, &query, limit as usize)),
-    }
+    state.quick_open(&repos, rev.as_deref(), &query, limit)
 }
 
 #[tauri::command(async)]
@@ -41,18 +66,9 @@ pub fn find_in_files(
     query_id: u64,
     events: Channel<FindEvent>,
 ) -> Result<()> {
-    let cancel = state.ops.start(query_id);
-    let emit = |e| drop(events.send(e));
-    find::find(
-        &state.env(),
-        &repos,
-        rev.as_deref(),
-        &query,
-        query_id,
-        &cancel,
-        &emit,
-    );
-    state.ops.finish(query_id);
+    state.find_in_files(&repos, rev.as_deref(), &query, query_id, &|e| {
+        drop(events.send(e))
+    });
     Ok(())
 }
 

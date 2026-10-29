@@ -1,11 +1,16 @@
-.PHONY: check fmt dev build sign-setup e2e-app
+.PHONY: check e2e e2e-app fmt dev build sign-setup
 
 check:
 	cd src-tauri && cargo fmt --check
-	cd src-tauri && cargo clippy --all-targets -- -D warnings
+	cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 	cd src-tauri && cargo test
 	pnpm check
 	pnpm test
+
+# The real UI in WebKit against the real commands over the e2e bridge, on temp repos.
+e2e:
+	pnpm exec playwright install webkit
+	pnpm e2e
 
 fmt:
 	cd src-tauri && cargo fmt
