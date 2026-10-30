@@ -1,8 +1,10 @@
 import { defineConfig, devices } from '@playwright/test'
 
-export const VITE_PORT = 1520
-export const BRIDGE_PORT = 1521
-export const FORGE_PORT = 1522
+// E2E_PORT moves all three ports, so two checkouts can run e2e at once.
+const base = Number(process.env.E2E_PORT ?? 1520)
+export const VITE_PORT = base
+export const BRIDGE_PORT = base + 1
+export const FORGE_PORT = base + 2
 
 export default defineConfig({
   testDir: 'e2e',
