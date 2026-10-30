@@ -54,7 +54,7 @@ gutter clicks on either side.
 
 ## Design
 
-**Log data.** One `git log --topo-order` streamed through the runner's `lines` callback, one record
+**Log data.** One `git log --date-order` streamed through the runner's `lines` callback, one record
 per line, fields separated by `%x1f`:
 `--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s`. Rows go to the UI over a Tauri `Channel` in
 batches of 500, tagged with a query id like find in files: a new query cancels the old one and stale
@@ -64,8 +64,9 @@ which stops git, and the UI shows "history truncated". Branch filter: all refs
 git rewrites parents and the graph stays connected; file history is this filter set from the viewer.
 Text (`--grep -i`, or a hash prefix) and author (`--author`) filters only hide commits and leave
 parents pointing at hidden ones, so under them the list shows no graph. On a large repo the first
-rows come quickly only when it has a commit-graph file; without one, `--topo-order` sorts the whole
-history first.
+rows come quickly only when it has a commit-graph file; without one, git sorts the whole
+history first. Date order, not topo order: topo order lists a long chain of merges into `main` before the merged
+branch, so every merge opens a lane to a commit far below (92 lanes on a real repo against 10).
 
 **Graph.** Rust assigns lanes while streaming: each active lane waits for one commit; a commit takes
 the leftmost lane waiting for it (or a new one), other lanes waiting for it end there, its first
@@ -314,7 +315,7 @@ comments only for a non-obvious reason.
 ## Done when
 
 - Cmd+9 opens the log. On a repo with 100,000 commits and a commit-graph file the first rows show in
-  under 300 ms. Rows come in the order of `git log --topo-order` for the same refs, and each row's
+  under 300 ms. Rows come in the order of `git log --date-order` for the same refs, and each row's
   edges lead to exactly its (rewritten) parents.
 - A commit's changes and a selected range's changes open in the diff viewer; file history works from
   the viewer.

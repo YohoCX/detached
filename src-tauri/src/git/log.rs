@@ -52,7 +52,7 @@ fn stream(
 ) -> Result<bool> {
     let mut args = vec![
         "log".into(),
-        "--topo-order".into(),
+        "--date-order".into(),
         format!("--format={LOG_FORMAT}"),
     ];
     match &q.refs {
@@ -394,10 +394,10 @@ mod tests {
     }
 
     #[test]
-    fn all_refs_in_topo_order_with_refs_and_lanes() {
+    fn all_refs_in_date_order_with_refs_and_lanes() {
         let r = repo();
         let (rows, truncated) = rows(&r.sb, &r.path, &query(LogRefs::All));
-        let args = ["log", "--topo-order", "--format=%H", "--branches", "HEAD"];
+        let args = ["log", "--date-order", "--format=%H", "--branches", "HEAD"];
         let want = r.sb.git(&r.path, &args);
         assert_eq!(shas(&rows), want.lines().collect::<Vec<_>>());
         assert!(!truncated);

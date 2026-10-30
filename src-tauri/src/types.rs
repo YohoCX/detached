@@ -385,7 +385,7 @@ pub struct LogRow {
     rename_all_fields = "camelCase"
 )]
 pub enum LogEvent {
-    /// Up to 500 rows, in `--topo-order`.
+    /// Up to 500 rows, in `--date-order`.
     Rows {
         query_id: u64,
         rows: Vec<LogRow>,

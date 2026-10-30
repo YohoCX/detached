@@ -1,4 +1,4 @@
-//! Lane assignment for the log graph, one row at a time in `--topo-order`.
+//! Lane assignment for the log graph, one row at a time in `--date-order`.
 
 use crate::types::{Edge, LogRow};
 
