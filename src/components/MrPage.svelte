@@ -8,6 +8,7 @@
   import { ago, bareTitle, isGitLab, tone } from '../lib/mr'
   import type { FileDoc, Zone } from '../lib/view.svelte'
   import CommitDetails from './CommitDetails.svelte'
+  import Grip from './Grip.svelte'
   import Icon from './Icon.svelte'
   import Markdown from './Markdown.svelte'
   import MergeWidget from './MergeWidget.svelte'
@@ -23,6 +24,8 @@
   const rev = (r: string): Side => ({ kind: 'rev', rev: r })
 
   let tab = $state<(typeof tabs)[number]>('Overview')
+  let sideWidth = $state(420)
+  let filesWidth = $state(280)
   let mr = $state<MergeRequest | null>(null)
   let threads = $state<T[]>([])
   let error = $state('')
@@ -241,13 +244,15 @@
             </div>
           {:else}<div class="empty muted">No commits</div>{/each}
         </div>
-        <div class="side">
+        <div class="side" style:width="{sideWidth}px">
+          <Grip key="mr.side" bind:size={sideWidth} edge="left" min={260} max={1000} />
           {#if commit}<CommitDetails {repo} shas={[commit]} />{:else}<div class="empty muted">Select a commit</div>{/if}
         </div>
       </div>
     {:else}
       <div class="split">
-        <div class="files">
+        <div class="files" style:width="{filesWidth}px">
+          <Grip key="mr.files" bind:size={filesWidth} edge="right" min={180} max={700} />
           <div class="files-head muted">{ready.files.length} {ready.files.length === 1 ? 'file' : 'files'}</div>
           {#each ready.files as f (f.path)}
             {@const n = threads.filter((t) => t.position && !t.position.outdated && [f.path, f.origPath].includes(t.position.path)).length}
@@ -302,8 +307,8 @@
   p { margin: 0; }
   .split { display: flex; height: 100%; }
   .list { flex: 1; min-width: 0; overflow-y: auto; padding: 6px 0; }
-  .side { width: 45%; min-width: 300px; flex: none; border-left: 1px solid var(--line); }
-  .files { width: 280px; flex: none; overflow-y: auto; padding-bottom: 6px; border-right: 1px solid var(--line); }
+  .side { position: relative; flex: none; border-left: 1px solid var(--line); }
+  .files { position: relative; flex: none; overflow-y: auto; padding-bottom: 6px; border-right: 1px solid var(--line); }
   .files-head { padding: 8px 16px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .diff { flex: 1; min-width: 0; }
   .row { display: flex; align-items: center; gap: 8px; height: 28px; margin: 0 6px; padding: 0 8px; border-radius: 9px; white-space: nowrap; }

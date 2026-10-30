@@ -25,6 +25,7 @@
   import { popup } from '../lib/menu'
   import CommitDetails from './CommitDetails.svelte'
   import Graph, { LANE } from './Graph.svelte'
+  import Grip from './Grip.svelte'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
@@ -39,6 +40,7 @@
   let sel = $state.raw(new Set<string>())
   let anchor = 0
   let worktree = $state(false)
+  let sideWidth = $state(420)
   let branches = $state<string[]>([])
   let newBranch = $state<{ sha: string; name: string; checkout: boolean } | null>(null)
   let reload = $state(0)
@@ -216,7 +218,8 @@
                 oncontextmenu={(e) => (e.preventDefault(), menu(i))}>
                 {#if graph}<div class="graph" style:width="{Math.min(width, 24) * LANE}px"><Graph row={r} /></div>{/if}
                 <span class="subject">
-                  {#each r.refs as ref (ref)}{@const c = chip(ref)}<span class="chip ellipsis {c.kind}" title={ref}>{c.label}</span>{/each}
+                  {#each r.refs.slice(0, 2) as ref (ref)}{@const c = chip(ref)}<span class="chip ellipsis {c.kind}" title={ref}>{c.label}</span>{/each}
+                  {#if r.refs.length > 2}<span class="chip more" title={r.refs.slice(2).join('\n')}>+{r.refs.length - 2}</span>{/if}
                   <span class="ellipsis">{r.subject}</span>
                 </span>
                 <span class="author muted ellipsis">{r.author}</span>
@@ -226,7 +229,8 @@
           </VirtualList>
         </div>
       {/if}
-      <div class="side">
+      <div class="side" style:width="{sideWidth}px">
+        <Grip key="log.side" bind:size={sideWidth} edge="left" min={260} max={1000} />
         {#if shas.length}<CommitDetails {repo} {shas} {worktree} />{:else}<div class="empty muted">Select a commit</div>{/if}
       </div>
     </div>
@@ -245,7 +249,7 @@
   .new label { display: flex; align-items: center; gap: 4px; }
   .body { display: flex; flex: 1; min-height: 0; }
   .rows { flex: 1; min-width: 0; outline: none; }
-  .side { width: 40%; min-width: 300px; flex: none; border-left: 1px solid var(--line); }
+  .side { position: relative; flex: none; border-left: 1px solid var(--line); }
   .empty { padding: 12px 16px; flex: 1; }
   .error { color: var(--error); white-space: pre-wrap; }
   .commit { display: flex; align-items: center; gap: 10px; height: 28px; margin: 0 6px; padding: 0 8px 0 4px; border-radius: 9px; white-space: nowrap; }
@@ -253,11 +257,12 @@
   .commit.selected { background: var(--selected-inactive); }
   .rows:focus-within .commit.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .graph { flex: none; overflow: hidden; }
-  .subject { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
+  .subject { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow: hidden; }
   .chip { flex: none; max-width: 160px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 18px; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 35%, transparent); }
   .chip.head { --c: var(--accent); }
   .chip.branch { --c: var(--success); }
   .chip.tag { --c: var(--warning); }
+  .chip.more { --c: var(--muted); flex: none; }
   .author { width: 140px; flex: none; }
   .date { width: 150px; flex: none; text-align: right; font-size: 12px; }
 </style>

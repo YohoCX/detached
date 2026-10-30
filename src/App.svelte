@@ -4,6 +4,7 @@
   import Changes from './components/Changes.svelte'
   import FileTree from './components/FileTree.svelte'
   import FindInFiles from './components/FindInFiles.svelte'
+  import Grip from './components/Grip.svelte'
   import Icon from './components/Icon.svelte'
   import JobLog from './components/JobLog.svelte'
   import MrList from './components/MrList.svelte'
@@ -30,6 +31,8 @@
     }
   })
 
+  let reposWidth = $state(280)
+  let toolWidth = $state(300)
   const tool = (t: 'changes' | 'files' | 'mrs') => (app.tool = app.tool === t ? null : t)
   const shown = $derived(view.shown)
 </script>
@@ -46,11 +49,14 @@
       <button class="icon-btn" class:on={app.tool === 'mrs'} title="Merge Requests" onclick={() => tool('mrs')}><Icon name="mr" /></button>
       <button class="icon-btn settings" title="Settings {chordFor('app.settings')}" onclick={() => (app.settings = true)}><Icon name="gear" /></button>
     </nav>
-    {#if app.sidebar}<aside class="repos panel"><Sidebar /></aside>{/if}
+    {#if app.sidebar}
+      <aside class="repos panel" style:width="{reposWidth}px"><Sidebar /><Grip key="repos" bind:size={reposWidth} edge="right" min={200} max={600} /></aside>
+    {/if}
     <div class="work">
       <div class="top">
         {#if app.tool}
-          <aside class="tool panel">
+          <aside class="tool panel" style:width="{toolWidth}px">
+            <Grip key="tool" bind:size={toolWidth} edge="right" min={220} max={800} />
             {#if app.tool === 'files'}<FileTree repo={app.current} />
             {:else if app.tool === 'mrs'}<MrList repo={app.current} />
             {:else}<Changes repo={app.current} />{/if}
@@ -81,9 +87,7 @@
   .strip .on { background: var(--selected); color: var(--fg); box-shadow: 0 0 18px var(--selected); }
   .work, .top { display: flex; gap: 10px; flex: 1; min-width: 0; min-height: 0; }
   .work { flex-direction: column; }
-  aside { flex: none; min-width: 0; overflow: hidden; }
-  .repos { width: 280px; }
-  .tool { width: 300px; }
+  aside { position: relative; flex: none; min-width: 0; overflow: hidden; }
   .doc { height: 100%; }
   .hidden { display: none; }
   main { flex: 1; min-width: 0; overflow: hidden; border-radius: 14px; background: var(--code); border: 1px solid var(--line); box-shadow: var(--panel-shadow); }
