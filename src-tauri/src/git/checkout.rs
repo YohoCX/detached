@@ -18,33 +18,33 @@ pub fn checkout(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Resul
 
 fn smart(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Result<CheckoutResult> {
     let env = state.env();
-    let (name, to, track) = match target {
-        CheckoutTarget::Local { name } => (arg(name)?, name.clone(), false),
-        CheckoutTarget::Remote { remote, name } => {
-            (arg(name)?, format!("{}/{name}", arg(remote)?), true)
-        }
-        CheckoutTarget::Rev { .. } => {
-            return Ok(CheckoutResult::Refused {
-                error: "checkout of a revision is not implemented yet".into(),
-            });
-        }
-    };
-    let args = if track {
-        vec!["switch", "--track", &to]
-    } else {
-        vec!["switch", &to]
-    };
-    let want = format!("refs/heads/{name}");
-    let cred = lfs_cred(state, repo, &to)?;
-    let head = || -> Result<String> {
-        let o = run(
-            &env,
-            repo,
-            &["symbolic-ref", "-q", "HEAD"],
-            Kind::Read,
-            Opts::default(),
-        )?;
+    let read = |args: &[&str]| -> Result<String> {
+        let o = run(&env, repo, args, Kind::Read, Opts::default())?;
         Ok(o.text().trim().to_string())
+    };
+    // `want` is what `head` returns once the switch is done.
+    let (to, flag, want) = match target {
+        CheckoutTarget::Local { name } => (arg(name)?.into(), None, format!("refs/heads/{name}")),
+        CheckoutTarget::Remote { remote, name } => (
+            format!("{}/{}", arg(remote)?, arg(name)?),
+            Some("--track"),
+            format!("refs/heads/{name}"),
+        ),
+        CheckoutTarget::Rev { sha } => (
+            arg(sha)?.to_string(),
+            Some("--detach"),
+            read(&["rev-parse", "-q", "--verify", &format!("{sha}^{{commit}}")])?,
+        ),
+    };
+    let args: Vec<&str> = ["switch"].into_iter().chain(flag).chain([&*to]).collect();
+    let cred = lfs_cred(state, repo, &to)?;
+    // The branch's ref, or the commit when detached.
+    let head = || -> Result<String> {
+        let branch = read(&["symbolic-ref", "-q", "HEAD"])?;
+        if branch.is_empty() {
+            return read(&["rev-parse", "HEAD"]);
+        }
+        Ok(branch)
     };
     let before = head()?;
     // A failing post-checkout hook makes switch exit non-zero after HEAD has moved.
@@ -416,6 +416,32 @@ mod tests {
             sb.git(&work, &["rev-parse", "--abbrev-ref", "@{u}"]),
             "origin/feature/x"
         );
+    }
+
+    #[test]
+    fn rev_target_detaches_through_the_same_steps() {
+        let sb = Sandbox::new();
+        let work = setup(&sb, &lines("1", "10"), &lines("1", "ten"));
+        let other = sb.git(&work, &["rev-parse", "other"]);
+        let rev = |sha: &str| {
+            let target = CheckoutTarget::Rev { sha: sha.into() };
+            checkout(&sb.state, &work, &target).unwrap()
+        };
+        std::fs::write(work.join("f"), lines("one", "10")).unwrap();
+        assert_eq!(rev(&other[..10]), Carried { warning: None });
+        assert_eq!(
+            (branch(&sb, &work), sb.git(&work, &["rev-parse", "HEAD"])),
+            ("".into(), other)
+        );
+        assert_eq!(read(&work, "f"), lines("one", "ten"));
+        sb.git(&work, &["reset", "-q", "--hard"]);
+        sb.hook(&work, "post-checkout", "exit 1");
+        assert!(matches!(rev("main"), Switched { warning: Some(_) }));
+        assert_eq!(branch(&sb, &work), "");
+        let Refused { error } = rev("0000000") else {
+            panic!()
+        };
+        assert!(error.contains("invalid reference"), "{error}");
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::env::Env;
 use crate::error::Result;
 use crate::git::runner::{Cred, Kind, Opts, Output, out, run};
+use crate::git::{arg, locked};
 use crate::state::{AppState, Cancel};
 
 /// `(remote, url)` pairs for fetch and push URLs, without repeats.
@@ -83,17 +84,22 @@ pub fn network(
 }
 
 /// `git fetch <remote> <head_ref> <target_branch>` with no destination ref; the fetched head's SHA.
-/// Stub until the MR ref fetch exists.
 pub fn fetch_mr(
-    _state: &AppState,
-    _repo: &Path,
-    _remote: &str,
-    _head_ref: &str,
-    _target_branch: &str,
-    _cancel: &Cancel,
-    _progress: &(dyn Fn(&str) + Sync),
+    state: &AppState,
+    repo: &Path,
+    remote: &str,
+    head_ref: &str,
+    target_branch: &str,
+    cancel: &Cancel,
+    progress: &(dyn Fn(&str) + Sync),
 ) -> Result<String> {
-    Ok("b".repeat(40))
+    locked(state, repo, || {
+        let args = ["fetch", arg(remote)?, arg(head_ref)?, arg(target_branch)?];
+        network(state, repo, &args, Some(remote), cancel, progress)?;
+        // FETCH_HEAD lists the fetched refs in command-line order.
+        let head = out(&state.env(), repo, &["rev-parse", "FETCH_HEAD"], Kind::Read)?;
+        Ok(head.trim().into())
+    })
 }
 
 #[cfg(test)]
@@ -123,6 +129,48 @@ mod tests {
                 ("origin".into(), "/push/url".into())
             ]
         );
+    }
+
+    #[test]
+    fn mr_fetch_goes_to_the_given_remote_and_adds_no_ref() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        let (root, seed) = (sb.dir.path(), sb.path("seed"));
+        sb.git(
+            root,
+            &["clone", "-q", "--bare", "origin.git", "upstream.git"],
+        );
+        let upstream = sb.path("upstream.git");
+        let upstream = upstream.to_str().unwrap();
+        let pr = sb.commit(&seed, "g", "pr\n", "pr");
+        sb.git(&seed, &["push", "-q", upstream, "HEAD:refs/pull/1/head"]);
+        sb.git(&seed, &["reset", "-q", "--hard", "HEAD~1"]);
+        let target = sb.commit(&seed, "h", "target\n", "target");
+        sb.git(&seed, &["push", "-q", upstream, "HEAD:main"]);
+        sb.git(&work, &["remote", "add", "upstream", upstream]);
+        let head = fetch_mr(
+            &sb.state,
+            &work,
+            "upstream",
+            "refs/pull/1/head",
+            "main",
+            &Cancel::default(),
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(head, pr);
+        sb.git(&work, &["cat-file", "-e", &target]);
+        assert!(!sb.git(&work, &["for-each-ref"]).contains("pull"));
+        let r = fetch_mr(
+            &sb.state,
+            &work,
+            "origin",
+            "refs/pull/1/head",
+            "main",
+            &Cancel::default(),
+            &|_| {},
+        );
+        assert!(r.is_err(), "{r:?}");
     }
 
     #[test]
