@@ -1,8 +1,9 @@
 // Fake GitLab (under /gitlab) and GitHub Enterprise (under /ghe) APIs for e2e, seeded per test.
 // Runs as plain node: type annotations only, no imports beyond node's.
 // Test hooks: `GET /__writes` lists the writes since the last reset (GraphQL mutations, not queries) as
-// `{method, path, body}`, the path percent-decoded and without its query. `POST /__append
-// {forge, path, job, text, status?}` grows a job's log and can set its status, for a live log.
+// `{method, path, body}`, the path percent-decoded and without its query; `GET /__requests` lists every
+// API request as `{method, path}`. `POST /__append {forge, path, job, text, status?}` grows a job's log
+// and can set its status, for a live log. `POST /__delay {ms}` delays API replies until the next reset.
 
 import { createServer } from 'node:http'
 
@@ -44,11 +45,15 @@ const ACTIVE = ['pending', 'running']
 let seed: Seed = { user: '', projects: [] }
 let projects: FakeProject[] = []
 let writes: Write[] = []
+let requests: { method: string; path: string }[] = []
+let delay = 0
 let next = 1000
 
 function reset(s: Seed) {
   seed = s
   writes = []
+  requests = []
+  delay = 0
   projects = s.projects.map((p, i) => {
     const branches: Record<string, string> = {}
     for (const m of p.mrs) Object.assign(branches, { [m.targetBranch]: m.baseSha, [m.sourceBranch]: m.headSha })
@@ -131,6 +136,25 @@ const glDiscussion = (m: FakeMr, t: { id: string; notes: FakeNote[] }) => ({
     resolvable: !!t.notes[0].position, resolved: m.resolved.includes(t.id), position: t.notes[0].position,
   })),
 })
+
+function glGraphql({ query, variables: v }: any): Reply {
+  const p = projects.find((x) => x.forge === 'gitlab' && x.path === v.path)
+  if (!query.includes('mergeRequests(')) return { body: { errors: [{ message: 'unknown query' }] } }
+  if (!p) return { body: { data: { project: null } } }
+  const arg = (k: string) => query.match(new RegExp(`${k}:"?([^",)]+)`))?.[1]
+  const state = arg('state')
+  const list = p.mrs.filter((m) => (!state || glMr(p, m).state === state) && (!arg('authorUsername') || m.author === arg('authorUsername')) &&
+    !arg('reviewerUsername') && !arg('assigneeUsername'))
+  const nodes = list.reverse().map((m) => {
+    const r = glMr(p, m)
+    return {
+      iid: String(m.number), title: r.title, state: r.state, draft: m.draft, sourceBranch: m.sourceBranch, targetBranch: m.targetBranch,
+      updatedAt: T, webUrl: r.web_url, author: { username: m.author }, approvedBy: { nodes: m.approvedBy.map((username) => ({ username })) },
+      headPipeline: r.head_pipeline && { status: r.head_pipeline.status.toUpperCase() }, sourceProject: { fullPath: p.path },
+    }
+  })
+  return { body: { data: { project: { mergeRequests: { nodes } } } } }
+}
 
 function gitlab(method: string, rest: string, q: URLSearchParams, body: any, url: string): Reply {
   if (rest === '/version') return { body: { version: '17.11.0', revision: 'fake' } }
@@ -265,6 +289,21 @@ function graphql(body: any): Reply {
   const byNode = (id: string) => {
     for (const p of projects) for (const m of p.mrs) if (`PR_${p.id}_${m.number}` === id) return { p, m }
     return null
+  }
+  if (query.includes('pullRequests(')) {
+    const p = projects.find((x) => x.forge === 'ghe' && x.path === `${v.owner}/${v.name}`)
+    if (!p) return { body: { data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] } }
+    const nodes = p.mrs.filter((m) => !v.states || v.states.includes(m.state.toUpperCase())).reverse().map((m) => {
+      const pl = headPipeline(p, m)
+      const latest = new Map(m.reviews.filter((r) => ['APPROVED', 'CHANGES_REQUESTED'].includes(r.state)).map((r) => [r.user, r.state]))
+      return {
+        number: m.number, title: m.title, state: m.state.toUpperCase(), isDraft: m.draft, headRefName: m.sourceBranch, baseRefName: m.targetBranch,
+        updatedAt: T, url: `${origin()}/ghe/${p.path}/pull/${m.number}`, author: { login: m.author }, headRepository: { nameWithOwner: p.path },
+        assignees: { nodes: [] }, reviewRequests: { nodes: [] }, latestOpinionatedReviews: { nodes: [...latest].map(([login, state]) => ({ state, author: { login } })) },
+        commits: { nodes: [{ commit: { statusCheckRollup: pl && { state: { success: 'SUCCESS', failed: 'FAILURE', canceled: 'FAILURE' }[pl.status as string] ?? 'PENDING' } } }] },
+      }
+    })
+    return { body: { data: { repository: { pullRequests: { nodes } } } } }
   }
   const pr = byNode(v.id ?? '')
   const ok = { body: { data: { result: { clientMutationId: null } } } }
@@ -427,6 +466,11 @@ createServer(async (req, res) => {
   const method = req.method ?? 'GET'
   if (pathname === '/health') return send({ body: { projects: seed.projects.length } })
   if (pathname === '/__writes') return send({ body: writes })
+  if (pathname === '/__requests') return send({ body: requests })
+  if (method === 'POST' && pathname === '/__delay') {
+    delay = JSON.parse(raw).ms
+    return send({ body: null })
+  }
   if (method === 'POST' && pathname === '/reset') {
     reset(JSON.parse(raw))
     return send({ body: null })
@@ -448,11 +492,17 @@ createServer(async (req, res) => {
     return send(j ? { text: j.log } : { status: 404, body: { message: 'Not Found' } })
   }
   const gl = pathname.match(/^\/gitlab\/api\/v4(\/.*)$/)
+  const glq = pathname === '/gitlab/api/graphql'
   const gh = pathname.match(/^\/ghe\/api(\/.*)$/)
-  if (gl && req.headers['private-token'] !== 'gitlab-token') return send({ status: 401, body: { message: '401 Unauthorized' } })
+  if (gl || glq || gh) {
+    requests.push({ method, path: decodeURIComponent(pathname) })
+    await new Promise((r) => setTimeout(r, delay))
+  }
+  if ((gl || glq) && req.headers['private-token'] !== 'gitlab-token') return send({ status: 401, body: { message: '401 Unauthorized' } })
   if (gh && req.headers.authorization !== 'Bearer ghe-token') return send({ status: 401, body: { message: 'Bad credentials' } })
   const read = typeof body.query === 'string' && body.query.startsWith('query')
   if (method !== 'GET' && (gl || gh) && !read) writes.push({ method, path: decodeURIComponent(pathname), body: raw ? body : null })
+  if (glq && method === 'POST') return send(glGraphql(body))
   if (gl) return send(gitlab(method, gl[1], url.searchParams, body, req.url!))
   if (gh) return send(ghe(method, gh[1], url.searchParams, body, req.url!))
   send({ status: 404, body: { message: '404 Not Found' } })

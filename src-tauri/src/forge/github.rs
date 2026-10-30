@@ -11,6 +11,14 @@ reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}\
 nodes{id isResolved isOutdated path line originalLine diffSide \
 comments(first:100){nodes{databaseId body createdAt author{login}}}}}}}}";
 
+const PULLS: &str = "query($owner:String!,$name:String!,$states:[PullRequestState!]){\
+repository(owner:$owner,name:$name){pullRequests(states:$states,first:50,\
+orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title state isDraft headRefName baseRefName \
+updatedAt url author{login} headRepository{nameWithOwner} assignees(first:100){nodes{login}} \
+reviewRequests(first:100){nodes{requestedReviewer{...on User{login}}}} \
+latestOpinionatedReviews(first:100){nodes{state author{login}}} \
+commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}";
+
 fn repo(p: &Project) -> String {
     format!("/repos/{}", p.path)
 }
@@ -196,31 +204,71 @@ impl GitHub {
 }
 
 impl Forge for GitHub {
+    /// One GraphQL request, with only what the list shows; filtered here, as REST would be.
     fn mrs(&self, p: &Project, filter: MrFilter) -> Result<Vec<MergeRequest>> {
-        let state = if filter == MrFilter::All {
-            "all"
-        } else {
-            "open"
+        let (owner, name) = p.path.split_once('/').unwrap_or_default();
+        let states = match filter {
+            MrFilter::All => json!(["OPEN", "CLOSED", "MERGED"]),
+            _ => json!(["OPEN"]),
         };
-        let path = format!(
-            "{}/pulls?state={state}&sort=updated&direction=desc&per_page={LIST}",
-            repo(p)
-        );
-        let list = self.0.list(&path, None, LIST)?;
+        let vars = json!({"owner": owner, "name": name, "states": states});
+        let d = self.0.graphql(PULLS, vars)?;
         let me = self.0.account.username.as_str();
-        let has = |v: &Value, k: &str| arr(&v[k]).any(|u| u["login"] == me);
-        let picked: Vec<u64> = list
-            .iter()
+        Ok(arr(&d["repository"]["pullRequests"]["nodes"])
             .filter(|v| match filter {
-                MrFilter::Mine => v["user"]["login"] == me,
-                MrFilter::ReviewRequested => has(v, "requested_reviewers"),
-                MrFilter::Assigned => has(v, "assignees"),
+                MrFilter::Mine => v["author"]["login"] == me,
+                MrFilter::ReviewRequested => arr(&v["reviewRequests"]["nodes"])
+                    .any(|r| r["requestedReviewer"]["login"] == me),
+                MrFilter::Assigned => arr(&v["assignees"]["nodes"]).any(|u| u["login"] == me),
                 _ => true,
             })
-            .filter_map(|v| v["number"].as_u64())
-            .collect();
-        let base = self.0.get(&repo(p))?;
-        each(&picked, |n| self.full(p, *n, &base))
+            .map(|v| {
+                let approved_by: Vec<String> = arr(&v["latestOpinionatedReviews"]["nodes"])
+                    .filter(|r| r["state"] == "APPROVED")
+                    .map(|r| s(&r["author"]["login"]))
+                    .collect();
+                let rollup = &v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"];
+                let source = v["headRepository"]["nameWithOwner"].as_str();
+                MergeRequest {
+                    provider: self.0.account.provider.clone(),
+                    number: v["number"].as_u64().unwrap_or_default(),
+                    title: s(&v["title"]),
+                    description: String::new(),
+                    state: match v["state"].as_str() {
+                        Some("OPEN") => MrState::Open,
+                        Some("MERGED") => MrState::Merged,
+                        _ => MrState::Closed,
+                    },
+                    draft: v["isDraft"] == true,
+                    author: s(&v["author"]["login"]),
+                    source_project: Project {
+                        host: p.host.clone(),
+                        path: source.unwrap_or(&p.path).into(),
+                    },
+                    source_branch: s(&v["headRefName"]),
+                    target_project: p.clone(),
+                    target_branch: s(&v["baseRefName"]),
+                    base_sha: String::new(),
+                    head_sha: String::new(),
+                    labels: vec![],
+                    reviewers: vec![],
+                    approved: approved_by.iter().any(|u| u == me),
+                    approved_by,
+                    blocking: None,
+                    merge_methods: vec![],
+                    can_delete_source_branch: false,
+                    auto_merge: false,
+                    pipeline: rollup.as_str().map(|r| match r {
+                        "SUCCESS" => PipelineStatus::Success,
+                        "FAILURE" | "ERROR" => PipelineStatus::Failed,
+                        _ => PipelineStatus::Pending,
+                    }),
+                    web_url: s(&v["url"]),
+                    project_url: String::new(),
+                    updated: time(&v["updatedAt"]),
+                }
+            })
+            .collect())
     }
 
     fn find_mr(&self, p: &Project, source: &Project, branch: &str) -> Result<Option<MergeRequest>> {

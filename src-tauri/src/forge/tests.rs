@@ -563,6 +563,110 @@ fn gitlab_current_mr_matches_source_project_and_branch() {
 }
 
 #[test]
+fn gitlab_list_is_one_graphql_request_per_filter() {
+    let node = json!({"iid": "3", "title": "Fix", "state": "opened", "draft": true, "sourceBranch": "fix",
+        "targetBranch": "main", "updatedAt": T0, "webUrl": "{base}/gitlab/group/app/-/merge_requests/3",
+        "author": {"username": "alice"}, "approvedBy": {"nodes": [{"username": "me"}, {"username": "bob"}]},
+        "headPipeline": {"status": "CANCELING"}, "sourceProject": {"fullPath": "me/app"}});
+    let page = json!({"data": {"project": {"mergeRequests": {"nodes": [node]}}}});
+    let t = gitlab(vec![route("POST /gitlab/api/graphql", 200, page)]);
+    use MrFilter::*;
+    for f in [Open, Mine, ReviewRequested, Assigned, All] {
+        assert_eq!(list_mrs(&t.sb.state, &t.repo, f).unwrap().len(), 1);
+    }
+    let reqs = t.fake.reqs();
+    let args: Vec<&str> = reqs
+        .iter()
+        .map(|r| {
+            assert_eq!(
+                (r.method.as_str(), r.path.as_str()),
+                ("POST", "/gitlab/api/graphql")
+            );
+            assert_eq!(r.header("private-token").as_deref(), Some("tok"));
+            assert_eq!(r.json()["variables"], json!({"path": "group/app"}));
+            let q = r.body.split("mergeRequests(").nth(1).unwrap();
+            &q[..q.find(')').unwrap()]
+        })
+        .collect();
+    let first = "sort:UPDATED_DESC,first:50";
+    assert_eq!(
+        args,
+        [
+            format!("{first},state:opened"),
+            format!(r#"{first},state:opened,authorUsername:\"me\""#),
+            format!(r#"{first},state:opened,reviewerUsername:\"me\""#),
+            format!(r#"{first},state:opened,assigneeUsername:\"me\""#),
+            first.into(),
+        ]
+    );
+    let mr = list_mrs(&t.sb.state, &t.repo, Open).unwrap().remove(0);
+    let base = &t.fake.base;
+    assert_eq!(
+        to_value(&mr).unwrap(),
+        json!({
+            "provider": "gitlabSelfHosted", "number": 3, "title": "Fix", "description": "", "state": "open",
+            "draft": true, "author": "alice", "sourceProject": {"host": t.host(), "path": "me/app"},
+            "sourceBranch": "fix", "targetProject": {"host": t.host(), "path": "group/app"},
+            "targetBranch": "main", "baseSha": "", "headSha": "", "labels": [], "reviewers": [],
+            "approvedBy": ["me", "bob"], "approved": true, "blocking": null, "mergeMethods": [],
+            "canDeleteSourceBranch": false, "autoMerge": false, "pipeline": "running",
+            "webUrl": format!("{base}/gitlab/group/app/-/merge_requests/3"), "projectUrl": "", "updated": T0_SECS
+        })
+    );
+}
+
+#[test]
+fn gitlab_list_falls_back_to_rest_on_a_graphql_error() {
+    let mut routes = vec![
+        route(
+            "POST /gitlab/api/graphql",
+            200,
+            json!({"errors": [{"message": "Field 'approvedBy' doesn't exist on type 'MergeRequest'"}]}),
+        ),
+        route(
+            &format!("GET {GL}/merge_requests?state=opened&order_by=updated_at&per_page=50"),
+            200,
+            json!([{"iid": 1}]),
+        ),
+    ];
+    routes.extend(gl_mr_routes(1));
+    let t = gitlab(routes);
+    let mrs = list_mrs(&t.sb.state, &t.repo, MrFilter::Open).unwrap();
+    assert_eq!((mrs.len(), mrs[0].number, mrs[0].approved), (1, 1, true));
+    assert_eq!(mrs[0].head_sha, "bbb", "the full MR");
+    assert_eq!(t.fake.reqs()[0].path, "/gitlab/api/graphql");
+}
+
+#[test]
+fn merged_and_closed_mrs_are_fetched_once_open_ones_every_time() {
+    let mut merged = gl_mr(2, 7);
+    merged["state"] = json!("merged");
+    let mut routes = gl_mr_routes(1);
+    routes.extend(gl_mr_routes(2));
+    routes[3] = route(&format!("GET {GL}/merge_requests/2"), 200, merged);
+    let t = gitlab(routes);
+    let fetches = |n: u64| {
+        let path = format!("{GL}/merge_requests/{n}");
+        t.fake.reqs().iter().filter(|r| r.path == path).count()
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            get_mr(&t.sb.state, &t.repo, 1).unwrap().state,
+            MrState::Open
+        );
+        assert_eq!(
+            get_mr(&t.sb.state, &t.repo, 2).unwrap().state,
+            MrState::Merged
+        );
+    }
+    assert_eq!((fetches(1), fetches(2)), (2, 1));
+    let comment = MrAction::Comment { body: "x".into() };
+    mr_action(&t.sb.state, &t.repo, 2, &comment).unwrap();
+    get_mr(&t.sb.state, &t.repo, 2).unwrap();
+    assert_eq!(fetches(2), 2, "an action drops the cached MR");
+}
+
+#[test]
 fn branch_pipelines_come_from_the_source_project_and_actions_use_the_pipelines_project() {
     let fork = "/gitlab/api/v4/projects/me%2Fapp";
     let routes = vec![route(
@@ -1027,6 +1131,78 @@ fn github_current_mr_matches_source_project_and_branch() {
     let mr = current_mr(&t.sb.state, &t.repo).unwrap().unwrap();
     assert_eq!((mr.number, mr.source_project.path.as_str()), (3, "me/app"));
     assert!(!mr.can_delete_source_branch, "no push access to the fork");
+}
+
+#[test]
+fn github_list_is_one_graphql_request_filtered_like_rest() {
+    let pr = |n: u64, author: &str, state: &str| {
+        json!({"number": n, "title": format!("PR {n}"), "state": state, "isDraft": n == 1,
+            "headRefName": "feature", "baseRefName": "main", "updatedAt": "2026-10-01T10:00:00Z",
+            "url": format!("{{base}}/ghe/owner/app/pull/{n}"), "author": {"login": author},
+            "headRepository": null, "assignees": {"nodes": []}, "reviewRequests": {"nodes": []},
+            "latestOpinionatedReviews": {"nodes": []}, "commits": {"nodes": []}})
+    };
+    let mut one = pr(1, "alice", "OPEN");
+    one["headRepository"] = json!({"nameWithOwner": "me/app"});
+    one["reviewRequests"] =
+        json!({"nodes": [{"requestedReviewer": {"login": "me"}}, {"requestedReviewer": {}}]});
+    one["latestOpinionatedReviews"] = json!({"nodes": [
+        {"state": "APPROVED", "author": {"login": "bob"}},
+        {"state": "CHANGES_REQUESTED", "author": {"login": "carol"}}]});
+    one["commits"] = json!({"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE"}}}]});
+    let mut two = pr(2, "me", "MERGED");
+    two["assignees"] = json!({"nodes": [{"login": "me"}]});
+    let nodes = json!([one, two, pr(3, "bob", "CLOSED")]);
+    let page = json!({"data": {"repository": {"pullRequests": {"nodes": nodes}}}});
+    let t = github(vec![route("POST /ghe/api/graphql", 200, page)]);
+    let numbers = |f| -> Vec<u64> {
+        let mrs = list_mrs(&t.sb.state, &t.repo, f).unwrap();
+        mrs.iter().map(|m| m.number).collect()
+    };
+    use MrFilter::*;
+    assert_eq!(numbers(Open), [1, 2, 3]);
+    assert_eq!(numbers(Mine), [2]);
+    assert_eq!(numbers(ReviewRequested), [1]);
+    assert_eq!(numbers(Assigned), [2]);
+    assert_eq!(numbers(All), [1, 2, 3]);
+    let states: Vec<Value> = t
+        .fake
+        .reqs()
+        .iter()
+        .map(|r| r.json()["variables"]["states"].clone())
+        .collect();
+    let open = json!(["OPEN"]);
+    assert_eq!(
+        states,
+        [
+            open.clone(),
+            open.clone(),
+            open.clone(),
+            open,
+            json!(["OPEN", "CLOSED", "MERGED"])
+        ]
+    );
+    assert!(t.fake.reqs().iter().all(|r| r.path == "/ghe/api/graphql"));
+    let mrs = list_mrs(&t.sb.state, &t.repo, All).unwrap();
+    let base = &t.fake.base;
+    assert_eq!(
+        to_value(&mrs[0]).unwrap(),
+        json!({
+            "provider": "githubEnterprise", "number": 1, "title": "PR 1", "description": "", "state": "open",
+            "draft": true, "author": "alice", "sourceProject": {"host": t.host(), "path": "me/app"},
+            "sourceBranch": "feature", "targetProject": {"host": t.host(), "path": "owner/app"},
+            "targetBranch": "main", "baseSha": "", "headSha": "", "labels": [], "reviewers": [],
+            "approvedBy": ["bob"], "approved": false, "blocking": null, "mergeMethods": [],
+            "canDeleteSourceBranch": false, "autoMerge": false, "pipeline": "failed",
+            "webUrl": format!("{base}/ghe/owner/app/pull/1"), "projectUrl": "", "updated": T0_SECS
+        })
+    );
+    let (m2, m3) = (&mrs[1], &mrs[2]);
+    assert_eq!(
+        (&m2.state, &m2.pipeline, m2.source_project.path.as_str()),
+        (&MrState::Merged, &None, "owner/app")
+    );
+    assert_eq!(m3.state, MrState::Closed);
 }
 
 #[test]

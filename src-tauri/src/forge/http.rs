@@ -192,12 +192,10 @@ impl Api {
         Ok(out)
     }
 
-    /// GitHub GraphQL: `https://api.github.com/graphql`, or `{base}/api/graphql` on Enterprise.
+    /// GraphQL: `https://api.github.com/graphql`, else `{base}/api/graphql`.
     pub fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
-        let url = format!(
-            "{}/graphql",
-            self.base.strip_suffix("/v3").unwrap_or(&self.base)
-        );
+        let base = self.base.trim_end_matches("/v3").trim_end_matches("/v4");
+        let url = format!("{base}/graphql");
         let body = json!({"query": query, "variables": variables});
         let v = self.send("POST", &url, Some(body))?;
         if let Some(e) = v["errors"].as_array().filter(|e| !e.is_empty()) {

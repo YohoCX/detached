@@ -38,6 +38,14 @@ fn status(s: &str) -> PipelineStatus {
     }
 }
 
+fn mr_state(s: &str) -> MrState {
+    match s {
+        "opened" => MrState::Open,
+        "merged" => MrState::Merged,
+        _ => MrState::Closed,
+    }
+}
+
 fn draft_title(t: &str, draft: bool) -> String {
     let lower = t.to_ascii_lowercase();
     let bare = ["draft:", "[draft]", "(draft)"]
@@ -122,11 +130,7 @@ impl GitLab {
             number: n,
             title: s(&v["title"]),
             description: s(&v["description"]),
-            state: match v["state"].as_str() {
-                Some("opened") => MrState::Open,
-                Some("merged") => MrState::Merged,
-                _ => MrState::Closed,
-            },
+            state: mr_state(v["state"].as_str().unwrap_or_default()),
             draft: v["draft"] == true || v["work_in_progress"] == true,
             author: s(&v["author"]["username"]),
             source_project,
@@ -155,23 +159,69 @@ impl GitLab {
         })
     }
 
-    /// `auto_merge` from GitLab 17.11, `merge_when_pipeline_succeeds` before.
-    fn auto_merge_key(&self) -> Result<&'static str> {
-        let v = s(&self.api.get("/version")?["version"]);
-        let n: Vec<u32> = v
-            .split(['.', '-'])
-            .take(2)
-            .filter_map(|x| x.parse().ok())
-            .collect();
-        Ok(match n >= vec![17, 11] {
-            true => "auto_merge",
-            false => "merge_when_pipeline_succeeds",
-        })
+    /// The list in one GraphQL request, with only what the list shows.
+    fn listed(&self, p: &Project, filter: &MrFilter) -> Result<Vec<MergeRequest>> {
+        let me = json!(self.api.account.username);
+        let args = match filter {
+            MrFilter::Open => ",state:opened".into(),
+            MrFilter::Mine => format!(",state:opened,authorUsername:{me}"),
+            MrFilter::ReviewRequested => format!(",state:opened,reviewerUsername:{me}"),
+            MrFilter::Assigned => format!(",state:opened,assigneeUsername:{me}"),
+            MrFilter::All => String::new(),
+        };
+        let q = format!(
+            "query($path:ID!){{project(fullPath:$path){{mergeRequests(sort:UPDATED_DESC,first:{LIST}{args})\
+             {{nodes{{iid title state draft sourceBranch targetBranch updatedAt webUrl author{{username}} \
+             approvedBy{{nodes{{username}}}} headPipeline{{status}} sourceProject{{fullPath}}}}}}}}}}"
+        );
+        let d = self.api.graphql(&q, json!({"path": p.path}))?;
+        let nodes = d["project"]["mergeRequests"]["nodes"].as_array();
+        let nodes = nodes.ok_or_else(|| Error::Other(format!("No project {}", p.path)))?;
+        Ok(nodes
+            .iter()
+            .map(|v| {
+                let approved_by: Vec<String> = arr(&v["approvedBy"]["nodes"])
+                    .map(|u| s(&u["username"]))
+                    .collect();
+                let source = v["sourceProject"]["fullPath"].as_str();
+                MergeRequest {
+                    provider: self.api.account.provider.clone(),
+                    number: s(&v["iid"]).parse().unwrap_or_default(),
+                    title: s(&v["title"]),
+                    description: String::new(),
+                    state: mr_state(&s(&v["state"])),
+                    draft: v["draft"] == true,
+                    author: s(&v["author"]["username"]),
+                    source_project: Project {
+                        host: p.host.clone(),
+                        path: source.unwrap_or(&p.path).into(),
+                    },
+                    source_branch: s(&v["sourceBranch"]),
+                    target_project: p.clone(),
+                    target_branch: s(&v["targetBranch"]),
+                    base_sha: String::new(),
+                    head_sha: String::new(),
+                    labels: vec![],
+                    reviewers: vec![],
+                    approved: approved_by.contains(&self.api.account.username),
+                    approved_by,
+                    blocking: None,
+                    merge_methods: vec![],
+                    can_delete_source_branch: false,
+                    auto_merge: false,
+                    pipeline: v["headPipeline"]["status"]
+                        .as_str()
+                        .map(|x| status(&x.to_ascii_lowercase())),
+                    web_url: s(&v["webUrl"]),
+                    project_url: String::new(),
+                    updated: time(&v["updatedAt"]),
+                }
+            })
+            .collect())
     }
-}
 
-impl Forge for GitLab {
-    fn mrs(&self, p: &Project, filter: MrFilter) -> Result<Vec<MergeRequest>> {
+    /// Two requests per MR, for instances whose GraphQL lacks a field.
+    fn mrs_rest(&self, p: &Project, filter: MrFilter) -> Result<Vec<MergeRequest>> {
         let q = match filter {
             MrFilter::Open => "state=opened".into(),
             MrFilter::Mine => "state=opened&scope=created_by_me".into(),
@@ -192,6 +242,27 @@ impl Forge for GitLab {
             let v = self.mr_json(p, m["iid"].as_u64().unwrap_or_default())?;
             self.full(p, &v, &project)
         })
+    }
+
+    /// `auto_merge` from GitLab 17.11, `merge_when_pipeline_succeeds` before.
+    fn auto_merge_key(&self) -> Result<&'static str> {
+        let v = s(&self.api.get("/version")?["version"]);
+        let n: Vec<u32> = v
+            .split(['.', '-'])
+            .take(2)
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        Ok(match n >= vec![17, 11] {
+            true => "auto_merge",
+            false => "merge_when_pipeline_succeeds",
+        })
+    }
+}
+
+impl Forge for GitLab {
+    fn mrs(&self, p: &Project, filter: MrFilter) -> Result<Vec<MergeRequest>> {
+        self.listed(p, &filter)
+            .or_else(|_| self.mrs_rest(p, filter))
     }
 
     fn find_mr(&self, p: &Project, source: &Project, branch: &str) -> Result<Option<MergeRequest>> {

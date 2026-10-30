@@ -6,7 +6,9 @@ pub mod project;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -99,6 +101,8 @@ pub trait Forge: Sync {
 
 /// MR lists hold the most recently updated ones.
 const LIST: usize = 50;
+/// Merged and closed MRs by account, project and number, kept for the session.
+static DONE: Mutex<BTreeMap<String, MergeRequest>> = Mutex::new(BTreeMap::new());
 
 fn open(state: &AppState, r: &Remote) -> Result<(Box<dyn Forge>, Project)> {
     let p = r.project()?;
@@ -190,9 +194,24 @@ pub fn current_mr(state: &AppState, repo: &Path) -> Result<Option<MergeRequest>>
     }
 }
 
+fn done_key(r: &Remote, number: u64) -> Result<String> {
+    let p = r.project()?;
+    let a = r.account.as_ref().map_or("", |a| a.id.as_str());
+    Ok(format!("{a} {} {} {number}", p.host, p.path))
+}
+
 pub fn get_mr(state: &AppState, repo: &Path, number: u64) -> Result<MergeRequest> {
-    let (f, p) = mr_forge(state, repo)?;
-    f.mr(&p, number)
+    let r = project::mr(state, repo)?;
+    let key = done_key(&r, number)?;
+    if let Some(m) = DONE.lock().unwrap().get(&key) {
+        return Ok(m.clone());
+    }
+    let (f, p) = open(state, &r)?;
+    let m = f.mr(&p, number)?;
+    if m.state != MrState::Open {
+        DONE.lock().unwrap().insert(key, m.clone());
+    }
+    Ok(m)
 }
 
 pub fn mr_threads(state: &AppState, repo: &Path, number: u64) -> Result<Vec<Thread>> {
@@ -201,7 +220,9 @@ pub fn mr_threads(state: &AppState, repo: &Path, number: u64) -> Result<Vec<Thre
 }
 
 pub fn mr_action(state: &AppState, repo: &Path, number: u64, action: &MrAction) -> Result<()> {
-    let (f, p) = mr_forge(state, repo)?;
+    let r = project::mr(state, repo)?;
+    DONE.lock().unwrap().remove(&done_key(&r, number)?);
+    let (f, p) = open(state, &r)?;
     f.act(&p, number, action)
 }
 
