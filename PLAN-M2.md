@@ -85,12 +85,15 @@ checkout revision (a new `CheckoutTarget` `{kind: 'rev', sha}`: `git switch --de
 smart checkout steps), compare with the working tree, open in the browser.
 
 **Remote to project.** The MR project is the project of one remote, chosen per repo in Settings
-(`mr_remotes: {repo → remote}`): `origin` by default, else the only remote. No guessing from remote
+(`mr_remotes: {repo → remote}`): `origin` by default, else the only remote; with several remotes,
+no `origin` and no saved remote that still exists, it is unset and the MR and pipeline views say so
+and open Settings. No guessing from remote
 names, since forks are wired in both directions (`origin` the team's fork and `upstream` the
 original, or the reverse). Host and path come from https, `ssh://` and scp-style URLs; ssh hosts go
 through `ssh -G <host>` first, so `~/.ssh/config` aliases resolve to the real hostname, and
 `ssh.github.com` counts as `github.com`. A base URL with a sub-path (GitLab under `/gitlab`) is
-stripped from the path. The current branch's source project is the project of its upstream remote.
+stripped from the path. The current branch's source project is the project of its upstream remote,
+and its source branch is the remote branch name of `@{push}` when set, else of `@{upstream}`.
 When that differs from the MR project (a fork), an MR is created with GitHub `head=owner:branch` or
 GitLab's source and target project ids (on different hosts, create is not offered), the create form
 shows the target project, and the current branch's MR is matched on source project and branch,
@@ -100,7 +103,9 @@ The API account for a host is, in order: the repo's forge account for that host
 (`forge_accounts: {repo → {host → account id}}`, any account allowed); else the only account that
 fits the host; else milestone 1's `repo_accounts` choice when it fits. Otherwise the host is
 ambiguous (several fit, none chosen) or unknown (none fits), and the MR and pipeline views say so and
-open Settings. This matching lives in `forge/project.rs` on top of the public URL parser.
+open Settings. An account fits an https remote on host plus base-path prefix, an ssh or scp remote
+on host alone; one `accounts::fits` predicate, made public in the scaffold, serves both milestone 1's
+matching and `forge/project.rs`, which builds on it and the public URL parser.
 `forge_hosts(repo)` lists each remote's host (after `ssh -G`) with its API account and an
 `ambiguous` flag, for Settings to offer every account per host and the MR remote.
 `accounts::remove` prunes `forge_accounts` as it prunes `repo_accounts`. `accounts::credentials` and
@@ -149,7 +154,8 @@ head commit is missing, `git fetch <MR project's remote> refs/merge-requests/<n>
 token; no destination ref, so nothing new appears among the user's refs. Those refs exist only in
 the MR project, never in a fork. When the fetched head differs from the API's head SHA, the MR is
 reloaded once; if they still differ (GitHub updates `refs/pull/<n>/head` a moment after a push), the
-diff shows the fetched head with a "head moved, refresh" notice. The diff is GitLab's
+diff shows the fetched head with a "head moved, refresh" notice, and line comments are off
+until the refresh, since their positions would name one head and their lines another. The diff is GitLab's
 `diff_refs.base_sha` → head, or on GitHub the local merge base of base and head → head. The Commits
 tab is `git log base..head`, and a commit opens the same details component as the log. The Changes
 tab always shows side by side: in inline mode Monaco hides the original editor and its view zones,
@@ -198,7 +204,9 @@ renders, and the webview can call every command, including git and token reads.
   bridge the IPC shim calls), so e2e runs under it.
 
 **Pipelines.** The Pipelines tab of the bottom panel lists the source project's pipelines (current
-branch, matched on branch and head SHA, or all), since a fork's branch pipelines run in the fork;
+branch, matched on the source branch and its remote-tracking ref's SHA, or all), since a fork's
+branch pipelines run in the fork; with no upstream (a new branch, a detached HEAD) it shows the MR
+project's pipelines, all branches;
 an MR's pipelines come from the MR's own endpoint. Every pipeline carries its project, and job and
 pipeline actions address that project; a pipeline expands to stages and jobs. A job opens its log in the main area: a
 virtualized viewer that renders ANSI colors and folds GitLab `section_start/end` and GitHub
@@ -226,7 +234,7 @@ bridge) only through the main session, as in milestone 1. All git work is A's, a
 1. **Scaffold** (main session):
    - the contract for log, forge and pipelines in `types.rs` and `api.ts`, including
      `CheckoutTarget` `rev`, the `Job`/`Pipeline` flags, `forge_hosts`, the `forge_accounts` and
-     `mr_remotes` settings (pruned on account removal) and the exact log format, with stub
+     `mr_remotes` settings (`forge_accounts` pruned on account removal), `accounts::fits`, and the exact log format, with stub
      commands returning fixtures, each also routed in `bin/e2e-bridge.rs`;
    - every M2 action id in `actions.ts`; `panel.log` moved to the keymap defaults; docs/KEYMAP.md;
    - `providers/` renamed to `forge/`; `accounts` URL parsing made public with ssh and scp support;
@@ -245,10 +253,11 @@ bridge) only through the main session, as in milestone 1. All git work is A's, a
      base paths, so the two e2e accounts never fit the same host and path); a `/reset` that takes
      the fixture's seed (projects, MRs with their base and head SHAs, pipelines), in a format fixed
      here;
-   - in `e2e/fixture.ts`, two repos, one per provider, whose `origin` points at the fake and whose
-     current branch tracks it (remote-tracking refs written locally), holding their MRs' base and
-     head commits so no fetch reaches the fake; the fixture seeds the fake with the SHAs it just
-     made, and `open()` expects the new repo count.
+   - in `e2e/fixture.ts`, two repos, one per provider, in their own folder that only an
+     `openForge()` helper adds, so `open()` and the milestone 1 specs keep their six repos and their
+     Fetch/Pull All results. Each repo's `origin` points at the fake and its current branch tracks it
+     (remote-tracking refs written locally); it holds its MRs' base and head commits so no fetch
+     reaches the fake, and the fixture seeds the fake with the SHAs it just made.
 2. **In parallel**, one Opus agent each in its own worktree:
    - A — `git/`: streamed log, filters, lanes, details, merge base and range log, hunk ranges for
      GitHub comments, MR ref fetch, detached checkout, with tests.
@@ -258,7 +267,7 @@ bridge) only through the main session, as in milestone 1. All git work is A's, a
    - C — BottomPanel, Log, Graph, CommitDetails: graph rendering, filters, details, commit changes,
      file history, against the stubs.
 3. **After A, B and C**, in parallel: D — MrList, MrPage, MrChip, Thread, Markdown, MergeWidget,
-   Viewer's MR hooks, the Settings forge-account picker, the MR e2e specs; E — Pipelines,
+   Viewer's MR hooks, the Settings forge-account and MR-remote pickers, the MR e2e specs; E — Pipelines,
    PipelineBadge, JobLog, the pipeline e2e specs. D mounts E's Pipelines only through the scaffold's props.
 4. **Wire** to the real commands, try it on real repos (writes only on the `sandbox` repo), then a
    revmux review.
