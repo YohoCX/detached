@@ -26,7 +26,8 @@ export const app = $state({
   message: null as { text: string; error: boolean } | null,
   sync: null as { kind: 'fetch' | 'pull'; done: number; total: number } | null,
   sidebar: true,
-  tool: 'changes' as 'changes' | 'files' | null,
+  tool: 'changes' as 'changes' | 'files' | 'mrs' | null,
+  bottom: null as 'log' | 'pipelines' | null,
   palette: null as PaletteMode | null,
   paletteAll: false,
   branches: null as BranchesView | null,
@@ -189,20 +190,21 @@ export async function syncRepos(kind: 'fetch' | 'pull', repos = app.repos.map((r
 
 export async function checkout(repo: string, target: CheckoutTarget) {
   const from = statusOf(repo)?.branch
+  const name = target.kind === 'rev' ? target.sha.slice(0, 10) : target.name
   let r: CheckoutResult
-  say(`Checking out ${target.name}…`)
+  say(`Checking out ${name}…`)
   try {
     r = await api.checkout(repo, target)
   } catch (e) {
-    return notify({ level: 'error', title: `Checkout of ${target.name} failed`, body: String(e) })
+    return notify({ level: 'error', title: `Checkout of ${name} failed`, body: String(e) })
   } finally {
     refresh(repo)
   }
-  if (r.kind === 'switched' || r.kind === 'carried') {
-    const rest = recentOf(repo).filter((b) => b !== target.name && b !== from)
-    recentBranches.set(repo, [target.name, ...(from ? [from] : []), ...rest].slice(0, 6))
+  if ((r.kind === 'switched' || r.kind === 'carried') && target.kind !== 'rev') {
+    const rest = recentOf(repo).filter((b) => b !== name && b !== from)
+    recentBranches.set(repo, [name, ...(from ? [from] : []), ...rest].slice(0, 6))
   }
-  const n = checkoutNotice(repo, target.name, r)
+  const n = checkoutNotice(repo, name, r)
   notify(n)
   say(n.title, n.level === 'error')
 }
@@ -250,6 +252,9 @@ export function registerActions(): () => void {
     register('nav.forward', nav.forward),
     register('panel.project', () => (app.tool = app.tool === 'files' ? null : 'files')),
     register('app.settings', () => (app.settings = true)),
+    register('panel.log', () => (app.bottom = app.bottom === 'log' ? null : 'log')),
+    register('panel.pipelines', () => (app.bottom = app.bottom === 'pipelines' ? null : 'pipelines')),
+    register('panel.mergeRequests', () => (app.tool = app.tool === 'mrs' ? null : 'mrs')),
     register('vcs.update', () => syncOne('pull', cur())),
     register('vcs.fetch', () => syncOne('fetch', cur())),
     register('vcs.fetchAll', () => syncRepos('fetch')),

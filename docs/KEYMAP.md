@@ -1,7 +1,7 @@
 # Default keymap
 
-JetBrains macOS keymap. Action ids are what `keymap.json` overrides. M2 actions are reserved: the
-chord is kept free, nothing is bound.
+JetBrains macOS keymap. Action ids are what `keymap.json` overrides. M3 rows keep their chords free
+until their actions exist.
 
 | Action id | Action | Keys | Milestone |
 | --- | --- | --- | --- |
@@ -14,15 +14,20 @@ chord is kept free, nothing is bound.
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 |
 | `panel.project` | Project tree panel | Cmd+1 | M1 |
 | `panel.log` | Git log panel | Cmd+9 | M2 |
-| `panel.commit` | Commit panel | Cmd+0 | M2 |
-| `vcs.commit` | Commit | Cmd+K | M2 |
-| `vcs.push` | Push | Cmd+Shift+K | M2 |
+| `panel.commit` | Commit panel | Cmd+0 | M3 |
+| `vcs.commit` | Commit | Cmd+K | M3 |
+| `vcs.push` | Push | Cmd+Shift+K | M3 |
 | `vcs.update` | Update project (pull) | Cmd+T | M1 |
 | `vcs.popup` | VCS operations popup | Ctrl+V | M1 |
 | `diff.show` | Show diff | Cmd+D | M1 |
 | `diff.next` / `diff.prev` | Next / previous change | F7 / Shift+F7 | M1 |
-| `vcs.rollback` | Rollback | Cmd+Alt+Z | M2 |
+| `vcs.rollback` | Rollback | Cmd+Alt+Z | M3 |
 | `app.settings` | Settings (accounts, removed repos, git) | Cmd+, | M1 |
+| `panel.mergeRequests` | Merge requests tool panel | | M2 |
+| `panel.pipelines` | Pipelines tab of the bottom panel | | M2 |
+| `vcs.fileHistory` | History of the open file | | M2 |
+| `mr.create` | Create a merge request from the current branch | | M2 |
+| `pipeline.run` | Run a pipeline for a branch | | M2 |
 
 Monaco bindings removed or re-pointed so these win: Cmd+K chords, Cmd+D (add selection to next
 match), Cmd+L (expand line selection), Cmd+E, Cmd+[ / Cmd+] (outdent/indent), F7 (accessible diff

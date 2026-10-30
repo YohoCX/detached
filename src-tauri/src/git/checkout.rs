@@ -23,6 +23,11 @@ fn smart(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Result<Check
         CheckoutTarget::Remote { remote, name } => {
             (arg(name)?, format!("{}/{name}", arg(remote)?), true)
         }
+        CheckoutTarget::Rev { .. } => {
+            return Ok(CheckoutResult::Refused {
+                error: "checkout of a revision is not implemented yet".into(),
+            });
+        }
     };
     let args = if track {
         vec!["switch", "--track", &to]

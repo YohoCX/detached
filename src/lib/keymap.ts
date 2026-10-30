@@ -16,11 +16,11 @@ export const defaults: Record<string, string> = {
   'diff.next': 'F7',
   'diff.prev': 'Shift+F7',
   'app.settings': 'Cmd+,',
+  'panel.log': 'Cmd+9',
 }
 
-/** M2 rows: the chords stay free, nothing is bound. */
+/** M3 rows: the chords stay free until their actions exist. */
 export const reserved: Record<string, string> = {
-  'panel.log': 'Cmd+9',
   'panel.commit': 'Cmd+0',
   'vcs.commit': 'Cmd+K',
   'vcs.push': 'Cmd+Shift+K',

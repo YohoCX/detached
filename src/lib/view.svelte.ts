@@ -1,10 +1,15 @@
 import { SvelteMap } from 'svelte/reactivity'
-import type { FileChange, Side } from './api'
-import { setOpener, type Location } from './nav'
+import type { DiffSide, FileChange, Project, Side } from './api'
+import { open, setOpener, type Doc, type Location } from './nav'
 
-export type Shown =
+/** What Viewer shows: a file, or a diff (an MR's has rev sides). */
+export type FileDoc =
   | ({ kind: 'file' } & Location)
   | { kind: 'diff'; repo: string; path: string; origPath: string | null; left: Side; right: Side }
+/** A view zone under `afterLine` on a diff's old or new side. */
+export interface Zone { side: DiffSide; afterLine: number; height: number; node: HTMLElement }
+/** The main area's document. */
+export type Shown = FileDoc | ({ repo: string } & Doc)
 
 export const view = $state({
   shown: null as Shown | null,
@@ -23,8 +28,13 @@ export const refs = new SvelteMap<string, string>()
 export const refOf = (repo: string | null) => (repo && refs.get(repo)) || null
 
 setOpener((loc) => {
-  view.shown = { kind: 'file', ...loc }
+  view.shown = loc.doc ? { repo: loc.repo, ...loc.doc } : { kind: 'file', ...loc }
 })
+
+const at = (repo: string, doc: Doc): Location => ({ repo, ref: null, path: '', line: null, doc })
+export const showMr = (repo: string, number: number) => open(at(repo, { kind: 'mr', number }))
+export const showJob = (repo: string, project: Project, id: number, name: string) =>
+  open(at(repo, { kind: 'job', project, id, name }))
 
 export function showDiff(repo: string, path: string, origPath: string | null = null, left: Side = { kind: 'head' }) {
   view.shown = { kind: 'diff', repo, path, origPath, left, right: { kind: 'worktree' } }

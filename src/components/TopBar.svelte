@@ -3,6 +3,8 @@
   import { chordFor } from '../lib/keymap'
   import Branches from './Branches.svelte'
   import Icon from './Icon.svelte'
+  import MrChip from './MrChip.svelte'
+  import PipelineBadge from './PipelineBadge.svelte'
   import RepoSwitcher from './RepoSwitcher.svelte'
   import StatusBar from './StatusBar.svelte'
 
@@ -29,6 +31,8 @@
     </button>
     {#key app.branches}{#if app.branches}<Branches />{/if}{/key}
   </div>
+  <MrChip repo={app.current} />
+  <PipelineBadge repo={app.current} />
   <StatusBar />
   <button class="search" onclick={() => run('search.everywhere')}>
     <Icon name="search" size={14} /><span class="fill">Search everywhere</span><kbd>{chordFor('search.everywhere')}</kbd>

@@ -6,7 +6,7 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::error::Result;
-use crate::git::{branches, checkout as smart, diff, files, pull as pulls, status};
+use crate::git::{branches, checkout as smart, diff, files, log, pull as pulls, remotes, status};
 use crate::state::AppState;
 use crate::types::*;
 
@@ -192,4 +192,107 @@ pub fn open_in_zed(
     line: Option<u32>,
 ) -> Result<()> {
     files::open_in_zed(&state.env(), Path::new(&repo), &path, line)
+}
+
+#[tauri::command(async)]
+pub fn log(
+    state: State<'_, AppState>,
+    repo: String,
+    query: LogQuery,
+    query_id: u64,
+    events: Channel<LogEvent>,
+) -> Result<()> {
+    state.op(query_id, |c| {
+        log::log(&state.env(), Path::new(&repo), &query, query_id, c, &|e| {
+            drop(events.send(e))
+        })
+    });
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn cancel_log(state: State<'_, AppState>, query_id: u64) {
+    state.ops.cancel(query_id);
+}
+
+#[tauri::command(async)]
+pub fn commit_details(
+    state: State<'_, AppState>,
+    repo: String,
+    sha: String,
+) -> Result<CommitDetails> {
+    log::commit_details(&state.env(), Path::new(&repo), &sha)
+}
+
+#[tauri::command(async)]
+pub fn branches_containing(
+    state: State<'_, AppState>,
+    repo: String,
+    sha: String,
+) -> Result<Vec<String>> {
+    log::branches_containing(&state.env(), Path::new(&repo), &sha)
+}
+
+#[tauri::command(async)]
+pub fn merge_base(
+    state: State<'_, AppState>,
+    repo: String,
+    a: String,
+    b: String,
+) -> Result<String> {
+    log::merge_base(&state.env(), Path::new(&repo), &a, &b)
+}
+
+#[tauri::command(async)]
+pub fn range_log(
+    state: State<'_, AppState>,
+    repo: String,
+    base: String,
+    head: String,
+) -> Result<Vec<CommitSummary>> {
+    log::range_log(&state.env(), Path::new(&repo), &base, &head)
+}
+
+#[tauri::command(async)]
+pub fn hunk_ranges(
+    state: State<'_, AppState>,
+    repo: String,
+    base: String,
+    head: String,
+    path: String,
+    orig_path: Option<String>,
+) -> Result<Vec<Hunk>> {
+    let repo = Path::new(&repo);
+    log::hunk_ranges(
+        &state.env(),
+        repo,
+        &base,
+        &head,
+        &path,
+        orig_path.as_deref(),
+    )
+}
+
+#[tauri::command(async)]
+pub fn fetch_mr(
+    state: State<'_, AppState>,
+    repo: String,
+    remote: String,
+    head_ref: String,
+    target_branch: String,
+    op_id: u64,
+    progress: Channel<String>,
+) -> Result<String> {
+    state.op(op_id, |c| {
+        let p = send(&progress);
+        remotes::fetch_mr(
+            &state,
+            Path::new(&repo),
+            &remote,
+            &head_ref,
+            &target_branch,
+            c,
+            &p,
+        )
+    })
 }

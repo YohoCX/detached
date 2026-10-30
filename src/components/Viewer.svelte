@@ -1,17 +1,24 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte'
   import { register } from '../lib/actions'
-  import { api, type Content } from '../lib/api'
+  import { api, type Content, type DiffSide } from '../lib/api'
   import { nameOf, say, statuses, statusOf } from '../lib/app.svelte'
   import { baseName, clashesWithMonaco, describe, dirName, languageFor } from '../lib/files'
   import { chordFor } from '../lib/keymap'
   import { monaco } from '../lib/monaco'
   import { nav } from '../lib/nav'
-  import { showDiff, sideName, view, type Shown } from '../lib/view.svelte'
+  import { showDiff, sideName, view, type FileDoc, type Zone } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
 
   type Editor = monaco.editor.IStandaloneCodeEditor
   type Model = monaco.editor.ITextModel
+  // Without props this is the main area's viewer of `view.shown`; an MR's Changes tab passes its diff.
+  let { doc, sideBySide: forceSideBySide = false, zones = [], ongutter }: {
+    doc?: FileDoc
+    sideBySide?: boolean
+    zones?: Zone[]
+    ongutter?: (side: DiffSide, line: number) => void
+  } = $props()
 
   let mode = $state<'empty' | 'editor' | 'diff' | 'placeholder'>('empty')
   let message = $state('')
@@ -27,7 +34,9 @@
   let pair: { original: Model; modified: Model } | null = null
   let key = ''
   let seq = 0
-  const shown = $derived(view.shown)
+  let loaded = $state(0)
+  const shown = $derived(doc ?? (view.shown?.kind === 'file' || view.shown?.kind === 'diff' ? view.shown : null))
+  const split = $derived(forceSideBySide || sideBySide)
 
   function load(k: string) {
     try {
@@ -75,6 +84,7 @@
       key = k
     }
     mode = 'diff'
+    loaded++
     if (focusPending) {
       focusPending = false
       diff.getModifiedEditor().focus()
@@ -100,7 +110,7 @@
     ed.focus()
   }
 
-  async function show(s: Shown, reveal: boolean) {
+  async function show(s: FileDoc, reveal: boolean) {
     const id = ++seq
     try {
       if (s.kind === 'file') {
@@ -137,12 +147,12 @@
     goto = null
     if (!(line > 0)) return active().focus()
     revealLine(active(), line, column > 0 ? column : 1)
-    const s = view.shown
+    const s = shown
     if (s?.kind === 'file') nav.visit({ repo: s.repo, ref: s.ref, path: s.path, line })
   }
 
   function zed() {
-    const s = view.shown
+    const s = shown
     if (!s) return
     const line = mode === 'editor' || mode === 'diff' ? (active().getPosition()?.lineNumber ?? null) : null
     api.openInZed(s.repo, s.path, line).catch((e) => say(String(e), true))
@@ -161,7 +171,6 @@
 
   function toggleSideBySide(on: boolean) {
     sideBySide = on
-    diff.updateOptions({ renderSideBySide: on })
     try {
       localStorage.setItem('viewer.sideBySide', String(on))
     } catch {}
@@ -183,19 +192,28 @@
     diff = monaco.editor.createDiffEditor(diffHost, {
       ...common,
       originalEditable: false,
-      renderSideBySide: sideBySide,
+      renderSideBySide: split,
       useInlineViewWhenSpaceIsLimited: false,
       ignoreTrimWhitespace: false,
     })
     const onTheme = () => monaco.editor.setTheme(dark.matches ? 'wb-dark' : 'wb-light')
     dark.addEventListener('change', onTheme)
+    const sides = [['old', diff.getOriginalEditor()], ['new', diff.getModifiedEditor()]] as const
+    const gutter = [monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN, monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS]
     const offs = [
       register('diff.next', () => mode === 'diff' && diff.goToDiff('next')),
       register('diff.prev', () => mode === 'diff' && diff.goToDiff('previous')),
-      register('diff.show', diffAction),
       register('editor.gotoLine', openGoto),
-      register('file.openInZed', zed),
-      register('find.inFiles', () => (view.find = true)),
+      ...(untrack(() => doc)
+        ? []
+        : [register('diff.show', diffAction), register('file.openInZed', zed), register('find.inFiles', () => (view.find = true))]),
+      ...sides.map(([side, ed]) => {
+        const sub = ed.onMouseDown((e) => {
+          const line = e.target.position?.lineNumber
+          if (ongutter && line && gutter.includes(e.target.type)) ongutter(side, line)
+        })
+        return () => sub.dispose()
+      }),
     ]
     return () => {
       offs.forEach((off) => off())
@@ -211,9 +229,26 @@
     if (view.focusDiff) focusPending = true
   })
 
-  let last: Shown | null = null
+  $effect(() => diff.updateOptions({ renderSideBySide: split }))
+
+  // Zones go in once a diff has loaded, and again whenever it reloads or the zones change.
   $effect(() => {
-    const s = view.shown
+    if (mode !== 'diff' || !zones.length) return
+    void loaded
+    const added = ([['old', diff.getOriginalEditor()], ['new', diff.getModifiedEditor()]] as const).map(([side, ed]) => {
+      const ids: string[] = []
+      ed.changeViewZones((a) => {
+        for (const z of zones.filter((z) => z.side === side))
+          ids.push(a.addZone({ afterLineNumber: z.afterLine, heightInPx: z.height, domNode: z.node }))
+      })
+      return () => ed.changeViewZones((a) => ids.forEach((id) => a.removeZone(id)))
+    })
+    return () => added.forEach((remove) => remove())
+  })
+
+  let last: FileDoc | null = null
+  $effect(() => {
+    const s = shown
     if (!s) return
     void statuses.get(s.repo)
     const fresh = s !== last
@@ -236,10 +271,12 @@
       {#if mode === 'diff'}
         <button class="icon-btn" title="Previous change {chordFor('diff.prev')}" onclick={() => diff.goToDiff('previous')}><Icon name="up" /></button>
         <button class="icon-btn" title="Next change {chordFor('diff.next')}" onclick={() => diff.goToDiff('next')}><Icon name="next" /></button>
-        <div class="seg">
-          <button class:on={sideBySide} onclick={() => toggleSideBySide(true)}>Side-by-side</button>
-          <button class:on={!sideBySide} onclick={() => toggleSideBySide(false)}>Unified</button>
-        </div>
+        {#if !forceSideBySide}
+          <div class="seg">
+            <button class:on={sideBySide} onclick={() => toggleSideBySide(true)}>Side-by-side</button>
+            <button class:on={!sideBySide} onclick={() => toggleSideBySide(false)}>Unified</button>
+          </div>
+        {/if}
       {/if}
       <button class="icon-btn" title="Open in Zed" onclick={zed}><Icon name="zed" /></button>
     </header>

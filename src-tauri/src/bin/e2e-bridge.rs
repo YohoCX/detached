@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use detached_lib::accounts::{self, store::MemoryStore};
 use detached_lib::env::{Env, which};
-use detached_lib::git::{branches, checkout, diff, files, pull};
+use detached_lib::forge;
+use detached_lib::git::{branches, checkout, diff, files, log, pull, remotes};
 use detached_lib::settings::Settings;
 use detached_lib::state::AppState;
 use serde::Serialize;
@@ -144,6 +145,7 @@ fn invoke(
         "quick_open",
         "find_in_files",
         "cancel_find",
+        "cancel_log",
     ];
     let repo = if takes(&no_repo) {
         String::new()
@@ -157,6 +159,7 @@ fn invoke(
         "fetch",
         "pull",
         "cancel_op",
+        "fetch_mr",
     ]) {
         arg(a, "opId")?
     } else {
@@ -171,6 +174,8 @@ fn invoke(
         "exclude_repo" => ok(s.exclude_repo(st("path")?)),
         "include_repo" => ok(s.include_repo(st("path")?)),
         "set_repo_account" => ok(s.set_repo_account(repo, opt("accountId")?)),
+        "set_forge_account" => ok(s.set_forge_account(repo, st("host")?, opt("accountId")?)),
+        "set_mr_remote" => ok(s.set_mr_remote(repo, opt("remote")?)),
         "env_info" => Ok(json!(s.env().info())),
         "keymap_overrides" => Ok(json!(s.keymap_overrides())),
         "repo_status" => ok(s.repo_status(&repo)),
@@ -220,6 +225,32 @@ fn invoke(
         }
         "list_files" => ok(files::list_files(&s.env(), rp, opt("rev")?.as_deref())),
         "read_file" => ok(s.read_file(&repo, opt("rev")?, &st("path")?)),
+        "log" => {
+            let (query, id) = (arg(a, "query")?, arg(a, "queryId")?);
+            s.op(id, |c| {
+                log::log(&s.env(), rp, &query, id, c, &|e| emit(json!(e)))
+            });
+            Ok(Value::Null)
+        }
+        "cancel_log" => Ok(json!(s.ops.cancel(arg(a, "queryId")?))),
+        "commit_details" => ok(log::commit_details(&s.env(), rp, &st("sha")?)),
+        "branches_containing" => ok(log::branches_containing(&s.env(), rp, &st("sha")?)),
+        "merge_base" => ok(log::merge_base(&s.env(), rp, &st("a")?, &st("b")?)),
+        "range_log" => ok(log::range_log(&s.env(), rp, &st("base")?, &st("head")?)),
+        "hunk_ranges" => ok(log::hunk_ranges(
+            &s.env(),
+            rp,
+            &st("base")?,
+            &st("head")?,
+            &st("path")?,
+            opt("origPath")?.as_deref(),
+        )),
+        "fetch_mr" => {
+            let (remote, head, target) = (st("remote")?, st("headRef")?, st("targetBranch")?);
+            ok(s.op(op_id, |c| {
+                remotes::fetch_mr(s, rp, &remote, &head, &target, c, &progress)
+            }))
+        }
         "list_accounts" => ok(accounts::load(&s.config_dir)),
         "save_account" => ok(accounts::save(s, arg(a, "input")?)),
         "remove_account" => ok(accounts::remove(s, &st("id")?)),
@@ -243,6 +274,51 @@ fn invoke(
             Ok(Value::Null)
         }
         "cancel_find" => Ok(json!(s.ops.cancel(arg(a, "queryId")?))),
+        "forge_hosts" => ok(forge::forge_hosts(s, rp)),
+        "commit_url" => ok(forge::commit_url(s, rp, &st("sha")?)),
+        "list_mrs" => ok(forge::list_mrs(s, rp, arg(a, "filter")?)),
+        "current_mr" => ok(forge::current_mr(s, rp)),
+        "get_mr" => ok(forge::get_mr(s, rp, arg(a, "number")?)),
+        "mr_threads" => ok(forge::mr_threads(s, rp, arg(a, "number")?)),
+        "mr_action" => ok(forge::mr_action(
+            s,
+            rp,
+            arg(a, "number")?,
+            &arg(a, "action")?,
+        )),
+        "new_mr" => ok(forge::new_mr(s, rp)),
+        "create_mr" => ok(forge::create_mr(s, rp, &arg(a, "input")?)),
+        "list_pipelines" => ok(forge::list_pipelines(s, rp, arg(a, "all")?)),
+        "mr_pipelines" => ok(forge::mr_pipelines(s, rp, arg(a, "number")?)),
+        "pipeline_jobs" => ok(forge::pipeline_jobs(
+            s,
+            rp,
+            &arg(a, "project")?,
+            arg(a, "id")?,
+        )),
+        "pipeline_action" => ok(forge::pipeline_action(
+            s,
+            rp,
+            &arg(a, "project")?,
+            arg(a, "id")?,
+            arg(a, "action")?,
+        )),
+        "job_action" => ok(forge::job_action(
+            s,
+            rp,
+            &arg(a, "project")?,
+            arg(a, "id")?,
+            arg(a, "action")?,
+        )),
+        "job_log" => ok(forge::job_log(
+            s,
+            rp,
+            &arg(a, "project")?,
+            arg(a, "id")?,
+            arg(a, "offset")?,
+        )),
+        "workflows" => ok(forge::workflows(s, rp, &arg(a, "project")?)),
+        "run_pipeline" => ok(forge::run_pipeline(s, rp, &arg(a, "input")?)),
         _ => Err(format!("{cmd} is not served by the e2e bridge")),
     }
 }

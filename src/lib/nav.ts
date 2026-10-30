@@ -1,8 +1,14 @@
+import type { Project } from './api'
+
+/** What the main area shows instead of a file: an MR page or a job log. */
+export type Doc = { kind: 'mr'; number: number } | { kind: 'job'; project: Project; id: number; name: string }
 /** `ref` null is the working tree. */
 export interface FileRef { repo: string; ref: string | null; path: string }
-export interface Location extends FileRef { line: number | null }
+/** With `doc` set, `ref`, `path` and `line` are unused. */
+export interface Location extends FileRef { line: number | null; doc?: Doc }
 
 const same = (a: FileRef, b: FileRef) => a.repo === b.repo && a.ref === b.ref && a.path === b.path
+const sameDoc = (a: Location, b: Location) => JSON.stringify(a.doc) === JSON.stringify(b.doc)
 
 export class Nav {
   recent: FileRef[] = []
@@ -12,9 +18,9 @@ export class Nav {
   /** Records an open: recent files (50, deduped) and history (100, forward entries dropped). */
   visit(loc: Location) {
     const { repo, ref, path } = loc
-    this.recent = [{ repo, ref, path }, ...this.recent.filter((r) => !same(r, loc))].slice(0, 50)
+    if (!loc.doc) this.recent = [{ repo, ref, path }, ...this.recent.filter((r) => !same(r, loc))].slice(0, 50)
     const cur = this.history[this.index]
-    if (cur && same(cur, loc) && cur.line === loc.line) return
+    if (cur && same(cur, loc) && cur.line === loc.line && sameDoc(cur, loc)) return
     this.history = [...this.history.slice(0, this.index + 1), loc].slice(-100)
     this.index = this.history.length - 1
   }

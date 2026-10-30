@@ -6,6 +6,7 @@ mod cred_tests;
 pub mod diff;
 pub mod discovery;
 pub mod files;
+pub mod log;
 pub mod pull;
 pub mod remotes;
 pub mod runner;

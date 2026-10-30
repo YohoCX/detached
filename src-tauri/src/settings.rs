@@ -17,6 +17,10 @@ pub struct Settings {
     pub excluded_repos: Vec<String>,
     /// Repo path -> account id.
     pub repo_accounts: BTreeMap<String, String>,
+    /// Repo path -> host -> account id, for forge API calls.
+    pub forge_accounts: BTreeMap<String, BTreeMap<String, String>>,
+    /// Repo path -> the remote whose project has the MRs.
+    pub mr_remotes: BTreeMap<String, String>,
     pub git_path: Option<String>,
 }
 
@@ -101,6 +105,39 @@ impl AppState {
         })
     }
 
+    pub fn set_forge_account(
+        &self,
+        repo: String,
+        host: String,
+        account_id: Option<String>,
+    ) -> Result<Settings> {
+        self.update(|s| {
+            let hosts = s.forge_accounts.entry(repo.clone()).or_default();
+            match account_id {
+                Some(id) => {
+                    hosts.insert(host, id);
+                }
+                None => {
+                    hosts.remove(&host);
+                }
+            }
+            if hosts.is_empty() {
+                s.forge_accounts.remove(&repo);
+            }
+        })
+    }
+
+    pub fn set_mr_remote(&self, repo: String, remote: Option<String>) -> Result<Settings> {
+        self.update(|s| match remote {
+            Some(r) => {
+                s.mr_remotes.insert(repo, r);
+            }
+            None => {
+                s.mr_remotes.remove(&repo);
+            }
+        })
+    }
+
     pub fn set_git_path(&self, path: Option<String>) -> Result<EnvInfo> {
         let s = self.update(|s| s.git_path = path)?;
         let (env, _) = Env::detect(s.git_path.as_deref());
@@ -155,6 +192,25 @@ pub fn set_repo_account(
     account_id: Option<String>,
 ) -> Result<Settings> {
     state.set_repo_account(repo, account_id)
+}
+
+#[tauri::command(async)]
+pub fn set_forge_account(
+    state: State<'_, AppState>,
+    repo: String,
+    host: String,
+    account_id: Option<String>,
+) -> Result<Settings> {
+    state.set_forge_account(repo, host, account_id)
+}
+
+#[tauri::command(async)]
+pub fn set_mr_remote(
+    state: State<'_, AppState>,
+    repo: String,
+    remote: Option<String>,
+) -> Result<Settings> {
+    state.set_mr_remote(repo, remote)
 }
 
 #[tauri::command(async)]

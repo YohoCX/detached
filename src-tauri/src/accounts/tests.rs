@@ -393,3 +393,80 @@ fn repo_accounts_groups_remotes_by_host() {
         host("gitlab.com", &["lab"], Some("c"), false)
     );
 }
+
+#[test]
+fn parses_https_ssh_and_scp_remotes() {
+    let r = |ssh, host: &str, path: &str| {
+        Some(RemoteUrl {
+            ssh,
+            host: host.into(),
+            path: path.into(),
+        })
+    };
+    let p = parse_remote;
+    assert_eq!(
+        p("https://u@Git.Example.com:8443/gitlab/g/r.git/"),
+        r(false, "git.example.com:8443", "/gitlab/g/r.git")
+    );
+    assert_eq!(
+        p("ssh://git@GitHub.com:22/x/y.git"),
+        r(true, "github.com", "/x/y.git")
+    );
+    assert_eq!(p("git@gh-work:x/y.git"), r(true, "gh-work", "/x/y.git"));
+    assert_eq!(
+        p("http://127.0.0.1:1522/ghe/o/r.git"),
+        r(false, "127.0.0.1:1522", "/ghe/o/r.git")
+    );
+    for local in [
+        "/srv/r.git",
+        "./a:b",
+        "file:///srv/r.git",
+        "http://github.com/x/y",
+    ] {
+        assert_eq!(p(local), None, "{local}");
+    }
+}
+
+#[test]
+fn fits_https_on_base_path_and_ssh_on_host_name() {
+    let sub = acc("a", "https://git.example.com:8443/gitlab");
+    let fits = |url: &str| fits(&sub, &parse_remote(url).unwrap());
+    assert!(fits("https://git.example.com:8443/gitlab/g/r.git"));
+    assert!(!fits("https://git.example.com:8443/gitlabx/r.git"));
+    assert!(!fits("https://git.example.com/gitlab/g/r.git"));
+    assert!(fits("git@git.example.com:g/r.git"));
+    assert!(fits("ssh://git@git.example.com:2222/g/r.git"));
+    assert!(!fits("git@other.example.com:g/r.git"));
+    assert!(test_http("http://localhost:1522/ghe"));
+    assert!(!test_http("http://127.0.0.1.evil.com/x"));
+}
+
+#[test]
+fn remove_prunes_forge_accounts_and_save_takes_loopback_http_in_tests() {
+    let (_d, state) = state(&[]);
+    let a = save(
+        &state,
+        AccountInput {
+            id: None,
+            provider: Provider::GithubEnterprise,
+            base_url: "http://127.0.0.1:1522/ghe".into(),
+            username: "u".into(),
+            label: "Fake".into(),
+            token: None,
+        },
+    )
+    .unwrap();
+    state
+        .set_forge_account("/r1".into(), "h1".into(), Some(a.id.clone()))
+        .unwrap();
+    state
+        .set_forge_account("/r1".into(), "h2".into(), Some("b".into()))
+        .unwrap();
+    state
+        .set_forge_account("/r2".into(), "h1".into(), Some(a.id.clone()))
+        .unwrap();
+    remove(&state, &a.id).unwrap();
+    let left = Settings::load(&state.config_dir).forge_accounts;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left["/r1"].get("h2").map(String::as_str), Some("b"));
+}

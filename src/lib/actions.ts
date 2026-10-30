@@ -1,4 +1,4 @@
-// Every M1 action id from docs/KEYMAP.md. Components register `run` for the actions they own.
+// Every action id from docs/KEYMAP.md. Components register `run` for the actions they own.
 
 export type Group = 'navigate' | 'search' | 'vcs' | 'diff' | 'view'
 
@@ -33,16 +33,24 @@ const defs: Action[] = [
   { id: 'diff.prev', title: 'Previous Change', group: 'diff' },
   { id: 'file.openInZed', title: 'Open in Zed', group: 'navigate' },
   { id: 'app.settings', title: 'Settings…', group: 'view' },
+  { id: 'panel.log', title: 'Git Log', group: 'view' },
+  { id: 'panel.mergeRequests', title: 'Merge Requests', group: 'view' },
+  { id: 'panel.pipelines', title: 'Pipelines', group: 'view' },
+  { id: 'vcs.fileHistory', title: 'Show History for File', group: 'vcs' },
+  { id: 'mr.create', title: 'Create Merge Request…', group: 'vcs' },
+  { id: 'pipeline.run', title: 'Run Pipeline…', group: 'vcs' },
 ]
 
 export const actions = new Map(defs.map((a) => [a.id, a]))
 
+/** A later registration wins until it is removed, then the earlier one runs again (an MR's diff viewer over the main one). */
 export function register(id: string, run: () => void): () => void {
   const a = actions.get(id)
   if (!a) throw new Error(`unknown action ${id}`)
+  const prev = a.run
   a.run = run
   return () => {
-    if (a.run === run) a.run = undefined
+    if (a.run === run) a.run = prev
   }
 }
 

@@ -1,6 +1,18 @@
+pub mod commands;
+
+use std::path::Path;
 use std::time::Duration;
 
-use crate::types::{Provider, VerifyResult};
+use serde_json::json;
+
+use crate::error::Result;
+use crate::state::AppState;
+use crate::types::*;
+
+/// GitHub's job log redirect target: https, or a local fake in tests and e2e.
+pub fn blob_allowed(url: &str) -> bool {
+    url.starts_with("https://") || crate::accounts::test_http(url)
+}
 
 pub fn api_base(provider: &Provider, base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
@@ -47,6 +59,160 @@ pub fn verify(provider: &Provider, base_url: &str, token: &str) -> VerifyResult 
         },
         Err(e) => failed(Some(status.as_u16()), e.to_string()),
     }
+}
+
+// Stubs returning fixtures until the GitLab and GitHub clients exist.
+
+fn fixture<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> T {
+    serde_json::from_value(v).unwrap()
+}
+
+fn project() -> serde_json::Value {
+    json!({"host": "gitlab.example.com", "path": "group/app"})
+}
+
+fn mr() -> MergeRequest {
+    fixture(json!({
+        "provider": "gitlabSelfHosted", "number": 1, "title": "Add feature", "description": "Adds it.",
+        "state": "open", "draft": false, "author": "alice", "sourceProject": project(),
+        "sourceBranch": "feature", "targetProject": project(), "targetBranch": "main",
+        "baseSha": "a".repeat(40), "headSha": "b".repeat(40), "labels": [], "reviewers": [],
+        "approvedBy": [], "approved": false, "blocking": null, "mergeMethods": ["merge", "squash"],
+        "canDeleteSourceBranch": true, "autoMerge": false, "pipeline": "success",
+        "webUrl": "https://gitlab.example.com/group/app/-/merge_requests/1",
+        "projectUrl": "https://gitlab.example.com/group/app", "updated": 1_700_000_000
+    }))
+}
+
+fn pipeline() -> Pipeline {
+    fixture(json!({
+        "id": 7, "project": project(), "status": "success", "ref": "feature", "sha": "b".repeat(40),
+        "source": "push", "created": 1_700_000_000, "started": 1_700_000_010,
+        "finished": 1_700_000_070, "webUrl": "https://gitlab.example.com/group/app/-/pipelines/7",
+        "cancellable": false, "retryable": true
+    }))
+}
+
+pub fn forge_hosts(_state: &AppState, _repo: &Path) -> Result<ForgeHosts> {
+    Ok(ForgeHosts {
+        hosts: vec![],
+        mr_remote: Some("origin".into()),
+    })
+}
+
+pub fn commit_url(_state: &AppState, _repo: &Path, sha: &str) -> Result<Option<String>> {
+    Ok(Some(format!(
+        "https://gitlab.example.com/group/app/-/commit/{sha}"
+    )))
+}
+
+pub fn list_mrs(_state: &AppState, _repo: &Path, _filter: MrFilter) -> Result<Vec<MergeRequest>> {
+    Ok(vec![mr()])
+}
+
+pub fn current_mr(_state: &AppState, _repo: &Path) -> Result<Option<MergeRequest>> {
+    Ok(Some(mr()))
+}
+
+pub fn get_mr(_state: &AppState, _repo: &Path, _number: u64) -> Result<MergeRequest> {
+    Ok(mr())
+}
+
+pub fn mr_threads(_state: &AppState, _repo: &Path, _number: u64) -> Result<Vec<Thread>> {
+    Ok(vec![fixture(json!({
+        "id": "t1", "resolvable": true, "resolved": false, "replyable": true, "replyTo": "t1",
+        "position": {"path": "README.md", "side": "new", "line": 1, "outdated": false},
+        "notes": [{"id": "n1", "author": "bob", "body": "Why?", "time": 1_700_000_100}]
+    }))])
+}
+
+pub fn mr_action(_state: &AppState, _repo: &Path, _number: u64, _action: &MrAction) -> Result<()> {
+    Ok(())
+}
+
+pub fn new_mr(_state: &AppState, _repo: &Path) -> Result<NewMr> {
+    Ok(fixture(json!({
+        "sourceProject": project(), "sourceBranch": "feature", "targetProject": project(),
+        "targetBranch": "main", "title": "Add feature"
+    })))
+}
+
+pub fn create_mr(_state: &AppState, _repo: &Path, _input: &CreateMr) -> Result<MergeRequest> {
+    Ok(mr())
+}
+
+/// The source project's pipelines of the current branch, or of every branch.
+pub fn list_pipelines(_state: &AppState, _repo: &Path, _all: bool) -> Result<Vec<Pipeline>> {
+    Ok(vec![pipeline()])
+}
+
+pub fn mr_pipelines(_state: &AppState, _repo: &Path, _number: u64) -> Result<Vec<Pipeline>> {
+    Ok(vec![pipeline()])
+}
+
+pub fn pipeline_jobs(
+    _state: &AppState,
+    _repo: &Path,
+    _project: &Project,
+    _id: u64,
+) -> Result<Vec<Stage>> {
+    Ok(vec![fixture(
+        json!({"name": "test", "status": "success", "jobs": [{
+            "id": 70, "name": "unit", "status": "success", "duration": 60, "allowFailure": false,
+            "cancellable": false, "playable": false, "retryable": true, "liveLog": true,
+            "webUrl": "https://gitlab.example.com/group/app/-/jobs/70", "steps": []
+        }]}),
+    )])
+}
+
+pub fn pipeline_action(
+    _state: &AppState,
+    _repo: &Path,
+    _project: &Project,
+    _id: u64,
+    _action: PipelineAction,
+) -> Result<()> {
+    Ok(())
+}
+
+pub fn job_action(
+    _state: &AppState,
+    _repo: &Path,
+    _project: &Project,
+    _id: u64,
+    _action: JobAction,
+) -> Result<()> {
+    Ok(())
+}
+
+pub fn job_log(
+    _state: &AppState,
+    _repo: &Path,
+    _project: &Project,
+    _id: u64,
+    offset: u64,
+) -> Result<JobLogChunk> {
+    let text = if offset == 0 {
+        "\u{1b}[32mok\u{1b}[0m\n"
+    } else {
+        ""
+    };
+    Ok(JobLogChunk {
+        text: text.into(),
+        next: offset + text.len() as u64,
+        complete: true,
+    })
+}
+
+pub fn workflows(_state: &AppState, _repo: &Path, _project: &Project) -> Result<Vec<Workflow>> {
+    Ok(vec![Workflow {
+        id: "ci.yml".into(),
+        name: "CI".into(),
+    }])
+}
+
+pub fn run_pipeline(_state: &AppState, _repo: &Path, _input: &RunPipeline) -> Result<Pipeline> {
+    Ok(pipeline())
 }
 
 #[cfg(test)]

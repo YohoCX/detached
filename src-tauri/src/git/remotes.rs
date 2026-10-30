@@ -82,6 +82,20 @@ pub fn network(
     run(&state.env(), repo, args, Kind::Network, opts)?.ok()
 }
 
+/// `git fetch <remote> <head_ref> <target_branch>` with no destination ref; the fetched head's SHA.
+/// Stub until the MR ref fetch exists.
+pub fn fetch_mr(
+    _state: &AppState,
+    _repo: &Path,
+    _remote: &str,
+    _head_ref: &str,
+    _target_branch: &str,
+    _cancel: &Cancel,
+    _progress: &(dyn Fn(&str) + Sync),
+) -> Result<String> {
+    Ok("b".repeat(40))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
