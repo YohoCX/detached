@@ -1,4 +1,4 @@
-// Native macOS context menus for the sidebar.
+// Native macOS context menus.
 
 import { Menu, PredefinedMenuItem } from '@tauri-apps/api/menu'
 import { api } from './api'
@@ -7,7 +7,7 @@ import { compare } from './view.svelte'
 
 type Item = { text: string; action: () => unknown; enabled?: boolean } | 'separator'
 
-async function popup(items: Item[]) {
+export async function popup(items: Item[]) {
   const built = await Promise.all(
     items.map((i) =>
       i === 'separator'
