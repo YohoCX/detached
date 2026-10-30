@@ -30,9 +30,9 @@ src-tauri/src/
   git/log.rs             streamed `git log`, commit details, merge base, range log
   git/graph.rs           lane assignment for the graph
   git/remotes.rs         + fetch of MR refs
-  accounts/              + public remote URL parsing (https, ssh, scp) and API account matching
+  accounts/              + public remote URL parsing (https, ssh, scp); credential matching unchanged
   forge/                 was providers/: http.rs (client, pagination, errors, rate limits),
-                         project.rs (remote → project), gitlab.rs, github.rs
+                         project.rs (remote → project and API account), gitlab.rs, github.rs
 src/components/
   BottomPanel.svelte     tabs Log | Pipelines, resizable, Cmd+9
   Log.svelte, Graph.svelte, CommitDetails.svelte
@@ -47,7 +47,10 @@ e2e/forge.ts             fake GitLab and GitHub API for e2e
 ```
 
 The main area shows one document: a file or diff (today's Viewer), an MR page, or a job log.
-Back/forward history covers all three.
+Back/forward history covers all three. The MR Changes tab reuses Viewer, so it keeps the loading,
+placeholders and F7 navigation: the scaffold gives Viewer props for the document (today's file or
+diff, or an MR diff with fixed sides), a forced side-by-side flag, and hooks for view zones and
+gutter clicks on either side.
 
 ## Design
 
@@ -85,14 +88,21 @@ smart checkout steps), compare with the working tree, open in the browser.
 remote. Host and path come from https, `ssh://` and scp-style URLs; ssh hosts go through
 `ssh -G <host>` first, so `~/.ssh/config` aliases resolve to the real hostname, and
 `ssh.github.com` counts as `github.com`. A base URL with a sub-path (GitLab under `/gitlab`) is
-stripped from the path. The account is found by host as for credentials, ssh remotes included. When
-no account matches (a self-hosted GitLab with a separate ssh hostname), the repo's account override
-in Settings may name any account, and its base URL is used. No account: the MR and pipeline views
-say which host needs one and open Settings.
+stripped from the path. When the project is a fork (GitHub `parent`, GitLab
+`forked_from_project`), MRs are listed and created against its parent. The API account is found by
+host, ssh remotes included; when none matches (a self-hosted GitLab with a separate ssh hostname),
+the repo's account override may name any account, and its base URL is used. This matching lives in
+`forge/project.rs` on top of the public URL parser. `accounts::credentials` keeps milestone 1's
+rule (https remotes only, an override only when its host matches), pinned by a test, so a token
+never goes to a host it does not belong to. Settings shows the override picker for ssh and
+unmatched hosts too, offering every account. No account: the MR and pipeline views say which host
+needs one and open Settings.
 
 **Forge client.** ureq with no redirects, as in milestone 1. API calls keep milestone 1's 10 s
 total timeout; job log downloads have none, only 10 s to the response, and stop when the log
-closes. The one followed redirect is GitHub's job log, which answers with a redirect to a signed blob
+closes or when the body takes over 120 s (`timeout_recv_body`), since a stalled read
+blocks and no cancel flag can stop it. The one followed redirect is GitHub's job log, which
+answers with a redirect to a signed blob
 URL: that URL is fetched once, https only, without the token. Lists follow `X-Next-Page` (GitLab)
 and `Link` (GitHub). GitHub polling sends `If-None-Match`, since a 304 does not count against the
 rate limit. Endpoints: GitLab `{base}/api/v4`; GitHub REST `https://api.github.com` or
@@ -110,10 +120,12 @@ GitLab's approve means "cannot approve", not a bad token). Scopes for full use: 
 read-write, Commit statuses and Metadata read.
 
 Both providers map to one set of types in `types.rs`: `MergeRequest` (number, title, state, draft,
-author, source and target branch, base and head SHA, labels, reviewers, approvals, mergeability with
+author, source project and branch, target branch, base and head SHA, labels, reviewers, approvals, mergeability with
 the blocking reason, allowed merge methods, pipeline summary, web URL, updated), `Thread` (id,
-resolvable, resolved, optional position `{path, side: old|new, line, outdated}`, notes with author,
-markdown body and time), `Pipeline` (id, status, ref, SHA, source, times, web URL, `cancellable`,
+resolvable, resolved, replyable, the id a reply goes to, optional position
+`{path, side: old|new, line, outdated}`, notes with id, author, markdown body and time; on GitHub
+the id is the review thread's GraphQL id and replies go to its first comment's REST id, and a
+general PR comment is a thread of one note that can be neither resolved nor replied to), `Pipeline` (id, status, ref, SHA, source, times, web URL, `cancellable`,
 `retryable`) with `Stage` and `Job` (id, name, status, duration, allowed to fail, `cancellable`,
 `playable`, `retryable`, `liveLog`). The flags carry what each provider can do, and the UI shows
 only actions whose flag is set. On GitHub one workflow run is one pipeline, its jobs grouped by
@@ -133,7 +145,8 @@ so threads on removed lines would vanish.
 **Line comments.** Threads render as Monaco view zones under their line, on the original side for
 `old` and the modified side for `new`; a `+` in the gutter of the hovered line starts one. GitLab
 takes any line; GitHub only lines inside the PR diff's hunks, so on GitHub the `+` shows only within
-the hunks of `git diff -U3 <merge base> <head> -- <path>`. Positions sent: GitLab
+the hunks of `git diff -U3 -M --diff-algorithm=myers <merge base> <head> -- <old path> <path>`
+(both paths, so a renamed file pairs up as on GitHub). Positions sent: GitLab
 `{position_type: "text", base_sha, start_sha, head_sha, old_path, new_path}` with `new_line`,
 `old_line`, or both for an unchanged line; GitHub `{commit_id: head, path, line, side: LEFT|RIGHT}`.
 Threads whose position no longer applies to the current head show as outdated in Overview only.
@@ -142,24 +155,28 @@ Threads whose position no longer applies to the current head show as outdated in
 unapprove on GitLab, merge with the methods the project allows plus squash, delete source branch,
 auto-merge when the pipeline succeeds, draft/ready, close/reopen, create from the current branch (it
 must have an upstream; target defaults to the project's default branch, title to the last commit's
-subject). GitHub's merge cannot delete the branch, so the app deletes `refs/heads/<branch>` after a
-successful merge; with auto-merge the option is not offered on GitHub. Every write refreshes the MR;
+subject; on GitHub `head` is `owner:branch` when the branch lives in a fork). GitLab deletes the
+source branch itself. GitHub's merge cannot, so after a successful merge the app deletes
+`refs/heads/<branch>` in the source project, and only when it has access there and the ref still
+points at the merged head SHA; otherwise, and with auto-merge, the option is not offered. Every write refreshes the MR;
 a failure shows the provider's message.
 
 **Foreign content.** MR descriptions, comments and job logs are the first foreign content the app
 renders, and the webview can call every command, including git and token reads.
-- Markdown: relative `href` and `src` are resolved against the project's web URL, then `marked` and
-  `DOMPurify` with a strict allowlist. Every link click is intercepted: http(s) goes to the default
+- Markdown: GitLab `/uploads/…` paths are prefixed with the project's web URL; other
+  root-relative links keep the base URL's sub-path, and relative ones resolve against the project's
+  web URL. Then `marked` and `DOMPurify` with a strict allowlist. Every link click is intercepted: http(s) goes to the default
   browser through `tauri-plugin-opener`, anything else is dropped. Images load only from `data:` and
-  https; private GitLab uploads need auth and show as links.
+  https; GitLab uploads need a session and always show as links.
 - Job logs: never `{@html}`. Text stays text nodes; spans come only from parsed ANSI SGR codes; OSC 8
   links go through the opener like markdown links.
 - CSP replaces `csp: null`: `default-src 'self'; script-src 'self'; style-src 'self'
   'unsafe-inline'; img-src 'self' data: https:; connect-src ipc: http://ipc.localhost; worker-src
   'self' blob:`, with `dangerousDisableAssetCspModification: ["style-src"]`. Tauri would otherwise
   add nonces to `style-src`, and with a nonce present browsers ignore `'unsafe-inline'`, which
-  blocks Monaco's runtime styles. The e2e Vite server sends the same CSP (plus `ws:` for its HMR)
-  as a header, so e2e runs under it.
+  blocks Monaco's runtime styles. The e2e Vite server sends the same CSP as a header, its
+  `connect-src` widened by exactly `'self'` and `ws:` (Vite) and `http://127.0.0.1:1521` (the e2e
+  bridge the IPC shim calls), so e2e runs under it.
 
 **Pipelines.** The Pipelines tab of the bottom panel lists the current repo's pipelines (current
 branch or all); a pipeline expands to stages and jobs. A job opens its log in the main area: a
@@ -192,22 +209,24 @@ bridge) only through the main session, as in milestone 1. All git work is A's, a
    - every M2 action id in `actions.ts`; `panel.log` moved to the keymap defaults; docs/KEYMAP.md;
    - `providers/` renamed to `forge/`; `accounts` URL parsing made public with ssh and scp support;
    - component files with fixed props: BottomPanel mounting Log and Pipelines, MrPage mounting
-     Pipelines with an MR, TopBar mounting MrChip and PipelineBadge, the main-area document shell;
+     Pipelines with an MR, TopBar mounting MrChip and PipelineBadge, the main-area document shell,
+     Viewer's props and hooks, and nav entries for MR pages and job logs;
    - `marked`, `dompurify`, `tauri-plugin-opener`, the CSP, and the CSP header in the e2e Vite
-     server, checked by hand: Monaco's diff renders and IPC works in the bundled app;
+     server; one existing e2e spec passes under it, and by hand Monaco's diff renders and IPC works
+     in the bundled app;
    - test-only allowances, under `cfg(any(test, feature = "e2e"))`: http loopback base URLs match
      accounts, and the job-log blob may be http loopback. The GitHub e2e account is a
      GitHub Enterprise one at the fake's URL.
 2. **In parallel**, one Opus agent each in its own worktree:
    - A — `git/`: streamed log, filters, lanes, details, merge base and range log, hunk ranges for
      GitHub comments, MR ref fetch, detached checkout, with tests.
-   - B — `forge/` and `e2e/forge.ts`: project resolution, GitLab and GitHub clients for MRs,
+   - B — `forge/` and `e2e/forge.ts`: project and API account resolution, GitLab and GitHub clients for MRs,
      threads, actions, pipelines and logs, errors and rate limits, with tests against a local fake
      server; the e2e fake covers every endpoint the clients call.
    - C — BottomPanel, Log, Graph, CommitDetails: graph rendering, filters, details, commit changes,
      file history, against the stubs.
-3. **After A, B and C**, in parallel: D — MrList, MrPage, MrChip, Thread, Markdown, MergeWidget;
-   E — Pipelines, PipelineBadge, JobLog. D mounts E's Pipelines only through the scaffold's props.
+3. **After A, B and C**, in parallel: D — MrList, MrPage, MrChip, Thread, Markdown, MergeWidget,
+   Viewer's MR hooks, the Settings override picker; E — Pipelines, PipelineBadge, JobLog. D mounts E's Pipelines only through the scaffold's props.
 4. **Wire** to the real commands, try it on real repos (writes only on the `sandbox` repo), then a
    revmux review.
 
@@ -225,11 +244,13 @@ comments only for a non-obvious reason.
   flags; pagination; redirects refused except the GitHub log blob, fetched without the token;
   rate-limit back-off; scope named only from the provider's signal; write bodies, including GitLab
   positions (`position_type`, an added, a removed and an unchanged line) and GitHub `side`/`line`;
-  the Enterprise GraphQL URL; remote URL parsing for https, ssh, scp, an ssh alias and a sub-path
+  the Enterprise GraphQL URL; a fork PR's branch delete goes to the source project and is skipped
+  when the ref moved; `credentials` still gives no token to an ssh remote or to a host the override
+  does not match; remote URL parsing for https, ssh, scp, an ssh alias and a sub-path
   base URL.
 - e2e, against `e2e/forge.ts` as a GitLab and a GitHub Enterprise account, under the CSP: MR list
   and page, a line comment lands with the right position, GitHub offers `+` only inside hunks,
-  approve, merge, retry a job, a live GitLab log; a description and a job log carrying
+  a renamed file's hunks, approve, merge, retry a job, a live GitLab log; a description and a job log carrying
   `<img onerror>` and `<script>` run nothing.
 
 ## Done when
