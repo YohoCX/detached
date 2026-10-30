@@ -4,7 +4,8 @@ import { mockIPC } from '@tauri-apps/api/mocks'
 
 declare global {
   interface Window {
-    __E2E__: { bridge: string; pick: string[] }
+    /** `opened` collects the URLs sent to the default browser. */
+    __E2E__: { bridge: string; pick: string[]; opened?: string[] }
     __TAURI_INTERNALS__: { runCallback(id: number, data: unknown): void }
   }
 }
@@ -15,6 +16,7 @@ const isChannel = (v: unknown): v is Channel =>
 
 mockIPC(async (cmd, args) => {
   if (cmd === 'plugin:dialog|open') return window.__E2E__.pick
+  if (cmd === 'plugin:opener|open_url') return void (window.__E2E__.opened ??= []).push((args as { url: string }).url)
   if (cmd.startsWith('plugin:menu|')) return cmd === 'plugin:menu|new' ? [0, ''] : null
   const channel = Object.values(args ?? {}).find(isChannel)
   // Channel messages carry an index, like Tauri's, so the Channel class keeps them in order.
