@@ -90,7 +90,7 @@ button { font: inherit; color: inherit; }
 
 input, textarea { -webkit-user-select: text; user-select: text; }
 
-input, select {
+input, select, textarea {
   font: inherit;
   color: inherit;
   background: var(--input);
@@ -99,7 +99,8 @@ input, select {
   padding: 4px 9px;
   outline: none;
 }
-input:focus, select:focus { border-color: var(--selected-ring); box-shadow: 0 0 0 3px var(--selected); }
+textarea { padding: 6px 9px; resize: vertical; }
+input:focus, select:focus, textarea:focus { border-color: var(--selected-ring); box-shadow: 0 0 0 3px var(--selected); }
 
 .panel { background: var(--panel); border: 1px solid var(--panel-line); box-shadow: var(--panel-shadow); border-radius: 14px; }
 

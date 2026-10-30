@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, type Account, type EnvInfo, type HostAccount } from '../lib/api'
+  import { api, type Account, type EnvInfo, type ForgeHosts, type HostAccount, type Settings } from '../lib/api'
   import { app, loadRepos, nameOf, say } from '../lib/app.svelte'
   import Accounts from './Accounts.svelte'
   import Icon from './Icon.svelte'
 
   let accounts = $state<Account[]>([])
   let hosts = $state<HostAccount[]>([])
+  let forge = $state<ForgeHosts | null>(null)
+  let saved = $state<Settings | null>(null)
   let excluded = $state<string[]>([])
   let env = $state<EnvInfo | null>(null)
   let gitPath = $state('')
@@ -23,11 +25,12 @@
   }
 
   async function reload() {
-    const s = await api.getSettings()
+    const s = (saved = await api.getSettings())
     excluded = s.excludedRepos
     gitPath = s.gitPath ?? ''
     accounts = await api.listAccounts()
     hosts = repo ? await api.repoAccounts(repo) : []
+    forge = repo ? await api.forgeHosts(repo) : null
   }
 
   onMount(() => {
@@ -38,6 +41,18 @@
   const setAccount = (id: string) =>
     attempt(async () => {
       await api.setRepoAccount(repo!, id || null)
+      await reload()
+    })
+
+  const setForgeAccount = (host: string, id: string) =>
+    attempt(async () => {
+      await api.setForgeAccount(repo!, host, id || null)
+      await reload()
+    })
+
+  const setMrRemote = (remote: string) =>
+    attempt(async () => {
+      await api.setMrRemote(repo!, remote || null)
       await reload()
     })
 
@@ -81,6 +96,36 @@
         {:else}
           <p class="muted">No https remotes; git uses your own credentials (ssh agent, keychain).</p>
         {/each}
+      </section>
+    {/if}
+
+    {#if repo && forge}
+      {@const f = forge}
+      {@const chosen = saved?.forgeAccounts[repo] ?? {}}
+      <section>
+        <h3>Merge requests for {nameOf(repo)}</h3>
+        {#if f.hosts.length}
+          <label class="row">
+            <span>Remote</span>
+            <select value={saved?.mrRemotes[repo] ?? ''} onchange={(e) => setMrRemote(e.currentTarget.value)}>
+              <option value="">{f.mrRemote ? `Automatic (${f.mrRemote})` : 'Choose a remote'}</option>
+              {#each f.hosts.flatMap((h) => h.remotes) as r (r)}<option value={r}>{r}</option>{/each}
+            </select>
+          </label>
+          {#each f.hosts as h (h.host)}
+            {@const auto = accounts.find((a) => a.id === h.accountId)}
+            <label class="row">
+              <span class="mono">{h.host}</span>
+              <span class="muted">{h.remotes.join(', ')}</span>
+              <select value={chosen[h.host] ?? ''} onchange={(e) => setForgeAccount(h.host, e.currentTarget.value)}>
+                <option value="">{h.ambiguous ? 'Choose an account' : auto ? `Automatic (${auto.label || auto.username})` : 'No account fits'}</option>
+                {#each accounts as a (a.id)}<option value={a.id}>{a.label || a.username}</option>{/each}
+              </select>
+            </label>
+          {/each}
+        {:else}
+          <p class="muted">No remote is on GitLab or GitHub.</p>
+        {/if}
       </section>
     {/if}
 

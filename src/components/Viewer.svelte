@@ -6,6 +6,7 @@
   import { baseName, clashesWithMonaco, describe, dirName, languageFor } from '../lib/files'
   import { chordFor } from '../lib/keymap'
   import { monaco } from '../lib/monaco'
+  import { otherLine } from '../lib/mr'
   import { nav } from '../lib/nav'
   import { showDiff, sideName, view, type FileDoc, type Zone } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
@@ -13,11 +14,14 @@
   type Editor = monaco.editor.IStandaloneCodeEditor
   type Model = monaco.editor.ITextModel
   // Without props this is the main area's viewer of `view.shown`; an MR's Changes tab passes its diff.
-  let { doc, sideBySide: forceSideBySide = false, zones = [], ongutter }: {
+  // With `ongutter`, a `+` in the hovered line's gutter, where `commentable` allows, calls it with
+  // the other side's line when the line is unchanged.
+  let { doc, sideBySide: forceSideBySide = false, zones = [], ongutter, commentable }: {
     doc?: FileDoc
     sideBySide?: boolean
     zones?: Zone[]
-    ongutter?: (side: DiffSide, line: number) => void
+    ongutter?: (side: DiffSide, line: number, other: number | null) => void
+    commentable?: (side: DiffSide, line: number) => boolean
   } = $props()
 
   let mode = $state<'empty' | 'editor' | 'diff' | 'placeholder'>('empty')
@@ -187,6 +191,7 @@
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'),
       fontSize: 13,
       theme: dark.matches ? 'wb-dark' : 'wb-light',
+      glyphMargin: !!untrack(() => ongutter),
     }
     editor = monaco.editor.create(editorHost, common)
     diff = monaco.editor.createDiffEditor(diffHost, {
@@ -199,7 +204,10 @@
     const onTheme = () => monaco.editor.setTheme(dark.matches ? 'wb-dark' : 'wb-light')
     dark.addEventListener('change', onTheme)
     const sides = [['old', diff.getOriginalEditor()], ['new', diff.getModifiedEditor()]] as const
-    const gutter = [monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN, monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS]
+    const T = monaco.editor.MouseTargetType
+    const gutter = [T.GUTTER_GLYPH_MARGIN, T.GUTTER_LINE_NUMBERS]
+    const can = (side: DiffSide, line: number | undefined): line is number =>
+      !!ongutter && !!line && (!commentable || commentable(side, line))
     const offs = [
       register('diff.next', () => mode === 'diff' && diff.goToDiff('next')),
       register('diff.prev', () => mode === 'diff' && diff.goToDiff('previous')),
@@ -208,11 +216,18 @@
         ? []
         : [register('diff.show', diffAction), register('file.openInZed', zed), register('find.inFiles', () => (view.find = true))]),
       ...sides.map(([side, ed]) => {
-        const sub = ed.onMouseDown((e) => {
-          const line = e.target.position?.lineNumber
-          if (ongutter && line && gutter.includes(e.target.type)) ongutter(side, line)
-        })
-        return () => sub.dispose()
+        const plus = ed.createDecorationsCollection()
+        const hover = (line?: number) =>
+          plus.set(can(side, line) ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'mr-plus' } }] : [])
+        const subs = [
+          ed.onMouseMove((e) => hover(e.target.type === T.CONTENT_VIEW_ZONE ? undefined : e.target.position?.lineNumber)),
+          ed.onMouseLeave(() => hover()),
+          ed.onMouseDown((e) => {
+            const line = e.target.position?.lineNumber
+            if (can(side, line) && gutter.includes(e.target.type)) ongutter!(side, line, otherLine(diff.getLineChanges() ?? [], side, line))
+          }),
+        ]
+        return () => subs.forEach((s) => s.dispose())
       }),
     ]
     return () => {
@@ -231,19 +246,50 @@
 
   $effect(() => diff.updateOptions({ renderSideBySide: split }))
 
-  // Zones go in once a diff has loaded, and again whenever it reloads or the zones change.
+  // Zones go in once a diff has loaded, and again whenever it reloads or the zones change; each is as
+  // wide as the visible text and follows its node's height. Mouse and keys in a zone stay away from
+  // Monaco, which would take focus.
   $effect(() => {
     if (mode !== 'diff' || !zones.length) return
     void loaded
-    const added = ([['old', diff.getOriginalEditor()], ['new', diff.getModifiedEditor()]] as const).map(([side, ed]) => {
-      const ids: string[] = []
-      ed.changeViewZones((a) => {
-        for (const z of zones.filter((z) => z.side === side))
-          ids.push(a.addZone({ afterLineNumber: z.afterLine, heightInPx: z.height, domNode: z.node }))
+    const removers = zones.map((z) => {
+      const ed = z.side === 'old' ? diff.getOriginalEditor() : diff.getModifiedEditor()
+      const domNode = document.createElement('div')
+      // Above the text layer, which otherwise takes the zone's clicks.
+      domNode.style.zIndex = '1'
+      domNode.append(z.node)
+      for (const t of ['mousedown', 'pointerdown', 'keydown', 'contextmenu']) domNode.addEventListener(t, (e) => e.stopPropagation())
+      const zone = { afterLineNumber: z.afterLine, heightInPx: 80, domNode }
+      let id = ''
+      ed.changeViewZones((a) => (id = a.addZone(zone)))
+      const fit = () => {
+        const l = ed.getLayoutInfo()
+        z.node.style.width = `${l.contentWidth - l.verticalScrollbarWidth}px`
+      }
+      // Keeps the content's margins inside the measured height.
+      z.node.style.display = 'flow-root'
+      fit()
+      const layout = ed.onDidLayoutChange(fit)
+      // Focus inside the zone can scroll Monaco's overflow-hidden layers natively, shifting the text.
+      const unscroll = (e: Event) => {
+        const t = e.target as Element
+        if (t.scrollLeft && t !== domNode && t.contains(domNode)) t.scrollLeft = 0
+      }
+      ed.getDomNode()?.addEventListener('scroll', unscroll, true)
+      const ro = new ResizeObserver(() => {
+        if (!z.node.offsetHeight || z.node.offsetHeight === zone.heightInPx) return
+        zone.heightInPx = z.node.offsetHeight
+        ed.changeViewZones((a) => a.layoutZone(id))
       })
-      return () => ed.changeViewZones((a) => ids.forEach((id) => a.removeZone(id)))
+      ro.observe(z.node)
+      return () => {
+        ro.disconnect()
+        layout.dispose()
+        ed.getDomNode()?.removeEventListener('scroll', unscroll, true)
+        ed.changeViewZones((a) => a.removeZone(id))
+      }
     })
-    return () => added.forEach((remove) => remove())
+    return () => removers.forEach((remove) => remove())
   })
 
   let last: FileDoc | null = null
@@ -322,5 +368,7 @@
   .host { position: absolute; inset: 0; }
   .hidden { display: none; }
   .placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  .host :global(.mr-plus) { cursor: pointer; }
+  .host :global(.mr-plus)::before { content: '+'; display: grid; place-items: center; width: 16px; height: 16px; margin: 1px 0 0 2px; border-radius: 5px; background: var(--accent); color: var(--accent-fg); font: 700 13px/1 var(--font); }
   .goto { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; width: 220px; box-shadow: var(--shadow); }
 </style>
