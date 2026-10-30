@@ -5,7 +5,7 @@ pipelines, for GitLab (gitlab.com and self-hosted) and GitHub (github.com and En
 interface. Decided with the owner on 2026-10-29: the log is a bottom panel, it covers the current
 repo, and MR/PR pages can act (comment, approve, merge), including on pipelines.
 
-**Status (2026-10-30): step 1 (scaffold) done; steps 2–4 not started.**
+**Status (2026-10-30): steps 1–3 done (scaffold; git, forge and log; MR and pipelines UI), merged on main. Next: step 4, wiring on real repos and a revmux review.**
 
 ## Scope
 
