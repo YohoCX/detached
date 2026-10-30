@@ -121,8 +121,9 @@ URL: that URL is fetched once, https only, without the token. Lists follow `X-Ne
 and `Link` (GitHub). GitHub polling sends `If-None-Match`, since a 304 does not count against the
 rate limit. Endpoints: GitLab `{base}/api/v4`; GitHub REST `https://api.github.com` or
 `{base}/api/v3`, GraphQL `https://api.github.com/graphql` or `{base}/api/graphql` on Enterprise.
-GitHub uses GraphQL only where REST has nothing: review threads (list, resolve), draft/ready,
-auto-merge. The GitLab version (`/api/v4/version`) picks `auto_merge` or
+GitHub uses GraphQL for the MR list and where REST has nothing: review threads (list, resolve),
+draft/ready, auto-merge. GitLab uses GraphQL (`{base}/api/graphql`) for the MR list only, falling
+back to REST when that fails. The GitLab version (`/api/v4/version`) picks `auto_merge` or
 `merge_when_pipeline_succeeds`.
 
 Errors: a rate limit (429, or 403 with `x-ratelimit-remaining: 0` or `retry-after`) backs off all
@@ -218,9 +219,19 @@ for a branch with variables (GitHub: `workflow_dispatch` on a chosen workflow wi
 re-run all or failed jobs). A visible running pipeline is polled every 5 s; otherwise on window
 focus.
 
+**Refresh and caching.** The MR list, Pipelines, the pipeline badge and the MR chip keep their last
+result per key in memory for the session (`src/lib/cache.svelte.ts`): coming back shows it at once
+while it refreshes, and a failed refresh keeps it and shows the error beside it. A window-focus
+refresh is skipped within 30 s of the view's last one; refresh buttons always refresh. The backend
+keeps merged and closed MRs from `get_mr` per account, project and number for the session; an MR
+action drops its entry.
+
 **MR list.** A strip tool beside Changes and Files. Filters: open, mine, review requested, assigned,
 all states, plus fuzzy search. A row: number, title, source → target, author, pipeline dot,
-approvals, updated. Refreshed on focus and every 60 s while visible.
+approvals, updated. One GraphQL request per refresh on both providers, with only the row's fields
+(the page loads the full MR); on GitHub the filters other than state apply to the 50 newest, as
+with REST. The pipeline dot is GitLab's head pipeline, GitHub's head commit status rollup.
+Refreshed on focus and every 60 s while visible.
 
 **Keymap.** `panel.log` Cmd+9 is bound. The new actions (MR list, pipelines, file history) are in
 the registry and Find action, without chords. docs/KEYMAP.md moves the commit, push and rollback

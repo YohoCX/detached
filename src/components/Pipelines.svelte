@@ -15,6 +15,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { api, type Job, type JobAction, type Pipeline, type PipelineAction, type Project, type Stage, type Workflow } from '../lib/api'
   import { statusOf } from '../lib/app.svelte'
+  import { cached, refresh } from '../lib/cache.svelte'
   import { when } from '../lib/log'
   import { active, color, glyph, jobKey, seen, took } from '../lib/pipelines'
   import { showJob } from '../lib/view.svelte'
@@ -25,8 +26,6 @@
 
   interface RunForm { project: Project; branch: string; workflow: string; workflows: Workflow[]; vars: [string, string][] }
 
-  let list = $state.raw<Pipeline[] | null>(null)
-  let error = $state<string | null>(null)
   let note = $state<string | null>(null)
   let busy = $state(false)
   let github = $state.raw(new Set<string>())
@@ -36,22 +35,23 @@
 
   const st = $derived(statusOf(repo))
   const head = $derived(`${st?.head} ${st?.branch}`)
+  const key = $derived(`pipes ${repo} ${mr} ${ui.all}`)
+  const cur = $derived(cached<Pipeline[]>(key))
+  const list = $derived(cur?.value)
+  const error = $derived(list ? null : cur?.error)
   const gh = (p: Project) => github.has(p.host)
   const running = $derived(
     !!list?.some((p) => active(p.status)) ||
       [...stages.values()].some((s) => Array.isArray(s) && s.some((g) => g.jobs.some((j) => active(j.status)))),
   )
 
-  let gen = 0
-  let key = ''
+  let expanded = ''
   $effect(() => {
-    const k = `${repo} ${mr} ${ui.all}`
+    const k = key
     void head
     untrack(() => {
-      if (k !== key) {
-        key = k
-        gen++
-        list = null
+      if (k !== expanded) {
+        expanded = k
         stages.clear()
       }
       load()
@@ -80,32 +80,26 @@
     untrack(openRun)
   })
 
-  async function load() {
-    const [r, n, all, g] = [repo, mr, ui.all, gen]
+  async function load(focus = false) {
+    const [r, n, all, k] = [repo, mr, ui.all, key]
     if (!r) return
-    try {
-      const ps = await (n ? api.mrPipelines(r, n) : api.listPipelines(r, all))
-      if (g !== gen) return
-      list = ps
-      error = null
-      for (const id of stages.keys()) {
-        const p = ps.find((x) => x.id === id)
-        if (p) jobs(p)
-        else stages.delete(id)
-      }
-    } catch (e) {
-      if (g === gen) error = String(e)
+    const ps = await refresh(k, () => (n ? api.mrPipelines(r, n) : api.listPipelines(r, all)), focus)
+    if (!ps || k !== key) return
+    for (const id of stages.keys()) {
+      const p = ps.find((x) => x.id === id)
+      if (p) jobs(p)
+      else stages.delete(id)
     }
   }
 
   async function jobs(p: Pipeline) {
-    const g = gen
+    const k = key
     try {
       const s = await api.pipelineJobs(repo!, p.project, p.id)
       for (const j of s.flatMap((x) => x.jobs)) seen.set(jobKey(p.project, j.id), { job: j, pipeline: p.id })
-      if (g === gen && stages.has(p.id)) stages.set(p.id, s)
+      if (k === key && stages.has(p.id)) stages.set(p.id, s)
     } catch (e) {
-      if (g === gen && stages.has(p.id)) stages.set(p.id, String(e))
+      if (k === key && stages.has(p.id)) stages.set(p.id, String(e))
     }
   }
 
@@ -156,7 +150,7 @@
   }
 </script>
 
-<svelte:window onfocus={load} />
+<svelte:window onfocus={() => load(true)} />
 
 {#if !repo}
   <div class="empty muted">No repository</div>
@@ -169,9 +163,9 @@
           <button class:on={ui.all} onclick={() => (ui.all = true)}>All branches</button>
         </div>
       {/if}
-      <span class="note error ellipsis" title={note}>{note ?? ''}</span>
+      <span class="note error ellipsis" title={note ?? cur?.error}>{note ?? (list && cur?.error) ?? ''}</span>
       {#if !mr}<button class="btn" disabled={busy} onclick={openRun}>Run Pipeline…</button>{/if}
-      <button class="icon-btn" title="Refresh" onclick={load}><Icon name="refresh" /></button>
+      <button class="icon-btn" title="Refresh" onclick={() => load()}><Icon name="refresh" /></button>
     </div>
     {#if run}
       {@const f = run}

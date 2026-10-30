@@ -2,6 +2,7 @@
   import { untrack } from 'svelte'
   import { api, type MergeRequest, type MrFilter } from '../lib/api'
   import { app } from '../lib/app.svelte'
+  import { cached, refresh } from '../lib/cache.svelte'
   import { filter as fuzzy } from '../lib/fuzzy'
   import { ago, bareTitle, isGitLab, setupProblem, tone } from '../lib/mr'
   import { showMr, view } from '../lib/view.svelte'
@@ -12,38 +13,35 @@
   const filters: [MrFilter, string][] = [['open', 'Open'], ['mine', 'Mine'], ['reviewRequested', 'Review requested'], ['assigned', 'Assigned to me'], ['all', 'All states']]
   let filter = $state<MrFilter>('open')
   let query = $state('')
-  let data = $state<{ key: string; mrs?: MergeRequest[]; setup?: string; error?: string } | null>(null)
 
-  const key = $derived(`${repo}\0${filter}`)
-  const cur = $derived(data?.key === key ? data : null)
-  const rows = $derived(fuzzy(cur?.mrs ?? [], query, (m) => `${m.number} ${m.title} ${m.author} ${m.sourceBranch}`).map((r) => r.item))
+  const key = $derived(`mrs\0${repo}\0${filter}`)
+  const cur = $derived(cached<{ mrs?: MergeRequest[]; setup?: string }>(key))
+  const rows = $derived(fuzzy(cur?.value?.mrs ?? [], query, (m) => `${m.number} ${m.title} ${m.author} ${m.sourceBranch}`).map((r) => r.item))
   const shown = $derived(view.shown?.kind === 'mr' && view.shown.repo === repo ? view.shown.number : null)
 
-  async function load() {
-    const [r, k, f] = [repo, key, filter]
+  function load(focus = false) {
+    const [r, f] = [repo, filter]
     if (!r) return
-    try {
+    refresh(key, async () => {
       const setup = setupProblem(await api.forgeHosts(r))
-      data = setup ? { key: k, setup } : { key: k, mrs: await api.listMrs(r, f) }
-    } catch (e) {
-      data = { key: k, error: String(e) }
-    }
+      return setup ? { setup } : { mrs: await api.listMrs(r, f) }
+    }, focus)
   }
 
   $effect(() => {
     void key
-    untrack(load)
+    untrack(() => load())
     const timer = setInterval(() => !document.hidden && load(), 60_000)
     return () => clearInterval(timer)
   })
 </script>
 
-<svelte:window onfocus={load} />
+<svelte:window onfocus={() => load(true)} />
 
 <section>
   <header>
     <span class="title">Merge Requests</span>
-    <button class="icon-btn" title="Refresh" onclick={load}><Icon name="refresh" /></button>
+    <button class="icon-btn" title="Refresh" onclick={() => load()}><Icon name="refresh" /></button>
   </header>
   {#if repo}
     <div class="bar">
@@ -51,14 +49,15 @@
       <select bind:value={filter}>{#each filters as [f, label] (f)}<option value={f}>{label}</option>{/each}</select>
     </div>
   {/if}
+  {#if cur?.value && cur.error}<div class="stale error ellipsis" title={cur.error}>{cur.error}</div>{/if}
   {#if !repo}
     <div class="empty muted">No repository</div>
-  {:else if cur?.setup}
-    <div class="empty"><p class="muted">{cur.setup}</p><button class="btn" onclick={() => (app.settings = true)}>Open Settings</button></div>
-  {:else if cur?.error}
-    <div class="empty error">{cur.error}</div>
   {:else if !cur}
     <div class="empty muted">Loading…</div>
+  {:else if cur.value?.setup}
+    <div class="empty"><p class="muted">{cur.value.setup}</p><button class="btn" onclick={() => (app.settings = true)}>Open Settings</button></div>
+  {:else if !cur.value}
+    <div class="empty error">{cur.error}</div>
   {:else if !rows.length}
     <div class="empty muted">{query ? 'No merge requests match' : 'No merge requests'}</div>
   {:else}
@@ -94,6 +93,7 @@
   .empty { padding: 12px 16px; display: grid; gap: 10px; justify-items: start; }
   .empty p { margin: 0; }
   .error { color: var(--error); white-space: pre-wrap; }
+  .stale { flex: none; padding: 0 16px 6px; font-size: 11px; white-space: nowrap; }
   .rows { flex: 1; min-height: 0; overflow-y: auto; }
   .mr { display: block; width: calc(100% - 12px); margin: 0 6px 2px; padding: 5px 10px; border: 0; border-radius: 10px; background: none; text-align: left; }
   .mr:hover { background: var(--hover); }

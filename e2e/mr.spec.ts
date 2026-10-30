@@ -7,6 +7,7 @@ const forge = `http://127.0.0.1:${FORGE_PORT}`
 type Write = { method: string; path: string; body: Record<string, unknown> | null }
 const writes = async (): Promise<Write[]> => (await fetch(`${forge}/__writes`)).json()
 const last = async (method: string, path: string) => (await writes()).filter((w) => w.method === method && w.path === path).pop()
+const requests = async (): Promise<{ method: string; path: string }[]> => (await fetch(`${forge}/__requests`)).json()
 
 const mrPage = (page: Page) => page.locator('main .page')
 const tab = (page: Page, name: string) => mrPage(page).locator('header .seg').getByRole('button', { name })
@@ -174,4 +175,24 @@ test('an ambiguous host says so and Settings picks the account', async ({ page, 
   await page.keyboard.press('Escape')
   await list.getByTitle('Refresh').click()
   await expect(list.locator('.mr')).toContainText('Add feature')
+})
+
+test('the MR list is one request, and a repo returned to shows its cached list at once', async ({ page, fx }) => {
+  await openForge(page, fx)
+  await repoRow(page, 'gitlab').click()
+  await expect(page.locator('header .chip')).toContainText('!1')
+  const before = (await requests()).length
+  await page.locator('nav.strip').getByTitle('Merge Requests').click()
+  const rows = page.locator('aside.tool .mr')
+  await expect(rows).toContainText('Add feature')
+  const lists = (await requests()).slice(before).filter((r) => /merge_requests|graphql/.test(r.path))
+  expect(lists).toEqual([{ method: 'POST', path: '/gitlab/api/graphql' }])
+
+  await repoRow(page, 'github').click()
+  await expect(rows).toContainText('#1')
+  await fetch(`${forge}/__delay`, { method: 'POST', body: JSON.stringify({ ms: 3000 }) })
+  const back = (await requests()).length
+  await repoRow(page, 'gitlab').click()
+  await expect(rows).toContainText('!1', { timeout: 1000 })
+  await expect.poll(async () => (await requests()).slice(back).some((r) => r.path === '/gitlab/api/graphql')).toBe(true)
 })

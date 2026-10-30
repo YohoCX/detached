@@ -3,6 +3,7 @@
   import { register } from '../lib/actions'
   import { api, type MergeRequest, type NewMr } from '../lib/api'
   import { say, statusOf } from '../lib/app.svelte'
+  import { cached, refresh } from '../lib/cache.svelte'
   import { bareTitle, isGitLab } from '../lib/mr'
   import { showMr } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
@@ -10,23 +11,21 @@
   // The current branch's open MR; without one, an entry to create it when the branch has an upstream.
   let { repo }: { repo: string | null } = $props()
 
-  /** undefined while unknown or when the repo has no working forge setup. */
-  let mr = $state<MergeRequest | null | undefined>(undefined)
   let form = $state<(NewMr & { description: string; draft: boolean; error: string; busy: boolean }) | null>(null)
   const st = $derived(statusOf(repo))
-  const key = $derived(repo && st?.branch && st.upstream ? `${repo}\0${st.branch}\0${st.upstream}` : '')
+  const key = $derived(repo && st?.branch && st.upstream ? `chip\0${repo}\0${st.branch}\0${st.upstream}` : '')
+  /** undefined while unknown or when the repo has no working forge setup. */
+  const mr = $derived(key ? cached<MergeRequest | null>(key)?.value : undefined)
 
-  async function load() {
-    const [r, k] = [repo, key]
-    if (!r || !k) return void (mr = undefined)
-    const m = await api.currentMr(r).catch(() => undefined)
-    if (k === key) mr = m
+  function load(focus = false) {
+    const r = repo
+    if (r && key) refresh(key, () => api.currentMr(r), focus)
   }
 
   $effect(() => {
     void key
     form = null
-    untrack(load)
+    untrack(() => load())
   })
 
   async function openForm() {
@@ -47,7 +46,7 @@
     try {
       const m = await api.createMr(r, { title: f.title.trim(), description: f.description, targetBranch: f.targetBranch.trim(), draft: f.draft })
       form = null
-      mr = m
+      load()
       showMr(r, m.number)
     } catch (e) {
       f.error = String(e)
@@ -58,7 +57,7 @@
   onMount(() => register('mr.create', openForm))
 </script>
 
-<svelte:window onfocus={load} />
+<svelte:window onfocus={() => load(true)} />
 
 {#if repo && mr !== undefined}
   <div class="anchor">
