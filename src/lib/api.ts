@@ -298,6 +298,8 @@ export const api = {
     invoke<FileDiff>('file_diff', { repo, path, origPath, left, right }),
   listFiles: (repo: string, rev: string | null) => invoke<FileEntry[]>('list_files', { repo, rev }),
   readFile: (repo: string, rev: string | null, path: string) => invoke<Content>('read_file', { repo, rev, path }),
+  /** A repo image as a data URL; null when it is missing, too large or not an image. */
+  readImage: (repo: string, rev: string | null, path: string) => invoke<string | null>('read_image', { repo, rev, path }),
   openInZed: (repo: string, path: string, line: number | null) => invoke<void>('open_in_zed', { repo, path, line }),
 
   log: (repo: string, query: LogQuery, queryId: number, on: (e: LogEvent) => void) =>

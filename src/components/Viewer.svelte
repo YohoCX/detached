@@ -5,12 +5,14 @@
   import { nameOf, say, statuses, statusOf } from '../lib/app.svelte'
   import { baseName, clashesWithMonaco, describe, dirName, languageFor } from '../lib/files'
   import { chordFor } from '../lib/keymap'
+  import { isMarkdown } from '../lib/markdown'
   import { monaco } from '../lib/monaco'
   import { otherLine } from '../lib/mr'
   import { nav } from '../lib/nav'
   import { load, save } from '../lib/storage'
   import { showDiff, sideName, view, type FileDoc, type Zone } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
+  import Markdown from './Markdown.svelte'
 
   type Editor = monaco.editor.IStandaloneCodeEditor
   type Model = monaco.editor.ITextModel
@@ -29,6 +31,8 @@
   let conflicted = $state(false)
   let sideBySide = $state(load('viewer.sideBySide') !== 'false')
   let goto = $state<string | null>(null)
+  let markdown = $state('')
+  let preview = $state(false)
   let editorHost: HTMLDivElement
   let diffHost: HTMLDivElement
   let gotoInput = $state<HTMLInputElement>()
@@ -42,6 +46,7 @@
   let focusPending = false
   const shown = $derived(doc ?? (view.shown?.kind === 'file' || view.shown?.kind === 'diff' ? view.shown : null))
   const split = $derived(forceSideBySide || sideBySide)
+  const md = $derived(shown?.kind === 'file' && isMarkdown(shown.path) && mode === 'editor' && !conflicted ? shown : null)
 
   const active = (): Editor => (mode === 'diff' ? diff.getModifiedEditor() : editor)
   const lang = (path: string) => languageFor(path, monaco.languages.getLanguages())
@@ -116,7 +121,12 @@
         if (c.kind !== 'text' && c.kind !== 'conflicted') return placeholder(describe(c))
         setFile(`${s.repo}\0${s.ref}\0${s.path}`, c.text, s.path)
         conflicted = c.kind === 'conflicted'
-        if (reveal) revealLine(editor, s.line ?? 1)
+        markdown = c.text
+        if (reveal) {
+          // A file opened at a line shows it in the source.
+          preview = !s.line && load('viewer.mdPreview') !== 'false'
+          revealLine(editor, s.line ?? 1)
+        }
         return
       }
       const d = await api.fileDiff(s.repo, s.path, s.origPath, s.left, s.right)
@@ -135,6 +145,7 @@
 
   function openGoto() {
     if (mode !== 'editor' && mode !== 'diff') return
+    preview = false
     goto = ''
     tick().then(() => gotoInput?.focus())
   }
@@ -164,6 +175,11 @@
     if (s?.kind !== 'file') return
     if (s.ref) return showDiff(s.repo, s.path, null, { kind: 'rev', rev: s.ref })
     showDiff(s.repo, s.path, statusOf(s.repo)?.changes.find((c) => c.path === s.path)?.origPath ?? null)
+  }
+
+  function togglePreview(on: boolean) {
+    preview = on
+    save('viewer.mdPreview', String(on))
   }
 
   function toggleSideBySide(on: boolean) {
@@ -203,6 +219,7 @@
       register('diff.next', () => mode === 'diff' && diff.goToDiff('next')),
       register('diff.prev', () => mode === 'diff' && diff.goToDiff('previous')),
       register('editor.gotoLine', openGoto),
+      register('markdown.preview', () => md && togglePreview(!preview)),
       ...(untrack(() => doc)
         ? []
         : [register('diff.show', diffAction), register('file.openInZed', zed), register('find.inFiles', () => (view.find = true))]),
@@ -312,6 +329,12 @@
           </div>
         {/if}
       {/if}
+      {#if md}
+        <div class="seg">
+          <button class:on={!preview} onclick={() => togglePreview(false)}>Source</button>
+          <button class:on={preview} onclick={() => togglePreview(true)}>Preview</button>
+        </div>
+      {/if}
       <button class="icon-btn" title="Open in Zed" onclick={zed}><Icon name="zed" /></button>
     </header>
   {/if}
@@ -320,7 +343,10 @@
   {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="editors" onkeydowncapture={(e) => clashesWithMonaco(e) && e.stopPropagation()}>
-    <div class="host" class:hidden={mode !== 'editor'} bind:this={editorHost}></div>
+    <div class="host" class:hidden={mode !== 'editor' || (md && preview)} bind:this={editorHost}></div>
+    {#if md && preview}
+      <div class="preview"><Markdown text={markdown} file={md} /></div>
+    {/if}
     <div class="host" class:hidden={mode !== 'diff'} bind:this={diffHost}></div>
     {#if mode === 'placeholder'}
       <div class="placeholder muted">{message}</div>
@@ -355,6 +381,7 @@
   .editors { position: relative; flex: 1; min-height: 0; }
   .host { position: absolute; inset: 0; }
   .hidden { display: none; }
+  .preview { position: absolute; inset: 0; overflow: auto; background: var(--code); }
   .placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
   .host :global(.mr-plus) { cursor: pointer; }
   .host :global(.mr-plus)::before { content: '+'; display: grid; place-items: center; width: 16px; height: 16px; margin: 1px 0 0 2px; border-radius: 5px; background: var(--accent); color: var(--accent-fg); font: 700 13px/1 var(--font); }

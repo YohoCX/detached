@@ -30,5 +30,6 @@ actions exist.
 | `vcs.fileHistory` | History of the open file | | M2 |
 | `mr.create` | Create a merge request from the current branch | | M2 |
 | `pipeline.run` | Run a pipeline for a branch | | M2 |
+| `markdown.preview` | Toggle the preview of an open markdown file | | M2 |
 
 Bound chords are caught in the capture phase, so they win over Monaco and text inputs.

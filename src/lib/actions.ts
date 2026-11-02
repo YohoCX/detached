@@ -38,6 +38,7 @@ const defs: Action[] = [
   { id: 'vcs.fileHistory', title: 'Show History for File', group: 'vcs' },
   { id: 'mr.create', title: 'Create Merge Request…', group: 'vcs' },
   { id: 'pipeline.run', title: 'Run Pipeline…', group: 'vcs' },
+  { id: 'markdown.preview', title: 'Toggle Markdown Preview', group: 'view' },
 ]
 
 export const actions = new Map(defs.map((a) => [a.id, a]))

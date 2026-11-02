@@ -184,6 +184,16 @@ pub fn read_file(
 }
 
 #[tauri::command(async)]
+pub fn read_image(
+    state: State<'_, AppState>,
+    repo: String,
+    rev: Option<String>,
+    path: String,
+) -> Result<Option<String>> {
+    diff::image(&state, Path::new(&repo), rev.as_deref(), &path)
+}
+
+#[tauri::command(async)]
 pub fn open_in_zed(
     state: State<'_, AppState>,
     repo: String,

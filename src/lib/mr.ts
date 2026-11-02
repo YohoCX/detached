@@ -1,6 +1,5 @@
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import type { DiffSide, ForgeHosts, MergeRequest, PipelineStatus } from './api'
+import { hasScheme, toDom } from './markdown'
 
 /** Why MRs cannot load for a repo, from `forge_hosts`; null when they can. */
 export function setupProblem(h: ForgeHosts): string | null {
@@ -54,23 +53,13 @@ export function links(mr: MergeRequest): Links {
 
 /** GitLab uploads under the project, other root-relative URLs under the base URL, relative ones against the project. */
 export function resolveUrl(url: string, l: Links): string {
-  if (/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url)) return url
+  if (hasScheme(url) || url.startsWith('#')) return url
   if (url.startsWith('/')) return (l.gitlab && url.startsWith('/uploads/') ? l.projectUrl : l.baseUrl) + url
   return new URL(url, `${l.projectUrl}/`).href
 }
 
-const ALLOWED_TAGS = [
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'kbd',
-  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img', 'em', 'strong', 'b', 'i', 'del', 's', 'sup', 'sub',
-  'span', 'div', 'details', 'summary',
-]
-const ALLOWED_ATTR = ['href', 'src', 'alt', 'title', 'align', 'start', 'colspan', 'rowspan']
-
-/** Foreign markdown to sanitized HTML: links resolved, images only from https and data:, GitLab uploads as links. */
 export function render(md: string, l: Links): string {
-  const html = marked.parse(md, { async: false, breaks: true })
-  const div = document.createElement('div')
-  div.append(DOMPurify.sanitize(html, { ALLOWED_TAGS, ALLOWED_ATTR, RETURN_DOM_FRAGMENT: true }))
+  const div = toDom(md, true)
   for (const a of div.querySelectorAll('a[href]')) a.setAttribute('href', resolveUrl(a.getAttribute('href')!, l))
   for (const img of div.querySelectorAll('img')) {
     const src = img.getAttribute('src')

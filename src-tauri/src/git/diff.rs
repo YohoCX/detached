@@ -1,7 +1,10 @@
 //! Change lists and the content of one side of a diff.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::env::Env;
 use crate::error::{Error, Result};
@@ -230,6 +233,68 @@ fn blob(state: &AppState, repo: &Path, target: &str, spec: &str) -> Result<Conte
     )?
     .ok()?;
     Ok(classify(o.stdout))
+}
+
+/// An image at `rev` or in the worktree as a data URL, for markdown previews; None when it is not one.
+pub fn image(
+    state: &AppState,
+    repo: &Path,
+    rev: Option<&str>,
+    path: &str,
+) -> Result<Option<String>> {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    let mime = match ext.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("bmp") => "image/bmp",
+        _ => return Ok(None),
+    };
+    if !Path::new(path)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+    {
+        return Ok(None);
+    }
+    let bytes = match rev {
+        None => {
+            let full = repo.join(path);
+            match fs::metadata(&full) {
+                Ok(m) if m.is_file() && m.len() <= MAX_SIZE => fs::read(full)?,
+                _ => return Ok(None),
+            }
+        }
+        Some(rev) => {
+            let cred = lfs_cred(state, repo, arg(rev)?)?;
+            let opts = Opts {
+                cred: cred.as_ref(),
+                ..Default::default()
+            };
+            let spec = format!("{rev}:{path}");
+            let o = run(
+                &state.env(),
+                repo,
+                &["cat-file", "--filters", &spec],
+                Kind::Read,
+                opts,
+            )?;
+            if o.code != 0 {
+                return Ok(None);
+            }
+            o.stdout
+        }
+    };
+    if bytes.len() as u64 > MAX_SIZE {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        STANDARD.encode(bytes)
+    )))
 }
 
 fn classify(bytes: Vec<u8>) -> Content {
@@ -544,5 +609,28 @@ mod tests {
         assert_eq!(paths, ["a", "b"]);
         assert!(compare_base(&env, &work, Some("-x")).is_err());
         assert!(compare_base(&env, &work, Some("nope")).is_err());
+    }
+
+    #[test]
+    fn images_as_data_urls() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        std::fs::create_dir(work.join("img")).unwrap();
+        sb.commit(&work, "img/a.svg", "<svg/>", "svg");
+        std::fs::write(work.join("img/a.svg"), "<svg></svg>").unwrap();
+        let img = |rev, path| image(&sb.state, &work, rev, path).unwrap();
+        assert_eq!(
+            img(Some("HEAD"), "img/a.svg").unwrap(),
+            "data:image/svg+xml;base64,PHN2Zy8+"
+        );
+        assert_eq!(
+            img(None, "img/a.svg").unwrap(),
+            "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="
+        );
+        assert_eq!(img(Some("HEAD"), "img/b.png"), None);
+        assert_eq!(img(None, "img"), None);
+        assert_eq!(img(None, "img/../img/a.svg"), None);
+        assert_eq!(img(None, "/etc/a.svg"), None);
+        assert!(image(&sb.state, &work, Some("-x"), "img/a.svg").is_err());
     }
 }

@@ -73,6 +73,7 @@ pub fn run() {
             git::commands::file_diff,
             git::commands::list_files,
             git::commands::read_file,
+            git::commands::read_image,
             git::commands::open_in_zed,
             git::commands::log,
             git::commands::cancel_log,

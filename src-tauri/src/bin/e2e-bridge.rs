@@ -220,6 +220,7 @@ fn invoke(
         }
         "list_files" => ok(files::list_files(&s.env(), rp, opt("rev")?.as_deref())),
         "read_file" => ok(s.read_file(&repo, opt("rev")?, &st("path")?)),
+        "read_image" => ok(diff::image(s, rp, opt("rev")?.as_deref(), &st("path")?)),
         "log" => {
             let (query, id) = (arg(a, "query")?, arg(a, "queryId")?);
             s.op(id, |c| {
