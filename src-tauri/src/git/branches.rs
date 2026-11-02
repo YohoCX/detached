@@ -75,7 +75,7 @@ pub fn create(state: &AppState, repo: &Path, name: &str, start: &str, switch: bo
     }
     arg(start)?;
     locked(state, repo, || {
-        out(&state.env(), repo, &["branch", name, start], Kind::Write)
+        out(&env, repo, &["branch", name, start], Kind::Write)
     })?;
     if !switch {
         return Ok(());

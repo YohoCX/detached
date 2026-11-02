@@ -22,7 +22,6 @@ impl AppState {
     }
 }
 
-/// Progress lines to the UI.
 fn send(c: &Channel<String>) -> impl Fn(&str) + Sync + '_ {
     |l| drop(c.send(l.into()))
 }
@@ -86,9 +85,9 @@ pub fn delete_remote_branch(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<()> {
-    let p = send(&progress);
+    let repo = Path::new(&repo);
     state.op(op_id, |c| {
-        branches::delete_remote(&state, Path::new(&repo), &remote, &name, c, &p)
+        branches::delete_remote(&state, repo, &remote, &name, c, &send(&progress))
     })
 }
 
@@ -283,16 +282,8 @@ pub fn fetch_mr(
     op_id: u64,
     progress: Channel<String>,
 ) -> Result<String> {
+    let (repo, p) = (Path::new(&repo), send(&progress));
     state.op(op_id, |c| {
-        let p = send(&progress);
-        remotes::fetch_mr(
-            &state,
-            Path::new(&repo),
-            &remote,
-            &head_ref,
-            &target_branch,
-            c,
-            &p,
-        )
+        remotes::fetch_mr(&state, repo, &remote, &head_ref, &target_branch, c, &p)
     })
 }

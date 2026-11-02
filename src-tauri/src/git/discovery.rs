@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::types::RepoInfo;
 
@@ -73,11 +73,11 @@ fn worktree_of(dir: &Path, dot_git: &Path) -> Option<String> {
         .parent()?;
     let main = common.parent().filter(|_| common.ends_with(".git"))?;
     // Lexically, since `gitdir` may be relative (`git worktree add --relative-paths`).
-    let mut norm = std::path::PathBuf::new();
+    let mut norm = PathBuf::new();
     for c in main.components() {
         match c {
-            std::path::Component::ParentDir => drop(norm.pop()),
-            std::path::Component::CurDir => {}
+            Component::ParentDir => drop(norm.pop()),
+            Component::CurDir => {}
             c => norm.push(c),
         }
     }

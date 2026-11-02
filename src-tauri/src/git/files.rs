@@ -58,7 +58,7 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
     };
     let by_path: HashMap<&str, &FileChange> =
         changes.iter().map(|c| (c.path.as_str(), c)).collect();
-    // Status lists an untracked directory once, as `dir/`.
+    // Status lists an untracked nested repo once, as `dir/`, even with `-uall`.
     let untracked_dirs: Vec<&str> = changes
         .iter()
         .map(|c| c.path.as_str())

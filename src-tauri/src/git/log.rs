@@ -25,15 +25,13 @@ pub fn log(
     cancel: &Cancel,
     emit: &(dyn Fn(LogEvent) + Sync),
 ) {
+    let done = |truncated| LogEvent::Done {
+        query_id,
+        truncated,
+    };
     emit(match stream(env, repo, query, query_id, cancel, emit) {
-        Ok(truncated) => LogEvent::Done {
-            query_id,
-            truncated,
-        },
-        Err(Error::Cancelled) => LogEvent::Done {
-            query_id,
-            truncated: false,
-        },
+        Ok(truncated) => done(truncated),
+        Err(Error::Cancelled) => done(false),
         Err(e) => LogEvent::Error {
             query_id,
             error: e.to_string(),
@@ -62,7 +60,7 @@ fn stream(
     }
     let text = q.text.as_deref().filter(|t| !t.is_empty());
     let author = q.author.as_deref().filter(|a| !a.is_empty());
-    // A short hash would also be a word: "defaced" is hex.
+    // Hex text is taken as a hash only, even when it is also a word ("defaced").
     let hash = text
         .filter(|t| (7..=40).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(str::to_ascii_lowercase);
@@ -220,7 +218,6 @@ pub fn merge_base(env: &Env, repo: &Path, a: &str, b: &str) -> Result<String> {
     Ok(o.ok()?.text().trim().into())
 }
 
-/// `git log base..head`.
 pub fn range_log(env: &Env, repo: &Path, base: &str, head: &str) -> Result<Vec<CommitSummary>> {
     commits(
         env,
@@ -229,7 +226,6 @@ pub fn range_log(env: &Env, repo: &Path, base: &str, head: &str) -> Result<Vec<C
     )
 }
 
-/// Hunks of `git diff -U3 -M --diff-algorithm=myers <base> <head> -- <orig_path> <path>`.
 pub fn hunk_ranges(
     env: &Env,
     repo: &Path,
@@ -245,8 +241,8 @@ pub fn hunk_ranges(
         "--diff-algorithm=myers",
         arg(base)?,
         arg(head)?,
+        "--",
     ];
-    args.push("--");
     args.extend(orig_path);
     args.push(path);
     Ok(out(env, repo, &args, Kind::Read)?
