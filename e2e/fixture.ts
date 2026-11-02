@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { build } from 'vite'
 import { BRIDGE_PORT, FORGE_PORT } from '../playwright.config'
-import type { Seed, SeedProject } from './forge'
+import type { Seed, SeedProject, Write } from './forge'
 
 const bridge = `http://127.0.0.1:${BRIDGE_PORT}`
-const forge = `http://127.0.0.1:${FORGE_PORT}`
+export const forgeUrl = `http://127.0.0.1:${FORGE_PORT}`
+export const post = (url: string, body: unknown) => fetch(url, { method: 'POST', body: JSON.stringify(body) })
 const lines = (n: number, edit: Record<number, string> = {}) =>
   Array.from({ length: n }, (_, i) => edit[i + 1] ?? `line ${i + 1}`).join('\n') + '\n'
 
@@ -25,7 +26,7 @@ export class Fixture {
 
   // HOME and global config in the fixture, so the developer's git config never applies.
   git = (cwd: string, ...args: string[]) => {
-    const env = { ...process.env, HOME: this.home, GIT_CONFIG_GLOBAL: join(this.home, '.gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: this.home, GIT_CONFIG_GLOBAL: join(this.home, '.gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
     for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
     return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: 'pipe' }).trim()
   }
@@ -107,7 +108,7 @@ function makeForge(fx: Fixture): Seed {
       'added.txt': 'added\n',
     })
     const headSha = g(repo, 'rev-parse', 'HEAD')
-    g(repo, 'remote', 'add', 'origin', `${forge}/${kind}/${path}.git`)
+    g(repo, 'remote', 'add', 'origin', `${forgeUrl}/${kind}/${path}.git`)
     g(repo, 'update-ref', 'refs/remotes/origin/main', baseSha)
     g(repo, 'update-ref', 'refs/remotes/origin/feature', headSha)
     g(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
@@ -148,8 +149,7 @@ export const test = base.extend<{ fx: Fixture }, { shim: string }>({
       const root = mkdtempSync(join(realpathSync(tmpdir()), 'wb-e2e-'))
       try {
         const fx = new Fixture(root)
-        const r = await fetch(`${bridge}/reset`, { method: 'POST', body: JSON.stringify({ root: fx.root }) })
-        expect(await r.text()).toContain('"ok"')
+        expect(await (await post(`${bridge}/reset`, { root: fx.root })).text()).toContain('"ok"')
         await page.addInitScript((cfg) => Object.assign(window, { __E2E__: cfg }), { bridge, pick: [fx.ws, fx.solo] })
         await page.addInitScript({ content: shim })
         page.on('pageerror', (e) => console.log('page error:', e))
@@ -172,19 +172,28 @@ export async function open(page: Page, repo?: string) {
   if (repo) await repoRow(page, repo).click()
 }
 
+/** Runs a command over the bridge, outside the page; throws its error. */
+export async function invoke(cmd: string, args: object = {}) {
+  const r = JSON.parse((await (await post(`${bridge}/invoke`, { cmd, args })).text()).trim().split('\n').pop()!)
+  if ('err' in r) throw new Error(`${cmd}: ${JSON.stringify(r.err)}`)
+  return r.ok
+}
+
+export const saveAccount = (provider: string, kind: string, username: string, label: string) =>
+  invoke('save_account', { input: { id: null, provider, baseUrl: `${forgeUrl}/${kind}`, username, label, token: `${kind}-token` } })
+
+export const writes = async (): Promise<Write[]> => (await fetch(`${forgeUrl}/__writes`)).json()
+export const requests = async (): Promise<{ method: string; path: string }[]> => (await fetch(`${forgeUrl}/__requests`)).json()
+
 /**
  * Seeds the fake forge from fresh `forge/` repos, saves a GitLab and a GitHub Enterprise account at its URL
  * and adds only the `forge/` folder.
  */
 export async function openForge(page: Page, fx: Fixture): Promise<Seed> {
   const seed = makeForge(fx)
-  const post = async (url: string, body: object) =>
-    expect(await (await fetch(url, { method: 'POST', body: JSON.stringify(body) })).text()).not.toContain('"err"')
-  await post(`${forge}/reset`, seed)
-  for (const [provider, kind, label] of [['gitlabSelfHosted', 'gitlab', 'Fake GitLab'], ['githubEnterprise', 'ghe', 'Fake GitHub']]) {
-    const input = { id: null, provider, baseUrl: `${forge}/${kind}`, username: seed.user, label, token: `${kind}-token` }
-    await post(`${bridge}/invoke`, { cmd: 'save_account', args: { input } })
-  }
+  expect((await post(`${forgeUrl}/reset`, seed)).ok).toBe(true)
+  await saveAccount('gitlabSelfHosted', 'gitlab', seed.user, 'Fake GitLab')
+  await saveAccount('githubEnterprise', 'ghe', seed.user, 'Fake GitHub')
   await page.evaluate((pick) => (window.__E2E__.pick = pick), [fx.forge])
   await page.getByRole('button', { name: 'Add folder…' }).click()
   await expect(sidebar(page).locator('.repo')).toHaveCount(2)
