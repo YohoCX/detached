@@ -1,16 +1,15 @@
-// Fake GitLab (under /gitlab) and GitHub Enterprise (under /ghe) APIs for e2e, seeded per test.
+// Fake GitLab (under /gitlab) and GitHub Enterprise (under /ghe) APIs for e2e, seeded by `POST /reset`.
 // Runs as plain node: type annotations only, no imports beyond node's.
-// Test hooks: `GET /__writes` lists the writes since the last reset (GraphQL mutations, not queries) as
-// `{method, path, body}`, the path percent-decoded and without its query; `GET /__requests` lists every
-// API request as `{method, path}`. `POST /__append {forge, path, job, text, status?}` grows a job's log
-// and can set its status, for a live log. `POST /__delay {ms}` delays API replies until the next reset.
+// Test hooks: `GET /__writes` lists the writes (GraphQL mutations, not queries) since the reset and
+// `GET /__requests` every API request, the path decoded and without its query. `POST /__append
+// {forge, path, job, text, status?}` grows a job's log for a live log; `POST /__delay {ms}` slows replies.
 
 import { createServer } from 'node:http'
 
-export type Status = 'pending' | 'running' | 'success' | 'failed' | 'canceled' | 'skipped' | 'manual'
-export interface SeedJob { id: number; name: string; stage: string; status: Status; log: string }
-export interface SeedPipeline { id: number; ref: string; sha: string; status: Status; jobs: SeedJob[]; /** `push` when unset. */ source?: string }
-export interface SeedMr {
+type Status = 'pending' | 'running' | 'success' | 'failed' | 'canceled' | 'skipped' | 'manual'
+interface SeedJob { id: number; name: string; stage: string; status: Status; log: string }
+interface SeedPipeline { id: number; ref: string; sha: string; status: Status; jobs: SeedJob[]; /** `push` when unset. */ source?: string }
+interface SeedMr {
   number: number
   title: string
   description: string
@@ -37,12 +36,14 @@ interface FakeNote { id: number; thread: string; body: string; author: string; c
 interface FakeReview { id: number; state: string; body: string; user: string }
 interface FakeMr extends SeedMr { notes: FakeNote[]; resolved: string[]; approvedBy: string[]; reviews: FakeReview[]; autoMerge: boolean }
 interface FakeProject extends SeedProject { id: number; mrs: FakeMr[]; branches: Record<string, string> }
-interface Write { method: string; path: string; body: unknown }
+export interface Write { method: string; path: string; body: unknown }
 interface Reply { status?: number; body?: unknown; text?: string; headers?: Record<string, string> }
 
 const T = '2026-10-01T10:00:00Z'
 const ACTIVE = ['pending', 'running']
-let seed: Seed = { user: '', projects: [] }
+const glMissing = { status: 404, body: { message: '404 Not found' } }
+const ghMissing = { status: 404, body: { message: 'Not Found' } }
+let user = ''
 let projects: FakeProject[] = []
 let writes: Write[] = []
 let requests: { method: string; path: string }[] = []
@@ -50,7 +51,7 @@ let delay = 0
 let next = 1000
 
 function reset(s: Seed) {
-  seed = s
+  user = s.user
   writes = []
   requests = []
   delay = 0
@@ -58,12 +59,19 @@ function reset(s: Seed) {
     const branches: Record<string, string> = {}
     for (const m of p.mrs) Object.assign(branches, { [m.targetBranch]: m.baseSha, [m.sourceBranch]: m.headSha })
     const mrs = p.mrs.map((m) => ({ ...m, notes: [], resolved: [], approvedBy: [], reviews: [], autoMerge: false }))
-    return { ...structuredClone(p), id: i + 1, mrs, branches }
+    return { ...p, id: i + 1, mrs, branches }
   })
 }
 
 const origin = () => `http://127.0.0.1:${process.argv[2]}`
-const allJobs = (p: FakeProject) => p.pipelines.flatMap((pl) => pl.jobs.map((j) => ({ pl, j })))
+const project = (forge: string, path: string) => projects.find((p) => p.forge === forge && p.path === path)
+const findMr = (p: FakeProject, n: string) => p.mrs.find((m) => m.number === Number(n))
+const findJob = (p: FakeProject, id: number) => p.pipelines.flatMap((pl) => pl.jobs.map((j) => ({ pl, j }))).find((x) => x.j.id === id)
+const route = (method: string, path: string) => (m: string, re: RegExp) => (method === m ? path.match(re) : null)
+const cancel = (pl: SeedPipeline) => {
+  for (const j of pl.jobs) if (ACTIVE.includes(j.status)) j.status = 'canceled'
+  pl.status = 'canceled'
+}
 const headPipeline = (p: FakeProject, m: FakeMr) => p.pipelines.find((pl) => pl.sha === m.headSha)
 const newPipeline = (p: FakeProject, ref: string, source: string): SeedPipeline => {
   const id = ++next
@@ -74,7 +82,7 @@ const newPipeline = (p: FakeProject, ref: string, source: string): SeedPipeline 
 const addMr = (p: FakeProject, m: Partial<SeedMr>): FakeMr => {
   const number = Math.max(0, ...p.mrs.map((x) => x.number)) + 1
   const mr: FakeMr = {
-    number, title: '', description: '', author: seed.user, state: 'open', draft: false, sourceBranch: '', targetBranch: p.defaultBranch,
+    number, title: '', description: '', author: user, state: 'open', draft: false, sourceBranch: '', targetBranch: p.defaultBranch,
     baseSha: '', headSha: '', notes: [], resolved: [], approvedBy: [], reviews: [], autoMerge: false, ...m,
   }
   mr.baseSha ||= p.branches[mr.targetBranch] ?? ''
@@ -84,21 +92,21 @@ const addMr = (p: FakeProject, m: Partial<SeedMr>): FakeMr => {
 }
 const note = (m: FakeMr, thread: string | null, body: string, position?: Record<string, unknown>) => {
   const id = ++next
-  const n: FakeNote = { id, thread: thread ?? String(id), body, author: seed.user, created: new Date().toISOString(), position }
+  const n: FakeNote = { id, thread: thread ?? String(id), body, author: user, created: new Date().toISOString(), position }
   m.notes.push(n)
   return n
 }
 const threads = (m: FakeMr) => [...new Set(m.notes.map((n) => n.thread))].map((id) => ({ id, notes: m.notes.filter((n) => n.thread === id) }))
 
-/** A page of `list`, with GitLab's `X-Next-Page` or GitHub's `Link`. */
-function paged(list: unknown[], q: URLSearchParams, url: string, gh: boolean, wrap?: string): Reply {
-  const per = Number(q.get('per_page') ?? 20)
-  const page = Number(q.get('page') ?? 1)
+/** The page of `list` that `url` asks for, with GitLab's `X-Next-Page` or GitHub's `Link`. */
+function paged(list: unknown[], url: URL, wrap?: string): Reply {
+  const per = Number(url.searchParams.get('per_page') ?? 20)
+  const page = Number(url.searchParams.get('page') ?? 1)
   const items = list.slice((page - 1) * per, page * per)
   const more = page * per < list.length
-  const nextUrl = new URL(url, origin())
-  nextUrl.searchParams.set('page', String(page + 1))
-  const headers: Record<string, string> = gh ? (more ? { Link: `<${nextUrl}>; rel="next"` } : {}) : { 'X-Next-Page': more ? String(page + 1) : '' }
+  const next = new URL(url)
+  next.searchParams.set('page', String(page + 1))
+  const headers: Record<string, string> = url.pathname.startsWith('/ghe/') ? (more ? { Link: `<${next}>; rel="next"` } : {}) : { 'X-Next-Page': more ? String(page + 1) : '' }
   return { body: wrap ? { total_count: list.length, [wrap]: items } : items, headers }
 }
 
@@ -138,7 +146,7 @@ const glDiscussion = (m: FakeMr, t: { id: string; notes: FakeNote[] }) => ({
 })
 
 function glGraphql({ query, variables: v }: any): Reply {
-  const p = projects.find((x) => x.forge === 'gitlab' && x.path === v.path)
+  const p = project('gitlab', v.path)
   if (!query.includes('mergeRequests(')) return { body: { errors: [{ message: 'unknown query' }] } }
   if (!p) return { body: { data: { project: null } } }
   const arg = (k: string) => query.match(new RegExp(`${k}:"?([^",)]+)`))?.[1]
@@ -156,22 +164,23 @@ function glGraphql({ query, variables: v }: any): Reply {
   return { body: { data: { project: { mergeRequests: { nodes } } } } }
 }
 
-function gitlab(method: string, rest: string, q: URLSearchParams, body: any, url: string): Reply {
+function gitlab(method: string, rest: string, body: any, url: URL): Reply {
   if (rest === '/version') return { body: { version: '17.11.0', revision: 'fake' } }
-  if (rest === '/user') return { body: { id: 1, username: seed.user } }
+  if (rest === '/user') return { body: { id: 1, username: user } }
   const pm = rest.match(/^\/projects\/([^/]+)(\/.*)?$/)
   const p = pm && projects.find((x) => x.forge === 'gitlab' && (x.path === decodeURIComponent(pm[1]) || String(x.id) === pm[1]))
   if (!pm || !p) return { status: 404, body: { message: '404 Project Not Found' } }
+  const q = url.searchParams
   const r = pm[2] ?? ''
-  const is = (m: string, re: RegExp) => (method === m ? r.match(re) : null)
+  const is = route(method, r)
   let x: RegExpMatchArray | null
   if (is('GET', /^$/)) return { body: glProject(p) }
   if (is('GET', /^\/merge_requests$/)) {
     const state = q.get('state') ?? 'all'
     const list = p.mrs.filter((m) =>
       (state === 'all' || glMr(p, m).state === state) && (!q.has('source_branch') || m.sourceBranch === q.get('source_branch')) &&
-      (q.get('scope') !== 'created_by_me' || m.author === seed.user) && q.get('scope') !== 'assigned_to_me' && !q.has('reviewer_username'))
-    return paged(list.reverse().map((m) => glMr(p, m)), q, url, false)
+      (q.get('scope') !== 'created_by_me' || m.author === user) && q.get('scope') !== 'assigned_to_me' && !q.has('reviewer_username'))
+    return paged(list.reverse().map((m) => glMr(p, m)), url)
   }
   if (is('POST', /^\/merge_requests$/)) {
     const draft = /^draft:\s*/i.test(body.title)
@@ -179,41 +188,38 @@ function gitlab(method: string, rest: string, q: URLSearchParams, body: any, url
   }
   if (is('GET', /^\/pipelines$/)) {
     const list = p.pipelines.filter((pl) => (!q.has('ref') || pl.ref === q.get('ref')) && (!q.has('sha') || pl.sha === q.get('sha')))
-    return paged(list.map((pl) => glPipeline(p, pl)), q, url, false)
+    return paged(list.map((pl) => glPipeline(p, pl)), url)
   }
   if (is('POST', /^\/pipeline$/)) return { status: 201, body: glPipeline(p, newPipeline(p, body.ref, 'api')) }
   if ((x = r.match(/^\/pipelines\/(\d+)(\/.*)?$/))) {
     const pl = p.pipelines.find((y) => y.id === Number(x![1]))
-    if (!pl) return { status: 404, body: { message: '404 Not found' } }
-    if (method === 'GET' && x[2] === '/jobs') return paged(pl.jobs.map((j) => glJob(p, pl, j)).reverse(), q, url, false)
+    if (!pl) return glMissing
+    if (method === 'GET' && x[2] === '/jobs') return paged(pl.jobs.map((j) => glJob(p, pl, j)).reverse(), url)
     if (method === 'POST' && x[2] === '/retry') {
       for (const j of pl.jobs) if (j.status === 'failed' || j.status === 'canceled') j.status = 'pending'
       pl.status = 'running'
       return { status: 201, body: glPipeline(p, pl) }
     }
     if (method === 'POST' && x[2] === '/cancel') {
-      for (const j of pl.jobs) if (ACTIVE.includes(j.status)) j.status = 'canceled'
-      pl.status = 'canceled'
+      cancel(pl)
       return { body: glPipeline(p, pl) }
     }
   }
   if ((x = r.match(/^\/jobs\/(\d+)(\/\w+)?$/))) {
-    const hit = allJobs(p).find((y) => y.j.id === Number(x![1]))
-    if (!hit) return { status: 404, body: { message: '404 Not found' } }
+    const hit = findJob(p, Number(x[1]))
+    if (!hit) return glMissing
     const { pl, j } = hit
     if (method === 'GET' && !x[2]) return { body: glJob(p, pl, j) }
     if (method === 'GET' && x[2] === '/trace') return { text: j.log }
     if (method === 'POST' && x[2] === '/retry') Object.assign(j, { status: 'pending', log: '' })
     else if (method === 'POST' && x[2] === '/cancel') j.status = 'canceled'
     else if (method === 'POST' && x[2] === '/play') j.status = 'pending'
-    else return { status: 404, body: { message: '404 Not found' } }
+    else return glMissing
     return { status: 201, body: glJob(p, pl, j) }
   }
-  if (!(x = r.match(/^\/merge_requests\/(\d+)(\/.*)?$/))) return { status: 404, body: { message: '404 Not found' } }
-  const m = p.mrs.find((y) => y.number === Number(x![1]))
-  if (!m) return { status: 404, body: { message: '404 Not found' } }
-  const sub = x[2] ?? ''
-  const at = (mm: string, re: RegExp) => (method === mm ? sub.match(re) : null)
+  const m = (x = r.match(/^\/merge_requests\/(\d+)(\/.*)?$/)) && findMr(p, x[1])
+  if (!x || !m) return glMissing
+  const at = route(method, x[2] ?? '')
   if (at('GET', /^$/)) return { body: glMr(p, m) }
   if (at('PUT', /^$/)) {
     if (body.title !== undefined) Object.assign(m, { draft: /^draft:\s*/i.test(body.title), title: body.title.replace(/^draft:\s*/i, '') })
@@ -222,13 +228,13 @@ function gitlab(method: string, rest: string, q: URLSearchParams, body: any, url
     return { body: glMr(p, m) }
   }
   if (at('GET', /^\/approvals$/)) {
-    return { body: { approved: m.approvedBy.length > 0, user_has_approved: m.approvedBy.includes(seed.user), approved_by: m.approvedBy.map((u) => ({ user: { username: u } })) } }
+    return { body: { approved: m.approvedBy.length > 0, user_has_approved: m.approvedBy.includes(user), approved_by: m.approvedBy.map((u) => ({ user: { username: u } })) } }
   }
-  if (at('POST', /^\/approve$/)) m.approvedBy = [...new Set([...m.approvedBy, seed.user])]
-  if (at('POST', /^\/unapprove$/)) m.approvedBy = m.approvedBy.filter((u) => u !== seed.user)
+  if (at('POST', /^\/approve$/)) m.approvedBy = [...new Set([...m.approvedBy, user])]
+  if (at('POST', /^\/unapprove$/)) m.approvedBy = m.approvedBy.filter((u) => u !== user)
   if (at('POST', /^\/(un)?approve$/)) return { status: 201, body: {} }
   if (at('GET', /^\/pipelines$/)) return { body: p.pipelines.filter((pl) => pl.sha === m.headSha).map((pl) => glPipeline(p, pl)) }
-  if (at('GET', /^\/discussions$/)) return paged(threads(m).map((t) => glDiscussion(m, t)), q, url, false)
+  if (at('GET', /^\/discussions$/)) return paged(threads(m).map((t) => glDiscussion(m, t)), url)
   if (at('POST', /^\/notes$/)) return { status: 201, body: { id: note(m, null, body.body).id } }
   if (at('POST', /^\/discussions$/)) {
     const n = note(m, null, body.body, body.position)
@@ -248,7 +254,7 @@ function gitlab(method: string, rest: string, q: URLSearchParams, body: any, url
     if (m.state === 'merged' && body.should_remove_source_branch) delete p.branches[m.sourceBranch]
     return { body: glMr(p, m) }
   }
-  return { status: 404, body: { message: '404 Not found' } }
+  return glMissing
 }
 
 // GitHub Enterprise REST v3 and GraphQL
@@ -290,9 +296,11 @@ function graphql(body: any): Reply {
     for (const p of projects) for (const m of p.mrs) if (`PR_${p.id}_${m.number}` === id) return { p, m }
     return null
   }
+  const noRepo = { body: { data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] } }
+  const noNode = { body: { errors: [{ message: `Could not resolve to a node with the global id of '${v.id}'` }] } }
   if (query.includes('pullRequests(')) {
-    const p = projects.find((x) => x.forge === 'ghe' && x.path === `${v.owner}/${v.name}`)
-    if (!p) return { body: { data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] } }
+    const p = project('ghe', `${v.owner}/${v.name}`)
+    if (!p) return noRepo
     const nodes = p.mrs.filter((m) => !v.states || v.states.includes(m.state.toUpperCase())).reverse().map((m) => {
       const pl = headPipeline(p, m)
       const latest = new Map(m.reviews.filter((r) => ['APPROVED', 'CHANGES_REQUESTED'].includes(r.state)).map((r) => [r.user, r.state]))
@@ -308,9 +316,8 @@ function graphql(body: any): Reply {
   const pr = byNode(v.id ?? '')
   const ok = { body: { data: { result: { clientMutationId: null } } } }
   if (query.includes('reviewThreads')) {
-    const p = projects.find((x) => x.forge === 'ghe' && x.path === `${v.owner}/${v.name}`)
-    const m = p?.mrs.find((x) => x.number === v.number)
-    if (!m) return { body: { data: { repository: null }, errors: [{ message: 'Could not resolve to a Repository' }] } }
+    const m = project('ghe', `${v.owner}/${v.name}`)?.mrs.find((x) => x.number === v.number)
+    if (!m) return noRepo
     const nodes = threads(m).filter((t) => t.notes[0].position).map((t) => {
       const pos = t.notes[0].position as { path: string; line: number; side: string }
       return {
@@ -326,9 +333,9 @@ function graphql(body: any): Reply {
       m.resolved = fn ? [...m.resolved, v.id] : m.resolved.filter((t) => t !== v.id)
       return ok
     }
-    return { body: { errors: [{ message: `Could not resolve to a node with the global id of '${v.id}'` }] } }
+    return noNode
   }
-  if (!pr) return { body: { errors: [{ message: `Could not resolve to a node with the global id of '${v.id}'` }] } }
+  if (!pr) return noNode
   if (query.includes('convertPullRequestToDraft(')) pr.m.draft = true
   else if (query.includes('markPullRequestReadyForReview(')) pr.m.draft = false
   else if (query.includes('enablePullRequestAutoMerge(')) pr.m.autoMerge = true
@@ -336,21 +343,22 @@ function graphql(body: any): Reply {
   return ok
 }
 
-function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: string): Reply {
+function ghe(method: string, rest: string, body: any, url: URL): Reply {
   if (rest === '/graphql' && method === 'POST') return graphql(body)
   rest = rest.replace(/^\/v3/, '')
-  if (rest === '/user') return { body: { login: seed.user } }
+  if (rest === '/user') return { body: { login: user } }
   const rm = rest.match(/^\/repos\/([^/]+\/[^/]+)(\/.*)?$/)
-  const p = rm && projects.find((x) => x.forge === 'ghe' && x.path === rm[1])
-  if (!rm || !p) return { status: 404, body: { message: 'Not Found' } }
+  const p = rm && project('ghe', rm[1])
+  if (!rm || !p) return ghMissing
+  const q = url.searchParams
   const r = rm[2] ?? ''
-  const is = (m: string, re: RegExp) => (method === m ? r.match(re) : null)
+  const is = route(method, r)
   let x: RegExpMatchArray | null
   if (is('GET', /^$/)) return { body: ghRepo(p) }
   if (is('GET', /^\/pulls$/)) {
     const state = q.get('state') ?? 'open'
     const list = p.mrs.filter((m) => (state === 'all' || ghPr(p, m).state === state) && (!q.has('head') || q.get('head') === `${p.path.split('/')[0]}:${m.sourceBranch}`))
-    return paged(list.reverse().map((m) => ghPr(p, m)), q, url, true)
+    return paged(list.reverse().map((m) => ghPr(p, m)), url)
   }
   if (is('POST', /^\/pulls$/)) {
     const head = String(body.head).split(':').pop()!
@@ -358,7 +366,7 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
   }
   if ((x = is('GET', /^\/git\/ref\/heads\/(.+)$/))) {
     const sha = p.branches[decodeURIComponent(x[1])]
-    return sha ? { body: { ref: `refs/heads/${x[1]}`, object: { type: 'commit', sha } } } : { status: 404, body: { message: 'Not Found' } }
+    return sha ? { body: { ref: `refs/heads/${x[1]}`, object: { type: 'commit', sha } } } : ghMissing
   }
   if ((x = is('DELETE', /^\/git\/refs\/heads\/(.+)$/))) {
     const b = decodeURIComponent(x[1])
@@ -369,7 +377,7 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
   if (is('GET', /^\/actions\/runs$/) || is('GET', /^\/actions\/workflows\/[^/]+\/runs$/)) {
     const list = p.pipelines.filter((pl) => (!q.has('branch') || pl.ref === q.get('branch')) && (!q.has('head_sha') || pl.sha === q.get('head_sha')) &&
       (!q.has('event') || q.get('event') === (pl.source ?? 'push')))
-    return paged(list.map((pl) => ghRun(p, pl)), q, url, true, 'workflow_runs')
+    return paged(list.map((pl) => ghRun(p, pl)), url, 'workflow_runs')
   }
   if (is('GET', /^\/actions\/workflows$/)) return { body: { total_count: 1, workflows: [{ id: 1, name: 'CI', path: '.github/workflows/ci.yml', state: 'active' }] } }
   if (is('POST', /^\/actions\/workflows\/[^/]+\/dispatches$/)) {
@@ -378,8 +386,8 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
   }
   if ((x = r.match(/^\/actions\/runs\/(\d+)(\/[\w-]+)?$/))) {
     const pl = p.pipelines.find((y) => y.id === Number(x![1]))
-    if (!pl) return { status: 404, body: { message: 'Not Found' } }
-    if (method === 'GET' && x[2] === '/jobs') return paged(pl.jobs.map((j) => ghJob(p, pl, j)), q, url, true, 'jobs')
+    if (!pl) return ghMissing
+    if (method === 'GET' && x[2] === '/jobs') return paged(pl.jobs.map((j) => ghJob(p, pl, j)), url, 'jobs')
     if (method === 'GET' && !x[2]) return { body: ghRun(p, pl) }
     const rerun = (pick: (j: SeedJob) => boolean) => {
       for (const j of pl.jobs) if (pick(j)) Object.assign(j, { status: 'pending', log: '' })
@@ -389,18 +397,17 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
     if (method === 'POST' && x[2] === '/rerun') return rerun(() => true)
     if (method === 'POST' && x[2] === '/rerun-failed-jobs') return rerun((j) => j.status === 'failed')
     if (method === 'POST' && x[2] === '/cancel') {
-      for (const j of pl.jobs) if (ACTIVE.includes(j.status)) j.status = 'canceled'
-      pl.status = 'canceled'
+      cancel(pl)
       return { status: 202, body: {} }
     }
   }
   if ((x = r.match(/^\/actions\/jobs\/(\d+)(\/\w+)?$/))) {
-    const hit = allJobs(p).find((y) => y.j.id === Number(x![1]))
-    if (!hit) return { status: 404, body: { message: 'Not Found' } }
+    const hit = findJob(p, Number(x[1]))
+    if (!hit) return ghMissing
     const { pl, j } = hit
     if (method === 'GET' && !x[2]) return { body: ghJob(p, pl, j) }
     if (method === 'GET' && x[2] === '/logs') {
-      if (ACTIVE.includes(j.status)) return { status: 404, body: { message: 'Not Found' } }
+      if (ACTIVE.includes(j.status)) return ghMissing
       return { status: 302, headers: { Location: `${origin()}/__blob/${p.id}/${j.id}?sig=fake` } }
     }
     if (method === 'POST' && x[2] === '/rerun') {
@@ -408,29 +415,25 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
       return { status: 201, body: {} }
     }
   }
-  if ((x = is('GET', /^\/issues\/(\d+)\/comments$/))) {
-    const m = p.mrs.find((y) => y.number === Number(x![1]))
-    return m ? paged(m.notes.filter((n) => !n.position && n.thread === String(n.id)).map(ghComment), q, url, true) : { status: 404, body: { message: 'Not Found' } }
+  if ((x = r.match(/^\/issues\/(\d+)\/comments$/))) {
+    const m = findMr(p, x[1])
+    if (!m) return ghMissing
+    if (method === 'GET') return paged(m.notes.filter((n) => !n.position && n.thread === String(n.id)).map(ghComment), url)
+    if (method === 'POST') return { status: 201, body: ghComment(note(m, null, body.body)) }
   }
-  if ((x = is('POST', /^\/issues\/(\d+)\/comments$/))) {
-    const m = p.mrs.find((y) => y.number === Number(x![1]))
-    return m ? { status: 201, body: ghComment(note(m, null, body.body)) } : { status: 404, body: { message: 'Not Found' } }
-  }
-  if (!(x = r.match(/^\/pulls\/(\d+)(\/.*)?$/))) return { status: 404, body: { message: 'Not Found' } }
-  const m = p.mrs.find((y) => y.number === Number(x![1]))
-  if (!m) return { status: 404, body: { message: 'Not Found' } }
-  const sub = x[2] ?? ''
-  const at = (mm: string, re: RegExp) => (method === mm ? sub.match(re) : null)
+  const m = (x = r.match(/^\/pulls\/(\d+)(\/.*)?$/)) && findMr(p, x[1])
+  if (!x || !m) return ghMissing
+  const at = route(method, x[2] ?? '')
   if (at('GET', /^$/)) return { body: ghPr(p, m) }
   if (at('PATCH', /^$/)) {
     if (body.state) m.state = body.state === 'closed' ? 'closed' : 'open'
     return { body: ghPr(p, m) }
   }
-  if (at('GET', /^\/reviews$/)) return paged(m.reviews.map(ghReview), q, url, true)
+  if (at('GET', /^\/reviews$/)) return paged(m.reviews.map(ghReview), url)
   if (at('POST', /^\/reviews$/)) {
     const state = { APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED', COMMENT: 'COMMENTED' }[body.event as string] ?? 'PENDING'
     if (state === 'CHANGES_REQUESTED' && !body.body) return { status: 422, body: { message: 'Unprocessable Entity', errors: ['Review body is required'] } }
-    const review = { id: ++next, state, body: body.body ?? '', user: seed.user }
+    const review = { id: ++next, state, body: body.body ?? '', user }
     m.reviews.push(review)
     return { body: ghReview(review) }
   }
@@ -442,7 +445,7 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
   }
   if ((x = at('POST', /^\/comments\/(\d+)\/replies$/))) {
     const first = m.notes.find((n) => n.id === Number(x![1]) && n.position)
-    if (!first) return { status: 404, body: { message: 'Not Found' } }
+    if (!first) return ghMissing
     return { status: 201, body: { id: note(m, first.thread, body.body).id } }
   }
   if (at('PUT', /^\/merge$/)) {
@@ -451,7 +454,7 @@ function ghe(method: string, rest: string, q: URLSearchParams, body: any, url: s
     m.state = 'merged'
     return { body: { sha: m.headSha, merged: true, message: 'Pull Request successfully merged' } }
   }
-  return { status: 404, body: { message: 'Not Found' } }
+  return ghMissing
 }
 
 createServer(async (req, res) => {
@@ -463,22 +466,23 @@ createServer(async (req, res) => {
   }
   const url = new URL(req.url!, origin())
   const { pathname } = url
+  const path = decodeURIComponent(pathname)
   const method = req.method ?? 'GET'
-  if (pathname === '/health') return send({ body: { projects: seed.projects.length } })
+  const body = raw ? JSON.parse(raw) : {}
+  if (pathname === '/health') return send({ body: { projects: projects.length } })
   if (pathname === '/__writes') return send({ body: writes })
   if (pathname === '/__requests') return send({ body: requests })
   if (method === 'POST' && pathname === '/__delay') {
-    delay = JSON.parse(raw).ms
+    delay = body.ms
     return send({ body: null })
   }
   if (method === 'POST' && pathname === '/reset') {
-    reset(JSON.parse(raw))
+    reset(body)
     return send({ body: null })
   }
-  const body = raw ? JSON.parse(raw) : {}
   if (method === 'POST' && pathname === '/__append') {
-    const p = projects.find((x) => x.forge === body.forge && x.path === body.path)
-    const j = p && allJobs(p).find((y) => y.j.id === body.job)?.j
+    const p = project(body.forge, body.path)
+    const j = p && findJob(p, body.job)?.j
     if (!j) return send({ status: 404, body: { message: 'no such job' } })
     j.log += body.text ?? ''
     if (body.status) j.status = body.status
@@ -488,22 +492,22 @@ createServer(async (req, res) => {
   if (blob) {
     if (req.headers.authorization) return send({ status: 400, body: { message: 'the signed URL must not get the token' } })
     const p = projects.find((x) => x.id === Number(blob[1]))
-    const j = p && allJobs(p).find((y) => y.j.id === Number(blob[2]))?.j
-    return send(j ? { text: j.log } : { status: 404, body: { message: 'Not Found' } })
+    const j = p && findJob(p, Number(blob[2]))?.j
+    return send(j ? { text: j.log } : ghMissing)
   }
   const gl = pathname.match(/^\/gitlab\/api\/v4(\/.*)$/)
   const glq = pathname === '/gitlab/api/graphql'
   const gh = pathname.match(/^\/ghe\/api(\/.*)$/)
   if (gl || glq || gh) {
-    requests.push({ method, path: decodeURIComponent(pathname) })
+    requests.push({ method, path })
     await new Promise((r) => setTimeout(r, delay))
   }
   if ((gl || glq) && req.headers['private-token'] !== 'gitlab-token') return send({ status: 401, body: { message: '401 Unauthorized' } })
   if (gh && req.headers.authorization !== 'Bearer ghe-token') return send({ status: 401, body: { message: 'Bad credentials' } })
   const read = typeof body.query === 'string' && body.query.startsWith('query')
-  if (method !== 'GET' && (gl || gh) && !read) writes.push({ method, path: decodeURIComponent(pathname), body: raw ? body : null })
+  if (method !== 'GET' && (gl || gh) && !read) writes.push({ method, path, body: raw ? body : null })
   if (glq && method === 'POST') return send(glGraphql(body))
-  if (gl) return send(gitlab(method, gl[1], url.searchParams, body, req.url!))
-  if (gh) return send(ghe(method, gh[1], url.searchParams, body, req.url!))
+  if (gl) return send(gitlab(method, gl[1], body, url))
+  if (gh) return send(ghe(method, gh[1], body, url))
   send({ status: 404, body: { message: '404 Not Found' } })
 }).listen(Number(process.argv[2]), '127.0.0.1')

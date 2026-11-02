@@ -17,7 +17,6 @@ test('fetch all and pull all report per repo; the diverged repo is left as it wa
   await expect(page.locator('.notice')).toContainText('Pull all: 1 not updated')
   await expect(repoRow(page, 'group/api').locator('.line').nth(1)).toHaveText(/^\s*main\s*Fast-forwarded/)
 
-  // Successes fade; the failure stays.
   await expect(outcome('group/api')).toHaveCount(0, { timeout: 10_000 })
   await expect(outcome('group/web')).toHaveText('Diverged (↑1 ↓1), not updated')
 

@@ -1,11 +1,8 @@
 import type { Page } from '@playwright/test'
-import { BRIDGE_PORT, FORGE_PORT } from '../playwright.config'
-import { expect, openForge, repoRow, test } from './fixture'
+import { expect, forgeUrl, invoke, openForge, post, repoRow, test, writes } from './fixture'
 
-const forge = `http://127.0.0.1:${FORGE_PORT}`
-const writes = async () => (await (await fetch(`${forge}/__writes`)).json()) as { method: string; path: string; body: unknown }[]
-const append = (body: object) => fetch(`${forge}/__append`, { method: 'POST', body: JSON.stringify(body) })
-const wrote = (method: string, path: string, body?: object) =>
+const append = (body: object) => post(`${forgeUrl}/__append`, body)
+const wrote = (method: string, path: string, body?: Record<string, unknown>) =>
   expect.poll(writes).toContainEqual(expect.objectContaining({ method, path, ...(body && { body: expect.objectContaining(body) }) }))
 
 const panel = (page: Page) => page.locator('.pipes')
@@ -117,9 +114,7 @@ test('GitHub: a run’s jobs, a finished job’s log, retry, steps while running
 
 test('without an account the tab says so and opens Settings, and the badge stays hidden', async ({ page, fx }) => {
   await openForge(page, fx)
-  const invoke = async (cmd: string, args: object) =>
-    JSON.parse(await (await fetch(`http://127.0.0.1:${BRIDGE_PORT}/invoke`, { method: 'POST', body: JSON.stringify({ cmd, args }) })).text()).ok
-  const accounts: { id: string; label: string }[] = await invoke('list_accounts', {})
+  const accounts: { id: string; label: string }[] = await invoke('list_accounts')
   await invoke('remove_account', { id: accounts.find((a) => a.label === 'Fake GitLab')!.id })
 
   await repoRow(page, 'gitlab').click()

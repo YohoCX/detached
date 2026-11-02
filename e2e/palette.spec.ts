@@ -9,7 +9,6 @@ test('go to file: filters, moves by keyboard under a resting mouse, opens, ignor
   const items = pal.locator('.item')
   await expect(items).toHaveCount(40)
 
-  // The mouse stays over the list while the keyboard scrolls it.
   const list = (await pal.locator('.list').boundingBox())!
   await page.mouse.move(list.x + list.width / 2, list.y + list.height / 2)
   const selected = () => items.evaluateAll((els) => els.findIndex((e) => e.classList.contains('selected')))

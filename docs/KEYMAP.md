@@ -1,7 +1,9 @@
 # Default keymap
 
-JetBrains macOS keymap. Action ids are what `keymap.json` overrides. M3 rows keep their chords free
-until their actions exist.
+JetBrains macOS keymap. Override chords by action id in
+`~/Library/Application Support/dev.wdevs.detached/keymap.json`, e.g. `{"file.goto": "Cmd+Shift+N"}`;
+an override that does not parse unbinds the action. M3 rows keep their chords free until their
+actions exist.
 
 | Action id | Action | Keys | Milestone |
 | --- | --- | --- | --- |
@@ -29,6 +31,4 @@ until their actions exist.
 | `mr.create` | Create a merge request from the current branch | | M2 |
 | `pipeline.run` | Run a pipeline for a branch | | M2 |
 
-Monaco bindings removed or re-pointed so these win: Cmd+K chords, Cmd+D (add selection to next
-match), Cmd+L (expand line selection), Cmd+E, Cmd+[ / Cmd+] (outdent/indent), F7 (accessible diff
-viewer), Cmd+Shift+O (go to symbol), Cmd+Shift+F, Ctrl+V.
+Bound chords are caught in the capture phase, so they win over Monaco and text inputs.

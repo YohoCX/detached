@@ -1,22 +1,18 @@
 import type { Locator, Page } from '@playwright/test'
 import { join } from 'node:path'
-import { BRIDGE_PORT, FORGE_PORT } from '../playwright.config'
-import { expect, openForge, repoRow, test } from './fixture'
+import { expect, forgeUrl, openForge, post, repoRow, requests, saveAccount, sidebar, test, writes } from './fixture'
 
-const forge = `http://127.0.0.1:${FORGE_PORT}`
-type Write = { method: string; path: string; body: Record<string, unknown> | null }
-const writes = async (): Promise<Write[]> => (await fetch(`${forge}/__writes`)).json()
 const last = async (method: string, path: string) => (await writes()).filter((w) => w.method === method && w.path === path).pop()
-const requests = async (): Promise<{ method: string; path: string }[]> => (await fetch(`${forge}/__requests`)).json()
 
 const mrPage = (page: Page) => page.locator('main .page')
 const tab = (page: Page, name: string) => mrPage(page).locator('header .seg').getByRole('button', { name })
 const side = (page: Page, which: 'original' | 'modified') => mrPage(page).locator(`.editor.${which}`)
 const lineNumber = (ed: Locator, n: number) => ed.locator('.line-numbers').getByText(String(n), { exact: true })
+const mrTool = (page: Page) => page.locator('nav.strip').getByTitle('Merge Requests')
 
 async function openMr(page: Page, repo: string) {
   await repoRow(page, repo).click()
-  await page.locator('nav.strip').getByTitle('Merge Requests').click()
+  await mrTool(page).click()
   const row = page.locator('aside.tool .mr')
   await expect(row).toHaveCount(1)
   await expect(row).toContainText('Add feature')
@@ -30,15 +26,16 @@ async function openFile(page: Page, name: string) {
   await expect(lineNumber(side(page, 'modified'), 1)).toBeVisible()
 }
 
-/** Hovers a line's number; whether a `+` shows there. */
-async function plusAt(ed: Locator, n: number) {
+/** Hovers a line's number and checks whether a `+` shows there. */
+async function plusAt(ed: Locator, n: number, shown: boolean) {
   await lineNumber(ed, n).hover()
+  if (shown) return expect(ed.locator('.mr-plus')).toBeVisible()
   await ed.page().waitForTimeout(100)
-  return ed.locator('.mr-plus').isVisible()
+  await expect(ed.locator('.mr-plus')).toBeHidden()
 }
 
 async function lineComment(page: Page, ed: Locator, n: number, text: string) {
-  expect(await plusAt(ed, n)).toBe(true)
+  await plusAt(ed, n, true)
   await ed.locator('.mr-plus').click()
   const box = mrPage(page).locator('.view-zones textarea')
   await box.fill(text)
@@ -75,7 +72,7 @@ test('GitLab: list, page, sanitized description, line comments, links, approve, 
   await activity.getByRole('link', { name: 'the docs' }).click()
   expect((await last('POST', `${api}/notes`))?.body).toEqual({ body: 'See [the docs](docs/a.md) and [this](javascript:alert(1))' })
   await activity.getByText('this', { exact: true }).click()
-  expect(await page.evaluate(() => window.__E2E__.opened)).toEqual([`${forge}/gitlab/group/app/docs/a.md`])
+  expect(await page.evaluate(() => window.__E2E__.opened)).toEqual([`${forgeUrl}/gitlab/group/app/docs/a.md`])
 
   await mrPage(page).getByRole('button', { name: 'Approve' }).click()
   await expect(mrPage(page).getByRole('button', { name: 'Unapprove' })).toBeVisible()
@@ -99,14 +96,14 @@ test('GitHub: + only inside hunks, a renamed file, request changes needs text, a
   await tab(page, 'Changes').click()
   await openFile(page, 'README.md')
   const [left, right] = [side(page, 'original'), side(page, 'modified')]
-  expect(await plusAt(right, 20)).toBe(false)
-  expect(await plusAt(right, 6)).toBe(true)
-  expect(await plusAt(right, 7)).toBe(false)
+  await plusAt(right, 20, false)
+  await plusAt(right, 6, true)
+  await plusAt(right, 7, false)
 
   await openFile(page, 'new.ts')
-  expect(await plusAt(right, 2)).toBe(false)
-  expect(await plusAt(left, 2)).toBe(false)
-  expect(await plusAt(left, 8)).toBe(true)
+  await plusAt(right, 2, false)
+  await plusAt(left, 2, false)
+  await plusAt(left, 8, true)
   await lineComment(page, right, 9, 'In the hunk')
   expect((await last('POST', `${api}/comments`))?.body).toEqual({ body: 'In the hunk', commit_id: headSha, path: 'src/new.ts', line: 9, side: 'RIGHT' })
 
@@ -146,7 +143,7 @@ test('creates an MR from the current branch, showing the target project', async 
   fx.git(repo, 'update-ref', 'refs/remotes/origin/topic', 'HEAD')
   fx.git(repo, 'branch', '-q', '--set-upstream-to', 'origin/topic')
   await repoRow(page, 'gitlab').click()
-  await page.locator('aside.repos').getByTitle('Refresh').click()
+  await sidebar(page).getByTitle('Refresh').click()
   await page.getByTitle('Create Merge Request').click()
   const form = page.getByRole('dialog', { name: 'Create Merge Request' })
   await expect(form).toContainText('group/app:topic into group/app')
@@ -162,10 +159,9 @@ test('creates an MR from the current branch, showing the target project', async 
 
 test('an ambiguous host says so and Settings picks the account', async ({ page, fx }) => {
   await openForge(page, fx)
-  const input = { id: null, provider: 'gitlabSelfHosted', baseUrl: `${forge}/gitlab`, username: 'other', label: 'Second GitLab', token: 'gitlab-token' }
-  await fetch(`http://127.0.0.1:${BRIDGE_PORT}/invoke`, { method: 'POST', body: JSON.stringify({ cmd: 'save_account', args: { input } }) })
+  await saveAccount('gitlabSelfHosted', 'gitlab', 'other', 'Second GitLab')
   await repoRow(page, 'gitlab').click()
-  await page.locator('nav.strip').getByTitle('Merge Requests').click()
+  await mrTool(page).click()
   const list = page.locator('aside.tool')
   await expect(list).toContainText('Several accounts fit 127.0.0.1')
   await list.getByRole('button', { name: 'Open Settings' }).click()
@@ -182,7 +178,7 @@ test('the MR list is one request, and a repo returned to shows its cached list a
   await repoRow(page, 'gitlab').click()
   await expect(page.locator('header .chip')).toContainText('!1')
   const before = (await requests()).length
-  await page.locator('nav.strip').getByTitle('Merge Requests').click()
+  await mrTool(page).click()
   const rows = page.locator('aside.tool .mr')
   await expect(rows).toContainText('Add feature')
   const lists = (await requests()).slice(before).filter((r) => /merge_requests|graphql/.test(r.path))
@@ -190,7 +186,7 @@ test('the MR list is one request, and a repo returned to shows its cached list a
 
   await repoRow(page, 'github').click()
   await expect(rows).toContainText('#1')
-  await fetch(`${forge}/__delay`, { method: 'POST', body: JSON.stringify({ ms: 3000 }) })
+  await post(`${forgeUrl}/__delay`, { ms: 3000 })
   const back = (await requests()).length
   await repoRow(page, 'gitlab').click()
   await expect(rows).toContainText('!1', { timeout: 1000 })
