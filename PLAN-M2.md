@@ -330,5 +330,5 @@ comments only for a non-obvious reason.
 
 ## Open questions
 
-- a self-hosted GitLab's GitLab version decides which merge and approval endpoints exist; check it at
+- The self-hosted GitLab's version decides which merge and approval endpoints exist; check it at
   the start of step 2.
