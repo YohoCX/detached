@@ -17,11 +17,27 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn new(
+        config_dir: PathBuf,
+        settings: Settings,
+        env: Env,
+        tokens: Arc<dyn TokenStore>,
+    ) -> AppState {
+        AppState {
+            config_dir,
+            settings: Mutex::new(settings),
+            env: RwLock::new(env),
+            ops: Default::default(),
+            locks: Default::default(),
+            tokens,
+        }
+    }
+
     pub fn env(&self) -> Env {
         self.env.read().unwrap().clone()
     }
 
-    /// Runs `f` as the cancellable operation `id`.
+    /// Runs `f` as the operation `id`, which `ops.cancel(id)` cancels meanwhile.
     pub fn op<T>(&self, id: u64, f: impl FnOnce(&Cancel) -> T) -> T {
         let cancel = self.ops.start(id);
         let r = f(&cancel);
@@ -30,7 +46,6 @@ impl AppState {
     }
 }
 
-/// Cancellation flag for one running operation.
 pub type Cancel = Arc<AtomicBool>;
 
 /// Running cancellable operations by the UI's op id.

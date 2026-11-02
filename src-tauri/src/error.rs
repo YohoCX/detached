@@ -6,7 +6,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
-    /// git exited non-zero; stderr as git printed it.
     #[error("{stderr}")]
     Git { code: i32, stderr: String },
     #[error("cancelled")]

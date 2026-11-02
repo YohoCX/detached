@@ -9,7 +9,7 @@ pub mod settings;
 pub mod state;
 pub mod types;
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 
 use tauri::{Manager, Runtime, Url, Webview};
 
@@ -32,21 +32,15 @@ pub fn run() {
         )
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            // Settings written under the app's former identifier move over once.
+            // Settings from the app's former identifier move over once.
             let old = config_dir.with_file_name("dev.wdevs.workbench");
-            if !config_dir.exists() && old.exists() {
-                let _ = std::fs::rename(&old, &config_dir);
+            if !config_dir.exists() {
+                let _ = std::fs::rename(old, &config_dir);
             }
             let settings = Settings::load(&config_dir);
             let (env, _) = Env::detect(settings.git_path.as_deref());
-            app.manage(AppState {
-                config_dir,
-                settings: Mutex::new(settings),
-                env: RwLock::new(env),
-                ops: Default::default(),
-                locks: Default::default(),
-                tokens: Arc::new(KeychainStore::default()),
-            });
+            let tokens = Arc::new(KeychainStore::default());
+            app.manage(AppState::new(config_dir, settings, env, tokens));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

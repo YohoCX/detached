@@ -4,7 +4,7 @@ use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -102,14 +102,8 @@ fn hook_checkout(env: &Env, dir: &Path) -> Result<CheckoutResult> {
     );
     std::fs::write(&hook, script)?;
     std::fs::set_permissions(&hook, Permissions::from_mode(0o755))?;
-    let state = AppState {
-        config_dir: dir.join("config"),
-        settings: Mutex::default(),
-        env: RwLock::new(env.clone()),
-        ops: Default::default(),
-        locks: Default::default(),
-        tokens: Arc::new(MemoryStore::default()),
-    };
+    let tokens = Arc::new(MemoryStore::default());
+    let state = AppState::new(dir.join("config"), Default::default(), env.clone(), tokens);
     let target = CheckoutTarget::Local {
         name: "other".into(),
     };

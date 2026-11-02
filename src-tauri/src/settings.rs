@@ -54,11 +54,14 @@ impl AppState {
         self.settings.lock().unwrap().clone()
     }
 
+    /// Memory keeps the old settings when the save fails.
     fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
         let mut s = self.settings.lock().unwrap();
-        f(&mut s);
-        s.save(&self.config_dir)?;
-        Ok(s.clone())
+        let mut next = s.clone();
+        f(&mut next);
+        next.save(&self.config_dir)?;
+        *s = next.clone();
+        Ok(next)
     }
 
     pub fn list_repos(&self) -> Vec<RepoInfo> {
@@ -95,14 +98,7 @@ impl AppState {
     }
 
     pub fn set_repo_account(&self, repo: String, account_id: Option<String>) -> Result<Settings> {
-        self.update(|s| match account_id {
-            Some(id) => {
-                s.repo_accounts.insert(repo, id);
-            }
-            None => {
-                s.repo_accounts.remove(&repo);
-            }
-        })
+        self.update(|s| put(&mut s.repo_accounts, repo, account_id))
     }
 
     pub fn set_forge_account(
@@ -113,14 +109,7 @@ impl AppState {
     ) -> Result<Settings> {
         self.update(|s| {
             let hosts = s.forge_accounts.entry(repo.clone()).or_default();
-            match account_id {
-                Some(id) => {
-                    hosts.insert(host, id);
-                }
-                None => {
-                    hosts.remove(&host);
-                }
-            }
+            put(hosts, host, account_id);
             if hosts.is_empty() {
                 s.forge_accounts.remove(&repo);
             }
@@ -128,14 +117,7 @@ impl AppState {
     }
 
     pub fn set_mr_remote(&self, repo: String, remote: Option<String>) -> Result<Settings> {
-        self.update(|s| match remote {
-            Some(r) => {
-                s.mr_remotes.insert(repo, r);
-            }
-            None => {
-                s.mr_remotes.remove(&repo);
-            }
-        })
+        self.update(|s| put(&mut s.mr_remotes, repo, remote))
     }
 
     pub fn set_git_path(&self, path: Option<String>) -> Result<EnvInfo> {
@@ -153,6 +135,13 @@ impl AppState {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
     }
+}
+
+fn put(map: &mut BTreeMap<String, String>, key: String, value: Option<String>) {
+    match value {
+        Some(v) => map.insert(key, v),
+        None => map.remove(&key),
+    };
 }
 
 #[tauri::command(async)]
@@ -225,7 +214,7 @@ pub fn keymap_overrides(state: State<'_, AppState>) -> BTreeMap<String, String> 
 
 #[tauri::command(async)]
 pub fn open_in_finder(path: String) -> Result<()> {
-    std::process::Command::new("open").arg(&path).spawn()?;
+    std::process::Command::new("open").arg(&path).status()?;
     Ok(())
 }
 
@@ -261,5 +250,21 @@ mod tests {
         Settings::default().save(dir.path()).unwrap();
         let kept = std::fs::read_to_string(dir.path().join(format!("{FILE}.bad"))).unwrap();
         assert_eq!(kept, bad);
+    }
+
+    #[test]
+    fn failed_save_leaves_memory_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("file");
+        std::fs::write(&not_a_dir, "").unwrap();
+        let env = Env {
+            path: String::new(),
+            git: "git".into(),
+        };
+        let tokens = std::sync::Arc::new(crate::accounts::store::MemoryStore::default());
+        let state = AppState::new(not_a_dir, Settings::default(), env, tokens);
+        let saved = state.set_mr_remote("/r".into(), Some("origin".into()));
+        assert!(saved.is_err());
+        assert_eq!(state.get_settings(), Settings::default());
     }
 }

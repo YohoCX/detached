@@ -1,5 +1,3 @@
-// Signatures are the contract with api.ts.
-
 use tauri::State;
 use tauri::ipc::Channel;
 

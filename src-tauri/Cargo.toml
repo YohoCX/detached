@@ -10,7 +10,7 @@ default-run = "detached"
 name = "detached_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# The HTTP bridge the Playwright suite in e2e/ drives; never in normal or release builds.
+# HTTP bridge for the Playwright suite in e2e/.
 [[bin]]
 name = "e2e-bridge"
 required-features = ["e2e"]
@@ -19,10 +19,10 @@ required-features = ["e2e"]
 e2e = []
 
 [build-dependencies]
-tauri-build = { version = "2.7.4", features = [] }
+tauri-build = "2.7.4"
 
 [dependencies]
-tauri = { version = "2.12.5", features = [] }
+tauri = "2.12.5"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

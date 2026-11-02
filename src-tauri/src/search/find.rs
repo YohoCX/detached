@@ -17,7 +17,7 @@ use crate::git::runner::{Kind, Opts, run};
 use crate::state::Cancel;
 use crate::types::{FindEvent, FindQuery};
 
-pub const CAP: usize = 10_000;
+const CAP: usize = 10_000;
 /// Longer lines (minified code) are cut, so one match can't flood the UI.
 const MAX_LINE: usize = 1000;
 
@@ -172,17 +172,15 @@ fn worktree(find: &Find, repo: &str, glob: Option<&str>) -> Result<()> {
 }
 
 fn at_rev(env: &Env, find: &Find, repo: &str, rev: &str, q: &FindQuery) -> Result<()> {
-    let mut args = vec!["grep", "-n", "-z", "--full-name", "-I", "--no-color"];
-    args.extend(
-        [
-            (!q.case_sensitive, "-i"),
-            (q.whole_word, "-w"),
-            // PCRE, close to the Rust regex syntax the working-tree search uses.
-            (true, if q.regex { "-P" } else { "-F" }),
-        ]
-        .into_iter()
-        .filter_map(|(on, flag)| on.then_some(flag)),
-    );
+    // PCRE, close to the Rust regex syntax the working-tree search uses.
+    let kind = if q.regex { "-P" } else { "-F" };
+    let mut args = vec!["grep", "-n", "-z", "--full-name", "-I", "--no-color", kind];
+    if !q.case_sensitive {
+        args.push("-i");
+    }
+    if q.whole_word {
+        args.push("-w");
+    }
     args.extend(["-e", &q.text, arg(rev)?, "--"]);
     let specs: Vec<String> = globs(q.glob.as_deref())
         .map(|g| {
@@ -212,8 +210,9 @@ fn at_rev(env: &Env, find: &Find, repo: &str, rev: &str, q: &FindQuery) -> Resul
         ..Default::default()
     };
     let o = run(env, Path::new(repo), &args, Kind::Read, opts)?;
+    // 1 is no match.
     if o.code > 1 {
-        return o.ok().map(drop);
+        o.ok()?;
     }
     Ok(())
 }

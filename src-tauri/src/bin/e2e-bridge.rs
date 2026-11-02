@@ -5,7 +5,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 use detached_lib::accounts::{self, store::MemoryStore};
@@ -94,15 +94,11 @@ fn reset(root: &Path) -> Result<Value, String> {
     )
     .and_then(|_| std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)))
     .map_err(|e| e.to_string())?;
-    let config_dir: PathBuf = root.join("config");
-    *STATE.write().unwrap() = Some(Arc::new(AppState {
-        settings: Mutex::new(Settings::load(&config_dir)),
-        config_dir,
-        env: RwLock::new(Env { path, git }),
-        ops: Default::default(),
-        locks: Default::default(),
-        tokens: Arc::new(MemoryStore::default()),
-    }));
+    let config_dir = root.join("config");
+    let settings = Settings::load(&config_dir);
+    let tokens = Arc::new(MemoryStore::default());
+    let state = AppState::new(config_dir, settings, Env { path, git }, tokens);
+    *STATE.write().unwrap() = Some(Arc::new(state));
     Ok(Value::Null)
 }
 
@@ -125,8 +121,7 @@ fn invoke(
 ) -> Result<Value, String> {
     let st = |k| arg::<String>(a, k);
     let opt = |k| arg::<Option<String>>(a, k);
-    // Required where the real command takes them, as Tauri rejects a missing key; an empty repo would
-    // also make `git -C ""` run in the bridge's cwd, the project checkout.
+    // Required as Tauri requires them; an empty repo would run git in the bridge's cwd, the checkout.
     let takes = |names: &[&str]| names.contains(&cmd);
     let no_repo = [
         "get_settings",
