@@ -1,6 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 
 use tempfile::TempDir;
 
@@ -40,14 +40,12 @@ impl Sandbox {
         )
         .unwrap();
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let state = AppState {
-            config_dir: dir.path().join("config"),
-            settings: Mutex::default(),
-            env: RwLock::new(Env { path, git }),
-            ops: Default::default(),
-            locks: Default::default(),
-            tokens: Arc::new(MemoryStore::default()),
-        };
+        let state = AppState::new(
+            dir.path().join("config"),
+            Default::default(),
+            Env { path, git },
+            Arc::new(MemoryStore::default()),
+        );
         Sandbox { dir, state }
     }
 
