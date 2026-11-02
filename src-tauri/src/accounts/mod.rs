@@ -243,7 +243,6 @@ pub fn fits(account: &Account, remote: &RemoteUrl) -> bool {
             .is_some_and(|r| r.is_empty() || r.starts_with('/'))
 }
 
-/// `(host[:port], path)` of an https URL; `None` for ssh, scp-like and other schemes.
 fn https(url: &str) -> Option<(String, String)> {
     parse_remote(url)
         .filter(|r| !r.ssh)

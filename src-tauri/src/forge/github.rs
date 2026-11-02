@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde_json::{Value, json};
 
 use super::http::{Api, now};
@@ -356,6 +358,10 @@ impl Forge for GitHub {
         let pr = format!("{}/pulls/{n}", repo(p));
         let post = |path: String, body: Value| self.0.send("POST", &path, Some(body)).map(drop);
         let node = || -> Result<Value> { Ok(self.0.get(&pr)?["node_id"].clone()) };
+        let patch = |state: &str| {
+            let body = json!({"state": state});
+            self.0.send("PATCH", &pr, Some(body)).map(drop)
+        };
         match a {
             MrAction::Comment { body } => post(
                 format!("{}/issues/{n}/comments", repo(p)),
@@ -384,10 +390,9 @@ impl Forge for GitHub {
                 thread_id,
                 resolved,
             } => {
-                let m = if *resolved {
-                    "resolveReviewThread"
-                } else {
-                    "unresolveReviewThread"
+                let m = match resolved {
+                    true => "resolveReviewThread",
+                    false => "unresolveReviewThread",
                 };
                 self.0
                     .graphql(&mutation(m, "threadId"), json!({"id": thread_id}))
@@ -439,16 +444,8 @@ impl Forge for GitHub {
                     .graphql(&mutation(m, "pullRequestId"), json!({"id": node()?}))
                     .map(drop)
             }
-            MrAction::Close | MrAction::Reopen => {
-                let state = if *a == MrAction::Close {
-                    "closed"
-                } else {
-                    "open"
-                };
-                self.0
-                    .send("PATCH", &pr, Some(json!({"state": state})))
-                    .map(drop)
-            }
+            MrAction::Close => patch("closed"),
+            MrAction::Reopen => patch("open"),
         }
     }
 
@@ -586,7 +583,8 @@ impl Forge for GitHub {
     /// Dispatches the workflow and waits up to 10 s for its run to appear.
     fn run(&self, input: &RunPipeline) -> Result<Pipeline> {
         let p = &input.project;
-        let wf = enc(input.workflow.as_deref().unwrap_or_default());
+        let wf = input.workflow.as_deref();
+        let wf = enc(wf.ok_or_else(|| Error::Other("No workflow chosen".into()))?);
         let runs = format!(
             "{}/actions/workflows/{wf}/runs?event=workflow_dispatch&branch={}&per_page=1",
             repo(p),

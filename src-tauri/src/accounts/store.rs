@@ -13,12 +13,12 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self, id: &str) -> Result<()>;
 }
 
-/// macOS Keychain generic passwords: service `workbench` (the app's former name, kept so saved tokens
-/// still resolve), account = account id. Reads are cached for the session: each Keychain read may
-/// ask the user, and fetch all would otherwise read the same token once per repo.
+/// Keychain generic passwords by account id. Reads are cached for the session: each may prompt the
+/// user, and fetch-all would read the same token once per repo.
 #[derive(Default)]
 pub struct KeychainStore(Mutex<HashMap<String, Option<String>>>);
 
+/// The app's former name, kept so saved tokens still resolve.
 const SERVICE: &str = "workbench";
 const ITEM_NOT_FOUND: i32 = -25300;
 
@@ -55,7 +55,7 @@ impl TokenStore for KeychainStore {
     }
 }
 
-/// For tests.
+/// For tests and e2e.
 #[derive(Default)]
 pub struct MemoryStore(Mutex<HashMap<String, String>>);
 
