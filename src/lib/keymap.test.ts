@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'bun:test'
 import { actions } from './actions'
 import { bindings, defaults, DoubleShift, formatChord, install, matches, parseChord, reserved, setOverrides, type Key, type KeyChord } from './keymap'
 
@@ -69,7 +69,7 @@ describe('bindings', () => {
     expect(matches(b.get('file.goto') as KeyChord, key('KeyP', 'p', { metaKey: true }))).toBe(true)
     expect(b.has('nav.back')).toBe(false)
     expect(b.has('diff.next')).toBe(false)
-    expect(b.get('nav.forward')).toEqual(parseChord('Cmd+]'))
+    expect(b.get('nav.forward')).toEqual(parseChord('Cmd+]')!)
   })
 })
 
@@ -107,20 +107,21 @@ describe('DoubleShift', () => {
 })
 
 describe('install', () => {
+  const realWindow = globalThis.window
   afterEach(() => {
-    vi.unstubAllGlobals()
+    Object.assign(globalThis, { window: realWindow })
     setOverrides({})
   })
 
   function setup() {
     let listener: (e: KeyboardEvent) => void = () => {}
-    vi.stubGlobal('window', {
+    Object.assign(globalThis, { window: {
       addEventListener: (_: string, f: typeof listener, capture: boolean) => {
         expect(capture).toBe(true)
         listener = f
       },
       removeEventListener: () => {},
-    })
+    } })
     const ran: string[] = []
     install((id) => ran.push(id))
     const press = (k: Key, timeStamp = 0) => {

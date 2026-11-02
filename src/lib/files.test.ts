@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import type { FileChange } from './api'
 import { buildTree, clashesWithMonaco, flatten, groupChanges, highlight, languageFor, statusOf } from './files'
 

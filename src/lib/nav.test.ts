@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, mock } from 'bun:test'
 import { back, forward, Nav, nav, open, setOpener, type Location } from './nav'
 
 const loc = (path: string, line: number | null = null, repo = '/r'): Location => ({ repo, ref: null, path, line })
@@ -58,6 +58,6 @@ describe('open hook', () => {
     forward()
     expect(opened.map((l) => l.path)).toEqual(['x', 'y', 'x', 'y'])
     expect(nav.recent[0].path).toBe('y')
-    setOpener(vi.fn())
+    setOpener(mock())
   })
 })

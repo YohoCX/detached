@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import type { ForgeHosts } from './api'
 import { otherLine, render, resolveUrl, setupProblem } from './mr'
 

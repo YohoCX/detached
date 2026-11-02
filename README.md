@@ -22,12 +22,12 @@ is blocked by Gatekeeper; the script avoids that. Account tokens are kept in the
 
 ## Development
 
-Needs Rust 1.90+, Bun 1.3+, Node 24 (Vitest and Playwright run on it) and the Xcode command line tools.
+Needs Rust 1.90+, Bun 1.3+, Node 24 (Playwright runs on it) and the Xcode command line tools.
 
 ```sh
 bun install
 make dev         # run the app
-make check       # fmt, clippy, cargo test, svelte-check, vitest
+make check       # fmt, clippy, cargo test, svelte-check, bun test
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
 make sign-setup  # once: the "Detached Dev" signing identity that make build and make release use
 make build       # Detached.app under src-tauri/target/release/bundle

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { filter, fuzzy, segments } from './fuzzy'
 
 describe('fuzzy', () => {

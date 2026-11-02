@@ -1,5 +1,4 @@
 import { mount } from 'svelte'
-import './app.css'
 import App from './App.svelte'
 
 // Text fields here hold paths, refs and queries, not prose: no macOS autocorrect bubble or capitalization.

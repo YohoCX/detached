@@ -3,7 +3,6 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { build } from 'vite'
 import { BRIDGE_PORT, FORGE_PORT } from '../playwright.config'
 import type { Seed, SeedProject, Write } from './forge'
 
@@ -134,12 +133,7 @@ function makeForge(fx: Fixture): Seed {
 export const test = base.extend<{ fx: Fixture }, { shim: string }>({
   shim: [
     async ({}, use) => {
-      const out = await build({
-        configFile: false,
-        logLevel: 'warn',
-        build: { write: false, minify: false, lib: { entry: 'e2e/shim.ts', formats: ['iife'], name: 'shim' } },
-      })
-      await use((out as { output: { code: string }[] }[])[0].output[0].code)
+      await use(execFileSync('bun', ['build', 'e2e/shim.ts', '--format=iife'], { encoding: 'utf8' }))
     },
     { scope: 'worker' },
   ],

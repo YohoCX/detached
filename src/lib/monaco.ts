@@ -1,8 +1,7 @@
 import * as monaco from 'monaco-editor'
-import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 
 // Read-only viewer: the editor worker is enough; language workers would only add diagnostics.
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
+self.MonacoEnvironment = { getWorker: () => new Worker('/editor.worker.js', { type: 'module' }) }
 
 // With every feature off the language services never ask for their workers; JSON keeps its tokenizer.
 const { typescript: ts, css, html, json } = monaco

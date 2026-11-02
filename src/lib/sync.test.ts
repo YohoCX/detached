@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import type { PullResult } from './api'
 import { pool, syncAll, type Outcome } from './sync'
 

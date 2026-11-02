@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'bun:test'
 import { actions, register, runAction } from './actions'
 
 describe('actions', () => {
