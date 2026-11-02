@@ -28,7 +28,6 @@ pub enum Kind {
     Write,
 }
 
-/// Credential `-c` arguments and the env vars they read. Built by `accounts::credentials`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cred {
     pub args: Vec<String>,
@@ -39,7 +38,7 @@ pub struct Cred {
 pub struct Opts<'a> {
     pub cred: Option<&'a Cred>,
     pub cancel: Option<&'a Cancel>,
-    /// Called with each stderr line (progress) for network calls.
+    /// Gets each stderr line.
     pub progress: Option<&'a (dyn Fn(&str) + Sync)>,
     /// Stderr silence that cancels a network call; 120 s when None.
     pub silence: Option<Duration>,
@@ -110,6 +109,7 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
     let mut stopped = false;
     let start = Instant::now();
     let mut heard = start;
+    let silence = opts.silence.unwrap_or(SILENCE);
     let mut exit: Option<(i32, Instant)> = None;
     loop {
         match rx.recv_timeout(TICK) {
@@ -157,35 +157,26 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
             continue;
         }
         let cancelled = opts.cancel.is_some_and(|c| c.load(Ordering::SeqCst));
-        let silence = opts.silence.unwrap_or(SILENCE);
-        match kind {
-            Kind::Read if cancelled => {
-                unsafe { libc::killpg(group, libc::SIGKILL) };
-                let _ = child.wait();
-                return Err(Error::Cancelled);
-            }
+        let error = match kind {
+            Kind::Write => continue,
+            _ if cancelled => Error::Cancelled,
             Kind::Read if start.elapsed() > READ_LIMIT => {
-                unsafe { libc::killpg(group, libc::SIGKILL) };
-                let _ = child.wait();
-                return Err(Error::Other(format!(
-                    "git {} timed out after 30 s",
-                    args.join(" ")
-                )));
+                Error::Other(format!("git {} timed out after 30 s", args.join(" ")))
             }
-            Kind::Network if cancelled => {
-                stop(group, &mut child);
-                return Err(Error::Cancelled);
-            }
-            Kind::Network if heard.elapsed() > silence => {
-                stop(group, &mut child);
-                return Err(Error::Other(format!(
-                    "git {} stopped: no response for {} s",
-                    args.join(" "),
-                    silence.as_secs()
-                )));
-            }
-            _ => {}
+            Kind::Network if heard.elapsed() > silence => Error::Other(format!(
+                "git {} stopped: no response for {} s",
+                args.join(" "),
+                silence.as_secs()
+            )),
+            _ => continue,
+        };
+        if kind == Kind::Network {
+            stop(group, &mut child);
+        } else {
+            unsafe { libc::killpg(group, libc::SIGKILL) };
+            let _ = child.wait();
         }
+        return Err(error);
     }
     if stopped {
         return Ok(Output {
@@ -225,7 +216,7 @@ fn stop(group: i32, child: &mut Child) {
     let _ = child.wait();
 }
 
-/// stdout of a call without credentials or progress; a non-zero exit is an error.
+/// stdout of a plain call; a non-zero exit is an error.
 pub fn out(env: &Env, repo: &Path, args: &[&str], kind: Kind) -> Result<String> {
     Ok(run(env, repo, args, kind, Opts::default())?.ok()?.text())
 }

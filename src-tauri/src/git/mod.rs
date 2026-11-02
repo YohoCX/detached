@@ -20,7 +20,7 @@ use std::path::Path;
 use crate::error::Result;
 use crate::state::AppState;
 
-/// A name or rev from the UI; a leading `-` would make git read it as an option (`git branch -D`).
+/// Rejects a leading `-`, which git would read as an option (`git branch -D`).
 pub fn arg(s: &str) -> Result<&str> {
     if s.is_empty() || s.starts_with('-') {
         return Err(crate::error::Error::Other(format!("invalid name: {s:?}")));
@@ -28,7 +28,6 @@ pub fn arg(s: &str) -> Result<&str> {
     Ok(s)
 }
 
-/// Runs `f` holding the repo's lock, which serializes mutating operations.
 pub fn locked<T>(state: &AppState, repo: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock = state.locks.get(repo);
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());

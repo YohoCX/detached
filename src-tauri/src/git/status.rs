@@ -5,8 +5,8 @@ use crate::error::Result;
 use crate::git::runner::{Kind, out};
 use crate::types::{CommitSummary, FileChange, InProgress, RepoStatus};
 
-/// Fields of `parse_commit`, one commit per line.
-pub const LOG_FORMAT: &str = "--format=%H%x1f%s%x1f%an%x1f%ct";
+/// The fields `parse_commit` reads.
+const SUMMARY_FORMAT: &str = "--format=%H%x1f%s%x1f%an%x1f%ct";
 
 pub fn parse_commit(s: &str) -> Option<CommitSummary> {
     let mut f = s.split('\x1f');
@@ -18,12 +18,11 @@ pub fn parse_commit(s: &str) -> Option<CommitSummary> {
     })
 }
 
-/// `git log` with `args`.
 pub fn commits(env: &Env, repo: &Path, args: &[&str]) -> Result<Vec<CommitSummary>> {
     let text = out(
         env,
         repo,
-        &[&["log", LOG_FORMAT], args].concat(),
+        &[&["log", SUMMARY_FORMAT], args].concat(),
         Kind::Read,
     )?;
     Ok(text.lines().filter_map(parse_commit).collect())
@@ -68,13 +67,13 @@ fn parse_status(text: &str) -> RepoStatus {
         last_commit: None,
         in_progress: None,
     };
+    // `n` space-separated fields: XY first, the path (which may hold spaces) last.
+    let entry = |rest: &str, n: usize| {
+        let v: Vec<&str> = rest.splitn(n, ' ').collect();
+        (v.len() == n).then(|| (v[0].to_string(), v[n - 1].to_string()))
+    };
     let mut fields = text.split('\0');
     while let Some(f) = fields.next() {
-        // `n` space-separated fields: XY first, the path (which may hold spaces) last.
-        let entry = |rest: &str, n: usize| {
-            let v: Vec<&str> = rest.splitn(n, ' ').collect();
-            (v.len() == n).then(|| (v[0].to_string(), v[n - 1].to_string()))
-        };
         let (xy, path, orig_path, conflicted) = match f.split_once(' ') {
             Some(("#", header)) => {
                 match header.split_once(' ') {

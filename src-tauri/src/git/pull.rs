@@ -38,11 +38,9 @@ pub fn fetch(
     progress: &(dyn Fn(&str) + Sync),
 ) -> Result<()> {
     locked(state, repo, || {
-        match upstream_remote(&state.env(), repo)? {
-            Some(r) => network(state, repo, &["fetch", &r], Some(&r), cancel, progress),
-            None => network(state, repo, &["fetch", "--all"], None, cancel, progress),
-        }?;
-        Ok(())
+        let remote = upstream_remote(&state.env(), repo)?;
+        let args = ["fetch", remote.as_deref().unwrap_or("--all")];
+        network(state, repo, &args, remote.as_deref(), cancel, progress).map(drop)
     })
 }
 

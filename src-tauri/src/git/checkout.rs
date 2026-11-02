@@ -38,7 +38,6 @@ fn smart(state: &AppState, repo: &Path, target: &CheckoutTarget) -> Result<Check
     };
     let args: Vec<&str> = ["switch"].into_iter().chain(flag).chain([&*to]).collect();
     let cred = lfs_cred(state, repo, &to)?;
-    // The branch's ref, or the commit when detached.
     let head = || -> Result<String> {
         let branch = read(&["symbolic-ref", "-q", "HEAD"])?;
         if branch.is_empty() {
