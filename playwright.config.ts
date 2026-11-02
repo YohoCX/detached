@@ -17,7 +17,7 @@ export default defineConfig({
   projects: [{ name: 'webkit', use: { browserName: 'webkit' } }],
   webServer: [
     {
-      command: `E2E_BRIDGE_PORT=${BRIDGE_PORT} pnpm exec vite --port ${VITE_PORT} --strictPort`,
+      command: `E2E_BRIDGE_PORT=${BRIDGE_PORT} bunx vite --port ${VITE_PORT} --strictPort`,
       url: `http://localhost:${VITE_PORT}`,
     },
     {

@@ -5,7 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+version=$(bun -p 'require("./src-tauri/tauri.conf.json").version')
 out=src-tauri/target/universal-apple-darwin/release/bundle/macos
 
 security find-identity -v -p codesigning | grep -q '"Detached Dev"' ||
@@ -14,7 +14,7 @@ security find-identity -v -p codesigning | grep -q '"Detached Dev"' ||
 gh auth status >/dev/null
 
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-pnpm tauri build --bundles app --target universal-apple-darwin
+bun tauri build --bundles app --target universal-apple-darwin
 ditto -c -k --keepParent "$out/Detached.app" "$out/Detached-macos.zip"
 
 git tag "v$version"

@@ -6,10 +6,10 @@ cd "$(dirname "$0")/.."
 
 if security find-identity -v -p codesigning | grep -q '"Detached Dev"'; then
   echo "Signing with \"Detached Dev\"."
-  pnpm tauri build --bundles app
+  bun tauri build --bundles app
 else
   echo "No valid \"Detached Dev\" identity (see make sign-setup): signing ad-hoc."
-  pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+  bun tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
 fi
 
 tmp=$(mktemp -d)

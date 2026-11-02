@@ -4,22 +4,22 @@ check:
 	cd src-tauri && cargo fmt --check
 	cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 	cd src-tauri && cargo test
-	pnpm check
-	pnpm test
+	bun run check
+	bun run test
 
 # The real UI in WebKit against the real commands over the e2e bridge, on temp repos.
 e2e:
-	pnpm exec playwright install webkit
-	pnpm e2e
+	bunx playwright install webkit
+	bun run e2e
 
 fmt:
 	cd src-tauri && cargo fmt
 
 dev:
-	pnpm tauri dev
+	bun tauri dev
 
 build:
-	pnpm tauri build
+	bun tauri build
 
 # One-time: a stable local code-signing identity, so Keychain access survives rebuilds.
 sign-setup:

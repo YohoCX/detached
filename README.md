@@ -22,10 +22,10 @@ is blocked by Gatekeeper; the script avoids that. Account tokens are kept in the
 
 ## Development
 
-Needs Rust 1.90+, Node 24, pnpm 10 and the Xcode command line tools.
+Needs Rust 1.90+, Bun 1.3+, Node 24 (Vitest and Playwright run on it) and the Xcode command line tools.
 
 ```sh
-pnpm install
+bun install
 make dev         # run the app
 make check       # fmt, clippy, cargo test, svelte-check, vitest
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
