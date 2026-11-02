@@ -109,7 +109,6 @@
     e.preventDefault()
   }
 
-  /** File name and directory, each with its share of the match indices. */
   function split(path: string, indices: number[]) {
     const chars = Array.from(path)
     const k = chars.lastIndexOf('/') + 1

@@ -1,5 +1,3 @@
-// Native macOS context menus.
-
 import { Menu, PredefinedMenuItem } from '@tauri-apps/api/menu'
 import { api } from './api'
 import { app, excludeRepo, removeFolder, say, syncOne, syncRepos } from './app.svelte'

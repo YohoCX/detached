@@ -4,7 +4,7 @@
   import { say } from '../lib/app.svelte'
   import { links, render } from '../lib/mr'
 
-  // Foreign markdown, sanitized; a link opens in the browser when it is http(s), else does nothing.
+  // Only http(s) links open, in the browser.
   let { text, mr }: { text: string; mr: MergeRequest } = $props()
 
   const html = $derived(render(text, links(mr)))

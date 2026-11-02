@@ -54,7 +54,6 @@ export const toneOf = (s: RepoStatus | string | undefined) =>
   : 'success'
 export const recentOf = (repo: string) => recentBranches.get(repo) ?? []
 
-/** Runs an action, or says it isn't available when no component registered it yet. */
 export function run(id: string) {
   if (!runAction(id)) say(`${actions.get(id)?.title ?? id} is not available yet`)
 }
@@ -152,6 +151,16 @@ export async function runOp<T>(
 
 export const cancelOp = (id: number) => api.cancelOp(id).catch((e) => say(String(e), true))
 
+export function prune(repo: string) {
+  runOp(repo, 'Prune', (id, p) => api.prune(repo, id, p)).then(
+    () => say(`${nameOf(repo)}: pruned stale remote branches`),
+    (e) => say(String(e), true),
+  )
+}
+
+export const branchNames = (repo: string) =>
+  api.listBranches(repo).then((b) => [...b.local.map((l) => l.name), ...b.remote.map((r) => `${r.remote}/${r.name}`)])
+
 const fetchRepo = (repo: string) => runOp(repo, 'Fetch', (id, p) => api.fetch(repo, id, p))
 const pullRepo = (repo: string) => runOp(repo, 'Pull', (id, p) => api.pull(repo, id, p))
 
@@ -212,11 +221,10 @@ export async function checkout(repo: string, target: CheckoutTarget) {
 function checkoutNotice(repo: string, name: string, r: CheckoutResult): Omit<Notice, 'id'> {
   switch (r.kind) {
     case 'switched':
-      return { level: r.warning ? 'warn' : 'info', title: `Checked out ${name}`, body: r.warning ?? undefined }
     case 'carried':
       return {
         level: r.warning ? 'warn' : 'info',
-        title: `Checked out ${name}, local changes carried over`,
+        title: `Checked out ${name}${r.kind === 'carried' ? ', local changes carried over' : ''}`,
         body: r.warning ?? undefined,
       }
     case 'refused':
@@ -262,13 +270,7 @@ export function registerActions(): () => void {
     register('vcs.checkout', () => (app.branches = 'checkout')),
     register('vcs.newBranch', () => (app.branches = 'new')),
     register('vcs.deleteBranch', () => (app.branches = 'delete')),
-    register('vcs.prune', () => {
-      const repo = cur()
-      if (repo) runOp(repo, 'Prune', (id, p) => api.prune(repo, id, p)).then(
-        () => say(`${nameOf(repo)}: pruned stale remote branches`),
-        (e) => say(String(e), true),
-      )
-    }),
+    register('vcs.prune', () => app.current && prune(app.current)),
   ]
   return () => offs.forEach((off) => off())
 }

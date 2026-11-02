@@ -1,5 +1,4 @@
-// Every action id from docs/KEYMAP.md. Components register `run` for the actions they own.
-
+// Every action id from docs/KEYMAP.md; components register `run` for the ones they own.
 export type Group = 'navigate' | 'search' | 'vcs' | 'diff' | 'view'
 
 export interface Action {

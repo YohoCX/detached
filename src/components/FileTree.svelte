@@ -6,7 +6,7 @@
 
 <script lang="ts">
   import { api, type FileEntry } from '../lib/api'
-  import { statuses } from '../lib/app.svelte'
+  import { branchNames, statuses } from '../lib/app.svelte'
   import { buildTree, dirName, flatten, statusOf, type Row } from '../lib/files'
   import { open } from '../lib/nav'
   import { refOf, refs } from '../lib/view.svelte'
@@ -60,15 +60,7 @@
     else refs.delete(repo)
   }
 
-  async function loadBranches() {
-    if (!repo) return
-    try {
-      const b = await api.listBranches(repo)
-      branches = [...b.local.map((l) => l.name), ...b.remote.map((r) => `${r.remote}/${r.name}`)]
-    } catch {
-      branches = []
-    }
-  }
+  const loadBranches = () => repo && branchNames(repo).then((b) => (branches = b), () => (branches = []))
 
   function activate(r: Row) {
     sel = r.path

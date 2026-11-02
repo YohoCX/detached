@@ -8,7 +8,6 @@
   import { showMr } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
 
-  // The current branch's open MR; without one, an entry to create it when the branch has an upstream.
   let { repo }: { repo: string | null } = $props()
 
   let form = $state<(NewMr & { description: string; draft: boolean; error: string; busy: boolean }) | null>(null)
@@ -29,11 +28,12 @@
   })
 
   async function openForm() {
-    const r = repo
-    if (!r || !key) return say('Create Merge Request needs a branch with an upstream', true)
+    const [r, k] = [repo, key]
+    if (!r || !k) return say('Create Merge Request needs a branch with an upstream', true)
     if (mr) return showMr(r, mr.number)
     try {
-      form = { ...(await api.newMr(r)), description: '', draft: false, error: '', busy: false }
+      const m = await api.newMr(r)
+      if (k === key) form = { ...m, description: '', draft: false, error: '', busy: false }
     } catch (e) {
       say(String(e), true)
     }

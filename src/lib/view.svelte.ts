@@ -8,7 +8,6 @@ export type FileDoc =
   | { kind: 'diff'; repo: string; path: string; origPath: string | null; left: Side; right: Side }
 /** A view zone under `afterLine` on a diff's old or new side, as tall as its node. */
 export interface Zone { side: DiffSide; afterLine: number; node: HTMLElement }
-/** The main area's document. */
 export type Shown = FileDoc | ({ repo: string } & Doc)
 
 export const view = $state({

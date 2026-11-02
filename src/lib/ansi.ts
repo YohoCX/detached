@@ -1,5 +1,4 @@
 // Job log text to lines of styled spans: ANSI SGR, OSC 8 links, GitLab sections, GitHub groups.
-// Only plain data comes out; components render it as text nodes.
 
 export interface Style { fg?: string; bg?: string; bold?: boolean; dim?: boolean; italic?: boolean; underline?: boolean; href?: string }
 export interface Span extends Style { text: string }

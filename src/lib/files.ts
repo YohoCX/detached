@@ -12,6 +12,8 @@ export function statusOf(c: FileChange): Status {
   return 'modified'
 }
 
+export const letter: Record<Status, string> = { modified: 'M', renamed: 'R', added: 'A', deleted: 'D', untracked: 'U', conflict: 'C' }
+
 export function groupChanges(cs: FileChange[]) {
   const sorted = [...cs].sort((a, b) => a.path.localeCompare(b.path))
   return [
@@ -23,6 +25,7 @@ export function groupChanges(cs: FileChange[]) {
 
 export const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1)
 export const dirName = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/')))
+export const folderName = (p: string) => p.split('/').filter(Boolean).pop() ?? p
 
 export interface Dir { name: string; path: string; dirs: Map<string, Dir>; files: FileEntry[]; dirty: boolean }
 export interface Row { path: string; name: string; depth: number; dir: boolean; dirty: boolean; change: FileChange | null }

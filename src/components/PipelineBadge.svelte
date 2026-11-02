@@ -5,7 +5,6 @@
   import { cached, refresh } from '../lib/cache.svelte'
   import { active, color, glyph } from '../lib/pipelines'
 
-  // The current branch's pipeline status; nothing when it has none.
   let { repo }: { repo: string | null } = $props()
 
   const st = $derived(statusOf(repo))

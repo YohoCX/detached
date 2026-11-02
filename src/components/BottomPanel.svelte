@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { innerHeight } from 'svelte/reactivity/window'
   import { app } from '../lib/app.svelte'
   import Grip from './Grip.svelte'
   import Log from './Log.svelte'
@@ -9,7 +10,7 @@
 </script>
 
 <section class="bottom panel" style:height="{height}px">
-  <Grip key="bottom" bind:size={height} edge="top" min={120} max={innerHeight - 240} />
+  <Grip key="bottom" bind:size={height} edge="top" min={120} max={innerHeight.current! - 240} />
   <header>
     {#each tabs as [tab, label] (tab)}
       <button class="tab" class:on={app.bottom === tab} onclick={() => (app.bottom = tab)}>{label}</button>

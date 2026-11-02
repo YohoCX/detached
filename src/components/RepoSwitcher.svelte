@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, statuses, toneOf } from '../lib/app.svelte'
+  import { folderName } from '../lib/files'
   import { filter, segments } from '../lib/fuzzy'
   import Icon from './Icon.svelte'
 
@@ -9,7 +10,6 @@
   let input: HTMLInputElement
   let list: HTMLDivElement
 
-  const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
   const items = $derived(filter(app.repos, query, (r) => r.name))
   $effect(() => input.focus())
 
@@ -42,7 +42,7 @@
         onmousemove={(e) => (e.movementX || e.movementY) && (sel = i)} onclick={() => choose(r.path)}>
         <span class="check">{#if r.path === app.current}<Icon name="check" size={14} />{/if}</span>
         <span class="name ellipsis">{#each segments(r.name, indices) as seg, k (k)}<span class:hit={seg.hit}>{seg.text}</span>{/each}
-          {#if r.folder !== r.path}<span class="muted folder">{base(r.folder)}</span>{/if}</span>
+          {#if r.folder !== r.path}<span class="muted folder">{folderName(r.folder)}</span>{/if}</span>
         <span class="muted ellipsis branch">
           {#if typeof s === 'string'}{s}{:else if s}{s.branch ?? 'detached'}{s.ahead ? ` ↑${s.ahead}` : ''}{s.behind ? ` ↓${s.behind}` : ''}{/if}
         </span>

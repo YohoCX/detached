@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, type CompareBase, type FileChange } from '../lib/api'
-  import { refresh, statuses } from '../lib/app.svelte'
-  import { baseName, dirName, groupChanges, statusOf } from '../lib/files'
+  import { branchNames, refresh, statuses } from '../lib/app.svelte'
+  import { baseName, dirName, groupChanges, letter, statusOf } from '../lib/files'
   import { open } from '../lib/nav'
   import { compare, showDiff, view } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
@@ -22,21 +22,28 @@
   $effect(() => {
     if (!repo || base === undefined) return
     void status
-    const r = repo
-    api.compareBase(r, base || null).then(
-      async (info) => (cmp = { repo: r, info, changes: await api.listChanges(r, { kind: 'rev', rev: info.mergeBase }, { kind: 'worktree' }) }),
-      (e) => (cmp = { repo: r, error: String(e) }),
-    )
-    api.listBranches(r).then((b) => (branches = [...b.local.map((l) => l.name), ...b.remote.map((x) => `${x.remote}/${x.name}`)]), () => {})
+    const [r, b] = [repo, base]
+    let stale = false
+    ;(async () => {
+      const info = await api.compareBase(r, b || null)
+      const changes = await api.listChanges(r, { kind: 'rev', rev: info.mergeBase }, { kind: 'worktree' })
+      if (!stale) cmp = { repo: r, info, changes: changes.sort((a, b) => a.path.localeCompare(b.path)) }
+    })().catch((e) => !stale && (cmp = { repo: r, error: String(e) }))
+    return () => (stale = true)
   })
+
+  $effect(() => {
+    const r = repo
+    if (r && base !== undefined) branchNames(r).then((b) => r === repo && (branches = b), () => {})
+  })
+
   const cur = $derived(cmp?.repo === repo ? cmp : null)
-  const info = $derived(cur && 'info' in cur ? cur.info : null)
+  const done = $derived(cur && 'info' in cur ? cur : null)
+  const info = $derived(done?.info)
   const groups = $derived(
     base === undefined
       ? groupChanges(typeof status === 'object' ? status.changes : [])
-      : info && cur && 'changes' in cur
-        ? [{ title: `Changes since ${info.base}`, items: [...cur.changes].sort((a, b) => a.path.localeCompare(b.path)) }]
-        : [],
+      : done ? [{ title: `Changes since ${done.info.base}`, items: done.changes }] : [],
   )
   const rows = $derived(
     groups.flatMap((g): Row[] => [
@@ -46,15 +53,13 @@
   )
   const selected = $derived(view.change?.repo === repo ? view.change?.change.path : null)
 
-  /** Like JetBrains: click previews the diff, double-click or Enter also focuses it; Cmd+Down opens the file. */
+  /** Click previews the diff, double-click or Enter also focuses it, Cmd+Down opens the file. */
   function select(c: FileChange, diff = true, focus = false) {
     if (!repo) return
     view.change = { repo, change: c }
     if (diff) showDiff(repo, c.path, c.origPath, info && base !== undefined ? { kind: 'rev', rev: info.mergeBase } : { kind: 'head' })
     if (focus) view.focusDiff++
   }
-
-  const letter: Record<string, string> = { modified: 'M', renamed: 'R', added: 'A', deleted: 'D', untracked: 'U', conflict: 'C' }
 
   const openFile = (c: FileChange) => repo && open({ repo, ref: null, path: c.path, line: null })
 
@@ -150,13 +155,7 @@
   .item.selected { background: var(--selected-inactive); }
   .rows:focus-within .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .name { font-weight: 600; }
-  .st { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono); color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
-  .modified, .renamed { --c: var(--modified); }
-  .added { --c: var(--added); }
-  .deleted { --c: var(--deleted); }
   .deleted .name { text-decoration: line-through; color: var(--muted); }
-  .untracked { --c: var(--untracked); }
-  .conflict { --c: var(--conflict); }
   .conflict .name { color: var(--conflict); }
   .item .muted { min-width: 0; }
 </style>

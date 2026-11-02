@@ -8,14 +8,14 @@
   import { monaco } from '../lib/monaco'
   import { otherLine } from '../lib/mr'
   import { nav } from '../lib/nav'
+  import { load, save } from '../lib/storage'
   import { showDiff, sideName, view, type FileDoc, type Zone } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
 
   type Editor = monaco.editor.IStandaloneCodeEditor
   type Model = monaco.editor.ITextModel
-  // Without props this is the main area's viewer of `view.shown`; an MR's Changes tab passes its diff.
-  // With `ongutter`, a `+` in the hovered line's gutter, where `commentable` allows, calls it with
-  // the other side's line when the line is unchanged.
+  // Without `doc` this shows `view.shown`. With `ongutter`, a `+` in the hovered line's gutter, where
+  // `commentable` allows, calls it with the other side's line when the line is unchanged.
   let { doc, sideBySide: forceSideBySide = false, zones = [], ongutter, commentable }: {
     doc?: FileDoc
     sideBySide?: boolean
@@ -39,16 +39,9 @@
   let key = ''
   let seq = 0
   let loaded = $state(0)
+  let focusPending = false
   const shown = $derived(doc ?? (view.shown?.kind === 'file' || view.shown?.kind === 'diff' ? view.shown : null))
   const split = $derived(forceSideBySide || sideBySide)
-
-  function load(k: string) {
-    try {
-      return localStorage.getItem(k)
-    } catch {
-      return null
-    }
-  }
 
   const active = (): Editor => (mode === 'diff' ? diff.getModifiedEditor() : editor)
   const lang = (path: string) => languageFor(path, monaco.languages.getLanguages())
@@ -175,9 +168,7 @@
 
   function toggleSideBySide(on: boolean) {
     sideBySide = on
-    try {
-      localStorage.setItem('viewer.sideBySide', String(on))
-    } catch {}
+    save('viewer.sideBySide', String(on))
   }
 
   onMount(() => {
@@ -239,23 +230,20 @@
     }
   })
 
-  let focusPending = false
   $effect(() => {
     if (view.focusDiff) focusPending = true
   })
 
   $effect(() => diff.updateOptions({ renderSideBySide: split }))
 
-  // Zones go in once a diff has loaded, and again whenever it reloads or the zones change; each is as
-  // wide as the visible text and follows its node's height. Mouse and keys in a zone stay away from
-  // Monaco, which would take focus.
+  // Re-added whenever the diff reloads; each zone is as wide as the visible text and as tall as its node.
   $effect(() => {
     if (mode !== 'diff' || !zones.length) return
     void loaded
     const removers = zones.map((z) => {
       const ed = z.side === 'old' ? diff.getOriginalEditor() : diff.getModifiedEditor()
       const domNode = document.createElement('div')
-      // Above the text layer, which otherwise takes the zone's clicks.
+      // Above the text layer, which otherwise takes the zone's clicks; Monaco would take focus on them.
       domNode.style.zIndex = '1'
       domNode.append(z.node)
       for (const t of ['mousedown', 'pointerdown', 'keydown', 'contextmenu']) domNode.addEventListener(t, (e) => e.stopPropagation())

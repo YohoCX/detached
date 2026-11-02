@@ -19,7 +19,7 @@ export const defaults: Record<string, string> = {
   'panel.log': 'Cmd+9',
 }
 
-/** M3 rows: the chords stay free until their actions exist. */
+/** Chords kept free for actions that do not exist yet. */
 export const reserved: Record<string, string> = {
   'panel.commit': 'Cmd+0',
   'vcs.commit': 'Cmd+K',

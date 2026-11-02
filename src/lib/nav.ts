@@ -15,7 +15,7 @@ export class Nav {
   history: Location[] = []
   index = -1
 
-  /** Records an open: recent files (50, deduped) and history (100, forward entries dropped). */
+  /** Recent files (50, deduped) and history (100, forward entries dropped). */
   visit(loc: Location) {
     const { repo, ref, path } = loc
     if (!loc.doc) this.recent = [{ repo, ref, path }, ...this.recent.filter((r) => !same(r, loc))].slice(0, 50)
@@ -36,9 +36,9 @@ export class Nav {
 
 export const nav = new Nav()
 
-let opener = (loc: Location) => console.log('open', loc)
+let opener: (loc: Location) => void = () => {}
 
-/** D sets the real opener (viewer); it shows `loc` without recording it again. */
+/** The opener shows `loc` without recording it again. */
 export const setOpener = (f: (loc: Location) => void) => (opener = f)
 
 export function open(loc: Location) {

@@ -4,7 +4,7 @@
   import { app, say } from '../lib/app.svelte'
   import { view } from '../lib/view.svelte'
 
-  // Kept between openings; the branch and path reset when the repo changes.
+  // Kept between openings; refs and path reset when the repo changes.
   const filters = $state({ repo: null as string | null, refs: { kind: 'all' } as LogRefs, text: '', author: '', path: '' })
 
   register('vcs.fileHistory', () => {
@@ -20,7 +20,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener'
   import { onDestroy } from 'svelte'
   import { api, newId, type LogQuery, type LogRow } from '../lib/api'
-  import { checkout, notify, statusOf } from '../lib/app.svelte'
+  import { branchNames, checkout, notify, statusOf } from '../lib/app.svelte'
   import { chip, lanes, pick, when } from '../lib/log'
   import { popup } from '../lib/menu'
   import CommitDetails from './CommitDetails.svelte'
@@ -63,7 +63,7 @@
     void reload
     const r = repo
     branches = []
-    if (r) api.listBranches(r).then((b) => r === repo && (branches = [...b.local.map((l) => l.name), ...b.remote.map((x) => `${x.remote}/${x.name}`)]), () => {})
+    if (r) branchNames(r).then((b) => r === repo && (branches = b), () => {})
   })
 
   $effect(() => {
@@ -215,7 +215,7 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div class="commit" class:selected={sel.has(r.sha)} role="option" aria-selected={sel.has(r.sha)} tabindex="-1"
                 onclick={(e) => choose(i, e.shiftKey ? 'range' : e.metaKey ? 'toggle' : 'one')}
-                oncontextmenu={(e) => (e.preventDefault(), menu(i))}>
+                oncontextmenu={() => menu(i)}>
                 {#if graph}<div class="graph" style:width="{Math.min(width, 24) * LANE}px"><Graph row={r} /></div>{/if}
                 <span class="subject">
                   {#each r.refs.slice(0, 2) as ref (ref)}{@const c = chip(ref)}<span class="chip ellipsis {c.kind}" title={ref}>{c.label}</span>{/each}
