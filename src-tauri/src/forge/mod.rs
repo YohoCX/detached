@@ -1,15 +1,14 @@
 pub mod commands;
 mod github;
 mod gitlab;
-pub mod http;
-pub mod project;
+mod http;
+mod project;
 #[cfg(test)]
 mod tests;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use serde_json::Value;
 
@@ -35,14 +34,7 @@ pub fn api_base(provider: &Provider, base_url: &str) -> String {
 
 /// `GET /user` with the token; the login (GitHub) or username (GitLab) on success.
 pub fn verify(provider: &Provider, base_url: &str, token: &str) -> VerifyResult {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .http_status_as_error(false)
-        // A redirect would carry PRIVATE-TOKEN to whatever host it names.
-        .max_redirects(0)
-        .build()
-        .into();
-    let req = agent.get(format!("{}/user", api_base(provider, base_url)));
+    let req = http::agent(false).get(format!("{}/user", api_base(provider, base_url)));
     let (req, field) = match provider {
         Provider::Github | Provider::GithubEnterprise => (
             req.header("Authorization", format!("Bearer {token}")),
@@ -62,7 +54,7 @@ pub fn verify(provider: &Provider, base_url: &str, token: &str) -> VerifyResult 
         let reason = status.canonical_reason().unwrap_or("request failed");
         return failed(Some(status.as_u16()), reason.into());
     }
-    match resp.body_mut().read_json::<serde_json::Value>() {
+    match resp.body_mut().read_json::<Value>() {
         Ok(v) => match v[field].as_str() {
             Some(user) => VerifyResult::Ok { user: user.into() },
             None => failed(Some(status.as_u16()), format!("no {field} in the response")),
@@ -71,7 +63,6 @@ pub fn verify(provider: &Provider, base_url: &str, token: &str) -> VerifyResult 
     }
 }
 
-/// What each provider's client does; `p` is the project addressed.
 pub trait Forge: Sync {
     fn mrs(&self, p: &Project, filter: MrFilter) -> Result<Vec<MergeRequest>>;
     /// The open MR from `branch` of `source`.
@@ -99,7 +90,7 @@ pub trait Forge: Sync {
     fn run(&self, input: &RunPipeline) -> Result<Pipeline>;
 }
 
-/// MR lists hold the most recently updated ones.
+/// MRs per list, the most recently updated.
 const LIST: usize = 50;
 /// Merged and closed MRs by account, project and number, kept for the session.
 static DONE: Mutex<BTreeMap<String, MergeRequest>> = Mutex::new(BTreeMap::new());
@@ -315,8 +306,6 @@ pub fn run_pipeline(state: &AppState, repo: &Path, input: &RunPipeline) -> Resul
     forge_for(state, repo, &input.project)?.run(input)
 }
 
-// Helpers shared by the clients.
-
 fn s(v: &Value) -> String {
     v.as_str().unwrap_or_default().into()
 }
@@ -378,7 +367,7 @@ fn rollup(all: impl IntoIterator<Item = PipelineStatus>) -> PipelineStatus {
         .unwrap_or(Skipped)
 }
 
-/// `f` over `items`, eight at a time.
+/// `f` over `items`, eight threads at a time.
 fn each<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> Result<R> + Sync) -> Result<Vec<R>> {
     let f = &f;
     let mut out = vec![];

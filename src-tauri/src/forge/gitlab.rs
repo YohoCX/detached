@@ -59,11 +59,11 @@ fn draft_title(t: &str, draft: bool) -> String {
     }
 }
 
-fn pipeline(p: Project, v: &Value) -> Pipeline {
+fn pipeline(p: &Project, v: &Value) -> Pipeline {
     let st = s(&v["status"]);
     Pipeline {
         id: v["id"].as_u64().unwrap_or_default(),
-        project: p,
+        project: p.clone(),
         status: status(&st),
         ref_: s(&v["ref"]),
         sha: s(&v["sha"]),
@@ -106,7 +106,7 @@ impl GitLab {
         self.api.get(&format!("{}/merge_requests/{n}", pr(p)))
     }
 
-    /// The MR from its JSON, its approvals and the target project's JSON.
+    /// `project` is the target project's JSON.
     fn full(&self, p: &Project, v: &Value, project: &Value) -> Result<MergeRequest> {
         use MergeMethod::*;
         let n = v["iid"].as_u64().unwrap_or_default();
@@ -293,17 +293,13 @@ impl Forge for GitLab {
                 let notes: Vec<&Value> = arr(&d["notes"]).filter(|n| n["system"] != true).collect();
                 let pos = &notes.first()?["position"];
                 let new = pos["new_line"].as_u64();
+                let (key, side) = match new {
+                    Some(_) => ("new_path", DiffSide::New),
+                    None => ("old_path", DiffSide::Old),
+                };
                 let position = pos.is_object().then(|| Position {
-                    path: s(&pos[if new.is_some() {
-                        "new_path"
-                    } else {
-                        "old_path"
-                    }]),
-                    side: if new.is_some() {
-                        DiffSide::New
-                    } else {
-                        DiffSide::Old
-                    },
+                    path: s(&pos[key]),
+                    side,
                     line: new.or(pos["old_line"].as_u64()).unwrap_or_default() as u32,
                     outdated: pos["head_sha"] != head,
                 });
@@ -438,7 +434,7 @@ impl Forge for GitLab {
         let v = self
             .api
             .get(&format!("{}/pipelines?per_page=20{q}", pr(p)))?;
-        Ok(arr(&v).map(|x| pipeline(p.clone(), x)).collect())
+        Ok(arr(&v).map(|x| pipeline(p, x)).collect())
     }
 
     fn mr_pipelines(&self, p: &Project, n: u64) -> Result<Vec<Pipeline>> {
@@ -446,7 +442,7 @@ impl Forge for GitLab {
             .api
             .get(&format!("{}/merge_requests/{n}/pipelines", pr(p)))?;
         arr(&v)
-            .map(|x| Ok(pipeline(self.project_of(p, &x["project_id"])?, x)))
+            .map(|x| Ok(pipeline(&self.project_of(p, &x["project_id"])?, x)))
             .collect()
     }
 
@@ -538,6 +534,6 @@ impl Forge for GitLab {
             &format!("{}/pipeline", pr(&input.project)),
             Some(body),
         )?;
-        Ok(pipeline(input.project.clone(), &v))
+        Ok(pipeline(&input.project, &v))
     }
 }

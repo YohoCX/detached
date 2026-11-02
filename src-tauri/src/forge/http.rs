@@ -28,12 +28,10 @@ impl Reply {
     }
 }
 
-/// A forge's REST API with one account's token.
 pub struct Api {
     pub account: Account,
     pub github: bool,
-    /// `{base}/api/v4`, `https://api.github.com` or `{base}/api/v3`.
-    pub base: String,
+    base: String,
     token: String,
 }
 
@@ -43,11 +41,11 @@ pub fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// No redirects; API calls get 10 s in all, log downloads 10 s to the response and 120 s per read.
-fn agent(log: bool) -> Agent {
+pub(super) fn agent(log: bool) -> Agent {
     let ten = Some(Duration::from_secs(10));
     let c = Agent::config_builder()
         .http_status_as_error(false)
+        // A redirect would carry the token to whatever host it names.
         .max_redirects(0);
     let c = if log {
         c.timeout_connect(ten)
@@ -145,9 +143,8 @@ impl Api {
         }
     }
 
-    /// One call; its JSON, or Null for an empty body. Redirects are errors.
-    pub fn send(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
-        let r = self.call(method, &self.url(path), body.as_ref(), false)?;
+    fn fetch(&self, method: &str, url: &str, body: Option<&Value>) -> Result<Reply> {
+        let r = self.call(method, url, body, false)?;
         if r.status >= 300 {
             return Err(Error::Other(format!(
                 "{} redirect to {} not followed",
@@ -155,6 +152,12 @@ impl Api {
                 r.header("location").unwrap_or("?")
             )));
         }
+        Ok(r)
+    }
+
+    /// The reply's JSON, or Null for an empty body.
+    pub fn send(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+        let r = self.fetch(method, &self.url(path), body.as_ref())?;
         Ok(serde_json::from_slice(&r.body).unwrap_or(Value::Null))
     }
 
@@ -167,16 +170,19 @@ impl Api {
         let first = self.url(path);
         let (mut url, mut out) = (first.clone(), vec![]);
         for _ in 0..PAGES {
-            let r = self.call("GET", &url, None, false)?;
+            let r = self.fetch("GET", &url, None)?;
             let v: Value = serde_json::from_slice(&r.body)?;
             let items = key.map_or(&v, |k| &v[k]);
-            out.extend(items.as_array().into_iter().flatten().cloned());
+            out.extend(super::arr(items).cloned());
             let next = if self.github {
                 r.header("link")
                     .and_then(|l| l.split(',').find(|p| p.contains("rel=\"next\"")))
                     .and_then(|p| p.split(';').next())
                     .map(|u| u.trim().trim_matches(['<', '>']).to_string())
-                    .filter(|u| u.starts_with(&self.base))
+                    .filter(|u| {
+                        u.strip_prefix(&self.base)
+                            .is_some_and(|r| r.starts_with('/'))
+                    })
             } else {
                 let sep = if first.contains('?') { '&' } else { '?' };
                 r.header("x-next-page")
@@ -273,10 +279,7 @@ fn error(github: bool, r: &Reply) -> Error {
             .to_string(),
         m => m.to_string(),
     };
-    let details: Vec<&str> = v["errors"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let details: Vec<&str> = super::arr(&v["errors"])
         .filter_map(|e| e["message"].as_str().or(e.as_str()))
         .collect();
     if !details.is_empty() {

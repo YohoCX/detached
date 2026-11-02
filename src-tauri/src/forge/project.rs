@@ -9,7 +9,6 @@ use crate::settings::Settings;
 use crate::state::AppState;
 use crate::types::{Account, ForgeHosts, HostAccount, Project};
 
-/// A remote whose URL names a forge project, with the account its API calls use.
 #[derive(Debug, Clone)]
 pub struct Remote {
     pub name: String,
@@ -51,7 +50,6 @@ impl Remote {
     }
 }
 
-/// The real host of an ssh alias, from `ssh -G`.
 fn ssh_host(env: &Env, host: &str) -> Option<String> {
     let ssh = crate::env::which("ssh", &env.path)?;
     let o = Command::new(ssh)
@@ -80,8 +78,8 @@ pub fn resolve_url(env: &Env, url: &str) -> Option<RemoteUrl> {
     Some(u)
 }
 
-/// The repo's forge account for the host, else the only fitting one, else milestone 1's choice
-/// when it fits; with none, whether several fit.
+/// The repo's forge account for the host, else the only fitting one, else the repo's git
+/// credential account when it fits; with none, whether several fit.
 pub fn account(
     s: &Settings,
     accounts: &[Account],
@@ -136,10 +134,15 @@ pub fn mr_remote(s: &Settings, repo: &str, names: &[&str]) -> Option<String> {
         .map(String::from)
 }
 
-pub fn hosts(state: &AppState, repo: &Path) -> Result<ForgeHosts> {
-    let names = crate::git::remotes::remotes(&state.env(), repo)?;
-    let mut names: Vec<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
+fn mr_name(state: &AppState, repo: &Path) -> Result<Option<String>> {
+    let all = crate::git::remotes::remotes(&state.env(), repo)?;
+    let mut names: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).collect();
     names.dedup();
+    let key = repo.to_str().unwrap_or_default();
+    Ok(mr_remote(&state.get_settings(), key, &names))
+}
+
+pub fn hosts(state: &AppState, repo: &Path) -> Result<ForgeHosts> {
     let mut hosts: Vec<HostAccount> = vec![];
     for r in remotes(state, repo)? {
         match hosts.iter_mut().find(|h| h.host == r.url.host) {
@@ -154,21 +157,13 @@ pub fn hosts(state: &AppState, repo: &Path) -> Result<ForgeHosts> {
     }
     Ok(ForgeHosts {
         hosts,
-        mr_remote: mr_remote(
-            &state.get_settings(),
-            repo.to_str().unwrap_or_default(),
-            &names,
-        ),
+        mr_remote: mr_name(state, repo)?,
     })
 }
 
 /// The remote holding the repo's MRs.
 pub fn mr(state: &AppState, repo: &Path) -> Result<Remote> {
-    let all = crate::git::remotes::remotes(&state.env(), repo)?;
-    let mut names: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).collect();
-    names.dedup();
-    let key = repo.to_str().unwrap_or_default();
-    let name = mr_remote(&state.get_settings(), key, &names)
+    let name = mr_name(state, repo)?
         .ok_or_else(|| Error::Other("No MR remote; choose one in Settings".into()))?;
     remotes(state, repo)?
         .into_iter()

@@ -105,42 +105,21 @@ fn matches_single_ambiguous_override_port_and_sub_path() {
         Some(("github.com".into(), some("a"), false))
     );
 
+    let id = |accounts: &[Account], url: &str| matched(accounts, None, url).unwrap().1;
     let ports = [
         acc("a", "https://git.example.com"),
         acc("b", "https://git.example.com:8443"),
     ];
-    assert_eq!(
-        matched(&ports, None, "https://git.example.com:8443/x")
-            .unwrap()
-            .1,
-        some("b")
-    );
-    assert_eq!(
-        matched(&ports, None, "https://git.example.com/x")
-            .unwrap()
-            .1,
-        some("a")
-    );
+    assert_eq!(id(&ports, "https://git.example.com:8443/x"), some("b"));
+    assert_eq!(id(&ports, "https://git.example.com/x"), some("a"));
 
     let sub = [acc("a", "https://git.example.com/gitlab")];
     assert_eq!(
-        matched(&sub, None, "https://git.example.com/gitlab/g/r.git")
-            .unwrap()
-            .1,
+        id(&sub, "https://git.example.com/gitlab/g/r.git"),
         some("a")
     );
-    assert_eq!(
-        matched(&sub, None, "https://git.example.com/gitlabx/r.git")
-            .unwrap()
-            .1,
-        None
-    );
-    assert_eq!(
-        matched(&sub, None, "https://git.example.com/other/r.git")
-            .unwrap()
-            .1,
-        None
-    );
+    assert_eq!(id(&sub, "https://git.example.com/gitlabx/r.git"), None);
+    assert_eq!(id(&sub, "https://git.example.com/other/r.git"), None);
 }
 
 #[test]
