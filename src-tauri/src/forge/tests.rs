@@ -63,6 +63,10 @@ fn route(key: &str, status: u16, body: Value) -> Route {
     }
 }
 
+fn get(path: &str, body: Value) -> Route {
+    route(&format!("GET {path}"), 200, body)
+}
+
 impl Route {
     fn with(mut self, k: &str, v: &str) -> Route {
         self.headers.push((k.into(), v.into()));
@@ -221,49 +225,37 @@ fn setup(
     sb.git(&repo, &["init", "-q", "-b", "feature"]);
     sb.commit(&repo, "f", "x\n", "Add feature");
     for (name, path) in remotes {
-        sb.git(
-            &repo,
-            &[
-                "remote",
-                "add",
-                name,
-                &format!("{}/{sub}/{path}.git", fake.base),
-            ],
-        );
+        let url = format!("{}/{sub}/{path}.git", fake.base);
+        sb.git(&repo, &["remote", "add", name, &url]);
     }
     if let Some(up) = upstream {
-        sb.git(
-            &repo,
-            &["update-ref", &format!("refs/remotes/{up}"), "HEAD"],
-        );
+        let tracking = format!("refs/remotes/{up}");
+        sb.git(&repo, &["update-ref", &tracking, "HEAD"]);
         sb.git(&repo, &["branch", "-q", "--set-upstream-to", up]);
     }
     Setup { sb, repo, fake }
 }
 
 fn gitlab(routes: Vec<Route>) -> Setup {
-    setup(
-        false,
-        routes,
-        &[("origin", "group/app")],
-        Some("origin/feature"),
-    )
+    let up = Some("origin/feature");
+    setup(false, routes, &[("origin", "group/app")], up)
 }
 
 fn github(routes: Vec<Route>) -> Setup {
-    setup(
-        true,
-        routes,
-        &[("origin", "owner/app")],
-        Some("origin/feature"),
-    )
+    let up = Some("origin/feature");
+    setup(true, routes, &[("origin", "owner/app")], up)
+}
+
+/// Also a `fork` remote at `me/app`, the branch's upstream.
+fn forked(github: bool, routes: Vec<Route>) -> Setup {
+    let origin = if github { "owner/app" } else { "group/app" };
+    let remotes = [("origin", origin), ("fork", "me/app")];
+    setup(github, routes, &remotes, Some("fork/feature"))
 }
 
 fn err<T: std::fmt::Debug>(r: Result<T>) -> String {
     r.unwrap_err().to_string()
 }
-
-// GitLab fixtures
 
 fn gl_project() -> Value {
     json!({"id": 7, "path_with_namespace": "group/app", "default_branch": "main",
@@ -286,18 +278,13 @@ fn gl_mr(iid: u64, source_project_id: u64) -> Value {
 
 fn gl_mr_routes(iid: u64) -> Vec<Route> {
     vec![
-        route(
-            &format!("GET {GL}/merge_requests/{iid}"),
-            200,
-            gl_mr(iid, 7),
-        ),
-        route(
-            &format!("GET {GL}/merge_requests/{iid}/approvals"),
-            200,
+        get(&format!("{GL}/merge_requests/{iid}"), gl_mr(iid, 7)),
+        get(
+            &format!("{GL}/merge_requests/{iid}/approvals"),
             json!({"approved": false, "user_has_approved": true,
                    "approved_by": [{"user": {"username": "me", "id": 1}}]}),
         ),
-        route(&format!("GET {GL}"), 200, gl_project()),
+        get(GL, gl_project()),
     ]
 }
 
@@ -351,7 +338,7 @@ fn gitlab_threads_follow_pages_and_skip_system_notes() {
     ]);
     let d = format!("GET {GL}/merge_requests/1/discussions?per_page=100");
     let t = gitlab(vec![
-        route(&format!("GET {GL}/merge_requests/1"), 200, gl_mr(1, 7)),
+        get(&format!("{GL}/merge_requests/1"), gl_mr(1, 7)),
         route(&d, 200, page1).with("X-Next-Page", "2"),
         route(&format!("{d}&page=2"), 200, page2).with("X-Next-Page", ""),
     ]);
@@ -383,9 +370,8 @@ fn gitlab_jobs_group_by_stage_with_flags() {
         json!({"id": id, "name": name, "stage": stage, "status": status, "duration": 60.4,
                "allow_failure": allow_failure, "web_url": format!("{{base}}/gitlab/group/app/-/jobs/{id}")})
     };
-    let t = gitlab(vec![route(
-        &format!("GET {GL}/pipelines/5/jobs"),
-        200,
+    let t = gitlab(vec![get(
+        &format!("{GL}/pipelines/5/jobs"),
         json!([
             job(74, "deploy", "deploy", "manual", false),
             job(73, "lint", "test", "failed", true),
@@ -426,16 +412,9 @@ fn gitlab_jobs_group_by_stage_with_flags() {
 #[test]
 fn gitlab_line_comment_positions_and_write_bodies() {
     let mut routes = gl_mr_routes(1);
-    routes.push(route(
-        "GET /gitlab/api/v4/version",
-        200,
-        json!({"version": "17.11.2-ee"}),
-    ));
-    routes.push(route(
-        "GET /gitlab/api/v4/version",
-        200,
-        json!({"version": "16.5.1-ee"}),
-    ));
+    for v in ["17.11.2-ee", "16.5.1-ee"] {
+        routes.push(get("/gitlab/api/v4/version", json!({ "version": v })));
+    }
     let t = gitlab(routes);
     let act = |a: MrAction| mr_action(&t.sb.state, &t.repo, 1, &a).unwrap();
     for (old_line, new_line) in [(None, Some(3)), (Some(5), None), (Some(7), Some(8))] {
@@ -478,84 +457,49 @@ fn gitlab_line_comment_positions_and_write_bodies() {
         json!({"body": "Here", "position": p})
     };
     let mr = format!("{GL}/merge_requests/1");
+    let (d, m) = (format!("{mr}/discussions"), format!("{mr}/merge"));
     let w = |m: &str, p: &str, b: Value| (m.to_string(), p.to_string(), b);
+    let merged = |key: &str| {
+        let mut b = json!({"squash": true, "should_remove_source_branch": true, "sha": "bbb"});
+        b[key] = json!(true);
+        b
+    };
     assert_eq!(
         t.fake.writes(),
         [
-            w(
-                "POST",
-                &format!("{mr}/discussions"),
-                pos(json!({"new_line": 3}))
-            ),
-            w(
-                "POST",
-                &format!("{mr}/discussions"),
-                pos(json!({"old_line": 5}))
-            ),
-            w(
-                "POST",
-                &format!("{mr}/discussions"),
-                pos(json!({"old_line": 7, "new_line": 8}))
-            ),
+            w("POST", &d, pos(json!({"new_line": 3}))),
+            w("POST", &d, pos(json!({"old_line": 5}))),
+            w("POST", &d, pos(json!({"old_line": 7, "new_line": 8}))),
             w("POST", &format!("{mr}/notes"), json!({"body": "Hi"})),
-            w(
-                "POST",
-                &format!("{mr}/discussions/d2/notes"),
-                json!({"body": "Ok"})
-            ),
-            w(
-                "PUT",
-                &format!("{mr}/discussions/d2"),
-                json!({"resolved": true})
-            ),
+            w("POST", &format!("{d}/d2/notes"), json!({"body": "Ok"})),
+            w("PUT", &format!("{d}/d2"), json!({"resolved": true})),
             w("POST", &format!("{mr}/approve"), json!({})),
             w("POST", &format!("{mr}/unapprove"), json!({})),
-            w(
-                "PUT",
-                &format!("{mr}/merge"),
-                json!({"squash": true, "should_remove_source_branch": true, "sha": "bbb", "auto_merge": true})
-            ),
-            w(
-                "PUT",
-                &format!("{mr}/merge"),
-                json!({"squash": true, "should_remove_source_branch": true, "sha": "bbb", "merge_when_pipeline_succeeds": true})
-            ),
+            w("PUT", &m, merged("auto_merge")),
+            w("PUT", &m, merged("merge_when_pipeline_succeeds")),
             w("PUT", &mr, json!({"title": "Add feature"})),
             w("PUT", &mr, json!({"state_event": "close"})),
         ]
     );
-    let e = err(mr_action(
-        &t.sb.state,
-        &t.repo,
-        1,
-        &MrAction::RequestChanges { body: "No".into() },
-    ));
+    let no = MrAction::RequestChanges { body: "No".into() };
+    let e = err(mr_action(&t.sb.state, &t.repo, 1, &no));
     assert!(e.contains("not supported"), "{e}");
 }
 
 #[test]
 fn gitlab_current_mr_matches_source_project_and_branch() {
+    let me = json!({"id": 8, "path_with_namespace": "me/app"});
     let mut routes = vec![
-        route(
-            "GET /gitlab/api/v4/projects/me%2Fapp",
-            200,
-            json!({"id": 8, "path_with_namespace": "me/app"}),
-        ),
-        route(
-            "GET /gitlab/api/v4/projects/8",
-            200,
-            json!({"id": 8, "path_with_namespace": "me/app"}),
-        ),
-        route(
-            &format!("GET {GL}/merge_requests?state=opened&source_branch=feature&per_page=100"),
-            200,
+        get("/gitlab/api/v4/projects/me%2Fapp", me.clone()),
+        get("/gitlab/api/v4/projects/8", me),
+        get(
+            &format!("{GL}/merge_requests?state=opened&source_branch=feature&per_page=100"),
             json!([{"iid": 1, "source_project_id": 7}, {"iid": 2, "source_project_id": 8}]),
         ),
-        route(&format!("GET {GL}/merge_requests/2"), 200, gl_mr(2, 8)),
+        get(&format!("{GL}/merge_requests/2"), gl_mr(2, 8)),
     ];
     routes.extend(gl_mr_routes(2).into_iter().skip(1));
-    let remotes = [("origin", "group/app"), ("fork", "me/app")];
-    let t = setup(false, routes, &remotes, Some("fork/feature"));
+    let t = forked(false, routes);
     let mr = current_mr(&t.sb.state, &t.repo).unwrap().unwrap();
     assert_eq!(mr.number, 2);
     assert_eq!(mr.source_project, t.project("me/app"));
@@ -623,9 +567,8 @@ fn gitlab_list_falls_back_to_rest_on_a_graphql_error() {
             200,
             json!({"errors": [{"message": "Field 'approvedBy' doesn't exist on type 'MergeRequest'"}]}),
         ),
-        route(
-            &format!("GET {GL}/merge_requests?state=opened&order_by=updated_at&per_page=50"),
-            200,
+        get(
+            &format!("{GL}/merge_requests?state=opened&order_by=updated_at&per_page=50"),
             json!([{"iid": 1}]),
         ),
     ];
@@ -643,21 +586,15 @@ fn merged_and_closed_mrs_are_fetched_once_open_ones_every_time() {
     merged["state"] = json!("merged");
     let mut routes = gl_mr_routes(1);
     routes.extend(gl_mr_routes(2));
-    routes[3] = route(&format!("GET {GL}/merge_requests/2"), 200, merged);
+    routes[3] = get(&format!("{GL}/merge_requests/2"), merged);
     let t = gitlab(routes);
     let fetches = |n: u64| {
         let path = format!("{GL}/merge_requests/{n}");
         t.fake.reqs().iter().filter(|r| r.path == path).count()
     };
+    let state = |n| get_mr(&t.sb.state, &t.repo, n).unwrap().state;
     for _ in 0..2 {
-        assert_eq!(
-            get_mr(&t.sb.state, &t.repo, 1).unwrap().state,
-            MrState::Open
-        );
-        assert_eq!(
-            get_mr(&t.sb.state, &t.repo, 2).unwrap().state,
-            MrState::Merged
-        );
+        assert_eq!((state(1), state(2)), (MrState::Open, MrState::Merged));
     }
     assert_eq!((fetches(1), fetches(2)), (2, 1));
     let comment = MrAction::Comment { body: "x".into() };
@@ -669,14 +606,12 @@ fn merged_and_closed_mrs_are_fetched_once_open_ones_every_time() {
 #[test]
 fn branch_pipelines_come_from_the_source_project_and_actions_use_the_pipelines_project() {
     let fork = "/gitlab/api/v4/projects/me%2Fapp";
-    let routes = vec![route(
-        &format!("GET {fork}/pipelines"),
-        200,
+    let routes = vec![get(
+        &format!("{fork}/pipelines"),
         json!([{"id": 5, "iid": 1, "project_id": 8, "sha": "bbb", "ref": "feature", "status": "failed",
                 "source": "push", "created_at": T0, "updated_at": T0, "web_url": "{base}/gitlab/me/app/-/pipelines/5"}]),
     )];
-    let remotes = [("origin", "group/app"), ("fork", "me/app")];
-    let t = setup(false, routes, &remotes, Some("fork/feature"));
+    let t = forked(false, routes);
     let sha = t.sb.git(&t.repo, &["rev-parse", "HEAD"]);
     let ps = list_pipelines(&t.sb.state, &t.repo, false).unwrap();
     assert_eq!(
@@ -694,40 +629,25 @@ fn branch_pipelines_come_from_the_source_project_and_actions_use_the_pipelines_p
         t.fake.reqs()[1].path,
         format!("{fork}/pipelines?per_page=20")
     );
-    pipeline_action(
-        &t.sb.state,
-        &t.repo,
-        &p.project,
-        p.id,
-        PipelineAction::Retry,
-    )
-    .unwrap();
-    job_action(&t.sb.state, &t.repo, &p.project, 74, JobAction::Play).unwrap();
+    let (s, r) = (&t.sb.state, &t.repo);
+    pipeline_action(s, r, &p.project, p.id, PipelineAction::Retry).unwrap();
+    job_action(s, r, &p.project, 74, JobAction::Play).unwrap();
     let paths: Vec<String> = t.fake.writes().into_iter().map(|w| w.1).collect();
-    assert_eq!(
-        paths,
-        [
-            format!("{fork}/pipelines/5/retry"),
-            format!("{fork}/jobs/74/play")
-        ]
+    let (retry, play) = (
+        format!("{fork}/pipelines/5/retry"),
+        format!("{fork}/jobs/74/play"),
     );
+    assert_eq!(paths, [retry, play]);
 }
 
 #[test]
 fn gitlab_job_log_reads_from_offset_and_completes_when_finished() {
+    let (job, trace) = (format!("{GL}/jobs/70"), format!("{GL}/jobs/70/trace"));
     let t = gitlab(vec![
-        route(
-            &format!("GET {GL}/jobs/70"),
-            200,
-            json!({"id": 70, "status": "running"}),
-        ),
-        route(
-            &format!("GET {GL}/jobs/70"),
-            200,
-            json!({"id": 70, "status": "success"}),
-        ),
-        route(&format!("GET {GL}/jobs/70/trace"), 200, Value::Null).raw("one\n"),
-        route(&format!("GET {GL}/jobs/70/trace"), 200, Value::Null).raw("one\ntwo\n"),
+        get(&job, json!({"id": 70, "status": "running"})),
+        get(&job, json!({"id": 70, "status": "success"})),
+        get(&trace, Value::Null).raw("one\n"),
+        get(&trace, Value::Null).raw("one\ntwo\n"),
     ]);
     let p = t.project("group/app");
     let c = job_log(&t.sb.state, &t.repo, &p, 70, 0).unwrap();
@@ -754,8 +674,6 @@ fn times_parse_with_fractions_and_offsets() {
     assert_eq!(opt_time(&json!("2000-02-29T00:00:00Z")), Some(951_782_400));
     assert_eq!(opt_time(&Value::Null), None);
 }
-
-// GitHub fixtures
 
 fn gh_repo(path: &str, push: bool) -> Value {
     json!({"id": 1, "full_name": path, "default_branch": "main", "html_url": format!("{{base}}/ghe/{path}"),
@@ -788,10 +706,9 @@ fn gh_run(id: u64, status: &str, conclusion: Value) -> Value {
 
 fn gh_pr_routes(n: u64, head_repo: &str) -> Vec<Route> {
     vec![
-        route(&format!("GET {GH}/pulls/{n}"), 200, gh_pr(n, head_repo)),
-        route(
-            &format!("GET {GH}/pulls/{n}/reviews"),
-            200,
+        get(&format!("{GH}/pulls/{n}"), gh_pr(n, head_repo)),
+        get(
+            &format!("{GH}/pulls/{n}/reviews"),
             json!([
                 gh_review(1, "bob", "CHANGES_REQUESTED", "Fix it"),
                 gh_review(2, "carol", "COMMENTED", ""),
@@ -799,13 +716,12 @@ fn gh_pr_routes(n: u64, head_repo: &str) -> Vec<Route> {
                 gh_review(4, "erin", "PENDING", "draft"),
             ]),
         ),
-        route(
-            &format!("GET {GH}/actions/runs"),
-            200,
+        get(
+            &format!("{GH}/actions/runs"),
             json!({"total_count": 2, "workflow_runs": [
                 gh_run(11, "in_progress", Value::Null), gh_run(10, "completed", json!("success"))]}),
         ),
-        route(&format!("GET {GH}"), 200, gh_repo("owner/app", true)),
+        get(GH, gh_repo("owner/app", true)),
     ]
 }
 
@@ -830,71 +746,41 @@ fn github_pr_maps_to_shared_types() {
     let r = &t.fake.reqs()[0];
     assert_eq!(r.header("authorization").as_deref(), Some("Bearer tok"));
     assert_eq!(r.header("private-token"), None);
-    assert!(
-        t.fake
-            .reqs()
-            .iter()
-            .any(|r| r.path == format!("{GH}/actions/runs?head_sha=bbb&per_page=100"))
-    );
+    let runs = format!("{GH}/actions/runs?head_sha=bbb&per_page=100");
+    assert!(t.fake.reqs().iter().any(|r| r.path == runs));
 }
 
 #[test]
 fn github_threads_from_graphql_comments_and_reviews() {
-    let thread = |id: &str, line: Value, side: &str, outdated: bool, db: u64, at: &str| {
+    let thread = |id: &str, line: Value, side: &str, outdated: bool, db: u64, min: u8| {
+        let at = format!("2026-10-01T10:0{min}:00Z");
         json!({"id": id, "isResolved": outdated, "isOutdated": outdated, "path": "src/a.rs", "line": line,
                "originalLine": 5, "diffSide": side, "comments": {"nodes": [
                    {"databaseId": db, "body": "Why?", "createdAt": at, "author": {"login": "bob"}},
                    {"databaseId": db + 1, "body": "Because.", "createdAt": at, "author": {"login": "me"}}]}})
     };
-    let page = |nodes: Value, next: bool| {
+    let page = |node: Value, next: bool| {
         json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
             "pageInfo": {"hasNextPage": next, "endCursor": if next { json!("c1") } else { Value::Null }},
-            "nodes": nodes}}}}})
+            "nodes": [node]}}}}})
     };
-    let comment = |id: u64, at: &str| json!({"id": id, "node_id": format!("IC_{id}"), "body": "Nice", "user": {"login": "carol"}, "created_at": at});
+    let comment = |id: u64, at: &str| json!([{"id": id, "node_id": format!("IC_{id}"), "body": "Nice", "user": {"login": "carol"}, "created_at": at}]);
     let comments = format!("GET {GH}/issues/1/comments?per_page=100");
+    let next = format!("<{{base}}{}&page=2>; rel=\"next\"", &comments[4..]);
+    let t1 = thread("PRRT_1", json!(3), "RIGHT", false, 101, 2);
+    let t2 = thread("PRRT_2", Value::Null, "LEFT", true, 201, 4);
+    let gql = "POST /ghe/api/graphql";
     let mut routes = gh_pr_routes(1, "owner/app");
     routes.extend([
-        route(
-            "POST /ghe/api/graphql",
-            200,
-            page(
-                json!([thread(
-                    "PRRT_1",
-                    json!(3),
-                    "RIGHT",
-                    false,
-                    101,
-                    "2026-10-01T10:02:00Z"
-                )]),
-                true,
-            ),
-        ),
-        route(
-            "POST /ghe/api/graphql",
-            200,
-            page(
-                json!([thread(
-                    "PRRT_2",
-                    Value::Null,
-                    "LEFT",
-                    true,
-                    201,
-                    "2026-10-01T10:04:00Z"
-                )]),
-                false,
-            ),
-        ),
-        route(&comments, 200, json!([comment(31, "2026-10-01T10:00:30Z")])).with(
-            "Link",
-            &format!("<{{base}}{}&page=2>; rel=\"next\"", &comments[4..]),
-        ),
+        route(gql, 200, page(t1, true)),
+        route(gql, 200, page(t2, false)),
+        route(&comments, 200, comment(31, "2026-10-01T10:00:30Z")).with("Link", &next),
         route(
             &format!("{comments}&page=2"),
             200,
-            json!([comment(32, "2026-10-01T10:09:00Z")]),
+            comment(32, "2026-10-01T10:09:00Z"),
         )
-        .with("Link", "<http://elsewhere.example/x>; rel=\"next\""),
+        .with("Link", "<{base}/ghe/api/v3x/elsewhere>; rel=\"next\""),
     ]);
     let t = github(routes);
     let th = mr_threads(&t.sb.state, &t.repo, 1).unwrap();
@@ -938,12 +824,15 @@ fn github_threads_from_graphql_comments_and_reviews() {
 #[test]
 fn github_write_bodies() {
     let mut routes = gh_pr_routes(1, "owner/app");
-    routes.push(route("POST /ghe/api/graphql", 200, json!({"data": {}})));
-    routes.push(route(
+    let merged = route(
         &format!("PUT {GH}/pulls/1/merge"),
         200,
         json!({"merged": true}),
-    ));
+    );
+    routes.extend([
+        route("POST /ghe/api/graphql", 200, json!({"data": {}})),
+        merged,
+    ]);
     let t = github(routes);
     let act = |a: MrAction| mr_action(&t.sb.state, &t.repo, 1, &a).unwrap();
     for (old_line, new_line) in [(None, Some(3)), (Some(5), None), (Some(7), Some(8))] {
@@ -979,70 +868,33 @@ fn github_write_bodies() {
     act(MrAction::Reopen);
     let w = t.fake.writes();
     let pr = format!("{GH}/pulls/1");
+    let c = format!("{pr}/comments");
     let line = |line, side| json!({"body": "Here", "commit_id": "bbb", "path": "src/a.rs", "line": line, "side": side});
-    let rest: Vec<(&str, String, Value)> = vec![
-        ("POST", format!("{pr}/comments"), line(3, "RIGHT")),
-        ("POST", format!("{pr}/comments"), line(5, "LEFT")),
-        ("POST", format!("{pr}/comments"), line(8, "RIGHT")),
-        (
-            "POST",
-            format!("{GH}/issues/1/comments"),
-            json!({"body": "Hi"}),
-        ),
-        (
-            "POST",
-            format!("{pr}/comments/101/replies"),
-            json!({"body": "Ok"}),
-        ),
-    ];
-    for (i, (m, p, b)) in rest.into_iter().enumerate() {
-        assert_eq!(w[i], (m.to_string(), p, b));
-    }
+    let post = |p: &str, b: Value| ("POST".to_string(), p.to_string(), b);
+    assert_eq!(
+        w[..5],
+        [
+            post(&c, line(3, "RIGHT")),
+            post(&c, line(5, "LEFT")),
+            post(&c, line(8, "RIGHT")),
+            post(&format!("{GH}/issues/1/comments"), json!({"body": "Hi"})),
+            post(&format!("{c}/101/replies"), json!({"body": "Ok"})),
+        ]
+    );
+    let query = |i: usize| w[i].2["query"].as_str().unwrap().to_string();
     assert_eq!(w[5].1, "/ghe/api/graphql");
-    assert!(
-        w[5].2["query"]
-            .as_str()
-            .unwrap()
-            .contains("resolveReviewThread(input:{threadId:$id})")
-    );
+    assert!(query(5).contains("resolveReviewThread(input:{threadId:$id})"));
     assert_eq!(w[5].2["variables"], json!({"id": "PRRT_1"}));
-    assert_eq!(
-        w[6],
-        (
-            "POST".into(),
-            format!("{pr}/reviews"),
-            json!({"event": "APPROVE"})
-        )
-    );
+    let reviews = format!("{pr}/reviews");
+    assert_eq!(w[6], post(&reviews, json!({"event": "APPROVE"})));
     assert_eq!(w[7].2, json!({"event": "REQUEST_CHANGES", "body": "No"}));
-    assert_eq!(
-        w[8],
-        (
-            "PUT".into(),
-            format!("{pr}/merge"),
-            json!({"merge_method": "squash", "sha": "bbb"})
-        )
-    );
-    assert!(
-        w[9].2["query"]
-            .as_str()
-            .unwrap()
-            .contains("enablePullRequestAutoMerge(")
-    );
-    assert_eq!(
-        w[9].2["variables"],
-        json!({"id": "PR_kwDO1", "m": "SQUASH", "sha": "bbb"})
-    );
-    assert!(
-        w[10].2["query"]
-            .as_str()
-            .unwrap()
-            .contains("convertPullRequestToDraft(")
-    );
-    assert_eq!(
-        w[11],
-        ("PATCH".into(), pr.clone(), json!({"state": "open"}))
-    );
+    let merge = json!({"merge_method": "squash", "sha": "bbb"});
+    assert_eq!(w[8], ("PUT".into(), format!("{pr}/merge"), merge));
+    assert!(query(9).contains("enablePullRequestAutoMerge("));
+    let vars = json!({"id": "PR_kwDO1", "m": "SQUASH", "sha": "bbb"});
+    assert_eq!(w[9].2["variables"], vars);
+    assert!(query(10).contains("convertPullRequestToDraft("));
+    assert_eq!(w[11], ("PATCH".into(), pr, json!({"state": "open"})));
     assert_eq!(w.len(), 12);
     let e = err(mr_action(&t.sb.state, &t.repo, 1, &MrAction::Unapprove));
     assert!(e.contains("not supported"), "{e}");
@@ -1052,82 +904,52 @@ fn github_write_bodies() {
 fn github_fork_branch_delete_goes_to_the_source_project_unless_the_ref_moved() {
     let fork = "/ghe/api/v3/repos/me/app";
     let mut routes = gh_pr_routes(1, "me/app");
+    let at = format!("{fork}/git/ref/heads/feature");
     routes.extend([
         route(
             &format!("PUT {GH}/pulls/1/merge"),
             200,
             json!({"merged": true}),
         ),
-        route(&format!("GET {fork}"), 200, gh_repo("me/app", true)),
-        route(
-            &format!("GET {fork}/git/ref/heads/feature"),
-            200,
-            json!({"object": {"sha": "bbb"}}),
-        ),
-        route(
-            &format!("GET {fork}/git/ref/heads/feature"),
-            200,
-            json!({"object": {"sha": "ccc"}}),
-        ),
+        get(fork, gh_repo("me/app", true)),
+        get(&at, json!({"object": {"sha": "bbb"}})),
+        get(&at, json!({"object": {"sha": "ccc"}})),
         route(
             &format!("DELETE {fork}/git/refs/heads/feature"),
             204,
             Value::Null,
         ),
     ]);
-    let t = setup(
-        true,
-        routes,
-        &[("origin", "owner/app"), ("fork", "me/app")],
-        Some("fork/feature"),
-    );
+    let t = forked(true, routes);
     let mr = get_mr(&t.sb.state, &t.repo, 1).unwrap();
     assert_eq!(mr.source_project, t.project("me/app"));
     assert!(mr.can_delete_source_branch);
-    let merge = MrAction::Merge {
+    let merge = |auto_merge| MrAction::Merge {
         method: MergeMethod::Merge,
         delete_source_branch: true,
-        auto_merge: false,
+        auto_merge,
         head_sha: "bbb".into(),
     };
-    mr_action(&t.sb.state, &t.repo, 1, &merge).unwrap();
-    mr_action(&t.sb.state, &t.repo, 1, &merge).unwrap();
+    mr_action(&t.sb.state, &t.repo, 1, &merge(false)).unwrap();
+    mr_action(&t.sb.state, &t.repo, 1, &merge(false)).unwrap();
     let w: Vec<(String, String)> = t.fake.writes().into_iter().map(|w| (w.0, w.1)).collect();
     let put = ("PUT".to_string(), format!("{GH}/pulls/1/merge"));
-    let delete = (
-        "DELETE".to_string(),
-        format!("{fork}/git/refs/heads/feature"),
-    );
+    let delete = ("DELETE".into(), format!("{fork}/git/refs/heads/feature"));
     assert_eq!(w, [put.clone(), delete, put]);
-    let auto = MrAction::Merge {
-        method: MergeMethod::Merge,
-        delete_source_branch: true,
-        auto_merge: true,
-        head_sha: "bbb".into(),
-    };
-    assert!(err(mr_action(&t.sb.state, &t.repo, 1, &auto)).contains("cannot delete"));
+    let e = err(mr_action(&t.sb.state, &t.repo, 1, &merge(true)));
+    assert!(e.contains("cannot delete"), "{e}");
 }
 
 #[test]
 fn github_current_mr_matches_source_project_and_branch() {
     let other = gh_pr(2, "other/app");
-    let mut routes = vec![route(
-        &format!("GET {GH}/pulls?state=open&head=me%3Afeature&per_page=100"),
-        200,
+    let mut routes = vec![get(
+        &format!("{GH}/pulls?state=open&head=me%3Afeature&per_page=100"),
         json!([other, gh_pr(3, "me/app")]),
     )];
     routes.extend(gh_pr_routes(3, "me/app"));
-    routes.push(route(
-        "GET /ghe/api/v3/repos/me/app",
-        200,
-        gh_repo("me/app", false),
-    ));
-    let t = setup(
-        true,
-        routes,
-        &[("origin", "owner/app"), ("fork", "me/app")],
-        Some("fork/feature"),
-    );
+    routes.push(get("/ghe/api/v3/repos/me/app", gh_repo("me/app", false)));
+    let t = forked(true, routes);
     let mr = current_mr(&t.sb.state, &t.repo).unwrap().unwrap();
     assert_eq!((mr.number, mr.source_project.path.as_str()), (3, "me/app"));
     assert!(!mr.can_delete_source_branch, "no push access to the fork");
@@ -1165,23 +987,14 @@ fn github_list_is_one_graphql_request_filtered_like_rest() {
     assert_eq!(numbers(ReviewRequested), [1]);
     assert_eq!(numbers(Assigned), [2]);
     assert_eq!(numbers(All), [1, 2, 3]);
-    let states: Vec<Value> = t
-        .fake
-        .reqs()
+    let reqs = t.fake.reqs();
+    let states: Vec<Value> = reqs
         .iter()
-        .map(|r| r.json()["variables"]["states"].clone())
+        .map(|r| r.json()["variables"]["states"].take())
         .collect();
     let open = json!(["OPEN"]);
-    assert_eq!(
-        states,
-        [
-            open.clone(),
-            open.clone(),
-            open.clone(),
-            open,
-            json!(["OPEN", "CLOSED", "MERGED"])
-        ]
-    );
+    let all = json!(["OPEN", "CLOSED", "MERGED"]);
+    assert_eq!(states, [&open, &open, &open, &open, &all].map(Value::clone));
     assert!(t.fake.reqs().iter().all(|r| r.path == "/ghe/api/graphql"));
     let mrs = list_mrs(&t.sb.state, &t.repo, All).unwrap();
     let base = &t.fake.base;
@@ -1213,26 +1026,15 @@ fn github_create_from_a_fork_uses_owner_and_branch() {
         json!({"number": 1}),
     )];
     routes.extend(gh_pr_routes(1, "me/app"));
-    routes.push(route(
-        "GET /ghe/api/v3/repos/me/app",
-        200,
-        gh_repo("me/app", true),
-    ));
-    let t = setup(
-        true,
-        routes,
-        &[("origin", "owner/app"), ("fork", "me/app")],
-        Some("fork/feature"),
-    );
+    routes.push(get("/ghe/api/v3/repos/me/app", gh_repo("me/app", true)));
+    let t = forked(true, routes);
     let n = new_mr(&t.sb.state, &t.repo).unwrap();
     assert_eq!(
         (n.target_branch.as_str(), n.title.as_str()),
         ("main", "Add feature")
     );
-    assert_eq!(
-        (n.source_project, n.target_project),
-        (t.project("me/app"), t.project("owner/app"))
-    );
+    let (me, owner) = (t.project("me/app"), t.project("owner/app"));
+    assert_eq!((n.source_project, n.target_project), (me, owner));
     let input = CreateMr {
         title: "T".into(),
         description: "D".into(),
@@ -1253,61 +1055,42 @@ fn github_jobs_and_log_through_the_blob_redirect_without_the_token() {
                      "html_url": "{base}/ghe/owner/app/actions/runs/11/job/70",
                      "steps": [{"name": "Checkout", "status": "completed", "conclusion": "success", "number": 1},
                                {"name": "Test", "status": "completed", "conclusion": "failure", "number": 2}]});
+    let jobs = json!({"total_count": 1, "jobs": [job.clone()]});
     let t = github(vec![
-        route(
-            &format!("GET {GH}/actions/runs/11/jobs"),
-            200,
-            json!({"total_count": 1, "jobs": [job.clone()]}),
-        ),
-        route(&format!("GET {GH}/actions/jobs/70"), 200, job),
+        get(&format!("{GH}/actions/runs/11/jobs"), jobs),
+        get(&format!("{GH}/actions/jobs/70"), job),
         route(&format!("GET {GH}/actions/jobs/70/logs"), 302, Value::Null)
             .with("Location", "{base}/blob/70?sig=x"),
-        route("GET /blob/70", 200, Value::Null).raw("line 1\nline 2\n"),
+        get("/blob/70", Value::Null).raw("line 1\nline 2\n"),
     ]);
     let p = t.project("owner/app");
     let stages = pipeline_jobs(&t.sb.state, &t.repo, &p, 11).unwrap();
+    use PipelineStatus::*;
+    let s = &stages[0];
     assert_eq!(
-        (
-            stages.len(),
-            stages[0].name.as_str(),
-            stages[0].status.clone()
-        ),
-        (1, "CI", PipelineStatus::Failed)
+        (stages.len(), s.name.as_str(), &s.status),
+        (1, "CI", &Failed)
     );
-    let j = &stages[0].jobs[0];
-    assert_eq!(
-        (
-            j.cancellable,
-            j.playable,
-            j.retryable,
-            j.live_log,
-            j.duration
-        ),
-        (false, false, true, false, Some(90))
+    let j = &s.jobs[0];
+    let flags = (
+        j.cancellable,
+        j.playable,
+        j.retryable,
+        j.live_log,
+        j.duration,
     );
-    let steps: Vec<(&str, PipelineStatus)> = j
+    assert_eq!(flags, (false, false, true, false, Some(90)));
+    let steps: Vec<_> = j
         .steps
         .iter()
-        .map(|s| (s.name.as_str(), s.status.clone()))
+        .map(|s| (s.name.as_str(), &s.status))
         .collect();
-    assert_eq!(
-        steps,
-        [
-            ("Checkout", PipelineStatus::Success),
-            ("Test", PipelineStatus::Failed)
-        ]
-    );
+    assert_eq!(steps, [("Checkout", &Success), ("Test", &Failed)]);
     let c = job_log(&t.sb.state, &t.repo, &p, 70, 2).unwrap();
-    assert_eq!(
-        (c.text.as_str(), c.next, c.complete),
-        ("ne 1\nline 2\n", 14, true)
-    );
-    let blob = t
-        .fake
-        .reqs()
-        .into_iter()
-        .find(|r| r.path.starts_with("/blob/"))
-        .unwrap();
+    let text = ("ne 1\nline 2\n", 14, true);
+    assert_eq!((c.text.as_str(), c.next, c.complete), text);
+    let reqs = t.fake.reqs();
+    let blob = reqs.iter().find(|r| r.path.starts_with("/blob/")).unwrap();
     assert_eq!(blob.path, "/blob/70?sig=x");
     assert_eq!(blob.header("authorization"), None);
     let e = err(job_action(&t.sb.state, &t.repo, &p, 70, JobAction::Cancel));
@@ -1316,11 +1099,8 @@ fn github_jobs_and_log_through_the_blob_redirect_without_the_token() {
 
 #[test]
 fn github_running_job_has_no_log_yet() {
-    let t = github(vec![route(
-        &format!("GET {GH}/actions/jobs/70"),
-        200,
-        json!({"id": 70, "status": "in_progress"}),
-    )]);
+    let job = json!({"id": 70, "status": "in_progress"});
+    let t = github(vec![get(&format!("{GH}/actions/jobs/70"), job)]);
     let c = job_log(&t.sb.state, &t.repo, &t.project("owner/app"), 70, 0).unwrap();
     assert_eq!((c.text.as_str(), c.next, c.complete), ("", 0, false));
     assert_eq!(t.fake.reqs().len(), 1);
@@ -1329,11 +1109,10 @@ fn github_running_job_has_no_log_yet() {
 #[test]
 fn redirects_are_refused_except_the_https_or_loopback_log_blob() {
     let t = github(vec![
-        route(&format!("GET {GH}"), 200, gh_repo("owner/app", true)),
+        get(GH, gh_repo("owner/app", true)),
         route(&format!("GET {GH}/pulls/1"), 302, Value::Null).with("Location", "{base}/elsewhere"),
-        route(
-            &format!("GET {GH}/actions/jobs/70"),
-            200,
+        get(
+            &format!("{GH}/actions/jobs/70"),
             json!({"status": "completed"}),
         ),
         route(&format!("GET {GH}/actions/jobs/70/logs"), 302, Value::Null)
@@ -1344,31 +1123,17 @@ fn redirects_are_refused_except_the_https_or_loopback_log_blob() {
         e.contains("302 redirect") && e.contains("not followed"),
         "{e}"
     );
-    let e = err(job_log(
-        &t.sb.state,
-        &t.repo,
-        &t.project("owner/app"),
-        70,
-        0,
-    ));
+    let p = t.project("owner/app");
+    let e = err(job_log(&t.sb.state, &t.repo, &p, 70, 0));
     assert!(e.contains("refused"), "{e}");
     assert!(!t.fake.reqs().iter().any(|r| r.path.contains("elsewhere")));
 
     let t = gitlab(vec![
-        route(
-            &format!("GET {GL}/jobs/70"),
-            200,
-            json!({"status": "success"}),
-        ),
+        get(&format!("{GL}/jobs/70"), json!({"status": "success"})),
         route(&format!("GET {GL}/jobs/70/trace"), 302, Value::Null).with("Location", "{base}/blob"),
     ]);
-    let e = err(job_log(
-        &t.sb.state,
-        &t.repo,
-        &t.project("group/app"),
-        70,
-        0,
-    ));
+    let p = t.project("group/app");
+    let e = err(job_log(&t.sb.state, &t.repo, &p, 70, 0));
     assert!(e.contains("refused"), "{e}");
     assert!(blob_allowed(
         "https://pipelines.actions.githubusercontent.com/x"
@@ -1378,14 +1143,9 @@ fn redirects_are_refused_except_the_https_or_loopback_log_blob() {
 
 #[test]
 fn rate_limits_back_off_until_the_reset() {
-    let t = gitlab(vec![
-        route(
-            &format!("GET {GL}/merge_requests/1"),
-            429,
-            json!({"message": "Too Many Requests"}),
-        )
-        .with("Retry-After", "60"),
-    ]);
+    let busy = json!({"message": "Too Many Requests"});
+    let busy = route(&format!("GET {GL}/merge_requests/1"), 429, busy);
+    let t = gitlab(vec![busy.with("Retry-After", "60")]);
     for _ in 0..2 {
         let e = err(get_mr(&t.sb.state, &t.repo, 1));
         assert!(e.starts_with("Rate limited; retrying after "), "{e}");
@@ -1393,14 +1153,11 @@ fn rate_limits_back_off_until_the_reset() {
     assert_eq!(t.fake.reqs().len(), 1, "the second call stays local");
 
     let reset = (http::now() + 120).to_string();
+    let limit = json!({"message": "API rate limit exceeded"});
     let t = github(vec![
-        route(
-            &format!("GET {GH}"),
-            403,
-            json!({"message": "API rate limit exceeded"}),
-        )
-        .with("x-ratelimit-remaining", "0")
-        .with("x-ratelimit-reset", &reset),
+        route(&format!("GET {GH}"), 403, limit)
+            .with("x-ratelimit-remaining", "0")
+            .with("x-ratelimit-reset", &reset),
     ]);
     assert!(err(get_mr(&t.sb.state, &t.repo, 1)).starts_with("Rate limited"));
     assert!(err(list_mrs(&t.sb.state, &t.repo, MrFilter::Open)).starts_with("Rate limited"));
@@ -1426,23 +1183,12 @@ fn scopes_are_named_only_from_the_providers_signal() {
             json!({"message": {"note": ["can't be blank"]}}),
         ),
     ]);
-    assert_eq!(
-        err(get_mr(&t.sb.state, &t.repo, 1)),
-        "403: the token lacks the api scope"
-    );
-    assert_eq!(
-        err(mr_action(&t.sb.state, &t.repo, 1, &MrAction::Approve)),
-        "401 Unauthorized"
-    );
-    let e = err(mr_action(
-        &t.sb.state,
-        &t.repo,
-        1,
-        &MrAction::Comment {
-            body: String::new(),
-        },
-    ));
-    assert_eq!(e, r#"400 {"note":["can't be blank"]}"#);
+    let act = |a: &MrAction| err(mr_action(&t.sb.state, &t.repo, 1, a));
+    let e = err(get_mr(&t.sb.state, &t.repo, 1));
+    assert_eq!(e, "403: the token lacks the api scope");
+    assert_eq!(act(&MrAction::Approve), "401 Unauthorized");
+    let blank = MrAction::Comment { body: "".into() };
+    assert_eq!(act(&blank), r#"400 {"note":["can't be blank"]}"#);
 
     let t = github(vec![
         route(&format!("GET {GH}"), 404, json!({"message": "Not Found"}))
@@ -1461,16 +1207,12 @@ fn scopes_are_named_only_from_the_providers_signal() {
             json!({"message": "Validation Failed", "errors": [{"resource": "PullRequest", "message": "state cannot be changed"}]}),
         ),
     ]);
-    assert_eq!(
-        err(get_mr(&t.sb.state, &t.repo, 1)),
-        "404: the token lacks the repo scope"
-    );
+    let act = |a: &MrAction| err(mr_action(&t.sb.state, &t.repo, 1, a));
+    let e = err(get_mr(&t.sb.state, &t.repo, 1));
+    assert_eq!(e, "404: the token lacks the repo scope");
     let comment = MrAction::Comment { body: "x".into() };
-    assert_eq!(
-        err(mr_action(&t.sb.state, &t.repo, 1, &comment)),
-        "404 Not Found"
-    );
-    let e = err(mr_action(&t.sb.state, &t.repo, 1, &MrAction::Close));
+    assert_eq!(act(&comment), "404 Not Found");
+    let e = act(&MrAction::Close);
     assert_eq!(e, "422 Validation Failed: state cannot be changed");
 }
 
@@ -1486,13 +1228,11 @@ fn github_polling_sends_if_none_match() {
     ]);
     let p = t.project("owner/app");
     let first = workflows(&t.sb.state, &t.repo, &p).unwrap();
-    assert_eq!(
-        first,
-        [Workflow {
-            id: "3".into(),
-            name: "CI".into()
-        }]
-    );
+    let ci = Workflow {
+        id: "3".into(),
+        name: "CI".into(),
+    };
+    assert_eq!(first, [ci]);
     assert_eq!(workflows(&t.sb.state, &t.repo, &p).unwrap(), first);
     let r = t.fake.reqs();
     assert_eq!(r[0].header("if-none-match"), None);
@@ -1504,22 +1244,15 @@ fn github_run_dispatches_and_returns_the_new_run() {
     let runs = format!(
         "GET {GH}/actions/workflows/3/runs?event=workflow_dispatch&branch=feature&per_page=1"
     );
+    let (old, new) = (
+        gh_run(10, "completed", json!("success")),
+        gh_run(12, "queued", Value::Null),
+    );
+    let dispatch = format!("POST {GH}/actions/workflows/3/dispatches");
     let t = github(vec![
-        route(
-            &runs,
-            200,
-            json!({"workflow_runs": [gh_run(10, "completed", json!("success"))]}),
-        ),
-        route(
-            &runs,
-            200,
-            json!({"workflow_runs": [gh_run(12, "queued", Value::Null)]}),
-        ),
-        route(
-            &format!("POST {GH}/actions/workflows/3/dispatches"),
-            204,
-            Value::Null,
-        ),
+        route(&runs, 200, json!({ "workflow_runs": [old] })),
+        route(&runs, 200, json!({ "workflow_runs": [new] })),
+        route(&dispatch, 204, Value::Null),
     ]);
     let input = RunPipeline {
         project: t.project("owner/app"),
@@ -1537,8 +1270,6 @@ fn github_run_dispatches_and_returns_the_new_run() {
         json!({"ref": "feature", "inputs": {"env": "staging"}})
     );
 }
-
-// Project and account resolution
 
 fn acc(id: &str, base_url: &str) -> Account {
     Account {
@@ -1562,56 +1293,50 @@ fn account_order_with_ambiguous_and_unknown_hosts() {
         let (a, ambiguous) = account(s, &accounts, "/r", &parse_remote(url).unwrap());
         (a.map(|a| a.id), ambiguous)
     };
+    let id = |id: &str| (Some(id.to_string()), false);
     let mut s = Settings::default();
     let sub = "https://git.example.com/gitlab/group/app.git";
-    assert_eq!(pick(&s, sub), (None, true));
-    assert_eq!(
-        pick(&s, "https://git.example.com/group/app.git"),
-        (Some("g1".into()), false)
+    let (top, ssh) = (
+        "https://git.example.com/group/app.git",
+        "git@github.com:o/r.git",
     );
-    assert_eq!(pick(&s, "git@github.com:o/r.git"), (None, true));
+    assert_eq!(pick(&s, sub), (None, true));
+    assert_eq!(pick(&s, top), id("g1"));
+    assert_eq!(pick(&s, ssh), (None, true));
     assert_eq!(pick(&s, "https://gitlab.com/o/r.git"), (None, false));
     s.repo_accounts.insert("/r".into(), "h1".into());
-    assert_eq!(
-        pick(&s, sub),
-        (None, true),
-        "milestone 1's choice applies only when it fits"
-    );
-    assert_eq!(
-        pick(&s, "git@github.com:o/r.git"),
-        (Some("h1".into()), false)
-    );
+    let why = "the repo's credential account applies only when it fits";
+    assert_eq!(pick(&s, sub), (None, true), "{why}");
+    assert_eq!(pick(&s, ssh), id("h1"));
     s.repo_accounts.insert("/r".into(), "g2".into());
-    assert_eq!(pick(&s, sub), (Some("g2".into()), false));
-    let host = |h: &str, id: &str| [(h.to_string(), id.to_string())].into_iter().collect();
-    s.forge_accounts
-        .insert("/r".into(), host("git.example.com", "h2"));
-    assert_eq!(
-        pick(&s, sub),
-        (Some("h2".into()), false),
-        "the forge account wins, fitting or not"
-    );
-    s.forge_accounts
-        .insert("/r".into(), host("git.example.com", "gone"));
-    assert_eq!(pick(&s, sub), (Some("g2".into()), false));
+    assert_eq!(pick(&s, sub), id("g2"));
+    let host = |id: &str| {
+        [("git.example.com".into(), id.into())]
+            .into_iter()
+            .collect()
+    };
+    s.forge_accounts.insert("/r".into(), host("h2"));
+    let why = "the forge account wins, fitting or not";
+    assert_eq!(pick(&s, sub), id("h2"), "{why}");
+    s.forge_accounts.insert("/r".into(), host("gone"));
+    assert_eq!(pick(&s, sub), id("g2"));
 }
 
 #[test]
 fn mr_remote_follows_the_setting_else_origin_else_the_only_remote() {
     let mut s = Settings::default();
-    assert_eq!(
-        mr_remote(&s, "/r", &["upstream", "origin"]).as_deref(),
-        Some("origin")
-    );
-    assert_eq!(mr_remote(&s, "/r", &["fork"]).as_deref(), Some("fork"));
-    assert_eq!(mr_remote(&s, "/r", &["fork", "upstream"]), None);
+    let pick = |s: &Settings, names: &[&str]| mr_remote(s, "/r", names);
+    assert_eq!(pick(&s, &["upstream", "origin"]).as_deref(), Some("origin"));
+    assert_eq!(pick(&s, &["fork"]).as_deref(), Some("fork"));
+    assert_eq!(pick(&s, &["fork", "upstream"]), None);
     s.mr_remotes.insert("/r".into(), "upstream".into());
     assert_eq!(
-        mr_remote(&s, "/r", &["upstream", "origin"]).as_deref(),
+        pick(&s, &["upstream", "origin"]).as_deref(),
         Some("upstream")
     );
+    let gone = pick(&s, &["fork", "origin"]);
     assert_eq!(
-        mr_remote(&s, "/r", &["fork", "origin"]).as_deref(),
+        gone.as_deref(),
         Some("origin"),
         "a saved remote that is gone"
     );
@@ -1694,10 +1419,8 @@ fn remote_urls_resolve_ssh_aliases_and_strip_the_base_sub_path() {
 fn forge_hosts_lists_each_remote_host_and_the_mr_remote() {
     let remotes = [("origin", "group/app"), ("fork", "me/app")];
     let t = setup(false, vec![], &remotes, None);
-    t.sb.git(
-        &t.repo,
-        &["remote", "add", "gh", "https://github.com/o/r.git"],
-    );
+    let gh = ["remote", "add", "gh", "https://github.com/o/r.git"];
+    t.sb.git(&t.repo, &gh);
     let h = forge_hosts(&t.sb.state, &t.repo).unwrap();
     assert_eq!(h.mr_remote.as_deref(), Some("origin"));
     let id = crate::accounts::load(&t.sb.state.config_dir).unwrap()[0]
@@ -1726,8 +1449,6 @@ fn forge_hosts_lists_each_remote_host_and_the_mr_remote() {
     );
 }
 
-// verify, from milestone 1
-
 #[test]
 fn api_bases() {
     assert_eq!(
@@ -1754,16 +1475,13 @@ fn api_bases() {
 #[test]
 fn verify_sends_each_providers_token_and_reports_failures() {
     let f = Fake::start(vec![
-        route("GET /gitlab/api/v4/user", 200, json!({"username": "alice"})),
+        get("/gitlab/api/v4/user", json!({"username": "alice"})),
         route("GET /api/v3/user", 403, json!({})),
         route("GET /moved/api/v4/user", 302, Value::Null)
             .with("Location", "http://127.0.0.1:9/elsewhere"),
     ]);
-    let ok = verify(
-        &Provider::GitlabSelfHosted,
-        &format!("{}/gitlab", f.base),
-        "glpat-x",
-    );
+    let gl = format!("{}/gitlab", f.base);
+    let ok = verify(&Provider::GitlabSelfHosted, &gl, "glpat-x");
     assert_eq!(
         ok,
         VerifyResult::Ok {
@@ -1778,11 +1496,8 @@ fn verify_sends_each_providers_token_and_reports_failures() {
             error: "Forbidden".into()
         }
     );
-    let r = verify(
-        &Provider::GitlabSelfHosted,
-        &format!("{}/moved", f.base),
-        "t",
-    );
+    let moved = format!("{}/moved", f.base);
+    let r = verify(&Provider::GitlabSelfHosted, &moved, "t");
     assert!(
         matches!(
             r,
@@ -1795,10 +1510,8 @@ fn verify_sends_each_providers_token_and_reports_failures() {
     );
     let reqs = f.reqs();
     assert_eq!(reqs[0].header("private-token").as_deref(), Some("glpat-x"));
-    assert_eq!(
-        reqs[1].header("authorization").as_deref(),
-        Some("Bearer ghp_x")
-    );
+    let bearer = reqs[1].header("authorization");
+    assert_eq!(bearer.as_deref(), Some("Bearer ghp_x"));
     assert_eq!(reqs.len(), 3);
 }
 
