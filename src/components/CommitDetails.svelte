@@ -1,19 +1,17 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { api, EMPTY_TREE, type CommitDetails, type FileChange, type Side } from '../lib/api'
-  import { baseName, dirName, statusOf } from '../lib/files'
+  import { baseName, dirName, letter, statusOf } from '../lib/files'
   import { when } from '../lib/log'
   import { view } from '../lib/view.svelte'
   import VirtualList from './VirtualList.svelte'
 
-  // One commit's details and changes, or for several (newest first) the changes from the oldest's first parent to the newest.
-  // With `worktree`, the changes from the one commit to the working tree.
+  // Several `shas` (newest first) show the changes from the oldest's first parent to the newest;
+  // `worktree` compares the one commit with the working tree.
   let { repo, shas, worktree = false }: { repo: string; shas: string[]; worktree?: boolean } = $props()
 
   const rev = (r: string): Side => ({ kind: 'rev', rev: r })
   const short = (sha: string) => sha.slice(0, 10)
-  const letter: Record<string, string> = { modified: 'M', renamed: 'R', added: 'A', deleted: 'D', untracked: 'U', conflict: 'C' }
-
   let data = $state<{ d: CommitDetails; left: Side; right: Side; changes: FileChange[] } | null>(null)
   let error = $state('')
   let containing = $state<string[] | string | null>(null)
@@ -141,11 +139,5 @@
   .files:focus-within .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .item .muted { min-width: 0; }
   .name { font-weight: 600; }
-  .st { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono); color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
-  .modified, .renamed { --c: var(--modified); }
-  .added { --c: var(--added); }
-  .deleted { --c: var(--deleted); }
   .deleted .name { text-decoration: line-through; color: var(--muted); }
-  .untracked { --c: var(--untracked); }
-  .conflict { --c: var(--conflict); }
 </style>

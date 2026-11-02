@@ -21,7 +21,6 @@
   import { showJob } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
 
-  // The repo's pipelines, or the MR's when `mr` is given.
   let { repo, mr }: { repo: string | null; mr?: number } = $props()
 
   interface RunForm { project: Project; branch: string; workflow: string; workflows: Workflow[]; vars: [string, string][] }
@@ -75,6 +74,11 @@
   })
 
   $effect(() => {
+    void repo
+    run = null
+  })
+
+  $effect(() => {
     if (!ui.run || mr) return
     ui.run = false
     untrack(openRun)
@@ -109,7 +113,6 @@
     jobs(p)
   }
 
-  /** Runs a write, then reloads; false when it failed, its message shown. */
   async function act(f: () => Promise<unknown>) {
     busy = true
     note = null
@@ -133,7 +136,7 @@
     try {
       const project = list?.[0]?.project ?? (await api.newMr(r)).sourceProject
       const workflows = gh(project) ? await api.workflows(r, project) : []
-      run = { project, branch: st?.branch ?? '', workflow: workflows[0]?.id ?? '', workflows, vars: [] }
+      if (r === repo) run = { project, branch: st?.branch ?? '', workflow: workflows[0]?.id ?? '', workflows, vars: [] }
     } catch (e) {
       note = String(e)
     }

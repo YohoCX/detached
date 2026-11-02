@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { api, type Branches, type CommitSummary, type LocalBranch, type RemoteBranch } from '../lib/api'
-  import { app, checkout, nameOf, notify, recentOf, refresh, runOp, say, statusOf } from '../lib/app.svelte'
+  import { app, checkout, notify, prune, recentOf, refresh, runOp, say, statusOf } from '../lib/app.svelte'
   import { filter, segments } from '../lib/fuzzy'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
@@ -97,7 +97,6 @@
     sub = s
   }
 
-  /** Runs a local branch write; afterwards closes the popup or returns to the reloaded list. */
   async function act(f: () => Promise<Sub | void>, after: 'close' | 'list' = 'list') {
     busy = true
     try {
@@ -117,7 +116,10 @@
   function choose(it: Item) {
     if (it.kind === 'header') return
     if (it.kind === 'new') return go({ kind: 'new', start: 'HEAD', label: head })
-    if (it.kind === 'prune') return prune()
+    if (it.kind === 'prune') {
+      close()
+      return prune(repo!)
+    }
     if (intent === 'delete') return it.kind === 'local' ? del(it.b.name) : go({ kind: 'deleteRemote', b: it.b })
     if (it.kind === 'local' && it.b.current) return go({ kind: 'menu', item: it })
     doCheckout(it)
@@ -145,14 +147,6 @@
     })
 
   const setTracking = (branch: string, upstream: string | null) => act(() => api.setUpstream(repo!, branch, upstream))
-
-  function prune() {
-    close()
-    runOp(repo!, 'Prune', (id, p) => api.prune(repo!, id, p)).then(
-      () => say(`${nameOf(repo!)}: pruned stale remote branches`),
-      (e) => say(String(e), true),
-    )
-  }
 
   function deleteRemote(b: RemoteBranch) {
     close()
@@ -221,7 +215,7 @@
     <p class="pad muted">Select a repository first.</p>
   {:else if sub.kind === 'list'}
     <input class="search" placeholder={intent === 'delete' ? 'Delete branch…' : 'Search branches'} bind:this={focus} bind:value={query}
- oninput={() => (enterPending = false)} />
+      oninput={() => (enterPending = false)} />
     {#if error}
       <p class="pad err">{error}</p>
     {:else if !data}

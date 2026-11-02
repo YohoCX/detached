@@ -146,6 +146,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--selected-ring); 
 .seg button { height: 24px; padding: 0 10px; border: 0; border-radius: 7px; background: none; font-size: 12px; font-weight: 600; color: var(--muted); }
 .seg button.on { background: var(--selected); color: var(--fg); font-weight: 700; }
 
+/* A change's status letter, tinted by its status class. */
+.st { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono); color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
+.modified, .renamed { --c: var(--modified); }
+.added { --c: var(--added); }
+.deleted { --c: var(--deleted); }
+.untracked { --c: var(--untracked); }
+.conflict { --c: var(--conflict); }
+
 .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 
 .muted { color: var(--muted); }

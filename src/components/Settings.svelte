@@ -35,7 +35,7 @@
 
   onMount(() => {
     attempt(reload)
-    api.envInfo().then((e) => (env = e))
+    attempt(async () => (env = await api.envInfo()))
   })
 
   const setAccount = (id: string) =>

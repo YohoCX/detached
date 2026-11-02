@@ -22,7 +22,6 @@ export function filter<T>(items: T[], query: string, text: (t: T) => string): { 
   return query ? out.sort((a, b) => b.score - a.score) : out
 }
 
-/** Splits `text` into runs for highlighting the chars at `indices`. */
 export function segments(text: string, indices: number[]): { text: string; hit: boolean }[] {
   const hits = new Set(indices)
   const out: { text: string; hit: boolean }[] = []

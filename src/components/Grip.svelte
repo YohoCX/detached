@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { load, save } from '../lib/storage'
 
-  // Drag handle on one edge of a relatively positioned pane; the size is remembered per key.
+  // On one edge of a relatively positioned pane; the size is remembered per key.
   let { key, size = $bindable(), edge, min = 160, max = 1200 }: {
     key: string
     size: number
@@ -10,11 +11,7 @@
     max?: number
   } = $props()
 
-  untrack(() => {
-    try {
-      size = Number(localStorage.getItem(`size.${key}`)) || size
-    } catch {}
-  })
+  untrack(() => (size = Number(load(`size.${key}`)) || size))
 
   const pos = (e: PointerEvent) => (edge === 'top' ? e.clientY : e.clientX)
 
@@ -23,11 +20,9 @@
     const [start, from, sign] = [pos(e), size, edge === 'right' ? 1 : -1]
     grip.setPointerCapture(e.pointerId)
     grip.onpointermove = (m) => (size = Math.round(Math.max(min, Math.min(max, from + sign * (pos(m) - start)))))
-    grip.onpointerup = () => {
+    grip.onlostpointercapture = () => {
       grip.onpointermove = null
-      try {
-        localStorage.setItem(`size.${key}`, String(size))
-      } catch {}
+      save(`size.${key}`, String(size))
     }
   }
 </script>

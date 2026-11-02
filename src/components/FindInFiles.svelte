@@ -1,5 +1,5 @@
 <script module lang="ts">
-  // Kept between openings, like JetBrains' Find in Files.
+  // Kept between openings.
   const opts = $state({ text: '', caseSensitive: false, wholeWord: false, regex: false, glob: '', all: false })
 </script>
 

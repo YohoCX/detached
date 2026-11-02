@@ -8,7 +8,6 @@
   import type { Edge, LogRow } from '../lib/api'
   import { lanes } from '../lib/log'
 
-  // One row's lanes: `row.top` and `row.bottom` drawn around the dot at `row.column`.
   let { row }: { row: LogRow } = $props()
 
   const H = 28

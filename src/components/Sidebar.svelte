@@ -2,7 +2,9 @@
   import { SvelteSet } from 'svelte/reactivity'
   import type { RepoInfo } from '../lib/api'
   import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses, toneOf } from '../lib/app.svelte'
+  import { folderName } from '../lib/files'
   import { folderMenu, repoMenu } from '../lib/menu'
+  import { load, save } from '../lib/storage'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
@@ -10,21 +12,11 @@
     | { folder: string; repo?: undefined }
     | { repo: RepoInfo; solo: boolean; worktree: boolean; worktrees: number; folder?: undefined }
 
-  // Collapsed folders and repos (by path), remembered across launches.
-  const KEY = 'sidebar.collapsed'
-  const collapsed = new SvelteSet<string>(load())
-  function load(): string[] {
-    try {
-      return JSON.parse(localStorage.getItem(KEY) ?? '[]')
-    } catch {
-      return []
-    }
-  }
+  // Collapsed folders and repos, by path.
+  const collapsed = new SvelteSet<string>(JSON.parse(load('sidebar.collapsed') ?? '[]'))
   function toggle(path: string) {
     if (!collapsed.delete(path)) collapsed.add(path)
-    try {
-      localStorage.setItem(KEY, JSON.stringify([...collapsed]))
-    } catch {}
+    save('sidebar.collapsed', JSON.stringify([...collapsed]))
   }
 
   const rows = $derived.by(() => {
@@ -47,7 +39,6 @@
   })
 
   const badge = { merge: 'MERGING', rebase: 'REBASING', cherryPick: 'CHERRY-PICKING', revert: 'REVERTING', bisect: 'BISECTING' }
-  const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
 </script>
 
 <section>
@@ -64,7 +55,7 @@
           <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}
             oncontextmenu={() => folderMenu(r.folder, collapsed.has(r.folder), () => toggle(r.folder))}>
             <span class="chevron" class:open={!collapsed.has(r.folder)}><Icon name="chevron" size={12} /></span>
-            <Icon name="folder" /><span class="label ellipsis">{base(r.folder)}</span>
+            <Icon name="folder" /><span class="label ellipsis">{folderName(r.folder)}</span>
             <button class="icon-btn hover" title="Remove folder" onclick={(e) => {
               e.stopPropagation()
               removeFolder(r.folder)
@@ -74,6 +65,7 @@
           {@const s = statuses.get(r.repo.path)}
           {@const st = typeof s === 'object' ? s : null}
           {@const o = outcomes.get(r.repo.path)}
+          {@const tone = toneOf(s)}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div
             class="repo"
@@ -95,7 +87,7 @@
                     toggle(r.repo.path)
                   }}><Icon name="chevron" size={12} /></button>
               {/if}
-              <span class="name ellipsis">{r.worktree ? base(r.repo.path) : r.repo.name}</span>
+              <span class="name ellipsis">{r.worktree ? folderName(r.repo.path) : r.repo.name}</span>
               {#if st?.inProgress}<span class="badge">{badge[st.inProgress]}</span>{/if}
               {#if st?.changes.length}<span class="dirty" title="Changed files">{st.changes.length}</span>{/if}
               <button class="icon-btn hover" title="Remove from list" onclick={(e) => {
@@ -105,7 +97,7 @@
               }}>
                 <Icon name="close" size={12} />
               </button>
-              {#if toneOf(s)}<span class="dot" style:color="var(--{toneOf(s)})"></span>{/if}
+              {#if tone}<span class="dot" style:color="var(--{tone})"></span>{/if}
             </div>
             <div class="line muted">
               {#if typeof s === 'string'}

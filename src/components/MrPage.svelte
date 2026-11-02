@@ -3,7 +3,7 @@
   import { mount, unmount, untrack } from 'svelte'
   import { api, type CommitSummary, type DiffSide, type FileChange, type Hunk, type MergeRequest, type MrAction, type Side, type Thread as T } from '../lib/api'
   import { runOp, say } from '../lib/app.svelte'
-  import { baseName, dirName, statusOf } from '../lib/files'
+  import { baseName, dirName, letter, statusOf } from '../lib/files'
   import { when } from '../lib/log'
   import { ago, bareTitle, isGitLab, tone } from '../lib/mr'
   import type { FileDoc, Zone } from '../lib/view.svelte'
@@ -20,7 +20,6 @@
 
   type Refs = { base: string; head: string; moved: boolean; commits: CommitSummary[]; files: FileChange[] }
   const tabs = ['Overview', 'Commits', 'Changes', 'Pipelines'] as const
-  const letter: Record<string, string> = { modified: 'M', renamed: 'R', added: 'A', deleted: 'D' }
   const rev = (r: string): Side => ({ kind: 'rev', rev: r })
 
   let tab = $state<(typeof tabs)[number]>('Overview')
@@ -61,7 +60,6 @@
     })
   })
 
-  /** Every write refreshes the MR; a failure shows the provider's message. */
   async function act(a: MrAction): Promise<boolean> {
     busy = true
     try {
@@ -123,9 +121,8 @@
   const commentable = (side: DiffSide, line: number) =>
     gitlab || hunks.some((h) => (side === 'new' ? within(h.newStart, h.newLines, line) : within(h.oldStart, h.oldLines, line)))
 
-  const fileThreads = $derived(
-    file ? threads.filter((t) => t.position && !t.position.outdated && [file!.path, file!.origPath].includes(t.position.path)) : [],
-  )
+  const onFile = (t: T, f: FileChange) => t.position && !t.position.outdated && [f.path, f.origPath].includes(t.position.path)
+  const fileThreads = $derived(file ? threads.filter((t) => onFile(t, file!)) : [])
   let zones = $state<Zone[]>([])
   $effect(() => {
     const m = mr
@@ -228,9 +225,8 @@
     {:else if tab === 'Pipelines'}
       <Pipelines {repo} mr={number} />
     {:else if !ready}
-      <div class="empty" class:error={typeof refs === 'object' && refs && 'error' in refs}>
-        {typeof refs === 'object' && refs && 'error' in refs ? refs.error : 'Loading…'}
-      </div>
+      {@const failed = typeof refs === 'object' && refs && 'error' in refs ? refs.error : ''}
+      <div class="empty" class:error={failed}>{failed || 'Loading…'}</div>
     {:else if tab === 'Commits'}
       <div class="split">
         <div class="list">
@@ -255,11 +251,11 @@
           <Grip key="mr.files" bind:size={filesWidth} edge="right" min={180} max={700} />
           <div class="files-head muted">{ready.files.length} {ready.files.length === 1 ? 'file' : 'files'}</div>
           {#each ready.files as f (f.path)}
-            {@const n = threads.filter((t) => t.position && !t.position.outdated && [f.path, f.origPath].includes(t.position.path)).length}
+            {@const n = threads.filter((t) => onFile(t, f)).length}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div class="row item {statusOf(f)}" class:selected={file?.path === f.path} role="option" aria-selected={file?.path === f.path} tabindex="-1"
               title={f.origPath ? `${f.origPath} → ${f.path}` : f.path} onclick={() => pick(f)}>
-              <span class="st">{letter[statusOf(f)] ?? 'M'}</span>
+              <span class="st">{letter[statusOf(f)]}</span>
               <span class="name">{baseName(f.path)}</span>
               <span class="muted ellipsis grow">{dirName(f.path)}</span>
               {#if n}<span class="count" title="{n} comment threads">{n}</span>{/if}
@@ -319,8 +315,4 @@
   .date { flex: none; font-size: 12px; }
   .name { font-weight: 600; }
   .count { flex: none; min-width: 18px; padding: 0 5px; border-radius: 999px; font-size: 11px; font-weight: 700; text-align: center; background: var(--selected); color: var(--accent); }
-  .st { flex: none; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono); color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent); }
-  .modified, .renamed { --c: var(--modified); }
-  .added { --c: var(--added); }
-  .deleted { --c: var(--deleted); }
 </style>

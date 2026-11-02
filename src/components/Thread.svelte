@@ -3,8 +3,7 @@
   import { ago } from '../lib/mr'
   import Markdown from './Markdown.svelte'
 
-  // A thread with reply and resolve, or with `thread` null a box whose text `start` turns into the action.
-  // In a diff `zone` it leaves out its position.
+  // With `thread` null, a new comment box whose text `start` turns into the action.
   let { mr, thread, act, start, oncancel, zone = false }: {
     mr: MergeRequest
     thread: Thread | null
@@ -22,11 +21,7 @@
     const body = text.trim()
     if (!body || busy) return
     busy = true
-    if (await act(thread ? { kind: 'reply', replyTo: thread.replyTo, body } : start!(body))) {
-      text = ''
-      replying = false
-      oncancel?.()
-    }
+    if (await act(thread ? { kind: 'reply', replyTo: thread.replyTo, body } : start!(body))) cancel()
     busy = false
   }
 
