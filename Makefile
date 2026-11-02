@@ -1,4 +1,4 @@
-.PHONY: check e2e e2e-app fmt dev build sign-setup
+.PHONY: check e2e e2e-app fmt dev build sign-setup release
 
 check:
 	cd src-tauri && cargo fmt --check
@@ -28,3 +28,7 @@ sign-setup:
 # Bundled app's backend self-test, launched through LaunchServices like Finder does.
 e2e-app:
 	./scripts/e2e-app.sh
+
+# Universal build published as GitHub release v<version from tauri.conf.json>, with install.sh.
+release:
+	./scripts/release.sh
