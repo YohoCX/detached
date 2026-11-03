@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { FileChange } from './api'
-import { buildTree, clashesWithMonaco, flatten, groupChanges, highlight, languageFor, statusOf } from './files'
+import { buildTree, clashesWithMonaco, flatten, groupChanges, highlight, languageFor, nestingDefaults, statusOf } from './files'
 
 const change = (path: string, index: string, worktree: string, conflicted = false): FileChange =>
   ({ path, origPath: null, index, worktree, conflicted })
@@ -37,6 +37,18 @@ describe('tree', () => {
       ['src', 0], ['src/lib', 1], ['src/lib/a.ts', 2], ['src/b.ts', 1], ['Cargo.toml', 0], ['README.md', 0],
     ])
     expect(rows.filter((r) => r.dirty).map((r) => r.path)).toEqual(['src', 'src/b.ts'])
+  })
+
+  it('nests related files one level under their main file', () => {
+    const files = ['a.ts', 'a.spec.ts', 'a.js', 'a.js.map', 'b.spec.ts', 'package.json', 'bun.lock', 'Cargo.lock']
+    const tree = buildTree(files.map((path) => ({ path, change: path === 'a.js.map' ? change(path, '.', 'M') : null })))
+    const rows = (open: string[]) =>
+      flatten(tree, new Set(open), { ...nestingDefaults, '.ts': ['.spec.ts', '.js'] }).map((r) => [r.name, r.depth, !!r.kids, r.dirty])
+    expect(rows([])).toEqual([
+      ['a.ts', 0, true, true], ['b.spec.ts', 0, false, false], ['Cargo.lock', 0, false, false], ['package.json', 0, true, false],
+    ])
+    expect(rows(['a.ts']).slice(0, 4).map((r) => r[0])).toEqual(['a.ts', 'a.js', 'a.js.map', 'a.spec.ts'])
+    expect(flatten(tree, new Set()).length).toBe(files.length)
   })
 })
 

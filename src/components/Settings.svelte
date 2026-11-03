@@ -9,7 +9,7 @@
   let hosts = $state<HostAccount[]>([])
   let forge = $state<ForgeHosts | null>(null)
   let saved = $state<Settings | null>(null)
-  let excluded = $state<string[]>([])
+  let excluded = $state<{ workspace: string; path: string }[]>([])
   let env = $state<EnvInfo | null>(null)
   let gitPath = $state('')
 
@@ -26,7 +26,7 @@
 
   async function reload() {
     const s = (saved = await api.getSettings())
-    excluded = s.excludedRepos
+    excluded = s.workspaces.flatMap((w) => w.excludedRepos.map((path) => ({ workspace: w.name, path })))
     gitPath = s.gitPath ?? ''
     accounts = await api.listAccounts()
     hosts = repo ? await api.repoAccounts(repo) : []
@@ -56,9 +56,9 @@
       await reload()
     })
 
-  const restore = (path: string) =>
+  const restore = (workspace: string, path: string) =>
     attempt(async () => {
-      await loadRepos(await api.includeRepo(path))
+      await loadRepos(await api.includeRepo(workspace, path))
       await reload()
     })
 
@@ -131,10 +131,11 @@
 
     <section>
       <h3>Removed repositories</h3>
-      {#each excluded as path (path)}
+      {#each excluded as { workspace, path } (workspace + path)}
         <div class="row">
           <span class="mono ellipsis">{path}</span>
-          <button class="btn" onclick={() => restore(path)}>Restore</button>
+          {#if saved && saved.workspaces.length > 1}<span class="muted">{workspace}</span>{/if}
+          <button class="btn" onclick={() => restore(workspace, path)}>Restore</button>
         </div>
       {:else}
         <p class="muted">None.</p>

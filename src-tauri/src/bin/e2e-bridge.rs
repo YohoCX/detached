@@ -130,6 +130,9 @@ fn invoke(
         "remove_folder",
         "exclude_repo",
         "include_repo",
+        "set_workspace_active",
+        "save_workspace",
+        "remove_workspace",
         "env_info",
         "keymap_overrides",
         "cancel_op",
@@ -164,10 +167,15 @@ fn invoke(
     match cmd {
         "get_settings" => Ok(json!(s.get_settings())),
         "list_repos" => Ok(json!(s.list_repos())),
-        "add_folder" => ok(s.add_folder(st("path")?)),
-        "remove_folder" => ok(s.remove_folder(st("path")?)),
-        "exclude_repo" => ok(s.exclude_repo(st("path")?)),
-        "include_repo" => ok(s.include_repo(st("path")?)),
+        "add_folder" => ok(s.add_folder(st("workspace")?, st("path")?)),
+        "remove_folder" => ok(s.remove_folder(st("workspace")?, st("path")?)),
+        "exclude_repo" => ok(s.exclude_repo(st("workspace")?, st("path")?)),
+        "include_repo" => ok(s.include_repo(st("workspace")?, st("path")?)),
+        "set_workspace_active" => {
+            ok(s.set_workspace_active(st("name")?, arg::<bool>(a, "active")?))
+        }
+        "save_workspace" => ok(s.save_workspace(st("name")?, opt("from")?)),
+        "remove_workspace" => ok(s.remove_workspace(st("name")?)),
         "set_repo_account" => ok(s.set_repo_account(repo, opt("accountId")?)),
         "set_forge_account" => ok(s.set_forge_account(repo, st("host")?, opt("accountId")?)),
         "set_mr_remote" => ok(s.set_mr_remote(repo, opt("remote")?)),

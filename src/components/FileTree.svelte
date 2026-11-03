@@ -6,9 +6,10 @@
 
 <script lang="ts">
   import { api, type FileEntry } from '../lib/api'
-  import { branchNames, statuses } from '../lib/app.svelte'
-  import { buildTree, dirName, flatten, statusOf, type Row } from '../lib/files'
+  import { app, branchNames, statuses } from '../lib/app.svelte'
+  import { buildTree, dirName, flatten, nestingDefaults, statusOf, type Row } from '../lib/files'
   import { open } from '../lib/nav'
+  import { load, save } from '../lib/storage'
   import { refOf, refs } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
@@ -27,7 +28,17 @@
     if (!expandedFor.has(key)) expandedFor.set(key, new SvelteSet())
     return expandedFor.get(key)!
   })
-  const rows = $derived(flatten(buildTree(entries), expanded))
+  let nest = $state(load('tree.nesting') !== 'false')
+  const rows = $derived(flatten(buildTree(entries), expanded, nest ? { ...nestingDefaults, ...app.fileNesting } : {}))
+
+  function toggleNesting() {
+    nest = !nest
+    save('tree.nesting', String(nest))
+  }
+
+  function toggle(path: string) {
+    if (!expanded.delete(path)) expanded.add(path)
+  }
 
   let seq = 0
   $effect(() => {
@@ -65,8 +76,7 @@
   function activate(r: Row) {
     sel = r.path
     if (!r.dir) return repo && open({ repo, ref, path: r.path, line: null })
-    if (expanded.has(r.path)) expanded.delete(r.path)
-    else expanded.add(r.path)
+    toggle(r.path)
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -79,10 +89,10 @@
     }
     if (e.key === 'ArrowDown') go(i + 1)
     else if (e.key === 'ArrowUp') go(i - 1)
-    else if (e.key === 'ArrowRight' && r?.dir) expanded.add(r.path)
+    else if (e.key === 'ArrowRight' && (r?.dir || r?.kids)) expanded.add(r.path)
     else if (e.key === 'ArrowLeft' && r) {
-      if (r.dir && expanded.has(r.path)) expanded.delete(r.path)
-      else if (dirName(r.path)) go(rows.findIndex((x) => x.path === dirName(r.path)))
+      if ((r.dir || r.kids) && expanded.has(r.path)) expanded.delete(r.path)
+      else if (r.parent || dirName(r.path)) go(rows.findIndex((x) => x.path === (r.parent ?? dirName(r.path))))
     } else if (e.key === 'Enter' && r) activate(r)
     else return
     e.preventDefault()
@@ -99,6 +109,7 @@
       {#each branches as b (b)}<option value={b}></option>{/each}
     </datalist>
     {#if ref}<button class="icon-btn" title="Back to the working tree" onclick={() => setRef('')}><Icon name="close" size={12} /></button>{/if}
+    <button class="icon-btn" class:on={nest} title="Nest related files" aria-pressed={nest} onclick={toggleNesting}><Icon name="tree" size={14} /></button>
   </header>
   {#if !repo}
     <div class="empty muted">No repository</div>
@@ -116,6 +127,12 @@
             {#if r.dir}
               <span class="chev" class:open={expanded.has(r.path)}><Icon name="chevron" size={12} /></span>
               <Icon name="folder" size={14} />
+            {:else if r.kids}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span class="chev" class:open={expanded.has(r.path)} onclick={(e) => {
+                e.stopPropagation()
+                toggle(r.path)
+              }}><Icon name="chevron" size={12} /></span>
             {:else}
               <span class="chev"></span>
             {/if}
@@ -142,6 +159,7 @@
   .rows:focus-within .item.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }
   .chev { display: inline-flex; width: 12px; flex: none; color: var(--muted); transition: transform 0.1s; }
   .chev.open { transform: rotate(90deg); }
+  .on { color: var(--accent); }
   .modified, .renamed { color: var(--modified); }
   .added { color: var(--added); }
   .deleted { color: var(--deleted); }

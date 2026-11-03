@@ -85,15 +85,17 @@ export type FindEvent =
   | { kind: 'match'; queryId: number; repo: string; path: string; line: number; text: string; ranges: [number, number][] }
   | { kind: 'done'; queryId: number; truncated: boolean }
   | { kind: 'error'; queryId: number; error: string }
+export interface Workspace { name: string; folders: string[]; excludedRepos: string[]; active: boolean }
 export interface Settings {
-  folders: string[]
-  excludedRepos: string[]
+  workspaces: Workspace[]
   repoAccounts: Record<string, string>
   /** Repo -> host -> account id. */
   forgeAccounts: Record<string, Record<string, string>>
   /** Repo -> the remote whose project has the MRs. */
   mrRemotes: Record<string, string>
   gitPath: string | null
+  /** Main file suffix -> suffixes nested under it, over the defaults. */
+  fileNesting: Record<string, string[]>
 }
 export interface EnvInfo { gitPath: string; gitVersion: string; path: string }
 
@@ -259,10 +261,14 @@ const noop: Progress = () => {}
 export const api = {
   getSettings: () => invoke<Settings>('get_settings'),
   listRepos: () => invoke<RepoInfo[]>('list_repos'),
-  addFolder: (path: string) => invoke<RepoInfo[]>('add_folder', { path }),
-  removeFolder: (path: string) => invoke<RepoInfo[]>('remove_folder', { path }),
-  excludeRepo: (path: string) => invoke<RepoInfo[]>('exclude_repo', { path }),
-  includeRepo: (path: string) => invoke<RepoInfo[]>('include_repo', { path }),
+  addFolder: (workspace: string, path: string) => invoke<RepoInfo[]>('add_folder', { workspace, path }),
+  removeFolder: (workspace: string, path: string) => invoke<RepoInfo[]>('remove_folder', { workspace, path }),
+  excludeRepo: (workspace: string, path: string) => invoke<RepoInfo[]>('exclude_repo', { workspace, path }),
+  includeRepo: (workspace: string, path: string) => invoke<RepoInfo[]>('include_repo', { workspace, path }),
+  setWorkspaceActive: (name: string, active: boolean) => invoke<RepoInfo[]>('set_workspace_active', { name, active }),
+  /** Creates workspace `name`, or renames `from` to it. */
+  saveWorkspace: (name: string, from: string | null) => invoke<RepoInfo[]>('save_workspace', { name, from }),
+  removeWorkspace: (name: string) => invoke<RepoInfo[]>('remove_workspace', { name }),
   setRepoAccount: (repo: string, accountId: string | null) =>
     invoke<Settings>('set_repo_account', { repo, accountId }),
   setForgeAccount: (repo: string, host: string, accountId: string | null) =>

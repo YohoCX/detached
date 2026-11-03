@@ -1,7 +1,7 @@
 import { open as pickFolders } from '@tauri-apps/plugin-dialog'
 import { SvelteMap } from 'svelte/reactivity'
 import { actions, register, runAction } from './actions'
-import { api, newId, type CheckoutResult, type CheckoutTarget, type RepoInfo, type RepoStatus } from './api'
+import { api, newId, type CheckoutResult, type CheckoutTarget, type RepoInfo, type RepoStatus, type Workspace } from './api'
 import * as nav from './nav'
 import { pool, syncAll, type Outcome } from './sync'
 
@@ -19,7 +19,8 @@ export interface Notice {
 
 export const app = $state({
   repos: [] as RepoInfo[],
-  folders: [] as string[],
+  workspaces: [] as Workspace[],
+  fileNesting: {} as Record<string, string[]>,
   current: null as string | null,
   ops: [] as Op[],
   notices: [] as Notice[],
@@ -110,14 +111,16 @@ export async function refreshAll() {
 export async function loadRepos(list?: RepoInfo[]) {
   try {
     if (list) setRepos(list)
-    app.folders = (await api.getSettings()).folders
+    const s = await api.getSettings()
+    app.workspaces = s.workspaces
+    app.fileNesting = s.fileNesting
   } catch (e) {
     return say(String(e), true)
   }
   await refreshAll()
 }
 
-async function settingsCall(f: () => Promise<RepoInfo[]>) {
+export async function settingsCall(f: () => Promise<RepoInfo[]>) {
   try {
     await loadRepos(await f())
   } catch (e) {
@@ -125,12 +128,15 @@ async function settingsCall(f: () => Promise<RepoInfo[]>) {
   }
 }
 
-export async function addFolders() {
+export const activeWorkspaces = () => app.workspaces.filter((w) => w.active)
+
+/** To the first active workspace by default; the first folder ever makes a "Default" one. */
+export async function addFolders(workspace = activeWorkspaces()[0]?.name ?? 'Default') {
   const picked = await pickFolders({ directory: true, multiple: true })
-  for (const path of picked ?? []) await settingsCall(() => api.addFolder(path))
+  for (const path of picked ?? []) await settingsCall(() => api.addFolder(workspace, path))
 }
-export const removeFolder = (path: string) => settingsCall(() => api.removeFolder(path))
-export const excludeRepo = (path: string) => settingsCall(() => api.excludeRepo(path))
+export const removeFolder = (workspace: string, path: string) => settingsCall(() => api.removeFolder(workspace, path))
+export const excludeRepo = (workspace: string, path: string) => settingsCall(() => api.excludeRepo(workspace, path))
 
 /** Runs a cancellable network operation with its progress in the status bar, then refreshes the repo. */
 export async function runOp<T>(

@@ -1,6 +1,7 @@
 import { Menu, PredefinedMenuItem } from '@tauri-apps/api/menu'
 import { api } from './api'
-import { app, excludeRepo, removeFolder, say, syncOne, syncRepos } from './app.svelte'
+import { addFolders, app, excludeRepo, removeFolder, say, settingsCall, syncOne, syncRepos } from './app.svelte'
+import { inFolder } from './files'
 import { fileManager } from './platform'
 import { compare } from './view.svelte'
 
@@ -19,7 +20,7 @@ export async function popup(items: Item[]) {
 
 const copy = (path: string) => navigator.clipboard.writeText(path).then(() => say(`Copied ${path}`))
 
-export function repoMenu(repo: string, solo: boolean) {
+export function repoMenu(workspace: string, repo: string, solo: boolean) {
   const branches = (view: 'checkout' | 'new') => {
     app.current = repo
     app.branches = view
@@ -40,12 +41,12 @@ export function repoMenu(repo: string, solo: boolean) {
     { text: 'Open in Zed', action: () => api.openInZed(repo, '', null) },
     { text: 'Copy Path', action: () => copy(repo) },
     'separator',
-    { text: 'Remove from List', action: () => (solo ? removeFolder(repo) : excludeRepo(repo)) },
+    { text: 'Remove from List', action: () => (solo ? removeFolder(workspace, repo) : excludeRepo(workspace, repo)) },
   ])
 }
 
-export function folderMenu(folder: string, collapsed: boolean, toggle: () => void) {
-  const repos = app.repos.filter((r) => r.folder === folder).map((r) => r.path)
+export function folderMenu(workspace: string, folder: string, collapsed: boolean, toggle: () => void) {
+  const repos = app.repos.filter((r) => inFolder(r.path, folder)).map((r) => r.path)
   return popup([
     { text: 'Fetch All in Folder', action: () => syncRepos('fetch', repos), enabled: !app.sync },
     { text: 'Pull All in Folder', action: () => syncRepos('pull', repos), enabled: !app.sync },
@@ -54,6 +55,12 @@ export function folderMenu(folder: string, collapsed: boolean, toggle: () => voi
     { text: `Open in ${fileManager}`, action: () => api.openFolder(folder) },
     { text: 'Copy Path', action: () => copy(folder) },
     'separator',
-    { text: 'Remove Folder', action: () => removeFolder(folder) },
+    { text: 'Remove Folder', action: () => removeFolder(workspace, folder) },
   ])
 }
+
+export const workspaceMenu = (workspace: string) =>
+  popup([
+    { text: 'Add Folder…', action: () => addFolders(workspace) },
+    { text: 'Turn Off', action: () => settingsCall(() => api.setWorkspaceActive(workspace, false)) },
+  ])

@@ -1,18 +1,20 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import type { RepoInfo } from '../lib/api'
-  import { addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses, toneOf } from '../lib/app.svelte'
-  import { folderName } from '../lib/files'
-  import { folderMenu, repoMenu } from '../lib/menu'
+  import { activeWorkspaces, addFolders, app, excludeRepo, outcomes, refreshAll, removeFolder, statuses, toneOf } from '../lib/app.svelte'
+  import { folderName, inFolder } from '../lib/files'
+  import { folderMenu, repoMenu, workspaceMenu } from '../lib/menu'
   import { load, save } from '../lib/storage'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
 
-  type Row =
-    | { folder: string; repo?: undefined }
-    | { repo: RepoInfo; solo: boolean; worktree: boolean; worktrees: number; folder?: undefined }
+  type Row = { workspace: string } & (
+    | { head: true; folder?: undefined; repo?: undefined }
+    | { folder: string; head?: undefined; repo?: undefined }
+    | { repo: RepoInfo; solo: boolean; worktree: boolean; worktrees: number; head?: undefined; folder?: undefined }
+  )
 
-  // Collapsed folders and repos, by path.
+  // Collapsed workspaces (`workspace:` and the name), folders and repos, by path.
   const collapsed = new SvelteSet<string>(JSON.parse(load('sidebar.collapsed') ?? '[]'))
   function toggle(path: string) {
     if (!collapsed.delete(path)) collapsed.add(path)
@@ -22,17 +24,26 @@
   const rows = $derived.by(() => {
     const out: Row[] = []
     const listed = new Set(app.repos.map((r) => r.path))
-    for (const folder of new Set([...app.folders, ...app.repos.map((r) => r.folder)])) {
-      // Worktrees sit under their main repo when it is listed, wherever they were found.
-      const repos = app.repos.filter((r) => r.folder === folder && !(r.worktreeOf && listed.has(r.worktreeOf)))
-      // A folder that is itself the only repo needs no header; removing the repo removes the folder.
-      const solo = repos.length === 1 && repos[0].path === folder
-      if (!solo) out.push({ folder })
-      if (!solo && collapsed.has(folder)) continue
-      for (const repo of repos) {
-        const wts = app.repos.filter((wt) => wt.worktreeOf === repo.path)
-        out.push({ repo, solo, worktree: false, worktrees: wts.length })
-        if (!collapsed.has(repo.path)) for (const wt of wts) out.push({ repo: wt, solo: false, worktree: true, worktrees: 0 })
+    const active = activeWorkspaces()
+    for (const { name: workspace, folders } of active) {
+      // Headers only tell several workspaces apart.
+      if (active.length > 1) {
+        out.push({ workspace, head: true })
+        if (collapsed.has(`workspace:${workspace}`)) continue
+      }
+      for (const folder of new Set(folders.map((f) => f.replace(/\/+$/, '')))) {
+        // Worktrees sit under their main repo when it is listed, wherever they were found.
+        const repos = app.repos.filter((r) => inFolder(r.path, folder) && !(r.worktreeOf && listed.has(r.worktreeOf)))
+        // A folder that is itself the only repo needs no header; removing the repo removes the folder.
+        const solo = repos.length === 1 && repos[0].path === folder
+        if (!solo) out.push({ workspace, folder })
+        if (!solo && collapsed.has(folder)) continue
+        for (const repo of repos) {
+          const wts = app.repos.filter((wt) => wt.worktreeOf === repo.path)
+          out.push({ workspace, repo, solo, worktree: false, worktrees: wts.length })
+          if (!collapsed.has(repo.path))
+            for (const wt of wts) out.push({ workspace, repo: wt, solo: false, worktree: true, worktrees: 0 })
+        }
       }
     }
     return out
@@ -44,21 +55,34 @@
 <section>
   <header>
     <span class="title">Repositories</span>
-    <button class="icon-btn" title="Add folder" onclick={addFolders}><Icon name="plus" /></button>
+    {#if !app.workspaces.length || activeWorkspaces().length}
+      <button class="icon-btn" title="Add folder" onclick={() => addFolders()}><Icon name="plus" /></button>
+    {/if}
     <button class="icon-btn" title="Refresh" onclick={refreshAll}><Icon name="refresh" /></button>
   </header>
   {#if rows.length}
     <VirtualList items={rows} height={40}>
       {#snippet row(r)}
-        {#if r.folder !== undefined}
+        {#if r.head}
+          {@const key = `workspace:${r.workspace}`}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="folder workspace" onclick={() => toggle(key)} oncontextmenu={() => workspaceMenu(r.workspace)}>
+            <span class="chevron" class:open={!collapsed.has(key)}><Icon name="chevron" size={12} /></span>
+            <span class="label ellipsis">{r.workspace}</span>
+            <button class="icon-btn hover" title="Add folder to {r.workspace}" onclick={(e) => {
+              e.stopPropagation()
+              addFolders(r.workspace)
+            }}><Icon name="plus" /></button>
+          </div>
+        {:else if r.folder !== undefined}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="folder" title={r.folder} onclick={() => toggle(r.folder)}
-            oncontextmenu={() => folderMenu(r.folder, collapsed.has(r.folder), () => toggle(r.folder))}>
+            oncontextmenu={() => folderMenu(r.workspace, r.folder, collapsed.has(r.folder), () => toggle(r.folder))}>
             <span class="chevron" class:open={!collapsed.has(r.folder)}><Icon name="chevron" size={12} /></span>
             <Icon name="folder" /><span class="label ellipsis">{folderName(r.folder)}</span>
             <button class="icon-btn hover" title="Remove folder" onclick={(e) => {
               e.stopPropagation()
-              removeFolder(r.folder)
+              removeFolder(r.workspace, r.folder)
             }}><Icon name="minus" /></button>
           </div>
         {:else}
@@ -75,7 +99,7 @@
             onclick={() => (app.current = r.repo.path)}
             oncontextmenu={() => {
               app.current = r.repo.path
-              repoMenu(r.repo.path, r.solo)
+              repoMenu(r.workspace, r.repo.path, r.solo)
             }}
           >
             <div class="line">
@@ -92,8 +116,8 @@
               {#if st?.changes.length}<span class="dirty" title="Changed files">{st.changes.length}</span>{/if}
               <button class="icon-btn hover" title="Remove from list" onclick={(e) => {
                 e.stopPropagation()
-                if (r.solo) removeFolder(r.repo.path)
-                else excludeRepo(r.repo.path)
+                if (r.solo) removeFolder(r.workspace, r.repo.path)
+                else excludeRepo(r.workspace, r.repo.path)
               }}>
                 <Icon name="close" size={12} />
               </button>
@@ -114,10 +138,12 @@
         {/if}
       {/snippet}
     </VirtualList>
+  {:else if app.workspaces.length && !activeWorkspaces().length}
+    <div class="empty muted"><p>No workspace is on. Turn one on in the top bar.</p></div>
   {:else}
     <div class="empty muted">
       <p>No repositories yet.</p>
-      <button class="btn primary" onclick={addFolders}>Add folder…</button>
+      <button class="btn primary" onclick={() => addFolders()}>Add folder…</button>
     </div>
   {/if}
 </section>
@@ -132,6 +158,7 @@
   .toggle { position: absolute; left: 8px; border: 0; background: none; padding: 2px; border-radius: 4px; }
   .toggle:hover { background: var(--hover); }
   .folder .label { flex: 1; }
+  .workspace { color: var(--fg); font-size: 12px; }
   .repo { position: relative; height: 100%; padding: 3px 10px 3px 28px; border-radius: 10px; margin: 0 6px; }
   .repo:hover { background: var(--hover); }
   .repo.selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--selected-ring); }

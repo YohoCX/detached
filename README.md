@@ -6,6 +6,12 @@ diffs, file browsing and find in files at any ref, the git log, and merge reques
 for GitLab and GitHub (including self-hosted GitLab and GitHub Enterprise). It does not commit,
 stage or push code. Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md).
 
+Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
+bar, and everything (sidebar, fetch and pull all, quick open, search) covers their repos. The
+project tree nests related files under their main file (`a.spec.ts` under `a.ts`, `bun.lock` under
+`package.json`); `fileNesting` in `settings.json` adds or replaces rules by main suffix, e.g.
+`{".vue": [".spec.ts"]}`, and an empty list drops one.
+
 ## Install
 
 ```sh

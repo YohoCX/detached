@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, nameOf, run, statusOf, syncRepos } from '../lib/app.svelte'
+  import { activeWorkspaces, app, nameOf, run, statusOf, syncRepos } from '../lib/app.svelte'
   import { chordFor } from '../lib/keymap'
   import { mac } from '../lib/platform'
   import Branches from './Branches.svelte'
@@ -8,13 +8,24 @@
   import PipelineBadge from './PipelineBadge.svelte'
   import RepoSwitcher from './RepoSwitcher.svelte'
   import StatusBar from './StatusBar.svelte'
+  import Workspaces from './Workspaces.svelte'
 
   const st = $derived(statusOf(app.current))
   let switcher = $state(false)
+  let workspaces = $state(false)
 </script>
 
 <!-- Only elements carrying the attribute drag the window, so empty space gets it too. -->
 <header class="panel" class:mac data-tauri-drag-region>
+  {#if app.workspaces.length}
+    <div class="anchor">
+      <button class="widget" title="Workspaces" onclick={() => (workspaces = !workspaces)}>
+        <span class="ellipsis">{activeWorkspaces().map((w) => w.name).join(', ') || 'No workspace'}</span>
+        <Icon name="down" size={12} />
+      </button>
+      {#if workspaces}<Workspaces onclose={() => (workspaces = false)} />{/if}
+    </div>
+  {/if}
   <div class="anchor">
     <button class="widget repo" title="Switch repository" disabled={!app.repos.length} onclick={() => (switcher = !switcher)}>
       <span class="strong ellipsis">{app.current ? nameOf(app.current) : 'No repository'}</span>
