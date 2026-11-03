@@ -2,7 +2,7 @@ import { expect, open, test } from './fixture'
 
 test('go to file: filters, moves by keyboard under a resting mouse, opens, ignores case', async ({ page }) => {
   await open(page, 'app')
-  await page.keyboard.press('Meta+Shift+O')
+  await page.keyboard.press('ControlOrMeta+Shift+O')
   const pal = page.locator('.palette')
   await expect(pal.locator('.mode')).toHaveText('Go to File')
   await page.keyboard.type('comp')
@@ -26,7 +26,7 @@ test('go to file: filters, moves by keyboard under a resting mouse, opens, ignor
   await expect(page.locator('.viewer header .name')).toHaveText(name)
   await expect(page.locator('.viewer .monaco-editor').first()).toContainText(`export const c${start + 17}`)
 
-  await page.keyboard.press('Meta+Shift+O')
+  await page.keyboard.press('ControlOrMeta+Shift+O')
   await page.keyboard.type('COMP-07')
   await expect(items.first().locator('.name')).toHaveText('comp-07.ts')
 })
@@ -36,9 +36,9 @@ test('keymap opens each palette and settings', async ({ page }) => {
   const mode = page.locator('.palette .mode')
   const rows: [string[], string][] = [
     [['Shift', 'Shift'], 'Search Everywhere'],
-    [['Meta+Shift+A'], 'Find Action'],
+    [['ControlOrMeta+Shift+A'], 'Find Action'],
     [['Control+V'], 'VCS Operations'],
-    [['Meta+E'], 'Recent Files'],
+    [['ControlOrMeta+E'], 'Recent Files'],
   ]
   for (const [keys, title] of rows) {
     for (const k of keys) await page.keyboard.press(k)
@@ -46,6 +46,6 @@ test('keymap opens each palette and settings', async ({ page }) => {
     await page.keyboard.press('Escape')
     await expect(mode).toBeHidden()
   }
-  await page.keyboard.press('Meta+Comma')
+  await page.keyboard.press('ControlOrMeta+Comma')
   await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible()
 })

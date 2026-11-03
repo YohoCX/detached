@@ -1,7 +1,6 @@
 //! The only place that spawns git. See PLAN.md "Git runner" for the rules this must follow.
 
 use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
@@ -11,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::env::Env;
 use crate::error::{Error, Result};
+use crate::os;
 use crate::state::Cancel;
 
 const READ_LIMIT: Duration = Duration::from_secs(30);
@@ -94,13 +94,13 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    os::group(&mut cmd);
     if kind == Kind::Read {
         cmd.env("GIT_OPTIONAL_LOCKS", "0");
     }
     let mut child = cmd.spawn()?;
-    let group = child.id() as i32;
+    let group = child.id();
     let (tx, rx) = mpsc::channel();
     drain(child.stdout.take().unwrap(), tx.clone(), Chunk::Out);
     drain(child.stderr.take().unwrap(), tx, Chunk::Err);
@@ -120,7 +120,7 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
                         let l: Vec<u8> = stdout.drain(..=i).collect();
                         if !f(&l[..i]) {
                             stopped = true;
-                            unsafe { libc::killpg(group, libc::SIGKILL) };
+                            os::kill(group, false);
                             break;
                         }
                     }
@@ -173,7 +173,7 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
         if kind == Kind::Network {
             stop(group, &mut child);
         } else {
-            unsafe { libc::killpg(group, libc::SIGKILL) };
+            os::kill(group, false);
             let _ = child.wait();
         }
         return Err(error);
@@ -206,13 +206,13 @@ fn drain(mut r: impl Read + Send + 'static, tx: Sender<Chunk>, wrap: fn(Vec<u8>)
 }
 
 /// SIGTERM lets git remove its lock files; SIGKILL then takes whatever is left in the group.
-fn stop(group: i32, child: &mut Child) {
-    unsafe { libc::killpg(group, libc::SIGTERM) };
+fn stop(group: u32, child: &mut Child) {
+    os::kill(group, true);
     let until = Instant::now() + Duration::from_secs(5);
     while child.try_wait().ok().flatten().is_none() && Instant::now() < until {
         thread::sleep(TICK);
     }
-    unsafe { libc::killpg(group, libc::SIGKILL) };
+    os::kill(group, false);
     let _ = child.wait();
 }
 

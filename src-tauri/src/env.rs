@@ -1,14 +1,7 @@
-use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::{Duration, Instant};
 
 use crate::git::runner::Kind;
 use crate::types::EnvInfo;
-
-const MARK: &str = "__WB__";
 
 /// PATH and git binary every child process uses.
 #[derive(Debug, Clone)]
@@ -20,14 +13,20 @@ pub struct Env {
 impl Env {
     /// Also says whether PATH came from the login shell rather than the fallback.
     pub fn detect(git_override: Option<&str>) -> (Env, bool) {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let probed = login_path(&shell, &[]);
+        #[cfg(unix)]
+        let probed = unix::login_path(
+            &std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
+            &[],
+        );
+        // A Windows app gets the user's PATH as is.
+        #[cfg(windows)]
+        let probed = std::env::var("PATH").ok();
         let from_shell = probed.is_some();
         let path = probed.unwrap_or_else(fallback_path);
         let git = git_override
             .map(PathBuf::from)
             .or_else(|| which("git", &path))
-            .unwrap_or_else(|| PathBuf::from("/usr/bin/git"));
+            .unwrap_or_else(|| PathBuf::from(if cfg!(unix) { "/usr/bin/git" } else { "git" }));
         (Env { path, git }, from_shell)
     }
 
@@ -48,76 +47,89 @@ fn fallback_path() -> String {
     format!("/opt/homebrew/bin:/usr/local/bin:{base}")
 }
 
-/// Interactive login shell, so `.zshrc` additions (nvm, fnm) count; rc files may print, hence markers.
-/// Stops at the closing marker: a job the rc files disowned can hold the pipe open forever.
-fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
-    let mut cmd = Command::new(shell);
-    cmd.args([
-        "-l",
-        "-i",
-        "-c",
-        &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
-    ])
-    .envs(envs.iter().copied())
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
-    // A new session, not just a group: `zsh -i` in a background group of the app's tty stops on SIGTTOU.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        })
-    };
-    let mut child = cmd.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0; 4096];
-        while let Ok(n @ 1..) = stdout.read(&mut buf) {
-            if tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut out = Vec::new();
-    let path = loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(b) => {
-                out.extend(b);
-                if let Some(p) = parse_marked(&String::from_utf8_lossy(&out)) {
-                    break Some(p);
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => break None,
-            Err(RecvTimeoutError::Timeout) => {
-                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
-                break None;
-            }
-        }
-    };
-    std::thread::spawn(move || child.wait());
-    path
-}
-
-fn parse_marked(out: &str) -> Option<String> {
-    let start = out.find(MARK)? + MARK.len();
-    let len = out[start..].find(MARK)?;
-    let path = &out[start..start + len];
-    (!path.is_empty()).then(|| path.to_string())
-}
-
 pub fn which(bin: &str, path: &str) -> Option<PathBuf> {
-    path.split(':')
-        .map(|d| Path::new(d).join(bin))
+    let bin = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(path)
+        .map(|d| d.join(&bin))
         .find(|p| p.is_file())
 }
 
-#[cfg(test)]
+#[cfg(unix)]
+mod unix {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::{Duration, Instant};
+
+    pub(super) const MARK: &str = "__WB__";
+
+    /// Interactive login shell, so `.zshrc` additions (nvm, fnm) count; rc files may print, hence markers.
+    /// Stops at the closing marker: a job the rc files disowned can hold the pipe open forever.
+    pub(super) fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
+        let mut cmd = Command::new(shell);
+        cmd.args([
+            "-l",
+            "-i",
+            "-c",
+            &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
+        ])
+        .envs(envs.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+        // A new session, not just a group: `zsh -i` in a background group of the app's tty stops on SIGTTOU.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            })
+        };
+        let mut child = cmd.spawn().ok()?;
+        let mut stdout = child.stdout.take()?;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0; 4096];
+            while let Ok(n @ 1..) = stdout.read(&mut buf) {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut out = Vec::new();
+        let path = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                Ok(b) => {
+                    out.extend(b);
+                    if let Some(p) = parse_marked(&String::from_utf8_lossy(&out)) {
+                        break Some(p);
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => break None,
+                Err(RecvTimeoutError::Timeout) => {
+                    unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                    break None;
+                }
+            }
+        };
+        std::thread::spawn(move || child.wait());
+        path
+    }
+
+    pub(super) fn parse_marked(out: &str) -> Option<String> {
+        let start = out.find(MARK)? + MARK.len();
+        let len = out[start..].find(MARK)?;
+        let path = &out[start..start + len];
+        (!path.is_empty()).then(|| path.to_string())
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
-    use super::*;
+    use super::unix::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn parses_path_between_markers_despite_rc_noise() {

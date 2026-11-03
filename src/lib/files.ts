@@ -1,5 +1,5 @@
 import type { Content, FileChange, FileEntry } from './api'
-import { matches, parseChord, type Key, type KeyChord } from './keymap'
+import { defaults, matches, parseChord, type Key, type KeyChord } from './keymap'
 
 export type Status = 'conflict' | 'untracked' | 'added' | 'deleted' | 'renamed' | 'modified'
 
@@ -114,7 +114,7 @@ export function describe(c: Content): string {
 }
 
 /** Monaco's own bindings on chords docs/KEYMAP.md gives to the app; Cmd+K starts its chords. */
-const monacoClashes = ['Cmd+K', 'Cmd+D', 'Cmd+L', 'Cmd+E', 'Cmd+[', 'Cmd+]', 'F7', 'Shift+F7', 'Cmd+Shift+O', 'Cmd+Shift+F', 'Ctrl+V']
+const monacoClashes = ['Cmd+K', 'Cmd+D', 'Cmd+L', 'Cmd+E', 'Cmd+[', 'Cmd+]', 'F7', 'Shift+F7', 'Cmd+Shift+O', 'Cmd+Shift+F', defaults['vcs.popup']]
   .map((s) => parseChord(s) as KeyChord)
 
 export const clashesWithMonaco = (e: Key) => monacoClashes.some((c) => matches(c, e))

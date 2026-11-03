@@ -14,7 +14,7 @@ test('changes: list, diff on click and double-click, file on Cmd+Down, F7 to the
   const header = page.locator('.viewer header')
   await item(page, 'README.md').click()
   await expect(header).toContainText('HEAD ↔ Working tree')
-  await item(page, 'README.md').press('Meta+ArrowDown')
+  await item(page, 'README.md').press('ControlOrMeta+ArrowDown')
   await expect(header.locator('.name')).toHaveText('README.md')
   await expect(header).not.toContainText('↔')
 

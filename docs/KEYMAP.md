@@ -1,9 +1,10 @@
 # Default keymap
 
-JetBrains macOS keymap. Override chords by action id in
-`~/Library/Application Support/dev.wdevs.detached/keymap.json`, e.g. `{"file.goto": "Cmd+Shift+N"}`;
-an override that does not parse unbinds the action. M3 rows keep their chords free until their
-actions exist.
+JetBrains macOS keymap. On Windows and Linux, Cmd is Ctrl and `Meta` names the Windows/Super key.
+Override chords by action id in `keymap.json` in the app's config directory
+(`~/Library/Application Support/dev.wdevs.detached`, `%APPDATA%\dev.wdevs.detached`,
+`~/.config/dev.wdevs.detached`), e.g. `{"file.goto": "Cmd+Shift+N"}`; an override that does not
+parse unbinds the action. M3 rows keep their chords free until their actions exist.
 
 | Action id | Action | Keys | Milestone |
 | --- | --- | --- | --- |
@@ -20,7 +21,7 @@ actions exist.
 | `vcs.commit` | Commit | Cmd+K | M3 |
 | `vcs.push` | Push | Cmd+Shift+K | M3 |
 | `vcs.update` | Update project (pull) | Cmd+T | M1 |
-| `vcs.popup` | VCS operations popup | Ctrl+V | M1 |
+| `vcs.popup` | VCS operations popup | Ctrl+V; Alt+` on Windows and Linux | M1 |
 | `diff.show` | Show diff | Cmd+D | M1 |
 | `diff.next` / `diff.prev` | Next / previous change | F7 / Shift+F7 | M1 |
 | `vcs.rollback` | Rollback | Cmd+Alt+Z | M3 |

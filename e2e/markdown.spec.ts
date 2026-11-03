@@ -33,7 +33,7 @@ test('markdown preview: code, mermaid, repo images, anchors and links; Source st
   })
   await open(page, 'lib')
   const goTo = async (name: string) => {
-    await page.keyboard.press('Meta+Shift+O')
+    await page.keyboard.press('ControlOrMeta+Shift+O')
     await page.keyboard.type(name)
     await expect(page.locator('.palette .item .name').first()).toHaveText(name)
     await page.keyboard.press('Enter')

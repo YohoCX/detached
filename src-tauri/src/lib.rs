@@ -3,7 +3,9 @@ pub mod env;
 pub mod error;
 pub mod forge;
 pub mod git;
+pub mod os;
 pub mod search;
+#[cfg(unix)]
 pub mod selftest;
 pub mod settings;
 pub mod state;
@@ -13,12 +15,13 @@ use std::sync::Arc;
 
 use tauri::{Manager, Runtime, Url, Webview};
 
-use crate::accounts::store::KeychainStore;
+use crate::accounts::store::SystemStore;
 use crate::env::Env;
 use crate::settings::Settings;
 use crate::state::AppState;
 
 pub fn run() {
+    #[cfg(unix)]
     if let Some(dest) = std::env::args().skip_while(|a| a != "--self-test").nth(1) {
         std::process::exit(if selftest::run(dest.as_ref()) { 0 } else { 1 });
     }
@@ -39,7 +42,7 @@ pub fn run() {
             }
             let settings = Settings::load(&config_dir);
             let (env, _) = Env::detect(settings.git_path.as_deref());
-            let tokens = Arc::new(KeychainStore::default());
+            let tokens = Arc::new(SystemStore::default());
             app.manage(AppState::new(config_dir, settings, env, tokens));
             Ok(())
         })
@@ -56,7 +59,7 @@ pub fn run() {
             settings::set_git_path,
             settings::env_info,
             settings::keymap_overrides,
-            settings::open_in_finder,
+            settings::open_folder,
             git::commands::repo_status,
             git::commands::list_branches,
             git::commands::checkout,

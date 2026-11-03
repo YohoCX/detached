@@ -235,9 +235,7 @@ impl Api {
 }
 
 fn limited(until: i64) -> Error {
-    // SAFETY: localtime_r only writes the given tm.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&until, &mut tm) };
+    let tm = crate::os::local(until);
     Error::Other(format!(
         "Rate limited; retrying after {:02}:{:02}:{:02}",
         tm.tm_hour, tm.tm_min, tm.tm_sec

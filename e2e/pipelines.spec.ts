@@ -118,7 +118,7 @@ test('without an account the tab says so and opens Settings, and the badge stays
   await invoke('remove_account', { id: accounts.find((a) => a.label === 'Fake GitLab')!.id })
 
   await repoRow(page, 'gitlab').click()
-  await page.keyboard.press('Meta+9')
+  await page.keyboard.press('ControlOrMeta+9')
   await page.locator('.bottom').getByRole('button', { name: 'Pipelines' }).click()
   await expect(panel(page)).toContainText(/No account for .+; add one in Settings/)
   await expect(page.locator('header .badge')).toHaveCount(0)

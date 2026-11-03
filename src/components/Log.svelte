@@ -23,6 +23,7 @@
   import { branchNames, checkout, notify, statusOf } from '../lib/app.svelte'
   import { chip, lanes, pick, when } from '../lib/log'
   import { popup } from '../lib/menu'
+  import { primary } from '../lib/platform'
   import CommitDetails from './CommitDetails.svelte'
   import Graph, { LANE } from './Graph.svelte'
   import Grip from './Grip.svelte'
@@ -214,7 +215,7 @@
             {#snippet row(r, i)}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div class="commit" class:selected={sel.has(r.sha)} role="option" aria-selected={sel.has(r.sha)} tabindex="-1"
-                onclick={(e) => choose(i, e.shiftKey ? 'range' : e.metaKey ? 'toggle' : 'one')}
+                onclick={(e) => choose(i, e.shiftKey ? 'range' : primary(e) ? 'toggle' : 'one')}
                 oncontextmenu={() => menu(i)}>
                 {#if graph}<div class="graph" style:width="{Math.min(width, 24) * LANE}px"><Graph row={r} /></div>{/if}
                 <span class="subject">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app, nameOf, run, statusOf, syncRepos } from '../lib/app.svelte'
   import { chordFor } from '../lib/keymap'
+  import { mac } from '../lib/platform'
   import Branches from './Branches.svelte'
   import Icon from './Icon.svelte'
   import MrChip from './MrChip.svelte'
@@ -13,7 +14,7 @@
 </script>
 
 <!-- Only elements carrying the attribute drag the window, so empty space gets it too. -->
-<header class="panel" data-tauri-drag-region>
+<header class="panel" class:mac data-tauri-drag-region>
   <div class="anchor">
     <button class="widget repo" title="Switch repository" disabled={!app.repos.length} onclick={() => (switcher = !switcher)}>
       <span class="strong ellipsis">{app.current ? nameOf(app.current) : 'No repository'}</span>
@@ -51,7 +52,8 @@
 </header>
 
 <style>
-  header { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 90px; flex: none; }
+  header { display: flex; align-items: center; gap: 6px; height: 46px; padding: 0 8px; flex: none; }
+  .mac { padding-left: 90px; }
   .widget { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px; border: 0; border-radius: 10px; background: none; min-width: 0; }
   .widget:hover { background: var(--hover); }
   .repo { background: var(--input); border: 1px solid var(--line); max-width: 320px; }

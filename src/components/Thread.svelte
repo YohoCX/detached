@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MergeRequest, MrAction, Thread } from '../lib/api'
   import { ago } from '../lib/mr'
+  import { primary } from '../lib/platform'
   import Markdown from './Markdown.svelte'
 
   // With `thread` null, a new comment box whose text `start` turns into the action.
@@ -51,7 +52,7 @@
   {#if !thread || replying}
     <textarea bind:value={text} rows="3" disabled={busy} placeholder={thread ? 'Reply' : 'Write a comment'}
       {@attach (el) => void ((thread || oncancel) && el.focus({ preventScroll: true }))}
-      onkeydown={(e) => (e.key === 'Enter' && e.metaKey ? send() : e.key === 'Escape' && (thread || oncancel) && cancel())}></textarea>
+      onkeydown={(e) => (e.key === 'Enter' && primary(e) ? send() : e.key === 'Escape' && (thread || oncancel) && cancel())}></textarea>
     <div class="buttons">
       {#if thread || oncancel}<button class="btn" onclick={cancel}>Cancel</button>{/if}
       <button class="btn primary" disabled={busy || !text.trim()} onclick={send}>{thread ? 'Reply' : 'Comment'}</button>

@@ -1,4 +1,7 @@
 // Defaults are docs/KEYMAP.md. Chords match on `event.code`, so they work under any keyboard layout.
+// Cmd is Ctrl on Windows and Linux.
+
+import { mac } from './platform'
 
 export const defaults: Record<string, string> = {
   'search.everywhere': 'Double Shift',
@@ -11,7 +14,7 @@ export const defaults: Record<string, string> = {
   'nav.forward': 'Cmd+]',
   'panel.project': 'Cmd+1',
   'vcs.update': 'Cmd+T',
-  'vcs.popup': 'Ctrl+V',
+  'vcs.popup': mac ? 'Ctrl+V' : 'Alt+`',
   'diff.show': 'Cmd+D',
   'diff.next': 'F7',
   'diff.prev': 'Shift+F7',
@@ -32,8 +35,7 @@ export type Chord = KeyChord | 'doubleShift'
 export type Key = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'repeat'>
 
 const mods: Record<string, 'meta' | 'ctrl' | 'alt' | 'shift'> = {
-  cmd: 'meta', meta: 'meta', command: 'meta', ctrl: 'ctrl', control: 'ctrl',
-  alt: 'alt', opt: 'alt', option: 'alt', shift: 'shift',
+  meta: 'meta', ctrl: 'ctrl', control: 'ctrl', alt: 'alt', opt: 'alt', option: 'alt', shift: 'shift',
 }
 const codes: Record<string, string> = {
   '[': 'BracketLeft', ']': 'BracketRight', ',': 'Comma', '.': 'Period', '/': 'Slash', ';': 'Semicolon',
@@ -51,7 +53,7 @@ function keyCode(k: string): string | null {
 }
 
 /** "Cmd+Shift+O", "Ctrl+V", "F7", "Cmd+[", "Double Shift"; null when invalid or empty. */
-export function parseChord(s: string): Chord | null {
+export function parseChord(s: string, onMac = mac): Chord | null {
   s = s.trim()
   if (/^double\s+shift$/i.test(s)) return 'doubleShift'
   const parts = s.split('+').map((p) => p.trim())
@@ -60,7 +62,7 @@ export function parseChord(s: string): Chord | null {
   if (!key || !code) return null
   const c: KeyChord = { meta: false, ctrl: false, alt: false, shift: false, code, key: key.length === 1 ? key.toUpperCase() : key }
   for (const p of parts) {
-    const m = mods[p.toLowerCase()]
+    const m = /^(cmd|command)$/i.test(p) ? (onMac ? 'meta' : 'ctrl') : mods[p.toLowerCase()]
     if (!m) return null
     c[m] = true
   }
@@ -70,10 +72,11 @@ export function parseChord(s: string): Chord | null {
 export const matches = (c: KeyChord, e: Key) =>
   e.code === c.code && e.metaKey === c.meta && e.ctrlKey === c.ctrl && e.altKey === c.alt && e.shiftKey === c.shift
 
-export function formatChord(c: Chord | null): string {
+export function formatChord(c: Chord | null, onMac = mac): string {
   if (!c) return ''
-  if (c === 'doubleShift') return '⇧⇧'
-  return (c.ctrl ? '⌃' : '') + (c.alt ? '⌥' : '') + (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + c.key
+  if (c === 'doubleShift') return onMac ? '⇧⇧' : 'Shift Shift'
+  if (onMac) return (c.ctrl ? '⌃' : '') + (c.alt ? '⌥' : '') + (c.shift ? '⇧' : '') + (c.meta ? '⌘' : '') + c.key
+  return [c.ctrl && 'Ctrl', c.alt && 'Alt', c.shift && 'Shift', c.meta && 'Meta', c.key].filter(Boolean).join('+')
 }
 
 /** Defaults with `keymap.json` overrides applied; an override that does not parse unbinds the action. */

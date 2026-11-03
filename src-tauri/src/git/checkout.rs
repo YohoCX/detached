@@ -171,13 +171,10 @@ fn drop_stash(env: &Env, repo: &Path, id: &str) -> Result<()> {
 }
 
 fn now() -> String {
-    // SAFETY: localtime_r only writes into the zeroed `tm` we own.
-    let tm = unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm
-    };
+    let t = std::time::UNIX_EPOCH
+        .elapsed()
+        .map_or(0, |d| d.as_secs() as i64);
+    let tm = crate::os::local(t);
     format!(
         "{}-{:02}-{:02} {:02}:{:02}:{:02}",
         tm.tm_year + 1900,
@@ -350,7 +347,11 @@ mod tests {
         let Refused { error } = go(&sb, &work, "other") else {
             panic!()
         };
-        assert!(error.contains("already used by worktree"), "{error}");
+        // Git before 2.42 says "already checked out".
+        assert!(
+            error.contains("already used by worktree") || error.contains("already checked out"),
+            "{error}"
+        );
         assert_eq!(branch(&sb, &work), "main");
         assert_eq!(
             (read(&work, "f"), read(&work, "untracked")),

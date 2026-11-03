@@ -1,6 +1,7 @@
 import { Menu, PredefinedMenuItem } from '@tauri-apps/api/menu'
 import { api } from './api'
 import { app, excludeRepo, removeFolder, say, syncOne, syncRepos } from './app.svelte'
+import { fileManager } from './platform'
 import { compare } from './view.svelte'
 
 type Item = { text: string; action: () => unknown; enabled?: boolean } | 'separator'
@@ -35,7 +36,7 @@ export function repoMenu(repo: string, solo: boolean) {
     { text: 'Branches…', action: () => branches('checkout') },
     { text: 'New Branch…', action: () => branches('new') },
     'separator',
-    { text: 'Open in Finder', action: () => api.openInFinder(repo) },
+    { text: `Open in ${fileManager}`, action: () => api.openFolder(repo) },
     { text: 'Open in Zed', action: () => api.openInZed(repo, '', null) },
     { text: 'Copy Path', action: () => copy(repo) },
     'separator',
@@ -50,7 +51,7 @@ export function folderMenu(folder: string, collapsed: boolean, toggle: () => voi
     { text: 'Pull All in Folder', action: () => syncRepos('pull', repos), enabled: !app.sync },
     'separator',
     { text: collapsed ? 'Expand' : 'Collapse', action: toggle },
-    { text: 'Open in Finder', action: () => api.openInFinder(folder) },
+    { text: `Open in ${fileManager}`, action: () => api.openFolder(folder) },
     { text: 'Copy Path', action: () => copy(folder) },
     'separator',
     { text: 'Remove Folder', action: () => removeFolder(folder) },

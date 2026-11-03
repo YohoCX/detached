@@ -52,13 +52,15 @@ impl Remote {
 
 fn ssh_host(env: &Env, host: &str) -> Option<String> {
     let ssh = crate::env::which("ssh", &env.path)?;
-    let o = Command::new(ssh)
-        .args(["-G", "--", host])
-        .env("PATH", &env.path)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let o = crate::os::group(
+        Command::new(ssh)
+            .args(["-G", "--", host])
+            .env("PATH", &env.path)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .output()
+    .ok()?;
     let text = String::from_utf8_lossy(&o.stdout);
     let h = text.lines().find_map(|l| l.strip_prefix("hostname "))?;
     Some(h.trim().to_ascii_lowercase())

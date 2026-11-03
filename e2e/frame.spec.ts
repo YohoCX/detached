@@ -8,13 +8,13 @@ test('the forge repos track the seeded fake; Cmd+9 opens the bottom panel', asyn
     expect(fx.git(`${fx.forge}/${name}`, 'rev-parse', '@{u}')).toBe(p.mrs[0].headSha)
   }
 
-  await page.keyboard.press('Meta+9')
+  await page.keyboard.press('ControlOrMeta+9')
   const panel = page.locator('.bottom')
   await expect(panel.getByRole('button', { name: 'Log' })).toBeVisible()
   await panel.getByRole('button', { name: 'Pipelines' }).click()
   await expect(panel).toContainText('Pipelines')
-  await page.keyboard.press('Meta+9')
+  await page.keyboard.press('ControlOrMeta+9')
   await expect(panel.getByRole('button', { name: 'Log' })).toHaveClass(/on/)
-  await page.keyboard.press('Meta+9')
+  await page.keyboard.press('ControlOrMeta+9')
   await expect(panel).toBeHidden()
 })

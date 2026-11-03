@@ -31,6 +31,14 @@ describe('parseChord', () => {
     expect(formatChord(parseChord('Cmd+['))).toBe('⌘[')
     expect(formatChord(parseChord('Double Shift'))).toBe('⇧⇧')
   })
+
+  it('reads Cmd as Ctrl on Windows and Linux', () => {
+    const c = parseChord('Cmd+Shift+O', false)
+    expect(c).toMatchObject({ ctrl: true, meta: false, shift: true })
+    expect(formatChord(c, false)).toBe('Ctrl+Shift+O')
+    expect(formatChord(parseChord('Meta+Alt+[', false), false)).toBe('Alt+Meta+[')
+    expect(formatChord('doubleShift', false)).toBe('Shift Shift')
+  })
 })
 
 describe('matches', () => {

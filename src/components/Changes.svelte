@@ -3,6 +3,7 @@
   import { branchNames, refresh, statuses } from '../lib/app.svelte'
   import { baseName, dirName, groupChanges, letter, statusOf } from '../lib/files'
   import { open } from '../lib/nav'
+  import { primary } from '../lib/platform'
   import { compare, showDiff, view } from '../lib/view.svelte'
   import Icon from './Icon.svelte'
   import VirtualList from './VirtualList.svelte'
@@ -66,7 +67,7 @@
   function onkeydown(e: KeyboardEvent) {
     const files = rows.flatMap((r) => (r.c ? [r.c] : []))
     const i = files.findIndex((c) => c.path === selected)
-    if (e.key === 'ArrowDown' && e.metaKey) {
+    if (e.key === 'ArrowDown' && primary(e)) {
       if (files[i]) openFile(files[i])
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       const next = files[Math.min(files.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))]

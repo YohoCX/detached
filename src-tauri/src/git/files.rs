@@ -1,7 +1,6 @@
 //! File lists for the tree and quick open, and Open in Zed.
 
 use std::collections::HashMap;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -87,20 +86,21 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
 
 /// Starts Zed on `<repo>/<path>[:line]` and returns without waiting for it.
 pub fn open_in_zed(env: &Env, repo: &Path, path: &str, line: Option<u32>) -> Result<()> {
+    // Some Linux packages name the CLI zeditor.
     let zed = env::which("zed", &env.path)
+        .or_else(|| env::which("zeditor", &env.path))
         .or_else(|| Some(PathBuf::from(ZED_CLI)).filter(|p| p.is_file()))
-        .ok_or_else(|| {
-            Error::Other("Zed not found: no zed on PATH and no Zed.app in /Applications".into())
-        })?;
+        .ok_or_else(|| Error::Other("Zed not found: no zed on PATH".into()))?;
     let file = repo.join(path).display().to_string();
-    let mut child = Command::new(zed)
-        .arg(line.map_or(file.clone(), |l| format!("{file}:{l}")))
-        .env("PATH", &env.path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?;
+    let mut child = crate::os::group(
+        Command::new(zed)
+            .arg(line.map_or(file.clone(), |l| format!("{file}:{l}")))
+            .env("PATH", &env.path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .spawn()?;
     std::thread::spawn(move || child.wait());
     Ok(())
 }

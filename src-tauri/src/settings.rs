@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::git::discovery;
 use crate::state::AppState;
 use crate::types::{EnvInfo, RepoInfo};
@@ -213,9 +213,8 @@ pub fn keymap_overrides(state: State<'_, AppState>) -> BTreeMap<String, String> 
 }
 
 #[tauri::command(async)]
-pub fn open_in_finder(path: String) -> Result<()> {
-    std::process::Command::new("open").arg(&path).status()?;
-    Ok(())
+pub fn open_folder(path: String) -> Result<()> {
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| Error::Other(e.to_string()))
 }
 
 #[tauri::command(async)]
