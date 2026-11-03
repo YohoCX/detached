@@ -1,0 +1,97 @@
+# A v* tag builds macOS, Windows and Linux and publishes the release; a manual run only builds.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+
+      # Every release is signed with the same "Detached Dev" identity, or Keychain access breaks on update.
+      - name: Import signing identity
+        if: runner.os == 'macOS'
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          [ -n "$CERT" ] || { echo "::error::Set the MACOS_CERTIFICATE secret (see README)."; exit 1; }
+          kc=$RUNNER_TEMP/signing.keychain-db
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          security create-keychain -p ci "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p ci "$kc"
+          security import "$RUNNER_TEMP/id.p12" -k "$kc" -P "" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/id.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$kc"
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security find-certificate -c "Detached Dev" -p "$kc" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+
+      - name: Build macOS
+        if: runner.os == 'macOS'
+        run: |
+          bun tauri build --bundles app --target universal-apple-darwin
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Detached.app
+          codesign --verify --deep --strict "$app"
+          codesign -dvv "$app" 2>&1 | grep -q 'Authority=Detached Dev'
+          mkdir out && ditto -c -k --keepParent "$app" out/Detached-macos.zip
+
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: |
+          bun tauri build --bundles nsis
+          mkdir out && cp src-tauri/target/release/bundle/nsis/*-setup.exe out/Detached-windows-x64-setup.exe
+
+      - name: Build Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf
+          bun tauri build --bundles appimage,deb
+          mkdir out
+          cp src-tauri/target/release/bundle/appimage/*.AppImage out/Detached-linux-x86_64.AppImage
+          cp src-tauri/target/release/bundle/deb/*.deb out/Detached-linux-amd64.deb
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ runner.os }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: out
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME, but tauri.conf.json says $version."; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Detached $version" --generate-notes out/* scripts/install.sh

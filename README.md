@@ -22,6 +22,11 @@ Installs `/Applications/Detached.app` (`DETACHED_DIR=~/Applications` to change);
 The app is signed with a self-signed identity and not notarized, so a copy downloaded in a browser
 is blocked by Gatekeeper; the script avoids that. Account tokens are kept in the macOS Keychain.
 
+Windows and Linux builds are on the [releases page](https://github.com/YohoCX/detached/releases/latest):
+`Detached-windows-x64-setup.exe` (unsigned, so SmartScreen asks once), `Detached-linux-x86_64.AppImage`
+and `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
+Credential Manager or the Secret Service (GNOME Keyring, KWallet).
+
 ## License
 
 [GPL-3.0-or-later](LICENSE). The license does not cover the Detached name and icon; forks should use their own.
@@ -35,11 +40,21 @@ bun install
 make dev         # run the app
 make check       # fmt, clippy, cargo test, svelte-check, bun test
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
-make sign-setup  # once: the "Detached Dev" signing identity that make build and make release use
+make sign-setup  # once: the "Detached Dev" signing identity that make build uses
 make build       # Detached.app under src-tauri/target/release/bundle
 make e2e-app     # builds Detached.app, starts it like Finder does, checks PATH, node and hooks
-make release     # universal build published as GitHub release v<version in tauri.conf.json>
+make release     # tags v<version in tauri.conf.json>; CI builds every platform and publishes it
 ```
+
+`.github/workflows/release.yml` signs the macOS build with the same "Detached Dev" identity, or
+Keychain access breaks on update. Once, export it from Keychain Access (My Certificates, Detached
+Dev, Export, `.p12` with an empty password), store it and delete the file:
+
+```sh
+base64 -i Detached.p12 | gh secret set MACOS_CERTIFICATE
+```
+
+Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 
 The command contract between UI and backend is `src/lib/api.ts` and `src-tauri/src/types.rs`;
 change both together. `make e2e` replaces only the Tauri IPC transport: `e2e/shim.ts` forwards

@@ -29,6 +29,6 @@ sign-setup:
 e2e-app:
 	./scripts/e2e-app.sh
 
-# Universal build published as GitHub release v<version from tauri.conf.json>, with install.sh.
+# Tags v<version from tauri.conf.json>; CI builds every platform and publishes the release.
 release:
 	./scripts/release.sh
