@@ -1,6 +1,6 @@
 //! The tokens of src/app.css, light and dark following the system.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use gpui_kit::component::Theme as Kit;
 use gpui_kit::{App, BoxShadow, Hsla, Pixels, SharedString, Window, px, rgb};
@@ -38,6 +38,9 @@ pub struct Theme {
     /// Monaco's diff colors: added and removed lines.
     pub diff_add: Hsla,
     pub diff_del: Hsla,
+    /// Monaco's cursor line and text selection.
+    pub line_highlight: Hsla,
+    pub text_selection: Hsla,
 }
 
 /// The gap between panes and around the window.
@@ -129,6 +132,8 @@ static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme {
     untracked: c(0xb45309),
     diff_add: c(0x10b981),
     diff_del: c(0xf43f5e),
+    line_highlight: a(0x1e2950, 0.04),
+    text_selection: a(0x6366f1, 0.2),
 });
 
 static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
@@ -169,6 +174,8 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     untracked: c(0xfbbf24),
     diff_add: c(0x34d399),
     diff_del: c(0xfb7185),
+    line_highlight: a(0xffffff, 0.03),
+    text_selection: a(0x818cf8, 0.3),
 });
 
 /// The tokens for the system appearance the kit's theme last synced to.
@@ -197,7 +204,7 @@ pub fn sync(window: &mut Window, cx: &mut App) {
         k.border = t.line;
         k.input = t.line;
         k.ring = t.selected_ring;
-        k.selection = t.selected;
+        k.selection = t.text_selection;
         k.accent = t.hover;
         k.accent_foreground = t.fg;
         k.popover = t.popup;
@@ -210,5 +217,10 @@ pub fn sync(window: &mut Window, cx: &mut App) {
         k.danger = t.diff_del;
         k.warning = t.warning;
         k.success = t.diff_add;
+        let mut code = (*k.highlight_theme).clone();
+        code.style.editor_background = Some(t.code);
+        code.style.editor_gutter_background = Some(t.code);
+        code.style.editor_active_line = Some(t.line_highlight);
+        k.highlight_theme = Arc::new(code);
     });
 }
