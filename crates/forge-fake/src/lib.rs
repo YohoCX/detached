@@ -148,8 +148,10 @@ pub(crate) struct State {
     pub requests: Vec<Request>,
     pub writes: Vec<Write>,
     pub delay: u64,
-    /// The last id given to a new pipeline or job.
+    /// The last id given to a new pipeline, job or review.
     pub next: u64,
+    /// By project index and MR number.
+    pub live: BTreeMap<(usize, u64), mrs::Live>,
 }
 
 impl State {

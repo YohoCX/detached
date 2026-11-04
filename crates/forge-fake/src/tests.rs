@@ -323,15 +323,9 @@ fn ghe_repo_with_or_without_v3() {
             "{path}"
         );
     }
-    assert_eq!(
-        post(
-            &f,
-            "/ghe/api/graphql",
-            &[GH],
-            json!({ "query": "query { x }" })
-        ),
-        missing
-    );
+    let unknown = json!({ "errors": [{ "message": "unknown query" }] });
+    let query = json!({ "query": "query { x }" });
+    assert_eq!(post(&f, "/ghe/api/graphql", &[GH], query), (200, unknown));
 }
 
 #[test]
@@ -794,4 +788,334 @@ fn ghe_logs_are_missing_while_active_then_redirect_to_a_blob_that_refuses_the_to
         .into_iter()
         .filter(|r| r.path.starts_with("/__blob"));
     assert_eq!(blobs.count(), 0);
+}
+
+/// Both forges with MR 1 (open, `feature` at `h1`, pipeline 100 succeeded), 2 (merged, by
+/// `other`) and 3 (an open draft by `other` from `wip` at `h3`, pipeline 300 running).
+fn mrs() -> Forge {
+    let mr = |n: u64, state, draft, author, source| {
+        json!({ "number": n, "title": format!("MR {n}"), "description": "d", "author": author,
+            "state": state, "draft": draft, "sourceBranch": source, "targetBranch": "main",
+            "baseSha": "b", "headSha": format!("h{n}") })
+    };
+    let mrs = json!([
+        mr(1, "open", false, "tester", "feature"),
+        mr(2, "merged", false, "other", "old"),
+        mr(3, "open", true, "other", "wip"),
+    ]);
+    let pipelines = json!([
+        { "id": 100, "ref": "feature", "sha": "h1", "status": "success", "jobs": [] },
+        { "id": 300, "ref": "wip", "sha": "h3", "status": "running", "jobs": [] },
+    ]);
+    let project = |forge, path| json!({ "forge": forge, "path": path, "defaultBranch": "main", "mrs": mrs, "pipelines": pipelines });
+    let seed = json!({ "user": "tester", "projects": [project("gitlab", "group/app"), project("ghe", "owner/app")] });
+    let f = Forge::start().unwrap();
+    f.reset(serde_json::from_value(seed).unwrap());
+    f
+}
+
+fn numbers(v: &Value, key: &str) -> Vec<u64> {
+    let list = v.as_array().unwrap().iter();
+    list.map(|x| match &x[key] {
+        Value::String(n) => n.parse().unwrap(),
+        n => n.as_u64().unwrap(),
+    })
+    .collect()
+}
+
+#[test]
+fn gitlab_graphql_lists_mrs_by_state_and_author_newest_first() {
+    let f = mrs();
+    let list = |args: &str, path: &str| {
+        let query = format!(
+            "query($path:ID!){{project(fullPath:$path){{mergeRequests(sort:UPDATED_DESC,first:50{args}){{nodes{{iid title state}}}}}}}}"
+        );
+        let body = json!({ "query": query, "variables": { "path": path } });
+        post(&f, "/gitlab/api/graphql", &[GL], body).1["data"]["project"].clone()
+    };
+    let nodes = |args| numbers(&list(args, "group/app")["mergeRequests"]["nodes"], "iid");
+    assert_eq!(nodes(""), [3, 2, 1]);
+    assert_eq!(nodes(",state:opened"), [3, 1]);
+    assert_eq!(nodes(",state:opened,authorUsername:\"tester\""), [1]);
+    assert!(nodes(",state:opened,reviewerUsername:\"tester\"").is_empty());
+    assert!(nodes(",state:opened,assigneeUsername:\"tester\"").is_empty());
+    assert_eq!(list("", "group/nope"), Value::Null);
+
+    post(
+        &f,
+        &format!("{GL_P}/merge_requests/1/approve"),
+        &[GL],
+        Value::Null,
+    );
+    let all = list("", "group/app")["mergeRequests"]["nodes"].clone();
+    assert_eq!(all[0]["title"], "Draft: MR 3");
+    assert_eq!(all[0]["headPipeline"], json!({ "status": "RUNNING" }));
+    assert_eq!(all[1]["state"], "merged");
+    assert_eq!(all[1]["headPipeline"], Value::Null);
+    let one = json!({
+        "iid": "1", "title": "MR 1", "state": "opened", "draft": false, "sourceBranch": "feature",
+        "targetBranch": "main", "updatedAt": T,
+        "webUrl": format!("{}/gitlab/group/app/-/merge_requests/1", f.url()),
+        "author": { "username": "tester" }, "approvedBy": { "nodes": [{ "username": "tester" }] },
+        "headPipeline": { "status": "SUCCESS" }, "sourceProject": { "fullPath": "group/app" },
+    });
+    assert_eq!(all[2], one);
+    let unknown = json!({ "errors": [{ "message": "unknown query" }] });
+    let query = json!({ "query": "query { other(x:1) }" });
+    assert_eq!(
+        post(&f, "/gitlab/api/graphql", &[GL], query),
+        (200, unknown)
+    );
+}
+
+#[test]
+fn ghe_graphql_lists_prs_by_state_with_latest_opinions_and_rollup() {
+    let f = mrs();
+    let list = |states: Value, name: &str| {
+        let query = "query($owner:String!,$name:String!,$states:[PullRequestState!]){repository(owner:$owner,name:$name){pullRequests(states:$states,first:50){nodes{number}}}}";
+        let vars = json!({ "owner": "owner", "name": name, "states": states });
+        post(
+            &f,
+            "/ghe/api/graphql",
+            &[GH],
+            json!({ "query": query, "variables": vars }),
+        )
+        .1
+    };
+    let nodes = |states| {
+        numbers(
+            &list(states, "app")["data"]["repository"]["pullRequests"]["nodes"],
+            "number",
+        )
+    };
+    assert_eq!(nodes(json!(["OPEN"])), [3, 1]);
+    assert_eq!(nodes(json!(["OPEN", "CLOSED", "MERGED"])), [3, 2, 1]);
+    assert_eq!(nodes(json!(["MERGED"])), [2]);
+    let missing = json!({ "data": { "repository": null }, "errors": [{ "message": "Could not resolve to a Repository" }] });
+    assert_eq!(list(json!(["OPEN"]), "nope"), missing);
+
+    let review = |event: &str, body: &str| {
+        post(
+            &f,
+            &format!("{GH_R}/pulls/1/reviews"),
+            &[GH],
+            json!({ "event": event, "body": body }),
+        )
+    };
+    review("APPROVE", "");
+    review("COMMENT", "hm");
+    let all = list(json!(["OPEN"]), "app")["data"]["repository"]["pullRequests"]["nodes"].clone();
+    let approved = json!([{ "state": "APPROVED", "author": { "login": "tester" } }]);
+    assert_eq!(all[1]["latestOpinionatedReviews"]["nodes"], approved);
+    review("REQUEST_CHANGES", "fix it");
+    let all = list(json!(["OPEN"]), "app")["data"]["repository"]["pullRequests"]["nodes"].clone();
+    let changes = json!([{ "state": "CHANGES_REQUESTED", "author": { "login": "tester" } }]);
+    assert_eq!(all[1]["latestOpinionatedReviews"]["nodes"], changes);
+    let rollup = |i: usize| all[i]["commits"]["nodes"][0]["commit"]["statusCheckRollup"].clone();
+    assert_eq!(
+        (rollup(0), rollup(1)),
+        (json!({ "state": "PENDING" }), json!({ "state": "SUCCESS" }))
+    );
+    assert_eq!(all[0]["isDraft"], true);
+    assert_eq!(all[0]["title"], "MR 3", "GitHub keeps the title bare");
+    assert_eq!(
+        all[1]["headRepository"],
+        json!({ "nameWithOwner": "owner/app" })
+    );
+    assert_eq!(all[1]["url"], format!("{}/ghe/owner/app/pull/1", f.url()));
+}
+
+#[test]
+fn gitlab_lists_mrs_by_state_source_branch_and_scope() {
+    let f = mrs();
+    let list = |q: &str| {
+        numbers(
+            &get(&f, &format!("{GL_P}/merge_requests{q}"), &[GL]).1,
+            "iid",
+        )
+    };
+    assert_eq!(list(""), [3, 2, 1]);
+    assert_eq!(list("?state=all"), [3, 2, 1]);
+    assert_eq!(list("?state=opened"), [3, 1]);
+    assert_eq!(list("?state=merged"), [2]);
+    assert_eq!(list("?state=opened&source_branch=wip"), [3]);
+    assert_eq!(list("?state=opened&scope=created_by_me"), [1]);
+    assert!(list("?state=opened&scope=assigned_to_me").is_empty());
+    assert!(list("?state=opened&reviewer_username=tester").is_empty());
+
+    let mr = get(&f, &format!("{GL_P}/merge_requests/1"), &[GL]).1;
+    assert_eq!(
+        (&mr["id"], &mr["state"], &mr["detailed_merge_status"]),
+        (&json!(1001), &json!("opened"), &json!("mergeable"))
+    );
+    assert_eq!(
+        mr["head_pipeline"],
+        json!({ "id": 100, "status": "success" })
+    );
+    assert_eq!(
+        mr["diff_refs"],
+        json!({ "base_sha": "b", "start_sha": "b", "head_sha": "h1" })
+    );
+    let draft = get(&f, &format!("{GL_P}/merge_requests/3"), &[GL]).1;
+    assert_eq!(
+        (&draft["title"], &draft["detailed_merge_status"]),
+        (&json!("Draft: MR 3"), &json!("draft_status"))
+    );
+    assert_eq!(get(&f, &format!("{GL_P}/merge_requests/9"), &[GL]).0, 404);
+}
+
+#[test]
+fn gitlab_approvals_follow_approve_and_unapprove() {
+    let f = mrs();
+    let approvals = || get(&f, &format!("{GL_P}/merge_requests/1/approvals"), &[GL]).1;
+    let none = json!({ "approved": false, "user_has_approved": false, "approved_by": [] });
+    assert_eq!(approvals(), none);
+    for _ in 0..2 {
+        assert_eq!(
+            post(
+                &f,
+                &format!("{GL_P}/merge_requests/1/approve"),
+                &[GL],
+                Value::Null
+            )
+            .0,
+            201
+        );
+    }
+    let me = json!({ "approved": true, "user_has_approved": true, "approved_by": [{ "user": { "username": "tester" } }] });
+    assert_eq!(approvals(), me);
+    post(
+        &f,
+        &format!("{GL_P}/merge_requests/1/unapprove"),
+        &[GL],
+        Value::Null,
+    );
+    assert_eq!(approvals(), none);
+    post(
+        &f,
+        &format!("{GL_P}/merge_requests/1/approve"),
+        &[GL],
+        Value::Null,
+    );
+    f.reset(serde_json::from_value(json!({ "user": "tester", "projects": [] })).unwrap());
+    assert!(lock(&f.state).live.is_empty());
+}
+
+#[test]
+fn gitlab_creates_mrs_on_the_branches_and_a_draft_title_sets_draft() {
+    let f = mrs();
+    let create = |body| post(&f, &format!("{GL_P}/merge_requests"), &[GL], body);
+    let (status, mr) = create(
+        json!({ "source_branch": "feature", "target_branch": "main", "title": "draft:  New", "description": "Why" }),
+    );
+    assert_eq!(status, 201);
+    let got = (
+        &mr["iid"],
+        &mr["title"],
+        &mr["draft"],
+        &mr["description"],
+        &mr["author"]["username"],
+    );
+    assert_eq!(
+        got,
+        (
+            &json!(4),
+            &json!("Draft: New"),
+            &json!(true),
+            &json!("Why"),
+            &json!("tester")
+        )
+    );
+    assert_eq!(
+        mr["diff_refs"]["head_sha"], "h1",
+        "the head is the source branch's"
+    );
+    let (_, plain) = create(json!({ "source_branch": "topic", "title": "Plain" }));
+    let got = (
+        &plain["iid"],
+        &plain["draft"],
+        &plain["target_branch"],
+        &plain["sha"],
+    );
+    assert_eq!(got, (&json!(5), &json!(false), &json!("main"), &json!("")));
+    let list = numbers(
+        &get(
+            &f,
+            &format!("{GL_P}/merge_requests?state=opened&source_branch=topic"),
+            &[GL],
+        )
+        .1,
+        "iid",
+    );
+    assert_eq!(list, [5]);
+}
+
+#[test]
+fn ghe_lists_pulls_by_state_and_head() {
+    let f = mrs();
+    let list = |q: &str| numbers(&get(&f, &format!("{GH_R}/pulls{q}"), &[GH]).1, "number");
+    assert_eq!(list(""), [3, 1]);
+    assert_eq!(list("?state=closed"), [2]);
+    assert_eq!(list("?state=all"), [3, 2, 1]);
+    assert_eq!(list("?state=open&head=owner%3Afeature"), [1]);
+    assert!(list("?state=open&head=fork%3Afeature").is_empty());
+
+    let pr = get(&f, &format!("{GH_R}/pulls/2"), &[GH]).1;
+    let got = (
+        &pr["state"],
+        &pr["merged"],
+        &pr["merged_at"],
+        &pr["mergeable_state"],
+    );
+    assert_eq!(
+        got,
+        (&json!("closed"), &json!(true), &json!(T), &json!("unknown"))
+    );
+    let pr = get(&f, &format!("{GH_R}/pulls/1"), &[GH]).1;
+    assert_eq!(
+        (&pr["node_id"], &pr["mergeable_state"]),
+        (&json!("PR_2_1"), &json!("clean"))
+    );
+    assert_eq!(pr["head"]["repo"]["full_name"], "owner/app");
+    assert_eq!(
+        (&pr["head"]["sha"], &pr["base"]["ref"]),
+        (&json!("h1"), &json!("main"))
+    );
+}
+
+#[test]
+fn ghe_creates_pulls_and_takes_reviews() {
+    let f = mrs();
+    let body = json!({ "head": "owner:feature", "base": "main", "title": "New", "body": "Why", "draft": true });
+    let (status, pr) = post(&f, &format!("{GH_R}/pulls"), &[GH], body);
+    assert_eq!(status, 201);
+    let got = (
+        &pr["number"],
+        &pr["title"],
+        &pr["draft"],
+        &pr["body"],
+        &pr["head"]["ref"],
+    );
+    assert_eq!(
+        got,
+        (
+            &json!(4),
+            &json!("New"),
+            &json!(true),
+            &json!("Why"),
+            &json!("feature")
+        )
+    );
+
+    let reviews = format!("{GH_R}/pulls/1/reviews");
+    let bare = post(&f, &reviews, &[GH], json!({ "event": "REQUEST_CHANGES" }));
+    assert_eq!(bare.0, 422);
+    let (status, r) = post(&f, &reviews, &[GH], json!({ "event": "APPROVE" }));
+    assert_eq!(
+        (status, &r["state"], &r["user"]["login"]),
+        (200, &json!("APPROVED"), &json!("tester"))
+    );
+    assert_eq!(r["node_id"], format!("PRR_{}", r["id"]));
+    let listed = get(&f, &reviews, &[GH]).1;
+    assert_eq!(listed, json!([r]));
 }
