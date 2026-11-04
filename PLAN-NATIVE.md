@@ -308,11 +308,14 @@ provider then fills it in.
 - **UI:** `ui` primitives and theme tokens; a vertical needing a new primitive adds it to `ui/` in
   its own commit. `ui_state::get/set` with the vertical's key prefix.
 - **Fixtures:** `Sandbox` repos, `settle`/`wait_until`, the forge fake, `open_app(cx)` returning a
-  test window with the store booted.
+  test window with the store booted; `open_app_with(cx, layout)` for e2e's sandbox (`ws/`, `solo`)
+  and `open_forge(cx)` for its `forge/` repos on a seeded fake, with the `Fixture` paths
+  (`sb.repo("group/api")`, ...) and `sb.commit_files`.
 - **Forge fake:** F ports the control routes (`/health`, `/reset` with the seed of projects, bare
   repos and MR head SHAs, `/__requests`, `/__writes`, `/__delay`), auth, pagination, `/user`,
-  `/version` and project lookup (GitLab by path or id, GitHub repo). V5 adds the MR, pipeline, job
-  and GraphQL routes of history.md §6.2.
+  `/version` and project lookup (GitLab by path or id, GitHub repo), and the per-project branch
+  SHAs reset takes from the MRs (`State::branches`). V5 adds the MR, pipeline, job and GraphQL
+  routes of history.md §6.2.
 
 ### Parity owners
 

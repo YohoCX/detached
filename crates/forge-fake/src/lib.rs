@@ -11,6 +11,7 @@ mod seed;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -131,6 +132,9 @@ pub(crate) struct State {
     pub origin: String,
     pub user: String,
     pub projects: Vec<Project>,
+    /// Per project, each branch's SHA; reset takes them from the MRs' target and source.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the MR routes read it"))]
+    pub branches: Vec<BTreeMap<String, String>>,
     pub requests: Vec<Request>,
     pub writes: Vec<Write>,
     pub delay: u64,
@@ -139,9 +143,18 @@ pub(crate) struct State {
 impl State {
     fn reset(&mut self, seed: Seed) {
         let origin = mem::take(&mut self.origin);
+        let branches = seed.projects.iter().map(|p| {
+            let mut b = BTreeMap::new();
+            for m in &p.mrs {
+                b.insert(m.target_branch.clone(), m.base_sha.clone());
+                b.insert(m.source_branch.clone(), m.head_sha.clone());
+            }
+            b
+        });
         *self = State {
             origin,
             user: seed.user,
+            branches: branches.collect(),
             projects: seed.projects,
             ..State::default()
         };

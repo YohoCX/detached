@@ -78,6 +78,13 @@ fn health_counts_the_seeded_projects() {
 }
 
 #[test]
+fn reset_maps_each_projects_branches_to_its_mr_shas() {
+    let f = seeded();
+    let ghe = BTreeMap::from([("feature".into(), "h".into()), ("trunk".into(), "b".into())]);
+    assert_eq!(lock(&f.state).branches, [BTreeMap::new(), ghe]);
+}
+
+#[test]
 fn reset_rejects_a_bad_seed() {
     let f = seeded();
     assert_eq!(post(&f, "/reset", &[], json!({ "user": "x" })).0, 400);

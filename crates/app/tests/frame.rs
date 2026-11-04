@@ -1,11 +1,12 @@
 mod common;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
 use detached_app::store::Tool;
 use detached_core::api;
-use detached_core::types::VerifyResult;
+use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
@@ -100,4 +101,71 @@ fn wait_until_gives_up_after_10_s(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_secs(10));
         false
     });
+}
+
+#[gpui_kit::test]
+fn the_e2e_layout_lists_its_repos_with_their_branch_state(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let sb = &cx.sb;
+    let path = |p: PathBuf| p.display().to_string();
+    let [app, wt, api, web, lib] =
+        ["app", "app-wt", "group/api", "group/web", "lib"].map(|n| path(sb.repo(n)));
+    let solo = path(sb.solo());
+    let branches = sb.git(&sb.repo("app"), &["branch", "--format=%(refname:short)"]);
+    assert_eq!(branches, "main\nother\nspike\nwt");
+    assert_eq!(sb.git(&sb.solo(), &["ls-files"]).lines().count(), 1046);
+
+    let repos = cx.store(|s, _| s.repos.clone());
+    let paths: Vec<_> = repos.iter().map(|r| &r.path).collect();
+    assert_eq!(paths, [&solo, &app, &wt, &api, &web, &lib]);
+    // Windows: names hold `\` and the worktree's link is unchecked (docs/TECHDEBT.md).
+    if cfg!(unix) {
+        let names: Vec<_> = repos.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["solo", "app", "app-wt", "group/api", "group/web", "lib"]
+        );
+        assert_eq!(repos[2].worktree_of.as_ref(), Some(&app));
+    }
+    let mut status = |p: &str| cx.store(|s, _| s.status(p).cloned()).unwrap();
+    let (a, w, l, m) = (status(&api), status(&web), status(&lib), status(&app));
+    assert_eq!(
+        (a.branch.as_deref(), a.ahead, a.behind),
+        (Some("main"), 0, 1)
+    );
+    assert_eq!(
+        (w.branch.as_deref(), w.ahead, w.behind),
+        (Some("main"), 1, 1)
+    );
+    assert_eq!((l.branch.as_deref(), l.upstream), (Some("feature"), None));
+    let change = |c: &FileChange| (c.path.clone(), c.orig_path.clone(), c.index, c.worktree);
+    let renamed = ("src/new.ts".into(), Some("src/old.ts".into()), 'R', '.');
+    let modified = ("README.md".into(), None, '.', 'M');
+    let untracked = ("notes.txt".into(), None, '?', '?');
+    let changes: Vec<_> = m.changes.iter().map(change).collect();
+    assert_eq!(changes, [modified, renamed, untracked]);
+}
+
+#[gpui_kit::test]
+fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    assert_eq!(names(cx), ["github", "gitlab"]);
+    let core = cx.store(|s, _| s.core().clone());
+    let mounts = [
+        ("gitlab", forge.gitlab(), "group/app/-"),
+        ("github", forge.ghe(), "owner/app"),
+    ];
+    for ((dir, base, project), p) in mounts.into_iter().zip(&seed.projects) {
+        let repo = cx.sb.forge_dir().join(dir);
+        let mr = &p.mrs[0];
+        assert_eq!(cx.sb.git(&repo, &["rev-parse", "@{u}"]), mr.head_sha);
+        assert_eq!(cx.sb.git(&repo, &["rev-parse", "origin/main"]), mr.base_sha);
+        assert_eq!(p.pipelines[0].sha, mr.head_sha);
+        let url = api::commit_url(&core, &repo.display().to_string(), &mr.head_sha).unwrap();
+        assert_eq!(
+            url,
+            Some(format!("{base}/{project}/commit/{}", mr.head_sha))
+        );
+    }
 }
