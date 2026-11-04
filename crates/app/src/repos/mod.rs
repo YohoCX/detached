@@ -2,6 +2,7 @@
 
 mod api;
 mod branches;
+mod settings;
 mod sidebar;
 mod switcher;
 mod sync;
@@ -22,6 +23,7 @@ use gpui_kit::{
 
 pub use api::*;
 pub use branches::branches;
+pub use settings::settings;
 pub use sidebar::sidebar;
 pub use switcher::switcher;
 pub use sync::{Bulk, Kind, sync_buttons};
@@ -68,7 +70,7 @@ impl State {
 }
 
 fn register_actions(cx: &mut App) -> Vec<Registration> {
-    use actions::Group::Vcs;
+    use actions::Group::{Vcs, View};
     use actions::register;
     let current = |f: fn(String, &mut App)| {
         move |_: &mut _, cx: &mut App| {
@@ -118,6 +120,9 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
             Vcs,
             current(sync::prune),
         ),
+        register(cx, "app.settings", "Settings…", View, |_, cx| {
+            open_settings(cx, Section::Accounts)
+        }),
     ]
 }
 

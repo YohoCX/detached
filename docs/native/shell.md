@@ -427,7 +427,7 @@ Opened from the Branch widget (`checkout`), the `vcs.checkout`, `vcs.newBranch` 
 - Action → `run(id)`.
 - Branch → `checkout(current, local|remote)`.
 
-### 1.9 Settings dialog (`src/components/Settings.svelte`)
+### 1.9 Settings dialog (`src/components/Settings.svelte`) [ported differently: kit Selects; its text cannot be selected]
 
 **Container:**
 - `.backdrop.scrim` (z 30). Clicking it closes the dialog.
@@ -472,7 +472,7 @@ Opened from the Branch widget (`checkout`), the `vcs.checkout`, `vcs.newBranch` 
    - Input with placeholder "git binary (empty: from your shell PATH)".
    - "Apply" → `setGitPath(trimmed value || null)`, which returns a new EnvInfo.
 
-### 1.10 Accounts (`src/components/Accounts.svelte`, embedded in Settings)
+### 1.10 Accounts (`src/components/Accounts.svelte`, embedded in Settings) [ported differently: Save with a required field empty focuses it instead of the browser's bubble]
 
 **Header:** h2 "Accounts" (so the section shows a heading twice) and an "Add account" button, disabled while the form is open.
 
@@ -543,7 +543,7 @@ Opened from the Branch widget (`checkout`), the `vcs.checkout`, `vcs.newBranch` 
 
 ## 2. State and logic modules
 
-### 2.1 `src/lib/app.svelte.ts`
+### 2.1 `src/lib/app.svelte.ts` [ported]
 
 **Shared stores:**
 - `statuses`: `SvelteMap<repo, RepoStatus | errorString>`.
@@ -767,7 +767,7 @@ The sidebar shown/hidden state, the open tool, the bottom panel, the current rep
 
 ---
 
-## 4. Backend commands used by this area (`src/lib/api.ts`)
+## 4. Backend commands used by this area (`src/lib/api.ts`) [ported]
 
 | api name | Tauri command | Called from |
 | --- | --- | --- |

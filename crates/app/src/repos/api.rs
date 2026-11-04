@@ -7,6 +7,7 @@ use gpui_kit::{App, Task};
 pub use detached_core::types::CheckoutTarget;
 
 use super::State;
+use super::settings::Open;
 use crate::blocking;
 use crate::store::{Level, Notice, Store};
 
@@ -68,11 +69,9 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
     })
 }
 
-/// Opens Settings at `section`.
-pub fn open_settings(cx: &mut App, _section: Section) {
-    Store::global(cx).update(cx, |s, cx| {
-        s.say("Settings… is not available yet", false, cx)
-    });
+/// Opens Settings at `section`, or shows that section if it is open.
+pub fn open_settings(cx: &mut App, section: Section) {
+    State::global(cx).update(cx, |_, cx| cx.emit(Open(section)));
 }
 
 /// `name` first, then the branch left, then the rest; at most 6.

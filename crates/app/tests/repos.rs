@@ -6,11 +6,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
+use detached_app::repos::{self, Section};
 use detached_app::store::{Level, Message, Notice};
 use detached_app::{actions, ui_state};
 use detached_core::api;
+use detached_core::types::{AccountInput, Provider};
+use detached_forge_fake::{Forge, Seed};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px};
 
 /// A sidebar row as drawn: a repo's path (None for a header), its label and its second line.
 #[derive(Debug)]
@@ -881,4 +884,233 @@ fn deleting_a_remote_branch_asks_first_then_runs_as_an_op(cx: &mut TestAppContex
     says(cx, "Deleted origin/topic on the remote", false);
     let origin = cx.sb.root().join("origin.git");
     assert_eq!(cx.sb.git(&origin, &["branch", "--list", "topic"]), "");
+}
+
+fn click_option(cx: &mut VisualTestContext, select: impl Into<ElementId>, option: &str) {
+    cx.click(select);
+    cx.click(ElementId::Name(format!("option:{option}").into()));
+}
+
+/// Account row `i`'s check state.
+fn check_of(cx: &mut VisualTestContext, i: usize) -> String {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        w.try_find(("accounts.row", i))?;
+        let state = w.within(("accounts.row", i)).try_find("state");
+        state.and_then(|s| s.label().map(String::from))
+    })
+    .unwrap_or_default()
+}
+
+fn in_account(cx: &mut VisualTestContext, i: usize, id: &'static str) {
+    click_in(cx, &ElementId::from(("accounts.row", i)), id);
+}
+
+fn type_into(cx: &mut VisualTestContext, id: &'static str, text: &str) {
+    cx.click(id);
+    cx.input(text);
+}
+
+fn requested(fake: &Forge, path: &str) -> bool {
+    fake.requests().iter().any(|r| r.path == path)
+}
+
+/// The app over a fake forge whose accounts are Fake GitLab and Fake GitHub, with Settings open.
+fn open_accounts(cx: &mut TestAppContext) -> (TestApp, Forge) {
+    let mut fake = None;
+    let seed = || Seed {
+        user: "tester".into(),
+        projects: vec![],
+    };
+    let mut app = open_app_with(cx, |sb| fake = Some(forge(sb, seed())));
+    app.press("secondary-,");
+    wait_until(&mut app, |cx| labels(cx, "accounts.row").len() == 2);
+    (app, fake.unwrap())
+}
+
+#[gpui_kit::test]
+fn settings_opens_from_its_chord_and_the_strip_and_closes_on_escape_close_and_the_scrim(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app(cx);
+    cx.press("secondary-,");
+    assert!(cx.find("settings").unwrap().visible());
+    cx.press("escape");
+    assert!(cx.find("settings").is_none());
+    cx.click("strip.settings");
+    assert!(cx.find("settings").is_some());
+    cx.click("settings.close");
+    assert!(cx.find("settings").is_none());
+    cx.click("strip.settings");
+    cx.update(|w, cx| w.click_at("settings.scrim", point(px(4.), px(4.)), cx));
+    settle(cx);
+    assert!(cx.find("settings").is_none());
+
+    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    wait_until(cx, |cx| cx.find("settings.env").is_some());
+    let env = label(cx, "settings.env");
+    assert!(
+        env.starts_with("git version ") && env.contains(" · "),
+        "{env}"
+    );
+    assert!(cx.find("settings.git").unwrap().visible());
+}
+
+#[gpui_kit::test]
+fn an_account_saved_with_a_token_is_checked_against_the_forge_and_a_bad_token_fails(
+    cx: &mut TestAppContext,
+) {
+    let (mut app, fake) = open_accounts(cx);
+    let cx = &mut app;
+    assert_eq!(labels(cx, "accounts.row"), ["Fake GitLab", "Fake GitHub"]);
+    cx.click("accounts.add");
+    click_option(cx, "accounts.provider", "GitLab self-hosted");
+    assert_eq!(cx.find("accounts.base").unwrap().value(), Some(""));
+    type_into(cx, "accounts.base", &fake.gitlab());
+    type_into(cx, "accounts.user", "tester");
+    type_into(cx, "accounts.token", "gitlab-token");
+    cx.click("accounts.save");
+    wait_until(cx, |cx| check_of(cx, 2) == "Token ok: tester");
+    assert!(cx.find("accounts.form").is_none());
+    assert_eq!(labels(cx, "accounts.row")[2], fake.gitlab());
+    assert!(requested(&fake, "/gitlab/api/v4/user"));
+
+    in_account(cx, 1, "verify");
+    wait_until(cx, |cx| check_of(cx, 1) == "Token ok: tester");
+    assert!(requested(&fake, "/ghe/api/v3/user"));
+
+    in_account(cx, 0, "edit");
+    type_into(cx, "accounts.token", "nope");
+    cx.press("enter");
+    wait_until(cx, |cx| {
+        check_of(cx, 0) == "Check failed (401): Unauthorized"
+    });
+}
+
+#[gpui_kit::test]
+fn an_edit_without_a_token_keeps_it_remove_asks_first_and_the_provider_fixes_the_base(
+    cx: &mut TestAppContext,
+) {
+    let (mut app, _fake) = open_accounts(cx);
+    let cx = &mut app;
+    in_account(cx, 1, "edit");
+    let token = cx.find("accounts.token").unwrap();
+    let keep = "Leave empty to keep the stored token";
+    assert_eq!(token.placeholder(), Some(keep));
+    type_into(cx, "accounts.label", " at work");
+    cx.click("accounts.save");
+    wait_until(cx, |cx| {
+        labels(cx, "accounts.row")[1] == "Fake GitHub at work"
+    });
+    assert_eq!(check_of(cx, 1), "", "no token, no check");
+    in_account(cx, 1, "verify");
+    wait_until(cx, |cx| check_of(cx, 1) == "Token ok: tester");
+
+    in_account(cx, 0, "remove");
+    assert_eq!(labels(cx, "accounts.row").len(), 2);
+    in_account(cx, 0, "cancel");
+    in_account(cx, 0, "remove");
+    in_account(cx, 0, "confirm");
+    wait_until(cx, |cx| {
+        labels(cx, "accounts.row") == ["Fake GitHub at work"]
+    });
+
+    let base = |cx: &mut VisualTestContext| {
+        let base = cx.find("accounts.base").unwrap();
+        base.value().unwrap_or_default().to_string()
+    };
+    cx.click("accounts.add");
+    type_into(cx, "accounts.base", "x");
+    assert_eq!(base(cx), "https://github.com", "locked");
+    assert_eq!(
+        cx.find("accounts.user").unwrap().placeholder(),
+        Some("Your login")
+    );
+    let token = cx.find("accounts.token").unwrap();
+    assert_eq!(token.placeholder(), Some("Personal access token"));
+    click_option(cx, "accounts.provider", "GitLab.com");
+    type_into(cx, "accounts.base", "x");
+    assert_eq!(base(cx), "https://gitlab.com", "locked");
+    assert_eq!(
+        cx.find("accounts.user").unwrap().placeholder(),
+        Some("oauth2")
+    );
+    click_option(cx, "accounts.provider", "GitHub Enterprise");
+    assert_eq!(base(cx), "");
+    type_into(cx, "accounts.base", "https://ghe.example.com");
+    assert_eq!(base(cx), "https://ghe.example.com");
+    cx.click("accounts.cancel");
+    assert!(cx.find("accounts.form").is_none());
+}
+
+#[gpui_kit::test]
+fn focus_coming_into_accounts_reloads_them(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    // Focus events need an active window.
+    cx.update(|w, _| w.activate_window());
+    cx.press("secondary-,");
+    wait_until(cx, |cx| cx.find("accounts.empty").is_some());
+    let input = AccountInput {
+        id: None,
+        provider: Provider::Github,
+        base_url: "https://github.com".into(),
+        username: "me".into(),
+        label: "Mine".into(),
+        token: None,
+    };
+    let core = cx.store(|s, _| s.core().clone());
+    api::save_account(&core, input).unwrap();
+    cx.click("accounts.add");
+    cx.click("accounts.user");
+    wait_until(cx, |cx| labels(cx, "accounts.row") == ["Mine"]);
+}
+
+#[gpui_kit::test]
+fn a_repo_removed_from_the_list_is_restored_from_settings(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let api = path(cx.sb.repo("group/api"));
+    let id = row(cx, &api).id;
+    click_in(cx, &id, "remove");
+    wait_until(cx, |cx| !paths(cx).contains(&api));
+    cx.press("secondary-,");
+    wait_until(cx, |cx| label(cx, ("settings.excluded", 0usize)) == api);
+    let restore = ElementId::from(("settings.excluded", 0usize));
+    click_in(cx, &restore, "restore");
+    wait_until(cx, |cx| paths(cx).contains(&api));
+    wait_until(cx, |cx| cx.find(("settings.excluded", 0usize)).is_none());
+}
+
+#[gpui_kit::test]
+fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_account(
+    cx: &mut TestAppContext,
+) {
+    let (mut app, _fake, _) = open_forge(cx);
+    let cx = &mut app;
+    let gitlab = path(cx.sb.forge_dir().join("gitlab"));
+    let current = gitlab.clone();
+    cx.store(|s, cx| s.set_current(Some(current), cx));
+    cx.update(|_, cx| repos::open_settings(cx, Section::Repos));
+    let value = |cx: &mut VisualTestContext, id: ElementId| {
+        let e = cx.find(id);
+        e.and_then(|e| e.value().map(String::from))
+    };
+    let account = ElementId::from(("settings.account", 0usize));
+    wait_until(cx, |cx| value(cx, account.clone()).is_some());
+    assert_eq!(value(cx, account.clone()).as_deref(), Some("Fake GitLab"));
+    let chosen = |cx: &mut VisualTestContext| {
+        let (core, repo) = (cx.store(|s, _| s.core().clone()), gitlab.clone());
+        api::get_settings(&core).repo_accounts.get(&repo).cloned()
+    };
+    assert_eq!(chosen(cx), None, "found, not chosen");
+    click_option(cx, account.clone(), "Fake GitLab");
+    let core = cx.store(|s, _| s.core().clone());
+    let id = api::list_accounts(&core).unwrap()[0].id.clone();
+    wait_until(cx, |cx| chosen(cx).as_ref() == Some(&id));
+    click_option(cx, account.clone(), "Automatic");
+    wait_until(cx, |cx| chosen(cx).is_none());
+
+    let remote = value(cx, "settings.mrRemote".into());
+    assert_eq!(remote.as_deref(), Some("Automatic (origin)"));
+    let host = value(cx, ("settings.forgeAccount", 0usize).into());
+    assert_eq!(host.as_deref(), Some("Automatic (Fake GitLab)"));
 }

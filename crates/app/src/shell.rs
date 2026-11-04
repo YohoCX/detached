@@ -37,6 +37,7 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
             crate::repos::workspaces(cx),
             crate::repos::switcher(cx),
             crate::repos::branches(window, cx),
+            crate::repos::settings(window, cx),
         ],
         TopBar::Center => vec![],
         TopBar::Right => vec![
@@ -527,8 +528,10 @@ mod tests {
         act(cx, w, |window, cx| window.click("strip.mrs", cx));
         assert_eq!(store(cx, |s, _| s.tool), Some(Tool::Mrs));
         act(cx, w, |window, cx| window.click("strip.settings", cx));
-        let said = store(cx, |s, _| s.message.clone().unwrap().text);
-        assert_eq!(said, "Settings… is not available yet");
+        act(cx, w, |window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("settings").visible(), "Settings opens");
+        });
     }
 
     #[gpui_kit::test]
