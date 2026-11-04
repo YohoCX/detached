@@ -7,8 +7,8 @@ use detached_core::git::patch::FilePatch;
 use detached_core::types::{Content, FileDiff};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::diff::{
-    Diff, DiffAnnotation, DiffFile, DiffGutterMarker, DiffHunkSeparator, DiffLinePosition,
-    DiffLineRange, DiffMode, DiffState,
+    Diff, DiffAnnotation, DiffEvent, DiffFile, DiffGutterMarker, DiffHunkSeparator,
+    DiffLinePosition, DiffLineRange, DiffMode, DiffState,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -71,6 +71,8 @@ pub struct DiffView {
     /// Focus the diff once loaded.
     pub(super) focus: bool,
     hover: Option<DiffLinePosition>,
+    /// Made on the first render, since on_add needs the window.
+    _numbers: Option<Subscription>,
     _load: Task<()>,
     _actions: Vec<Registration>,
     _store: Subscription,
@@ -123,6 +125,7 @@ impl DiffView {
             reveal: true,
             focus: false,
             hover: None,
+            _numbers: None,
             _load: Task::ready(()),
             _actions: actions,
             _store: store,
@@ -241,15 +244,38 @@ impl DiffView {
         Some(self.state.read(cx).files().first()?.path().clone())
     }
 
+    fn can_add(&self, side: DiffSide, line: u32) -> bool {
+        self.commentable.as_ref().is_none_or(|f| f(side, line))
+    }
+
     fn set_hover(&mut self, p: Option<DiffLinePosition>, cx: &mut Context<Self>) {
-        let ok = |p: &DiffLinePosition| {
-            let line = p.line() as u32;
-            self.commentable.as_ref().is_none_or(|f| f(p.side(), line))
-        };
-        let p = p.filter(ok);
+        let p = p.filter(|p| self.can_add(p.side(), p.line() as u32));
         if self.hover != p {
             self.hover = p;
             cx.notify();
+        }
+    }
+
+    /// A press on a line's number adds there, as the "+" does.
+    fn number_pressed(
+        &mut self,
+        _: &Entity<DiffState>,
+        e: &DiffEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (DiffEvent::SelectionStarted(r), Some(on_add)) = (e, self.on_add.clone()) else {
+            return;
+        };
+        let (side, line) = (r.side(), r.start() as u32);
+        if r.end_side() == side && r.end() == r.start() && self.can_add(side, line) {
+            on_add(
+                side,
+                line,
+                other_line(&self.changes, side, line),
+                window,
+                cx,
+            );
         }
     }
 
@@ -432,6 +458,9 @@ impl Render for DiffView {
                 .code
                 .get_or_insert_with(|| cx.new(|cx| Code::new(window, cx)));
             code.update(cx, |c, cx| c.set(&self.doc.path, &text, keep, window, cx));
+        }
+        if self._numbers.is_none() {
+            self._numbers = Some(cx.subscribe_in(&self.state, window, Self::number_pressed));
         }
         if self.focus && matches!(self.body, Body::Diff | Body::Conflict) {
             self.focus = false;

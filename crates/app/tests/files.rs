@@ -253,7 +253,7 @@ fn an_annotation_draws_its_view_under_its_line(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn commentable_lines_get_a_plus_that_passes_the_other_sides_line(cx: &mut TestAppContext) {
+fn a_commentable_lines_plus_or_number_adds_with_the_other_sides_line(cx: &mut TestAppContext) {
     let app = &mut open_app_with(cx, layout);
     let added = Rc::new(RefCell::new(vec![]));
     let sink = added.clone();
@@ -273,12 +273,18 @@ fn commentable_lines_get_a_plus_that_passes_the_other_sides_line(cx: &mut TestAp
         hover(cx, side, n);
         cx.click("diff.add");
     }
+    for (side, n) in [("new", 3usize), ("new", 7), ("old", 5)] {
+        cx.update(|w, cx| w.within((side, n - 1)).click(("line", n - 1), cx));
+        settle(cx);
+    }
     use DiffSide::{Modified, Original};
     let want = [
         (Modified, 4, Some(4)),
         (Modified, 5, None),
         (Original, 5, None),
         (Original, 6, Some(6)),
+        (Modified, 7, Some(7)),
+        (Original, 5, None),
     ];
     assert_eq!(*added.borrow(), want);
 }
@@ -654,10 +660,12 @@ fn markdown_previews_code_diagrams_anchors_and_links_and_source_sticks(cx: &mut 
         "a failed diagram shows its source"
     );
     assert_eq!(description(cx, "md.mermaid").as_deref(), Some("light"));
-    cx.update(|w, cx| Theme::change(ThemeMode::Dark, Some(w), cx));
-    wait_until(cx, |cx| {
-        description(cx, "md.mermaid").as_deref() == Some("dark")
-    });
+    for (mode, name) in [(ThemeMode::Dark, "dark"), (ThemeMode::Light, "light")] {
+        cx.update(|w, cx| Theme::change(mode, Some(w), cx));
+        wait_until(cx, |cx| {
+            description(cx, "md.mermaid").as_deref() == Some(name)
+        });
+    }
 
     click_text(cx, "Web", 0.5);
     assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/x"));

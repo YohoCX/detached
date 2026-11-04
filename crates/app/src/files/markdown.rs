@@ -2,13 +2,16 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use base64::Engine;
 use detached_core::api;
 use detached_core::state::AppState;
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
+use futures::channel::oneshot;
 use gpui_kit::base::markdown_ast::Node;
 use gpui_kit::base::{MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle};
 use gpui_kit::{
@@ -38,6 +41,7 @@ pub struct Markdown {
     want: UnboundedSender<String>,
     /// By source, with whether it was drawn dark.
     diagrams: HashMap<String, (bool, Diagram)>,
+    /// Draws under way, by source and appearance.
     drawing: HashSet<(String, bool)>,
     /// A file's side padding, which centers its column.
     pad: Pixels,
@@ -132,9 +136,13 @@ impl Markdown {
         let Some(from) = image_url(&self.links, &url) else {
             return;
         };
-        let core = Store::global(cx).read(cx).core().clone();
-        let links = self.links.clone();
-        let job = blocking::run(cx, move || fetch(&core, &links, &from));
+        let job = if from.to_ascii_lowercase().starts_with("https:") {
+            web_image(cx, from)
+        } else {
+            let core = Store::global(cx).read(cx).core().clone();
+            let links = self.links.clone();
+            blocking::run(cx, move || fetch(&core, &links, &from))
+        };
         cx.spawn(async move |this, cx| {
             let image = job.await;
             this.update(cx, |m, cx| {
@@ -155,6 +163,7 @@ impl Markdown {
         cx.spawn(async move |this, cx| {
             let diagram = job.await;
             this.update(cx, |m, cx| {
+                m.drawing.remove(&(source.clone(), dark));
                 m.diagrams.insert(source, (dark, diagram));
                 cx.notify();
             })
@@ -575,29 +584,62 @@ fn image_url(links: &Links, url: &str) -> Option<String> {
     }
 }
 
+/// A data or repo image.
 fn fetch(core: &AppState, links: &Links, from: &str) -> Option<Arc<Image>> {
-    let lower = from.to_ascii_lowercase();
-    if lower.starts_with("data:") {
+    if from.to_ascii_lowercase().starts_with("data:") {
         return data_image(from);
-    }
-    if lower.starts_with("https:") {
-        let mut response = ureq::get(from).call().ok()?;
-        let mime = response.body().mime_type()?.to_string();
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(5 << 20)
-            .read_to_vec()
-            .ok()?;
-        return Some(Arc::new(Image::from_bytes(
-            ImageFormat::from_mime_type(&mime)?,
-            bytes,
-        )));
     }
     let Links::Repo { repo, rev, .. } = links else {
         return None;
     };
     data_image(&api::read_image(core, repo, rev.as_deref(), from).ok()??)
+}
+
+/// Web images load a few at a time on threads of their own, so a slow host cannot hold core's
+/// pool.
+fn web_image(cx: &App, url: String) -> Task<Option<Arc<Image>>> {
+    type Job = (String, oneshot::Sender<Option<Arc<Image>>>);
+    static QUEUE: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
+        let config = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10)));
+        let agent = ureq::Agent::new_with_config(config.build());
+        for _ in 0..4 {
+            let (rx, agent) = (rx.clone(), agent.clone());
+            let work = move || {
+                loop {
+                    let job = rx.lock().map(|rx| rx.recv());
+                    let Ok(Ok((url, tx))) = job else { return };
+                    tx.send(get(&agent, &url)).ok();
+                }
+            };
+            thread::Builder::new()
+                .name("images".into())
+                .spawn(work)
+                .ok();
+        }
+        tx
+    });
+    let (tx, rx) = oneshot::channel();
+    queue.send((url, tx)).ok();
+    cx.foreground_executor()
+        .spawn(async move { rx.await.ok().flatten() })
+}
+
+fn get(agent: &ureq::Agent, url: &str) -> Option<Arc<Image>> {
+    let mut response = agent.get(url).call().ok()?;
+    let mime = response.body().mime_type()?.to_string();
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(5 << 20)
+        .read_to_vec()
+        .ok()?;
+    Some(Arc::new(Image::from_bytes(
+        ImageFormat::from_mime_type(&mime)?,
+        bytes,
+    )))
 }
 
 /// A base64 or percent-encoded data URL's image.
@@ -776,6 +818,14 @@ mod tests {
     fn keeps_task_list_checkboxes_and_drops_other_inputs(cx: &mut TestAppContext) {
         let md = "- [x] done\n- [ ] todo\n\n<input type=\"text\" value=\"x\">";
         assert_eq!(prepare(md, &repo("a.md"), false), md);
+        let mut boxes = vec![];
+        let root = markdown::to_mdast(md, &ParseOptions::gfm()).unwrap();
+        visit(&root, &mut |n| {
+            if let Node::ListItem(item) = n {
+                boxes.push(item.checked);
+            }
+        });
+        assert_eq!(boxes, [Some(true), Some(false)], "the kit draws these");
         let text = rendered(md, cx);
         assert_eq!(text.trim_end(), "done\ntodo", "the boxes are no text");
     }
