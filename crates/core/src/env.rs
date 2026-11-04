@@ -26,7 +26,7 @@ impl Env {
         let path = probed.unwrap_or_else(fallback_path);
         let git = git_override
             .map(PathBuf::from)
-            .or_else(|| which("git", &path))
+            .or_else(|| find_git(&path))
             .unwrap_or_else(|| PathBuf::from(if cfg!(unix) { "/usr/bin/git" } else { "git" }));
         (
             Env {
@@ -53,6 +53,23 @@ impl Env {
 fn fallback_path() -> String {
     let base = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".into());
     format!("/opt/homebrew/bin:/usr/local/bin:{base}")
+}
+
+/// macOS's /usr/bin/git is an xcrun shim that costs a process (and a license check) per call.
+pub fn find_git(path: &str) -> Option<PathBuf> {
+    let git = which("git", path)?;
+    #[cfg(target_os = "macos")]
+    if git == Path::new("/usr/bin/git") {
+        let out = std::process::Command::new("xcrun")
+            .args(["--find", "git"])
+            .output()
+            .ok()?;
+        let real = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        if out.status.success() && real.is_file() {
+            return Some(real);
+        }
+    }
+    Some(git)
 }
 
 pub fn which(bin: &str, path: &str) -> Option<PathBuf> {

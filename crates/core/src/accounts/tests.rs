@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::accounts::store::MemoryStore;
-use crate::env::{Env, which};
+use crate::env::Env;
 use crate::settings::Settings;
 use crate::types::Provider;
 
@@ -25,7 +25,7 @@ fn state(accounts: &[Account]) -> (TempDir, AppState) {
     store(dir.path(), accounts).unwrap();
     let path = std::env::var("PATH").unwrap();
     let env = Env {
-        git: which("git", &path).unwrap(),
+        git: crate::env::find_git(&path).unwrap(),
         path,
         vars: vec![],
     };

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use detached_core::accounts::store::MemoryStore;
 use detached_core::api;
-use detached_core::env::{Env, which};
+use detached_core::env::{Env, find_git};
 use detached_core::settings::Settings;
 use detached_core::state::AppState;
 use serde::Serialize;
@@ -78,7 +78,7 @@ fn serve(stream: TcpStream) {
 /// Git runs with HOME and global config in the fixture, like `git::testutil`.
 fn reset(root: &Path) -> Result<Value, String> {
     let path = std::env::var("PATH").unwrap_or_default();
-    let git = which("git", &path).ok_or("git not found")?;
+    let git = find_git(&path).ok_or("git not found")?;
     let home = root.join("home").display().to_string();
     let vars = vec![
         ("HOME".into(), home.clone()),

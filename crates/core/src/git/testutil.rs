@@ -27,7 +27,7 @@ impl Sandbox {
         )
         .unwrap();
         let path = std::env::var("PATH").unwrap();
-        let git = env::which("git", &path).unwrap();
+        let git = env::find_git(&path).unwrap();
         let s = |p: &Path| p.display().to_string();
         let vars = vec![
             ("HOME".into(), s(&home)),
