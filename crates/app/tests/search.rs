@@ -1,8 +1,6 @@
 mod common;
 
-use std::cell::Cell;
 use std::path::Path;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -103,6 +101,22 @@ fn file(repo: &str, rev: Option<&str>, path: &str) -> Option<Doc> {
     }))
 }
 
+/// Waits for the viewer's editor to hold `text` with focus: a file takes focus once it loads, so
+/// a palette reopened sooner would lose its keys.
+fn opened(cx: &mut VisualTestContext, text: &str) {
+    let code = ElementId::from("viewer.code");
+    wait_until(cx, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.find_all("input-state").into_iter().any(|e| {
+                e.path().contains(&code)
+                    && e.focused() == Some(true)
+                    && e.value().is_some_and(|v| v.contains(text))
+            })
+        })
+    });
+}
+
 #[gpui_kit::test]
 fn go_to_file_filters_moves_by_keyboard_under_a_resting_mouse_opens_and_ignores_case(
     cx: &mut TestAppContext,
@@ -140,6 +154,7 @@ fn go_to_file_filters_moves_by_keyboard_under_a_resting_mouse_opens_and_ignores_
     cx.press("enter");
     assert_eq!(title(cx), None);
     assert_eq!(shown(cx), file(&repo, None, &path));
+    opened(cx, "export const c");
 
     cx.press("secondary-shift-o");
     search(cx, "COMP-07", "src/components/comp-07.ts");
@@ -186,9 +201,11 @@ fn go_to_file_searches_the_tree_ref_and_lists_recent_files(cx: &mut TestAppConte
     assert_eq!(rows(cx)[0].1, "app @ other");
     cx.press("enter");
     assert_eq!(shown(cx), file(&repo, Some("other"), "README.md"));
+    wait_until(cx, |cx| cx.find("markdown").is_some());
     cx.press("secondary-shift-o");
     search(cx, "index", "src/index.ts");
     cx.press("enter");
+    opened(cx, "export {}");
 
     cx.press("secondary-shift-o");
     let recent: [(String, String); 2] =
@@ -234,26 +251,15 @@ fn keymap_opens_each_palette_and_settings(cx: &mut TestAppContext) {
         cx.press("escape");
         assert_eq!(title(cx), None);
     }
-    let opened = Rc::new(Cell::new(false));
-    let o = opened.clone();
-    let _settings = cx.update(|_, cx| {
-        actions::register(
-            cx,
-            "app.settings",
-            "Settings…",
-            Group::View,
-            move |_, _| o.set(true),
-        )
-    });
     cx.press("secondary-,");
-    assert!(opened.get());
+    assert!(cx.find("settings").unwrap().visible());
 }
 
 #[gpui_kit::test]
-fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branch_closes(
+fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branch_checks_it_out(
     cx: &mut TestAppContext,
 ) {
-    let (mut app, _) = open(cx);
+    let (mut app, repo) = open(cx);
     let cx = &mut app;
     double_shift(cx);
     assert_eq!(all(cx), Some(false));
@@ -280,6 +286,29 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
     search(cx, "spike", "spike");
     cx.press("enter");
     assert_eq!(title(cx), None);
+    let branch = |cx: &mut VisualTestContext| {
+        cx.store(|s, _| s.status(&repo).and_then(|st| st.branch.clone()))
+    };
+    wait_until(cx, |cx| branch(cx).as_deref() == Some("spike"));
+    let app_repo = cx.sb.repo("app");
+    assert_eq!(
+        cx.sb.git(&app_repo, &["symbolic-ref", "--short", "HEAD"]),
+        "spike"
+    );
+
+    // A remote branch with no local one checks out a new local branch tracking it.
+    cx.sb.git(
+        &app_repo,
+        &["update-ref", "refs/remotes/origin/topic", "main"],
+    );
+    double_shift(cx);
+    search(cx, "origin/topic", "origin/topic");
+    cx.press("enter");
+    wait_until(cx, |cx| branch(cx).as_deref() == Some("topic"));
+    let upstream = cx
+        .sb
+        .git(&app_repo, &["rev-parse", "--abbrev-ref", "topic@{u}"]);
+    assert_eq!(upstream, "origin/topic");
 }
 
 #[gpui_kit::test]
@@ -503,6 +532,7 @@ fn find_in_files_opens_the_selected_match_at_its_line_and_keeps_the_text(cx: &mu
     cx.click(("find.match", a));
     assert!(!find_open(cx));
     assert_eq!(shown(cx), at("data/beta-a.txt", 1));
+    opened(cx, "beta-42");
 
     cx.press("secondary-shift-f");
     let text = cx.find("find.text").unwrap();
@@ -516,6 +546,7 @@ fn find_in_files_opens_the_selected_match_at_its_line_and_keeps_the_text(cx: &mu
     cx.press("enter");
     assert!(!find_open(cx));
     assert_eq!(shown(cx), at("data/beta-b.txt", 2));
+    opened(cx, "beta-7");
 
     // The kept text is selected, so typing replaces it.
     cx.press("secondary-shift-f");
