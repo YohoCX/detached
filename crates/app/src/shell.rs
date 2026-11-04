@@ -126,6 +126,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         ui::theme::sync(window, cx);
+        history::init(cx);
         let store = Store::global(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
