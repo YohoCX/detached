@@ -12,13 +12,13 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FontWeight, Global,
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
     px,
 };
 
-use super::{active, color, core, glyph, name, now, poll, took};
+use super::{active, color, core, glyph, name, note, now, poll, took};
 use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
 use crate::store::{DocRef, Location, Store};
@@ -462,6 +462,7 @@ impl Pipelines {
             })
             .child(
                 ui::icon_button("pipelines.refresh", Icon::Refresh, cx)
+                    .test_support()
                     .tooltip(|window, cx| Tooltip::new("Refresh").build(window, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.load(false, cx))),
             )
@@ -777,7 +778,7 @@ impl Pipelines {
 }
 
 impl Render for Pipelines {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let cached = cache::cached::<Vec<Pipeline>>(&self.key, cx);
         let (list, error) = (
             cached.and_then(|c| c.value.clone()),
@@ -786,10 +787,12 @@ impl Render for Pipelines {
         let jobs = self.stages.values().flatten().flatten().flatten();
         let running = list.iter().flatten().any(|p| active(&p.status))
             || jobs.flat_map(|s| &s.jobs).any(|j| active(&j.status));
-        poll(&mut self.poll, running, |this, cx| this.load(false, cx), cx);
+        if running != self.poll.is_some() {
+            self.poll = running.then(|| poll(5, |this, cx| this.load(false, cx), window, cx));
+        }
         let t = theme(cx);
         if self.repo.is_none() {
-            return empty("No repository", cx).into_any_element();
+            return note("pipelines.note", "No repository", t.muted);
         }
         let body = match (&list, error.clone()) {
             (None, Some(e)) => {
@@ -816,8 +819,8 @@ impl Render for Pipelines {
                     })
                     .into_any_element()
             }
-            (None, None) => empty("Loading…", cx).into_any_element(),
-            (Some(l), _) if l.is_empty() => empty("No pipelines", cx).into_any_element(),
+            (None, None) => note("pipelines.note", "Loading…", t.muted),
+            (Some(l), _) if l.is_empty() => note("pipelines.note", "No pipelines", t.muted),
             (Some(l), _) => div()
                 .children(l.iter().flat_map(|p| {
                     let row = self.row(p, cx).into_any_element();
@@ -872,12 +875,4 @@ pub(super) fn status(s: &PipelineStatus, cx: &App) -> impl IntoElement + use<> {
         .text_color(color(s, cx))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .child(glyph(s))
-}
-
-fn empty(text: &'static str, cx: &App) -> Div {
-    div()
-        .px(px(16.))
-        .py(px(12.))
-        .text_color(theme(cx).muted)
-        .child(text)
 }

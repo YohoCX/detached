@@ -5,15 +5,14 @@ use detached_core::api;
 use detached_core::types::{Job, JobLogChunk, Project, Step};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ListHorizontalSizingBehavior, ParentElement, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, rgb, uniform_list,
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ListHorizontalSizingBehavior,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, rgb, uniform_list,
 };
 
 use super::ansi::{Color, LogParser, Span, visible};
 use super::pipelines::{Seen, job_key, status};
-use super::{core, glyph};
+use super::{core, glyph, note, text_of};
 use crate::blocking;
 use crate::store::{Doc, Event, Store};
 use crate::ui::theme::{Theme, mono};
@@ -217,17 +216,14 @@ impl JobLog {
             .whitespace_nowrap()
             .children(self.job.as_ref().map(|j| status(&j.status, cx)))
             .child(div().font_weight(FontWeight::BOLD).child(self.name.clone()))
-            .child(note("job.at", at, t.muted))
+            .child(text_of("job.at", at).text_color(t.muted))
             .child(div().flex_1())
             .when(self.following, |d| {
-                d.child(note("job.following", "Following…", t.muted))
+                d.child(text_of("job.following", "Following…").text_color(t.muted))
             })
             .when(self.cut, |d| {
-                d.child(note(
-                    "job.cut",
-                    "Over 20 MB: showing the end only",
-                    t.warning,
-                ))
+                let cut = "Over 20 MB: showing the end only";
+                d.child(text_of("job.cut", cut).text_color(t.warning))
             })
             .when_some(url, |d, url| {
                 d.child(
@@ -329,9 +325,6 @@ impl Render for JobLog {
         let github = self.job.as_ref().filter(|j| self.following && !j.live_log);
         let body = if let Some(e) = &self.error {
             note("job.error", e.clone(), t.error)
-                .px(px(16.))
-                .py(px(12.))
-                .into_any_element()
         } else if let Some(j) = github {
             self.steps(&j.steps, cx)
         } else if self.rows.is_empty() {
@@ -341,9 +334,6 @@ impl Render for JobLog {
                 "Empty log"
             };
             note("job.empty", empty, t.muted)
-                .px(px(16.))
-                .py(px(12.))
-                .into_any_element()
         } else {
             self.lines(cx)
         };
@@ -354,17 +344,6 @@ impl Render for JobLog {
             .child(self.header(cx))
             .child(body)
     }
-}
-
-/// Text that tests find by its id and read by its label.
-fn note(id: &'static str, text: impl Into<SharedString>, color: Hsla) -> impl IntoElement + Styled {
-    let text = text.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(text.clone())
-        .text_color(color)
-        .child(text)
 }
 
 /// A span's text in its style; a link opens in the browser. Its color is its description.

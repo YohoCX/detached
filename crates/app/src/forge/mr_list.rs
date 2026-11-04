@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use detached_core::api;
 use detached_core::types::{MergeRequest, MrFilter, MrState};
 use gpui_kit::base::TestSupportExt;
@@ -9,13 +7,13 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Task, Window, div, prelude::FluentBuilder, px, relative, transparent_black,
+    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, Role, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px, relative, transparent_black,
 };
 
 use super::mr::{ago, bare_title, number, setup_problem, show_mr, tone};
-use super::{core, name, now};
+use super::{core, name, note, now, poll};
 use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
 use crate::store::{Doc, Store};
@@ -72,27 +70,12 @@ impl MrList {
                 }
             }),
         ];
-        let poll = cx.spawn_in(window, async |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_secs(60))
-                    .await;
-                let load = this.update_in(cx, |this, window, cx| {
-                    if window.is_visible() {
-                        this.load(false, cx);
-                    }
-                });
-                if load.is_err() {
-                    return;
-                }
-            }
-        });
         let mut this = MrList {
             repo: None,
             filter: 0,
             query,
             pick,
-            _poll: poll,
+            _poll: poll(60, |this, cx| this.load(false, cx), window, cx),
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -250,20 +233,6 @@ impl MrList {
     }
 }
 
-/// A line of text in place of the list.
-fn note(text: impl Into<SharedString>, error: bool, cx: &App) -> AnyElement {
-    let (t, text) = (theme(cx), text.into());
-    div()
-        .id("mrs.note")
-        .test_support()
-        .aria_label(text.clone())
-        .px(px(16.))
-        .py(px(12.))
-        .text_color(if error { t.error } else { t.muted })
-        .child(text)
-        .into_any_element()
-}
-
 impl Render for MrList {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
@@ -279,8 +248,8 @@ impl Render for MrList {
             _ => None,
         };
         let body = match (&self.repo, value.clone()) {
-            (None, _) => note("No repository", false, cx),
-            (_, None) if !loaded => note("Loading…", false, cx),
+            (None, _) => note("mrs.note", "No repository", t.muted),
+            (_, None) if !loaded => note("mrs.note", "Loading…", t.muted),
             (_, Some(Listed::Setup(s))) => div()
                 .id("mrs.setup")
                 .test_support()
@@ -298,7 +267,7 @@ impl Render for MrList {
                         .on_click(|_, _, cx| repos::open_settings(cx, Section::Repos)),
                 )
                 .into_any_element(),
-            (_, None) => note(error.clone().unwrap_or_default(), true, cx),
+            (_, None) => note("mrs.note", error.clone().unwrap_or_default(), t.error),
             (_, Some(Listed::Mrs(mrs))) => {
                 let keyed: Vec<_> = mrs
                     .iter()
@@ -310,8 +279,8 @@ impl Render for MrList {
                     .collect();
                 let hits = fuzzy::filter(&keyed, &query, |k| &k.0);
                 match (hits.is_empty(), query.is_empty()) {
-                    (true, true) => note("No merge requests", false, cx),
-                    (true, false) => note("No merge requests match", false, cx),
+                    (true, true) => note("mrs.note", "No merge requests", t.muted),
+                    (true, false) => note("mrs.note", "No merge requests match", t.muted),
                     _ => div()
                         .id("mrs.rows")
                         .flex_1()

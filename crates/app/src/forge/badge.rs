@@ -79,18 +79,16 @@ impl PipelineBadge {
 }
 
 impl Render for PipelineBadge {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let cached = self
             .key
             .as_ref()
             .and_then(|k| cache::cached::<Option<Pipeline>>(k, cx));
         let p = cached.and_then(|c| c.value.clone().flatten());
-        poll(
-            &mut self.poll,
-            p.as_ref().is_some_and(|p| active(&p.status)),
-            |this, cx| this.load(false, cx),
-            cx,
-        );
+        let running = p.as_ref().is_some_and(|p| active(&p.status));
+        if running != self.poll.is_some() {
+            self.poll = running.then(|| poll(5, |this, cx| this.load(false, cx), window, cx));
+        }
         let Some(p) = p else {
             return div().hidden().into_any_element();
         };

@@ -11,7 +11,7 @@ use super::mr::is_gitlab;
 use super::mr_page::{MrPage, button};
 use crate::ui::{self, radius, theme};
 
-/// The merge status and controls of an open MR; its choices last while the MR stays open.
+/// The merge status and controls of an open MR; its choices last while its Overview shows.
 #[derive(Default)]
 pub struct MergeWidget {
     picked: Option<MergeMethod>,

@@ -9,7 +9,10 @@ use detached_core::api;
 use detached_core::types::{AccountInput, MrAction, Provider};
 use detached_forge_fake::{Forge, Kind, Pipeline, Request, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
-use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{
+    ElementId, ScrollDelta, TestAppContext, VisualContext, VisualTestContext, WindowVisibility,
+    point, px,
+};
 use serde_json::{Value, json};
 
 /// Makes the forge repo `name` (`gitlab`, `github`) current.
@@ -271,22 +274,49 @@ fn pipeline_run_opens_the_panel_with_the_form(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_running_pipeline_polls_every_5_s(cx: &mut TestAppContext) {
+fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     let (mut app, forge, mut seed) = open_forge(cx);
     let cx = &mut app;
     seed.projects[0].pipelines[0].status = Status::Running;
-    forge.reset(seed);
+    forge.reset(seed.clone());
     show(cx, "gitlab");
     cx.store(|s, cx| s.open_bottom(Bottom::Pipelines, cx));
-    wait_until(cx, |cx| {
-        let running = |l: Option<String>| l.is_some_and(|l| l.starts_with("●"));
-        running(label(cx, ("pipeline", 100u64))) && running(label(cx, "pipeline.badge"))
-    });
-    let list = "/gitlab/api/v4/projects/group/app/pipelines";
-    let count = || forge.requests().iter().filter(|r| r.path == list).count();
-    let n = count();
+    let shows = |cx: &mut VisualTestContext, glyph: &str| {
+        let is = |l: Option<String>| l.is_some_and(|l| l.starts_with(glyph));
+        is(label(cx, ("pipeline", 100u64))) && is(label(cx, "pipeline.badge"))
+    };
+    wait_until(cx, |cx| shows(cx, "●"));
+    let count = || requested(&forge, "/gitlab/api/v4/projects/group/app/pipelines");
+    // The panel and the badge each ask once, 5 s on; the slack is for the requests themselves.
+    let tick = |cx: &mut VisualTestContext| {
+        let (n, start) = (count(), cx.executor().now());
+        cx.executor().advance_clock(Duration::from_secs(5));
+        wait_until(cx, |_| count() >= n + 2);
+        assert!(cx.executor().now() - start < Duration::from_secs(7));
+        assert_eq!(count(), n + 2);
+    };
+    // A tick that asks nothing: a Refresh after it is the only request, as the tick's would go first.
+    let quiet = |cx: &mut VisualTestContext| {
+        let n = count();
+        cx.executor().advance_clock(Duration::from_secs(5));
+        settle(cx);
+        cx.click("pipelines.refresh");
+        wait_until(cx, |_| count() > n);
+        assert_eq!(count(), n + 1);
+    };
+    let window =
+        |cx: &mut VisualTestContext, v| cx.simulate_window_visibility_change(cx.window_handle(), v);
+    tick(cx);
+    window(cx, WindowVisibility::Hidden);
+    quiet(cx);
+    window(cx, WindowVisibility::Visible);
+    tick(cx);
+
+    seed.projects[0].pipelines[0].status = Status::Success;
+    forge.reset(seed);
     cx.executor().advance_clock(Duration::from_secs(5));
-    wait_until(cx, |_| count() >= n + 2);
+    wait_until(cx, |cx| shows(cx, "✓"));
+    quiet(cx);
 }
 
 #[gpui_kit::test]
@@ -635,9 +665,12 @@ fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
     assert!(label(cx, row).is_none());
     assert_eq!(none(cx).as_deref(), Some("No merge requests match"));
 
-    let n = requested(&forge, "/gitlab/api/graphql");
+    let count = || requested(&forge, "/gitlab/api/graphql");
+    let (n, start) = (count(), cx.executor().now());
     cx.executor().advance_clock(Duration::from_secs(60));
-    wait_until(cx, |_| requested(&forge, "/gitlab/api/graphql") > n);
+    wait_until(cx, |_| count() > n);
+    assert!(cx.executor().now() - start < Duration::from_secs(62));
+    assert_eq!(count(), n + 1);
 }
 
 /// Shows MR 1 of the forge repo `name`, loaded.
@@ -685,8 +718,24 @@ fn gitlab_overview_comment_approve_squash_merge(cx: &mut TestAppContext) {
     let approved = label(cx, "mr.approved");
     assert_eq!(approved.as_deref(), Some("Approved by tester"));
 
-    click_in(cx, "merge.method", 1usize);
-    cx.click("merge.delete");
+    let picked = |cx: &mut VisualTestContext| {
+        let squash = find_in(cx, "merge.method", 1usize).and_then(|e| e.checked());
+        (squash, cx.find("merge.delete").and_then(|e| e.checked()))
+    };
+    let pick = |cx: &mut VisualTestContext| {
+        click_in(cx, "merge.method", 1usize);
+        cx.click("merge.delete");
+        assert_eq!(picked(cx), (Some(true), Some(true)));
+    };
+    pick(cx);
+    click_in(cx, "mr.tabs", 3usize);
+    click_in(cx, "mr.tabs", 0usize);
+    assert_eq!(
+        picked(cx),
+        (Some(false), Some(false)),
+        "leaving Overview drops the choices"
+    );
+    pick(cx);
     cx.click("merge.submit");
     let merge = json!({ "squash": true, "should_remove_source_branch": true, "sha": head });
     let path = format!("{GL_MR}/merge");

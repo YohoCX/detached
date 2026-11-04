@@ -16,7 +16,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
-use gpui_kit::{AnyView, App, AppContext, Context, Hsla, Task, Window};
+use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::{
+    AnyElement, AnyView, App, AppContext, Context, Div, Hsla, InteractiveElement, IntoElement,
+    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, Window, div,
+    px,
+};
 
 pub use badge::PipelineBadge;
 pub use chip::MrChip;
@@ -112,26 +117,48 @@ fn core(cx: &App) -> Arc<AppState> {
     Store::global(cx).read(cx).core().clone()
 }
 
-/// Starts or stops a task that runs `load` every 5 s.
+/// An element tests find by `id` and read by `label`.
+fn labelled(id: &'static str, label: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
+    div().id(id).test_support().aria_label(label)
+}
+
+/// `text` labelled with itself.
+fn text_of(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
+    let text = text.into();
+    labelled(id, text.clone()).child(text)
+}
+
+/// A line of text in place of content.
+fn note(id: &'static str, text: impl Into<SharedString>, color: Hsla) -> AnyElement {
+    text_of(id, text)
+        .px(px(16.))
+        .py(px(12.))
+        .text_color(color)
+        .into_any_element()
+}
+
+/// Runs `load` every `secs` while the window shows, until the task drops.
 fn poll<V: 'static>(
-    task: &mut Option<Task<()>>,
-    on: bool,
+    secs: u64,
     load: fn(&mut V, &mut Context<V>),
+    window: &Window,
     cx: &mut Context<V>,
-) {
-    if on == task.is_some() {
-        return;
-    }
-    *task = on.then(|| {
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(5)).await;
-                if this.update(cx, load).is_err() {
-                    return;
+) -> Task<()> {
+    cx.spawn_in(window, async move |this, cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_secs(secs))
+                .await;
+            let tick = this.update_in(cx, |this, window, cx| {
+                if window.is_visible() {
+                    load(this, cx);
                 }
+            });
+            if tick.is_err() {
+                return;
             }
-        })
-    });
+        }
+    })
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ use gpui_kit::{
 use super::merge::MergeWidget;
 use super::mr::{ago, bare_title, is_gitlab, links, tone};
 use super::thread::Thread;
-use super::{Pipelines, core, name, now};
+use super::{Pipelines, core, labelled, name, note, now, text_of};
 use crate::blocking;
 use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Markdown};
 use crate::history::CommitDetails;
@@ -140,7 +140,10 @@ impl MrPage {
             this.update(cx, |this, cx| {
                 match mr.and_then(|m| Ok((m, threads?))) {
                     Ok((m, t)) => this.set(m, t, cx),
-                    Err(e) => this.error = Some(e.to_string()),
+                    Err(e) => {
+                        this.error = Some(e.to_string());
+                        this.merge = MergeWidget::default();
+                    }
                 }
                 cx.notify();
             })
@@ -395,6 +398,9 @@ impl MrPage {
         if tab == self.tab {
             return;
         }
+        if self.tab == Tab::Overview {
+            self.merge = MergeWidget::default();
+        }
         let (repo, n) = (Some(self.repo.clone()), Some(self.number));
         self.tab = tab;
         self.pipelines =
@@ -526,19 +532,19 @@ impl MrPage {
                 .child(l.clone())
         };
         let facts = [
-            ("mr.labels", "Labels", &m.labels),
-            ("mr.reviewers", "Reviewers", &m.reviewers),
-            ("mr.approved", "Approved by", &m.approved_by),
+            ("mr.labels", "Labels", &m.labels, true),
+            ("mr.reviewers", "Reviewers", &m.reviewers, false),
+            ("mr.approved", "Approved by", &m.approved_by, false),
         ];
         let facts = facts.into_iter().filter(|f| !f.2.is_empty());
-        let fact = |(id, dt, all): (&'static str, &'static str, &Vec<String>)| {
-            let dd = match id {
-                "mr.labels" => div()
+        let fact = |(id, dt, all, pills): (&'static str, &'static str, &Vec<String>, bool)| {
+            let dd = match pills {
+                true => div()
                     .flex()
                     .flex_wrap()
                     .gap(px(4.))
                     .children(all.iter().map(pill)),
-                _ => div().child(all.join(", ")),
+                false => div().child(all.join(", ")),
             };
             labelled(id, format!("{dt} {}", all.join(", ")))
                 .flex()
@@ -907,15 +913,6 @@ pub(super) fn button(
         .aria_label(label)
 }
 
-/// A line of text in place of a tab's content.
-fn note(id: &'static str, text: impl Into<SharedString>, color: Hsla) -> AnyElement {
-    text_of(id, text)
-        .px(px(16.))
-        .py(px(12.))
-        .text_color(color)
-        .into_any_element()
-}
-
 fn muted(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .flex_none()
@@ -1069,17 +1066,6 @@ fn line_comment(
         new_line,
         head_sha: head.clone(),
     }
-}
-
-/// An element tests find by `id` and read by `label`.
-fn labelled(id: &'static str, label: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
-    div().id(id).test_support().aria_label(label)
-}
-
-/// `text` labelled with itself.
-fn text_of(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
-    let text = text.into();
-    labelled(id, text.clone()).child(text)
 }
 
 /// The Draft and state pills, labelled `label`.

@@ -276,7 +276,7 @@ Rules behind them:
   - `ongutter` is undefined, so there is no `+` at all, when the head moved or the MR is not open (`:268`).
 - "Select a file" when nothing is picked.
 
-**Line comments, i.e. how they attach to diff lines**:
+**Line comments, i.e. how they attach to diff lines** [not done: the "+", the draft and the thread zones need files::DiffView, a stub until V2 lands; MrPage and Thread pass them, the UI tests come with the rebase onto V2]:
 - **Viewer gutter** (`src/components/Viewer.svelte:201,213-239`):
   - The glyph margin is enabled when `ongutter` is set.
   - Hovering a line on either side (original = old, modified = new) shows the `.mr-plus` decoration ("+" in an accent square, `:386-387`) if `commentable(side, line)` allows it.
@@ -392,7 +392,7 @@ Rules behind them:
 
 ## 3. Pipelines [ported]
 
-### 3.1 Pipelines (`src/components/Pipelines.svelte`) [ported differently: the workflow select is a context menu, and the 5 s poll does not pause while the window is hidden]
+### 3.1 Pipelines (`src/components/Pipelines.svelte`) [ported differently: the workflow select is a context menu]
 - **Props**: `repo`, optional `mr`.
   - In the bottom panel it has no `mr`.
   - In MrPage's Pipelines tab it gets `mr=number`: no branch toggle, no Run button, and data from `mrPipelines`.
@@ -541,9 +541,9 @@ Rules behind them:
   - Log `filters` (module level; refs and path reset on repo change).
   - Pipelines `ui.all` (module level, default "Current branch").
 - Component level (reset when the component remounts):
-  - MrList filter (default `open`) and query.
-  - MrPage tab (Overview on each open).
-  - MergeWidget choices.
+  - MrList filter (default `open`) and query. [ported]
+  - MrPage tab (Overview on each open). [ported]
+  - MergeWidget choices. [ported]
 
 **Session caches** (`src/lib/cache.svelte.ts`): the last value per key plus the latest error. A focus refresh within 30 s of the last one is skipped. Keys:
 - `mrs\0repo\0filter` [ported]
