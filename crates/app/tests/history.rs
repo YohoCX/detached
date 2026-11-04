@@ -917,6 +917,19 @@ fn show_branches_lists_the_local_and_remote_branches_with_the_commit(cx: &mut Te
     wait_until(cx, |cx| found(cx).as_deref() == Some("main, origin/main"));
 }
 
+fn files_focused(cx: &mut VisualTestContext) -> Option<bool> {
+    cx.find("details.files").and_then(|e| e.focused())
+}
+
+fn diff_focused(cx: &mut VisualTestContext) -> Option<bool> {
+    cx.find("diff-body").and_then(|e| e.focused())
+}
+
+/// The file name the viewer shows.
+fn name(cx: &mut VisualTestContext) -> Option<String> {
+    label(cx, "viewer.name")
+}
+
 #[gpui_kit::test]
 fn arrows_and_enter_step_through_the_files_and_show_each_diff(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, four);
@@ -930,8 +943,14 @@ fn arrows_and_enter_step_through_the_files_and_show_each_diff(cx: &mut TestAppCo
     side(cx);
     cx.click(("details.file", 0usize));
     assert_eq!(path(cx).as_deref(), Some("gone.txt"));
-    let focused = cx.find("details.files").and_then(|e| e.focused());
-    assert_eq!(focused, Some(true), "a click focuses the files");
+    wait_until(cx, |cx| diff_focused(cx).is_some());
+    assert_eq!(
+        diff_focused(cx),
+        Some(false),
+        "a click leaves focus in the files"
+    );
+    assert_eq!(files_focused(cx), Some(true));
+    assert_eq!(name(cx).as_deref(), Some("gone.txt"));
     cx.press("down");
     assert_eq!(path(cx).as_deref(), Some("new.txt"));
     for _ in 0..3 {
@@ -963,9 +982,16 @@ fn arrows_and_enter_step_through_the_files_and_show_each_diff(cx: &mut TestAppCo
         Some("README.md"),
         "Enter shows the selected file"
     );
+    wait_until(cx, |cx| diff_focused(cx) == Some(true));
+    assert_eq!(name(cx).as_deref(), Some("README.md"));
+
+    cx.click(("details.file", 0usize));
+    assert_eq!(files_focused(cx), Some(true));
     cx.update(|w, cx| w.double_click(("details.file", 1usize), cx));
     settle(cx);
     assert_eq!(path(cx).as_deref(), Some("new.txt"));
+    wait_until(cx, |cx| diff_focused(cx) == Some(true));
+    assert_eq!(name(cx).as_deref(), Some("new.txt"));
 }
 
 #[gpui_kit::test]
@@ -1150,9 +1176,10 @@ fn the_new_branch_bar_cancels_on_escape_needs_a_name_and_creates_on_enter(cx: &m
     cx.input("fix");
     cx.press("enter");
     assert!(cx.find("log.new").is_none());
-    let checkout = Some(("Checkout is not available yet".into(), false));
+    let checkout = Some(("Checked out fix".into(), false));
     wait_until(cx, |cx| said(cx) == checkout);
     assert_eq!(cx.sb.git(&solo, &["rev-parse", "fix"]), head);
+    assert_eq!(cx.sb.git(&solo, &["branch", "--show-current"]), "fix");
     let branches = cx.sb.git(&solo, &["branch", "--format=%(refname:short)"]);
     assert_eq!(branches, "fix\nmain", "nothing made on Escape or blank");
 }
@@ -1176,13 +1203,17 @@ fn a_taken_branch_name_raises_the_error_notice(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn checkout_revision_calls_repos_checkout(cx: &mut TestAppContext) {
+fn checkout_revision_detaches_head_at_the_row(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let sha = cx.sb.git(&solo, &["rev-parse", "HEAD~1"]);
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
     right_click(cx, 1, "Checkout Revision");
-    let checkout = Some(("Checkout is not available yet".into(), false));
-    assert_eq!(said(cx), checkout);
+    let done = Some((format!("Checked out {}", &sha[..10]), false));
+    wait_until(cx, |cx| said(cx) == done);
+    assert_eq!(cx.sb.git(&solo, &["rev-parse", "HEAD"]), sha);
+    assert_eq!(cx.sb.git(&solo, &["branch", "--show-current"]), "");
 }
 
 #[gpui_kit::test]
