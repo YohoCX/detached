@@ -124,7 +124,8 @@ impl Palette {
         }
     }
 
-    /// A new mode resets the selection, opening clears the query; the query field takes focus.
+    /// A new mode resets the selection, opening clears the query and the scroll; the query field
+    /// takes focus.
     fn opened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = cx.global::<Search>().mode;
         if mode != self.mode {
@@ -132,6 +133,7 @@ impl Palette {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
                 self.branches.clear();
                 self.load = None;
+                self.scroll = UniformListScrollHandle::new();
             }
             self.mode = mode;
             self.sel = 0;
@@ -434,9 +436,8 @@ impl Render for Palette {
                         .on_click(|on, _, cx| cx.global_mut::<Search>().all = *on),
                 )
             });
-        let query = Input::new(&self.input)
-            .id("palette.query")
-            .h(px(40.))
+        // `Input::h` sizes only multi-line inputs.
+        let query = Styled::h(Input::new(&self.input).id("palette.query"), px(40.))
             .px(px(12.))
             .text_size(text::TITLE)
             .rounded(radius::FIELD)

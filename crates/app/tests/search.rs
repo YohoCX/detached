@@ -1,12 +1,14 @@
 mod common;
 
+use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
-use detached_app::store::{Doc, Location, Tool};
+use detached_app::store::{Doc, Level, Location, Notice, Tool};
 use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
@@ -109,6 +111,8 @@ fn go_to_file_filters_moves_by_keyboard_under_a_resting_mouse_opens_and_ignores_
     let cx = &mut app;
     cx.press("secondary-shift-o");
     assert_eq!(title(cx).as_deref(), Some("Go to File"));
+    let query = cx.find("palette.query").unwrap();
+    assert_eq!(query.bounds().size.height, px(40.));
     search(cx, "comp", "src/components/comp-01.ts");
     cx.press("up");
     let last = selected(cx).unwrap();
@@ -125,7 +129,7 @@ fn go_to_file_filters_moves_by_keyboard_under_a_resting_mouse_opens_and_ignores_
     for _ in 0..20 {
         cx.press("down");
     }
-    // WebKit sends a move a moment after content scrolls under a resting pointer.
+    // Content scrolled under the resting pointer; a move to the same place does not select.
     cx.simulate_mouse_move(center, None, Modifiers::none());
     assert_eq!(selected(cx).unwrap().0, start + 20);
     for _ in 0..3 {
@@ -230,12 +234,23 @@ fn keymap_opens_each_palette_and_settings(cx: &mut TestAppContext) {
         cx.press("escape");
         assert_eq!(title(cx), None);
     }
+    let opened = Rc::new(Cell::new(false));
+    let o = opened.clone();
+    let _settings = cx.update(|_, cx| {
+        actions::register(
+            cx,
+            "app.settings",
+            "Settings…",
+            Group::View,
+            move |_, _| o.set(true),
+        )
+    });
     cx.press("secondary-,");
-    assert_eq!(said(cx).as_deref(), Some("Settings… is not available yet"));
+    assert!(opened.get());
 }
 
 #[gpui_kit::test]
-fn search_everywhere_lists_files_then_branches_then_actions_and_checks_out_a_branch(
+fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branch_closes(
     cx: &mut TestAppContext,
 ) {
     let (mut app, _) = open(cx);
@@ -265,7 +280,6 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_checks_out_a_bra
     search(cx, "spike", "spike");
     cx.press("enter");
     assert_eq!(title(cx), None);
-    assert_eq!(said(cx).as_deref(), Some("Checkout is not available yet"));
 }
 
 #[gpui_kit::test]
@@ -283,15 +297,21 @@ fn find_action_mutes_unregistered_actions_and_runs_the_chosen_one(cx: &mut TestA
     assert_eq!(title(cx), None);
     assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Files));
 
+    let off = cx.update(|_, cx| actions::all(cx).into_iter().find(|(_, on)| !on));
+    let off = off.expect("an action with no handler").0.title;
     cx.press("secondary-shift-a");
-    search(cx, "prune", "Prune Remote Branches");
+    search(cx, off, off);
     assert_eq!(cx.find(row(0)).unwrap().disabled(), Some(true));
     cx.press("enter");
-    let said = said(cx);
-    assert_eq!(
-        said.as_deref(),
-        Some("Prune Remote Branches is not available yet")
-    );
+    assert_eq!(said(cx), Some(format!("{off} is not available yet")));
+
+    // Reopened, the list starts at the top again.
+    cx.press("secondary-shift-a");
+    cx.press("up");
+    assert!(cx.find(row(0)).is_none(), "Up wraps to the last row");
+    cx.press("escape");
+    cx.press("secondary-shift-a");
+    assert_eq!(selected(cx).unwrap().0, 0);
 
     cx.press(VCS);
     let vcs: Vec<String> = actions::ACTIONS
@@ -422,6 +442,9 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     let text = cx.find("find.text").unwrap();
     assert_eq!(text.placeholder(), Some("Text to find"));
     assert_eq!(text.focused(), Some(true));
+    assert_eq!(text.bounds().size.height, px(40.));
+    let glob = cx.find("find.glob").unwrap();
+    assert_eq!(glob.bounds().size.height, px(28.));
 
     cx.input("alpha");
     // Past the debounce, then the clock stays put: the stream's next batch waits for a frame.
@@ -668,4 +691,27 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
         "the options last the session"
     );
     wait_status(cx, "1 match in 1 file");
+}
+
+#[gpui_kit::test]
+fn notices_stay_usable_over_find_in_files(cx: &mut TestAppContext) {
+    let (mut app, _) = open_solo(cx);
+    let cx = &mut app;
+    cx.press("secondary-shift-f");
+    let id = cx.store(|s, cx| {
+        let n = Notice {
+            level: Level::Warn,
+            title: "Fetch all: 1 not updated".into(),
+            ..Notice::default()
+        };
+        s.notify(n, cx)
+    });
+    let notice = ElementId::from(("notice", id as usize));
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        w.within(notice).click("close", cx)
+    });
+    settle(cx);
+    assert!(cx.store(|s, _| s.notices.is_empty()));
+    assert!(find_open(cx));
 }

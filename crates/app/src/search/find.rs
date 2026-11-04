@@ -504,10 +504,9 @@ impl Render for Find {
                 .py(px(4.))
                 .px(px(12.))
         };
-        let input = Input::new(&self.input)
-            .id("find.text")
+        // `Input::h` sizes only multi-line inputs.
+        let input = Styled::h(Input::new(&self.input).id("find.text"), px(40.))
             .flex_1()
-            .h(px(40.))
             .px(px(12.))
             .font_family(theme::mono(cx))
             .text_size(text::TITLE)
@@ -542,10 +541,8 @@ impl Render for Find {
                 }))
                 .child(label)
         });
-        let glob = Input::new(&self.glob)
-            .id("find.glob")
+        let glob = Styled::h(Input::new(&self.glob).id("find.glob"), px(28.))
             .w(px(280.))
-            .h(px(28.))
             .px(px(9.))
             .text_size(text::SMALL)
             .rounded(radius::ITEM)
