@@ -13,11 +13,40 @@ path = "src/main.rs"
 detached-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-gpui-kit = "=0.9.0"
+# The grammars of the languages the viewer maps file names to.
+gpui-kit = { version = "=0.9.0", features = [
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-csharp",
+    "tree-sitter-css",
+    "tree-sitter-elixir",
+    "tree-sitter-go",
+    "tree-sitter-graphql",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-kotlin",
+    "tree-sitter-lua",
+    "tree-sitter-markdown",
+    "tree-sitter-php",
+    "tree-sitter-proto",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-scala",
+    "tree-sitter-sql",
+    "tree-sitter-swift",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 futures = "0.3"
+tree-sitter = "0.26"
+tree-sitter-containerfile = "0.9.2"
 
 [dev-dependencies]
 detached-core = { workspace = true, features = ["testutil", "e2e"] }
 detached-forge-fake = { path = "../forge-fake" }
-gpui-kit = { version = "=0.9.0", features = ["test-support", "tree-sitter-rust"] }
+gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 tempfile.workspace = true
