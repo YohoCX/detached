@@ -12,16 +12,18 @@ use gpui_kit::component::diff::{
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, Context, ElementId, Entity, Focusable, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, ElementId, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div, prelude::FluentBuilder, px,
 };
 
 use super::api::{Annotation, DiffDoc, DiffOptions, DiffSide, OnAdd, Side};
+use super::code::{Code, language_for};
+use super::goto::{Goto, GotoLine};
+use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::store::{Event, Store};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::util::{base_name, dir_name};
 use crate::{blocking, keymap, ui_state};
 
 /// A run of changed lines as Monaco reports it: a side without lines has end 0 and the line
@@ -37,11 +39,14 @@ struct LineChange {
 enum Body {
     Loading,
     Diff,
+    /// The right side's working text with its conflict markers, in an editor.
+    Conflict,
     Text(SharedString),
 }
 
 enum Loaded {
     Diff(Vec<DiffFile>, Vec<LineChange>),
+    Conflict(String),
     Text(String),
 }
 
@@ -53,6 +58,11 @@ pub struct DiffView {
     commentable: Option<Rc<dyn Fn(DiffSide, u32) -> bool>>,
     state: Entity<DiffState>,
     body: Body,
+    /// Made on the first render that has a conflict to show, since the editor needs the window.
+    code: Option<Entity<Code>>,
+    /// Conflict text for the next render, and whether the view stays where it is.
+    conflict: Option<(String, bool)>,
+    goto: Option<(Entity<GotoLine>, Subscription)>,
     changes: Rc<Vec<LineChange>>,
     /// What the shown files came from; an equal reload changes nothing.
     last: Option<Result<FilePatch, String>>,
@@ -83,9 +93,14 @@ impl DiffView {
                 this.update(cx, |v, cx| v.step(forward, cx)).ok();
             }
         };
+        let this = cx.weak_entity();
+        let goto = move |window: &mut Window, cx: &mut App| {
+            this.update(cx, |v, cx| v.open_goto(window, cx)).ok();
+        };
         let actions = vec![
             actions::register(cx, "diff.next", "Next Change", Group::Diff, step(true)),
             actions::register(cx, "diff.prev", "Previous Change", Group::Diff, step(false)),
+            actions::register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, goto),
         ];
         let store = cx.subscribe(&Store::global(cx), |this: &mut Self, _, e, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.doc.repo) {
@@ -100,6 +115,9 @@ impl DiffView {
             commentable: options.commentable,
             state,
             body: Body::Loading,
+            code: None,
+            conflict: None,
+            goto: None,
             changes: Rc::default(),
             last: None,
             reveal: true,
@@ -160,7 +178,14 @@ impl DiffView {
                         self.move_to(c, cx);
                     }
                 }
+                Loaded::Conflict(text) => {
+                    self.conflict = Some((text, !self.reveal));
+                    self.body = Body::Conflict;
+                }
                 Loaded::Text(msg) => self.body = Body::Text(msg.into()),
+            }
+            if !matches!(self.body, Body::Diff | Body::Conflict) {
+                self.goto = None;
             }
             self.last = Some(patch);
         }
@@ -265,33 +290,9 @@ impl DiffView {
                 cx,
             )
         });
-        let muted = |s: &str| {
-            div()
-                .min_w_0()
-                .truncate()
-                .text_color(t.muted)
-                .child(s.to_string())
-        };
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(8.))
-            .h(px(44.))
-            .pl(px(16.))
-            .pr(px(8.))
-            .border_b_1()
-            .border_color(t.line)
-            .child(
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .child(base_name(&d.path).to_string()),
-            )
-            .child(muted(dir_name(&d.path)))
-            .child(muted(Store::global(cx).read(cx).name_of(&d.repo)))
+        let repo = Store::global(cx).read(cx).name_of(&d.repo).to_string();
+        let zed = cx.listener(|this, _, _, cx| this.zed(cx));
+        viewer::header(&d.path, repo, cx)
             .child(
                 div()
                     .id("diff.pill")
@@ -319,6 +320,51 @@ impl DiffView {
                 )
                 .children(seg)
             })
+            .child(viewer::zed_button(zed, cx))
+    }
+
+    fn open_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.body, Body::Diff | Body::Conflict) {
+            return;
+        }
+        let goto = cx.new(|cx| GotoLine::new(window, cx));
+        let events = cx.subscribe_in(&goto, window, |this: &mut Self, _, e, window, cx| {
+            this.goto = None;
+            match (*e, &this.code) {
+                (Goto::To(line, col), Some(code)) if matches!(this.body, Body::Conflict) => {
+                    code.update(cx, |c, cx| c.reveal(line, col, window, cx));
+                }
+                (Goto::To(line, _), _) => {
+                    this.move_to((DiffSide::Modified, line), cx);
+                    this.focus_body(window, cx);
+                }
+                (Goto::Back, _) => this.focus_body(window, cx),
+                (Goto::Closed, _) => {}
+            }
+            cx.notify();
+        });
+        self.goto = Some((goto, events));
+        cx.notify();
+    }
+
+    fn focus_body(&self, window: &mut Window, cx: &mut App) {
+        match (&self.body, &self.code) {
+            (Body::Conflict, Some(code)) => code.update(cx, |c, cx| c.focus(window, cx)),
+            _ => window.focus(&self.state.focus_handle(cx), cx),
+        }
+    }
+
+    /// Opens the file in Zed at the cursor's line on the right side.
+    pub(super) fn zed(&self, cx: &mut App) {
+        let line = match (&self.body, &self.code) {
+            (Body::Conflict, Some(code)) => Some(code.read(cx).line(cx)),
+            (Body::Diff, _) => self.cursor(cx).and_then(|(side, line)| match side {
+                DiffSide::Modified => Some(line),
+                DiffSide::Original => other_line(&self.changes, side, line),
+            }),
+            _ => None,
+        };
+        viewer::open_in_zed(&self.doc.repo, &self.doc.path, line, cx);
     }
 
     fn diff(&self, cx: &mut Context<Self>) -> Diff {
@@ -381,12 +427,22 @@ impl DiffView {
 
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.focus && matches!(self.body, Body::Diff) {
+        if let Some((text, keep)) = self.conflict.take() {
+            let code = self
+                .code
+                .get_or_insert_with(|| cx.new(|cx| Code::new(window, cx)));
+            code.update(cx, |c, cx| c.set(&self.doc.path, &text, keep, window, cx));
+        }
+        if self.focus && matches!(self.body, Body::Diff | Body::Conflict) {
             self.focus = false;
-            window.focus(&self.state.focus_handle(cx), cx);
+            self.focus_body(window, cx);
         }
         let body = match &self.body {
             Body::Loading => div().into_any_element(),
+            Body::Conflict => div()
+                .size_full()
+                .children(self.code.clone())
+                .into_any_element(),
             Body::Text(msg) => ui::placeholder(msg.clone(), cx)
                 .id("diff.placeholder")
                 .test_support()
@@ -394,14 +450,19 @@ impl Render for DiffView {
                 .into_any_element(),
             Body::Diff => self.diff(cx).into_any_element(),
         };
+        let zed = cx.listener(|this, _, _, cx| this.zed(cx));
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(self.header(cx))
+            .when(matches!(self.body, Body::Conflict), |d| {
+                d.child(viewer::conflict_bar(zed, cx))
+            })
             .child(
                 div()
                     .id("diff.body")
+                    .relative()
                     .flex()
                     .flex_col()
                     .flex_1()
@@ -411,7 +472,8 @@ impl Render for DiffView {
                             this.set_hover(None, cx);
                         }
                     }))
-                    .child(body),
+                    .child(body)
+                    .children(self.goto.as_ref().map(|g| g.0.clone())),
             )
     }
 }
@@ -426,17 +488,23 @@ fn mode(split: bool) -> DiffMode {
 
 /// Off the UI thread: what the view shows for `patch`.
 fn parse(d: &DiffDoc, patch: &Result<FilePatch, String>) -> Loaded {
-    let one = |text: &str| Loaded::Diff(vec![DiffFile::unchanged(d.path.clone(), text)], vec![]);
+    let lang = language_for(&d.path);
     match patch {
         Ok(FilePatch::Patch(p)) => match DiffFile::parse(p) {
-            Ok(files) => Loaded::Diff(files, line_changes(p)),
+            Ok(files) => {
+                let files = files.into_iter().map(|f| f.with_language(lang));
+                Loaded::Diff(files.collect(), line_changes(p))
+            }
             Err(e) => Loaded::Text(e.message().to_string()),
         },
-        Ok(FilePatch::Unchanged(text)) => one(text),
+        Ok(FilePatch::Unchanged(text)) => {
+            let file = DiffFile::unchanged(d.path.clone(), text).with_language(lang);
+            Loaded::Diff(vec![file], vec![])
+        }
         Ok(FilePatch::Sides(FileDiff {
             right: Content::Conflicted { text },
             ..
-        })) => one(text),
+        })) => Loaded::Conflict(text.clone()),
         Ok(FilePatch::Sides(s)) => Loaded::Text(format!(
             "{}: {}. {}: {}.",
             side_name(&d.left),
@@ -549,7 +617,7 @@ fn side_name(s: &Side) -> String {
     }
 }
 
-fn describe(c: &Content) -> String {
+pub(super) fn describe(c: &Content) -> String {
     match c {
         Content::Binary => "Binary file".into(),
         Content::TooLarge { size } => {

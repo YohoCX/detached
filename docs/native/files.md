@@ -297,7 +297,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 - An action runs `run(id)`.
 - A branch runs `checkout(current, local|remote)`.
 
-### 1.7 Navigation history (`src/lib/nav.ts`)
+### 1.7 Navigation history (`src/lib/nav.ts`) [ported]
 
 - `open(loc)` records into `nav` and calls the opener, which sets `view.shown` (`view.svelte.ts:29-31`).
 - `recent`: files only (not MR or job docs), deduped by repo, ref and path, most recent first, capped at 50 (`nav.ts:19-21`).

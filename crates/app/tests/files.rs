@@ -1,13 +1,18 @@
 mod common;
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
 use common::*;
-use detached_app::files::{self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Side};
+use detached_app::actions::{self, Group, Registration};
+use detached_app::files::{
+    self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Location, Side,
+};
 use detached_app::ui_state;
+use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::test::{TestQueryExt, TestWindowExt};
+use gpui_kit::test::{ElementSnapshot, TestQueryExt, TestWindowExt};
 use gpui_kit::{
     AppContext, Context, ElementId, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     TestAppContext, VisualContext, VisualTestContext, Window, div, px,
@@ -273,4 +278,287 @@ fn commentable_lines_get_a_plus_that_passes_the_other_sides_line(cx: &mut TestAp
         (Original, 6, Some(6)),
     ];
     assert_eq!(*added.borrow(), want);
+}
+
+fn open(cx: &mut VisualTestContext, repo: &Path, rev: Option<&str>, path: &str, line: Option<u32>) {
+    let loc = Location {
+        repo: repo.display().to_string(),
+        rev: rev.map(Into::into),
+        path: path.into(),
+        line,
+        doc: None,
+    };
+    cx.update(|_, cx| files::open(cx, loc));
+    settle(cx);
+}
+
+/// The viewer's editors: the file's, then its find field when open.
+fn editors(cx: &mut VisualTestContext) -> Vec<ElementSnapshot> {
+    let code = ElementId::from("viewer.code");
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let all = w.find_all("input-state").into_iter();
+        all.filter(|e| e.path().contains(&code)).collect()
+    })
+}
+
+fn editor_text(cx: &mut VisualTestContext) -> Option<String> {
+    editors(cx).first()?.value().map(Into::into)
+}
+
+fn editor_focused(cx: &mut VisualTestContext) -> bool {
+    editors(cx).first().and_then(|e| e.focused()) == Some(true)
+}
+
+/// Waits for `text` in the focused editor.
+fn shown(cx: &mut VisualTestContext, text: &str) {
+    wait_until(cx, |cx| {
+        editor_text(cx).is_some_and(|t| t.contains(text)) && editor_focused(cx)
+    });
+}
+
+/// From the cursor to the end of its line, as Copy takes it.
+fn rest_of_line(cx: &mut VisualTestContext) -> String {
+    cx.press("shift-end");
+    cursor(cx)
+}
+
+/// Waits for the cursor to be where the rest of its line is `rest`.
+fn cursor_at(cx: &mut VisualTestContext, rest: &str) {
+    wait_until(cx, |cx| rest_of_line(cx) == rest);
+}
+
+/// `todo 1` to `todo 60`.
+fn todo() -> String {
+    (1..=60).map(|i| format!("todo {i}\n")).collect()
+}
+
+#[gpui_kit::test]
+fn open_shows_the_file_its_header_and_the_cursor_on_its_line(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    write(&app, [("src/notes/todo.txt", todo())]);
+    open(cx, &app, None, "src/notes/todo.txt", Some(30));
+    shown(cx, "todo 60");
+    assert_eq!(editor_text(cx), Some(todo()));
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("todo.txt"));
+    assert_eq!(label(cx, "viewer.dir").as_deref(), Some("src/notes"));
+    assert_eq!(label(cx, "viewer.repo").as_deref(), Some("app"));
+    assert_eq!(rest_of_line(cx), "todo 30");
+}
+
+#[gpui_kit::test]
+fn a_file_at_a_ref_shows_the_ref_and_its_text(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, Some("main"), "README.md", None);
+    shown(cx, "line 60");
+    assert_eq!(editor_text(cx), Some(readme_text(&[])));
+    assert_eq!(label(cx, "viewer.repo").as_deref(), Some("app @ main"));
+}
+
+#[gpui_kit::test]
+fn files_that_are_not_text_say_what_they_are(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    let big = "a".repeat(6 * 1048576);
+    write(
+        &app,
+        [("bin.dat", &b"\0\x01"[..]), ("big.txt", big.as_bytes())],
+    );
+    let sub = app.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    cx.sb.git(&sub, &["init", "-q"]);
+    let sha = cx.sb.commit(&sub, "f", "x\n", "sub");
+    let cases = [
+        ("bin.dat", "Binary file".to_string()),
+        ("big.txt", "File too large to show (6.0 MB)".into()),
+        ("nope.txt", "No file here".into()),
+        ("sub", format!("Submodule at {}", &sha[..10])),
+    ];
+    for (path, want) in cases {
+        open(cx, &app, None, path, None);
+        wait_until(cx, |cx| {
+            label(cx, "file.placeholder").as_deref() == Some(&want)
+        });
+        assert_eq!(label(cx, "viewer.name").as_deref(), Some(path));
+    }
+}
+
+#[gpui_kit::test]
+fn a_conflicted_file_shows_the_bar_and_its_markers(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "c");
+        sb.git(&r, &["switch", "-qc", "side"]);
+        sb.commit(&r, "README.md", "side\n", "side");
+        sb.git(&r, &["switch", "-q", "main"]);
+        sb.commit(&r, "README.md", "main\n", "main");
+        // Exits 1 on the conflict.
+        run(
+            &sb.state.env(),
+            &r,
+            &["merge", "side"],
+            Kind::Write,
+            Opts::default(),
+        )
+        .unwrap();
+    });
+    let r = cx.sb.path("repos/c");
+    let bar = "This file has merge conflicts.";
+    open(cx, &r, None, "README.md", None);
+    shown(cx, "<<<<<<<");
+    assert_eq!(label(cx, "viewer.conflict").as_deref(), Some(bar));
+    let doc = DiffDoc {
+        repo: r.display().to_string(),
+        path: "README.md".into(),
+        orig_path: None,
+        left: Side::Head,
+        right: Side::Worktree,
+    };
+    show(cx, doc, true);
+    wait_until(cx, |cx| cx.find("diff.pill").is_some());
+    shown(cx, ">>>>>>> side");
+    assert_eq!(label(cx, "viewer.conflict").as_deref(), Some(bar));
+    assert!(
+        cx.find("diff.next").is_none(),
+        "no change stepping in the editor"
+    );
+}
+
+#[gpui_kit::test]
+fn go_to_line_moves_the_cursor_and_records_the_line(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, None, "README.md", None);
+    shown(cx, "line 60");
+    let goto = |cx: &mut VisualTestContext, typed: &str| {
+        cx.press("secondary-l");
+        assert!(!editor_focused(cx), "the field has focus");
+        cx.input(typed);
+        cx.press("enter");
+        assert!(editor_focused(cx));
+    };
+    goto(cx, "12:3");
+    assert_eq!(rest_of_line(cx), "ne 12");
+    goto(cx, "nowhere");
+    assert_eq!(rest_of_line(cx), "ne 12", "an invalid line only refocuses");
+    cx.press("secondary-l");
+    cx.press("escape");
+    assert!(editor_focused(cx), "Escape refocuses");
+    cx.press("secondary-[");
+    cursor_at(cx, "line 1");
+    cx.press("secondary-]");
+    cursor_at(cx, "line 12");
+}
+
+#[gpui_kit::test]
+fn back_and_forward_reveal_the_line_again(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, None, "README.md", Some(40));
+    shown(cx, "line 60");
+    open(cx, &app, None, "src/index.ts", None);
+    shown(cx, "export {}");
+    cx.press("secondary-[");
+    shown(cx, "line 60");
+    assert_eq!(rest_of_line(cx), "line 40");
+    cx.press("secondary-]");
+    shown(cx, "export {}");
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("index.ts"));
+}
+
+#[gpui_kit::test]
+fn a_file_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, None, "README.md", Some(30));
+    shown(cx, "line 60");
+    let edits = [(5, "line 5 changed and longer"), (50, "line 50 edited")];
+    write(&app, [("README.md", readme_text(&edits))]);
+    cx.store(|s, cx| s.refresh_all(cx));
+    wait_until(cx, |cx| {
+        editor_text(cx).is_some_and(|t| t.contains("line 50 edited"))
+    });
+    assert!(editor_focused(cx));
+    assert_eq!(rest_of_line(cx), "line 30", "the cursor stays");
+}
+
+#[gpui_kit::test]
+fn show_diff_compares_a_file_with_its_ref_or_with_head(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, Some("main"), "README.md", None);
+    shown(cx, "line 60");
+    cx.press("secondary-d");
+    wait_until(cx, |cx| {
+        text(cx, "new", 5).as_deref() == Some("line 5 changed")
+    });
+    assert_eq!(
+        label(cx, "diff.pill").as_deref(),
+        Some("main ↔ Working tree")
+    );
+
+    write(&app, [("src/new.ts", "export const old = 2\n")]);
+    open(cx, &app, None, "src/new.ts", None);
+    shown(cx, "old = 2");
+    cx.press("secondary-d");
+    wait_until(cx, |cx| {
+        text(cx, "new", 1).as_deref() == Some("export const old = 2")
+    });
+    assert_eq!(
+        label(cx, "diff.pill").as_deref(),
+        Some("HEAD ↔ Working tree")
+    );
+    let old = text(cx, "old", 1);
+    assert_eq!(
+        old.as_deref(),
+        Some("export const old = 1"),
+        "from where the rename started"
+    );
+}
+
+/// Handlers for `ids` that record that they ran, as the last registrations.
+fn record(
+    cx: &mut VisualTestContext,
+    ids: &[&'static str],
+) -> (Rc<RefCell<Vec<&'static str>>>, Vec<Registration>) {
+    let ran = Rc::new(RefCell::new(vec![]));
+    let regs = cx.update(|_, cx| {
+        ids.iter()
+            .map(|&id| {
+                let ran = ran.clone();
+                let push = move |_: &mut Window, _: &mut gpui_kit::App| ran.borrow_mut().push(id);
+                actions::register(cx, id, "Recorded", Group::View, push)
+            })
+            .collect()
+    });
+    (ran, regs)
+}
+
+#[gpui_kit::test]
+fn the_viewer_editor_leaves_the_apps_chords_to_the_app(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    open(cx, &app, None, "README.md", None);
+    shown(cx, "line 60");
+    open(cx, &app, None, "src/index.ts", None);
+    shown(cx, "export {}");
+    cx.press("secondary-a");
+    assert_eq!(cursor(cx), "export {}\n", "Cmd+C is the editor's");
+    let ids = ["diff.next", "diff.prev", "find.inFiles"];
+    let (ran, _regs) = record(cx, &ids);
+    for key in ["f7", "shift-f7", "secondary-shift-f"] {
+        cx.press(key);
+    }
+    assert_eq!(*ran.borrow(), ids);
+    assert_eq!(editors(cx).len(), 1, "Cmd+Shift+F opened no replace field");
+    cx.press("secondary-[");
+    shown(cx, "line 60");
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("README.md"));
+    cx.press("secondary-f");
+    let find = editors(cx);
+    assert_eq!(find.len(), 2, "Cmd+F opened the editor's find field");
+    let focused: Vec<_> = find.iter().filter(|e| e.focused() == Some(true)).collect();
+    assert_eq!(focused.len(), 1);
+    assert!(!focused[0].value().unwrap_or_default().contains("line 60"));
 }

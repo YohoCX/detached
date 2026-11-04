@@ -55,8 +55,8 @@ fn tool(tool: Tool, _: &mut Window, cx: &mut App) -> AnyView {
 }
 
 /// Shows `Doc::File` and `Doc::Diff`; it stays alive under MR pages and job logs.
-fn viewer(_: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(files::Viewer::new).into()
+fn viewer(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| files::Viewer::new(window, cx)).into()
 }
 
 /// An MR page or a job log, over the viewer.

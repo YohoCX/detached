@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Viewer line numbers are not Monaco's colors | V2 `files::code`, `ui::theme` | The kit's `Input` sets the editor style from the global theme's muted and foreground colors on every render and its setter is crate-private, so the line numbers cannot take Monaco's own colors without changing every muted text. |
 | A diff reloading with new text loses its scroll | V2 `files::diff` | `DiffState::set_files` resets the viewport and the kit cannot restore one (kit #3670), so a file changed on disk scrolls back to the cursor on the next status refresh; an unchanged one is not reloaded. |
 | Nested repo names hold `\` on Windows | `git::discovery` | `group\api` in the sidebar; the UI fixture test checks names and the worktree's main repo on Unix only (git there may also write a worktree's link with another spelling of the temp path). |
 | Long markdown blocks the native UI on open | the kit's `TextView` (V2's markdown) | A 2,000-line (95 KB) file takes 220–275 ms of layout in one frame (kit #3695, measured in step 0). Work around in V2, e.g. by splitting large documents. |
