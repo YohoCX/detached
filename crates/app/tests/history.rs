@@ -164,6 +164,28 @@ fn a_new_commit_reloads_the_log_on_the_status_refresh(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn rows_take_the_lists_width_so_their_columns_line_up(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    let rows: Vec<_> = cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0..3usize)
+            .map(|i| w.find(("log.row", i)).bounds())
+            .collect()
+    });
+    assert!(
+        rows.iter()
+            .all(|r| r.size == rows[0].size && r.left() == rows[0].left())
+    );
+    let refresh = cx.find("log.refresh").unwrap().bounds();
+    assert!(
+        rows[0].right() > refresh.left(),
+        "the rows reach the panel's right side"
+    );
+}
+
+#[gpui_kit::test]
 fn a_branch_made_outside_shows_after_refresh_not_on_a_status_refresh(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     cx.press("secondary-9");

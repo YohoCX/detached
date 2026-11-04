@@ -381,8 +381,8 @@ impl Log {
                     .test_support()
                     .role(Role::ListBoxOption)
                     .aria_label(r.subject.clone())
+                    .w_full()
                     .h(px(ROW))
-                    .mx(px(6.))
                     .gap(px(10.))
                     .pl(px(4.))
                     .pr(px(8.))
@@ -527,6 +527,7 @@ impl Render for Log {
             uniform_list("log.rows", self.rows.len(), list)
                 .track_scroll(&self.scroll)
                 .flex_1()
+                .px(px(6.))
                 .into_any_element()
         };
         div()
