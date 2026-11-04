@@ -7,7 +7,7 @@ use detached_app::actions;
 use detached_app::store::{Bottom, Doc, Tool};
 use detached_core::api;
 use detached_core::types::{AccountInput, MrAction, Provider};
-use detached_forge_fake::{Forge, Kind, Request, Status};
+use detached_forge_fake::{Forge, Kind, Pipeline, Request, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
 use serde_json::{Value, json};
@@ -90,6 +90,13 @@ fn wrote(forge: &Forge, path: &str, body: Option<Value>) -> bool {
     let hit = |w: &detached_forge_fake::Write| {
         w.method == "POST" && w.path == path && body.as_ref().is_none_or(|b| &w.body == b)
     };
+    forge.writes().iter().any(hit)
+}
+
+/// A write of exactly `body`.
+fn sent(forge: &Forge, method: &str, path: &str, body: Value) -> bool {
+    let hit =
+        |w: &detached_forge_fake::Write| w.method == method && w.path == path && w.body == body;
     forge.writes().iter().any(hit)
 }
 
@@ -631,4 +638,261 @@ fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
     let n = requested(&forge, "/gitlab/api/graphql");
     cx.executor().advance_clock(Duration::from_secs(60));
     wait_until(cx, |_| requested(&forge, "/gitlab/api/graphql") > n);
+}
+
+/// Shows MR 1 of the forge repo `name`, loaded.
+fn open_mr(cx: &mut VisualTestContext, name: &str) {
+    show(cx, name);
+    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    cx.store(|s, cx| s.show(Doc::Mr { repo, number: 1 }, cx));
+    wait_until(cx, |cx| label(cx, "mr.title").is_some());
+}
+
+const GL_MR: &str = "/gitlab/api/v4/projects/group/app/merge_requests/1";
+const GH_PR: &str = "/ghe/api/v3/repos/owner/app/pulls/1";
+
+#[gpui_kit::test]
+fn gitlab_overview_comment_approve_squash_merge(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    let head = seed.projects[0].mrs[0].head_sha.clone();
+    open_mr(cx, "gitlab");
+    assert_eq!(label(cx, "mr.number").as_deref(), Some("!1"));
+    assert_eq!(label(cx, "mr.title").as_deref(), Some("Add feature"));
+    assert_eq!(label(cx, "mr.state").as_deref(), Some("open"));
+    let description = label(cx, "mr.description").unwrap();
+    assert!(description.contains("Adds the feature."), "{description}");
+    assert_eq!(label(cx, "merge.status").as_deref(), Some("Ready to merge"));
+    assert!(cx.find(("thread", 0usize)).is_none());
+
+    click_in(cx, "mr.comment", "thread.text");
+    cx.input("Looks good");
+    click_in(cx, "mr.comment", "thread.send");
+    let notes = format!("{GL_MR}/notes");
+    wait_until(cx, |_| {
+        sent(&forge, "POST", &notes, json!({ "body": "Looks good" }))
+    });
+    let note = (("thread", 0usize), ("note", 0usize));
+    wait_until(cx, |cx| {
+        label_in(cx, note.0, note.1).as_deref() == Some("Looks good")
+    });
+
+    cx.click("mr.approve");
+    wait_until(cx, |cx| {
+        label(cx, "mr.approve").as_deref() == Some("Unapprove")
+    });
+    assert!(wrote(&forge, &format!("{GL_MR}/approve"), None));
+    let approved = label(cx, "mr.approved");
+    assert_eq!(approved.as_deref(), Some("Approved by tester"));
+
+    click_in(cx, "merge.method", 1usize);
+    cx.click("merge.delete");
+    cx.click("merge.submit");
+    let merge = json!({ "squash": true, "should_remove_source_branch": true, "sha": head });
+    let path = format!("{GL_MR}/merge");
+    wait_until(cx, |_| sent(&forge, "PUT", &path, merge.clone()));
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("merged"));
+    assert!(cx.find("merge.submit").is_none() && cx.find("mr.close").is_none());
+}
+
+#[gpui_kit::test]
+fn github_request_changes_needs_text_approve_merge(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    let head = seed.projects[1].mrs[0].head_sha.clone();
+    let reviews = format!("{GH_PR}/reviews");
+    open_mr(cx, "github");
+    assert_eq!(label(cx, "mr.number").as_deref(), Some("#1"));
+    let posted = |forge: &Forge| forge.writes().iter().filter(|w| w.path == reviews).count();
+
+    // A click that started an action would leave the page busy, so the next one would hang.
+    cx.click("mr.request_changes");
+    type_into(cx, "mr.review", "Please split this");
+    cx.click("mr.request_changes");
+    let body = json!({ "event": "REQUEST_CHANGES", "body": "Please split this" });
+    wait_until(cx, |_| sent(&forge, "POST", &reviews, body.clone()));
+    assert_eq!(posted(&forge), 1, "Request changes needs a text");
+    let note = (("thread", 0usize), ("note", 0usize));
+    wait_until(cx, |cx| {
+        label_in(cx, note.0, note.1).as_deref() == Some("Please split this")
+    });
+    settle(cx);
+    cx.click("mr.request_changes");
+
+    cx.click("mr.approve");
+    wait_until(cx, |cx| {
+        label(cx, "mr.approved").as_deref() == Some("Approved by tester")
+    });
+    assert!(sent(
+        &forge,
+        "POST",
+        &reviews,
+        json!({ "event": "APPROVE" })
+    ));
+    assert_eq!(
+        posted(&forge),
+        2,
+        "the text cleared, so Request changes is off"
+    );
+    assert!(
+        cx.find("mr.approve").is_none(),
+        "Approve hides once approved"
+    );
+
+    cx.click("merge.submit");
+    let merge = json!({ "merge_method": "merge", "sha": head });
+    wait_until(cx, |_| {
+        sent(&forge, "PUT", &format!("{GH_PR}/merge"), merge.clone())
+    });
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("merged"));
+}
+
+#[gpui_kit::test]
+fn replies_and_resolves_a_gitlab_thread(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let comment = MrAction::LineComment {
+        body: "Why?".into(),
+        path: "README.md".into(),
+        old_path: "README.md".into(),
+        old_line: None,
+        new_line: Some(3),
+        head_sha: seed.projects[0].mrs[0].head_sha.clone(),
+    };
+    api::mr_action(&core, &repo, 1, &comment).unwrap();
+    open_mr(cx, "gitlab");
+    let th = ("thread", 0usize);
+    assert_eq!(
+        label_in(cx, th, "thread.where").as_deref(),
+        Some("README.md:3")
+    );
+    assert!(find_in(cx, th, "thread.outdated").is_none());
+    assert_eq!(label_in(cx, th, ("note", 0usize)).as_deref(), Some("Why?"));
+
+    click_in(cx, th, "thread.reply");
+    assert!(find_in(cx, th, "thread.text").is_some());
+    cx.press("escape");
+    assert!(
+        find_in(cx, th, "thread.text").is_none(),
+        "Escape closes a reply"
+    );
+    click_in(cx, th, "thread.reply");
+    cx.input("Because");
+    cx.press("secondary-enter");
+    let reply = json!({ "body": "Because" });
+    wait_until(cx, |_| {
+        sent(
+            &forge,
+            "POST",
+            &format!("{GL_MR}/discussions/1001/notes"),
+            reply.clone(),
+        )
+    });
+    wait_until(cx, |cx| {
+        label_in(cx, th, ("note", 1usize)).as_deref() == Some("Because")
+    });
+    settle(cx);
+    assert!(
+        find_in(cx, th, "thread.text").is_none(),
+        "a sent reply closes"
+    );
+
+    let resolve = format!("{GL_MR}/discussions/1001");
+    click_in(cx, th, "thread.resolve");
+    wait_until(cx, |cx| find_in(cx, th, "thread.resolved").is_some());
+    assert!(sent(&forge, "PUT", &resolve, json!({ "resolved": true })));
+    assert_eq!(
+        label_in(cx, th, "thread.resolve").as_deref(),
+        Some("Unresolve")
+    );
+    // The thread is busy until the page's reload has been handed back.
+    settle(cx);
+    click_in(cx, th, "thread.resolve");
+    wait_until(cx, |cx| find_in(cx, th, "thread.resolved").is_none());
+    assert!(sent(&forge, "PUT", &resolve, json!({ "resolved": false })));
+}
+
+#[gpui_kit::test]
+fn draft_close_and_reopen(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    open_mr(cx, "gitlab");
+    assert!(cx.find("mr.draft_pill").is_none());
+    cx.click("mr.set_draft");
+    wait_until(cx, |cx| cx.find("mr.draft_pill").is_some());
+    assert!(sent(
+        &forge,
+        "PUT",
+        GL_MR,
+        json!({ "title": "Draft: Add feature" })
+    ));
+    assert_eq!(label(cx, "mr.title").as_deref(), Some("Add feature"));
+    assert_eq!(label(cx, "mr.set_draft").as_deref(), Some("Mark as ready"));
+    let status = label(cx, "merge.status");
+    assert_eq!(status.as_deref(), Some("Cannot merge: draft status"));
+
+    cx.click("mr.close");
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));
+    assert!(sent(
+        &forge,
+        "PUT",
+        GL_MR,
+        json!({ "state_event": "close" })
+    ));
+    assert!(cx.find("merge.status").is_none() && cx.find("mr.close").is_none());
+    cx.click("mr.reopen");
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("open"));
+    assert!(sent(
+        &forge,
+        "PUT",
+        GL_MR,
+        json!({ "state_event": "reopen" })
+    ));
+    assert!(cx.find("mr.reopen").is_none());
+}
+
+#[gpui_kit::test]
+fn a_failed_action_shows_until_dismissed(cx: &mut TestAppContext) {
+    let (mut app, _forge, _) = open_forge(cx);
+    let cx = &mut app;
+    open_mr(cx, "gitlab");
+    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
+    cx.click("merge.submit");
+    wait_until(cx, |cx| cx.find("mr.failure").is_some());
+    let failure = label(cx, "mr.failure").unwrap();
+    assert!(failure.contains("405"), "{failure}");
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));
+    cx.click("mr.dismiss");
+    assert!(cx.find("mr.failure").is_none());
+}
+
+#[gpui_kit::test]
+fn the_pipelines_tab_lists_the_mr_heads_pipelines(cx: &mut TestAppContext) {
+    let (mut app, forge, mut seed) = open_forge(cx);
+    let cx = &mut app;
+    let base = seed.projects[0].mrs[0].base_sha.clone();
+    seed.projects[0].pipelines.push(Pipeline {
+        id: 150,
+        r#ref: "main".into(),
+        sha: base,
+        status: Status::Success,
+        jobs: vec![],
+        source: None,
+    });
+    forge.reset(seed);
+    open_mr(cx, "gitlab");
+    click_in(cx, "mr.tabs", 3usize);
+    wait_until(cx, |cx| label(cx, ("pipeline", 100u64)).is_some());
+    assert!(
+        cx.find(("pipeline", 150u64)).is_none(),
+        "main's pipeline is not the MR's"
+    );
+    assert!(cx.find("pipelines.run").is_none() && cx.find("pipelines.scope").is_none());
+    assert!(requested(&forge, &format!("{GL_MR}/pipelines")) > 0);
+    click_in(cx, "mr.tabs", 0usize);
+    assert!(cx.find(("pipeline", 100u64)).is_none());
+    assert!(cx.find("mr.description").is_some());
 }

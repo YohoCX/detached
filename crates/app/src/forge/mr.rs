@@ -3,6 +3,7 @@
 use detached_core::types::{ForgeHosts, MergeRequest, PipelineStatus, Provider};
 use gpui_kit::{App, Hsla};
 
+use crate::files::Links;
 use crate::nav;
 use crate::store::{DocRef, Location};
 use crate::ui::theme;
@@ -31,6 +32,23 @@ pub fn setup_problem(h: &ForgeHosts) -> Option<String> {
 
 pub fn is_gitlab(mr: &MergeRequest) -> bool {
     matches!(mr.provider, Provider::Gitlab | Provider::GitlabSelfHosted)
+}
+
+/// Where an MR's text resolves links: its project, and the forge's base URL, sub-path included.
+pub fn links(mr: &MergeRequest) -> Links {
+    let p = mr.project_url.strip_suffix('/').unwrap_or(&mr.project_url);
+    let base = match p.strip_suffix(&format!("/{}", mr.target_project.path)) {
+        Some(base) => base,
+        None => {
+            let host = p.find("://").map_or(0, |i| i + 3);
+            &p[..p[host..].find('/').map_or(p.len(), |i| host + i)]
+        }
+    };
+    Links::Forge {
+        project_url: p.into(),
+        base_url: base.into(),
+        gitlab: is_gitlab(mr),
+    }
 }
 
 /// `!N` on GitLab, `#N` on GitHub.
@@ -127,13 +145,12 @@ mod tests {
         assert!(got[4].ends_with(", 2026"), "{}", got[4]);
     }
 
-    #[test]
-    fn strips_the_draft_prefix_of_drafts_only() {
+    fn mr(title: &str, draft: bool) -> MergeRequest {
         let project = Project {
             host: "h".into(),
             path: "g/a".into(),
         };
-        let mr = |title: &str, draft| MergeRequest {
+        MergeRequest {
             provider: Provider::GitlabSelfHosted,
             number: 7,
             title: title.into(),
@@ -143,7 +160,7 @@ mod tests {
             author: String::new(),
             source_project: project.clone(),
             source_branch: String::new(),
-            target_project: project.clone(),
+            target_project: project,
             target_branch: String::new(),
             base_sha: String::new(),
             head_sha: String::new(),
@@ -159,7 +176,11 @@ mod tests {
             web_url: String::new(),
             project_url: String::new(),
             updated: 0,
-        };
+        }
+    }
+
+    #[test]
+    fn strips_the_draft_prefix_of_drafts_only() {
         assert_eq!(bare_title(&mr("Draft: Add x", true)), "Add x");
         assert_eq!(bare_title(&mr("[DRAFT]  Add x", true)), "Add x");
         assert_eq!(bare_title(&mr("Draft: Add x", false)), "Draft: Add x");
@@ -171,5 +192,36 @@ mod tests {
             (number(&mr("x", false)), number(&github)),
             ("!7".into(), "#7".into())
         );
+    }
+
+    #[test]
+    fn links_resolve_under_the_project_and_the_base_url_with_its_sub_path() {
+        let at = |url: &str, github: bool| {
+            let m = MergeRequest {
+                project_url: url.into(),
+                provider: match github {
+                    true => Provider::GithubEnterprise,
+                    false => Provider::GitlabSelfHosted,
+                },
+                ..mr("x", false)
+            };
+            links(&m)
+        };
+        let forge = |project: &str, base: &str, gitlab| Links::Forge {
+            project_url: project.into(),
+            base_url: base.into(),
+            gitlab,
+        };
+        let sub = "https://git.example.com/gitlab/g/a";
+        assert_eq!(
+            at(&format!("{sub}/"), false),
+            forge(sub, "https://git.example.com/gitlab", true)
+        );
+        assert_eq!(
+            at("https://github.com/g/a", true),
+            forge("https://github.com/g/a", "https://github.com", false)
+        );
+        let moved = "http://127.0.0.1:9/ghe/other/app";
+        assert_eq!(at(moved, true), forge(moved, "http://127.0.0.1:9", false));
     }
 }

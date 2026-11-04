@@ -319,7 +319,7 @@ Rules behind them:
   - GitLab: every discussion is replyable, and `reply_to` is the discussion id. Resolvable if any note is resolvable; resolved if all resolvable notes are.
   - GitHub: review threads can be resolved and replied to (the reply goes to the first comment's databaseId). Issue comments and reviews with a body (not PENDING) become one-note threads that can be neither resolved nor replied to. Everything is sorted by the first note's time (`github.rs:59-75,339-354`).
 
-### 2.5 MergeWidget (`src/components/MergeWidget.svelte`)
+### 2.5 MergeWidget (`src/components/MergeWidget.svelte`) [ported]
 - **Status line with dot** (`:25-30`):
   - `autoMerge`: accent, "Set to merge when the pipeline succeeds".
   - `blocking`: warning, "Cannot merge: <reason>".
@@ -390,9 +390,9 @@ Rules behind them:
 
 ---
 
-## 3. Pipelines
+## 3. Pipelines [ported]
 
-### 3.1 Pipelines (`src/components/Pipelines.svelte`)
+### 3.1 Pipelines (`src/components/Pipelines.svelte`) [ported differently: the workflow select is a context menu, and the 5 s poll does not pause while the window is hidden]
 - **Props**: `repo`, optional `mr`.
   - In the bottom panel it has no `mr`.
   - In MrPage's Pipelines tab it gets `mr=number`: no branch toggle, no Run button, and data from `mrPipelines`.

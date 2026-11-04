@@ -62,9 +62,9 @@ fn viewer(window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 /// An MR page or a job log, over the viewer.
-fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
+fn page(doc: &Doc, window: &mut Window, cx: &mut App) -> AnyView {
     match doc {
-        Doc::Mr { .. } => stub("Merge request", cx),
+        Doc::Mr { repo, number } => forge::mr_page(repo.clone(), *number, window, cx),
         _ => forge::job_log(doc, cx),
     }
 }

@@ -4,9 +4,12 @@ mod ansi;
 mod badge;
 mod chip;
 mod job_log;
+mod merge;
 mod mr;
 mod mr_list;
+mod mr_page;
 mod pipelines;
+mod thread;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +22,7 @@ pub use badge::PipelineBadge;
 pub use chip::MrChip;
 pub use job_log::JobLog;
 pub use mr_list::MrList;
+pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
 use crate::store::{Doc, Store};
@@ -35,6 +39,11 @@ pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
 /// The tool panel's Merge Requests.
 pub fn mrs(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| MrList::new(window, cx)).into()
+}
+
+/// The main area's page for a `Doc::Mr`.
+pub fn mr_page(repo: String, number: u64, window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| MrPage::new(repo, number, window, cx)).into()
 }
 
 /// The main area's page for a `Doc::Job`.
