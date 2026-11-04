@@ -43,7 +43,7 @@ make e2e         # Playwright in WebKit: the real UI against the real commands a
 make sign-setup  # once: the "Detached Dev" signing identity that make build uses
 make build       # Detached.app under target/release/bundle
 make e2e-app     # builds Detached.app, starts it like Finder does, checks PATH, node and hooks
-make release     # tags v<version in tauri.conf.json>; CI builds every platform and publishes it
+make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
 
 `.github/workflows/release.yml` signs the macOS build with the same "Detached Dev" identity, or

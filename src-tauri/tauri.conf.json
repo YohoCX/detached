@@ -1,7 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Detached",
-  "version": "0.3.0",
   "identifier": "dev.wdevs.detached",
   "build": {
     "frontendDist": "../dist",
@@ -33,11 +32,11 @@
     "active": true,
     "targets": ["app", "appimage", "deb", "nsis"],
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "../crates/app/icons/32x32.png",
+      "../crates/app/icons/128x128.png",
+      "../crates/app/icons/128x128@2x.png",
+      "../crates/app/icons/icon.icns",
+      "../crates/app/icons/icon.ico"
     ],
     "macOS": {
       "signingIdentity": "Detached Dev"

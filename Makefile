@@ -50,6 +50,6 @@ sign-setup:
 e2e-app:
 	./scripts/e2e-app.sh
 
-# Tags v<version from tauri.conf.json>; CI builds every platform and publishes the release.
+# Tags v<version from Cargo.toml>; CI builds every platform and publishes the release.
 release:
 	./scripts/release.sh

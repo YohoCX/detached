@@ -90,6 +90,6 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(jq -r .version src-tauri/tauri.conf.json)
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME, but tauri.conf.json says $version."; exit 1; }
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME, but Cargo.toml says $version."; exit 1; }
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Detached $version" --generate-notes out/* scripts/install.sh

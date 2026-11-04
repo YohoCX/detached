@@ -73,7 +73,8 @@ crates/core/               package detached-core: the backend from src-tauri/src
   src/selftest.rs          --self-test <report>, unchanged (unix)
   src/bin/e2e-bridge.rs    for the Tauri Playwright suite until V6 removes it
 crates/forge-fake/         package detached-forge-fake: e2e/forge.ts in Rust
-crates/app/                package detached-app, binary detached-native (detached from V6 on)
+crates/app/                package detached-app, binary detached
+  icons/                   the app icons, also the Tauri bundle's until it goes
   src/main.rs              args (--self-test, --smoke), window, menus, boot
   src/store.rs             app-wide state entity
   src/blocking.rs          runs core on worker threads, back on the UI thread with the result
@@ -97,8 +98,10 @@ crates/app/                package detached-app, binary detached-native (detache
 src-tauri/, src/, e2e/     the Tauri client on top of crates/core until V6 removes it
 ```
 
-The Tauri package keeps its name `detached` and its binary, so `Detached.app/Contents/MacOS/detached`
-(which `install.sh` quits before replacing) stays put until V6. Cargo's `target/` moves to the root.
+The Tauri package keeps its name `detached`, but its binary is `detached-tauri` (a local Tauri bundle
+has `Contents/MacOS/detached-tauri`): the native binary owns `target/*/detached` and the shipped
+`Detached.app/Contents/MacOS/detached`, which `install.sh` quits before replacing. Both clients take
+their version from the root `Cargo.toml`. Cargo's `target/` moves to the root.
 
 ## Carried over unchanged
 
