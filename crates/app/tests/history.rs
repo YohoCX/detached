@@ -7,6 +7,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::*;
+use detached_app::actions;
+use detached_app::store::{Bottom, DiffDoc, Doc, Location};
+use detached_core::types::Side;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, TestAppContext, VisualTestContext, px};
 
@@ -388,4 +391,66 @@ fn filters_survive_closing_and_opening_the_log(cx: &mut TestAppContext) {
     assert_eq!(value(cx, "log.refs").as_deref(), Some("HEAD"));
     assert_eq!(value(cx, "log.path").as_deref(), Some("CHANGELOG.md"));
     assert_eq!(value(cx, "log.text").as_deref(), Some("upstream"));
+}
+
+fn file_history(cx: &mut VisualTestContext, doc: Doc) {
+    cx.store(|s, cx| s.show(doc, cx));
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fileHistory")));
+    settle(cx);
+}
+
+#[gpui_kit::test]
+fn file_history_opens_the_log_on_the_shown_files_path(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let file = Location {
+        repo: cx.sb.solo().display().to_string(),
+        rev: None,
+        path: "CHANGELOG.md".into(),
+        line: None,
+        doc: None,
+    };
+    file_history(cx, Doc::File(file));
+    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Log));
+    wait_for_rows(cx, &["upstream change"]);
+    assert_eq!(value(cx, "log.path").as_deref(), Some("CHANGELOG.md"));
+}
+
+#[gpui_kit::test]
+fn file_history_of_a_diff_moves_to_its_repo_and_keeps_refs_text_and_author(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    pick(cx, "HEAD");
+    filter(cx, "log.text", "t");
+    filter(cx, "log.author", "Test");
+    wait_for_rows(cx, &["data", "upstream change", "initial"]);
+    let app = cx.sb.repo("app").display().to_string();
+    let diff = DiffDoc {
+        repo: app.clone(),
+        path: "README.md".into(),
+        orig_path: None,
+        left: Side::Index,
+        right: Side::Worktree,
+    };
+    file_history(cx, Doc::Diff(diff));
+    assert_eq!(cx.store(|s, _| s.current().map(String::from)), Some(app));
+    wait_for_rows(cx, &["initial"]);
+    assert_eq!(value(cx, "log.path").as_deref(), Some("README.md"));
+    assert_eq!(value(cx, "log.refs").as_deref(), Some("HEAD"));
+    assert_eq!(value(cx, "log.text").as_deref(), Some("t"));
+    assert_eq!(value(cx, "log.author").as_deref(), Some("Test"));
+}
+
+#[gpui_kit::test]
+fn file_history_without_a_shown_file_says_so(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fileHistory")));
+    let said = cx.store(|s, _| s.message.clone().map(|m| (m.text, m.error)));
+    assert_eq!(
+        said,
+        Some(("Open a file to show its history".into(), false))
+    );
+    assert_eq!(cx.store(|s, _| s.bottom), None);
 }
