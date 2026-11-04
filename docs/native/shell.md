@@ -102,7 +102,7 @@ Lives inside the TopBar. Font 12px, `var(--muted)`, `gap: 12px`.
   - A × button titled "Cancel" that calls `cancelOp(op.id)`, i.e. `api.cancelOp`. Errors go to the message slot.
   - Chip `max-width: 320px`.
 
-### 1.3 Sidebar (`src/components/Sidebar.svelte`)
+### 1.3 Sidebar (`src/components/Sidebar.svelte`) [ported]
 
 **Header** (:56-62): height 44, `padding: 0 8px 0 16px`.
 - Title "Repositories", 14px, weight 800.

@@ -43,7 +43,7 @@ fn top_bar(slot: TopBar, _: &mut Window, cx: &mut App) -> Vec<AnyView> {
 }
 
 fn sidebar(_: &mut Window, cx: &mut App) -> AnyView {
-    stub("Repositories", cx)
+    crate::repos::sidebar(cx)
 }
 
 fn tool(tool: Tool, window: &mut Window, cx: &mut App) -> AnyView {
