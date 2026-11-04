@@ -40,8 +40,8 @@ fn main() {
         }
         if smoke {
             // Opening the window drew its first frame. Presenting it is not awaited: a hidden
-            // or occluded window gets no frames.
-            cx.quit();
+            // or occluded window gets no frames. Linux's event loop drops a quit made before it runs.
+            cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
         }
         cx.activate(true);
     });
