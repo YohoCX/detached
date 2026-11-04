@@ -896,3 +896,81 @@ fn the_pipelines_tab_lists_the_mr_heads_pipelines(cx: &mut TestAppContext) {
     assert!(cx.find(("pipeline", 100u64)).is_none());
     assert!(cx.find("mr.description").is_some());
 }
+
+#[gpui_kit::test]
+fn the_changes_tab_lists_files_by_path_with_thread_badges(cx: &mut TestAppContext) {
+    let (mut app, _forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let head = &seed.projects[0].mrs[0].head_sha;
+    let comment = |old_line, new_line| MrAction::LineComment {
+        body: "Hm".into(),
+        path: "README.md".into(),
+        old_path: "README.md".into(),
+        old_line,
+        new_line,
+        head_sha: head.clone(),
+    };
+    for c in [comment(None, Some(3)), comment(Some(5), Some(5))] {
+        api::mr_action(&core, &repo, 1, &c).unwrap();
+    }
+    open_mr(cx, "gitlab");
+    click_in(cx, "mr.tabs", 2usize);
+    wait_until(cx, |cx| label(cx, "mr.files_head").is_some());
+    assert_eq!(label(cx, "mr.files_head").as_deref(), Some("3 files"));
+    let files: Vec<_> = (0..3usize).map(|i| label(cx, ("file", i))).collect();
+    let files: Vec<_> = files.iter().map(|f| f.as_deref().unwrap()).collect();
+    assert_eq!(files, ["added.txt", "README.md", "src/new.ts"]);
+    let readme = ("file", 1usize);
+    assert_eq!(label_in(cx, readme, "count").as_deref(), Some("2"));
+    assert!(find_in(cx, ("file", 2usize), "count").is_none());
+    assert!(cx.find("mr.no_file").is_some());
+    assert!(cx.find("mr.moved").is_none());
+
+    cx.click(readme);
+    assert!(cx.find("mr.no_file").is_none());
+    assert_eq!(cx.find(readme).unwrap().selected(), Some(true));
+    // Refresh drops the resolved files at once, so they show again only once resolved anew.
+    cx.click("mr.refresh");
+    wait_until(cx, |cx| label(cx, "mr.files_head").is_some());
+    assert_eq!(cx.find(readme).unwrap().selected(), Some(true), "kept");
+    assert!(cx.find("mr.no_file").is_none());
+}
+
+#[gpui_kit::test]
+fn the_commits_tab_lists_the_range_and_shows_details(cx: &mut TestAppContext) {
+    let (mut app, _forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    let head = &seed.projects[1].mrs[0].head_sha;
+    open_mr(cx, "github");
+    click_in(cx, "mr.tabs", 1usize);
+    let first = ("commit", 0usize);
+    wait_until(cx, |cx| cx.find(first).is_some());
+    let want = format!("{} feature work", &head[..8]);
+    assert_eq!(label(cx, first), Some(want));
+    assert!(
+        cx.find(("commit", 1usize)).is_none(),
+        "only the MR's commit"
+    );
+    assert!(cx.find("mr.no_commit").is_some());
+    cx.click(first);
+    assert!(cx.find("mr.no_commit").is_none());
+    assert_eq!(cx.find(first).unwrap().selected(), Some(true));
+}
+
+#[gpui_kit::test]
+fn a_head_missing_here_is_fetched_and_its_failure_shows(cx: &mut TestAppContext) {
+    let (mut app, forge, mut seed) = open_forge(cx);
+    let cx = &mut app;
+    seed.projects[0].mrs[0].head_sha = "0123456789abcdef0123456789abcdef01234567".into();
+    forge.reset(seed);
+    open_mr(cx, "gitlab");
+    click_in(cx, "mr.tabs", 1usize);
+    wait_until(cx, |cx| {
+        label(cx, "mr.refs").is_some_and(|l| l != "Loading…")
+    });
+    let error = label(cx, "mr.refs").unwrap();
+    assert!(error.contains("/gitlab/group/app.git"), "{error}");
+    assert!(cx.find(("commit", 0usize)).is_none());
+}

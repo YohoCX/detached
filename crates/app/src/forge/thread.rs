@@ -21,39 +21,64 @@ pub struct Thread {
     /// The open reply or comment box.
     text: Option<(Entity<TextareaState>, Subscription)>,
     busy: bool,
+    /// Under a diff line, where the line needs no `path:line` header.
+    zone: bool,
+    /// A line comment's draft: what its text becomes.
+    start: Option<Box<dyn Fn(String) -> MrAction>>,
 }
 
 impl Thread {
     pub fn new(
         page: WeakEntity<MrPage>,
         thread: types::Thread,
+        zone: bool,
         links: &Links,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut this = Self::empty(page);
+        let mut this = Self::empty(page, zone);
         this.set(thread, links, cx);
         this
     }
 
     /// The general comment box: always open, not focused.
     pub fn comment(page: WeakEntity<MrPage>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut this = Self::empty(page);
+        let mut this = Self::empty(page, false);
         this.open(false, window, cx);
         this
     }
 
-    fn empty(page: WeakEntity<MrPage>) -> Self {
+    /// A line comment's box, focused; Cancel and Escape drop it from the page.
+    pub fn draft(
+        page: WeakEntity<MrPage>,
+        start: impl Fn(String) -> MrAction + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::empty(page, true);
+        this.start = Some(Box::new(start));
+        this.open(true, window, cx);
+        this
+    }
+
+    fn empty(page: WeakEntity<MrPage>, zone: bool) -> Self {
         Thread {
             page,
             thread: None,
             notes: vec![],
             text: None,
             busy: false,
+            zone,
+            start: None,
         }
     }
 
-    pub fn id(&self) -> Option<&str> {
-        self.thread.as_ref().map(|t| t.id.as_str())
+    pub fn thread(&self) -> Option<&types::Thread> {
+        self.thread.as_ref()
+    }
+
+    /// A reply or a draft, which close; the general box stays.
+    fn closes(&self) -> bool {
+        self.thread.is_some() || self.start.is_some()
     }
 
     /// The thread as loaded again; its notes render anew only when they changed.
@@ -84,11 +109,16 @@ impl Thread {
         cx.notify();
     }
 
-    /// Closes a reply; the general box only empties.
+    /// Closes a reply or a draft; the general box only empties.
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match (&self.thread, &self.text) {
-            (None, Some((text, _))) => text.update(cx, |s, cx| s.set_value("", window, cx)),
+        match &self.text {
+            Some((text, _)) if !self.closes() => {
+                text.update(cx, |s, cx| s.set_value("", window, cx))
+            }
             _ => self.text = None,
+        }
+        if self.start.is_some() {
+            self.page.update(cx, |p, cx| p.drop_draft(cx)).ok();
         }
         cx.notify();
     }
@@ -99,12 +129,13 @@ impl Thread {
         if body.is_empty() || self.busy {
             return;
         }
-        let a = match &self.thread {
-            Some(t) => MrAction::Reply {
+        let a = match (&self.thread, &self.start) {
+            (Some(t), _) => MrAction::Reply {
                 reply_to: t.reply_to.clone(),
                 body,
             },
-            None => MrAction::Comment { body },
+            (None, Some(start)) => start(body),
+            (None, None) => MrAction::Comment { body },
         };
         self.act(a, true, window, cx);
     }
@@ -153,7 +184,7 @@ impl Thread {
 
     fn input(&self, text: &Entity<TextareaState>, cx: &Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let reply = self.thread.is_some();
+        let (reply, closes) = (self.thread.is_some(), self.closes());
         let blank = text.read(cx).value().trim().is_empty();
         div()
             .flex()
@@ -170,7 +201,7 @@ impl Thread {
                     .flex()
                     .justify_end()
                     .gap(px(6.))
-                    .when(reply, |d| {
+                    .when(closes, |d| {
                         let cancel = cx.listener(|this, _, window, cx| this.cancel(window, cx));
                         d.child(button("thread.cancel", "Cancel", true, cancel, cx))
                     })
@@ -233,7 +264,8 @@ impl Render for Thread {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let th = self.thread.as_ref();
-        let at = th.and_then(|x| x.position.as_ref()).map(|p| {
+        let at = th.and_then(|x| x.position.as_ref()).filter(|_| !self.zone);
+        let at = at.map(|p| {
             let at = format!("{}:{}", p.path, p.line);
             div()
                 .id("thread.where")
@@ -293,7 +325,7 @@ impl Render for Thread {
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "escape" && this.thread.is_some() && this.text.is_some() {
+                if e.keystroke.key == "escape" && this.closes() && this.text.is_some() {
                     cx.stop_propagation();
                     this.cancel(window, cx);
                 }

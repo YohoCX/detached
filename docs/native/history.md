@@ -211,7 +211,7 @@ Rules behind them:
   - Refresh button: always.
   - Each refresh first calls `forgeHosts` and `setupProblem`, then `listMrs`.
 
-### 2.3 MrPage (`src/components/MrPage.svelte`)
+### 2.3 MrPage (`src/components/MrPage.svelte`) [ported]
 
 **Header** (`:155-167`):
 - `!N` or `#N` (it shows `#` until the MR loads, since `gitlab` is false before then).
@@ -300,7 +300,7 @@ Rules behind them:
   - GitHub (`github.rs:297-355`): `diffSide` LEFT → old. Line is `line ?? originalLine`. Outdated comes from `isOutdated`.
 - Outdated threads show only in Overview, with an "outdated" pill (`Thread.svelte:39-44`).
 
-### 2.4 Thread (`src/components/Thread.svelte`)
+### 2.4 Thread (`src/components/Thread.svelte`) [ported]
 - **Existing thread**:
   - Unless in a zone, a header "path:line" with an "outdated" pill.
   - Notes: author (bold), `ago` time, Markdown body.
@@ -530,8 +530,8 @@ Rules behind them:
 |---|---|---|---|
 | `size.bottom` | 280 | 120 / innerHeight−240 | `BottomPanel.svelte:9,13` |
 | `size.log.side` | 420 | 260 / 1000 | `Log.svelte:44,234` [ported] |
-| `size.mr.side` | 420 | 260 / 1000 | `MrPage.svelte:26,244` |
-| `size.mr.files` | 280 | 180 / 700 | `MrPage.svelte:27,251` |
+| `size.mr.side` | 420 | 260 / 1000 | `MrPage.svelte:26,244` [ported] |
+| `size.mr.files` | 280 | 180 / 700 | `MrPage.svelte:27,251` [ported] |
 | `size.tool` (MR list panel, shared) | 300 | 220 / 800 | `App.svelte:35,61` |
 | `viewer.sideBySide` | true | (not a size) | `Viewer.svelte:32,187`. Commit diffs follow it; the MR Changes tab is always side-by-side. |
 
@@ -546,10 +546,10 @@ Rules behind them:
   - MergeWidget choices.
 
 **Session caches** (`src/lib/cache.svelte.ts`): the last value per key plus the latest error. A focus refresh within 30 s of the last one is skipped. Keys:
-- `mrs\0repo\0filter`
-- `pipes repo mr all`
-- `badge repo head branch`
-- `chip\0repo\0branch\0upstream`
+- `mrs\0repo\0filter` [ported]
+- `pipes repo mr all` [ported]
+- `badge repo head branch` [ported]
+- `chip\0repo\0branch\0upstream` [ported]
 
 **Backend in-memory caches**:
 - `DONE`: merged and closed MRs (`mod.rs:96`).
@@ -559,7 +559,7 @@ Rules behind them:
 
 ---
 
-## 5. Backend commands used (`src/lib/api.ts`)
+## 5. Backend commands used (`src/lib/api.ts`) [ported]
 
 **Streaming and cancel:**
 - `log(repo, query{refs, path, text, author}, queryId, Channel<LogEvent>)` (`api.ts:311-312`). The command returns at once; events are `rows {queryId, rows}`, `done {queryId, truncated}` and `error {queryId, error}`. Cancel with `cancel_log(queryId)` (`src-tauri/src/git/commands.rs:207-225`).
