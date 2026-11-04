@@ -33,7 +33,7 @@ pub enum TopBar {
 
 fn top_bar(slot: TopBar, _: &mut Window, cx: &mut App) -> Vec<AnyView> {
     match slot {
-        TopBar::Left => vec![stub("Repository", cx)],
+        TopBar::Left => vec![crate::repos::workspaces(cx), crate::repos::switcher(cx)],
         TopBar::Center => vec![],
         TopBar::Right => vec![
             stub("Search everywhere", cx),

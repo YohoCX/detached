@@ -2,7 +2,9 @@
 
 mod api;
 mod sidebar;
+mod switcher;
 mod sync;
+mod workspaces;
 
 use std::collections::HashMap;
 
@@ -10,15 +12,23 @@ use detached_core::api as core;
 use detached_core::error::Result;
 use detached_core::state::AppState;
 use detached_core::types::RepoInfo;
-use gpui_kit::{App, AppContext, AsyncApp, Entity, Global, PathPromptOptions, Task};
+use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::{
+    App, AppContext, AsyncApp, Div, Entity, Global, InteractiveElement, PathPromptOptions, Role,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Task, px,
+};
 
 pub use api::*;
 pub use sidebar::sidebar;
+pub use switcher::switcher;
 pub use sync::{Bulk, Kind, sync_buttons};
+pub use workspaces::workspaces;
 
 use crate::actions::{self, Registration};
 use crate::blocking;
 use crate::store::Store;
+use crate::ui::{self, radius, theme};
 
 /// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches.
 pub struct State {
@@ -159,4 +169,25 @@ pub(crate) fn run_core(cx: &mut App, f: impl FnOnce(&AppState) -> Result<()> + S
 
 fn say_error(text: String, cx: &mut AsyncApp) {
     cx.update(|cx| Store::global(cx).update(cx, |s, cx| s.say(text, true, cx)));
+}
+
+/// A top bar widget that reads `label`; `title` is its tooltip.
+fn widget(
+    id: &'static str,
+    title: &'static str,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> ObservedElement<Stateful<Div>> {
+    ui::pressable(id)
+        .test_support()
+        .min_w_0()
+        .gap(px(7.))
+        .h(px(32.))
+        .px(px(10.))
+        .rounded(radius::WIDGET)
+        .hover(|s| s.bg(theme(cx).hover))
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_description(title)
+        .tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
 }

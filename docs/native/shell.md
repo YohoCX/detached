@@ -213,7 +213,7 @@ Built with Tauri `Menu.new` and `PredefinedMenuItem` separators, then `.popup()`
 
 Errors from `openFolder` and `openInZed` in these menus are not caught (no `say`).
 
-### 1.5 Workspaces popup (`src/components/Workspaces.svelte`)
+### 1.5 Workspaces popup (`src/components/Workspaces.svelte`) [ported]
 
 **Container:**
 - A transparent full-screen `.backdrop` (z-index 10). Clicking it closes the popup.
@@ -245,7 +245,7 @@ Errors from `openFolder` and `openInZed` in these menus are not caught (no `say`
 - Rename fails if the target name exists.
 - Errors surface through `settingsCall` → `say(err, true)` in the status message.
 
-### 1.6 RepoSwitcher (`src/components/RepoSwitcher.svelte`)
+### 1.6 RepoSwitcher (`src/components/RepoSwitcher.svelte`) [ported]
 
 **Container:** transparent backdrop (z 10, click closes); `.popup.glass`, `role=dialog`, `aria-label="Switch repository"`. Width 420, under the repo widget, `margin-top: 8px` (:58-59).
 

@@ -9,7 +9,7 @@ use detached_core::error;
 use detached_core::settings::Workspace;
 use detached_core::state::AppState;
 use detached_core::types::{InProgress, RepoInfo, RepoStatus};
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla,
@@ -111,7 +111,7 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
 
 /// The status dot: error, local changes, diverged from upstream, no upstream, in sync.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tone {
+pub(super) enum Tone {
     Error,
     Warning,
     Accent,
@@ -120,7 +120,7 @@ enum Tone {
 }
 
 impl Tone {
-    fn color(self, t: &Theme) -> Hsla {
+    pub(super) fn color(self, t: &Theme) -> Hsla {
         match self {
             Tone::Error => t.error,
             Tone::Warning => t.warning,
@@ -132,7 +132,7 @@ impl Tone {
 }
 
 /// None while the status loads.
-fn tone_of(status: Option<&Result<RepoStatus, String>>) -> Option<Tone> {
+pub(super) fn tone_of(status: Option<&Result<RepoStatus, String>>) -> Option<Tone> {
     Some(match status? {
         Err(_) => Tone::Error,
         Ok(s) if !s.changes.is_empty() || s.in_progress.is_some() => Tone::Warning,
@@ -546,8 +546,11 @@ fn label(text: &str) -> Div {
         .child(text.to_uppercase())
 }
 
-fn empty(text: &'static str, cx: &App) -> Div {
+fn empty(text: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
     div()
+        .id("sidebar.empty")
+        .test_support()
+        .aria_label(text)
         .flex()
         .flex_col()
         .items_center()

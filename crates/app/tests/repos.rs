@@ -379,3 +379,235 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
     let text = (n.title.as_str(), n.body.as_deref());
     assert_eq!(text, ("Fetch all: 1 not updated", Some("hang: cancelled")));
 }
+
+fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> String {
+    let e = cx.find(id);
+    e.and_then(|e| e.label().map(String::from))
+        .unwrap_or_default()
+}
+
+/// The sidebar's workspace headers: header rows without a folder path.
+fn workspace_headers(cx: &mut VisualTestContext) -> Vec<String> {
+    let rows = rows(cx).into_iter().filter(|r| r.path.is_none());
+    let rows: Vec<_> = rows.map(|r| (r.id, r.label)).collect();
+    rows.into_iter()
+        .filter(|(id, _)| cx.find(id.clone()).unwrap().description().is_none())
+        .map(|(_, label)| label)
+        .collect()
+}
+
+/// The Workspaces popup's rows: id, name and whether it is on.
+fn workspace_rows(cx: &mut VisualTestContext) -> Vec<(ElementId, String, bool)> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..8)
+            .filter_map(|i| {
+                let id = ElementId::from(("workspaces.row", i));
+                let e = w.try_find(id.clone())?;
+                Some((id, e.label()?.to_string(), e.checked()?))
+            })
+            .collect()
+    })
+}
+
+fn workspace_row(cx: &mut VisualTestContext, name: &str) -> ElementId {
+    let mut rows = workspace_rows(cx).into_iter();
+    rows.find(|r| r.1 == name)
+        .unwrap_or_else(|| panic!("no workspace {name}"))
+        .0
+}
+
+fn names(cx: &mut VisualTestContext) -> Vec<String> {
+    workspace_rows(cx).into_iter().map(|r| r.1).collect()
+}
+
+#[gpui_kit::test]
+fn workspaces_several_on_at_once_each_with_its_folders_rename_turn_off_delete(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = path(cx.sb.repo("lib"));
+    cx.click("workspaces");
+    cx.click("workspaces.new");
+    cx.input("Home");
+    cx.press("enter");
+    wait_until(cx, |cx| workspace_headers(cx) == ["Default", "Home"]);
+    assert_eq!(cx.find("workspaces.new").unwrap().value(), Some(""));
+    cx.press("escape");
+    assert!(cx.find("workspaces.popup").is_none());
+
+    let home = rows(cx).into_iter().find(|r| r.label == "Home").unwrap();
+    let picked = vec![cx.sb.repo("lib")];
+    click_in(cx, &home.id, "add");
+    cx.simulate_path_prompt_response(|_| Some(picked));
+    wait_until(cx, |cx| {
+        paths(cx).iter().filter(|p| **p == lib).count() == 2
+    });
+
+    cx.click("workspaces");
+    let default = workspace_row(cx, "Default");
+    cx.click(default);
+    wait_until(cx, |cx| {
+        workspace_headers(cx).is_empty() && paths(cx) == [lib.as_str()]
+    });
+    assert_eq!(label(cx, "workspaces"), "Home");
+
+    let home = workspace_row(cx, "Home");
+    click_in(cx, &home, "rename");
+    let input = cx.find("workspaces.rename").unwrap();
+    assert_eq!(input.label(), Some("Workspace name"));
+    assert_eq!(input.value(), Some("Home"));
+    cx.input("Family");
+    cx.press("enter");
+    wait_until(cx, |cx| label(cx, "workspaces") == "Family");
+
+    let family = workspace_row(cx, "Family");
+    cx.click(family);
+    wait_until(cx, |cx| label(cx, "workspaces") == "No workspace");
+    let empty = label(cx, "sidebar.empty");
+    assert_eq!(empty, "No workspace is on. Turn one on in the top bar.");
+
+    let family = workspace_row(cx, "Family");
+    click_in(cx, &family, "remove");
+    wait_until(cx, |cx| names(cx) == ["Default"]);
+}
+
+#[gpui_kit::test]
+fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_cancels(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let on = |cx: &mut VisualTestContext| workspace_rows(cx)[0].2;
+    cx.click("workspaces");
+    let default = workspace_row(cx, "Default");
+    cx.click(default);
+    wait_until(cx, |cx| !on(cx));
+    cx.press("space");
+    wait_until(cx, on);
+    cx.press("enter");
+    wait_until(cx, |cx| !on(cx));
+
+    let default = workspace_row(cx, "Default");
+    click_in(cx, &default, "rename");
+    cx.input("X");
+    cx.press("escape");
+    assert!(cx.find("workspaces.rename").is_none());
+    assert!(
+        cx.find("workspaces.popup").is_some(),
+        "only the rename closes"
+    );
+    settle(cx);
+    assert_eq!(names(cx), ["Default"]);
+    cx.press("escape");
+    assert!(cx.find("workspaces.popup").is_none());
+}
+
+#[gpui_kit::test]
+fn a_rename_commits_on_blur_and_a_taken_name_is_said_in_red(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    // Focus and blur events need an active window.
+    cx.update(|w, _| w.activate_window());
+    cx.click("workspaces");
+    cx.click("workspaces.new");
+    cx.input("Default");
+    cx.press("enter");
+    says(cx, "Workspace Default already exists", true);
+
+    let default = workspace_row(cx, "Default");
+    click_in(cx, &default, "rename");
+    cx.input("Main");
+    cx.click("workspaces.new");
+    wait_until(cx, |cx| names(cx) == ["Main"]);
+    assert_eq!(label(cx, "workspaces"), "Main");
+    let new = cx.find("workspaces.new").unwrap();
+    assert_eq!(new.focused(), Some(true), "the click keeps its focus");
+}
+
+/// The switcher's options: id, path, and whether it is selected.
+fn options(cx: &mut VisualTestContext) -> Vec<(ElementId, String, bool)> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..)
+            .map_while(|i| {
+                let id = ElementId::from(("switcher.row", i));
+                let e = w.try_find(id.clone())?;
+                let path = e.description()?.to_string();
+                Some((id, path, e.selected() == Some(true)))
+            })
+            .collect()
+    })
+}
+
+fn chosen(cx: &mut VisualTestContext) -> Option<String> {
+    options(cx).into_iter().find(|o| o.2).map(|o| o.1)
+}
+
+fn folder_label(cx: &mut VisualTestContext, repo: &str) -> Option<String> {
+    let id = options(cx).into_iter().find(|o| o.1 == repo).unwrap().0;
+    cx.update(|w, _| w.within(id).try_find("folder"))
+        .map(|f| f.label().unwrap().to_string())
+}
+
+#[gpui_kit::test]
+fn the_repository_switcher_starts_on_the_current_repo_type_enter_selects(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let [lib, api] = ["lib", "group/api"].map(|n| path(cx.sb.repo(n)));
+    let solo = path(cx.sb.solo());
+    let current = lib.clone();
+    cx.store(|s, cx| s.set_current(Some(current), cx));
+    cx.click("switcher");
+    assert_eq!(chosen(cx), Some(lib.clone()));
+    assert_eq!(folder_label(cx, &api).as_deref(), Some("ws"));
+    assert_eq!(folder_label(cx, &solo), None);
+    cx.press("enter");
+    assert!(cx.find("switcher.popup").is_none());
+    assert_eq!(label(cx, "switcher"), "lib");
+
+    cx.click("switcher");
+    cx.input("solo");
+    cx.press("enter");
+    assert!(cx.find("switcher.popup").is_none());
+    assert_eq!(label(cx, "switcher"), "solo");
+    let id = row(cx, &solo).id;
+    assert_eq!(cx.find(id).unwrap().selected(), Some(true));
+}
+
+#[gpui_kit::test]
+fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_a_click_chooses(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let all = cx.store(|s, _| s.repos.iter().map(|r| r.path.clone()).collect::<Vec<_>>());
+    cx.click("switcher");
+    assert_eq!(chosen(cx).as_ref(), Some(&all[0]), "the current repo");
+    cx.press("up");
+    assert_eq!(chosen(cx).as_ref(), Some(&all[0]));
+    for _ in 0..all.len() + 2 {
+        cx.press("down");
+    }
+    assert_eq!(chosen(cx).as_ref(), all.last());
+    cx.input("zzz");
+    assert_eq!(label(cx, "switcher.empty"), "No repositories match.");
+    cx.press("enter");
+    assert!(cx.find("switcher.popup").is_some(), "nothing to choose");
+    cx.press("escape");
+    assert!(cx.find("switcher.popup").is_none());
+
+    cx.click("switcher");
+    let lib = path(cx.sb.repo("lib"));
+    let sidebar_row = row(cx, &lib).id;
+    cx.click(sidebar_row);
+    assert!(cx.find("switcher.popup").is_none());
+    let current = cx.store(|s, _| s.current().map(String::from));
+    assert_eq!(
+        current.as_ref(),
+        Some(&all[0]),
+        "the backdrop takes the click"
+    );
+
+    cx.click("switcher");
+    let option = options(cx).into_iter().find(|o| o.1 == lib).unwrap().0;
+    cx.click(option);
+    assert!(cx.find("switcher.popup").is_none());
+    assert_eq!(label(cx, "switcher"), "lib");
+}
