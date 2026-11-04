@@ -1,4 +1,5 @@
-//! The Log panel: the current repo's commits with their graph, streamed in batches, and its filters.
+//! The Log panel: the current repo's commits with their graph, streamed in batches, its filters, and
+//! the rows' context menu with its New Branch bar.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -7,22 +8,25 @@ use std::time::Duration;
 use detached_core::api;
 use detached_core::types::{LogEvent, LogQuery, LogRefs, LogRow};
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight, Global,
-    Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role,
-    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
+    AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, FocusHandle,
+    FontWeight, Global, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::graph::{self, LANE, ROW};
 use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
-use crate::store::{Bottom, Doc, Event, QueryId, Store};
+use crate::repos::{self, CheckoutTarget};
+use crate::store::{Bottom, Doc, Event, Level, Notice, QueryId, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::when;
 
@@ -133,6 +137,19 @@ fn head(s: &Store, repo: &str) -> Head {
         .map(|st| (st.head.clone(), st.branch.clone(), st.behind))
 }
 
+fn say(cx: &mut App, text: impl Into<String>, error: bool) {
+    Store::global(cx).update(cx, |s, cx| s.say(text, error, cx));
+}
+
+/// The New Branch bar's commit and its Checkout box.
+struct NewBranch {
+    sha: String,
+    checkout: bool,
+}
+
+/// What a context menu item does with the repo and the row's SHA.
+type Item = fn(&mut Log, &str, &str, &mut Window, &mut Context<Log>);
+
 pub struct Log {
     rows: Vec<LogRow>,
     /// The most lanes a row needs.
@@ -158,8 +175,13 @@ pub struct Log {
     /// Where Shift ranges and the arrows start.
     anchor: usize,
     focus: FocusHandle,
-    /// The side panel's commits, newest first, and their view.
-    details: Option<(Vec<String>, Entity<CommitDetails>)>,
+    /// Whether the side panel compares the selected commit with the working tree.
+    worktree: bool,
+    /// The side panel's commits, newest first, its worktree flag and the view.
+    details: Option<(Vec<String>, bool, Entity<CommitDetails>)>,
+    branch: Option<NewBranch>,
+    /// The New Branch bar's name field.
+    name: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -170,6 +192,7 @@ impl Log {
             FIELDS.map(|(_, hint, _)| cx.new(|cx| InputState::new(window, cx).placeholder(hint)));
         let first = Some(IndexPath::default());
         let refs = cx.new(|cx| SelectState::new(choices(&[]), first, window, cx));
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Branch name"));
         let mut subscriptions = vec![
             cx.observe_in(&store, window, |this, _, window, cx| this.sync(window, cx)),
             cx.subscribe(&store, |this, store, e: &Event, cx| {
@@ -185,6 +208,10 @@ impl Log {
                     cx.global_mut::<Filters>().refs = refs.clone();
                     this.sync(window, cx);
                 }
+            }),
+            cx.subscribe(&name, |this, _, e: &InputEvent, cx| match e {
+                InputEvent::PressEnter { .. } => this.create(cx),
+                _ => cx.notify(),
             }),
         ];
         for (i, input) in inputs.iter().enumerate() {
@@ -222,7 +249,10 @@ impl Log {
             sel: HashSet::new(),
             anchor: 0,
             focus: cx.focus_handle(),
+            worktree: false,
             details: None,
+            branch: None,
+            name,
             _subscriptions: subscriptions,
         };
         log.sync(window, cx);
@@ -346,11 +376,12 @@ impl Log {
         self.load(cx);
     }
 
-    fn choose(&mut self, i: usize, how: Pick, cx: &mut Context<Self>) {
+    fn choose(&mut self, i: usize, how: Pick, worktree: bool, cx: &mut Context<Self>) {
         self.sel = pick(&self.rows, &self.sel, self.anchor, i, how);
         if how != Pick::Range {
             self.anchor = i;
         }
+        self.worktree = worktree;
         self.show(cx);
     }
 
@@ -365,7 +396,7 @@ impl Log {
             (false, false) => self.anchor.saturating_sub(1),
         }
         .min(last);
-        self.choose(i, Pick::One, cx);
+        self.choose(i, Pick::One, false, cx);
         self.scroll.scroll_to_item(i, ScrollStrategy::Nearest);
     }
 
@@ -378,15 +409,187 @@ impl Log {
             .filter(|r| self.sel.contains(&r.sha))
             .map(|r| r.sha.clone())
             .collect();
-        if self.details.as_ref().map_or(&[][..], |d| &d.0) == shas {
+        let worktree = self.worktree;
+        let same = |d: &(Vec<String>, bool, _)| d.0 == shas && d.1 == worktree;
+        if self.details.as_ref().map_or(shas.is_empty(), same) {
             return;
         }
         let repo = self.filters.repo.clone().unwrap_or_default();
         self.details = (!shas.is_empty()).then(|| {
-            let view = cx.new(|cx| CommitDetails::new(repo, shas.clone(), cx));
-            (shas, view)
+            let view = cx.new(|cx| match worktree {
+                true => CommitDetails::worktree(repo, shas[0].clone(), cx),
+                false => CommitDetails::new(repo, shas.clone(), cx),
+            });
+            (shas, worktree, view)
         });
         cx.notify();
+    }
+
+    /// Selects an unselected row `i` and opens its menu at `at`.
+    fn menu(&mut self, i: usize, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(repo), Some(row)) = (self.filters.repo.clone(), self.rows.get(i)) else {
+            return;
+        };
+        let sha = row.sha.clone();
+        if !self.sel.contains(&sha) {
+            self.choose(i, Pick::One, false, cx);
+        }
+        let log = cx.weak_entity();
+        let item = move |f: Item| {
+            let (log, repo, sha) = (log.clone(), repo.clone(), sha.clone());
+            move |window: &mut Window, cx: &mut App| {
+                log.update(cx, |this, cx| f(this, &repo, &sha, window, cx))
+                    .ok();
+            }
+        };
+        ui::Menu::default()
+            .item("Copy Revision Number", item(Self::copy))
+            .item("New Branch…", item(Self::new_branch))
+            .item("Checkout Revision", item(Self::checkout))
+            .item("Compare with Local", item(Self::compare))
+            .separator()
+            .item("Open in Browser", item(Self::browse))
+            .show(at, window, cx);
+    }
+
+    fn copy(&mut self, _: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(sha.into()));
+        say(cx, format!("Copied {sha}"), false);
+    }
+
+    fn new_branch(&mut self, _: &str, sha: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.branch = Some(NewBranch {
+            sha: sha.into(),
+            checkout: true,
+        });
+        self.name.update(cx, |name, cx| {
+            name.set_value("", window, cx);
+            name.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn checkout(&mut self, repo: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
+        repos::checkout(cx, repo, CheckoutTarget::Rev { sha: sha.into() }).detach();
+    }
+
+    fn compare(&mut self, _: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.rows.iter().position(|r| r.sha == sha) {
+            self.choose(i, Pick::One, true, cx);
+        }
+    }
+
+    fn browse(&mut self, repo: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
+        let core = Store::global(cx).read(cx).core().clone();
+        let (repo, sha) = (repo.to_string(), sha.to_string());
+        let url = blocking::run(cx, move || api::commit_url(&core, &repo, &sha));
+        cx.spawn(async move |_, cx| {
+            let url = url.await;
+            cx.update(|cx| match url {
+                Ok(Some(url)) => cx.open_url(&url),
+                Ok(None) => say(cx, "No web page is known for this repository", true),
+                Err(e) => say(cx, e.to_string(), true),
+            })
+        })
+        .detach();
+    }
+
+    /// Creates the bar's branch, then checks it out or reloads.
+    fn create(&mut self, cx: &mut Context<Self>) {
+        let name = self.name.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let (Some(repo), Some(NewBranch { sha, checkout })) =
+            (self.filters.repo.clone(), self.branch.take())
+        else {
+            return;
+        };
+        cx.notify();
+        let core = Store::global(cx).read(cx).core().clone();
+        let (r, n) = (repo.clone(), name.clone());
+        let made = blocking::run(cx, move || api::create_branch(&core, &r, &n, &sha, false));
+        cx.spawn(async move |this, cx| {
+            let made = made.await;
+            cx.update(|cx| match made {
+                Ok(()) => {
+                    say(cx, format!("Created branch {name}"), false);
+                    if checkout {
+                        repos::checkout(cx, &repo, CheckoutTarget::Local { name }).detach();
+                    } else {
+                        this.update(cx, |this, cx| this.refresh(cx)).ok();
+                    }
+                }
+                Err(e) => {
+                    let failed = Notice {
+                        level: Level::Error,
+                        title: format!("New branch {name} failed"),
+                        body: Some(e.to_string()),
+                        ..Default::default()
+                    };
+                    Store::global(cx).update(cx, |s, cx| s.notify(failed, cx));
+                }
+            })
+        })
+        .detach();
+    }
+
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        self.branch = None;
+        cx.notify();
+    }
+
+    /// "New branch at <sha>", the name, Checkout, Create and Cancel.
+    fn bar(&self, b: &NewBranch, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = theme(cx);
+        let short = b.sha[..10].to_string();
+        let blank = self.name.read(cx).value().trim().is_empty();
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .py(px(6.))
+            .border_b_1()
+            .border_color(t.line)
+            .text_size(text::SMALL)
+            .on_action(cx.listener(|this, _: &Escape, _, cx| this.cancel(cx)))
+            .child(
+                div()
+                    .id("log.new")
+                    .test_support()
+                    .aria_label(format!("New branch at {short}"))
+                    .flex()
+                    .gap(px(4.))
+                    .text_color(t.muted)
+                    .child("New branch at")
+                    .child(div().font_family(theme::mono(cx)).child(short)),
+            )
+            .child(field(Input::new(&self.name).id("log.branch"), cx).w(px(200.)))
+            .child(
+                Checkbox::new("log.checkout")
+                    .checked(b.checkout)
+                    .label("Checkout")
+                    .text_size(text::SMALL)
+                    .on_click(cx.listener(|this, on: &bool, _, cx| {
+                        if let Some(b) = &mut this.branch {
+                            b.checkout = *on;
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(
+                ui::primary_button("log.create", "Create", cx)
+                    .test_support()
+                    .when(blank, |b| b.opacity(0.5))
+                    .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+            )
+            .child(
+                ui::button("log.cancel", "Cancel", cx)
+                    .test_support()
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+            )
     }
 
     fn rows(
@@ -503,8 +706,14 @@ impl Log {
                             (_, true) => Pick::Toggle,
                             _ => Pick::One,
                         };
-                        this.choose(i, how, cx);
+                        this.choose(i, how, false, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            this.menu(i, e.position, window, cx)
+                        }),
+                    )
             })
             .collect()
     }
@@ -614,7 +823,7 @@ impl Render for Log {
                 .into_any_element()
         };
         let side = match &self.details {
-            Some((_, view)) => view.clone().into_any_element(),
+            Some((_, _, view)) => view.clone().into_any_element(),
             None => message("log.select", "Select a commit", t.muted).into_any_element(),
         };
         let side = ui::pane("log.side", Edge::Left, 420., 260., 1000.)
@@ -623,11 +832,13 @@ impl Render for Log {
             .border_l_1()
             .border_color(t.line)
             .child(side);
+        let branch = self.branch.as_ref().map(|b| self.bar(b, cx));
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(bar)
+            .children(branch)
             .child(div().flex().flex_1().min_h_0().child(body).child(side))
             .into_any_element()
     }

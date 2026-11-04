@@ -29,14 +29,14 @@ All paths are relative to the repo root. Citations are `file:line`.
 
 ---
 
-## 1. Git history
+## 1. Git history [ported]
 
 ### 1.1 BottomPanel (`src/components/BottomPanel.svelte`) [ported]
 - Height defaults to 280. A top-edge Grip (key `bottom`) resizes it, min 120, max `innerHeight-240` (`:9,13`).
 - Header has the tabs "Log" and "Pipelines". The tab with `app.bottom===tab` gets class `on`, and a click sets `app.bottom` (`:15-17`).
 - Content: `<Log repo={app.current}/>` or `<Pipelines repo={app.current}/>` (`:20`).
 
-### 1.2 Log (`src/components/Log.svelte`)
+### 1.2 Log (`src/components/Log.svelte`) [ported]
 
 **State held at module level, for the session, not persisted** (`:8`): `filters = {repo, refs:{kind:'all'}, text:'', author:'', path:''}`.
 - When the repo changes, refs and path reset to all and '', and the selection clears. Text and author are kept (`:57-61`).

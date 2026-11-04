@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::history::CommitDetails;
-use detached_app::store::{Bottom, DiffDoc, Doc, Location};
+use detached_app::store::{Bottom, DiffDoc, Doc, Level, Location};
+use detached_app::ui::menu;
 use detached_app::util::when;
 use detached_app::{actions, ui_state};
 use detached_core::types::Side;
@@ -1032,4 +1033,210 @@ fn worktree_mode_compares_the_commit_with_the_working_tree(cx: &mut TestAppConte
         right: Side::Worktree,
     };
     assert_eq!(shown(w), Some(Doc::Diff(want)));
+}
+
+/// Right-clicks row `i` and picks `item` in its menu.
+fn right_click(cx: &mut VisualTestContext, i: usize, item: &str) {
+    cx.update(|w, cx| w.right_click(("log.row", i), cx));
+    settle(cx);
+    assert!(cx.update(|w, cx| menu::pick(item, w, cx)), "no {item}");
+    settle(cx);
+}
+
+fn said(cx: &mut VisualTestContext) -> Option<(String, bool)> {
+    cx.store(|s, _| s.message.clone().map(|m| (m.text, m.error)))
+}
+
+fn selection(cx: &mut VisualTestContext, n: usize) -> Vec<bool> {
+    (0..n).map(|i| selected(cx, i).unwrap()).collect()
+}
+
+#[gpui_kit::test]
+fn copy_revision_number_copies_the_full_sha_of_the_row(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let [middle, bottom] = ["HEAD~1", "HEAD~2"].map(|r| cx.sb.git(&solo, &["rev-parse", r]));
+    let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 0, Modifiers::none());
+    click_row(cx, 1, cmd);
+    right_click(cx, 1, "Copy Revision Number");
+    assert_eq!(
+        selection(cx, 3),
+        [true, true, false],
+        "a selected row keeps the selection"
+    );
+    let copied = |cx: &mut VisualTestContext| cx.read_from_clipboard().and_then(|c| c.text());
+    assert_eq!(copied(cx).as_ref(), Some(&middle));
+    assert_eq!(said(cx), Some((format!("Copied {middle}"), false)));
+
+    right_click(cx, 2, "Copy Revision Number");
+    assert_eq!(
+        selection(cx, 3),
+        [false, false, true],
+        "an unselected row is selected first"
+    );
+    assert_eq!(copied(cx), Some(bottom));
+}
+
+#[gpui_kit::test]
+fn new_branch_without_checkout_creates_it_at_the_row_and_reloads(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let sha = cx.sb.git(&solo, &["rev-parse", "HEAD~1"]);
+    let repo = solo.display().to_string();
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    right_click(cx, 1, "New Branch…");
+    let at = format!("New branch at {}", &sha[..10]);
+    assert_eq!(label(cx, "log.new"), Some(at));
+    let focused = cx.find("log.branch").and_then(|e| e.focused());
+    assert_eq!(focused, Some(true), "the name has focus");
+    let checked = |cx: &mut VisualTestContext| cx.find("log.checkout").and_then(|e| e.checked());
+    assert_eq!(checked(cx), Some(true));
+    cx.input("topic");
+    cx.click("log.checkout");
+    assert_eq!(checked(cx), Some(false));
+    cx.click("log.create");
+    assert!(cx.find("log.new").is_none());
+
+    wait_until(cx, |cx| refs(cx, "upstream change").contains("topic"));
+    assert_eq!(cx.sb.git(&solo, &["rev-parse", "topic"]), sha);
+    assert_eq!(cx.sb.git(&solo, &["branch", "--show-current"]), "main");
+    assert_eq!(said(cx), Some(("Created branch topic".into(), false)));
+    let names = |cx: &mut VisualTestContext| cx.store(|s, _| s.branch_names.get(&repo).cloned());
+    wait_until(cx, |cx| {
+        names(cx).is_some_and(|n| n.contains(&"topic".into()))
+    });
+}
+
+#[gpui_kit::test]
+fn the_new_branch_bar_cancels_on_escape_needs_a_name_and_creates_on_enter(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let head = cx.sb.git(&solo, &["rev-parse", "HEAD"]);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    right_click(cx, 0, "New Branch…");
+    cx.input("dropped");
+    cx.press("escape");
+    assert!(cx.find("log.new").is_none(), "Escape cancels");
+
+    right_click(cx, 0, "New Branch…");
+    assert_eq!(value(cx, "log.branch").as_deref(), Some(""), "a fresh name");
+    cx.click("log.create");
+    assert!(
+        cx.find("log.new").is_some(),
+        "Create does nothing without a name"
+    );
+    cx.click("log.branch");
+    cx.input("   ");
+    cx.click("log.create");
+    assert!(cx.find("log.new").is_some(), "nor with a blank one");
+    cx.click("log.cancel");
+    assert!(cx.find("log.new").is_none(), "Cancel closes the bar");
+
+    right_click(cx, 0, "New Branch…");
+    cx.input("fix");
+    cx.press("enter");
+    assert!(cx.find("log.new").is_none());
+    let checkout = Some(("Checkout is not available yet".into(), false));
+    wait_until(cx, |cx| said(cx) == checkout);
+    assert_eq!(cx.sb.git(&solo, &["rev-parse", "fix"]), head);
+    let branches = cx.sb.git(&solo, &["branch", "--format=%(refname:short)"]);
+    assert_eq!(branches, "fix\nmain", "nothing made on Escape or blank");
+}
+
+#[gpui_kit::test]
+fn a_taken_branch_name_raises_the_error_notice(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    right_click(cx, 1, "New Branch…");
+    cx.input("main");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.store(|s, _| !s.notices.is_empty()));
+    let n = cx.store(|s, _| s.notices[0].clone());
+    assert_eq!(
+        (n.level, n.title.as_str()),
+        (Level::Error, "New branch main failed")
+    );
+    let body = n.body.unwrap_or_default();
+    assert!(body.contains("already exists"), "{body}");
+}
+
+#[gpui_kit::test]
+fn checkout_revision_calls_repos_checkout(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    right_click(cx, 1, "Checkout Revision");
+    let checkout = Some(("Checkout is not available yet".into(), false));
+    assert_eq!(said(cx), checkout);
+}
+
+#[gpui_kit::test]
+fn compare_with_local_shows_the_working_tree_changes_since_the_commit(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    let want = count(&cx.sb, &app);
+    set_current(cx, &app);
+    open_tall(cx);
+    wait_for_status(cx, &want);
+    let n = subjects(cx).len();
+    let i = subjects(cx)
+        .iter()
+        .position(|s| s == "upstream change")
+        .unwrap();
+    click_row(cx, 0, Modifiers::none());
+    click_row(cx, n - 1, Modifiers::shift());
+    right_click(cx, i, "Compare with Local");
+    let mut only = vec![false; n];
+    only[i] = true;
+    assert_eq!(selection(cx, n), only, "only that row");
+    let head = |cx: &mut VisualTestContext| label(cx, "details.head");
+    wait_until(cx, |cx| {
+        head(cx).is_some_and(|h| h.ends_with("in the working tree"))
+    });
+    assert_eq!(
+        head(cx).as_deref(),
+        Some("2 files changed since, in the working tree")
+    );
+    // Untracked notes.txt is not in `git diff <sha>`, as in the Tauri client.
+    let want = [
+        file("M", "README.md", "README.md"),
+        file("R", "src/new.ts", "src/old.ts → src/new.ts"),
+    ];
+    assert_eq!(files(cx), want);
+
+    click_row(cx, i, Modifiers::none());
+    wait_until(cx, |cx| {
+        head(cx).is_some_and(|h| !h.contains("working tree"))
+    });
+}
+
+#[gpui_kit::test]
+fn open_in_browser_opens_the_commit_on_the_forge(cx: &mut TestAppContext) {
+    let (mut app, forge, _seed) = open_forge(cx);
+    let cx = &mut app;
+    let gitlab = cx.sb.forge_dir().join("gitlab");
+    let sha = cx.sb.git(&gitlab, &["rev-parse", "HEAD"]);
+    set_current(cx, &gitlab);
+    cx.press("secondary-9");
+    wait_for_status(cx, "2 commits");
+    right_click(cx, 0, "Open in Browser");
+    let want = format!("{}/group/app/-/commit/{sha}", forge.gitlab());
+    wait_until(cx, |cx| cx.opened_url().as_ref() == Some(&want));
+}
+
+#[gpui_kit::test]
+fn open_in_browser_without_a_forge_says_no_page_is_known(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    right_click(cx, 0, "Open in Browser");
+    let none = Some(("No web page is known for this repository".into(), true));
+    wait_until(cx, |cx| said(cx) == none);
+    assert_eq!(cx.opened_url(), None);
 }
