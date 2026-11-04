@@ -403,7 +403,7 @@ fn split<'a>(path: &'a str, indices: &[usize]) -> [(&'a str, Vec<usize>); 2] {
 }
 
 impl Render for Palette {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(mode) = self.mode else {
             return div();
         };
@@ -501,7 +501,7 @@ impl Render for Palette {
                 }
             });
         ui::modal(
-            px(680.),
+            px(680.).min(window.viewport_size().width * 0.9),
             0.12,
             radius::PALETTE,
             |_, cx| close(cx),

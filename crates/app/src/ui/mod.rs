@@ -51,8 +51,8 @@ pub fn glass<E: Styled>(e: E, cx: &App) -> E {
         .rounded(radius::GLASS)
 }
 
-/// `content` in a glass box over a scrim that tints the window: `top` down as a fraction of the
-/// height, centered, 90% of the width up to `width`. Clicking the scrim calls `close`.
+/// `content` in a glass box `width` wide over a scrim that tints the window: `top` down as a
+/// fraction of the height, centered. Clicking the scrim calls `close`.
 pub fn modal(
     width: Pixels,
     top: f32,
@@ -71,8 +71,7 @@ pub fn modal(
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| close(window, cx));
     let content = glass(div(), cx)
-        .w(relative(0.9))
-        .max_w(width)
+        .w(width)
         .rounded(radius)
         .flex()
         .flex_col()
