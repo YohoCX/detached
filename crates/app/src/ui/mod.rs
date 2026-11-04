@@ -4,26 +4,30 @@
 pub mod grip;
 pub mod icon;
 pub mod menu;
+pub mod popup;
 pub mod suggest;
 pub mod theme;
 
 use std::rc::Rc;
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, BoxShadow, Context, Div, ElementId, FontWeight, Hsla,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Role, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, BoxShadow, Context, Div, ElementId, Entity, FontWeight,
+    HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
 pub use menu::Menu;
+pub use popup::popup;
 pub use suggest::Suggest;
 pub use theme::{GAP, radius, text, theme};
 
-use crate::util::{self, Status};
+use crate::util::{self, Status, fuzzy};
 
 /// Top bar, strip, sidebar, tool pane and bottom panel.
 pub fn panel<E: Styled>(e: E, cx: &App) -> E {
@@ -235,6 +239,35 @@ pub fn status(s: Status, cx: &App) -> Div {
         .text_size(text::LETTER)
         .font_weight(FontWeight::BOLD)
         .child(util::letter(s))
+}
+
+/// A text field on the kit's input state, as wide as its parent and 32px high.
+pub fn input(state: &Entity<InputState>, cx: &App) -> Input {
+    // `Input::h` sizes only multi-line inputs.
+    Styled::h(Input::new(state), px(32.))
+        .px(px(9.))
+        .rounded(radius::ITEM)
+        .bg(theme(cx).input)
+}
+
+/// `text` with the chars at `indices` bold in the hit color.
+pub fn highlighted(text: impl Into<SharedString>, indices: &[usize], cx: &App) -> StyledText {
+    let text = text.into();
+    let hit = HighlightStyle {
+        color: Some(theme(cx).hit),
+        font_weight: Some(FontWeight::BOLD),
+        ..HighlightStyle::default()
+    };
+    let mut end = 0;
+    let runs: Vec<_> = fuzzy::segments(&text, indices)
+        .into_iter()
+        .filter_map(|(run, h)| {
+            let start = end;
+            end += run.len();
+            h.then_some((start..end, hit))
+        })
+        .collect();
+    StyledText::new(text).with_highlights(runs)
 }
 
 /// Muted text centered in the space it is given.
