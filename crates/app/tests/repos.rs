@@ -482,7 +482,7 @@ fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_c
 }
 
 #[gpui_kit::test]
-fn a_rename_commits_on_blur_and_on_a_click_outside_and_a_taken_name_is_said_in_red(
+fn a_rename_commits_on_blur_a_click_outside_or_another_rename_and_a_taken_name_is_said_in_red(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
@@ -511,6 +511,20 @@ fn a_rename_commits_on_blur_and_on_a_click_outside_and_a_taken_name_is_said_in_r
     cx.click(lib);
     assert!(cx.find("workspaces.popup").is_none());
     wait_until(cx, |cx| label(cx, "workspaces") == "Home");
+
+    cx.click("workspaces");
+    cx.click("workspaces.new");
+    cx.input("Work");
+    cx.press("enter");
+    wait_until(cx, |cx| names(cx) == ["Home", "Work"]);
+    let home = workspace_row(cx, "Home");
+    click_in(cx, &home, "rename");
+    cx.input("Main");
+    let work = workspace_row(cx, "Work");
+    click_in(cx, &work, "rename");
+    wait_until(cx, |cx| names(cx) == ["Main"]);
+    let input = cx.find("workspaces.rename").unwrap();
+    assert_eq!(input.value(), Some("Work"), "the second rename is open");
 }
 
 /// The switcher's options: id, path, and whether it is selected.

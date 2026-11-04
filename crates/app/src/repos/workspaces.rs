@@ -82,6 +82,7 @@ impl Workspaces {
     }
 
     fn rename(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit(window, cx);
         let Some(open) = &mut self.open else { return };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(from.clone()));
         input.update(cx, |s, cx| {
