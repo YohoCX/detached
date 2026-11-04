@@ -52,7 +52,7 @@ them; those are listed under Design.
 | Mermaid | `mermaid-rs-renderer` to SVG, drawn with `img()`; on error the source block |
 | Lists, tree | GPUI `uniform_list`/`list`, the kit's `Tree`; the commit graph on `canvas` |
 | Async | core stays blocking; a small pool of std threads runs it (see Threads) |
-| Packaging | decided in V6: `cargo-packager` (`.app`, NSIS, deb, AppImage) unless something better is current then |
+| Packaging | `cargo-packager` 0.11.8 (`.app`, NSIS, deb, AppImage), configured in `crates/app/Cargo.toml` and run by `scripts/package.sh`, which signs the `.app` itself; its updater and signer are not used. Looked at in V6: `gpui-updater-release` (Sparkle, macOS-centric) and `cargo-bundle` (no NSIS or AppImage) |
 | Auto-update | ours: `latest.json` in the latest GitHub release, minisign signature per file |
 | Terminal | step 3: a port of `zortax/gpui-terminal` (MIT/Apache-2.0, `alacritty_terminal`) onto gpui-pre |
 | Tests | `cargo test` for core and for ported logic; the kit's headless UI tests (`#[gpui_kit::test]`) against temp repos and a fake forge, on macOS, Windows and Linux runners |

@@ -4,13 +4,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-if security find-identity -v -p codesigning | grep -q '"Detached Dev"'; then
-  echo "Signing with \"Detached Dev\"."
-  bun tauri build --bundles app
-else
-  echo "No valid \"Detached Dev\" identity (see make sign-setup): signing ad-hoc."
-  bun tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
-fi
+scripts/package.sh
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -18,7 +12,7 @@ trap 'rm -rf "$tmp"' EXIT
 shell=$(dscl . -read "/Users/$USER" UserShell | sed 's/^UserShell: //')
 env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL="$shell" \
   TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  open -n -W "$@" target/release/bundle/macos/Detached.app --args --self-test "$tmp/report.json"
+  open -n -W "$@" target/package/Detached.app --args --self-test "$tmp/report.json"
 if [ ! -f "$tmp/report.json" ]; then
   echo "FAIL: the app wrote no report." >&2
   exit 1

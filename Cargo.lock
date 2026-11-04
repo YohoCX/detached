@@ -1812,6 +1812,7 @@ dependencies = [
  "base64 0.23.1",
  "detached-core",
  "detached-forge-fake",
+ "embed-resource",
  "futures",
  "gpui-kit",
  "markdown",

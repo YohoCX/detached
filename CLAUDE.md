@@ -13,8 +13,11 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
 make app      # the native client, against the dev.wdevs.detached.native config copy
 make ui-test  # the native UI tests only
 make smoke    # build and run `--smoke`
+make build    # the native packages for this OS under target/package (scripts/package.sh)
+make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
 make e2e      # Playwright on the Tauri client (until removed)
 make dev      # the Tauri client
+make build-tauri  # the Tauri bundles (until removed)
 ```
 
 Keep this list in sync with the Makefile.

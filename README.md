@@ -41,8 +41,9 @@ make dev         # run the app
 make check       # fmt, clippy, cargo test, svelte-check, bun test
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
 make sign-setup  # once: the "Detached Dev" signing identity that make build uses
-make build       # Detached.app under target/release/bundle
-make e2e-app     # builds Detached.app, starts it like Finder does, checks PATH, node and hooks
+make build       # the native client's packages for this OS under target/package
+make build-tauri # the Tauri bundles under target/release/bundle
+make e2e-app     # packages Detached.app, starts it like Finder does, checks PATH, node and hooks
 make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
 

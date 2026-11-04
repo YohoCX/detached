@@ -1,4 +1,4 @@
-.PHONY: check app ui-test smoke e2e e2e-app fmt dev build sign-setup release
+.PHONY: check app ui-test smoke e2e e2e-app fmt dev build build-tauri sign-setup release
 
 check:
 	cargo fmt --all --check
@@ -39,7 +39,11 @@ fmt:
 dev:
 	bun tauri dev
 
+# The native packages for this OS in target/package: Detached.app and its zip, NSIS, or deb and AppImage.
 build:
+	./scripts/package.sh
+
+build-tauri:
 	bun tauri build
 
 # One-time: a stable local code-signing identity, so Keychain access survives rebuilds.
