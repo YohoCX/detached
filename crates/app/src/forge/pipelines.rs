@@ -866,7 +866,7 @@ fn github_hosts(core: &AppState, repo: &str) -> Result<HashSet<String>> {
 }
 
 /// A status glyph in its color, the status as its tooltip.
-fn status(s: &PipelineStatus, cx: &App) -> impl IntoElement + use<> {
+pub(super) fn status(s: &PipelineStatus, cx: &App) -> impl IntoElement + use<> {
     let tip = name(s);
     div()
         .id("status")

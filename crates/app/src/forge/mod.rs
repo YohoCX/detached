@@ -1,6 +1,8 @@
 //! Merge requests, pipelines and job logs.
 
+mod ansi;
 mod badge;
+mod job_log;
 mod pipelines;
 
 use std::sync::Arc;
@@ -11,14 +13,20 @@ use detached_core::types::PipelineStatus;
 use gpui_kit::{AnyView, App, AppContext, Context, Hsla, Task, Window};
 
 pub use badge::PipelineBadge;
+pub use job_log::JobLog;
 pub use pipelines::Pipelines;
 
-use crate::store::Store;
+use crate::store::{Doc, Store};
 use crate::ui::theme;
 
 /// The top bar's center.
 pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     vec![cx.new(|cx| PipelineBadge::new(window, cx)).into()]
+}
+
+/// The main area's page for a `Doc::Job`.
+pub fn job_log(doc: &Doc, cx: &mut App) -> AnyView {
+    cx.new(|cx| JobLog::new(doc.clone(), cx)).into()
 }
 
 /// The bottom panel's Pipelines tab.

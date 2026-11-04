@@ -474,7 +474,7 @@ Rules behind them:
 - **Shape**: a button with glyph + status text, tooltip "Pipeline #id: status". Click sets `app.bottom='pipelines'`; it opens the panel and does not toggle (`:34-38`).
 - **Polling**: every 5 s while the pipeline is active and the document is visible; focus refresh with the 30 s skip (`:25-32`).
 
-### 3.3 JobLog (`src/components/JobLog.svelte`)
+### 3.3 JobLog (`src/components/JobLog.svelte`) [ported differently: lines are not text-selectable, since the shell has no kit TextSelectionLayer yet]
 - **Header** (`:106-113`):
   - Status glyph, only if the job is known from `seen`.
   - Bold name, muted "project.path #id".

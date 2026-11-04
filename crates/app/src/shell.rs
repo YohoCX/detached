@@ -65,7 +65,7 @@ fn viewer(window: &mut Window, cx: &mut App) -> AnyView {
 fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
     match doc {
         Doc::Mr { .. } => stub("Merge request", cx),
-        _ => stub("Job log", cx),
+        _ => forge::job_log(doc, cx),
     }
 }
 

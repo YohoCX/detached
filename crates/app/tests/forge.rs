@@ -6,9 +6,9 @@ use common::*;
 use detached_app::actions;
 use detached_app::store::{Bottom, Doc};
 use detached_core::api;
-use detached_forge_fake::{Forge, Status};
+use detached_forge_fake::{Forge, Kind, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
-use gpui_kit::{ElementId, TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
 use serde_json::{Value, json};
 
 /// Makes the forge repo `name` (`gitlab`, `github`) current.
@@ -79,6 +79,14 @@ fn wrote(forge: &Forge, path: &str, body: Option<Value>) -> bool {
         w.method == "POST" && w.path == path && body.as_ref().is_none_or(|b| &w.body == b)
     };
     forge.writes().iter().any(hit)
+}
+
+fn requested(forge: &Forge, path: &str) -> usize {
+    forge.requests().iter().filter(|r| r.path == path).count()
+}
+
+fn line(i: usize) -> (&'static str, usize) {
+    ("line", i)
 }
 
 /// From the badge to the expanded pipeline `id` and its job `id + 1`.
@@ -260,4 +268,145 @@ fn a_running_pipeline_polls_every_5_s(cx: &mut TestAppContext) {
     let n = count();
     cx.executor().advance_clock(Duration::from_secs(5));
     wait_until(cx, |_| count() >= n + 2);
+}
+
+#[gpui_kit::test]
+fn gitlab_job_log_colours_follows_and_stops(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    open_pipeline(cx, 100);
+    let job = ("job", 101u64);
+    click_in(cx, job, "open");
+    let seeded = "built <img src=x onerror=alert(1)>";
+    wait_until(cx, |cx| label(cx, line(0)).as_deref() == Some(seeded));
+    assert_eq!(label(cx, "job.at").as_deref(), Some("group/app #101"));
+    let built = find_in(cx, line(0), 0usize).unwrap();
+    assert_eq!(
+        (built.label(), built.description()),
+        (Some("built"), Some("ansi-2"))
+    );
+    assert!(cx.find("job.following").is_none());
+
+    click_in(cx, job, "retry");
+    wait_until(cx, |cx| find_in(cx, job, "cancel").is_some());
+    let trace = "/gitlab/api/v4/projects/group/app/jobs/101/trace";
+    let n = requested(&forge, trace);
+    click_in(cx, job, "open");
+    let empty = label(cx, "job.empty");
+    assert_eq!(empty.as_deref(), Some("Waiting for output…"));
+    wait_until(cx, |_| requested(&forge, trace) > n);
+    settle(cx);
+
+    let (gitlab, app) = (Kind::Gitlab, "group/app");
+    forge.append(
+        gitlab,
+        app,
+        101,
+        "\x1b[33mstep one\x1b[0m\n",
+        Some(Status::Running),
+    );
+    cx.executor().advance_clock(Duration::from_secs(3));
+    wait_until(cx, |cx| label(cx, line(0)).as_deref() == Some("step one"));
+    assert_eq!(label(cx, "job.following").as_deref(), Some("Following…"));
+    forge.append(gitlab, app, 101, "step two\n", Some(Status::Success));
+    cx.executor().advance_clock(Duration::from_secs(3));
+    wait_until(cx, |cx| label(cx, line(1)).as_deref() == Some("step two"));
+    wait_until(cx, |cx| cx.find("job.following").is_none());
+}
+
+#[gpui_kit::test]
+fn github_job_log_via_the_blob_redirect_and_steps_while_running(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "github");
+    open_pipeline(cx, 200);
+    let job = ("job", 201u64);
+    click_in(cx, job, "open");
+    let seeded = "built <img src=x onerror=alert(1)>";
+    wait_until(cx, |cx| label(cx, line(0)).as_deref() == Some(seeded));
+    let logs = "/ghe/api/v3/repos/owner/app/actions/jobs/201/logs";
+    assert_eq!(requested(&forge, logs), 1);
+
+    click_in(cx, job, "retry");
+    wait_until(cx, |cx| label(cx, job).is_some_and(|l| l.starts_with("○")));
+    let refresh = "/ghe/api/v3/repos/owner/app/actions/runs/200/jobs";
+    let n = requested(&forge, refresh);
+    click_in(cx, job, "open");
+    let note = "GitHub serves the log once the job has finished.";
+    assert_eq!(label(cx, "job.steps").as_deref(), Some(note));
+    let step = label_in(cx, "job.steps", ("step", 0usize));
+    assert_eq!(step.as_deref(), Some("○Run"));
+    cx.click("job.open");
+    let url = format!("{}/ghe/owner/app/actions/runs/200/job/201", forge.url());
+    assert_eq!(cx.opened_url(), Some(url));
+    // The poll waits from the status read after each chunk.
+    wait_until(cx, |_| requested(&forge, refresh) > n);
+    settle(cx);
+
+    let done = Some(Status::Success);
+    forge.append(Kind::Ghe, "owner/app", 201, "rerun done\n", done);
+    cx.executor().advance_clock(Duration::from_secs(5));
+    wait_until(cx, |cx| label(cx, line(0)).as_deref() == Some("rerun done"));
+    assert!(cx.find("job.steps").is_none());
+}
+
+#[gpui_kit::test]
+fn clicking_a_section_head_folds_it(cx: &mut TestAppContext) {
+    let (mut app, forge, mut seed) = open_forge(cx);
+    let cx = &mut app;
+    let s = |k: &str| format!("\x1b[0Ksection_{k}:1700000000:build\r\x1b[0K");
+    let log = format!("{}Building\ninside\n{}\nafter\n", s("start"), s("end"));
+    seed.projects[0].pipelines[0].jobs[0].log = log;
+    forge.reset(seed);
+    show(cx, "gitlab");
+    open_pipeline(cx, 100);
+    click_in(cx, ("job", 101u64), "open");
+    wait_until(cx, |cx| label(cx, line(0)).as_deref() == Some("Building"));
+    let shown = |cx: &mut VisualTestContext| [0, 1, 2].map(|i| label(cx, line(i)));
+    let all = [
+        Some("Building".into()),
+        Some("inside".into()),
+        Some("after".into()),
+    ];
+    assert_eq!(shown(cx), all);
+    assert_eq!(cx.find(line(0)).unwrap().expanded(), Some(true));
+
+    cx.click(line(0));
+    assert_eq!(cx.find(line(0)).unwrap().expanded(), Some(false));
+    assert_eq!(shown(cx), [all[0].clone(), None, all[2].clone()]);
+    cx.click(line(0));
+    assert_eq!(shown(cx), all);
+}
+
+#[gpui_kit::test]
+fn a_followed_log_keeps_to_the_bottom_until_scrolled_up(cx: &mut TestAppContext) {
+    let (mut app, forge, mut seed) = open_forge(cx);
+    let cx = &mut app;
+    let job = &mut seed.projects[0].pipelines[0].jobs[0];
+    job.log = (1..=100).map(|i| format!("line {i}\n")).collect();
+    job.status = Status::Running;
+    forge.reset(seed);
+    show(cx, "gitlab");
+    open_pipeline(cx, 100);
+    click_in(cx, ("job", 101u64), "open");
+    wait_until(cx, |cx| cx.find(line(99)).is_some());
+    assert!(cx.find(line(0)).is_none(), "the top has scrolled away");
+
+    let (gitlab, app) = (Kind::Gitlab, "group/app");
+    forge.append(gitlab, app, 101, "line 101\n", None);
+    cx.executor().advance_clock(Duration::from_secs(3));
+    wait_until(cx, |cx| cx.find(line(100)).is_some());
+
+    let up = ScrollDelta::Pixels(point(px(0.), px(200.)));
+    cx.update(|w, cx| w.scroll(line(90), up, cx));
+    settle(cx);
+    assert!(cx.find(line(100)).is_none());
+    forge.append(gitlab, app, 101, "line 102\n", Some(Status::Success));
+    cx.executor().advance_clock(Duration::from_secs(3));
+    wait_until(cx, |cx| cx.find("job.following").is_none());
+    assert!(
+        cx.find(line(101)).is_none(),
+        "it stays where it was scrolled"
+    );
 }
