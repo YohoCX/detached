@@ -1,6 +1,7 @@
 //! Shared widgets and the theme. Buttons stop mouse down, so a click in the top bar does not move
 //! the window.
 
+pub mod disabled;
 pub mod grip;
 pub mod icon;
 pub mod menu;
@@ -20,6 +21,7 @@ use gpui_kit::{
     div, prelude::FluentBuilder, px, relative,
 };
 
+pub use disabled::disabled;
 pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
 pub use menu::Menu;
