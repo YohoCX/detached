@@ -42,11 +42,20 @@ pub fn paths(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<String>> {
             .build()
             .flatten()
             .filter(|e| e.file_type().is_some_and(|t| !t.is_dir()))
-            .filter_map(|e| Some(e.path().strip_prefix(repo).ok()?.to_str()?.to_string()))
+            .filter_map(|e| Some(slashed(e.path().strip_prefix(repo).ok()?.to_str()?)))
             .collect(),
     };
     v.sort_unstable();
     Ok(v)
+}
+
+/// Git's separator, so walk paths match status paths on Windows too.
+fn slashed(p: &str) -> String {
+    if cfg!(windows) {
+        p.replace('\\', "/")
+    } else {
+        p.to_string()
+    }
 }
 
 pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileEntry>> {
@@ -111,7 +120,6 @@ mod tests {
     use crate::git::testutil::Sandbox;
 
     #[test]
-    #[cfg(unix)]
     fn worktree_listing_respects_gitignore_and_carries_status() {
         let sb = Sandbox::new();
         let work = sb.clone_pair("work");
