@@ -365,7 +365,7 @@ Opened from the Branch widget (`checkout`), the `vcs.checkout`, `vcs.newBranch` 
 - In the list view, or when the intent is new: closes the popup.
 - In any other sub-view: back to the list.
 
-### 1.8 Palette (`src/components/Palette.svelte`)
+### 1.8 Palette (`src/components/Palette.svelte`) [ported]
 
 **Modes and titles** (:16-22):
 

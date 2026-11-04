@@ -1,7 +1,9 @@
 mod common;
 
 use common::*;
-use detached_app::store::{Doc, Location};
+use detached_app::actions::{self, Group};
+use detached_app::keymap;
+use detached_app::store::{Doc, Location, Tool};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, TestAppContext, VisualTestContext, point, px};
 
@@ -59,6 +61,26 @@ fn search(cx: &mut VisualTestContext, query: &str, first: &str) {
     wait_until(cx, |cx| {
         cx.find(row(0)).is_some_and(|e| e.label() == Some(first))
     });
+}
+
+fn said(cx: &mut VisualTestContext) -> Option<String> {
+    cx.store(|s, _| s.message.as_ref().map(|m| m.text.clone()))
+}
+
+/// Ctrl+V pastes off macOS.
+const VCS: &str = if cfg!(target_os = "macos") {
+    "ctrl-v"
+} else {
+    "alt-`"
+};
+
+/// Two lone Shift taps.
+fn double_shift(cx: &mut VisualTestContext) {
+    for _ in 0..2 {
+        cx.simulate_modifiers_change(Modifiers::shift());
+        cx.simulate_modifiers_change(Modifiers::none());
+    }
+    settle(cx);
 }
 
 fn shown(cx: &mut VisualTestContext) -> Option<Doc> {
@@ -183,4 +205,114 @@ fn go_to_file_searches_the_tree_ref_and_lists_recent_files(cx: &mut TestAppConte
     cx.update(|w, cx| w.click_at("scrim", point(px(10.), px(10.)), cx));
     settle(cx);
     assert_eq!(title(cx), None);
+}
+
+#[gpui_kit::test]
+fn keymap_opens_each_palette_and_settings(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    double_shift(cx);
+    assert_eq!(title(cx).as_deref(), Some("Search Everywhere"));
+    cx.press("escape");
+    assert_eq!(title(cx), None);
+    let chords = [
+        ("secondary-shift-a", "Find Action"),
+        (VCS, "VCS Operations"),
+        ("secondary-e", "Recent Files"),
+    ];
+    for (key, mode) in chords {
+        cx.press(key);
+        assert_eq!(title(cx).as_deref(), Some(mode));
+        cx.press("escape");
+        assert_eq!(title(cx), None);
+    }
+    cx.press("secondary-,");
+    assert_eq!(said(cx).as_deref(), Some("Settings… is not available yet"));
+}
+
+#[gpui_kit::test]
+fn search_everywhere_lists_files_then_branches_then_actions_and_checks_out_a_branch(
+    cx: &mut TestAppContext,
+) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    double_shift(cx);
+    assert_eq!(all(cx), Some(false));
+    search(cx, "i", "src/index.ts");
+    wait_until(cx, |cx| rows(cx).iter().any(|r| r.1 == "Checkout"));
+    let rows = rows(cx);
+    let kind = |detail: &str| match detail {
+        "app" => "file",
+        "Checkout" => "branch",
+        _ => "action",
+    };
+    let mut kinds: Vec<_> = rows.iter().map(|r| kind(&r.1)).collect();
+    kinds.dedup();
+    assert_eq!(kinds, ["file", "branch", "action"]);
+    let branches: Vec<_> = rows
+        .iter()
+        .filter(|r| r.1 == "Checkout")
+        .map(|r| &r.0)
+        .collect();
+    assert_eq!(branches, ["main", "spike", "origin/main"]);
+
+    cx.press("escape");
+    double_shift(cx);
+    search(cx, "spike", "spike");
+    cx.press("enter");
+    assert_eq!(title(cx), None);
+    assert_eq!(said(cx).as_deref(), Some("Checkout is not available yet"));
+}
+
+#[gpui_kit::test]
+fn find_action_mutes_unregistered_actions_and_runs_the_chosen_one(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Changes));
+    cx.press("secondary-shift-a");
+    search(cx, "project tree", "Project Tree");
+    let chord = cx.update(|_, cx| keymap::chord_for("panel.project", cx));
+    let first = cx.find(row(0)).unwrap();
+    assert_eq!(first.description(), Some(chord.as_str()));
+    assert_eq!(first.disabled(), None);
+    cx.press("enter");
+    assert_eq!(title(cx), None);
+    assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Files));
+
+    cx.press("secondary-shift-a");
+    search(cx, "prune", "Prune Remote Branches");
+    assert_eq!(cx.find(row(0)).unwrap().disabled(), Some(true));
+    cx.press("enter");
+    let said = said(cx);
+    assert_eq!(
+        said.as_deref(),
+        Some("Prune Remote Branches is not available yet")
+    );
+
+    cx.press(VCS);
+    let vcs: Vec<String> = actions::ACTIONS
+        .iter()
+        .filter(|a| a.group == Group::Vcs)
+        .map(|a| a.title.into())
+        .collect();
+    let titles: Vec<String> = rows(cx).into_iter().map(|r| r.0).collect();
+    assert_eq!(titles, vcs);
+}
+
+#[gpui_kit::test]
+fn the_search_pill_shows_its_chord_and_opens_search_everywhere(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    let pill = cx.find("search.pill").unwrap();
+    assert_eq!(pill.label(), Some("Search everywhere"));
+    let chord = if cfg!(target_os = "macos") {
+        "⇧⇧"
+    } else {
+        "Shift Shift"
+    };
+    assert_eq!(pill.description(), Some(chord));
+    cx.click("search.pill");
+    assert_eq!(title(cx).as_deref(), Some("Search Everywhere"));
+    let empty = cx.find("palette.empty").unwrap();
+    assert_eq!(empty.label(), Some("Search files, branches and actions"));
 }

@@ -1,4 +1,4 @@
-//! Go to File and Recent Files.
+//! Search Everywhere, Go to File, Find Action, VCS Operations and Recent Files.
 
 use std::ops::Range;
 
@@ -9,32 +9,61 @@ use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, M
 use gpui_kit::{
     App, AppContext, BoxShadow, Context, Entity, FontWeight, InteractiveElement, IntoElement,
     ListSizingBehavior, MouseMoveEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy,
-    StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle, Window, div,
+    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::{Mode, Search, close, open};
-use crate::actions::{self, Group, Registration};
+use crate::actions::{self, Action, Group, Registration};
 use crate::nav::Nav;
+use crate::repos::{self, CheckoutTarget};
 use crate::store::{Location, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
-use crate::{blocking, files};
+use crate::{blocking, files, keymap};
 
-/// Quick open's limit in Go to File.
-const LIMIT: u32 = 50;
+#[derive(Clone)]
+enum Item {
+    File(Location),
+    Branch {
+        label: String,
+        target: CheckoutTarget,
+    },
+    /// Whether a handler is registered.
+    Action(Action, bool),
+}
+
+impl Item {
+    /// What the query matches.
+    fn text(&self) -> &str {
+        match self {
+            Item::File(l) => &l.path,
+            Item::Branch { label, .. } => label,
+            Item::Action(a, _) => a.title,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Row {
-    repo: String,
-    rev: Option<String>,
-    path: String,
-    /// Char indices of the matched characters in `path`.
+    item: Item,
+    /// Char indices of the matched characters in the item's text.
     indices: Vec<usize>,
 }
 
-/// The query, repos and rev quick open was last asked; None when it was not asked.
-type Ask = Option<(String, Vec<String>, Option<String>)>;
+/// The `items` the query matches, best first.
+fn hits(items: &[Item], query: &str) -> Vec<Row> {
+    fuzzy::filter(items, query, Item::text)
+        .into_iter()
+        .map(|h| Row {
+            item: h.item.clone(),
+            indices: h.indices,
+        })
+        .collect()
+}
+
+/// The query, repos, rev and limit quick open was last asked; None when it was not asked.
+type Ask = Option<(String, Vec<String>, Option<String>, u32)>;
 
 pub struct Palette {
     /// The mode this view last saw open.
@@ -44,6 +73,9 @@ pub struct Palette {
     files: Vec<Row>,
     asked: Ask,
     seq: u64,
+    /// Search Everywhere's branches of the current repo, read once per open by `load`.
+    branches: Vec<Item>,
+    load: Option<Task<()>>,
     scroll: UniformListScrollHandle,
     /// A move to the same place (content scrolled under a resting pointer) does not select.
     mouse: Option<Point<Pixels>>,
@@ -66,17 +98,15 @@ impl Palette {
                 }
             }),
         ];
+        let mut reg = |id, group, mode: Mode| {
+            actions::register(cx, id, mode.title(), group, move |_, cx| open(mode, cx))
+        };
         let actions = vec![
-            actions::register(cx, "file.goto", "Go to File", Group::Search, |_, cx| {
-                open(Mode::File, cx)
-            }),
-            actions::register(
-                cx,
-                "file.recent",
-                "Recent Files",
-                Group::Navigate,
-                |_, cx| open(Mode::Recent, cx),
-            ),
+            reg("search.everywhere", Group::Search, Mode::Everywhere),
+            reg("file.goto", Group::Search, Mode::File),
+            reg("action.find", Group::Search, Mode::Action),
+            reg("vcs.popup", Group::Vcs, Mode::Vcs),
+            reg("file.recent", Group::Navigate, Mode::Recent),
         ];
         Palette {
             mode: None,
@@ -85,6 +115,8 @@ impl Palette {
             files: vec![],
             asked: None,
             seq: 0,
+            branches: vec![],
+            load: None,
             scroll: UniformListScrollHandle::new(),
             mouse: None,
             _subscriptions: subscriptions,
@@ -98,6 +130,8 @@ impl Palette {
         if mode != self.mode {
             if self.mode.is_none() {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
+                self.branches.clear();
+                self.load = None;
             }
             self.mode = mode;
             self.sel = 0;
@@ -108,7 +142,8 @@ impl Palette {
         self.sync(window, cx);
     }
 
-    /// Follows the mode, `all`, the query and the current repo with the placeholder and quick open.
+    /// Follows the mode, `all`, the query and the current repo with the placeholder, quick open
+    /// and the branches.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = cx.global::<Search>().all;
         let store = Store::global(cx).read(cx);
@@ -122,6 +157,7 @@ impl Palette {
                 .update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
         self.search(cx);
+        self.load_branches(cx);
         cx.notify();
     }
 
@@ -133,7 +169,12 @@ impl Palette {
             true => store.repos.iter().map(|r| r.path.clone()).collect(),
             false => store.current().into_iter().map(String::from).collect(),
         };
-        if self.mode != Some(Mode::File) || query.is_empty() || repos.is_empty() {
+        let limit = match self.mode {
+            Some(Mode::File) => 50,
+            Some(Mode::Everywhere) => 10,
+            _ => return None,
+        };
+        if query.is_empty() || repos.is_empty() {
             return None;
         }
         // One repo browses its tree's ref; across repos, the working trees.
@@ -141,7 +182,7 @@ impl Palette {
             .current()
             .filter(|_| !all)
             .and_then(|r| store.tree_ref(r));
-        Some((query, repos, rev.map(String::from)))
+        Some((query, repos, rev.map(String::from), limit))
     }
 
     fn search(&mut self, cx: &mut Context<Self>) {
@@ -151,14 +192,14 @@ impl Palette {
         }
         self.asked = ask.clone();
         self.seq += 1;
-        let Some((query, repos, rev)) = ask else {
+        let Some((query, repos, rev, limit)) = ask else {
             self.files.clear();
             return;
         };
         let (seq, at) = (self.seq, rev.clone());
         let core = Store::global(cx).read(cx).core().clone();
         let found = blocking::run(cx, move || {
-            api::quick_open(&core, &repos, at.as_deref(), &query, LIMIT)
+            api::quick_open(&core, &repos, at.as_deref(), &query, limit)
         });
         cx.spawn(async move |this, cx| {
             let found = found.await.unwrap_or_default();
@@ -169,9 +210,13 @@ impl Palette {
                 this.files = found
                     .into_iter()
                     .map(|m| Row {
-                        repo: m.repo,
-                        rev: rev.clone(),
-                        path: m.path,
+                        item: Item::File(Location {
+                            repo: m.repo,
+                            rev: rev.clone(),
+                            path: m.path,
+                            line: None,
+                            doc: None,
+                        }),
                         indices: m.indices.into_iter().map(|i| i as usize).collect(),
                     })
                     .collect();
@@ -182,21 +227,67 @@ impl Palette {
         .detach();
     }
 
+    fn load_branches(&mut self, cx: &mut Context<Self>) {
+        let store = Store::global(cx).read(cx);
+        let wanted = self.mode == Some(Mode::Everywhere) && self.load.is_none();
+        let Some(repo) = store.current().filter(|_| wanted).map(String::from) else {
+            return;
+        };
+        let core = store.core().clone();
+        let found = blocking::run(cx, move || api::list_branches(&core, &repo));
+        self.load = Some(cx.spawn(async move |this, cx| {
+            let Ok(b) = found.await else { return };
+            let local = b.local.into_iter().map(|l| Item::Branch {
+                label: l.name.clone(),
+                target: CheckoutTarget::Local { name: l.name },
+            });
+            let remote = b.remote.into_iter().map(|r| Item::Branch {
+                label: format!("{}/{}", r.remote, r.name),
+                target: CheckoutTarget::Remote {
+                    remote: r.remote,
+                    name: r.name,
+                },
+            });
+            let branches = local.chain(remote).collect();
+            this.update(cx, |this, cx| {
+                this.branches = branches;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
     fn rows(&self, cx: &App) -> Vec<Row> {
         let query = self.input.read(cx).value();
-        if self.mode == Some(Mode::File) && !query.is_empty() {
-            return self.files.clone();
+        let actions = |vcs: bool| {
+            let all: Vec<Item> = actions::all(cx)
+                .into_iter()
+                .filter(|(a, _)| !vcs || a.group == Group::Vcs)
+                .map(|(a, on)| Item::Action(a, on))
+                .collect();
+            hits(&all, &query)
+        };
+        match self.mode {
+            Some(Mode::File) if !query.is_empty() => self.files.clone(),
+            Some(Mode::File | Mode::Recent) => {
+                let recent = cx.try_global::<Nav>().map_or(&[][..], |n| &n.recent);
+                let recent: Vec<Item> = recent.iter().cloned().map(Item::File).collect();
+                hits(&recent, &query)
+            }
+            Some(Mode::Action) => actions(false),
+            Some(Mode::Vcs) => actions(true),
+            Some(Mode::Everywhere) if !query.is_empty() => {
+                let branches = hits(&self.branches, &query).into_iter().take(10);
+                let actions = actions(false).into_iter().take(10);
+                self.files
+                    .iter()
+                    .cloned()
+                    .chain(branches)
+                    .chain(actions)
+                    .collect()
+            }
+            Some(Mode::Everywhere) | None => vec![],
         }
-        let recent = cx.try_global::<Nav>().map_or(&[][..], |n| &n.recent);
-        fuzzy::filter(recent, &query, |l| &l.path)
-            .into_iter()
-            .map(|h| Row {
-                repo: h.item.repo.clone(),
-                rev: h.item.rev.clone(),
-                path: h.item.path.clone(),
-                indices: h.indices,
-            })
-            .collect()
     }
 
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -207,41 +298,49 @@ impl Palette {
         cx.notify();
     }
 
-    fn choose(&mut self, i: usize, cx: &mut Context<Self>) {
+    fn choose(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(row) = self.rows(cx).into_iter().nth(i) else {
             return;
         };
         close(cx);
-        files::open(
-            cx,
-            Location {
-                repo: row.repo,
-                rev: row.rev,
-                path: row.path,
-                line: None,
-                doc: None,
-            },
-        );
+        match row.item {
+            Item::File(loc) => files::open(cx, loc),
+            Item::Action(a, _) => actions::dispatch(window, cx, a.id),
+            Item::Branch { target, .. } => {
+                if let Some(repo) = Store::global(cx).read(cx).current().map(String::from) {
+                    repos::checkout(cx, &repo, target).detach();
+                }
+            }
+        }
     }
 
     fn row(&self, i: usize, row: &Row, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let store = Store::global(cx).read(cx);
-        let name = store.name_of(&row.repo);
-        let detail = match &row.rev {
-            Some(rev) => format!("{name} @ {rev}"),
-            None => name.to_string(),
+        let label = row.item.text().to_string();
+        let (detail, off) = match &row.item {
+            Item::File(l) => {
+                let name = Store::global(cx).read(cx).name_of(&l.repo);
+                let at = |rev| format!("{name} @ {rev}");
+                (l.rev.as_ref().map_or(name.to_string(), at), false)
+            }
+            Item::Branch { .. } => ("Checkout".to_string(), false),
+            Item::Action(a, on) => (keymap::chord_for(a.id, cx), !on),
         };
-        let [(name, name_hits), (dir, dir_hits)] = split(&row.path, &row.indices);
         let on = i == self.sel;
         let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
             .spread_radius(px(1.))
             .inset();
-        div()
+        let name = |s: &str, hits: &[usize]| {
+            div()
+                .whitespace_nowrap()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(ui::highlighted(s.to_string(), hits, cx))
+        };
+        let small = div().flex_none().text_size(text::SMALL).text_color(t.muted);
+        let base = div()
             .id(("palette.row", i))
-            .test_support()
             .role(Role::ListBoxOption)
-            .aria_label(row.path.clone())
+            .aria_label(label.clone())
             .aria_description(detail.clone())
             .aria_selected(on)
             .w_full()
@@ -258,31 +357,39 @@ impl Palette {
                     cx.notify();
                 }
             }))
-            .on_click(cx.listener(move |this, _, _, cx| this.choose(i, cx)))
-            .child(Icon::Tree.size(px(14.)))
-            .child(
-                div()
-                    .flex_none()
-                    .whitespace_nowrap()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(ui::highlighted(name.to_string(), &name_hits, cx)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(text::SMALL)
-                    .text_color(t.muted)
-                    .child(ui::highlighted(dir.to_string(), &dir_hits, cx)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(text::SMALL)
-                    .text_color(t.muted)
-                    .child(detail),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| this.choose(i, window, cx)));
+        let row = match &row.item {
+            Item::File(_) => {
+                let [(file, file_hits), (dir, dir_hits)] = split(&label, &row.indices);
+                base.child(Icon::Tree.size(px(14.)))
+                    .child(name(file, &file_hits).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(text::SMALL)
+                            .text_color(t.muted)
+                            .child(ui::highlighted(dir.to_string(), &dir_hits, cx)),
+                    )
+                    .child(small.child(detail))
+            }
+            Item::Branch { .. } => base
+                .child(Icon::Branch.size(px(14.)))
+                .child(name(&label, &row.indices).flex_1().min_w_0().truncate())
+                .child(small.child(detail)),
+            Item::Action(..) => base
+                .child(div().flex_none().w(px(14.)))
+                .child(
+                    name(&label, &row.indices)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .when(off, |d| d.text_color(t.muted)),
+                )
+                .child(small.font_family(ui::theme::mono(cx)).child(detail)),
+        };
+        ui::disabled(row, off).test_support()
     }
 }
 
@@ -302,10 +409,6 @@ impl Render for Palette {
         };
         let t = theme(cx);
         let all = cx.global::<Search>().all;
-        let title = match mode {
-            Mode::File => "Go to File",
-            Mode::Recent => "Recent Files",
-        };
         let n = self.rows(cx).len();
         let head = div()
             .flex()
@@ -319,9 +422,9 @@ impl Render for Palette {
                     .flex_1()
                     .text_size(text::TITLE)
                     .font_weight(FontWeight::EXTRA_BOLD)
-                    .child(title),
+                    .child(mode.title()),
             )
-            .when(mode == Mode::File, |d| {
+            .when(matches!(mode, Mode::File | Mode::Everywhere), |d| {
                 d.child(
                     Checkbox::new("palette.all")
                         .checked(all)
@@ -352,25 +455,32 @@ impl Render for Palette {
         .max_h(px(420.))
         .px(px(8.))
         .pb(px(8.));
+        let empty = match mode == Mode::Everywhere && self.input.read(cx).value().is_empty() {
+            true => "Search files, branches and actions",
+            false => "Nothing found",
+        };
         let empty = div()
+            .id("palette.empty")
+            .test_support()
+            .aria_label(empty)
             .px(px(18.))
             .pt(px(14.))
             .pb(px(22.))
             .text_color(t.muted)
-            .child("Nothing found");
+            .child(empty);
         let dialog = div()
             .id("palette")
             .test_support()
             .role(Role::Dialog)
-            .aria_label(title)
+            .aria_label(mode.title())
             .flex()
             .flex_col()
             .capture_action(cx.listener(|_, _: &Escape, _, cx| {
                 close(cx);
                 cx.stop_propagation();
             }))
-            .capture_action(cx.listener(|this, _: &Enter, _, cx| {
-                this.choose(this.sel, cx);
+            .capture_action(cx.listener(|this, _: &Enter, window, cx| {
+                this.choose(this.sel, window, cx);
                 cx.stop_propagation();
             }))
             .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {

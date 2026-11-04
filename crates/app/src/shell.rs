@@ -40,10 +40,7 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
             crate::repos::settings(window, cx),
         ],
         TopBar::Center => vec![],
-        TopBar::Right => vec![
-            stub("Search everywhere", cx),
-            crate::repos::sync_buttons(cx),
-        ],
+        TopBar::Right => vec![search::pill(cx), crate::repos::sync_buttons(cx)],
     }
 }
 

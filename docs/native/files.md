@@ -257,7 +257,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ### 1.5 Markdown (`src/components/Markdown.svelte`): see §3. [ported]
 
-### 1.6 Palette: go to file, search everywhere, recent (`src/components/Palette.svelte`)
+### 1.6 Palette: go to file, search everywhere, recent (`src/components/Palette.svelte`) [ported]
 
 **Opening** (`src/lib/app.svelte.ts:252-255`):
 - `file.goto` → mode `file`; `search.everywhere` → `everywhere`; `file.recent` → `recent`.
