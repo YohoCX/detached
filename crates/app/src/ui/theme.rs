@@ -78,6 +78,22 @@ pub mod text {
     pub const TITLE: Pixels = px(14.);
 }
 
+/// A markdown file's column.
+pub mod doc {
+    use gpui_kit::{Pixels, px};
+
+    pub const WIDTH: Pixels = px(880.);
+    pub const PAD_TOP: Pixels = px(24.);
+    pub const PAD_X: Pixels = px(32.);
+    pub const PAD_BOTTOM: Pixels = px(48.);
+    pub const BODY: Pixels = px(14.);
+    pub const LINE_HEIGHT: f32 = 1.6;
+    pub const H1: Pixels = px(26.);
+    pub const H2: Pixels = px(20.);
+    pub const H3: Pixels = px(16.);
+    pub const CODE: Pixels = px(12.5);
+}
+
 fn c(hex: u32) -> Hsla {
     rgb(hex).into()
 }
@@ -178,13 +194,14 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     text_selection: a(0x818cf8, 0.3),
 });
 
+/// Whether the kit's theme last synced to a dark appearance.
+pub fn is_dark(cx: &App) -> bool {
+    cx.try_global::<Kit>().is_some_and(|k| k.is_dark())
+}
+
 /// The tokens for the system appearance the kit's theme last synced to.
 pub fn theme(cx: &App) -> &'static Theme {
-    if cx.try_global::<Kit>().is_some_and(|k| k.is_dark()) {
-        &DARK
-    } else {
-        &LIGHT
-    }
+    if is_dark(cx) { &DARK } else { &LIGHT }
 }
 
 /// The platform's monospace family, which the kit makes sure is installed.
