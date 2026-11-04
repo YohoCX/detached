@@ -5,6 +5,8 @@ use std::sync::{Arc, LazyLock};
 use gpui_kit::component::Theme as Kit;
 use gpui_kit::{App, BoxShadow, Hsla, Pixels, SharedString, Window, px, rgb};
 
+use crate::util::Status;
+
 pub struct Theme {
     pub ground: Hsla,
     pub panel: Hsla,
@@ -76,6 +78,8 @@ pub mod text {
     /// Section labels and key hints.
     pub const LABEL: Pixels = px(11.);
     pub const TITLE: Pixels = px(14.);
+    /// Change status letters.
+    pub const LETTER: Pixels = px(10.);
 }
 
 /// A markdown file's column.
@@ -193,6 +197,18 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     line_highlight: a(0xffffff, 0.03),
     text_selection: a(0x818cf8, 0.3),
 });
+
+impl Theme {
+    pub fn status(&self, s: Status) -> Hsla {
+        match s {
+            Status::Modified | Status::Renamed => self.modified,
+            Status::Added => self.added,
+            Status::Deleted => self.deleted,
+            Status::Untracked => self.untracked,
+            Status::Conflict => self.conflict,
+        }
+    }
+}
 
 /// Whether the kit's theme last synced to a dark appearance.
 pub fn is_dark(cx: &App) -> bool {

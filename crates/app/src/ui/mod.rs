@@ -4,11 +4,13 @@
 pub mod grip;
 pub mod icon;
 pub mod menu;
+pub mod suggest;
 pub mod theme;
 
 use std::rc::Rc;
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
@@ -18,7 +20,10 @@ use gpui_kit::{
 pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
 pub use menu::Menu;
+pub use suggest::Suggest;
 pub use theme::{GAP, radius, text, theme};
+
+use crate::util::{self, Status};
 
 /// Top bar, strip, sidebar, tool pane and bottom panel.
 pub fn panel<E: Styled>(e: E, cx: &App) -> E {
@@ -103,6 +108,18 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
     on_change: impl Fn(T, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Stateful<Div> {
+    let options: Vec<_> = options.iter().map(|&(v, label)| (v, label, None)).collect();
+    segmented_tips(id, &options, value, on_change, cx)
+}
+
+/// `segmented` with a tooltip on the options that have one.
+pub fn segmented_tips<T: Copy + PartialEq + 'static>(
+    id: impl Into<ElementId>,
+    options: &[(T, &'static str, Option<&'static str>)],
+    value: T,
+    on_change: impl Fn(T, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Stateful<Div> {
     let t = theme(cx);
     let on_change = Rc::new(on_change);
     div()
@@ -111,7 +128,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
         .p(px(2.))
         .rounded(radius::ITEM)
         .bg(t.hover)
-        .children(options.iter().enumerate().map(|(i, &(v, label))| {
+        .children(options.iter().enumerate().map(|(i, &(v, label, tip))| {
             let on = v == value;
             let on_change = on_change.clone();
             pressable(i)
@@ -130,9 +147,30 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_toggled(on.into())
+                .when_some(tip, |b, tip| {
+                    b.tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+                })
                 .on_click(move |_, window, cx| on_change(v, window, cx))
                 .child(label)
         }))
+}
+
+/// A change's status letter on a tint of its color.
+pub fn status(s: Status, cx: &App) -> Div {
+    let c = theme(cx).status(s);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(18.))
+        .rounded(radius::LETTER)
+        .bg(c.opacity(0.18))
+        .text_color(c)
+        .font_family(theme::mono(cx))
+        .text_size(text::LETTER)
+        .font_weight(FontWeight::BOLD)
+        .child(util::letter(s))
 }
 
 /// Muted text centered in the space it is given.
