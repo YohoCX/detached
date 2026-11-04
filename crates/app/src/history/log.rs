@@ -102,7 +102,6 @@ fn file_history(_: &mut Window, cx: &mut App) {
     });
 }
 
-/// A choice of the refs select.
 #[derive(Clone)]
 struct Refs(SharedString, LogRefs);
 
@@ -118,7 +117,6 @@ impl SelectItem for Refs {
     }
 }
 
-/// "All branches", "HEAD", then the branches.
 fn choices(names: &[String]) -> Vec<Refs> {
     let fixed = [("All branches", LogRefs::All), ("HEAD", LogRefs::Head)];
     let fixed = fixed.map(|(title, refs)| Refs(title.into(), refs));
@@ -141,7 +139,6 @@ fn say(cx: &mut App, text: impl Into<String>, error: bool) {
     Store::global(cx).update(cx, |s, cx| s.say(text, error, cx));
 }
 
-/// The New Branch bar's commit and its Checkout box.
 struct NewBranch {
     sha: String,
     checkout: bool,
@@ -162,10 +159,8 @@ pub struct Log {
     head: Head,
     query: Option<(QueryId, Task<()>)>,
     scroll: UniformListScrollHandle,
-    /// The filters the query and the widgets follow.
     filters: Filters,
     refs: Entity<SelectState<Vec<Refs>>>,
-    /// The branches the select offers.
     names: Vec<String>,
     inputs: [Entity<InputState>; 3],
     /// A field's pending change, applied when its timer fires.
@@ -180,7 +175,6 @@ pub struct Log {
     /// The side panel's commits, newest first, its worktree flag and the view.
     details: Option<(Vec<String>, bool, Entity<CommitDetails>)>,
     branch: Option<NewBranch>,
-    /// The New Branch bar's name field.
     name: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -376,6 +370,10 @@ impl Log {
         self.load(cx);
     }
 
+    fn index(&self, sha: &str) -> Option<usize> {
+        self.rows.iter().position(|r| r.sha == sha)
+    }
+
     fn choose(&mut self, i: usize, how: Pick, worktree: bool, cx: &mut Context<Self>) {
         self.sel = pick(&self.rows, &self.sel, self.anchor, i, how);
         if how != Pick::Range {
@@ -425,15 +423,14 @@ impl Log {
         cx.notify();
     }
 
-    /// Selects an unselected row `i` and opens its menu at `at`.
-    fn menu(&mut self, i: usize, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(repo), Some(row)) = (self.filters.repo.clone(), self.rows.get(i)) else {
+    fn menu(&mut self, sha: &str, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(repo), Some(i)) = (self.filters.repo.clone(), self.index(sha)) else {
             return;
         };
-        let sha = row.sha.clone();
-        if !self.sel.contains(&sha) {
+        if !self.sel.contains(sha) {
             self.choose(i, Pick::One, false, cx);
         }
+        let sha = sha.to_string();
         let log = cx.weak_entity();
         let item = move |f: Item| {
             let (log, repo, sha) = (log.clone(), repo.clone(), sha.clone());
@@ -474,7 +471,7 @@ impl Log {
     }
 
     fn compare(&mut self, _: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(i) = self.rows.iter().position(|r| r.sha == sha) {
+        if let Some(i) = self.index(sha) {
             self.choose(i, Pick::One, true, cx);
         }
     }
@@ -494,7 +491,6 @@ impl Log {
         .detach();
     }
 
-    /// Creates the bar's branch, then checks it out or reloads.
     fn create(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).value().trim().to_string();
         if name.is_empty() {
@@ -539,7 +535,6 @@ impl Log {
         cx.notify();
     }
 
-    /// "New branch at <sha>", the name, Checkout, Create and Cancel.
     fn bar(&self, b: &NewBranch, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let short = b.sha[..10].to_string();
@@ -647,6 +642,8 @@ impl Log {
                     )
                 });
                 let on = self.sel.contains(&r.sha);
+                // A click can land before the next paint, after a reload moved the rows.
+                let sha = r.sha.clone();
                 ui::list_row(("log.row", i), on, focused, cx)
                     .test_support()
                     .role(Role::ListBoxOption)
@@ -699,19 +696,24 @@ impl Log {
                             .text_color(t.muted)
                             .child(when(r.time)),
                     )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                        let m = e.modifiers();
-                        let how = match (m.shift, m.secondary(cx)) {
-                            (true, _) => Pick::Range,
-                            (_, true) => Pick::Toggle,
-                            _ => Pick::One,
-                        };
-                        this.choose(i, how, false, cx);
+                    .on_click(cx.listener({
+                        let sha = sha.clone();
+                        move |this, e: &ClickEvent, _, cx| {
+                            let m = e.modifiers();
+                            let how = match (m.shift, m.secondary(cx)) {
+                                (true, _) => Pick::Range,
+                                (_, true) => Pick::Toggle,
+                                _ => Pick::One,
+                            };
+                            if let Some(i) = this.index(&sha) {
+                                this.choose(i, how, false, cx);
+                            }
+                        }
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                            this.menu(i, e.position, window, cx)
+                            this.menu(&sha, e.position, window, cx)
                         }),
                     )
             })

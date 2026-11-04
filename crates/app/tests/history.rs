@@ -15,7 +15,8 @@ use detached_app::{actions, ui_state};
 use detached_core::types::Side;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, ElementId, Modifiers, TestAppContext, VisualTestContext, WindowOptions, point, px,
+    AppContext, ElementId, Modifiers, ScrollDelta, TestAppContext, VisualTestContext,
+    WindowOptions, point, px,
 };
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
@@ -999,6 +1000,14 @@ fn a_long_message_scrolls_within_half_the_panel(cx: &mut TestAppContext) {
     let [info, details] = ["details.info", "details"].map(|id| cx.find(id).unwrap().bounds());
     assert!(info.size.height > px(100.));
     assert!(info.size.height <= details.size.height / 2.);
+    let body = |cx: &mut VisualTestContext| cx.find("details.body").unwrap().bounds();
+    assert!(body(cx).bottom() > info.bottom());
+    let down = ScrollDelta::Pixels(point(px(0.), px(-5000.)));
+    cx.update(|w, cx| w.scroll("details.info", down, cx));
+    assert!(
+        body(cx).bottom() <= info.bottom(),
+        "the body's last line shows"
+    );
 }
 
 #[gpui_kit::test]

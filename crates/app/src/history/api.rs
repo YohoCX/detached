@@ -47,14 +47,27 @@ fn load(core: &AppState, repo: &str, shas: &[String], worktree: bool) -> error::
         }
     };
     let mut files = api::list_changes(core, repo, &left, &right)?;
-    // Case-insensitive, as the Tauri client's localeCompare.
-    files.sort_by_cached_key(|c| (c.path.to_lowercase(), c.path.clone()));
+    files.sort_by_cached_key(|c| collate(&c.path));
     Ok(Loaded {
         commit,
         left,
         right,
         files,
     })
+}
+
+/// The order of JS `localeCompare` on ASCII: punctuation in ICU's order, digits, letters, and
+/// lowercase first when only case differs.
+fn collate(path: &str) -> (Vec<u32>, Vec<bool>) {
+    const PUNCT: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
+    let primary = path.chars().map(|c| match PUNCT.find(c) {
+        Some(i) => i as u32,
+        None => PUNCT.len() as u32 + c.to_ascii_lowercase() as u32,
+    });
+    (
+        primary.collect(),
+        path.chars().map(char::is_uppercase).collect(),
+    )
 }
 
 fn short(sha: &str) -> &str {
@@ -71,7 +84,6 @@ fn selectable(id: &'static str, s: impl Into<SharedString>) -> ObservedElement<S
         .child(SelectableText::new("text", s))
 }
 
-/// A field of the commit: its name, muted, then the value.
 fn field(name: &'static str, value: impl IntoElement, cx: &App) -> Div {
     div()
         .flex()
@@ -96,7 +108,6 @@ pub struct CommitDetails {
     data: Option<Result<Loaded, String>>,
     /// None until asked for; an Err shows muted: "Searching…" or the error.
     branches: Option<Result<String, String>>,
-    /// The selected file.
     sel: Option<usize>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
@@ -418,5 +429,32 @@ impl Render for CommitDetails {
                         .px(px(6.)),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorts_paths_as_locale_compare() {
+        let mut paths = [
+            "src/a.ts",
+            "src_test/b.ts",
+            "a-b.txt",
+            "a_b.txt",
+            "A.txt",
+            "a.txt",
+        ];
+        paths.sort_by_cached_key(|p| collate(p));
+        let want = [
+            "a_b.txt",
+            "a-b.txt",
+            "a.txt",
+            "A.txt",
+            "src_test/b.ts",
+            "src/a.ts",
+        ];
+        assert_eq!(paths, want);
     }
 }
