@@ -15,7 +15,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
 use crate::ui::{self, Edge, GAP, Icon, radius, stub, text, theme};
-use crate::{actions, files, keymap};
+use crate::{actions, files, history, keymap};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -74,7 +74,7 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
 
 fn bottom(bottom: Bottom, _: &mut Window, cx: &mut App) -> AnyView {
     match bottom {
-        Bottom::Log => stub("Log", cx),
+        Bottom::Log => cx.new(history::Log::new).into(),
         Bottom::Pipelines => stub("Pipelines", cx),
         Bottom::Terminal => stub("Terminal", cx),
     }

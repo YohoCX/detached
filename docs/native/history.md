@@ -31,7 +31,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 
 ## 1. Git history
 
-### 1.1 BottomPanel (`src/components/BottomPanel.svelte`)
+### 1.1 BottomPanel (`src/components/BottomPanel.svelte`) [ported]
 - Height defaults to 280. A top-edge Grip (key `bottom`) resizes it, min 120, max `innerHeight-240` (`:9,13`).
 - Header has the tabs "Log" and "Pipelines". The tab with `app.bottom===tab` gets class `on`, and a click sets `app.bottom` (`:15-17`).
 - Content: `<Log repo={app.current}/>` or `<Pipelines repo={app.current}/>` (`:20`).
@@ -105,7 +105,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 - If `view.shown` is not a file or diff, status "Open a file to show its history".
 - Otherwise it sets `app.current = shown.repo`, `filters.repo/path = shown.repo/path` and `app.bottom='log'`. Refs, text and author are left as they were.
 
-### 1.3 Graph (`src/components/Graph.svelte`)
+### 1.3 Graph (`src/components/Graph.svelte`) [ported]
 - Lane width `LANE=14`, row height 28.
 - 8-color palette: `#6366f1 #10b981 #f59e0b #ec4899 #06b6d4 #8b5cf6 #ef4444 #84cc16`, picked as `color % 8` (`:3,15`).
 - `row.top` edges are drawn from y=0 to the middle; `row.bottom` edges from the middle to 28 (`:24-25`).
