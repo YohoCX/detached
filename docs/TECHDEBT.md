@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Tree and Changes order is not quite `localeCompare`'s | V2 `files::tree`, `files::changes` | Case is ignored and digit runs compare by value as in the Tauri client, but punctuation sorts by code point (ICU puts `_` before `-`, `.` and digits) and accents are not folded, so `a_b`/`a-b` or `é`/`e` names can swap places. |
 | A long markdown file reloaded with new text blocks a frame | V2 `files::markdown`, the kit's `TextView` | The kit lays out a whole text in one frame (kit #3695): the spike's 2,000 lines take about 300 ms. A first show goes in by 4 KB pieces, one a frame (max frame 20–40 ms); a reload with changed text replaces it at once, since feeding it again would scroll back to the top. |
 | No space under a markdown file's h1 and h2 rules | V2 `files::markdown` | The rule is the heading's bottom border; the kit's list rows ignore a heading's margin and give it no wrapper, so the next block starts right under the rule (the Tauri page left 12–14 px). |
 | Viewer line numbers are not Monaco's colors | V2 `files::code`, `ui::theme` | The kit's `Input` sets the editor style from the global theme's muted and foreground colors on every render and its setter is crate-private, so the line numbers cannot take Monaco's own colors without changing every muted text. |

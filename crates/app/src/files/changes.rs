@@ -59,16 +59,7 @@ pub struct Changes {
 impl Changes {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = Store::global(cx);
-        let names = |cx: &App| {
-            let s = Store::global(cx).read(cx);
-            let names = s.current().and_then(|r| s.branch_names.get(r));
-            names
-                .into_iter()
-                .flatten()
-                .map(|n| n.clone().into())
-                .collect()
-        };
-        let base = cx.new(|cx| Suggest::new(names, window, cx));
+        let base = cx.new(|cx| Suggest::new(branch_names, window, cx));
         let subscriptions = vec![
             cx.observe_in(&store, window, |this, _, window, cx| {
                 this.sync(window, cx);
@@ -516,6 +507,17 @@ impl Render for Changes {
             .when(self.key.is_some(), |d| d.child(self.base_row(cx)))
             .child(body)
     }
+}
+
+/// The current repo's branch names loaded so far, for a ref field's suggestions.
+pub(super) fn branch_names(cx: &App) -> Vec<SharedString> {
+    let s = Store::global(cx).read(cx);
+    let names = s.current().and_then(|r| s.branch_names.get(r));
+    names
+        .into_iter()
+        .flatten()
+        .map(|n| n.clone().into())
+        .collect()
 }
 
 /// Show Diff's first case: the selected change against HEAD, when focus is in Changes or no file

@@ -9,7 +9,7 @@ use detached_app::actions::{self, Group, Registration};
 use detached_app::files::{
     self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Location, Markdown, Side,
 };
-use detached_app::store::Tool;
+use detached_app::store::{Doc, Tool};
 use detached_app::ui_state;
 use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
@@ -1003,4 +1003,272 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
     wait_until(cx, |cx| {
         label(cx, "changes.empty").as_deref() == Some(empty)
     });
+}
+
+fn tree_rows(cx: &mut VisualTestContext) -> Vec<ElementSnapshot> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..)
+            .map_while(|i| w.try_find(("tree.row", i)))
+            .collect()
+    })
+}
+
+/// The project tree's rows as drawn, by name.
+fn tree(cx: &mut VisualTestContext) -> Vec<String> {
+    let rows = tree_rows(cx).into_iter();
+    rows.map(|e| e.label().unwrap_or_default().into()).collect()
+}
+
+/// The index and snapshot of the row named `name`.
+fn tree_row(cx: &mut VisualTestContext, name: &str) -> (usize, ElementSnapshot) {
+    let mut rows = tree_rows(cx).into_iter().enumerate();
+    let row = rows.find(|(_, e)| e.label() == Some(name));
+    row.unwrap_or_else(|| panic!("no row {name}"))
+}
+
+fn click_row(cx: &mut VisualTestContext, name: &str) {
+    let i = tree_row(cx, name).0;
+    cx.click(("tree.row", i));
+}
+
+fn selected_row(cx: &mut VisualTestContext) -> Option<String> {
+    let rows = tree_rows(cx).into_iter();
+    rows.filter(|e| e.selected() == Some(true))
+        .find_map(|e| e.label().map(String::from))
+}
+
+/// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
+fn open_tree(cx: &mut TestApp, repo: &str) {
+    let repo = cx.sb.repo(repo);
+    make_current(cx, &repo);
+    cx.press("secondary-1");
+    wait_until(cx, |cx| !tree(cx).is_empty());
+}
+
+/// The layout, with related files in lib's src.
+fn nest_layout(sb: &Sandbox) {
+    layout(sb);
+    let files = [("src/a.ts", ""), ("src/a.spec.ts", ""), ("src/b.ts", "")];
+    sb.commit_files(&sb.repo("lib"), "nest", files);
+}
+
+fn shown_file(cx: &mut VisualTestContext) -> Option<Location> {
+    cx.store(|s, _| match s.shown() {
+        Some(Doc::File(loc)) => Some(loc.clone()),
+        _ => None,
+    })
+}
+
+#[gpui_kit::test]
+fn related_files_nest_under_their_main_file_and_the_switch_flattens_the_tree(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, nest_layout);
+    open_tree(cx, "lib");
+    assert_eq!(tree(cx), ["src", "feature.txt", "README.md"]);
+    click_row(cx, "src");
+    let want = [
+        "src",
+        "components",
+        "a.ts",
+        "b.ts",
+        "index.ts",
+        "old.ts",
+        "feature.txt",
+        "README.md",
+    ];
+    assert_eq!(tree(cx), want);
+    assert_eq!(tree_row(cx, "src").1.expanded(), Some(true));
+    assert_eq!(tree_row(cx, "a.ts").1.expanded(), Some(false));
+
+    let i = tree_row(cx, "a.ts").0;
+    cx.click(("tree.chevron", i));
+    assert_eq!(&tree(cx)[2..5], ["a.ts", "a.spec.ts", "b.ts"]);
+    assert_eq!(shown_file(cx), None, "the chevron does not open the file");
+
+    cx.click("tree.nesting");
+    let flat = ["src", "components", "a.spec.ts", "a.ts", "b.ts"];
+    assert_eq!(&tree(cx)[..5], flat);
+    assert_eq!(
+        cx.find("tree.nesting").and_then(|e| e.checked()),
+        Some(false)
+    );
+    let saved = cx.update(|_, cx| ui_state::get::<bool>("tree.nesting", cx));
+    assert_eq!(saved, Some(false));
+
+    click_row(cx, "b.ts");
+    wait_until(cx, editor_focused);
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("b.ts"));
+    let loc = shown_file(cx).unwrap();
+    assert_eq!((loc.path.as_str(), loc.rev), ("src/b.ts", None));
+    assert_eq!(selected_row(cx).as_deref(), Some("b.ts"));
+}
+
+#[gpui_kit::test]
+fn arrows_move_right_expands_left_collapses_or_goes_to_the_parent_and_enter_opens(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, nest_layout);
+    open_tree(cx, "lib");
+    cx.press("up");
+    assert_eq!(selected_row(cx), None, "keys need focus in the tree");
+    click_row(cx, "src");
+    assert_eq!(cx.find("tree.rows").and_then(|e| e.focused()), Some(true));
+    let step = |cx: &mut VisualTestContext, key: &str, want: &str| {
+        cx.press(key);
+        assert_eq!(selected_row(cx).as_deref(), Some(want), "after {key}");
+    };
+    step(cx, "down", "components");
+    step(cx, "right", "components");
+    step(cx, "down", "comp-01.ts");
+    step(cx, "left", "components");
+    step(cx, "left", "components");
+    assert_eq!(tree(cx)[2], "a.ts", "Left collapsed components");
+    step(cx, "down", "a.ts");
+    step(cx, "right", "a.ts");
+    step(cx, "down", "a.spec.ts");
+    step(cx, "left", "a.ts");
+    step(cx, "left", "a.ts");
+    assert_eq!(tree(cx)[3], "b.ts", "Left collapsed a.ts");
+    step(cx, "left", "src");
+    step(cx, "left", "src");
+    assert_eq!(tree(cx), ["src", "feature.txt", "README.md"]);
+    step(cx, "up", "src");
+    for _ in 0..3 {
+        cx.press("down");
+    }
+    assert_eq!(selected_row(cx).as_deref(), Some("README.md"), "clamped");
+    cx.press("up");
+    cx.press("enter");
+    wait_until(cx, editor_focused);
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("feature.txt"));
+}
+
+#[gpui_kit::test]
+fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cross(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, nest_layout);
+    open_tree(cx, "lib");
+    click_row(cx, "src");
+    let lib = cx.sb.repo("lib").display().to_string();
+    let field = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.within("tree.ref").find("input-state")
+        })
+    };
+    assert_eq!(field(cx).placeholder(), Some("Working tree"));
+    assert!(cx.find("tree.back").is_none());
+
+    // Inputs report focus only in an active window.
+    cx.update(|w, _| w.activate_window());
+    cx.click("tree.ref");
+    wait_until(cx, |cx| cx.find(("suggest", 0usize)).is_some());
+    let names: Vec<_> = (0usize..)
+        .map_while(|i| cx.find(("suggest", i)))
+        .filter_map(|e| e.label().map(String::from))
+        .collect();
+    assert!(names.contains(&"feature".to_string()), "{names:?}");
+    assert!(names.contains(&"origin/main".to_string()), "{names:?}");
+
+    cx.input("nope");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("tree.empty").is_some());
+    let error = label(cx, "tree.empty").unwrap();
+    assert!(error.contains("nope"), "{error}");
+    assert!(tree(cx).is_empty());
+    cx.click("tree.back");
+    wait_until(cx, |cx| tree(cx).first().is_some_and(|r| r == "src"));
+    assert_eq!(field(cx).value(), Some(""));
+    assert!(cx.find("tree.back").is_none());
+    assert!(cx.store(|s, _| s.tree_ref(&lib).is_none()));
+
+    cx.click("tree.ref");
+    cx.input(" main ");
+    cx.press("enter");
+    // main has the upstream CHANGELOG.md and not the branch's feature.txt; src stays expanded.
+    let at_main = [
+        "src",
+        "components",
+        "index.ts",
+        "old.ts",
+        "CHANGELOG.md",
+        "README.md",
+    ];
+    wait_until(cx, |cx| tree(cx) == at_main);
+    assert_eq!(
+        cx.store(|s, _| s.tree_ref(&lib).map(String::from))
+            .as_deref(),
+        Some("main")
+    );
+    assert_eq!(field(cx).value(), Some("main"));
+    // lib's branch changed it; main has the original.
+    click_row(cx, "index.ts");
+    shown(cx, "export {}");
+    let loc = shown_file(cx).unwrap();
+    assert_eq!(
+        (loc.path.as_str(), loc.rev.as_deref()),
+        ("src/index.ts", Some("main"))
+    );
+
+    cx.click("tree.back");
+    wait_until(cx, |cx| tree(cx).contains(&"feature.txt".to_string()));
+    assert!(cx.store(|s, _| s.tree_ref(&lib).is_none()));
+}
+
+#[gpui_kit::test]
+fn rows_take_their_change_status_and_the_working_tree_reloads_with_the_status(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    open_tree(cx, "app");
+    click_row(cx, "src");
+    let statuses = |cx: &mut VisualTestContext| {
+        let rows = tree_rows(cx).into_iter();
+        rows.map(|e| {
+            let status = e.description().unwrap_or("clean");
+            format!("{} {status}", e.label().unwrap_or_default())
+        })
+        .collect::<Vec<_>>()
+    };
+    let want = [
+        "src modified",
+        "components clean",
+        "index.ts clean",
+        "new.ts renamed",
+        "CHANGELOG.md clean",
+        "notes.txt untracked",
+        "README.md modified",
+    ];
+    assert_eq!(statuses(cx), want);
+
+    let app = cx.sb.repo("app");
+    write(&app, [("fresh.txt", "x\n")]);
+    let repo = app.display().to_string();
+    cx.store(|s, cx| s.refresh(repo, cx).detach());
+    wait_until(cx, |cx| {
+        statuses(cx).contains(&"fresh.txt untracked".to_string())
+    });
+}
+
+#[gpui_kit::test]
+fn expansion_outlives_the_tool_and_the_selection_does_not(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    open_tree(cx, "lib");
+    click_row(cx, "src");
+    assert_eq!(tree(cx)[1], "components");
+    cx.press("secondary-1");
+    assert!(cx.find("tree").is_none());
+    cx.press("secondary-1");
+    wait_until(cx, |cx| tree(cx).get(1).is_some_and(|r| r == "components"));
+    assert_eq!(tree_row(cx, "src").1.expanded(), Some(true));
+    assert_eq!(selected_row(cx), None);
+
+    // Each repo has its own.
+    let app = cx.sb.repo("app");
+    make_current(cx, &app);
+    wait_until(cx, |cx| tree(cx).contains(&"notes.txt".to_string()));
+    assert_eq!(tree(cx), ["src", "CHANGELOG.md", "notes.txt", "README.md"]);
 }

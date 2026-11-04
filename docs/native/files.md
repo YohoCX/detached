@@ -5,7 +5,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 0. Wiring and layout (context)
+## 0. Wiring and layout (context) [ported]
 
 - `src/App.svelte:59-65`: the tool panel shows one of `FileTree` (`app.tool==='files'`), `MrList` or `Changes` (the default, `app.tool` defaults to `'changes'`, `src/lib/app.svelte.ts:30`). It always gets `repo={app.current}`. The left strip buttons toggle the tool (`App.svelte:47-49`). `Cmd+1` toggles Project (`app.svelte.ts:267`).
 - `App.svelte:68-69`: **the Viewer stays mounted** (it is only `display:none`) while an MR page or job log is shown, so its Monaco editors and models survive. A second Viewer instance lives inside the MR page (`src/components/MrPage.svelte:267`). It has a `doc`, is forced side-by-side, has view zones and `ongutter`.
@@ -108,7 +108,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 **Theme**: follows `prefers-color-scheme` live (`:191, 211-212`).
 
-### 1.2 FileTree (`src/components/FileTree.svelte`)
+### 1.2 FileTree (`src/components/FileTree.svelte`) [ported]
 
 **Header** (`:103-113`):
 - Title "Project".
@@ -459,7 +459,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 5. Persisted UI state
+## 5. Persisted UI state [ported]
 
 **localStorage** (via `src/lib/storage.ts`; failures are ignored):
 
@@ -486,7 +486,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 6. Backend commands used (`src/lib/api.ts`; Rust in `src-tauri/src/git/commands.rs`, `search/commands.rs`)
+## 6. Backend commands used (`src/lib/api.ts`; Rust in `src-tauri/src/git/commands.rs`, `search/commands.rs`) [ported]
 
 | Command | Args | Returns | Notes |
 |---|---|---|---|
