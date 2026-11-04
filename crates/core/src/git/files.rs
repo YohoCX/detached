@@ -50,7 +50,7 @@ pub fn paths(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<String>> {
 }
 
 /// Git's separator, so walk paths match status paths on Windows too.
-fn slashed(p: &str) -> String {
+pub fn slashed(p: &str) -> String {
     if cfg!(windows) {
         p.replace('\\', "/")
     } else {

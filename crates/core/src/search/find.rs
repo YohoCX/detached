@@ -12,7 +12,7 @@ use ignore::overrides::OverrideBuilder;
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::arg;
-use crate::git::files::walker;
+use crate::git::files::{slashed, walker};
 use crate::git::runner::{Kind, Opts, run};
 use crate::state::Cancel;
 use crate::types::{FindEvent, FindQuery};
@@ -162,7 +162,11 @@ fn worktree(find: &Find, repo: &str, glob: Option<&str>) -> Result<()> {
             };
             let rel = e.path().strip_prefix(root).ok().and_then(Path::to_str);
             if let (Some(path), true) = (rel, e.file_type().is_some_and(|t| t.is_file())) {
-                let sink = Lines { find, repo, path };
+                let sink = Lines {
+                    find,
+                    repo,
+                    path: &slashed(path),
+                };
                 let _ = searcher.search_path(&find.matcher, e.path(), sink);
             }
             WalkState::Continue
@@ -307,7 +311,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn literal_regex_case_and_whole_word() {
         let r = repo(&[
             ("a.txt", "a.b here\naxb there\n"),
@@ -347,7 +350,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn glob_and_gitignore_limit_the_files() {
         let r = repo(&[
             (".gitignore", "out/\n"),
