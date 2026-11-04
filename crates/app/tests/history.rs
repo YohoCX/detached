@@ -7,11 +7,15 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::*;
+use detached_app::history::CommitDetails;
 use detached_app::store::{Bottom, DiffDoc, Doc, Location};
+use detached_app::util::when;
 use detached_app::{actions, ui_state};
 use detached_core::types::Side;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{
+    AppContext, ElementId, Modifiers, TestAppContext, VisualTestContext, WindowOptions, point, px,
+};
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))
@@ -481,17 +485,45 @@ fn file_history_without_a_shown_file_says_so(cx: &mut TestAppContext) {
     assert_eq!(cx.store(|s, _| s.bottom), None);
 }
 
-/// What the side panel shows: the selected commits' short SHAs, or "Select a commit".
-fn side(cx: &mut VisualTestContext) -> String {
-    label(cx, "details")
-        .or_else(|| label(cx, "log.select"))
-        .unwrap()
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// A commit field's value in the side panel, by its name.
+fn field(cx: &mut VisualTestContext, name: &'static str) -> Option<String> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let details = w.try_find("details").is_some();
+        let field = details
+            .then(|| w.within("details").try_find(name))
+            .flatten();
+        field.and_then(|e| e.label().map(String::from))
+    })
 }
 
-/// The short SHAs of `revs` in `repo`, as the side panel lists them.
-fn short(sb: &Sandbox, repo: &Path, revs: &[&str]) -> String {
-    let sha = |rev: &&str| sb.git(repo, &["rev-parse", rev])[..10].to_string();
-    revs.iter().map(sha).collect::<Vec<_>>().join(", ")
+/// What the side panel shows once loaded: "Select a commit", one commit's full SHA, or
+/// "N commits, <parent> → <newest>" with short SHAs.
+fn side(cx: &mut VisualTestContext) -> String {
+    let mut shown = None;
+    wait_until(cx, |cx| {
+        let range = label(cx, "details.range")
+            .map(|r| format!("{}, {r}", label(cx, "details.subject").unwrap()));
+        shown = label(cx, "log.select")
+            .or_else(|| field(cx, "Commit"))
+            .or(range);
+        shown.is_some()
+    });
+    shown.unwrap()
+}
+
+/// What `side` reads for `revs` of `repo`, newest first.
+fn want(sb: &Sandbox, repo: &Path, revs: &[&str]) -> String {
+    let sha = |rev: &str| sb.git(repo, &["rev-parse", rev]);
+    let [newest, .., oldest] = revs else {
+        return sha(revs[0]);
+    };
+    let parents = sb.git(repo, &["rev-list", "--parents", "-n1", oldest]);
+    let parent = parents.split(' ').nth(1).unwrap_or(EMPTY_TREE);
+    let n = revs.len();
+    format!("{n} commits, {} → {}", &parent[..10], &sha(newest)[..10])
 }
 
 fn click_row(cx: &mut VisualTestContext, i: usize, modifiers: Modifiers) {
@@ -512,7 +544,7 @@ fn click_cmd_click_and_shift_click_show_the_selection_newest_first(cx: &mut Test
         &["HEAD", "HEAD~1"],
         &["HEAD", "HEAD~1", "HEAD~2"],
     ];
-    let [one, two, three] = revs.map(|revs| short(&cx.sb, &solo, revs));
+    let [one, two, three] = revs.map(|revs| want(&cx.sb, &solo, revs));
     let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
@@ -536,7 +568,7 @@ fn click_cmd_click_and_shift_click_show_the_selection_newest_first(cx: &mut Test
 fn arrows_start_at_the_top_and_step_from_the_anchor(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo();
-    let [top, middle, bottom] = ["HEAD", "HEAD~1", "HEAD~2"].map(|r| short(&cx.sb, &solo, &[r]));
+    let [top, middle, bottom] = ["HEAD", "HEAD~1", "HEAD~2"].map(|r| want(&cx.sb, &solo, &[r]));
     let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
@@ -607,7 +639,7 @@ fn a_repo_change_clears_the_selection(cx: &mut TestAppContext) {
 fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo();
-    let picked = short(&cx.sb, &solo, &["HEAD~1"]);
+    let picked = want(&cx.sb, &solo, &["HEAD~1"]);
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
     click_row(cx, 1, Modifiers::none());
@@ -654,4 +686,350 @@ fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppC
         start.x - px(580.),
         "reopened at the stored width"
     );
+}
+
+/// `repos/details`: "initial" (README.md), "base" (src/old.ts, gone.txt), "notes" (notes.txt), then
+/// "Change four files" with a body, which adds new.txt, changes README.md, deletes gone.txt and
+/// renames src/old.ts to src/renamed.ts.
+fn four(sb: &Sandbox) {
+    let r = repo(sb, "details");
+    let base = [
+        ("src/old.ts", "export const old = 1\n"),
+        ("gone.txt", "gone\n"),
+    ];
+    sb.commit_files(&r, "base", base);
+    sb.commit_files(&r, "notes", [("notes.txt", "notes\n")]);
+    write(&r, [("new.txt", "new\n"), ("README.md", "changed\n")]);
+    sb.git(&r, &["rm", "-q", "gone.txt"]);
+    sb.git(&r, &["mv", "src/old.ts", "src/renamed.ts"]);
+    sb.git(&r, &["add", "-A"]);
+    let body = "Why they change.\nSecond line.";
+    sb.git(&r, &["commit", "-q", "-m", "Change four files", "-m", body]);
+}
+
+/// Opens the Log tall enough for a commit's fields and four files.
+fn open_tall(cx: &mut VisualTestContext) {
+    cx.update(|_, cx| ui_state::set("size.bottom", 600., cx));
+    cx.press("secondary-9");
+}
+
+/// A file row as the side panel shows it: letter, path and tooltip.
+fn file(letter: &str, path: &str, tip: &str) -> (String, String, String) {
+    (letter.into(), path.into(), tip.into())
+}
+
+fn files(cx: &mut VisualTestContext) -> Vec<(String, String, String)> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..)
+            .map_while(|i| {
+                let row = w.try_find(("details.file", i))?;
+                let letter = w.within(("details.file", i)).find("letter");
+                let letter = letter.label()?;
+                Some(file(letter, row.label()?, row.description()?))
+            })
+            .collect()
+    })
+}
+
+fn rev(sha: &str) -> Side {
+    Side::Rev { rev: sha.into() }
+}
+
+fn shown(cx: &mut VisualTestContext) -> Option<Doc> {
+    cx.store(|s, _| s.shown().cloned())
+}
+
+/// The diff of `path` in the current repo.
+fn diff(
+    cx: &mut VisualTestContext,
+    path: &str,
+    orig: Option<&str>,
+    left: Side,
+    right: Side,
+) -> Option<Doc> {
+    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    Some(Doc::Diff(DiffDoc {
+        repo,
+        path: path.into(),
+        orig_path: orig.map(String::from),
+        left,
+        right,
+    }))
+}
+
+#[gpui_kit::test]
+fn one_commit_shows_its_message_fields_and_files(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, four);
+    let r = cx.sb.path("repos/details");
+    let [head, parent] = ["HEAD", "HEAD~1"].map(|rev| cx.sb.git(&r, &["rev-parse", rev]));
+    let at: i64 = cx
+        .sb
+        .git(&r, &["log", "-1", "--format=%at"])
+        .parse()
+        .unwrap();
+    open_tall(cx);
+    wait_for_status(cx, "4 commits");
+    click_row(cx, 0, Modifiers::none());
+    assert_eq!(side(cx), head);
+    let subject = label(cx, "details.subject");
+    assert_eq!(subject.as_deref(), Some("Change four files"));
+    let body = label(cx, "details.body");
+    assert_eq!(body.as_deref(), Some("Why they change.\nSecond line."));
+    let author = format!("Test <test@example.com>, {}", when(at));
+    assert_eq!(field(cx, "Author"), Some(author));
+    assert_eq!(field(cx, "Committer"), None, "the author committed it");
+    assert_eq!(field(cx, "Parent"), Some(parent[..10].to_string()));
+    assert_eq!(label(cx, "details.head").as_deref(), Some("4 files"));
+    let want = [
+        file("D", "gone.txt", "gone.txt"),
+        file("A", "new.txt", "new.txt"),
+        file("M", "README.md", "README.md"),
+        file("R", "src/renamed.ts", "src/old.ts → src/renamed.ts"),
+    ];
+    assert_eq!(files(cx), want);
+
+    cx.click(("details.file", 3usize));
+    let want = diff(
+        cx,
+        "src/renamed.ts",
+        Some("src/old.ts"),
+        rev(&parent),
+        rev(&head),
+    );
+    assert_eq!(shown(cx), want);
+    assert_eq!(
+        cx.find(("details.file", 3usize)).unwrap().selected(),
+        Some(true)
+    );
+}
+
+#[gpui_kit::test]
+fn a_root_commit_is_diffed_against_the_empty_tree(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "root");
+    });
+    let head = cx.sb.git(&cx.sb.path("repos/root"), &["rev-parse", "HEAD"]);
+    open_tall(cx);
+    wait_for_status(cx, "1 commits");
+    click_row(cx, 0, Modifiers::none());
+    assert_eq!(side(cx), head);
+    assert_eq!(field(cx, "Parent"), None);
+    assert_eq!(files(cx), [file("A", "README.md", "README.md")]);
+    cx.click(("details.file", 0usize));
+    let want = diff(cx, "README.md", None, rev(EMPTY_TREE), rev(&head));
+    assert_eq!(shown(cx), want);
+}
+
+#[gpui_kit::test]
+fn a_merge_shows_its_parents_and_its_first_parent_changes(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "merged");
+        sb.git(&r, &["switch", "-qc", "feature"]);
+        sb.commit_files(&r, "feature work", [("f.txt", "f\n")]);
+        sb.git(&r, &["switch", "-q", "main"]);
+        sb.commit_files(&r, "main work", [("m.txt", "m\n")]);
+        sb.git(
+            &r,
+            &["merge", "-q", "--no-ff", "feature", "-m", "merge feature"],
+        );
+    });
+    let r = cx.sb.path("repos/merged");
+    let parents = cx.sb.git(&r, &["log", "-1", "--format=%p", "--abbrev=10"]);
+    open_tall(cx);
+    wait_for_status(cx, "4 commits");
+    click_row(cx, 0, Modifiers::none());
+    side(cx);
+    assert_eq!(field(cx, "Parents"), Some(parents));
+    assert_eq!(field(cx, "Parent"), None);
+    assert_eq!(files(cx), [file("A", "f.txt", "f.txt")]);
+}
+
+#[gpui_kit::test]
+fn a_range_shows_its_count_its_ends_and_the_combined_files(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, four);
+    let r = cx.sb.path("repos/details");
+    let want = want(&cx.sb, &r, &["HEAD", "HEAD~1", "HEAD~2"]);
+    let [head, initial] = ["HEAD", "HEAD~3"].map(|rev| cx.sb.git(&r, &["rev-parse", rev]));
+    open_tall(cx);
+    wait_for_status(cx, "4 commits");
+    click_row(cx, 0, Modifiers::none());
+    click_row(cx, 2, Modifiers::shift());
+    assert_eq!(side(cx), want);
+    assert!(want.starts_with(&format!("3 commits, {} → ", &initial[..10])));
+    assert_eq!(field(cx, "Commit"), None);
+    assert_eq!(label(cx, "details.head").as_deref(), Some("4 files"));
+    let want = [
+        file("A", "new.txt", "new.txt"),
+        file("A", "notes.txt", "notes.txt"),
+        file("M", "README.md", "README.md"),
+        file("A", "src/renamed.ts", "src/renamed.ts"),
+    ];
+    assert_eq!(files(cx), want);
+    cx.click(("details.file", 2usize));
+    let want = diff(cx, "README.md", None, rev(&initial), rev(&head));
+    assert_eq!(shown(cx), want);
+}
+
+#[gpui_kit::test]
+fn a_commit_by_another_author_shows_its_committer(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "authors");
+        let by = "--author=Ann Lee <ann@example.com>";
+        sb.git(
+            &r,
+            &["commit", "-q", "--allow-empty", "-m", "ann's work", by],
+        );
+        sb.commit(&r, "README.md", "more\n", "test's work");
+    });
+    let r = cx.sb.path("repos/authors");
+    let times = cx.sb.git(&r, &["log", "-1", "--format=%at %ct", "HEAD~1"]);
+    let times: Vec<i64> = times.split(' ').map(|t| t.parse().unwrap()).collect();
+    open_tall(cx);
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 1, Modifiers::none());
+    side(cx);
+    let ann = format!("Ann Lee <ann@example.com>, {}", when(times[0]));
+    assert_eq!(field(cx, "Author"), Some(ann));
+    let test = format!("Test <test@example.com>, {}", when(times[1]));
+    assert_eq!(field(cx, "Committer"), Some(test));
+    assert_eq!(label(cx, "details.head").as_deref(), Some("0 files"));
+    click_row(cx, 0, Modifiers::none());
+    side(cx);
+    assert_eq!(field(cx, "Committer"), None);
+    assert_eq!(label(cx, "details.head").as_deref(), Some("1 file"));
+}
+
+#[gpui_kit::test]
+fn show_branches_lists_the_local_and_remote_branches_with_the_commit(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    open_tall(cx);
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 1, Modifiers::none());
+    side(cx);
+    let link = "Show branches containing this commit";
+    assert_eq!(field(cx, "Branches").as_deref(), Some(link));
+    cx.update(|w, cx| w.within("details").click("Branches", cx));
+    let found = |cx: &mut VisualTestContext| field(cx, "Branches");
+    assert_ne!(found(cx).as_deref(), Some(link));
+    wait_until(cx, |cx| found(cx).as_deref() == Some("main, origin/main"));
+}
+
+#[gpui_kit::test]
+fn arrows_and_enter_step_through_the_files_and_show_each_diff(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, four);
+    let path = |cx: &mut VisualTestContext| match shown(cx) {
+        Some(Doc::Diff(d)) => Some(d.path),
+        _ => None,
+    };
+    open_tall(cx);
+    wait_for_status(cx, "4 commits");
+    click_row(cx, 0, Modifiers::none());
+    side(cx);
+    cx.click(("details.file", 0usize));
+    assert_eq!(path(cx).as_deref(), Some("gone.txt"));
+    let focused = cx.find("details.files").and_then(|e| e.focused());
+    assert_eq!(focused, Some(true), "a click focuses the files");
+    cx.press("down");
+    assert_eq!(path(cx).as_deref(), Some("new.txt"));
+    for _ in 0..3 {
+        cx.press("down");
+    }
+    assert_eq!(
+        path(cx).as_deref(),
+        Some("src/renamed.ts"),
+        "the last stays"
+    );
+    cx.press("up");
+    assert_eq!(path(cx).as_deref(), Some("README.md"));
+    let rows: Vec<_> = (0..4usize)
+        .map(|i| cx.find(("details.file", i)).unwrap().selected())
+        .collect();
+    assert_eq!(rows, [Some(false), Some(false), Some(true), Some(false)]);
+
+    let file = Location {
+        repo: cx.store(|s, _| s.current().unwrap().to_string()),
+        rev: None,
+        path: "notes.txt".into(),
+        line: None,
+        doc: None,
+    };
+    cx.store(|s, cx| s.show(Doc::File(file), cx));
+    cx.press("enter");
+    assert_eq!(
+        path(cx).as_deref(),
+        Some("README.md"),
+        "Enter shows the selected file"
+    );
+    cx.update(|w, cx| w.double_click(("details.file", 1usize), cx));
+    settle(cx);
+    assert_eq!(path(cx).as_deref(), Some("new.txt"));
+}
+
+#[gpui_kit::test]
+fn a_new_selection_while_one_loads_shows_only_the_latest(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, four);
+    let notes = want(&cx.sb, &cx.sb.path("repos/details"), &["HEAD~1"]);
+    open_tall(cx);
+    wait_for_status(cx, "4 commits");
+    cx.update(|w, cx| {
+        w.click(("log.row", 0usize), cx);
+        w.click(("log.row", 1usize), cx);
+    });
+    assert_eq!(side(cx), notes);
+    settle(cx);
+    assert_eq!(files(cx), [file("A", "notes.txt", "notes.txt")]);
+    assert_eq!(field(cx, "Commit"), Some(notes));
+}
+
+#[gpui_kit::test]
+fn a_long_message_scrolls_within_half_the_panel(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "long");
+        let body: Vec<_> = (1..=80).map(|i| format!("line {i}")).collect();
+        let body = body.join("\n");
+        let msg = ["commit", "-q", "--allow-empty", "-m", "Long", "-m", &body];
+        sb.git(&r, &msg);
+    });
+    open_tall(cx);
+    wait_for_status(cx, "2 commits");
+    click_row(cx, 0, Modifiers::none());
+    side(cx);
+    let [info, details] = ["details.info", "details"].map(|id| cx.find(id).unwrap().bounds());
+    assert!(info.size.height > px(100.));
+    assert!(info.size.height <= details.size.height / 2.);
+}
+
+#[gpui_kit::test]
+fn worktree_mode_compares_the_commit_with_the_working_tree(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, four);
+    let r = cx.sb.path("repos/details");
+    write(&r, [("README.md", "local\n")]);
+    let sha = cx.sb.git(&r, &["rev-parse", "HEAD"]);
+    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let (r, s) = (repo.clone(), sha.clone());
+    let window = cx.update(|_, cx| {
+        let view =
+            |_: &mut _, cx: &mut gpui_kit::App| cx.new(|cx| CommitDetails::worktree(r, s, cx));
+        gpui_kit::open_window(WindowOptions::default(), cx, view)
+            .unwrap()
+            .0
+    });
+    let w = &mut VisualTestContext::from_window(window, cx);
+    wait_until(w, |w| label(w, "details.head").is_some());
+    let head = label(w, "details.head");
+    assert_eq!(
+        head.as_deref(),
+        Some("1 file changed since, in the working tree")
+    );
+    assert_eq!(files(w), [file("M", "README.md", "README.md")]);
+    w.click(("details.file", 0usize));
+    let want = DiffDoc {
+        repo,
+        path: "README.md".into(),
+        orig_path: None,
+        left: rev(&sha),
+        right: Side::Worktree,
+    };
+    assert_eq!(shown(w), Some(Doc::Diff(want)));
 }

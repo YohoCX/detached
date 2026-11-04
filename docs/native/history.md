@@ -144,7 +144,7 @@ All paths are relative to the repo root. Citations are `file:line`.
   - `range_log` (`:219-225`): `base..head`.
   - `hunk_ranges` (`:227-249`): `git diff -U3 -M --diff-algorithm=myers base head -- [origPath] path`.
 
-### 1.5 CommitDetails (`src/components/CommitDetails.svelte`)
+### 1.5 CommitDetails (`src/components/CommitDetails.svelte`) [ported]
 - **Props**: `repo`, `shas` (newest first), `worktree`. Used by Log and by MrPage's Commits tab.
 - **Loading** (`:21-38`): `commitDetails(oldest)`, then the sides:
   - left = `worktree ? d.sha : (d.parents[0] ?? EMPTY_TREE)`, i.e. first parent for merges and the empty tree for a root commit.

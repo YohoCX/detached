@@ -10,12 +10,31 @@ pub use log::{Log, init};
 use std::collections::HashSet;
 
 use detached_core::types::LogRow;
+use gpui_kit::base::TestSupportExt;
+use gpui_kit::{
+    Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement,
+    Styled, div, px,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Chip {
     Head,
     Branch,
     Tag,
+}
+
+/// A state, an error or a hint in place of a list.
+fn message(id: &'static str, label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
+    let label = label.into();
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(label.clone())
+        .flex_1()
+        .px(px(16.))
+        .py(px(12.))
+        .text_color(color)
+        .child(label)
 }
 
 /// `HEAD -> main` and a detached `HEAD` mark the current commit; `tag: v1` is a tag.

@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use super::graph::{self, LANE, ROW};
-use super::{Chip, CommitDetails, Pick, chip, lanes, pick};
+use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
 use crate::store::{Bottom, Doc, Event, QueryId, Store};
@@ -517,19 +517,6 @@ fn field<E: Styled + Sizable>(e: E, cx: &App) -> E {
         .bg(t.input)
         .rounded(radius::ITEM)
         .text_size(text::SMALL)
-}
-
-fn message(id: &'static str, label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
-    let label = label.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(label.clone())
-        .flex_1()
-        .px(px(16.))
-        .py(px(12.))
-        .text_color(color)
-        .child(label)
 }
 
 /// `1234567` as "1,234,567".
