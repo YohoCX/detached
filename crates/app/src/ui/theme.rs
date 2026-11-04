@@ -40,6 +40,8 @@ pub struct Theme {
     /// Monaco's cursor line and text selection.
     pub line_highlight: Hsla,
     pub text_selection: Hsla,
+    /// The 16 terminal colors: job logs, the terminal.
+    pub ansi: [Hsla; 16],
 }
 
 /// The gap between panes and around the window.
@@ -151,6 +153,11 @@ static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme {
     untracked: c(0xb45309),
     line_highlight: a(0x1e2950, 0.04),
     text_selection: a(0x6366f1, 0.2),
+    ansi: [
+        0x1e293b, 0xdc2626, 0x059669, 0xb45309, 0x2563eb, 0xc026d3, 0x0891b2, 0x64748b, 0x475569,
+        0xef4444, 0x10b981, 0xd97706, 0x3b82f6, 0xd946ef, 0x06b6d4, 0x334155,
+    ]
+    .map(c),
 });
 
 static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
@@ -191,6 +198,11 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     untracked: c(0xfbbf24),
     line_highlight: a(0xffffff, 0.03),
     text_selection: a(0x818cf8, 0.3),
+    ansi: [
+        0x64748b, 0xf87171, 0x34d399, 0xfbbf24, 0x60a5fa, 0xe879f9, 0x22d3ee, 0xcbd5e1, 0x94a3b8,
+        0xfca5a5, 0x6ee7b7, 0xfde68a, 0x93c5fd, 0xf0abfc, 0x67e8f9, 0xf8fafc,
+    ]
+    .map(c),
 });
 
 impl Theme {
