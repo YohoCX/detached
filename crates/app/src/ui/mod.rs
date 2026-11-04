@@ -15,9 +15,9 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, BoxShadow, Context, Div, ElementId, Entity, FontWeight,
-    HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div,
-    prelude::FluentBuilder, px,
+    HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window,
+    div, prelude::FluentBuilder, px, relative,
 };
 
 pub use grip::{Edge, pane};
@@ -47,6 +47,58 @@ pub fn glass<E: Styled>(e: E, cx: &App) -> E {
         .border_color(t.panel_line)
         .shadow(t.shadow.clone())
         .rounded(radius::GLASS)
+}
+
+/// `content` in a glass box over a scrim that tints the window: `top` down as a fraction of the
+/// height, centered, 90% of the width up to `width`. Clicking the scrim calls `close`.
+pub fn modal(
+    width: Pixels,
+    top: f32,
+    radius: Pixels,
+    close: impl Fn(&mut Window, &mut App) + 'static,
+    content: impl IntoElement,
+    cx: &App,
+) -> Div {
+    let scrim = div()
+        .id("scrim")
+        .test_support()
+        .absolute()
+        .inset_0()
+        .bg(theme(cx).scrim)
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| close(window, cx));
+    let content = glass(div(), cx)
+        .w(relative(0.9))
+        .max_w(width)
+        .rounded(radius)
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .occlude()
+        .child(content);
+    div().absolute().inset_0().child(scrim).child(
+        div()
+            .absolute()
+            .top(relative(top))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(content),
+    )
+}
+
+/// A key chord in a small outlined chip.
+pub fn kbd(chord: impl Into<SharedString>, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .px(px(5.))
+        .border_1()
+        .border_color(theme(cx).line)
+        .rounded(radius::KBD)
+        .text_size(text::LABEL)
+        .child(chord.into())
 }
 
 /// A clickable box whose mouse down does not reach the top bar.
