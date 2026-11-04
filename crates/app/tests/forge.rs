@@ -254,8 +254,7 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
     });
     assert!(cx.find("pipeline.badge").is_none());
     cx.click("pipelines.settings");
-    let said = cx.store(|s, _| s.message.clone().map(|m| m.text));
-    assert_eq!(said.as_deref(), Some("Settings… is not available yet"));
+    wait_until(cx, |cx| cx.find("settings").is_some_and(|s| s.visible()));
 }
 
 #[gpui_kit::test]
@@ -566,16 +565,20 @@ fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppCont
     let ambiguous = |l: String| l.starts_with("Several accounts fit 127.0.0.1");
     wait_until(cx, |cx| label(cx, "mrs.setup").is_some_and(ambiguous));
     cx.click("mrs.settings");
-    assert_eq!(said(cx).as_deref(), Some("Settings… is not available yet"));
-
+    let account = ElementId::from(("settings.forgeAccount", 0usize));
+    let option = ElementId::Name("option:Fake GitLab".into());
+    wait_until(cx, |cx| cx.find(account.clone()).is_some());
+    wait_until(cx, |cx| {
+        cx.click(account.clone());
+        cx.find(option.clone()).is_some()
+    });
+    cx.click(option);
     let repo = cx.store(|s, _| s.current().unwrap().to_string());
-    let host = api::forge_hosts(&core, &repo).unwrap().hosts.remove(0).host;
-    let accounts = api::list_accounts(&core).unwrap();
-    let fake = accounts
-        .into_iter()
-        .find(|a| a.label == "Fake GitLab")
-        .unwrap();
-    api::set_forge_account(&core, repo, host, Some(fake.id)).unwrap();
+    wait_until(cx, |_| {
+        api::get_settings(&core).forge_accounts.contains_key(&repo)
+    });
+    cx.press("escape");
+    assert!(cx.find("settings").is_none_or(|s| !s.visible()));
     cx.click("mrs.refresh");
     wait_until(cx, |cx| label(cx, ("mr", 1u64)).is_some());
     assert!(cx.find("mrs.setup").is_none());
