@@ -63,7 +63,8 @@ impl Menu {
         self
     }
 
-    /// Opens at `position` in the window, usually the right click's.
+    /// Opens at `position` in the window, usually the right click's. Call it on the click, not the
+    /// mouse down: a focusable parent takes the kit-drawn menu's focus on mouse down.
     pub fn show(self, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
         if !cx.has_global::<Picks>() {
             cx.on_action(|p: &Pick, cx| {
@@ -101,11 +102,15 @@ impl Menu {
 /// Runs the shown menu's enabled item `label` as a click on it does; false when there is none.
 pub fn pick(label: &str, window: &mut Window, cx: &mut App) -> bool {
     let entries = cx.try_global::<Picks>().map_or(&[][..], |p| &p.0);
-    let entry = entries.iter().find(|e| e.enabled && e.label == label);
-    entry
-        .map(|e| e.run.clone())
-        .map(|run| run(window, cx))
-        .is_some()
+    let Some(e) = entries.iter().find(|e| e.enabled && e.label == label) else {
+        return false;
+    };
+    let run = e.run.clone();
+    // The kit draws the menu in the window here, focused, and a click on an item closes it.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx);
+    run(window, cx);
+    true
 }
 
 #[cfg(test)]

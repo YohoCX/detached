@@ -15,10 +15,10 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, FocusHandle,
-    FontWeight, Global, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, uniform_list,
+    FontWeight, Global, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
+    Point, Render, Role, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px,
+    uniform_list,
 };
 
 use super::graph::{self, LANE, ROW};
@@ -710,12 +710,11 @@ impl Log {
                             }
                         }
                     }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                            this.menu(&sha, e.position, window, cx)
-                        }),
-                    )
+                    .on_aux_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if e.is_secondary() {
+                            this.menu(&sha, e.position(), window, cx)
+                        }
+                    }))
             })
             .collect()
     }
