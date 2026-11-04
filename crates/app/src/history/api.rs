@@ -16,6 +16,11 @@ impl CommitDetails {
     pub fn new(_repo: String, shas: Vec<String>, _cx: &mut Context<Self>) -> Self {
         CommitDetails { shas }
     }
+
+    /// One commit compared with the working tree, for Compare with Local.
+    pub fn worktree(repo: String, sha: String, cx: &mut Context<Self>) -> Self {
+        Self::new(repo, vec![sha], cx)
+    }
 }
 
 impl Render for CommitDetails {

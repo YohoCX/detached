@@ -301,7 +301,8 @@ provider then fills it in.
     `Links::Forge { project_url, base_url, gitlab: bool }` (GitLab resolves `/uploads/…` under the
     project and shows its upload images as links, history.md §2.7).
 - **History API** (`src/history/api.rs`): `CommitDetails::new(repo, shas, cx)`, the view the log's
-  side panel and the MR page's Commits tab both show.
+  side panel and the MR page's Commits tab both show; `CommitDetails::worktree(repo, sha, cx)`, one
+  commit against the working tree, for the log's Compare with Local.
 - **Helpers** (`util.rs`, F): `base_name`, `dir_name`, `folder_name`, `in_folder`, the change
   `letter` and `status_of`, `when` (commit and pipeline times), `fuzzy::filter`/`segments`; the
   context-menu helper in `ui/`. A vertical's own helpers stay in its directory.
