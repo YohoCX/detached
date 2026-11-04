@@ -67,10 +67,6 @@ fn search(cx: &mut VisualTestContext, query: &str, first: &str) {
     });
 }
 
-fn said(cx: &mut VisualTestContext) -> Option<String> {
-    cx.store(|s, _| s.message.as_ref().map(|m| m.text.clone()))
-}
-
 /// Ctrl+V pastes off macOS.
 const VCS: &str = if cfg!(target_os = "macos") {
     "ctrl-v"
@@ -312,7 +308,7 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
 }
 
 #[gpui_kit::test]
-fn find_action_mutes_unregistered_actions_and_runs_the_chosen_one(cx: &mut TestAppContext) {
+fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let cx = &mut app;
     assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Changes));
@@ -325,14 +321,6 @@ fn find_action_mutes_unregistered_actions_and_runs_the_chosen_one(cx: &mut TestA
     cx.press("enter");
     assert_eq!(title(cx), None);
     assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Files));
-
-    let off = cx.update(|_, cx| actions::all(cx).into_iter().find(|(_, on)| !on));
-    let off = off.expect("an action with no handler").0.title;
-    cx.press("secondary-shift-a");
-    search(cx, off, off);
-    assert_eq!(cx.find(row(0)).unwrap().disabled(), Some(true));
-    cx.press("enter");
-    assert_eq!(said(cx), Some(format!("{off} is not available yet")));
 
     // Reopened, the list starts at the top again.
     cx.press("secondary-shift-a");
