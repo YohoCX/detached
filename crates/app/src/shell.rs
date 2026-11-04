@@ -15,7 +15,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
 use crate::ui::{self, Edge, GAP, Icon, radius, stub, text, theme};
-use crate::{actions, files, history, keymap, search};
+use crate::{actions, files, forge, history, keymap, search};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -39,7 +39,7 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
             crate::repos::branches(window, cx),
             crate::repos::settings(window, cx),
         ],
-        TopBar::Center => vec![],
+        TopBar::Center => forge::top_bar(window, cx),
         TopBar::Right => vec![search::pill(cx), crate::repos::sync_buttons(cx)],
     }
 }
@@ -78,7 +78,7 @@ fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
 fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
     match bottom {
         Bottom::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
-        Bottom::Pipelines => stub("Pipelines", cx),
+        Bottom::Pipelines => forge::pipelines(window, cx),
         Bottom::Terminal => stub("Terminal", cx),
     }
 }

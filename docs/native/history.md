@@ -467,7 +467,7 @@ Rules behind them:
   - GitHub job: never cancellable or playable; retryable when done; `liveLog=false`; has steps. All jobs go under a single stage named after the workflow (`github.rs:41-57,501-537`).
   - Rollup priority: Running > Pending > Failed > Canceled > Manual > Success, else Skipped (`mod.rs:361-368`).
 
-### 3.2 PipelineBadge (`src/components/PipelineBadge.svelte`)
+### 3.2 PipelineBadge (`src/components/PipelineBadge.svelte`) [ported]
 - **Key**: only with an upstream: `badge repo head branch` (`:12`).
 - **Value**: `listPipelines(repo, false)[0] ?? null`.
 - **Visibility**: rendered only when a pipeline exists. It is hidden with no upstream, no pipelines, or an error with nothing cached.
