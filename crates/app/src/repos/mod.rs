@@ -1,6 +1,7 @@
 //! Sidebar, workspaces, repo switcher, branches, sync, settings and accounts.
 
 mod api;
+mod branches;
 mod sidebar;
 mod switcher;
 mod sync;
@@ -20,6 +21,7 @@ use gpui_kit::{
 };
 
 pub use api::*;
+pub use branches::branches;
 pub use sidebar::sidebar;
 pub use switcher::switcher;
 pub use sync::{Bulk, Kind, sync_buttons};
@@ -29,14 +31,17 @@ use crate::actions::{self, Registration};
 use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
+use branches::Intent;
 
-/// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches.
+/// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches, the
+/// branches popup's intent.
 pub struct State {
     pub sync: Option<Bulk>,
     /// Bumped each time a repo's outcome is shown, so a fade clears only the outcome it was set for.
     shown: HashMap<String, u64>,
     /// Per repo, newest first; in memory only.
     pub recent: HashMap<String, Vec<String>>,
+    branches: Option<Intent>,
     _actions: Vec<Registration>,
 }
 
@@ -54,6 +59,7 @@ impl State {
             sync: None,
             shown: HashMap::new(),
             recent: HashMap::new(),
+            branches: None,
             _actions: register_actions(cx),
         });
         cx.set_global(GlobalState(state.clone()));
@@ -95,6 +101,15 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
         ),
         register(cx, "vcs.pullAll", "Pull All Repositories", Vcs, |_, cx| {
             sync::sync_repos(Kind::Pull, None, cx)
+        }),
+        register(cx, "vcs.checkout", "Checkout Branch…", Vcs, |_, cx| {
+            branches::open(Some(Intent::Checkout), cx)
+        }),
+        register(cx, "vcs.newBranch", "New Branch…", Vcs, |_, cx| {
+            branches::open(Some(Intent::New), cx)
+        }),
+        register(cx, "vcs.deleteBranch", "Delete Branch…", Vcs, |_, cx| {
+            branches::open(Some(Intent::Delete), cx)
         }),
         register(
             cx,

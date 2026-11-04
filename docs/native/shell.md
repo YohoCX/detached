@@ -171,7 +171,7 @@ A detached HEAD with no changes and no ahead/behind therefore shows `success`.
 
 Text cannot be selected anywhere (global `user-select: none`), so double-clicking empty space selects nothing.
 
-### 1.4 Native context menus (`src/lib/menu.ts`)
+### 1.4 Native context menus (`src/lib/menu.ts`) [ported differently: OS-drawn menus on macOS and Windows, kit-drawn on Linux]
 Built with Tauri `Menu.new` and `PredefinedMenuItem` separators, then `.popup()` (:10-19). Items carry an `enabled` flag.
 
 **Repo menu** (`repoMenu`, :23-46):
@@ -278,7 +278,7 @@ Errors from `openFolder` and `openInZed` in these menus are not caught (no `say`
 
 **Choosing** sets `app.current` and closes.
 
-### 1.7 Branches popup (`src/components/Branches.svelte`)
+### 1.7 Branches popup (`src/components/Branches.svelte`) [ported]
 Opened from the Branch widget (`checkout`), the `vcs.checkout`, `vcs.newBranch` and `vcs.deleteBranch` actions, and the repo menu's "Branches…" / "New Branch…".
 
 **Captured at mount** (:24-26), not reactive: `repo = app.current`, `intent = app.branches`, `head = current branch or 'HEAD'`.

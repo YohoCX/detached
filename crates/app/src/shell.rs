@@ -31,9 +31,13 @@ pub enum TopBar {
 
 // The slots. Each vertical puts its view's constructor in place of its stub.
 
-fn top_bar(slot: TopBar, _: &mut Window, cx: &mut App) -> Vec<AnyView> {
+fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     match slot {
-        TopBar::Left => vec![crate::repos::workspaces(cx), crate::repos::switcher(cx)],
+        TopBar::Left => vec![
+            crate::repos::workspaces(cx),
+            crate::repos::switcher(cx),
+            crate::repos::branches(window, cx),
+        ],
         TopBar::Center => vec![],
         TopBar::Right => vec![
             stub("Search everywhere", cx),

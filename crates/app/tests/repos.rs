@@ -6,8 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
-use detached_app::repos::{self, CheckoutTarget};
-use detached_app::store::{Level, Message};
+use detached_app::store::{Level, Message, Notice};
 use detached_app::{actions, ui_state};
 use detached_core::api;
 use gpui_kit::test::TestWindowExt;
@@ -298,43 +297,6 @@ fn fetch_all_and_pull_all_report_per_repo_and_the_diverged_repo_is_left_as_it_wa
 }
 
 #[gpui_kit::test]
-fn checkout_over_conflicting_local_changes_keeps_the_stash_and_names_it(cx: &mut TestAppContext) {
-    let cx = &mut open_app_with(cx, layout);
-    let app = path(cx.sb.repo("app"));
-    let other = CheckoutTarget::Local {
-        name: "other".into(),
-    };
-    let task = cx.update(|_, cx| repos::checkout(cx, &app, other));
-    cx.foreground_executor().block_test(task);
-    let n = cx.store(|s, _| s.notices.last().cloned()).unwrap();
-    let title = "Checked out other, your changes did not apply cleanly";
-    assert_eq!((n.level, n.title.as_str()), (Level::Error, title));
-    let body = n.body.as_deref().unwrap();
-    assert!(
-        body.contains("Stash kept: detached: main -> other"),
-        "{body}"
-    );
-    assert_eq!(n.repo.as_deref(), Some(app.as_str()));
-    assert_eq!(n.files, ["README.md"]);
-    assert!(cx.find(("notice", n.id as usize)).unwrap().visible());
-    assert_eq!(
-        said(cx),
-        Some(Message {
-            text: title.into(),
-            error: true
-        })
-    );
-    let branch = cx.store(|s, _| s.status(&app).and_then(|st| st.branch.clone()));
-    assert_eq!(
-        branch.as_deref(),
-        Some("other"),
-        "refreshed when the task ends"
-    );
-    let stashes = cx.sb.git(&cx.sb.repo("app"), &["stash", "list"]);
-    assert!(stashes.contains("detached: main -> other"), "{stashes}");
-}
-
-#[gpui_kit::test]
 fn fetch_update_and_prune_run_on_the_current_repo_and_say_how_it_went(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let app = path(cx.sb.repo("app"));
@@ -610,4 +572,313 @@ fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_
     cx.click(option);
     assert!(cx.find("switcher.popup").is_none());
     assert_eq!(label(cx, "switcher"), "lib");
+}
+
+fn select(cx: &mut TestApp, repo: &str) -> String {
+    let repo = path(cx.sb.repo(repo));
+    let current = repo.clone();
+    cx.store(|s, cx| s.set_current(Some(current), cx));
+    repo
+}
+
+/// Labels of the rows with ids `(id, 0..)`, and whether each is selected.
+fn listed(cx: &mut VisualTestContext, id: &'static str) -> Vec<(String, bool)> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..)
+            .map_while(|i| w.try_find((id, i)))
+            .map(|e| {
+                (
+                    e.label().unwrap_or_default().into(),
+                    e.selected() == Some(true),
+                )
+            })
+            .collect()
+    })
+}
+
+fn labels(cx: &mut VisualTestContext, id: &'static str) -> Vec<String> {
+    listed(cx, id).into_iter().map(|r| r.0).collect()
+}
+
+fn picked(cx: &mut VisualTestContext) -> Option<String> {
+    listed(cx, "branches.row")
+        .into_iter()
+        .find(|r| r.1)
+        .map(|r| r.0)
+}
+
+/// Types `query` into the branches search and waits until `branch` is the selected row.
+fn search(cx: &mut VisualTestContext, query: &str, branch: &str) {
+    cx.input(query);
+    wait_until(cx, |cx| picked(cx).as_deref() == Some(branch));
+}
+
+fn branch_of(cx: &TestApp, repo: &str) -> String {
+    cx.sb.git(&cx.sb.repo(repo), &["branch", "--show-current"])
+}
+
+fn has_branch(cx: &TestApp, repo: &str, branch: &str) -> bool {
+    !cx.sb
+        .git(&cx.sb.repo(repo), &["branch", "--list", branch])
+        .is_empty()
+}
+
+fn last_error(cx: &mut VisualTestContext) -> Option<Notice> {
+    cx.store(|s, _| s.notices.iter().rfind(|n| n.level == Level::Error).cloned())
+}
+
+#[gpui_kit::test]
+fn checkout_over_conflicting_local_changes_keeps_the_stash_and_names_it(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = select(cx, "app");
+    cx.click("branches");
+    search(cx, "other", "other");
+    cx.press("enter");
+    assert!(cx.find("branches.popup").is_none());
+    wait_until(cx, |cx| last_error(cx).is_some());
+    let n = last_error(cx).unwrap();
+    let title = "Checked out other, your changes did not apply cleanly";
+    assert_eq!(n.title, title);
+    let body = n.body.as_deref().unwrap();
+    assert!(
+        body.contains("Stash kept: detached: main -> other"),
+        "{body}"
+    );
+    assert_eq!(n.repo.as_deref(), Some(app.as_str()));
+    assert_eq!(n.files, ["README.md"]);
+    assert!(cx.find(("notice", n.id as usize)).unwrap().visible());
+    says(cx, title, true);
+    wait_until(cx, |cx| label(cx, "branches") == "other");
+    let stashes = cx.sb.git(&cx.sb.repo("app"), &["stash", "list"]);
+    assert!(stashes.contains("detached: main -> other"), "{stashes}");
+}
+
+#[gpui_kit::test]
+fn deleting_an_unmerged_branch_lists_its_commits_and_asks_first(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    select(cx, "app");
+    // The VCS palette is V3's: its Delete Branch runs this action.
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.deleteBranch")));
+    settle(cx);
+    let query = cx.find("branches.query").unwrap();
+    assert_eq!(query.placeholder(), Some("Delete branch…"));
+    search(cx, "spike", "spike");
+    cx.press("enter");
+    wait_until(cx, |cx| {
+        label(cx, "branches.title") == "spike is not fully merged"
+    });
+    let commits = labels(cx, "branches.commit");
+    assert!(
+        commits.iter().any(|c| c.contains("spike work")),
+        "{commits:?}"
+    );
+    assert!(has_branch(cx, "app", "spike"));
+    cx.click("branches.force");
+    says(cx, "Deleted branch spike", false);
+    assert!(!has_branch(cx, "app", "spike"));
+}
+
+#[gpui_kit::test]
+fn a_new_branch_named_dash_d_is_refused_and_its_start_branch_survives(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    select(cx, "app");
+    cx.click("branches");
+    search(cx, "other", "other");
+    cx.press("right");
+    let items = labels(cx, "branches.menu");
+    let i = items.iter().position(|l| l == "New Branch from 'other'…");
+    cx.click(("branches.menu", i.unwrap_or_else(|| panic!("{items:?}"))));
+    assert_eq!(
+        cx.find("branches.name").unwrap().placeholder(),
+        Some("Branch name")
+    );
+    cx.input("-D");
+    cx.click("branches.create");
+
+    wait_until(cx, |cx| last_error(cx).is_some());
+    let n = last_error(cx).unwrap();
+    assert_eq!(n.title, "Branch operation failed");
+    let body = n.body.unwrap_or_default();
+    assert!(body.contains(r#"invalid name: "-D""#), "{body}");
+    assert!(has_branch(cx, "app", "other"));
+}
+
+#[gpui_kit::test]
+fn enter_right_after_pasting_checks_out_the_first_match_before_the_branches_load(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    select(cx, "lib");
+    // One update: list_branches answers on a later turn, so Enter surely comes first.
+    cx.update(|w, cx| {
+        w.click("branches", cx);
+        w.input("main", cx);
+        w.press("enter", cx);
+    });
+    wait_until(cx, |cx| label(cx, "branches") == "main");
+    assert_eq!(branch_of(cx, "lib"), "main");
+}
+
+fn upstream(cx: &TestApp, repo: &str, branch: &str) -> String {
+    let rev = format!("{branch}@{{u}}");
+    cx.sb
+        .git(&cx.sb.repo(repo), &["rev-parse", "--abbrev-ref", &rev])
+}
+
+#[gpui_kit::test]
+fn the_current_branch_opens_its_menu_whose_keys_clamp_run_and_go_back(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    select(cx, "lib");
+    cx.click("branches");
+    wait_until(cx, |cx| picked(cx).is_some());
+    cx.input("zzz");
+    assert_eq!(label(cx, "branches.empty"), "No branches match.");
+    for _ in 0..3 {
+        cx.press("backspace");
+    }
+    search(cx, "feature", "feature");
+    cx.press("enter");
+    assert_eq!(label(cx, "branches.title"), "feature");
+    let items = ["New Branch from 'feature'…", "Set Tracking Branch…"];
+    assert_eq!(labels(cx, "branches.menu"), items);
+    cx.press("left");
+    assert_eq!(cx.find("branches.query").unwrap().value(), Some("feature"));
+    cx.press("right");
+    cx.press("escape");
+    assert!(cx.find("branches.query").is_some(), "escape goes back");
+    cx.press("right");
+    for _ in 0..3 {
+        cx.press("down");
+    }
+    let selected = listed(cx, "branches.menu").into_iter().position(|i| i.1);
+    assert_eq!(selected, Some(1));
+
+    cx.press("enter");
+    assert_eq!(label(cx, "branches.title"), "Tracking branch for feature");
+    cx.input("main");
+    assert_eq!(labels(cx, "branches.track"), ["origin/main"]);
+    cx.press("enter");
+    let tracks = |cx: &mut VisualTestContext| {
+        let row = cx.find(("branches.row", 1usize));
+        row.and_then(|r| r.description().map(String::from))
+    };
+    wait_until(cx, |cx| tracks(cx).as_deref() == Some("origin/main"));
+    assert_eq!(upstream(cx, "lib", "feature"), "origin/main");
+    assert_eq!(picked(cx).as_deref(), Some("feature"));
+    cx.press("right");
+    let items = labels(cx, "branches.menu");
+    let unset = items.iter().position(|l| l == "Unset Tracking Branch");
+    cx.click((
+        "branches.menu",
+        unset.unwrap_or_else(|| panic!("{items:?}")),
+    ));
+    wait_until(cx, |cx| picked(cx).is_some() && tracks(cx).is_none());
+    cx.press("escape");
+    assert!(cx.find("branches.popup").is_none());
+    assert_eq!(branch_of(cx, "lib"), "feature");
+}
+
+#[gpui_kit::test]
+fn new_branch_opens_the_form_and_an_unticked_checkout_leaves_head(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    select(cx, "lib");
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.newBranch")));
+    settle(cx);
+    assert_eq!(label(cx, "branches.title"), "New branch from feature");
+    assert_eq!(cx.find("branches.name").unwrap().focused(), Some(true));
+    assert_eq!(cx.find("branches.checkout").unwrap().checked(), Some(true));
+    cx.click("branches.checkout");
+    assert_eq!(cx.find("branches.checkout").unwrap().checked(), Some(false));
+    cx.click("branches.name");
+    cx.input("topic");
+    cx.press("enter");
+    says(cx, "Created branch topic", false);
+    assert!(cx.find("branches.popup").is_none());
+    assert!(has_branch(cx, "lib", "topic"));
+    assert_eq!(branch_of(cx, "lib"), "feature");
+}
+
+#[gpui_kit::test]
+fn recent_lists_the_branch_left_and_a_remote_branch_checks_out_tracking_it(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        let lib = sb.repo("lib");
+        sb.git(&lib, &["push", "-q", "origin", "HEAD:refs/heads/topic"]);
+        sb.git(&lib, &["fetch", "-q"]);
+    });
+    select(cx, "lib");
+    cx.click("branches");
+    search(cx, "main", "main");
+    cx.press("enter");
+    wait_until(cx, |cx| label(cx, "branches") == "main");
+
+    cx.click("branches");
+    wait_until(cx, |cx| picked(cx).is_some());
+    let rows = [
+        "New Branch…",
+        "Prune Remote Branches",
+        "RECENT",
+        "feature",
+        "LOCAL",
+        "feature",
+        "main",
+        "REMOTE",
+        "origin/main",
+        "origin/topic",
+    ];
+    assert_eq!(labels(cx, "branches.row"), rows);
+    assert_eq!(picked(cx).as_deref(), Some("New Branch…"));
+    cx.press("down");
+    cx.press("down");
+    assert_eq!(
+        picked(cx).as_deref(),
+        Some("feature"),
+        "headers are skipped"
+    );
+    cx.press("up");
+    assert_eq!(picked(cx).as_deref(), Some("Prune Remote Branches"));
+    cx.press("enter");
+    assert!(cx.find("branches.popup").is_none());
+    says(cx, "lib: pruned stale remote branches", false);
+
+    cx.click("branches");
+    search(cx, "topic", "origin/topic");
+    cx.press("enter");
+    wait_until(cx, |cx| label(cx, "branches") == "topic");
+    assert_eq!(upstream(cx, "lib", "topic"), "origin/topic");
+}
+
+#[gpui_kit::test]
+fn deleting_a_remote_branch_asks_first_then_runs_as_an_op(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        let lib = sb.repo("lib");
+        sb.git(&lib, &["push", "-q", "origin", "HEAD:refs/heads/topic"]);
+        sb.git(&lib, &["fetch", "-q"]);
+    });
+    select(cx, "lib");
+    cx.click("branches");
+    search(cx, "topic", "origin/topic");
+    cx.press("right");
+    let items = [
+        "Checkout",
+        "New Branch from 'origin/topic'…",
+        "Delete on Remote…",
+    ];
+    assert_eq!(labels(cx, "branches.menu"), items);
+    cx.click(("branches.menu", 2usize));
+    assert_eq!(label(cx, "branches.title"), "Delete topic on origin?");
+    cx.click("branches.cancel");
+    assert_eq!(picked(cx).as_deref(), Some("origin/topic"));
+    cx.press("right");
+    cx.click(("branches.menu", 2usize));
+    assert_eq!(cx.find("branches.confirm").unwrap().focused(), Some(true));
+    cx.press("enter");
+    assert!(cx.find("branches.popup").is_none());
+    says(cx, "Deleted origin/topic on the remote", false);
+    let origin = cx.sb.root().join("origin.git");
+    assert_eq!(cx.sb.git(&origin, &["branch", "--list", "topic"]), "");
 }

@@ -18,6 +18,7 @@ use gpui_kit::{
     relative, uniform_list,
 };
 
+use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
 use crate::store::{Store, Tool};
@@ -635,11 +636,20 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
         let r = repo.to_string();
         move |_: &mut Window, cx: &mut App| sync_one(kind, r.clone(), cx)
     };
+    let branches = |intent| {
+        let r = repo.to_string();
+        move |_: &mut Window, cx: &mut App| {
+            select_repo(&r, cx);
+            branches::open(Some(intent), cx);
+        }
+    };
     Menu::default()
         .item("Fetch", one(Kind::Fetch))
         .item("Pull", one(Kind::Pull))
         .separator()
         .item("Compare with Base Branch", compare)
+        .item("Branches…", branches(Intent::Checkout))
+        .item("New Branch…", branches(Intent::New))
         .separator()
         .item(format!("Open in {FILE_MANAGER}"), open_folder(repo))
         .item("Open in Zed", zed)
