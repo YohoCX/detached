@@ -370,7 +370,7 @@ Rules behind them:
   - GitLab: `POST` on the **source** project with a Draft title; `target_project_id` for forks (`gitlab.rs:401-419`).
   - GitHub: `head` = `owner:branch` for forks, plus `draft` (`github.rs:456-478`).
 
-### 2.7 Markdown (`src/components/Markdown.svelte`, `src/lib/mr.ts`, `src/lib/markdown.ts`)
+### 2.7 Markdown (`src/components/Markdown.svelte`, `src/lib/mr.ts`, `src/lib/markdown.ts`) [ported]
 - **MR mode**: `render(text, links(mr))`. Rendering:
   - `marked` with `breaks:true`, then DOMPurify with an allowlist of tags and attributes (`markdown.ts:4-9,26-34`).
   - Task-list checkboxes are kept but disabled; other inputs are removed.

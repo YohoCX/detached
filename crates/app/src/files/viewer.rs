@@ -52,6 +52,13 @@ impl Viewer {
             register(cx, "diff.next", "Next Change", Group::Diff, none),
             register(cx, "diff.prev", "Previous Change", Group::Diff, none),
             register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, none),
+            register(
+                cx,
+                "markdown.preview",
+                "Toggle Markdown Preview",
+                Group::View,
+                none,
+            ),
             register(cx, "diff.show", "Show Diff", Group::Diff, |_, cx| {
                 diff_shown(cx)
             }),

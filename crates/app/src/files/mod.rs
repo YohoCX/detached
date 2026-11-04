@@ -5,6 +5,7 @@ mod code;
 mod diff;
 mod file;
 mod goto;
+mod markdown;
 mod viewer;
 
 pub use api::*;

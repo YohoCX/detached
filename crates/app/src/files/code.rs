@@ -74,6 +74,10 @@ impl Code {
         cx.notify();
     }
 
+    pub(super) fn text(&self, cx: &App) -> String {
+        self.editor.read(cx).text().to_string()
+    }
+
     /// The cursor's line, from 1.
     pub(super) fn line(&self, cx: &App) -> u32 {
         self.editor.read(cx).cursor_position().line + 1
@@ -194,6 +198,21 @@ pub(super) fn language_for(path: &str) -> &'static str {
         .map(|(_, lang)| *lang)
         .or_else(|| by_ext().map(|(lang, _)| *lang))
         .unwrap_or("plaintext")
+}
+
+/// Monaco's aliases that are neither a name above nor an extension.
+const ALIASES: &[(&str, &str)] = &[("shell", "bash"), ("c++", "cpp"), ("c#", "csharp")];
+
+/// A code fence's language as the kit names it: by name, alias or extension; None for plain text.
+pub(super) fn fence_language(tag: &str) -> Option<&'static str> {
+    let tag = tag.to_lowercase();
+    let lang = EXTENSIONS
+        .iter()
+        .map(|(lang, _)| *lang)
+        .find(|lang| *lang == tag)
+        .or_else(|| ALIASES.iter().find(|(a, _)| *a == tag).map(|(_, l)| *l))
+        .unwrap_or_else(|| language_for(&format!("x.{tag}")));
+    (lang != "plaintext").then_some(lang)
 }
 
 /// The kit ships no Dockerfile grammar.

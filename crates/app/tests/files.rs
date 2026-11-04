@@ -7,15 +7,17 @@ use std::rc::Rc;
 use common::*;
 use detached_app::actions::{self, Group, Registration};
 use detached_app::files::{
-    self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Location, Side,
+    self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Location, Markdown, Side,
 };
 use detached_app::ui_state;
 use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::test_support::{TextSnapshot, texts};
+use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::{ElementSnapshot, TestQueryExt, TestWindowExt};
 use gpui_kit::{
     AppContext, Context, ElementId, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    TestAppContext, VisualContext, VisualTestContext, Window, div, px,
+    TestAppContext, VisualContext, VisualTestContext, Window, div, point, px,
 };
 
 fn diff(app: &TestApp, path: &str, orig_path: Option<&str>) -> DiffDoc {
@@ -328,6 +330,11 @@ fn cursor_at(cx: &mut VisualTestContext, rest: &str) {
     wait_until(cx, |cx| rest_of_line(cx) == rest);
 }
 
+/// Markdown files open in their source, as these tests read README.md in the editor.
+fn md_source(cx: &mut VisualTestContext) {
+    cx.update(|_, cx| ui_state::set("viewer.mdPreview", false, cx));
+}
+
 /// `todo 1` to `todo 60`.
 fn todo() -> String {
     (1..=60).map(|i| format!("todo {i}\n")).collect()
@@ -350,6 +357,7 @@ fn open_shows_the_file_its_header_and_the_cursor_on_its_line(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn a_file_at_a_ref_shows_the_ref_and_its_text(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
     let app = cx.sb.repo("app");
     open(cx, &app, Some("main"), "README.md", None);
     shown(cx, "line 60");
@@ -428,6 +436,7 @@ fn a_conflicted_file_shows_the_bar_and_its_markers(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn go_to_line_moves_the_cursor_and_records_the_line(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
     let app = cx.sb.repo("app");
     open(cx, &app, None, "README.md", None);
     shown(cx, "line 60");
@@ -486,6 +495,7 @@ fn a_file_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn show_diff_compares_a_file_with_its_ref_or_with_head(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
     let app = cx.sb.repo("app");
     open(cx, &app, Some("main"), "README.md", None);
     shown(cx, "line 60");
@@ -538,6 +548,7 @@ fn record(
 #[gpui_kit::test]
 fn the_viewer_editor_leaves_the_apps_chords_to_the_app(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    md_source(cx);
     let app = cx.sb.repo("app");
     open(cx, &app, None, "README.md", None);
     shown(cx, "line 60");
@@ -561,4 +572,167 @@ fn the_viewer_editor_leaves_the_apps_chords_to_the_app(cx: &mut TestAppContext) 
     let focused: Vec<_> = find.iter().filter(|e| e.focused() == Some(true)).collect();
     assert_eq!(focused.len(), 1);
     assert!(!focused[0].value().unwrap_or_default().contains("line 60"));
+}
+
+/// The texts reading `text` in a fresh frame.
+fn painted(cx: &mut VisualTestContext, text: &str) -> Vec<TextSnapshot> {
+    let all = cx.update(|w, cx| {
+        w.render_frame(cx);
+        texts(w)
+    });
+    all.into_iter().filter(|t| t.text() == text).collect()
+}
+
+fn visible(cx: &mut VisualTestContext, text: &str) -> bool {
+    painted(cx, text).iter().any(|t| t.visible())
+}
+
+/// Clicks the start of `text` in the markdown view, `down` of the way down its lines.
+fn click_text(cx: &mut VisualTestContext, text: &str, down: f32) {
+    let t = painted(cx, text).into_iter().find(|t| t.visible()).unwrap();
+    let root = cx.find("markdown").unwrap().bounds().origin;
+    let b = t.bounds();
+    let at = point(b.left() + px(3.), b.top() + b.size.height * down) - root;
+    cx.update(|w, cx| w.click_at("markdown", at, cx));
+    settle(cx);
+}
+
+fn description(cx: &mut VisualTestContext, id: &'static str) -> Option<String> {
+    cx.find(id).and_then(|e| e.description().map(Into::into))
+}
+
+fn md_preview(cx: &mut VisualTestContext) -> Option<bool> {
+    cx.update(|_, cx| ui_state::get::<bool>("viewer.mdPreview", cx))
+}
+
+/// e2e's guide, longer than the piece the preview shows in one frame.
+fn guide() -> String {
+    let filler = "A filler paragraph, long enough to make this guide several pieces long.\n\n";
+    let filler = filler.repeat(80);
+    format!(
+        "# Guide\n\n[Usage](#usage)\n\n[Other](other.md)\n\n[Web](https://example.com/x)\n\n\
+         ![logo](img/logo.svg)\n\n- [x] done\n\n```ts\nconst a = 1\n```\n\n\
+         ```mermaid\ngraph TD; A-->B\n```\n\n```mermaid\ngraph TD; A-->\n```\n\n\
+         {filler}## Usage\n\nend\n"
+    )
+}
+
+#[gpui_kit::test]
+fn markdown_previews_code_diagrams_anchors_and_links_and_source_sticks(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = cx.sb.repo("lib");
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#;
+    let files = [
+        ("docs/guide.md", guide()),
+        ("docs/other.md", "# Other\n".into()),
+        ("docs/img/logo.svg", svg.into()),
+    ];
+    cx.sb.commit_files(&lib, "docs", files);
+    open(cx, &lib, None, "docs/guide.md", None);
+    wait_until(cx, |cx| visible(cx, "Guide"));
+    let (h1, done) = (
+        painted(cx, "Guide")[0].bounds(),
+        painted(cx, "done")[0].bounds(),
+    );
+    assert!(h1.size.height > done.size.height * 1.3, "a large h1");
+    assert!(
+        painted(cx, "[x] done").is_empty(),
+        "the task box is no text"
+    );
+    assert!(visible(cx, "const a = 1"));
+
+    wait_until(cx, |cx| cx.find("md.mermaid.error").is_some());
+    wait_until(cx, |cx| cx.find("md.mermaid").is_some());
+    assert_eq!(cx.update(|w, _| w.find_all("md.mermaid").len()), 1);
+    let error = label(cx, "md.mermaid.error").unwrap();
+    assert!(error.contains("invalid flowchart edge syntax"), "{error}");
+    let source = label(cx, "md.mermaid.source");
+    assert_eq!(
+        source.as_deref(),
+        Some("graph TD; A-->"),
+        "a failed diagram shows its source"
+    );
+    assert_eq!(description(cx, "md.mermaid").as_deref(), Some("light"));
+    cx.update(|w, cx| Theme::change(ThemeMode::Dark, Some(w), cx));
+    wait_until(cx, |cx| {
+        description(cx, "md.mermaid").as_deref() == Some("dark")
+    });
+
+    click_text(cx, "Web", 0.5);
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/x"));
+    assert!(!visible(cx, "end"));
+    click_text(cx, "Usage", 0.5);
+    wait_until(cx, |cx| visible(cx, "end"));
+    assert!(!visible(cx, "Guide"), "scrolled to the h2");
+
+    open(cx, &lib, None, "docs/guide.md", None);
+    wait_until(cx, |cx| visible(cx, "Other"));
+    click_text(cx, "Other", 0.5);
+    wait_until(cx, |cx| {
+        label(cx, "viewer.name").as_deref() == Some("other.md")
+    });
+    wait_until(cx, |cx| visible(cx, "Other") && !visible(cx, "Guide"));
+
+    cx.update(|w, cx| w.within("viewer.md").click(0usize, cx));
+    settle(cx);
+    shown(cx, "# Other");
+    assert!(cx.find("markdown").is_none());
+    assert_eq!(md_preview(cx), Some(false));
+    open(cx, &lib, None, "docs/guide.md", None);
+    shown(cx, "# Guide");
+    assert!(cx.find("markdown").is_none(), "Source sticks");
+}
+
+#[gpui_kit::test]
+fn markdown_preview_toggles_and_a_line_shows_the_source(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    let toggle = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| actions::run(w, cx, "markdown.preview"));
+        settle(cx);
+    };
+    open(cx, &app, None, "README.md", None);
+    wait_until(cx, |cx| cx.find("markdown").is_some());
+    toggle(cx);
+    shown(cx, "line 60");
+    assert_eq!(md_preview(cx), Some(false));
+    toggle(cx);
+    assert!(cx.find("markdown").is_some());
+    assert_eq!(md_preview(cx), Some(true));
+
+    open(cx, &app, None, "README.md", Some(6));
+    shown(cx, "line 60");
+    assert!(cx.find("markdown").is_none(), "a line shows in the source");
+    assert_eq!(rest_of_line(cx), "line 6");
+    open(cx, &app, None, "README.md", None);
+    wait_until(cx, |cx| cx.find("markdown").is_some());
+    cx.press("secondary-l");
+    assert!(cx.find("markdown").is_none(), "Go to Line shows the source");
+    cx.press("escape");
+    assert_eq!(md_preview(cx), Some(true), "neither is remembered");
+}
+
+#[gpui_kit::test]
+fn forge_markdown_breaks_lines_and_opens_only_web_links(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    let links = Links::Forge {
+        project_url: "https://git.example.com/gitlab/group/app".into(),
+        base_url: "https://git.example.com/gitlab".into(),
+        gitlab: true,
+    };
+    let text = "[the docs](docs/a.md)\n[this](javascript:alert(1))";
+    let cx = app
+        .cx
+        .add_window_view(|_, cx| Markdown::new(text, links, true, cx))
+        .1;
+    wait_until(cx, |cx| visible(cx, "the docs\nthis"));
+    click_text(cx, "the docs\nthis", 0.25);
+    let docs = "https://git.example.com/gitlab/group/app/docs/a.md";
+    assert_eq!(cx.opened_url().as_deref(), Some(docs));
+    click_text(cx, "the docs\nthis", 0.75);
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(docs),
+        "javascript: does nothing"
+    );
 }

@@ -35,7 +35,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ## 1. User-visible behavior per component
 
-### 1.1 Viewer (`src/components/Viewer.svelte`)
+### 1.1 Viewer (`src/components/Viewer.svelte`) [ported]
 
 **What it shows.** `shown = doc ?? view.shown`, but only when it is of kind `file` or `diff` (`:47`). `FileDoc` is either `{kind:'file', repo, ref, path, line}` or `{kind:'diff', repo, path, origPath, left: Side, right: Side}` (`src/lib/view.svelte.ts:6-8`).
 
@@ -255,7 +255,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 - "Results truncated at 10,000 matches. Narrow the search." when truncated.
 - The error text (red) for regex or glob errors and the like.
 
-### 1.5 Markdown (`src/components/Markdown.svelte`): see §3.
+### 1.5 Markdown (`src/components/Markdown.svelte`): see §3. [ported]
 
 ### 1.6 Palette: go to file, search everywhere, recent (`src/components/Palette.svelte`)
 
@@ -308,7 +308,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 2. Monaco usage (`src/lib/monaco.ts`, `Viewer.svelte`, `Markdown.svelte`)
+## 2. Monaco usage (`src/lib/monaco.ts`, `Viewer.svelte`, `Markdown.svelte`) [ported differently: the kit's Editor, Diff and TextView in place of Monaco; built-in find kept; view zones become Diff annotations; the clash guard becomes key contexts]
 
 **Setup**:
 - Full `import * as monaco from 'monaco-editor'`, version 0.57.0 (`package.json`).
@@ -359,7 +359,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 3. Markdown preview (`src/lib/markdown.ts`, `src/components/Markdown.svelte`)
+## 3. Markdown preview (`src/lib/markdown.ts`, `src/components/Markdown.svelte`) [ported differently: mermaid-rs-renderer and kit highlighting in place of mermaid.js and Monaco colorize]
 
 **Renderer**: `marked` ^18.1.2 (`new Marked` with a custom `code` renderer), then `DOMPurify` ^3.4.17 with an allowlist, then `mermaid` ^12.2.0 (lazy `import('mermaid')`).
 

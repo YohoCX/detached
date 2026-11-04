@@ -9,14 +9,16 @@ use gpui_kit::{
     prelude::FluentBuilder,
 };
 
+use super::api::{Links, Markdown};
 use super::code::Code;
 use super::diff::describe;
 use super::goto::{Goto, GotoLine};
+use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::nav::Nav;
 use crate::store::{Event, Location, Store};
-use crate::{blocking, ui};
+use crate::{blocking, ui, ui_state};
 
 enum Body {
     Loading,
@@ -28,6 +30,8 @@ pub(super) struct FileView {
     loc: Location,
     code: Entity<Code>,
     body: Body,
+    /// A markdown file's preview, in place of its source.
+    preview: Option<Entity<Markdown>>,
     /// Put the cursor on the location's line once loaded.
     reveal: bool,
     goto: Option<(Entity<GotoLine>, Subscription)>,
@@ -42,13 +46,25 @@ impl FileView {
         let goto = move |window: &mut Window, cx: &mut App| {
             this.update(cx, |v, cx| v.open_goto(window, cx)).ok();
         };
-        let actions = vec![actions::register(
-            cx,
-            "editor.gotoLine",
-            "Go to Line",
-            Group::Navigate,
-            goto,
-        )];
+        let this = cx.weak_entity();
+        let preview = move |window: &mut Window, cx: &mut App| {
+            this.update(cx, |v, cx| {
+                if v.is_markdown() {
+                    v.toggle(v.preview.is_none(), window, cx);
+                }
+            })
+            .ok();
+        };
+        let actions = vec![
+            actions::register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, goto),
+            actions::register(
+                cx,
+                "markdown.preview",
+                "Toggle Markdown Preview",
+                Group::View,
+                preview,
+            ),
+        ];
         let store = Store::global(cx);
         let store = cx.subscribe_in(&store, window, |this: &mut Self, _, e, window, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.loc.repo) {
@@ -59,6 +75,7 @@ impl FileView {
             loc,
             code: cx.new(|cx| Code::new(window, cx)),
             body: Body::Loading,
+            preview: None,
             reveal: true,
             goto: None,
             _load: Task::ready(()),
@@ -112,12 +129,51 @@ impl FileView {
             }
         });
         self.body = Body::Text { conflicted };
+        if !self.is_markdown() || reveal {
+            self.preview = None;
+        }
+        if let Some(p) = &self.preview {
+            p.update(cx, |m, cx| m.set_text(text.into(), cx));
+        } else if reveal && self.is_markdown() && self.loc.line.is_none() {
+            let on = ui_state::get("viewer.mdPreview", cx).unwrap_or(true);
+            self.set_preview(on, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn is_markdown(&self) -> bool {
+        matches!(self.body, Body::Text { conflicted: false }) && is_markdown(&self.loc.path)
+    }
+
+    fn toggle(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        ui_state::set("viewer.mdPreview", on, cx);
+        self.set_preview(on, window, cx);
+    }
+
+    /// Shows the preview or the source, and focuses it.
+    fn set_preview(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !on {
+            self.preview = None;
+            self.code.update(cx, |c, cx| c.focus(window, cx));
+        } else if self.preview.is_none() {
+            let l = &self.loc;
+            let links = Links::Repo {
+                repo: l.repo.clone(),
+                rev: l.rev.clone(),
+                path: l.path.clone(),
+            };
+            let text = self.code.read(cx).text(cx);
+            let preview = cx.new(|cx| Markdown::new(text, links, false, cx));
+            preview.update(cx, |m, cx| m.focus(window, cx));
+            self.preview = Some(preview);
+        }
         cx.notify();
     }
 
     fn placeholder(&mut self, text: String, cx: &mut Context<Self>) {
         self.body = Body::Placeholder(text.into());
         self.goto = None;
+        self.preview = None;
         cx.notify();
     }
 
@@ -125,6 +181,8 @@ impl FileView {
         if !matches!(self.body, Body::Text { .. }) {
             return;
         }
+        // Go to Line shows the source without changing what a markdown file opens in.
+        self.preview = None;
         let goto = cx.new(|cx| GotoLine::new(window, cx));
         let events = cx.subscribe_in(&goto, window, |this: &mut Self, _, e, window, cx| {
             this.goto = None;
@@ -163,10 +221,11 @@ impl Render for FileView {
             None => name,
         };
         let zed = || cx.listener(|this: &mut Self, _, _, cx| this.zed(cx));
-        let body = match &self.body {
-            Body::Loading => div().into_any_element(),
-            Body::Text { .. } => self.code.clone().into_any_element(),
-            Body::Placeholder(msg) => ui::placeholder(msg.clone(), cx)
+        let body = match (&self.body, &self.preview) {
+            (Body::Loading, _) => div().into_any_element(),
+            (Body::Text { .. }, Some(preview)) => preview.clone().into_any_element(),
+            (Body::Text { .. }, None) => self.code.clone().into_any_element(),
+            (Body::Placeholder(msg), _) => ui::placeholder(msg.clone(), cx)
                 .id("file.placeholder")
                 .test_support()
                 .aria_label(msg.clone())
@@ -179,6 +238,19 @@ impl Render for FileView {
             .child(
                 viewer::header(&l.path, repo, cx)
                     .child(div().flex_1())
+                    .when(self.is_markdown(), |h| {
+                        let this = cx.weak_entity();
+                        let options = [(false, "Source"), (true, "Preview")];
+                        h.child(ui::segmented(
+                            "viewer.md",
+                            &options,
+                            self.preview.is_some(),
+                            move |on, window, cx| {
+                                this.update(cx, |v, cx| v.toggle(on, window, cx)).ok();
+                            },
+                            cx,
+                        ))
+                    })
                     .child(viewer::zed_button(zed(), cx)),
             )
             .when(matches!(self.body, Body::Text { conflicted: true }), |d| {

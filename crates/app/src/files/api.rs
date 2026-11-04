@@ -2,12 +2,13 @@
 
 use std::rc::Rc;
 
-use gpui_kit::{AnyView, App, Context, IntoElement, Render, SharedString, Window};
+use gpui_kit::{AnyView, App, Window};
 
 pub use detached_core::types::Side;
 pub use gpui_kit::component::diff::DiffSide;
 
 pub use super::diff::DiffView;
+pub use super::markdown::Markdown;
 use super::viewer::FocusDiff;
 use crate::nav;
 pub use crate::store::{DiffDoc, DocRef, Location};
@@ -61,26 +62,4 @@ pub enum Links {
         base_url: String,
         gitlab: bool,
     },
-}
-
-pub struct Markdown {
-    text: SharedString,
-}
-
-impl Markdown {
-    /// `breaks` renders a lone newline as a line break, as MR text does.
-    pub fn new(
-        text: impl Into<SharedString>,
-        _links: Links,
-        _breaks: bool,
-        _cx: &mut Context<Self>,
-    ) -> Self {
-        Markdown { text: text.into() }
-    }
-}
-
-impl Render for Markdown {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.text.clone()
-    }
 }
