@@ -17,7 +17,7 @@ use detached_core::types::RepoInfo;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, AsyncApp, Div, Entity, Global, InteractiveElement, PathPromptOptions, Role,
+    App, AppContext, Div, Entity, Global, InteractiveElement, PathPromptOptions, Role,
     SharedString, Stateful, StatefulInteractiveElement, Styled, Task, px,
 };
 
@@ -26,7 +26,7 @@ pub use branches::branches;
 pub use settings::settings;
 pub use sidebar::sidebar;
 pub use switcher::switcher;
-pub use sync::{Bulk, Kind, sync_buttons};
+pub use sync::sync_buttons;
 pub use workspaces::workspaces;
 
 use crate::actions::{self, Registration};
@@ -34,15 +34,16 @@ use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
 use branches::Intent;
+use sync::{Bulk, Kind};
 
 /// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches, the
 /// branches popup's intent.
-pub struct State {
-    pub sync: Option<Bulk>,
+struct State {
+    sync: Option<Bulk>,
     /// Bumped each time a repo's outcome is shown, so a fade clears only the outcome it was set for.
     shown: HashMap<String, u64>,
     /// Per repo, newest first; in memory only.
-    pub recent: HashMap<String, Vec<String>>,
+    recent: HashMap<String, Vec<String>>,
     branches: Option<Intent>,
     _actions: Vec<Registration>,
 }
@@ -53,7 +54,7 @@ impl Global for GlobalState {}
 
 impl State {
     /// Made on first use, by the shell's slot constructors at the latest; it registers the actions.
-    pub fn global(cx: &mut App) -> Entity<State> {
+    fn global(cx: &mut App) -> Entity<State> {
         if let Some(g) = cx.try_global::<GlobalState>() {
             return g.0.clone();
         }
@@ -162,7 +163,7 @@ pub(crate) fn add_folders(workspace: Option<String>, cx: &mut App) {
     cx.spawn(async move |cx| {
         let paths = match picked.await {
             Ok(Ok(Some(paths))) => paths,
-            Ok(Err(e)) => return say_error(e.to_string(), cx),
+            Ok(Err(e)) => return cx.update(|cx| say(e.to_string(), true, cx)),
             _ => return,
         };
         for path in paths {
@@ -181,14 +182,14 @@ pub(crate) fn run_core(cx: &mut App, f: impl FnOnce(&AppState) -> Result<()> + S
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         if let Err(e) = done.await {
-            say_error(e.to_string(), cx);
+            cx.update(|cx| say(e.to_string(), true, cx));
         }
     })
     .detach();
 }
 
-fn say_error(text: String, cx: &mut AsyncApp) {
-    cx.update(|cx| Store::global(cx).update(cx, |s, cx| s.say(text, true, cx)));
+fn say(text: String, error: bool, cx: &mut App) {
+    Store::global(cx).update(cx, |s, cx| s.say(text, error, cx));
 }
 
 /// A top bar widget that reads `label`; `title` is its tooltip.

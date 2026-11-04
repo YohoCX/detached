@@ -153,7 +153,6 @@ fn badge_text(p: InProgress) -> &'static str {
     }
 }
 
-/// The sidebar slot's view.
 pub fn sidebar(cx: &mut App) -> AnyView {
     cx.new(Sidebar::new).into()
 }

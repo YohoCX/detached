@@ -21,7 +21,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, transparent_black, uniform_list,
 };
 
-use super::{CheckoutTarget, State, checkout, sync, widget};
+use super::{CheckoutTarget, State, checkout, say, sync, widget};
 use crate::blocking;
 use crate::store::{Level, Notice, Store};
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
@@ -35,7 +35,7 @@ pub enum Intent {
     Delete,
 }
 
-/// Opens the popup for `intent`, or closes it.
+/// None closes it.
 pub fn open(intent: Option<Intent>, cx: &mut App) {
     State::global(cx).update(cx, |s, cx| {
         s.branches = intent;
@@ -603,7 +603,7 @@ impl Popup {
         self.act(
             move |core, repo| api::create_branch(core, repo, &n, &start, false),
             move |(), cx| {
-                say(format!("Created branch {name}"), cx);
+                say(format!("Created branch {name}"), false, cx);
                 if and_checkout {
                     checkout(cx, &repo, CheckoutTarget::Local { name }).detach();
                 }
@@ -621,7 +621,7 @@ impl Popup {
             move |r, cx| match r {
                 DeleteResult::NotMerged { commits } => Next::Go(Sub::NotMerged { name, commits }),
                 DeleteResult::Deleted => {
-                    say(format!("Deleted branch {name}"), cx);
+                    say(format!("Deleted branch {name}"), false, cx);
                     Next::List
                 }
             },
@@ -1141,7 +1141,6 @@ fn search(input: &Entity<InputState>, id: &'static str, cx: &App) -> Div {
     )
 }
 
-/// A view's title row, after the back button if there is one.
 fn title(back: Option<AnyElement>, text: String) -> Div {
     div()
         .flex()
@@ -1203,8 +1202,4 @@ fn danger(
         .focus(|s| s.border_color(t.selected_ring))
         .role(Role::Button)
         .aria_label(label)
-}
-
-fn say(text: String, cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| s.say(text, false, cx));
 }

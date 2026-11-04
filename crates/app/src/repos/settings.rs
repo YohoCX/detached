@@ -11,7 +11,7 @@ use detached_core::state::AppState;
 use detached_core::types::{
     Account, AccountInput, EnvInfo, ForgeHosts, HostAccount, Provider, VerifyResult,
 };
-use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::base::{ObservedElement, POPUP_PRIORITY, TestSupportExt};
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{Enter, InputState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
@@ -23,7 +23,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{Section, State, settings_call};
+use super::{Section, State, say, settings_call};
 use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
@@ -144,7 +144,7 @@ fn select<V: Clone + PartialEq + 'static>(
 }
 
 /// What a reload reads.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Data {
     settings: Settings,
     accounts: Vec<Account>,
@@ -153,17 +153,15 @@ struct Data {
     env: Option<EnvInfo>,
 }
 
-fn load(core: &AppState, repo: Option<&str>) -> Result<Data> {
-    Ok(Data {
-        settings: api::get_settings(core),
-        accounts: api::list_accounts(core)?,
-        hosts: match repo {
-            Some(r) => api::repo_accounts(core, r)?,
-            None => vec![],
-        },
-        forge: repo.map(|r| api::forge_hosts(core, r)).transpose()?,
-        env: Some(api::env_info(core)),
-    })
+/// Stops at the first error, keeping what it read before and the rest from `d`.
+fn load(core: &AppState, repo: Option<&str>, d: &mut Data) -> Result<()> {
+    d.settings = api::get_settings(core);
+    d.accounts = api::list_accounts(core)?;
+    if let Some(r) = repo {
+        d.hosts = api::repo_accounts(core, r)?;
+        d.forge = Some(api::forge_hosts(core, r)?);
+    }
+    Ok(())
 }
 
 /// The selects of the repo sections, made anew from each reload.
@@ -382,7 +380,16 @@ impl Dialog {
             error: None,
             form: None,
         };
-        this.reload(window, cx);
+        // The Accounts section also shows its list's error inline on open.
+        let open = |core: &AppState| {
+            let error = api::list_accounts(core).err().map(|e| e.to_string());
+            Ok((api::env_info(core), error))
+        };
+        let then = |this: &mut Self, (env, error), _: &mut Window, _: &mut Context<Self>| {
+            this.data.env = Some(env);
+            this.error = error;
+        };
+        this.call(false, open, then, window, cx);
         this
     }
 
@@ -409,23 +416,27 @@ impl Dialog {
         if inline {
             self.error = None;
         }
-        let (core, repo) = (Store::global(cx).read(cx).core().clone(), self.repo.clone());
+        let core = Store::global(cx).read(cx).core().clone();
+        let (repo, mut data) = (self.repo.clone(), self.data.clone());
         let done = blocking::run(cx, move || {
-            f(&core).map(|t| (t, load(&core, repo.as_deref())))
+            f(&core).map(|t| {
+                let loaded = load(&core, repo.as_deref(), &mut data);
+                (t, data, loaded)
+            })
         });
         cx.spawn_in(window, async move |this, cx| {
             let done = done.await;
             this.update_in(cx, |this, window, cx| {
                 match done {
-                    Ok((t, data)) => {
-                        match data {
-                            Ok(data) => this.apply(data, window, cx),
-                            Err(e) => say(e.to_string(), cx),
+                    Ok((t, data, loaded)) => {
+                        this.apply(data, window, cx);
+                        if let Err(e) = loaded {
+                            say(e.to_string(), true, cx);
                         }
                         then(this, t, window, cx);
                     }
                     Err(e) if inline => this.error = Some(e.to_string()),
-                    Err(e) => say(e.to_string(), cx),
+                    Err(e) => say(e.to_string(), true, cx),
                 }
                 cx.notify();
             })
@@ -787,9 +798,14 @@ impl Dialog {
                         |this, window, cx| {
                             let path = this.git.read(cx).value().trim().to_string();
                             let path = Some(path).filter(|p| !p.is_empty());
-                            let set =
-                                move |core: &AppState| api::set_git_path(core, path).map(drop);
-                            this.call(false, set, |_, (), _, _| {}, window, cx);
+                            let set = move |core: &AppState| api::set_git_path(core, path);
+                            this.call(
+                                false,
+                                set,
+                                |this, env, _, _| this.data.env = Some(env),
+                                window,
+                                cx,
+                            );
                         },
                     )),
             )
@@ -913,7 +929,6 @@ fn row() -> Div {
     div().flex().items_center().gap(px(10.)).mb(px(6.))
 }
 
-/// A host, its remotes and the select for it.
 fn host(h: &HostAccount, select: impl IntoElement, cx: &App) -> Div {
     row()
         .child(
@@ -936,10 +951,6 @@ fn close(cx: &Context<Dialog>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 
     move |_, _, cx| {
         this.update(cx, |_, cx| cx.emit(DismissEvent)).ok();
     }
-}
-
-fn say(text: String, cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| s.say(text, true, cx));
 }
 
 impl Render for Dialog {
@@ -1017,6 +1028,8 @@ impl Render for Dialog {
             .child(head)
             .child(body);
         let all = div().w(vp.width).h(vp.height).child(scrim).child(dialog);
+        // After the top bar's popups at their priority; its own selects nest, so they draw over it.
         deferred(anchored().position(point(px(0.), px(0.))).child(all))
+            .with_priority(POPUP_PRIORITY)
     }
 }

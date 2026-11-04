@@ -897,9 +897,17 @@ fn deleting_a_remote_branch_asks_first_then_runs_as_an_op(cx: &mut TestAppContex
     assert_eq!(cx.sb.git(&origin, &["branch", "--list", "topic"]), "");
 }
 
+/// Opens `select` again when a reload made it anew, closed, before the option showed.
 fn click_option(cx: &mut VisualTestContext, select: impl Into<ElementId>, option: &str) {
-    cx.click(select);
-    cx.click(ElementId::Name(format!("option:{option}").into()));
+    let (select, option) = (
+        select.into(),
+        ElementId::Name(format!("option:{option}").into()),
+    );
+    wait_until(cx, |cx| {
+        cx.click(select.clone());
+        cx.find(option.clone()).is_some()
+    });
+    cx.click(option);
 }
 
 /// Account row `i`'s check state.
@@ -1055,12 +1063,17 @@ fn an_edit_without_a_token_keeps_it_remove_asks_first_and_the_provider_fixes_the
 }
 
 #[gpui_kit::test]
-fn focus_coming_into_accounts_reloads_them(cx: &mut TestAppContext) {
-    let cx = &mut open_app(cx);
-    // Focus events need an active window.
-    cx.update(|w, _| w.activate_window());
+fn settings_opened_over_a_popup_takes_the_clicks(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.click("workspaces");
     cx.press("secondary-,");
-    wait_until(cx, |cx| cx.find("accounts.empty").is_some());
+    cx.click("settings.close");
+    assert!(cx.find("settings").is_none());
+    assert!(cx.find("workspaces.popup").is_some(), "under Settings");
+}
+
+/// Saves a GitHub account labeled Mine through core.
+fn save_mine(cx: &mut VisualTestContext) {
     let input = AccountInput {
         id: None,
         provider: Provider::Github,
@@ -1071,9 +1084,61 @@ fn focus_coming_into_accounts_reloads_them(cx: &mut TestAppContext) {
     };
     let core = cx.store(|s, _| s.core().clone());
     api::save_account(&core, input).unwrap();
+}
+
+#[gpui_kit::test]
+fn focus_coming_into_accounts_reloads_them(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    // Focus events need an active window.
+    cx.update(|w, _| w.activate_window());
+    cx.press("secondary-,");
+    wait_until(cx, |cx| cx.find("accounts.empty").is_some());
+    save_mine(cx);
     cx.click("accounts.add");
     cx.click("accounts.user");
     wait_until(cx, |cx| labels(cx, "accounts.row") == ["Mine"]);
+}
+
+#[gpui_kit::test]
+fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_broken(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = path(cx.sb.repo("lib"));
+    let id = row(cx, &lib).id;
+    click_in(cx, &id, "remove");
+    wait_until(cx, |cx| !paths(cx).contains(&lib));
+    select(cx, "app");
+    save_mine(cx);
+    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    wait_until(cx, |cx| labels(cx, "accounts.row") == ["Mine"]);
+    let git = path(cx.sb.root().join("no-git"));
+    type_into(cx, "settings.gitPath", &git);
+    cx.click("settings.apply");
+    wait_until(cx, |cx| label(cx, "settings.env") == format!(" · {git}"));
+
+    cx.click("settings.close");
+    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    let field = |cx: &mut VisualTestContext| {
+        let f = cx.find("settings.gitPath");
+        f.and_then(|f| f.value().map(String::from))
+    };
+    wait_until(cx, |cx| field(cx) == Some(git.clone()));
+    assert_eq!(labels(cx, "accounts.row"), ["Mine"]);
+    assert_eq!(label(cx, ("settings.excluded", 0usize)), lib);
+    assert!(said(cx).unwrap().error, "the repo's accounts need git");
+}
+
+#[gpui_kit::test]
+fn an_unreadable_accounts_file_is_said_in_accounts_and_in_the_status_bar(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    std::fs::write(cx.sb.state.config_dir.join("accounts.json"), "{").unwrap();
+    cx.press("secondary-,");
+    wait_until(cx, |cx| cx.find("accounts.error").is_some());
+    let said = said(cx).unwrap();
+    assert!(said.error);
+    assert_eq!(label(cx, "accounts.error"), said.text);
+    assert!(cx.find("settings.env").is_some());
 }
 
 #[gpui_kit::test]
