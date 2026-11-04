@@ -215,6 +215,14 @@ pub fn theme(cx: &App) -> &'static Theme {
     if is_dark(cx) { &DARK } else { &LIGHT }
 }
 
+/// A log graph lane's color: mid tones that read on both the light and the dark panel.
+pub fn lane(color: u32) -> Hsla {
+    const LANES: [u32; 8] = [
+        0x6366f1, 0x10b981, 0xf59e0b, 0xec4899, 0x06b6d4, 0x8b5cf6, 0xef4444, 0x84cc16,
+    ];
+    c(LANES[color as usize % LANES.len()])
+}
+
 /// The platform's monospace family, which the kit makes sure is installed.
 pub fn mono(cx: &App) -> SharedString {
     Kit::global(cx).mono_font_family.clone()
