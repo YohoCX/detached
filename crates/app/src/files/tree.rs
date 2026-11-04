@@ -12,7 +12,7 @@ use detached_core::types::FileEntry;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, BoxShadow, Context, Entity, FocusHandle, FontWeight, Global,
+    AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
     Window, div, prelude::FluentBuilder, px, uniform_list,
@@ -332,9 +332,6 @@ impl Tree {
         let t = theme(cx);
         let on = self.sel.as_ref() == Some(&r.path);
         let name = base_name(&r.path).to_string();
-        let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
-            .spread_radius(px(1.))
-            .inset();
         let chevron = div()
             .flex()
             .flex_none()
@@ -357,7 +354,7 @@ impl Tree {
         };
         let tip: SharedString = r.path.clone().into();
         let row = r.clone();
-        ui::row(("tree.row", i), on, cx)
+        ui::list_row(("tree.row", i), on, focused, cx)
             .test_support()
             .role(Role::TreeItem)
             .aria_label(name.clone())
@@ -373,8 +370,6 @@ impl Tree {
             .pl(px(8. + 16. * r.depth as f32))
             .pr(px(8.))
             .whitespace_nowrap()
-            .when(on && !focused, |d| d.bg(t.selected_inactive))
-            .when(on && focused, |d| d.shadow(vec![ring]))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.activate(&row, cx)))
             .child(chevron)

@@ -10,7 +10,7 @@ use detached_core::types::{CompareBase, FileChange};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, BoxShadow, ClickEvent, Context, Entity, FocusHandle, FontWeight, Global,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight, Global,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
     Window, div, prelude::FluentBuilder, px, uniform_list,
@@ -388,11 +388,8 @@ impl Changes {
             None => c.path.clone(),
         }
         .into();
-        let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
-            .spread_radius(px(1.))
-            .inset();
         let change = c.clone();
-        ui::row(("changes.row", i), on, cx)
+        ui::list_row(("changes.row", i), on, focused, cx)
             .test_support()
             .role(Role::ListItem)
             .aria_label(name.clone())
@@ -403,8 +400,6 @@ impl Changes {
             .pl(px(14.))
             .pr(px(8.))
             .whitespace_nowrap()
-            .when(on && !focused, |r| r.bg(t.selected_inactive))
-            .when(on && focused, |r| r.shadow(vec![ring]))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 this.select(change.clone(), e.click_count() > 1, cx);
