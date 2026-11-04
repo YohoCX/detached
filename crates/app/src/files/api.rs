@@ -51,6 +51,9 @@ impl DiffView {
     pub fn new(doc: DiffDoc, _options: DiffOptions, _cx: &mut Context<Self>) -> Self {
         DiffView { doc }
     }
+
+    /// Replaces the views under lines without reloading the diff.
+    pub fn set_annotations(&mut self, _annotations: Vec<Annotation>, _cx: &mut Context<Self>) {}
 }
 
 impl Render for DiffView {

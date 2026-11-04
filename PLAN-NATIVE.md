@@ -295,6 +295,8 @@ provider then fills it in.
     focus into the diff once it loads (double-click or Enter) and `false` leaves it in the caller's
     list (a click or arrow keys stepping through files);
   - `DiffView::new(doc, DiffOptions { side_by_side: Option<bool>, annotations, on_add, commentable }, cx)`;
+    `DiffView::set_annotations(annotations, cx)` replaces the views under lines (MR threads, the
+    draft) without reloading the diff;
   - `Markdown::new(text, Links, breaks: bool, cx)`, `Links::Repo { repo, rev, path }` or
     `Links::Forge { project_url, base_url, gitlab: bool }` (GitLab resolves `/uploads/…` under the
     project and shows its upload images as links, history.md §2.7).
