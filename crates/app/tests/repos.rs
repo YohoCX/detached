@@ -13,7 +13,10 @@ use detached_core::api;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{
+    ElementId, KeyDownEvent, KeyUpEvent, Keystroke, Pixels, Role, TestAppContext,
+    VisualTestContext, point, px,
+};
 
 /// A sidebar row as drawn: a repo's path (None for a header), its label and its second line.
 #[derive(Debug)]
@@ -447,8 +450,19 @@ fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_c
     let default = workspace_row(cx, "Default");
     cx.click(default);
     wait_until(cx, |cx| !on(cx));
-    cx.press("space");
+    // Released only after a frame, so a toggle on key down would be drawn before the key up.
+    let keystroke = Keystroke::parse("space").unwrap();
+    cx.simulate_event(KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    settle(cx);
+    cx.update(|w, cx| w.render_frame(cx));
+    cx.simulate_event(KeyUpEvent { keystroke });
     wait_until(cx, on);
+    settle(cx);
+    assert!(on(cx), "one toggle per press");
     cx.press("enter");
     wait_until(cx, |cx| !on(cx));
 
