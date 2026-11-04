@@ -202,15 +202,19 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
     let id = row(cx, &lib).id;
     let x = cx.update(|w, _| w.within(id.clone()).find("remove"));
     assert!(!x.visible(), "shown only on hover");
+    // The rows change with the listing, before the workspaces load.
     click_in(cx, &id, "remove");
-    wait_until(cx, |cx| !paths(cx).contains(&lib));
-    let w = cx.store(|s, _| s.workspaces[0].clone());
-    assert_eq!(w.excluded_repos, [lib]);
+    wait_until(cx, |cx| {
+        cx.store(|s, _| s.workspaces[0].excluded_repos == [lib.as_str()])
+    });
+    assert!(!paths(cx).contains(&lib));
 
     let id = row(cx, &solo).id;
     click_in(cx, &id, "remove");
-    wait_until(cx, |cx| !paths(cx).contains(&solo));
-    assert_eq!(cx.store(|s, _| s.workspaces[0].folders.clone()), [ws]);
+    wait_until(cx, |cx| {
+        cx.store(|s, _| s.workspaces[0].folders == [ws.as_str()])
+    });
+    assert!(!paths(cx).contains(&solo));
 
     let api = path(cx.sb.repo("group/api"));
     let id = row(cx, &api).id;
