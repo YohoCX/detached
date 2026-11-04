@@ -511,6 +511,12 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
     );
     show(cx, "gitlab");
     cx.store(|s, cx| s.refresh_all(cx));
+    let path = repo.display().to_string();
+    let upstream = |cx: &mut VisualTestContext| {
+        cx.store(|s, _| s.status(&path).and_then(|st| st.upstream.clone()))
+    };
+    // Until then the create button can show under the old branch, read after the switch.
+    wait_until(cx, |cx| upstream(cx).as_deref() == Some("origin/topic"));
     wait_until(cx, |cx| cx.find("mr.new").is_some());
 
     cx.click("mr.new");
@@ -670,11 +676,13 @@ fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
     assert_eq!(none(cx).as_deref(), Some("No merge requests match"));
 
     let count = || requested(&forge, "/gitlab/api/graphql");
-    let (n, start) = (count(), cx.executor().now());
+    // Open, Review requested, Open again; the last may still be on its way.
+    wait_until(cx, |_| count() == 3);
+    let start = cx.executor().now();
     cx.executor().advance_clock(Duration::from_secs(60));
-    wait_until(cx, |_| count() > n);
+    wait_until(cx, |_| count() > 3);
     assert!(cx.executor().now() - start < Duration::from_secs(62));
-    assert_eq!(count(), n + 1);
+    assert_eq!(count(), 4);
 }
 
 /// Shows MR 1 of the forge repo `name`, loaded.

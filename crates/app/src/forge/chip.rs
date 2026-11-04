@@ -114,19 +114,20 @@ impl MrChip {
     }
 
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(repo), Some(key)) = (self.repo.clone(), self.key.clone()) else {
+        let (Some(repo), Some(_)) = (self.repo.clone(), &self.key) else {
             let text = "Create Merge Request needs a branch with an upstream";
             return Store::global(cx).update(cx, |s, cx| s.say(text, true, cx));
         };
         if let Some(Some(m)) = self.mr(cx) {
             return show_mr(cx, repo, m.number);
         }
-        let core = core(cx);
-        let new = blocking::run(cx, move || api::new_mr(&core, &repo));
+        let (core, r) = (core(cx), repo.clone());
+        let new = blocking::run(cx, move || api::new_mr(&core, &r));
         cx.spawn_in(window, async move |this, cx| {
             let new = new.await;
             this.update_in(cx, |this, window, cx| match new {
-                Ok(new) if this.key.as_ref() == Some(&key) => {
+                // Not the key: new_mr reads the branch on disk, which the status may catch up with later.
+                Ok(new) if this.repo.as_ref() == Some(&repo) => {
                     this.form = Some(Form::new(new, window, cx));
                     cx.notify();
                 }
