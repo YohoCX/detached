@@ -308,7 +308,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 2. Monaco usage (`src/lib/monaco.ts`, `Viewer.svelte`, `Markdown.svelte`) [ported differently: the kit's Editor, Diff and TextView in place of Monaco; built-in find kept; view zones become Diff annotations; the clash guard becomes key contexts]
+## 2. Monaco usage (`src/lib/monaco.ts`, `Viewer.svelte`, `Markdown.svelte`) [ported differently: the kit's Editor, Diff and TextView in place of Monaco; built-in find kept; view zones become Diff annotations; the clash guard becomes key contexts; light diff colors are the app's error and success]
 
 **Setup**:
 - Full `import * as monaco from 'monaco-editor'`, version 0.57.0 (`package.json`).

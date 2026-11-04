@@ -37,9 +37,6 @@ pub struct Theme {
     pub deleted: Hsla,
     pub conflict: Hsla,
     pub untracked: Hsla,
-    /// Monaco's diff colors: added and removed lines.
-    pub diff_add: Hsla,
-    pub diff_del: Hsla,
     /// Monaco's cursor line and text selection.
     pub line_highlight: Hsla,
     pub text_selection: Hsla,
@@ -150,8 +147,6 @@ static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme {
     deleted: c(0x64748b),
     conflict: c(0xe11d48),
     untracked: c(0xb45309),
-    diff_add: c(0x10b981),
-    diff_del: c(0xf43f5e),
     line_highlight: a(0x1e2950, 0.04),
     text_selection: a(0x6366f1, 0.2),
 });
@@ -192,8 +187,6 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     deleted: c(0x94a3b8),
     conflict: c(0xfb7185),
     untracked: c(0xfbbf24),
-    diff_add: c(0x34d399),
-    diff_del: c(0xfb7185),
     line_highlight: a(0xffffff, 0.03),
     text_selection: a(0x818cf8, 0.3),
 });
@@ -246,10 +239,9 @@ pub fn sync(window: &mut Window, cx: &mut App) {
         k.list_active = t.selected;
         k.primary = t.primary;
         k.primary_foreground = t.primary_fg;
-        // The kit's diff colors removed and added lines with these two.
-        k.danger = t.diff_del;
+        k.danger = t.error;
         k.warning = t.warning;
-        k.success = t.diff_add;
+        k.success = t.success;
         let mut code = (*k.highlight_theme).clone();
         code.style.editor_background = Some(t.code);
         code.style.editor_gutter_background = Some(t.code);
