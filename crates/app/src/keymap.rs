@@ -18,6 +18,9 @@ const MAC: bool = cfg!(target_os = "macos");
 /// The shell's key context; it holds focus whenever nothing inside it does.
 pub const CONTEXT: &str = "Detached";
 
+/// Around the viewer's read-only editor, where the app's chords beat the editor's own.
+pub const VIEWER: &str = "Viewer";
+
 /// Append-only, in the order bindings are tried.
 pub const DEFAULTS: &[(&str, &str)] = &[
     ("search.everywhere", "Double Shift"),
@@ -221,19 +224,21 @@ pub fn load(core: Arc<AppState>, cx: &mut App) -> Task<()> {
 /// Binds the defaults with `overrides`; once per app.
 pub fn bind(overrides: &BTreeMap<String, String>, cx: &mut App) {
     let bound = bindings(overrides, MAC);
-    let context = KeyBindingContextPredicate::parse(CONTEXT).ok().map(Rc::new);
+    // Bound after the kit's, so in the viewer they beat its editor's Outdent, Indent and Replace.
+    let viewer = format!("{VIEWER} > Input");
+    let contexts =
+        [CONTEXT, &viewer].map(|c| KeyBindingContextPredicate::parse(c).ok().map(Rc::new));
     // GPUI tries the latest binding of a chord first; the first one listed has to win.
-    let keys: Vec<KeyBinding> = bound
-        .iter()
-        .rev()
-        .filter_map(|(id, c)| match c {
-            Chord::Keys(k) => {
-                let run = Box::new(Run(id));
-                KeyBinding::load(&k.keystroke(), run, context.clone(), false, None, cx).ok()
-            }
-            Chord::DoubleShift => None,
-        })
-        .collect();
+    let mut keys = vec![];
+    for (id, c) in bound.iter().rev() {
+        let Chord::Keys(k) = c else { continue };
+        for context in &contexts {
+            let run = Box::new(Run(id));
+            keys.extend(
+                KeyBinding::load(&k.keystroke(), run, context.clone(), false, None, cx).ok(),
+            );
+        }
+    }
     cx.bind_keys(keys);
     if let Some(&(id, _)) = bound.iter().find(|(_, c)| *c == Chord::DoubleShift) {
         let mut double = DoubleShift::default();
@@ -255,7 +260,7 @@ mod tests {
     use gpui_kit::{
         AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
         KeybindingKeystroke, OperatingSystem, ParentElement, Render, TestAppContext,
-        VisualTestContext, Window, div,
+        VisualTestContext, Window, div, prelude::FluentBuilder,
     };
 
     use super::*;
@@ -495,18 +500,22 @@ mod tests {
 
     const CMD: &str = if MAC { "cmd" } else { "ctrl" };
 
-    /// The shell's key context, focused, around the kit's editor.
+    /// The shell's key context, focused, around the kit's editor, in the viewer's when `viewer`.
     struct Root {
         focus: FocusHandle,
         editor: Entity<EditorState>,
+        viewer: bool,
     }
 
     impl Render for Root {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let editor = div()
+                .when(self.viewer, |d| d.key_context(VIEWER))
+                .child(Editor::new(&self.editor));
             div()
                 .key_context(CONTEXT)
                 .track_focus(&self.focus)
-                .child(Editor::new(&self.editor))
+                .child(editor)
         }
     }
 
@@ -523,7 +532,11 @@ mod tests {
             let focus = cx.focus_handle();
             window.focus(&focus, cx);
             let editor = cx.new(|cx| EditorState::new(window, cx));
-            Root { focus, editor }
+            Root {
+                focus,
+                editor,
+                viewer: false,
+            }
         });
         cx.run_until_parked();
         (root, cx)
@@ -590,5 +603,25 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(*ran.borrow(), ["nav.back", "editor.gotoLine"]);
         cx.update(|_, cx| assert_eq!(editor.read(cx).value(), "  a", "the editor outdented"));
+    }
+
+    #[gpui_kit::test]
+    fn inside_the_viewer_the_apps_chords_beat_the_editors(cx: &mut TestAppContext) {
+        let (root, cx) = root(cx, &BTreeMap::new());
+        let (ran, _regs) = cx.update(|_, cx| record(cx, &["nav.back", "find.inFiles"]));
+        let editor = cx.update(|window, cx| {
+            root.update(cx, |r, _| r.viewer = true);
+            let editor = root.read(cx).editor.clone();
+            editor.update(cx, |e, cx| {
+                e.set_value("    a", window, cx);
+                e.focus(window, cx);
+            });
+            editor
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(&format!("{CMD}-[ {CMD}-shift-f"));
+        cx.run_until_parked();
+        assert_eq!(*ran.borrow(), ["nav.back", "find.inFiles"]);
+        cx.update(|_, cx| assert_eq!(editor.read(cx).value(), "    a"));
     }
 }

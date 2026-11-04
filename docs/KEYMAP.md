@@ -42,4 +42,5 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 In the Tauri client, bound chords are caught in the capture phase, so they win over Monaco and text
 inputs. In the native client they are bound in the window's context, so a focused text field or
 editor keeps its own binding of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable
-multi-line field, and on macOS Cmd+Shift+F (replace) in the editor.
+multi-line field, and on macOS Cmd+Shift+F (replace) in an editor. The viewer's read-only editor is
+the exception: there the app's chords win, while Cmd+F (its search) and Cmd+C stay its own.
