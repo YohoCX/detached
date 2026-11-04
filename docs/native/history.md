@@ -125,7 +125,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 - Trailing empty lanes are trimmed. Freed columns are reused, and colors stay with their lane.
 - A lane whose parent never arrives (truncation, shallow clone) runs to the last row.
 
-### 1.4 Backend log semantics (`src-tauri/src/git/log.rs`)
+### 1.4 Backend log semantics (`src-tauri/src/git/log.rs`) [ported]
 - **Command**: `git log --date-order --format=LOG_FORMAT` (`:51-55`). Refs:
   - all → `--branches --remotes --tags HEAD`
   - head → `HEAD`

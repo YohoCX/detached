@@ -1,31 +1,128 @@
-//! The Log panel: the current repo's commits with their graph, streamed in batches.
+//! The Log panel: the current repo's commits with their graph, streamed in batches, and its filters.
 
 use std::ops::Range;
+use std::time::Duration;
 
 use detached_core::api;
 use detached_core::types::{LogEvent, LogQuery, LogRefs, LogRow};
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, Global, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
+    AnyElement, App, AppContext, Context, Entity, FontWeight, Global, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px,
+    uniform_list,
 };
 
 use super::graph::{self, LANE, ROW};
 use super::{Chip, chip, lanes};
+use crate::actions::{self, Group, Registration};
 use crate::blocking;
-use crate::store::{Event, QueryId, Store};
+use crate::store::{Bottom, Doc, Event, QueryId, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::when;
 
-/// The filters for the session, kept while the panel is closed; refs reset when the repo changes.
+/// The filters of the session, kept while the panel is closed.
+#[derive(Clone, PartialEq)]
 struct Filters {
     repo: Option<String>,
     refs: LogRefs,
+    /// Text or hash, author and path, as typed.
+    fields: [String; 3],
+}
+
+impl Default for Filters {
+    fn default() -> Self {
+        Filters {
+            repo: None,
+            refs: LogRefs::All,
+            fields: Default::default(),
+        }
+    }
 }
 
 impl Global for Filters {}
+
+const PATH: usize = 2;
+
+/// The inputs of `Filters::fields`: id, placeholder and width.
+const FIELDS: [(&str, &str, f32); 3] = [
+    ("log.text", "Text or hash", 180.),
+    ("log.author", "Author", 120.),
+    ("log.path", "Path", 120.),
+];
+
+const DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// Keeps `vcs.fileHistory` registered for the life of the app.
+struct Registered {
+    _file_history: Registration,
+}
+
+impl Global for Registered {}
+
+/// Registers `vcs.fileHistory`, which works with the Log closed.
+pub fn init(cx: &mut App) {
+    let _file_history = actions::register(
+        cx,
+        "vcs.fileHistory",
+        "Show History for File",
+        Group::Vcs,
+        file_history,
+    );
+    cx.set_global(Registered { _file_history });
+}
+
+/// The Log on the shown file's repo and path; refs, text and author stay.
+fn file_history(_: &mut Window, cx: &mut App) {
+    let store = Store::global(cx);
+    let (repo, path) = match store.read(cx).shown() {
+        Some(Doc::File(l)) => (l.repo.clone(), l.path.clone()),
+        Some(Doc::Diff(d)) => (d.repo.clone(), d.path.clone()),
+        _ => {
+            return store.update(cx, |s, cx| {
+                s.say("Open a file to show its history", false, cx)
+            });
+        }
+    };
+    let f = cx.default_global::<Filters>();
+    f.repo = Some(repo.clone());
+    f.fields[PATH] = path;
+    store.update(cx, |s, cx| {
+        s.set_current(Some(repo), cx);
+        s.open_bottom(Bottom::Log, cx);
+    });
+}
+
+/// A choice of the refs select.
+#[derive(Clone)]
+struct Refs(SharedString, LogRefs);
+
+impl SelectItem for Refs {
+    type Value = LogRefs;
+
+    fn title(&self) -> SharedString {
+        self.0.clone()
+    }
+
+    fn value(&self) -> &LogRefs {
+        &self.1
+    }
+}
+
+/// "All branches", "HEAD", then the branches.
+fn choices(names: &[String]) -> Vec<Refs> {
+    let fixed = [("All branches", LogRefs::All), ("HEAD", LogRefs::Head)];
+    let fixed = fixed.map(|(title, refs)| Refs(title.into(), refs));
+    let branches = names.iter().map(|name| {
+        let refs = LogRefs::Branch { name: name.clone() };
+        Refs(name.clone().into(), refs)
+    });
+    fixed.into_iter().chain(branches).collect()
+}
 
 /// What reloads the log when it changes: HEAD moving or a fetch bringing commits.
 type Head = Option<(Option<String>, Option<String>, u32)>;
@@ -39,77 +136,149 @@ pub struct Log {
     rows: Vec<LogRow>,
     /// The most lanes a row needs.
     lanes: usize,
+    /// Whether the rows came with lanes: not under a text or author filter.
+    graph: bool,
     loading: bool,
     truncated: bool,
     error: Option<String>,
     head: Head,
     query: Option<(QueryId, Task<()>)>,
     scroll: UniformListScrollHandle,
-    _subscriptions: [Subscription; 2],
+    /// The filters the query and the widgets follow.
+    filters: Filters,
+    refs: Entity<SelectState<Vec<Refs>>>,
+    /// The branches the select offers.
+    names: Vec<String>,
+    inputs: [Entity<InputState>; 3],
+    /// A field's pending change, applied when its timer fires.
+    timers: [Option<Task<()>>; 3],
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Log {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        if !cx.has_global::<Filters>() {
-            cx.set_global(Filters {
-                repo: None,
-                refs: LogRefs::All,
-            });
-        }
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = Store::global(cx);
-        let subscriptions = [
-            cx.observe(&store, |this, store, cx| {
-                if store.read(cx).current() != cx.global::<Filters>().repo.as_deref() {
-                    this.load(cx);
-                }
-            }),
+        let inputs =
+            FIELDS.map(|(_, hint, _)| cx.new(|cx| InputState::new(window, cx).placeholder(hint)));
+        let first = Some(IndexPath::default());
+        let refs = cx.new(|cx| SelectState::new(choices(&[]), first, window, cx));
+        let mut subscriptions = vec![
+            cx.observe_in(&store, window, |this, _, window, cx| this.sync(window, cx)),
             cx.subscribe(&store, |this, store, e: &Event, cx| {
-                let s = store.read(cx);
                 if let Event::Status(repo) = e
-                    && s.current() == Some(repo)
-                    && head(s, repo) != this.head
+                    && this.filters.repo.as_ref() == Some(repo)
+                    && head(store.read(cx), repo) != this.head
                 {
                     this.load(cx);
                 }
             }),
+            cx.subscribe_in(&refs, window, |this, _, e: &SelectEvent<_>, window, cx| {
+                if let SelectEvent::Confirm(Some(refs)) = e {
+                    cx.global_mut::<Filters>().refs = refs.clone();
+                    this.sync(window, cx);
+                }
+            }),
         ];
+        for (i, input) in inputs.iter().enumerate() {
+            let typed = cx.subscribe_in(input, window, move |this, input, e, window, cx| {
+                if !matches!(e, InputEvent::Change) {
+                    return;
+                }
+                let value = input.read(cx).value().to_string();
+                this.timers[i] = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(DEBOUNCE).await;
+                    this.update_in(cx, |this, window, cx| {
+                        cx.global_mut::<Filters>().fields[i] = value;
+                        this.sync(window, cx);
+                    })
+                    .ok();
+                }));
+            });
+            subscriptions.push(typed);
+        }
         let mut log = Log {
             rows: vec![],
             lanes: 0,
+            graph: true,
             loading: false,
             truncated: false,
             error: None,
             head: None,
             query: None,
             scroll: UniformListScrollHandle::new(),
+            filters: Filters::default(),
+            refs,
+            names: vec![],
+            inputs,
+            timers: Default::default(),
             _subscriptions: subscriptions,
         };
-        log.load(cx);
+        log.sync(window, cx);
         log
     }
 
-    /// Starts a query for the current repo in place of the running one. The rows on screen stay
-    /// until its first batch, so a reload neither flickers nor loses the scroll position.
+    /// Resets refs and path when the repo changes, brings the widgets to the filters and the
+    /// store's branches, and reloads when the filters changed.
+    fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let s = Store::global(cx).read(cx);
+        let repo = s.current().map(String::from);
+        let names = repo.as_ref().and_then(|r| s.branch_names.get(r));
+        let names = (names.map_or(&[][..], Vec::as_slice) != self.names)
+            .then(|| names.cloned().unwrap_or_default());
+        let f = cx.default_global::<Filters>();
+        if f.repo != repo {
+            (f.repo, f.refs) = (repo, LogRefs::All);
+            f.fields[PATH].clear();
+        }
+        let f = f.clone();
+        if let Some(names) = names {
+            let items = choices(&names);
+            self.names = names;
+            self.refs.update(cx, |r, cx| {
+                r.set_items(items, window, cx);
+                r.set_selected_value(&f.refs, window, cx);
+            });
+        } else if f.refs != self.filters.refs {
+            self.refs
+                .update(cx, |r, cx| r.set_selected_value(&f.refs, window, cx));
+        }
+        if f == self.filters {
+            return;
+        }
+        let fields = self.filters.fields.iter().zip(&f.fields);
+        for (input, (old, new)) in self.inputs.iter().zip(fields) {
+            if old != new && input.read(cx).value().as_ref() != new {
+                input.update(cx, |i, cx| i.set_value(new.clone(), window, cx));
+            }
+        }
+        if f.repo != self.filters.repo
+            && let Some(repo) = f.repo.clone()
+        {
+            Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+        }
+        self.filters = f;
+        self.load(cx);
+    }
+
+    /// Starts a query in place of the running one. The rows on screen stay until its first batch,
+    /// so a reload neither flickers nor loses the scroll position.
     fn load(&mut self, cx: &mut Context<Self>) {
         self.query = None;
         cx.notify();
-        let store = Store::global(cx);
-        let repo = store.read(cx).current().map(String::from);
-        let f = cx.global_mut::<Filters>();
-        if f.repo != repo {
-            *f = Filters {
-                repo: repo.clone(),
-                refs: LogRefs::All,
-            };
-        }
+        let f = &self.filters;
+        let Some(repo) = f.repo.clone() else { return };
+        let [text, author, path] = f.fields.each_ref().map(|v| {
+            let v = v.trim();
+            (!v.is_empty()).then(|| v.to_string())
+        });
+        let graph = text.is_none() && author.is_none();
         let query = LogQuery {
             refs: f.refs.clone(),
-            path: None,
-            text: None,
-            author: None,
+            path,
+            text,
+            author,
         };
-        let Some(repo) = repo else { return };
-        let s = store.read(cx);
+        let s = Store::global(cx).read(cx);
         self.head = head(s, &repo);
         let (id, core) = (s.query_id(), s.core().clone());
         let qid = id.id;
@@ -120,9 +289,9 @@ impl Log {
             move |send| api::log(&core, &repo, &query, qid, send),
             move |events, cx| {
                 this.update(cx, |this, cx| {
-                    events
-                        .into_iter()
-                        .for_each(|e| this.take(qid, e, &mut fresh));
+                    for e in events {
+                        this.take(qid, graph, e, &mut fresh);
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -132,13 +301,14 @@ impl Log {
         self.query = Some((id, task));
     }
 
-    fn take(&mut self, qid: u64, e: LogEvent, fresh: &mut bool) {
+    fn take(&mut self, qid: u64, graph: bool, e: LogEvent, fresh: &mut bool) {
         if self.query.as_ref().map(|q| q.0.id) != Some(qid) {
             return;
         }
         if std::mem::take(fresh) {
             self.rows.clear();
             self.lanes = 0;
+            self.graph = graph;
         }
         (self.error, self.truncated) = match e {
             LogEvent::Rows { rows, .. } => {
@@ -152,9 +322,17 @@ impl Log {
         self.loading = false;
     }
 
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        if let Some(repo) = self.filters.repo.clone() {
+            Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+        }
+        self.load(cx);
+    }
+
     fn rows(&self, range: Range<usize>, cx: &App) -> Vec<impl IntoElement + use<>> {
         let t = theme(cx);
         let width = px(self.lanes.min(24) as f32 * LANE);
+        let graph = self.graph;
         let pill = |id: SharedString, label: SharedString, tip: SharedString, color: Hsla| {
             div()
                 .id(id)
@@ -209,16 +387,18 @@ impl Log {
                     .pl(px(4.))
                     .pr(px(8.))
                     .whitespace_nowrap()
-                    .child(
-                        div()
-                            .id("graph")
-                            .test_support()
-                            .flex_none()
-                            .w(width)
-                            .h_full()
-                            .overflow_hidden()
-                            .child(graph::paint(r)),
-                    )
+                    .when(graph, |row| {
+                        row.child(
+                            div()
+                                .id("graph")
+                                .test_support()
+                                .flex_none()
+                                .w(width)
+                                .h_full()
+                                .overflow_hidden()
+                                .child(graph::paint(r)),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
@@ -251,6 +431,15 @@ impl Log {
             })
             .collect()
     }
+}
+
+/// A kit input or select in the look of ours.
+fn field<E: Styled + Sizable>(e: E, cx: &App) -> E {
+    let t = theme(cx);
+    e.small()
+        .bg(t.input)
+        .rounded(radius::ITEM)
+        .text_size(text::SMALL)
 }
 
 fn message(label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
@@ -289,6 +478,11 @@ impl Render for Log {
             true => "Loading…".to_string(),
             false => format!("{} commits", thousands(self.rows.len())),
         };
+        let refs = field(Select::new(&self.refs).id("log.refs"), cx);
+        let inputs =
+            self.inputs.iter().zip(FIELDS).map(|(input, (id, _, w))| {
+                field(Input::new(input).id(id), cx).flex_none().w(px(w))
+            });
         let bar = div()
             .flex()
             .flex_none()
@@ -299,6 +493,8 @@ impl Render for Log {
             .border_b_1()
             .border_color(t.line)
             .text_size(text::SMALL)
+            .child(div().flex_none().w(px(180.)).child(refs))
+            .children(inputs)
             .child(div().flex_1())
             .child(
                 div()
@@ -320,7 +516,7 @@ impl Render for Log {
             .child(
                 ui::titled(ui::icon_button("log.refresh", Icon::Refresh, cx), "Refresh")
                     .test_support()
-                    .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             );
         let body: AnyElement = if let Some(e) = &self.error {
             message(e.clone(), t.error).into_any_element()

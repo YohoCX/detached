@@ -72,9 +72,9 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
-fn bottom(bottom: Bottom, _: &mut Window, cx: &mut App) -> AnyView {
+fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
     match bottom {
-        Bottom::Log => cx.new(history::Log::new).into(),
+        Bottom::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
         Bottom::Pipelines => stub("Pipelines", cx),
         Bottom::Terminal => stub("Terminal", cx),
     }

@@ -5,7 +5,7 @@ mod graph;
 mod log;
 
 pub use api::*;
-pub use log::Log;
+pub use log::{Log, init};
 
 use detached_core::types::LogRow;
 
