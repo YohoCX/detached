@@ -15,7 +15,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
 use crate::ui::{self, Edge, GAP, Icon, radius, stub, text, theme};
-use crate::{actions, keymap};
+use crate::{actions, files, keymap};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -56,7 +56,7 @@ fn tool(tool: Tool, _: &mut Window, cx: &mut App) -> AnyView {
 
 /// Shows `Doc::File` and `Doc::Diff`; it stays alive under MR pages and job logs.
 fn viewer(_: &mut Window, cx: &mut App) -> AnyView {
-    stub("No file open", cx)
+    cx.new(files::Viewer::new).into()
 }
 
 /// An MR page or a job log, over the viewer.

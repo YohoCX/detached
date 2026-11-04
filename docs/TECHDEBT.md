@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| A diff reloading with new text loses its scroll | V2 `files::diff` | `DiffState::set_files` resets the viewport and the kit cannot restore one (kit #3670), so a file changed on disk scrolls back to the cursor on the next status refresh; an unchanged one is not reloaded. |
 | Nested repo names hold `\` on Windows | `git::discovery` | `group\api` in the sidebar; the UI fixture test checks names and the worktree's main repo on Unix only (git there may also write a worktree's link with another spelling of the temp path). |
 | Long markdown blocks the native UI on open | the kit's `TextView` (V2's markdown) | A 2,000-line (95 KB) file takes 220–275 ms of layout in one frame (kit #3695, measured in step 0). Work around in V2, e.g. by splitting large documents. |
 | Native client draws in system fonts | `crates/app` `ui::theme` | The system UI font and the kit's mono font stand in for Manrope and JetBrains Mono (shell.md §5). Bundling them takes their TTF files in the repo (the fontsource packages hold woff2 only) and `add_fonts` at boot. |
