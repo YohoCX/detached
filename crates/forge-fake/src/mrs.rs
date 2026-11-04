@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::http::{Reply, Req, paged};
+use crate::http::{Reply, Req, decode, paged};
 use crate::{Job, Kind, Mr, MrState, Pipeline, State, Status, ghe};
 
 pub(crate) const T: &str = "2026-10-01T10:00:00Z";
@@ -13,6 +13,20 @@ pub(crate) const T: &str = "2026-10-01T10:00:00Z";
 pub(crate) struct Live {
     pub approved_by: Vec<String>,
     pub reviews: Vec<Review>,
+    pub notes: Vec<Note>,
+    /// Resolved thread ids.
+    pub resolved: Vec<String>,
+    pub auto_merge: bool,
+}
+
+/// A comment: its own thread (the note id) unless it replies or starts a review thread.
+pub(crate) struct Note {
+    pub id: u64,
+    pub thread: String,
+    pub body: String,
+    pub author: String,
+    /// GitLab's `position` or GitHub's `{path, line, side}`.
+    pub position: Option<Value>,
 }
 
 pub(crate) struct Review {
@@ -25,6 +39,9 @@ pub(crate) struct Review {
 static SEEDED: Live = Live {
     approved_by: Vec::new(),
     reviews: Vec::new(),
+    notes: Vec::new(),
+    resolved: Vec::new(),
+    auto_merge: false,
 };
 
 fn live(s: &State, p: usize, n: u64) -> &Live {
@@ -96,6 +113,12 @@ pub(crate) fn graphql(s: &mut State, k: Kind, req: &Req) -> Option<Reply> {
             .iter()
             .position(|p| p.forge == k && p.path == path)
     };
+    let repo = || Some(format!("{}/{}", v["owner"].as_str()?, v["name"].as_str()?));
+    let no_repo = || {
+        let missing = json!({ "message": "Could not resolve to a Repository" });
+        let v = json!({ "data": { "repository": null }, "errors": [missing] });
+        Some(Reply::json(200, v))
+    };
     match k {
         Kind::Gitlab if q.contains("mergeRequests(") => {
             let Some(p) = find(v["path"].as_str().unwrap_or_default()) else {
@@ -117,13 +140,8 @@ pub(crate) fn graphql(s: &mut State, k: Kind, req: &Req) -> Option<Reply> {
             data(json!({ "project": { "mergeRequests": { "nodes": nodes } } }))
         }
         Kind::Ghe if q.contains("pullRequests(") => {
-            let path = format!("{}/{}", v["owner"].as_str()?, v["name"].as_str()?);
-            let Some(p) = find(&path) else {
-                let missing = json!({ "message": "Could not resolve to a Repository" });
-                return Some(Reply::json(
-                    200,
-                    json!({ "data": { "repository": null }, "errors": [missing] }),
-                ));
+            let Some(p) = find(&repo()?) else {
+                return no_repo();
             };
             let states = v["states"].as_array();
             let pick = |m: &&Mr| {
@@ -134,11 +152,85 @@ pub(crate) fn graphql(s: &mut State, k: Kind, req: &Req) -> Option<Reply> {
             let nodes: Vec<_> = nodes.map(|m| gh_node(s, p, m)).collect();
             data(json!({ "repository": { "pullRequests": { "nodes": nodes } } }))
         }
-        _ => Some(Reply::json(
-            200,
-            json!({ "errors": [{ "message": "unknown query" }] }),
-        )),
+        Kind::Ghe if q.contains("reviewThreads") => {
+            let n = v["number"].as_u64()?;
+            let p = find(&repo()?).filter(|&p| s.projects[p].mrs.iter().any(|m| m.number == n));
+            let Some(p) = p else {
+                return no_repo();
+            };
+            let l = live(s, p, n);
+            let nodes: Vec<_> = threads(l)
+                .into_iter()
+                .filter_map(|(id, notes)| {
+                    let pos = notes[0].position.as_ref()?;
+                    let comments: Vec<_> = notes.iter().map(|n| json!({ "databaseId": n.id, "body": n.body, "createdAt": T, "author": { "login": n.author } })).collect();
+                    Some(json!({
+                        "id": id, "isResolved": l.resolved.contains(&id), "isOutdated": false,
+                        "path": pos["path"], "line": pos["line"], "originalLine": pos["line"],
+                        "diffSide": pos["side"], "comments": { "nodes": comments },
+                    }))
+                })
+                .collect();
+            let page = json!({ "hasNextPage": false, "endCursor": null });
+            let threads = json!({ "pageInfo": page, "nodes": nodes });
+            data(json!({ "repository": { "pullRequest": { "reviewThreads": threads } } }))
+        }
+        Kind::Ghe => mutation(s, q, v["id"].as_str().unwrap_or_default()),
+        _ => unknown(),
     }
+}
+
+fn unknown() -> Option<Reply> {
+    let v = json!({ "errors": [{ "message": "unknown query" }] });
+    Some(Reply::json(200, v))
+}
+
+/// GitHub's thread and PR mutations on the node `id`.
+fn mutation(s: &mut State, q: &str, id: &str) -> Option<Reply> {
+    let ok = Some(Reply::json(
+        200,
+        json!({ "data": { "result": { "clientMutationId": null } } }),
+    ));
+    let message = format!("Could not resolve to a node with the global id of '{id}'");
+    let missing = Some(Reply::json(
+        200,
+        json!({ "errors": [{ "message": message }] }),
+    ));
+    if q.contains("resolveReviewThread(") {
+        let mut all = s.live.values_mut();
+        let Some(l) = all.find(|l| l.notes.iter().any(|n| n.thread == id)) else {
+            return missing;
+        };
+        l.resolved.retain(|t| t != id);
+        if !q.contains("unresolveReviewThread(") {
+            l.resolved.push(id.into());
+        }
+        return ok;
+    }
+    let draft = match q {
+        _ if q.contains("convertPullRequestToDraft(") => Some(true),
+        _ if q.contains("markPullRequestReadyForReview(") => Some(false),
+        _ if q.contains("enablePullRequestAutoMerge(") => None,
+        _ => return unknown(),
+    };
+    let mut prs = s.projects.iter_mut().enumerate().flat_map(|(p, x)| {
+        let node = move |m: &Mr| format!("PR_{}_{}", p + 1, m.number);
+        x.mrs
+            .iter_mut()
+            .filter(move |m| node(m) == id)
+            .map(move |m| (p, m))
+    });
+    let Some((p, m)) = prs.next() else {
+        return missing;
+    };
+    match draft {
+        Some(d) => m.draft = d,
+        None => {
+            let n = m.number;
+            s.live.entry((p, n)).or_default().auto_merge = true;
+        }
+    }
+    ok
 }
 
 /// `sub` below `/gitlab/api/v4/projects/:id` (`/merge_requests`, ...) of `State::projects[p]`.
@@ -162,15 +254,8 @@ pub(crate) fn gitlab(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Re
             Some(paged(&s.origin, req, list, None))
         }
         ("POST", ["merge_requests"]) => {
-            let (b, title) = (&req.body, req.body["title"].as_str().unwrap_or_default());
-            let draft = title
-                .get(..6)
-                .is_some_and(|d| d.eq_ignore_ascii_case("draft:"));
-            let title = if draft {
-                title[6..].trim_start()
-            } else {
-                title
-            };
+            let b = &req.body;
+            let (draft, title) = draft_title(b["title"].as_str().unwrap_or_default());
             let [description, source, target] =
                 ["description", "source_branch", "target_branch"].map(|k| b[k].as_str());
             add_mr(s, p, title, description, draft, source, target);
@@ -195,6 +280,76 @@ pub(crate) fn gitlab(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Re
                 _ => {}
             }
             Some(Reply::json(201, json!({})))
+        }
+        ("PUT", ["merge_requests", n]) => {
+            let m = mr_mut(s, p, n)?;
+            if let Some(t) = req.body["title"].as_str() {
+                let (draft, t) = draft_title(t);
+                (m.draft, m.title) = (draft, t.into());
+            }
+            match req.body["state_event"].as_str() {
+                Some("close") => m.state = MrState::Closed,
+                Some("reopen") => m.state = MrState::Open,
+                _ => {}
+            }
+            Some(Reply::json(200, gl_mr(s, p, mr(s, p, n)?)))
+        }
+        ("GET", ["merge_requests", n, "pipelines"]) => {
+            let head = &mr(s, p, n)?.head_sha;
+            let list = s.projects[p].pipelines.iter().filter(|pl| pl.sha == *head);
+            let list: Vec<_> = list.map(|pl| gl_pipeline(s, p, pl)).collect();
+            Some(Reply::json(200, json!(list)))
+        }
+        ("GET", ["merge_requests", n, "discussions"]) => {
+            let l = live(s, p, mr(s, p, n)?.number);
+            let list = threads(l).iter().map(|t| gl_discussion(l, &t.0)).collect();
+            Some(paged(&s.origin, req, list, None))
+        }
+        ("POST", ["merge_requests", n, "notes"]) => {
+            let id = note(s, p, n, None, req, None)?;
+            Some(Reply::json(201, json!({ "id": id })))
+        }
+        ("POST", ["merge_requests", n, "discussions"]) => {
+            let position = Some(req.body["position"].clone());
+            let id = note(s, p, n, None, req, position)?.to_string();
+            let l = live(s, p, mr(s, p, n)?.number);
+            Some(Reply::json(201, gl_discussion(l, &id)))
+        }
+        ("POST", ["merge_requests", n, "discussions", d, "notes"]) => {
+            let id = note(s, p, n, Some(decode(d)), req, None)?;
+            Some(Reply::json(201, json!({ "id": id })))
+        }
+        ("PUT", ["merge_requests", n, "discussions", d]) => {
+            let (n, d) = (mr(s, p, n)?.number, decode(d));
+            let l = s
+                .live
+                .get_mut(&(p, n))
+                .filter(|l| l.notes.iter().any(|x| x.thread == d))?;
+            l.resolved.retain(|t| *t != d);
+            if req.body["resolved"] == true {
+                l.resolved.push(d.clone());
+            }
+            Some(Reply::json(200, gl_discussion(l, &d)))
+        }
+        ("PUT", ["merge_requests", n, "merge"]) => {
+            let m = mr(s, p, n)?;
+            let moved = "SHA does not match HEAD of source branch";
+            if let Some(e) = unmergeable(m, req, "405 Method Not Allowed", moved) {
+                return Some(e);
+            }
+            let b = &req.body;
+            let auto = b["auto_merge"] == true || b["merge_when_pipeline_succeeds"] == true;
+            let done = head_pipeline(s, p, m).is_some_and(|pl| pl.status == Status::Success);
+            let (number, source) = (m.number, m.source_branch.clone());
+            if auto && !done {
+                s.live.entry((p, number)).or_default().auto_merge = true;
+            } else {
+                mr_mut(s, p, n)?.state = MrState::Merged;
+                if b["should_remove_source_branch"] == true {
+                    s.branches[p].remove(&source);
+                }
+            }
+            Some(Reply::json(200, gl_mr(s, p, mr(s, p, n)?)))
         }
         ("GET", ["pipelines"]) => {
             let pick = |k, v: &str| req.param(k).is_none_or(|q| q == v);
@@ -317,6 +472,78 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             s.live.entry((p, n)).or_default().reviews.push(r);
             Some(Reply::json(200, v))
         }
+        ("PATCH", ["pulls", n]) => {
+            let m = mr_mut(s, p, n)?;
+            match req.body["state"].as_str() {
+                Some("closed") => m.state = MrState::Closed,
+                Some(_) => m.state = MrState::Open,
+                None => {}
+            }
+            Some(Reply::json(200, gh_pr(s, p, mr(s, p, n)?)))
+        }
+        ("GET", ["issues", n, "comments"]) => {
+            let l = live(s, p, mr(s, p, n)?.number);
+            let general = l.notes.iter().filter(|x| x.thread == x.id.to_string());
+            let list = general.map(gh_comment).collect();
+            Some(paged(&s.origin, req, list, None))
+        }
+        ("POST", ["issues", n, "comments"]) => {
+            let id = note(s, p, n, None, req, None)?;
+            let l = live(s, p, mr(s, p, n)?.number);
+            let c = gh_comment(l.notes.iter().find(|x| x.id == id)?);
+            Some(Reply::json(201, c))
+        }
+        ("POST", ["pulls", n, "comments"]) => {
+            let b = &req.body;
+            if b["commit_id"].as_str() != Some(&mr(s, p, n)?.head_sha) {
+                let e = json!({ "message": "Validation Failed", "errors": ["commit_id is not part of the pull request"] });
+                return Some(Reply::json(422, e));
+            }
+            let at = json!({ "path": b["path"], "line": b["line"], "side": b["side"] });
+            s.next += 1;
+            let thread = format!("PRRT_{}", s.next);
+            let id = note(s, p, n, Some(thread), req, Some(at))?;
+            let v = json!({ "id": id, "body": b["body"], "path": b["path"], "line": b["line"], "side": b["side"], "commit_id": b["commit_id"] });
+            Some(Reply::json(201, v))
+        }
+        ("POST", ["pulls", n, "comments", c, "replies"]) => {
+            let l = live(s, p, mr(s, p, n)?.number);
+            let first = l
+                .notes
+                .iter()
+                .find(|x| x.id.to_string() == *c && x.position.is_some());
+            let id = note(s, p, n, Some(first?.thread.clone()), req, None)?;
+            Some(Reply::json(201, json!({ "id": id })))
+        }
+        ("PUT", ["pulls", n, "merge"]) => {
+            let m = mr(s, p, n)?;
+            let (not_open, moved) = (
+                "Pull Request is not mergeable",
+                "Head branch was modified. Review and try the merge again.",
+            );
+            if let Some(e) = unmergeable(m, req, not_open, moved) {
+                return Some(e);
+            }
+            let sha = m.head_sha.clone();
+            mr_mut(s, p, n)?.state = MrState::Merged;
+            let v = json!({ "sha": sha, "merged": true, "message": "Pull Request successfully merged" });
+            Some(Reply::json(200, v))
+        }
+        ("GET", ["git", "ref", "heads", branch @ ..]) => {
+            let b = decode(&branch.join("/"));
+            let sha = s.branches[p].get(&b)?;
+            let v = json!({ "ref": format!("refs/heads/{b}"), "object": { "type": "commit", "sha": sha } });
+            Some(Reply::json(200, v))
+        }
+        ("DELETE", ["git", "refs", "heads", branch @ ..]) => {
+            match s.branches[p].remove(&decode(&branch.join("/"))) {
+                Some(_) => Some(none(204)),
+                None => {
+                    let e = json!({ "message": "Reference does not exist" });
+                    Some(Reply::json(422, e))
+                }
+            }
+        }
         ("GET", ["actions", "runs"] | ["actions", "workflows", _, "runs"]) => {
             let pick = |k, v: &str| req.param(k).is_none_or(|q| q == v);
             let list = s.projects[p].pipelines.iter().filter(|pl| {
@@ -333,10 +560,7 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
         ("POST", ["actions", "workflows", _, "dispatches"]) => {
             let branch = req.body["ref"].as_str().unwrap_or_default();
             new_pipeline(s, p, branch, "workflow_dispatch");
-            Some(Reply {
-                body: None,
-                ..Reply::json(204, Value::Null)
-            })
+            Some(none(204))
         }
         ("GET", ["actions", "runs", id]) => {
             let k = pipeline(s, p, id)?;
@@ -382,9 +606,8 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             }
             let to = format!("{}/__blob/{}/{}?sig=fake", s.origin, p + 1, j.id);
             Some(Reply {
-                body: None,
                 headers: vec![("Location", to)],
-                ..Reply::json(302, Value::Null)
+                ..none(302)
             })
         }
         ("POST", ["actions", "jobs", id, "rerun"]) => {
@@ -394,6 +617,24 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             empty(201)
         }
         _ => None,
+    }
+}
+
+/// A reply without a body.
+fn none(status: u16) -> Reply {
+    Reply {
+        body: None,
+        ..Reply::json(status, Value::Null)
+    }
+}
+
+/// Why a merge of `m` at the request's `sha` fails: not open, or the head moved.
+fn unmergeable(m: &Mr, req: &Req, not_open: &str, moved: &str) -> Option<Reply> {
+    let sha = req.body["sha"].as_str().filter(|x| !x.is_empty());
+    match m.state {
+        MrState::Open if sha.is_none_or(|x| x == m.head_sha) => None,
+        MrState::Open => Some(Reply::json(409, json!({ "message": moved }))),
+        _ => Some(Reply::json(405, json!({ "message": not_open }))),
     }
 }
 
@@ -457,6 +698,81 @@ fn new_pipeline(s: &mut State, p: usize, branch: &str, source: &str) {
 fn mr<'a>(s: &'a State, p: usize, n: &str) -> Option<&'a Mr> {
     let n: u64 = n.parse().ok()?;
     s.projects[p].mrs.iter().find(|m| m.number == n)
+}
+
+fn mr_mut<'a>(s: &'a mut State, p: usize, n: &str) -> Option<&'a mut Mr> {
+    let n: u64 = n.parse().ok()?;
+    s.projects[p].mrs.iter_mut().find(|m| m.number == n)
+}
+
+/// Whether a title starts with `Draft:`, and the title without it.
+fn draft_title(t: &str) -> (bool, &str) {
+    match t.get(..6).filter(|d| d.eq_ignore_ascii_case("draft:")) {
+        Some(_) => (true, t[6..].trim_start()),
+        None => (false, t),
+    }
+}
+
+/// Adds the request's `body` as a note by the user to MR `n`, in `thread` or its own; its id.
+fn note(
+    s: &mut State,
+    p: usize,
+    n: &str,
+    thread: Option<String>,
+    req: &Req,
+    position: Option<Value>,
+) -> Option<u64> {
+    let n = mr(s, p, n)?.number;
+    s.next += 1;
+    let (id, author) = (s.next, s.user.clone());
+    let thread = thread.unwrap_or_else(|| id.to_string());
+    let body = req.body["body"].as_str().unwrap_or_default().into();
+    let note = Note {
+        id,
+        thread,
+        body,
+        author,
+        position,
+    };
+    s.live.entry((p, n)).or_default().notes.push(note);
+    Some(id)
+}
+
+/// The thread ids in order of their first note, with their notes.
+fn threads(l: &Live) -> Vec<(String, Vec<&Note>)> {
+    let mut out: Vec<(String, Vec<&Note>)> = vec![];
+    for n in &l.notes {
+        match out.iter_mut().find(|t| t.0 == n.thread) {
+            Some(t) => t.1.push(n),
+            None => out.push((n.thread.clone(), vec![n])),
+        }
+    }
+    out
+}
+
+/// A GitLab discussion; notes on a position can be resolved.
+fn gl_discussion(l: &Live, id: &str) -> Value {
+    let notes: Vec<_> = l.notes.iter().filter(|n| n.thread == id).collect();
+    let position = notes.first().and_then(|n| n.position.clone());
+    let notes: Vec<_> = notes
+        .iter()
+        .map(|n| {
+            json!({
+                "id": n.id, "type": position.as_ref().map(|_| "DiffNote"), "body": n.body,
+                "author": { "username": n.author }, "created_at": T, "system": false,
+                "resolvable": position.is_some(), "resolved": l.resolved.iter().any(|t| t == id),
+                "position": position,
+            })
+        })
+        .collect();
+    json!({ "id": id, "individual_note": position.is_none() && notes.len() == 1, "notes": notes })
+}
+
+fn gh_comment(n: &Note) -> Value {
+    json!({
+        "id": n.id, "node_id": format!("IC_{}", n.id), "body": n.body,
+        "user": { "login": n.author }, "created_at": T,
+    })
 }
 
 /// Adds an open MR by the user, numbered after the project's last, its SHAs from the branches.
@@ -581,7 +897,7 @@ fn gl_mr(s: &State, p: usize, m: &Mr) -> Value {
         "source_branch": m.source_branch, "target_branch": m.target_branch,
         "source_project_id": p + 1, "target_project_id": p + 1, "sha": m.head_sha, "diff_refs": diff,
         "labels": [], "reviewers": [], "detailed_merge_status": status,
-        "merge_when_pipeline_succeeds": false, "head_pipeline": pl,
+        "merge_when_pipeline_succeeds": live(s, p, m.number).auto_merge, "head_pipeline": pl,
         "web_url": format!("{}/-/merge_requests/{}", web(s, p, "gitlab"), m.number),
         "created_at": T, "updated_at": T,
     })
@@ -605,7 +921,8 @@ fn gh_pr(s: &State, p: usize, m: &Mr) -> Value {
         "user": { "login": m.author }, "labels": [], "requested_reviewers": [], "assignees": [],
         "head": { "ref": m.source_branch, "sha": m.head_sha, "repo": repo },
         "base": { "ref": m.target_branch, "sha": m.base_sha, "repo": repo },
-        "mergeable": open.then_some(true), "mergeable_state": mergeable, "auto_merge": null,
+        "mergeable": open.then_some(true), "mergeable_state": mergeable,
+        "auto_merge": live(s, p, m.number).auto_merge.then(|| json!({ "merge_method": "merge" })),
         "html_url": format!("{}/pull/{}", web(s, p, "ghe"), m.number),
         "created_at": T, "updated_at": T,
     })

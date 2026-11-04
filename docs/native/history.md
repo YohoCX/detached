@@ -644,7 +644,7 @@ Window focus refreshes the MR list, Pipelines, badge and chip with the 30 s skip
   - The forge is reset with a seed: user `tester`; MR 1 "Add feature" `feature→main`, with a description containing `<img src=x onerror=alert(1)>`; pipeline 100 (GitLab) / 200 (GitHub), success on the head, with job 101 / 201 "build" whose log is `\e[32mbuilt\e[0m <img src=x onerror=alert(1)>`.
   - Accounts are saved over the bridge: `gitlabSelfHosted` "Fake GitLab" (token `gitlab-token`) and `githubEnterprise` "Fake GitHub" (`ghe-token`), base URLs `${forgeUrl}/gitlab` and `/ghe`.
 
-### 6.2 Fake forge (`e2e/forge.ts`), to be ported
+### 6.2 Fake forge (`e2e/forge.ts`), to be ported [ported]
 - **Control endpoints**:
   - `GET /health` → `{projects:n}`
   - `POST /reset` (Seed)

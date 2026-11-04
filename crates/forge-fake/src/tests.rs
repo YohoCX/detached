@@ -1119,3 +1119,326 @@ fn ghe_creates_pulls_and_takes_reviews() {
     let listed = get(&f, &reviews, &[GH]).1;
     assert_eq!(listed, json!([r]));
 }
+
+fn put(f: &Forge, path: &str, auth: &[(&str, &str)], body: Value) -> (u16, Value) {
+    call(f, "PUT", path, auth, body)
+}
+
+#[test]
+fn gitlab_mr_put_sets_draft_through_the_title_and_closes_and_reopens() {
+    let f = mrs();
+    let mr = format!("{GL_P}/merge_requests/1");
+    let (status, m) = put(&f, &mr, &[GL], json!({ "title": "Draft: MR 1" }));
+    assert_eq!(
+        (status, &m["title"], &m["draft"]),
+        (200, &json!("Draft: MR 1"), &json!(true))
+    );
+    let m = put(&f, &mr, &[GL], json!({ "title": "MR 1" })).1;
+    assert_eq!(m["draft"], false);
+    let m = put(&f, &mr, &[GL], json!({ "state_event": "close" })).1;
+    assert_eq!(
+        (&m["state"], &m["detailed_merge_status"]),
+        (&json!("closed"), &json!("not_open"))
+    );
+    let m = put(&f, &mr, &[GL], json!({ "state_event": "reopen" })).1;
+    assert_eq!(m["state"], "opened");
+    assert_eq!(
+        put(&f, &format!("{GL_P}/merge_requests/9"), &[GL], json!({})).0,
+        404
+    );
+}
+
+#[test]
+fn gitlab_mr_pipelines_are_those_at_its_head() {
+    let f = mrs();
+    let list = |n| {
+        ids(
+            &get(&f, &format!("{GL_P}/merge_requests/{n}/pipelines"), &[GL]).1,
+            None,
+        )
+    };
+    assert_eq!((list(1), list(3)), (vec![100], vec![300]));
+    assert!(list(2).is_empty());
+}
+
+#[test]
+fn gitlab_notes_discussions_replies_and_resolve() {
+    let f = mrs();
+    let mr = format!("{GL_P}/merge_requests/1");
+    let (status, note) = post(&f, &format!("{mr}/notes"), &[GL], json!({ "body": "Hi" }));
+    assert_eq!((status, note), (201, json!({ "id": 1001 })));
+    let position =
+        json!({ "position_type": "text", "new_path": "a.txt", "new_line": 3, "head_sha": "h1" });
+    let body = json!({ "body": "Here", "position": position });
+    let (status, d) = post(&f, &format!("{mr}/discussions"), &[GL], body);
+    assert_eq!((status, &d["id"]), (201, &json!("1002")));
+    let reply = post(
+        &f,
+        &format!("{mr}/discussions/1002/notes"),
+        &[GL],
+        json!({ "body": "Re" }),
+    );
+    assert_eq!(reply, (201, json!({ "id": 1003 })));
+
+    let all = || get(&f, &format!("{mr}/discussions"), &[GL]).1;
+    let ds = all();
+    let general = &ds[0];
+    assert_eq!(general["individual_note"], true);
+    let first = &general["notes"][0];
+    assert_eq!(
+        (
+            &first["body"],
+            &first["type"],
+            &first["resolvable"],
+            &first["author"]["username"]
+        ),
+        (&json!("Hi"), &Value::Null, &json!(false), &json!("tester"))
+    );
+    let thread = &ds[1];
+    assert_eq!(thread["individual_note"], false);
+    let bodies: Vec<_> = thread["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["body"].clone())
+        .collect();
+    assert_eq!(bodies, [json!("Here"), json!("Re")]);
+    assert_eq!(thread["notes"][1]["position"], position);
+    assert_eq!(thread["notes"][0]["type"], "DiffNote");
+
+    let resolve = |on| {
+        put(
+            &f,
+            &format!("{mr}/discussions/1002"),
+            &[GL],
+            json!({ "resolved": on }),
+        )
+    };
+    let (status, d) = resolve(true);
+    assert_eq!((status, &d["notes"][1]["resolved"]), (200, &json!(true)));
+    assert_eq!(all()[1]["notes"][0]["resolved"], true);
+    resolve(false);
+    assert_eq!(all()[1]["notes"][0]["resolved"], false);
+    assert_eq!(
+        put(
+            &f,
+            &format!("{mr}/discussions/77"),
+            &[GL],
+            json!({ "resolved": true })
+        )
+        .0,
+        404
+    );
+}
+
+#[test]
+fn gitlab_merge_refuses_closed_mrs_and_moved_heads_or_merges_and_deletes_the_branch() {
+    let f = mrs();
+    let merge = |n: u64, body| put(&f, &format!("{GL_P}/merge_requests/{n}/merge"), &[GL], body);
+    assert_eq!(merge(2, json!({})).0, 405);
+    let moved = merge(1, json!({ "sha": "old" }));
+    assert_eq!(
+        moved,
+        (
+            409,
+            json!({ "message": "SHA does not match HEAD of source branch" })
+        )
+    );
+
+    let (status, m) = merge(3, json!({ "sha": "h3", "auto_merge": true }));
+    assert_eq!(
+        (status, &m["state"], &m["merge_when_pipeline_succeeds"]),
+        (200, &json!("opened"), &json!(true)),
+        "a running pipeline sets auto-merge"
+    );
+
+    let (status, m) = merge(
+        1,
+        json!({ "sha": "h1", "auto_merge": true, "should_remove_source_branch": true }),
+    );
+    assert_eq!(
+        (status, &m["state"]),
+        (200, &json!("merged")),
+        "a succeeded pipeline merges"
+    );
+    assert!(!lock(&f.state).branches[0].contains_key("feature"));
+    assert!(lock(&f.state).branches[1].contains_key("feature"));
+    assert_eq!(merge(1, json!({})).0, 405);
+}
+
+#[test]
+fn ghe_pr_patch_closes_and_reopens() {
+    let f = mrs();
+    let pr = format!("{GH_R}/pulls/1");
+    let (status, v) = call(&f, "PATCH", &pr, &[GH], json!({ "state": "closed" }));
+    assert_eq!(
+        (status, &v["state"], &v["merged"]),
+        (200, &json!("closed"), &json!(false))
+    );
+    let v = call(&f, "PATCH", &pr, &[GH], json!({ "state": "open" })).1;
+    assert_eq!(v["state"], "open");
+}
+
+#[test]
+fn ghe_issue_comments_review_comments_and_replies() {
+    let f = mrs();
+    let comments = format!("{GH_R}/issues/1/comments");
+    let hi = json!({ "id": 1001, "node_id": "IC_1001", "body": "Hi", "user": { "login": "tester" }, "created_at": T });
+    let posted = post(&f, &comments, &[GH], json!({ "body": "Hi" }));
+    assert_eq!(posted, (201, hi.clone()));
+
+    let review = format!("{GH_R}/pulls/1/comments");
+    let at = |sha| json!({ "body": "Here", "commit_id": sha, "path": "a.txt", "line": 3, "side": "RIGHT" });
+    let stale = post(&f, &review, &[GH], at("h0"));
+    assert_eq!(stale.0, 422);
+    let (status, c) = post(&f, &review, &[GH], at("h1"));
+    let want = json!({ "id": 1003, "body": "Here", "path": "a.txt", "line": 3, "side": "RIGHT", "commit_id": "h1" });
+    assert_eq!((status, c), (201, want));
+    let reply = post(
+        &f,
+        &format!("{review}/1003/replies"),
+        &[GH],
+        json!({ "body": "Re" }),
+    );
+    assert_eq!(reply, (201, json!({ "id": 1004 })));
+    let to_general = post(
+        &f,
+        &format!("{review}/1001/replies"),
+        &[GH],
+        json!({ "body": "x" }),
+    );
+    assert_eq!(to_general.0, 404, "only review comments take replies");
+
+    assert_eq!(get(&f, &comments, &[GH]).1, json!([hi]));
+    let l = lock(&f.state);
+    let threads: Vec<_> = l.live[&(1, 1)]
+        .notes
+        .iter()
+        .map(|n| n.thread.as_str())
+        .collect();
+    assert_eq!(threads, ["1001", "PRRT_1002", "PRRT_1002"]);
+}
+
+#[test]
+fn ghe_branch_refs_read_and_delete() {
+    let f = mrs();
+    let (status, r) = get(&f, &format!("{GH_R}/git/ref/heads/feature"), &[GH]);
+    let want = json!({ "ref": "refs/heads/feature", "object": { "type": "commit", "sha": "h1" } });
+    assert_eq!((status, r), (200, want));
+    assert_eq!(get(&f, &format!("{GH_R}/git/ref/heads/nope"), &[GH]).0, 404);
+    let delete = |b: &str| {
+        call(
+            &f,
+            "DELETE",
+            &format!("{GH_R}/git/refs/heads/{b}"),
+            &[GH],
+            Value::Null,
+        )
+    };
+    assert_eq!(delete("feature"), (204, Value::Null));
+    assert_eq!(delete("feature").0, 422);
+    assert_eq!(
+        get(&f, &format!("{GH_R}/git/ref/heads/feature"), &[GH]).0,
+        404
+    );
+    assert!(
+        lock(&f.state).branches[0].contains_key("feature"),
+        "GitLab's are apart"
+    );
+}
+
+#[test]
+fn ghe_merge_refuses_closed_prs_and_moved_heads() {
+    let f = mrs();
+    let merge = |n: u64, body| put(&f, &format!("{GH_R}/pulls/{n}/merge"), &[GH], body);
+    assert_eq!(merge(2, json!({})).0, 405);
+    assert_eq!(
+        merge(1, json!({ "merge_method": "merge", "sha": "old" })).0,
+        409
+    );
+    let (status, v) = merge(1, json!({ "merge_method": "merge", "sha": "h1" }));
+    let want =
+        json!({ "sha": "h1", "merged": true, "message": "Pull Request successfully merged" });
+    assert_eq!((status, v), (200, want));
+    let pr = get(&f, &format!("{GH_R}/pulls/1"), &[GH]).1;
+    assert_eq!(
+        (&pr["state"], &pr["merged"]),
+        (&json!("closed"), &json!(true))
+    );
+}
+
+#[test]
+fn ghe_graphql_review_threads_resolve_and_pr_mutations() {
+    let f = mrs();
+    let gql = |query: &str, vars: Value| {
+        post(
+            &f,
+            "/ghe/api/graphql",
+            &[GH],
+            json!({ "query": query, "variables": vars }),
+        )
+        .1
+    };
+    let at =
+        json!({ "body": "Here", "commit_id": "h1", "path": "a.txt", "line": 3, "side": "LEFT" });
+    post(&f, &format!("{GH_R}/pulls/1/comments"), &[GH], at);
+    post(
+        &f,
+        &format!("{GH_R}/pulls/1/comments/1002/replies"),
+        &[GH],
+        json!({ "body": "Re" }),
+    );
+    post(
+        &f,
+        &format!("{GH_R}/issues/1/comments"),
+        &[GH],
+        json!({ "body": "Hi" }),
+    );
+    let threads = |n: u64| {
+        let q = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id}}}}}";
+        gql(q, json!({ "owner": "owner", "name": "app", "number": n }))
+    };
+    let t = threads(1)["data"]["repository"]["pullRequest"]["reviewThreads"].clone();
+    assert_eq!(
+        t["pageInfo"],
+        json!({ "hasNextPage": false, "endCursor": null })
+    );
+    let comment = |id: u64, body: &str| json!({ "databaseId": id, "body": body, "createdAt": T, "author": { "login": "tester" } });
+    let want = json!([{
+        "id": "PRRT_1001", "isResolved": false, "isOutdated": false, "path": "a.txt", "line": 3,
+        "originalLine": 3, "diffSide": "LEFT",
+        "comments": { "nodes": [comment(1002, "Here"), comment(1003, "Re")] },
+    }]);
+    assert_eq!(t["nodes"], want, "general comments are not review threads");
+    assert_eq!(threads(9)["data"]["repository"], Value::Null);
+
+    let resolve = |name: &str, id: &str| {
+        let q = format!("mutation($id:ID!){{{name}(input:{{threadId:$id}}){{clientMutationId}}}}");
+        gql(&q, json!({ "id": id }))
+    };
+    let resolved = |f: &Forge| lock(&f.state).live[&(1, 1)].resolved.clone();
+    let ok = json!({ "data": { "result": { "clientMutationId": null } } });
+    assert_eq!(resolve("resolveReviewThread", "PRRT_1001"), ok);
+    assert_eq!(resolved(&f), ["PRRT_1001"]);
+    let t = threads(1)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"][0].clone();
+    assert_eq!(t["isResolved"], true);
+    assert_eq!(resolve("unresolveReviewThread", "PRRT_1001"), ok);
+    assert!(resolved(&f).is_empty());
+    let missing = json!({ "errors": [{ "message": "Could not resolve to a node with the global id of 'PRRT_9'" }] });
+    assert_eq!(resolve("resolveReviewThread", "PRRT_9"), missing);
+
+    let on_pr = |name: &str, id: &str| {
+        let q =
+            format!("mutation($id:ID!){{{name}(input:{{pullRequestId:$id}}){{clientMutationId}}}}");
+        gql(&q, json!({ "id": id }))
+    };
+    let pr = |f: &Forge| get(f, &format!("{GH_R}/pulls/1"), &[GH]).1;
+    assert_eq!(on_pr("convertPullRequestToDraft", "PR_2_1"), ok);
+    assert_eq!(pr(&f)["draft"], true);
+    on_pr("markPullRequestReadyForReview", "PR_2_1");
+    assert_eq!(pr(&f)["draft"], false);
+    assert_eq!(pr(&f)["auto_merge"], Value::Null);
+    on_pr("enablePullRequestAutoMerge", "PR_2_1");
+    assert_eq!(pr(&f)["auto_merge"], json!({ "merge_method": "merge" }));
+    assert!(on_pr("convertPullRequestToDraft", "PR_9_1")["errors"].is_array());
+}
