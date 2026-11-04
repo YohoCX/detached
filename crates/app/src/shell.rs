@@ -15,7 +15,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
 use crate::ui::{self, Edge, GAP, Icon, radius, stub, text, theme};
-use crate::{actions, files, history, keymap};
+use crate::{actions, files, history, keymap, search};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -73,8 +73,8 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
 }
 
 /// Modals over the window, inside the shell's key context so the app's chords still reach it.
-fn overlays(_: &mut Window, _: &mut App) -> Vec<AnyView> {
-    vec![]
+fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
+    vec![search::palette(window, cx)]
 }
 
 fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
