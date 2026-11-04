@@ -168,6 +168,22 @@ pub fn row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> 
         })
 }
 
+/// A row of a focusable list: a selected one is ringed while the list has focus and faintly tinted
+/// otherwise.
+pub fn list_row(
+    id: impl Into<ElementId>,
+    selected: bool,
+    focused: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = theme(cx);
+    let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
+    row(id, selected, cx).when(selected, |r| match focused {
+        true => r.shadow(vec![ring.inset()]),
+        false => r.bg(t.selected_inactive),
+    })
+}
+
 /// Mutually exclusive options, the current one tinted.
 pub fn segmented<T: Copy + PartialEq + 'static>(
     id: impl Into<ElementId>,
