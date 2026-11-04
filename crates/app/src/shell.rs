@@ -72,6 +72,11 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
+/// Modals over the window, inside the shell's key context so the app's chords still reach it.
+fn overlays(_: &mut Window, _: &mut App) -> Vec<AnyView> {
+    vec![]
+}
+
 fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
     match bottom {
         Bottom::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
@@ -117,6 +122,7 @@ pub struct Shell {
     viewer: AnyView,
     page: Option<(Doc, AnyView)>,
     bottom: Option<(Bottom, AnyView)>,
+    overlays: Vec<AnyView>,
     status: Entity<StatusBar>,
     notices: Entity<Notices>,
     focus: FocusHandle,
@@ -150,6 +156,7 @@ impl Shell {
             viewer: viewer(window, cx),
             page: None,
             bottom: None,
+            overlays: overlays(window, cx),
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
             focus,
@@ -449,6 +456,7 @@ impl Render for Shell {
                     ),
             )
             .child(self.notices.clone())
+            .children(self.overlays.iter().cloned())
     }
 }
 
