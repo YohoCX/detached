@@ -77,6 +77,8 @@ pub mod text {
     pub const TITLE: Pixels = px(14.);
     /// Change status letters.
     pub const LETTER: Pixels = px(10.);
+    /// A dialog's title.
+    pub const HEADING: Pixels = px(15.);
 }
 
 /// A markdown file's column.
