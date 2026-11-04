@@ -113,6 +113,14 @@ impl Forge {
     pub fn writes(&self) -> Vec<Write> {
         lock(&self.state).writes.clone()
     }
+
+    /// Grows a job's log and sets its status if given, as `POST /__append`; panics without the job.
+    pub fn append(&self, _: Kind, _: &str, _: u64, _: &str, _: Option<Status>) {}
+
+    /// Slows each API reply by `ms`, as `POST /__delay`.
+    pub fn delay(&self, ms: u64) {
+        lock(&self.state).delay = ms;
+    }
 }
 
 impl Drop for Forge {

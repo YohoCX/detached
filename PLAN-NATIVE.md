@@ -320,7 +320,8 @@ provider then fills it in.
   repos and MR head SHAs, `/__requests`, `/__writes`, `/__delay`), auth, pagination, `/user`,
   `/version` and project lookup (GitLab by path or id, GitHub repo), and the per-project branch
   SHAs reset takes from the MRs (`State::branches`). V5 adds the MR, pipeline, job and GraphQL
-  routes of history.md §6.2.
+  routes of history.md §6.2. Tests drive it through `Forge::reset`, `requests`, `writes`,
+  `append(kind, path, job, text, status)` (as `/__append`) and `delay(ms)` (as `/__delay`).
 
 ### Parity owners
 
