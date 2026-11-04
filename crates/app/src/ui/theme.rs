@@ -35,6 +35,9 @@ pub struct Theme {
     pub deleted: Hsla,
     pub conflict: Hsla,
     pub untracked: Hsla,
+    /// Monaco's diff colors: added and removed lines.
+    pub diff_add: Hsla,
+    pub diff_del: Hsla,
 }
 
 /// The gap between panes and around the window.
@@ -124,6 +127,8 @@ static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme {
     deleted: c(0x64748b),
     conflict: c(0xe11d48),
     untracked: c(0xb45309),
+    diff_add: c(0x10b981),
+    diff_del: c(0xf43f5e),
 });
 
 static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
@@ -162,6 +167,8 @@ static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
     deleted: c(0x94a3b8),
     conflict: c(0xfb7185),
     untracked: c(0xfbbf24),
+    diff_add: c(0x34d399),
+    diff_del: c(0xfb7185),
 });
 
 /// The tokens for the system appearance the kit's theme last synced to.
@@ -199,8 +206,9 @@ pub fn sync(window: &mut Window, cx: &mut App) {
         k.list_active = t.selected;
         k.primary = t.primary;
         k.primary_foreground = t.primary_fg;
-        k.danger = t.error;
+        // The kit's diff colors removed and added lines with these two.
+        k.danger = t.diff_del;
         k.warning = t.warning;
-        k.success = t.success;
+        k.success = t.diff_add;
     });
 }

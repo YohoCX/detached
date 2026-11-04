@@ -8,6 +8,7 @@ pub mod theme;
 
 use std::rc::Rc;
 
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
@@ -114,6 +115,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
             let on = v == value;
             let on_change = on_change.clone();
             pressable(i)
+                .test_support()
                 .h(px(24.))
                 .px(px(10.))
                 .rounded(radius::SEGMENT)
@@ -126,6 +128,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
                 .text_color(if on { t.fg } else { t.muted })
                 .when(on, |b| b.bg(t.selected))
                 .role(Role::Button)
+                .aria_label(label)
                 .aria_toggled(on.into())
                 .on_click(move |_, window, cx| on_change(v, window, cx))
                 .child(label)
