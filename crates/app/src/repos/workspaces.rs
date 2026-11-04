@@ -131,14 +131,6 @@ impl Workspaces {
             return field(input).into_any_element();
         }
         let (name, active) = (w.name.clone(), w.active);
-        let toggle = move |cx: &mut App| {
-            let name = name.clone();
-            settings_call(cx, move |core| {
-                api::set_workspace_active(core, name, !active)
-            })
-            .detach();
-        };
-        let key = toggle.clone();
         let tip = SharedString::from(w.folders.join("\n"));
         let n = w.folders.len();
         let (rename, remove) = (w.name.clone(), w.name.clone());
@@ -160,12 +152,13 @@ impl Workspaces {
             .aria_label(w.name.clone())
             .aria_description(tip.clone())
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(move |_, _, cx| toggle(cx))
-            .on_key_down(move |e: &KeyDownEvent, _, cx| {
-                if matches!(e.keystroke.key.as_str(), "space" | "enter") {
-                    key(cx);
-                    cx.stop_propagation();
-                }
+            // GPUI clicks a focused element on Space and Enter.
+            .on_click(move |_, _, cx| {
+                let name = name.clone();
+                settings_call(cx, move |core| {
+                    api::set_workspace_active(core, name, !active)
+                })
+                .detach();
             })
             .child(
                 div()
@@ -270,8 +263,10 @@ impl Render for Workspaces {
             .child(Icon::Down.size(px(12.)));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
         let this = cx.weak_entity();
-        let close = move |_: &mut Window, cx: &mut App| {
+        let close = move |window: &mut Window, cx: &mut App| {
             this.update(cx, |this, cx| {
+                // A click outside does not blur the rename field.
+                this.commit(window, cx);
                 this.open = None;
                 cx.notify();
             })

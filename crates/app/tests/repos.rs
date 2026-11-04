@@ -468,7 +468,9 @@ fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_c
 }
 
 #[gpui_kit::test]
-fn a_rename_commits_on_blur_and_a_taken_name_is_said_in_red(cx: &mut TestAppContext) {
+fn a_rename_commits_on_blur_and_on_a_click_outside_and_a_taken_name_is_said_in_red(
+    cx: &mut TestAppContext,
+) {
     let cx = &mut open_app_with(cx, layout);
     // Focus and blur events need an active window.
     cx.update(|w, _| w.activate_window());
@@ -486,6 +488,15 @@ fn a_rename_commits_on_blur_and_a_taken_name_is_said_in_red(cx: &mut TestAppCont
     assert_eq!(label(cx, "workspaces"), "Main");
     let new = cx.find("workspaces.new").unwrap();
     assert_eq!(new.focused(), Some(true), "the click keeps its focus");
+
+    let main = workspace_row(cx, "Main");
+    click_in(cx, &main, "rename");
+    cx.input("Home");
+    let lib = path(cx.sb.repo("lib"));
+    let lib = row(cx, &lib).id;
+    cx.click(lib);
+    assert!(cx.find("workspaces.popup").is_none());
+    wait_until(cx, |cx| label(cx, "workspaces") == "Home");
 }
 
 /// The switcher's options: id, path, and whether it is selected.
