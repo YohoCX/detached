@@ -413,6 +413,7 @@ impl Render for Shell {
         div()
             .key_context(keymap::CONTEXT)
             .track_focus(&self.focus)
+            .capture_any_mouse_down(|_, _, cx| keymap::DoubleShift::reset(cx))
             .relative()
             .flex()
             .flex_col()

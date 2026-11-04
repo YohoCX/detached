@@ -181,8 +181,8 @@ pub fn bindings(overrides: &BTreeMap<String, String>, mac: bool) -> Vec<(&'stati
 
 const DOUBLE: Duration = Duration::from_millis(300);
 
-/// Two lone Shift taps within 300 ms; any other key between them resets it. GPUI reports a lone
-/// modifier as a keystroke of its own on release.
+/// Two lone Shift taps within 300 ms; any other key or a mouse press between them resets it. GPUI
+/// reports a lone modifier as a keystroke of its own on release, even after a Shift-click.
 #[derive(Default)]
 pub struct DoubleShift {
     last: Option<Instant>,
@@ -198,7 +198,13 @@ impl DoubleShift {
         self.last = (lone && !fired).then_some(now);
         fired
     }
+
+    pub fn reset(cx: &mut App) {
+        cx.default_global::<DoubleShift>().last = None;
+    }
 }
+
+impl Global for DoubleShift {}
 
 struct Bound(Vec<(&'static str, Chord)>);
 
@@ -241,9 +247,9 @@ pub fn bind(overrides: &BTreeMap<String, String>, cx: &mut App) {
     }
     cx.bind_keys(keys);
     if let Some(&(id, _)) = bound.iter().find(|(_, c)| *c == Chord::DoubleShift) {
-        let mut double = DoubleShift::default();
         cx.observe_keystrokes(move |e, window, cx| {
-            if double.key(&e.keystroke, cx.background_executor().now()) {
+            let now = cx.background_executor().now();
+            if cx.default_global::<DoubleShift>().key(&e.keystroke, now) {
                 actions::dispatch(window, cx, id);
             }
         })
