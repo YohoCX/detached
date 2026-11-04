@@ -170,7 +170,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 
 ---
 
-## 2. Merge requests
+## 2. Merge requests [ported]
 
 ### 2.1 Setup states (`src/lib/mr.ts:5-11`), used by MrList [ported]
 - No MR remote: "Choose the remote that holds the merge requests in Settings."
@@ -276,7 +276,7 @@ Rules behind them:
   - `ongutter` is undefined, so there is no `+` at all, when the head moved or the MR is not open (`:268`).
 - "Select a file" when nothing is picked.
 
-**Line comments, i.e. how they attach to diff lines** [not done: the "+", the draft and the thread zones need files::DiffView, a stub until V2 lands; MrPage and Thread pass them, the UI tests come with the rebase onto V2]:
+**Line comments, i.e. how they attach to diff lines** [ported; the head-moved case is untested, since the fake serves no git and the fixture keeps every commit local]:
 - **Viewer gutter** (`src/components/Viewer.svelte:201,213-239`):
   - The glyph margin is enabled when `ongutter` is set.
   - Hovering a line on either side (original = old, modified = new) shows the `.mr-plus` decoration ("+" in an accent square, `:386-387`) if `commentable(side, line)` allows it.

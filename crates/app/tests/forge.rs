@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::actions;
+use detached_app::files::{self, DiffDoc, Side};
 use detached_app::store::{Bottom, Doc, Tool};
 use detached_core::api;
 use detached_core::types::{AccountInput, MrAction, Provider};
@@ -1009,6 +1010,11 @@ fn the_commits_tab_lists_the_range_and_shows_details(cx: &mut TestAppContext) {
     cx.click(first);
     assert!(cx.find("mr.no_commit").is_none());
     assert_eq!(cx.find(first).unwrap().selected(), Some(true));
+    wait_until(cx, |cx| {
+        label(cx, "details.head").as_deref() == Some("3 files")
+    });
+    let subject = label(cx, "details.subject");
+    assert_eq!(subject.as_deref(), Some("feature work"));
 }
 
 #[gpui_kit::test]
@@ -1025,4 +1031,180 @@ fn a_head_missing_here_is_fetched_and_its_failure_shows(cx: &mut TestAppContext)
     let error = label(cx, "mr.refs").unwrap();
     assert!(error.contains("/gitlab/group/app.git"), "{error}");
     assert!(cx.find(("commit", 0usize)).is_none());
+}
+
+/// Hovers line `n` on `side` ("old" or "new") of the MR's diff.
+fn hover(cx: &mut VisualTestContext, side: &'static str, n: usize) {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        w.within((side, n - 1)).hover("source", cx)
+    });
+    settle(cx);
+}
+
+/// Whether line `n` on `side` shows the "+".
+fn plus_at(cx: &mut VisualTestContext, side: &'static str, n: usize) -> bool {
+    hover(cx, side, n);
+    cx.find("diff.add").is_some()
+}
+
+/// Changes, then the file row `i`, until its diff shows line 1.
+fn open_file(cx: &mut VisualTestContext, i: usize) {
+    click_in(cx, "mr.tabs", 2usize);
+    wait_until(cx, |cx| cx.find(("file", i)).is_some());
+    cx.click(("file", i));
+    wait_until(cx, |cx| find_in(cx, ("new", 0usize), "source").is_some());
+}
+
+/// A line comment through the "+" on line `n` of `side`.
+fn comment_at(cx: &mut VisualTestContext, side: &'static str, n: usize, text: &str) {
+    hover(cx, side, n);
+    cx.click("diff.add");
+    assert!(find_in(cx, "mr.diff", "thread.text").is_some(), "the draft");
+    cx.input(text);
+}
+
+#[gpui_kit::test]
+fn gitlab_line_comments_go_under_their_lines_and_into_activity(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    let m = &seed.projects[0].mrs[0];
+    let discussions = format!("{GL_MR}/discussions");
+    let position = |old: Option<u32>, new: u32| {
+        let mut p = json!({
+            "position_type": "text", "base_sha": m.base_sha, "start_sha": m.base_sha,
+            "head_sha": m.head_sha, "old_path": "README.md", "new_path": "README.md", "new_line": new,
+        });
+        if let Some(old) = old {
+            p["old_line"] = old.into();
+        }
+        p
+    };
+    open_mr(cx, "gitlab");
+    open_file(cx, 1);
+
+    comment_at(cx, "new", 3, "Changed line");
+    cx.press("secondary-enter");
+    let body = json!({ "body": "Changed line", "position": position(None, 3) });
+    wait_until(cx, |_| sent(&forge, "POST", &discussions, body.clone()));
+    let zone = |cx: &mut VisualTestContext| label_in(cx, "mr.diff", ("note", 0usize));
+    let draft = |cx: &mut VisualTestContext| find_in(cx, "mr.diff", "thread.text").is_some();
+    wait_until(cx, |cx| {
+        zone(cx).as_deref() == Some("Changed line") && !draft(cx)
+    });
+    let line = |cx: &mut VisualTestContext, n: usize| {
+        find_in(cx, ("new", n - 1), "source").unwrap().bounds()
+    };
+    let note = find_in(cx, "mr.diff", ("note", 0usize)).unwrap().bounds();
+    assert!(line(cx, 3).bottom() <= note.top() && note.bottom() <= line(cx, 4).top());
+
+    comment_at(cx, "new", 7, "Dropped");
+    cx.press("escape");
+    assert!(!draft(cx), "Escape drops the draft");
+    comment_at(cx, "old", 5, "Unchanged line");
+    click_in(cx, "mr.diff", "thread.send");
+    let body = json!({ "body": "Unchanged line", "position": position(Some(5), 5) });
+    wait_until(cx, |_| sent(&forge, "POST", &discussions, body.clone()));
+
+    click_in(cx, "mr.tabs", 0usize);
+    let at = |cx: &mut VisualTestContext, i: usize| label_in(cx, ("thread", i), "thread.where");
+    wait_until(cx, |cx| at(cx, 1).is_some());
+    assert_eq!(
+        [at(cx, 0), at(cx, 1)].map(|w| w.unwrap()),
+        ["README.md:3", "README.md:5"]
+    );
+}
+
+#[gpui_kit::test]
+fn github_takes_line_comments_inside_its_hunks_only(cx: &mut TestAppContext) {
+    let (mut app, forge, seed) = open_forge(cx);
+    let cx = &mut app;
+    let head = &seed.projects[1].mrs[0].head_sha;
+    open_mr(cx, "github");
+    open_file(cx, 1);
+    // The hunks load after the diff.
+    wait_until(cx, |cx| plus_at(cx, "new", 6));
+    assert!(!plus_at(cx, "new", 20) && !plus_at(cx, "new", 7));
+
+    open_file(cx, 2);
+    wait_until(cx, |cx| plus_at(cx, "old", 8));
+    assert!(!plus_at(cx, "new", 2) && !plus_at(cx, "old", 2));
+    comment_at(cx, "new", 9, "In the hunk");
+    click_in(cx, "mr.diff", "thread.send");
+    let body = json!({
+        "body": "In the hunk", "commit_id": head, "path": "src/new.ts", "line": 9, "side": "RIGHT",
+    });
+    wait_until(cx, |_| {
+        sent(&forge, "POST", &format!("{GH_PR}/comments"), body.clone())
+    });
+}
+
+#[gpui_kit::test]
+fn a_closed_mr_takes_no_line_comments(cx: &mut TestAppContext) {
+    let (mut app, _forge, _) = open_forge(cx);
+    let cx = &mut app;
+    open_mr(cx, "gitlab");
+    open_file(cx, 1);
+    assert!(plus_at(cx, "new", 3));
+    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
+    cx.click("mr.refresh");
+    wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));
+    wait_until(cx, |cx| find_in(cx, ("new", 2usize), "source").is_some());
+    assert!(!plus_at(cx, "new", 3));
+}
+
+#[gpui_kit::test]
+fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut TestAppContext) {
+    let (mut app, _forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let readme: String = (1..=30)
+        .map(|i| match i {
+            3 => "line 3 changed\n".into(),
+            20 | 25 => format!("line {i} edited\n"),
+            _ => format!("line {i}\n"),
+        })
+        .collect();
+    std::fs::write(std::path::Path::new(&repo).join("README.md"), readme).unwrap();
+    let worktree = DiffDoc {
+        repo: repo.clone(),
+        path: "README.md".into(),
+        orig_path: None,
+        left: Side::Head,
+        right: Side::Worktree,
+    };
+    let copied = |cx: &mut VisualTestContext| {
+        cx.press("secondary-c");
+        cx.read_from_clipboard()
+            .and_then(|c| c.text())
+            .unwrap_or_default()
+    };
+    let shown = worktree.clone();
+    cx.update(|_, cx| files::show_diff(cx, shown, true));
+    wait_until(cx, |cx| copied(cx) == "line 20 edited\n");
+
+    cx.store(|s, cx| s.show(Doc::Mr { repo, number: 1 }, cx));
+    wait_until(cx, |cx| label(cx, "mr.title").is_some());
+    open_file(cx, 1);
+    cx.press("secondary-l");
+    assert!(
+        find_in(cx, "mr.diff", "input-state").is_some(),
+        "Go to Line in the MR's diff"
+    );
+    cx.input("20");
+    cx.press("enter");
+    assert_eq!(copied(cx), "line 20\n");
+    cx.press("f7");
+    assert_eq!(
+        copied(cx),
+        "line 3 changed\n",
+        "wrapped to the MR's one change"
+    );
+
+    cx.update(|_, cx| files::show_diff(cx, worktree, true));
+    wait_until(cx, |cx| copied(cx) == "line 20 edited\n");
+    cx.press("f7");
+    assert_eq!(copied(cx), "line 25 edited\n", "the viewer's again");
 }

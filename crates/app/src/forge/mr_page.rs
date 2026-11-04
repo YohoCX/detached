@@ -818,7 +818,7 @@ impl MrPage {
                     .border_color(t.line)
                     .child(files),
             )
-            .child(div().flex_1().min_w_0().h_full().child(diff))
+            .child(div().id("mr.diff").flex_1().min_w_0().h_full().child(diff))
     }
 }
 
