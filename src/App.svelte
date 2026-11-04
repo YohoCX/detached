@@ -47,7 +47,9 @@
       <button class="icon-btn" class:on={app.tool === 'files'} title="Project {chordFor('panel.project')}" onclick={() => tool('files')}><Icon name="tree" /></button>
       <button class="icon-btn" class:on={app.tool === 'changes'} title="Changes" onclick={() => tool('changes')}><Icon name="changes" /></button>
       <button class="icon-btn" class:on={app.tool === 'mrs'} title="Merge Requests" onclick={() => tool('mrs')}><Icon name="mr" /></button>
-      <button class="icon-btn settings" title="Settings {chordFor('app.settings')}" onclick={() => (app.settings = true)}><Icon name="gear" /></button>
+      <button class="icon-btn push" class:on={app.bottom === 'log'} title="Git Log {chordFor('panel.log')}" onclick={() => run('panel.log')}><Icon name="log" /></button>
+      <button class="icon-btn" class:on={app.bottom === 'pipelines'} title="Pipelines" onclick={() => run('panel.pipelines')}><Icon name="pipeline" /></button>
+      <button class="icon-btn" title="Settings {chordFor('app.settings')}" onclick={() => (app.settings = true)}><Icon name="gear" /></button>
     </nav>
     {#if app.sidebar}
       <aside class="repos panel" style:width="{reposWidth}px"><Sidebar /><Grip key="repos" bind:size={reposWidth} edge="right" min={200} max={600} /></aside>
@@ -83,7 +85,7 @@
   .body { display: flex; gap: 10px; flex: 1; min-height: 0; }
   .strip { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 48px; padding: 8px 0; flex: none; }
   .strip .icon-btn { width: 34px; height: 34px; justify-content: center; border-radius: 10px; }
-  .strip .settings { margin-top: auto; }
+  .strip .push { margin-top: auto; }
   .strip .on { background: var(--selected); color: var(--fg); box-shadow: 0 0 18px var(--selected); }
   .work, .top { display: flex; gap: 10px; flex: 1; min-width: 0; min-height: 0; }
   .work { flex-direction: column; }
