@@ -10,7 +10,7 @@ Decided with the owner on 2026-11-04:
 - Mermaid renders in Rust; a block that fails shows its source.
 - Plan first, reviewed with revmux; the work runs as parallel verticals after a shared foundation.
 
-**Status (2026-11-04): plan reviewed (revmux, 5 rounds, 28 findings fixed). Next: step 0 (foundation).**
+**Status (2026-11-04): step 0 (foundation) done and green on macOS; measured 48 MB idle, ~0.3 s to first frame. Next: step 1 (V1–V5) after the owner's hand check.**
 
 The parity bar is the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
 does is surveyed in [docs/native/](docs/native/): [shell.md](docs/native/shell.md) (window, top bar,
@@ -262,9 +262,11 @@ provider then fills it in.
   `panel.*` actions toggle), for Compare with Base (V1 opens Changes), file history (V4 opens Log)
   and Run Pipeline and the badge (V5 open Pipelines).
 - **Threads:** `blocking::run`, `blocking::stream`, the op and query id rules.
-- **Actions:** `actions::register(id, title, group, handler) -> Registration`. The latest
+- **Core:** `api::file_patch` returns `FilePatch::Patch` (the whole file as one hunk),
+  `Unchanged(text)` for equal sides, or `Sides(FileDiff)` when the sides are not two texts.
+- **Actions:** `actions::register(cx, id, title, group, handler) -> Registration`. The latest
   registration of an id wins; dropping it restores the previous one (how the MR page's diff takes
-  F7, Shift+F7 and Cmd+L from the main viewer while mounted). `actions::run(id) -> bool` says
+  F7, Shift+F7 and Cmd+L from the main viewer while mounted). `actions::run(window, cx, id) -> bool` says
   whether a handler ran. A vertical adds its ids to the list in `actions.rs` and default chords to
   `keymap.rs` (append-only). Each action's handler is registered by the vertical that owns its
   behavior; step 0 adds an owner column to docs/KEYMAP.md's table, covering every action of today's
@@ -301,7 +303,7 @@ provider then fills it in.
 - **Helpers** (`util.rs`, F): `base_name`, `dir_name`, `folder_name`, `in_folder`, the change
   `letter` and `status_of`, `when` (commit and pipeline times), `fuzzy::filter`/`segments`; the
   context-menu helper in `ui/`. A vertical's own helpers stay in its directory.
-- **Navigation:** `nav::open(Location)` records and shows any location (file, MR, job),
+- **Navigation:** `nav::open(cx, Location)` records and shows any location (file, MR, job),
   back/forward, recent files (files only) with today's caps (50, 100).
 - **UI:** `ui` primitives and theme tokens; a vertical needing a new primitive adds it to `ui/` in
   its own commit. `ui_state::get/set` with the vertical's key prefix.

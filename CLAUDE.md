@@ -5,17 +5,14 @@ Read-only multi-repo git client. Two clients share one backend while the native 
 - `crates/app`: the native client on GPUI (gpui-kit). The future; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `src-tauri` + `src/`: the Tauri/Svelte client, kept working until PLAN-NATIVE step 2 removes it.
 
-Until PLAN-NATIVE step 0 lands, `crates/` does not exist and the commands below marked "step 0"
-do not either.
-
 ## Commands
 
 ```sh
 make check    # the merge gate: fmt, clippy -D warnings and cargo test over the whole workspace
               # (core, ported unit tests, UI tests), plus svelte-check and bun test until V6
-make app      # step 0: the native client, against the dev.wdevs.detached.native config copy
-make ui-test  # step 0: the native UI tests only
-make smoke    # step 0: build and run `--smoke`
+make app      # the native client, against the dev.wdevs.detached.native config copy
+make ui-test  # the native UI tests only
+make smoke    # build and run `--smoke`
 make e2e      # Playwright on the Tauri client (until removed)
 make dev      # the Tauri client
 ```

@@ -22,8 +22,6 @@ jobs:
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
       - run: bun install --frozen-lockfile
 
       # Every release is signed with the same "Detached Dev" identity, or Keychain access breaks on update.
@@ -50,7 +48,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           bun tauri build --bundles app --target universal-apple-darwin
-          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Detached.app
+          app=target/universal-apple-darwin/release/bundle/macos/Detached.app
           codesign --verify --deep --strict "$app"
           codesign -dvv "$app" 2>&1 | grep -q 'Authority=Detached Dev'
           mkdir out && ditto -c -k --keepParent "$app" out/Detached-macos.zip
@@ -59,7 +57,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           bun tauri build --bundles nsis
-          mkdir out && cp src-tauri/target/release/bundle/nsis/*-setup.exe out/Detached-windows-x64-setup.exe
+          mkdir out && cp target/release/bundle/nsis/*-setup.exe out/Detached-windows-x64-setup.exe
 
       - name: Build Linux
         if: runner.os == 'Linux'
@@ -68,8 +66,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf
           bun tauri build --bundles appimage,deb
           mkdir out
-          cp src-tauri/target/release/bundle/appimage/*.AppImage out/Detached-linux-x86_64.AppImage
-          cp src-tauri/target/release/bundle/deb/*.deb out/Detached-linux-amd64.deb
+          cp target/release/bundle/appimage/*.AppImage out/Detached-linux-x86_64.AppImage
+          cp target/release/bundle/deb/*.deb out/Detached-linux-amd64.deb
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

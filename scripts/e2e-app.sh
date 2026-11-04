@@ -18,7 +18,7 @@ trap 'rm -rf "$tmp"' EXIT
 shell=$(dscl . -read "/Users/$USER" UserShell | sed 's/^UserShell: //')
 env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL="$shell" \
   TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  open -n -W "$@" src-tauri/target/release/bundle/macos/Detached.app --args --self-test "$tmp/report.json"
+  open -n -W "$@" target/release/bundle/macos/Detached.app --args --self-test "$tmp/report.json"
 if [ ! -f "$tmp/report.json" ]; then
   echo "FAIL: the app wrote no report." >&2
   exit 1

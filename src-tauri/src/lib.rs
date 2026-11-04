@@ -1,29 +1,13 @@
-pub mod accounts;
-pub mod env;
-pub mod error;
-pub mod forge;
-pub mod git;
-pub mod os;
-pub mod search;
-#[cfg(unix)]
-pub mod selftest;
-pub mod settings;
-pub mod state;
-pub mod types;
+mod commands;
 
-use std::sync::Arc;
-
+use detached_core::state::AppState;
 use tauri::{Manager, Runtime, Url, Webview};
-
-use crate::accounts::store::SystemStore;
-use crate::env::Env;
-use crate::settings::Settings;
-use crate::state::AppState;
 
 pub fn run() {
     #[cfg(unix)]
     if let Some(dest) = std::env::args().skip_while(|a| a != "--self-test").nth(1) {
-        std::process::exit(if selftest::run(dest.as_ref()) { 0 } else { 1 });
+        let ok = detached_core::selftest::run(dest.as_ref());
+        std::process::exit(if ok { 0 } else { 1 });
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -34,86 +18,77 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let config_dir = app.path().app_config_dir()?;
-            // Settings from the app's former identifier move over once.
-            let old = config_dir.with_file_name("dev.wdevs.workbench");
-            if !config_dir.exists() {
-                let _ = std::fs::rename(old, &config_dir);
-            }
-            let settings = Settings::load(&config_dir);
-            let (env, _) = Env::detect(settings.git_path.as_deref());
-            let tokens = Arc::new(SystemStore::default());
-            app.manage(AppState::new(config_dir, settings, env, tokens));
+            app.manage(AppState::boot()?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            settings::get_settings,
-            settings::list_repos,
-            settings::add_folder,
-            settings::remove_folder,
-            settings::exclude_repo,
-            settings::include_repo,
-            settings::set_workspace_active,
-            settings::save_workspace,
-            settings::remove_workspace,
-            settings::set_repo_account,
-            settings::set_forge_account,
-            settings::set_mr_remote,
-            settings::set_git_path,
-            settings::env_info,
-            settings::keymap_overrides,
-            settings::open_folder,
-            git::commands::repo_status,
-            git::commands::list_branches,
-            git::commands::checkout,
-            git::commands::create_branch,
-            git::commands::set_upstream,
-            git::commands::delete_branch,
-            git::commands::delete_remote_branch,
-            git::commands::prune,
-            git::commands::fetch,
-            git::commands::pull,
-            git::commands::cancel_op,
-            git::commands::list_changes,
-            git::commands::compare_base,
-            git::commands::file_diff,
-            git::commands::list_files,
-            git::commands::read_file,
-            git::commands::read_image,
-            git::commands::open_in_zed,
-            git::commands::log,
-            git::commands::cancel_log,
-            git::commands::commit_details,
-            git::commands::branches_containing,
-            git::commands::merge_base,
-            git::commands::range_log,
-            git::commands::hunk_ranges,
-            git::commands::fetch_mr,
-            accounts::commands::list_accounts,
-            accounts::commands::save_account,
-            accounts::commands::remove_account,
-            accounts::commands::verify_account,
-            accounts::commands::repo_accounts,
-            forge::commands::forge_hosts,
-            forge::commands::commit_url,
-            forge::commands::list_mrs,
-            forge::commands::current_mr,
-            forge::commands::get_mr,
-            forge::commands::mr_threads,
-            forge::commands::mr_action,
-            forge::commands::new_mr,
-            forge::commands::create_mr,
-            forge::commands::list_pipelines,
-            forge::commands::mr_pipelines,
-            forge::commands::pipeline_jobs,
-            forge::commands::pipeline_action,
-            forge::commands::job_action,
-            forge::commands::job_log,
-            forge::commands::workflows,
-            forge::commands::run_pipeline,
-            search::commands::quick_open,
-            search::commands::find_in_files,
-            search::commands::cancel_find,
+            commands::get_settings,
+            commands::list_repos,
+            commands::add_folder,
+            commands::remove_folder,
+            commands::exclude_repo,
+            commands::include_repo,
+            commands::set_workspace_active,
+            commands::save_workspace,
+            commands::remove_workspace,
+            commands::set_repo_account,
+            commands::set_forge_account,
+            commands::set_mr_remote,
+            commands::set_git_path,
+            commands::env_info,
+            commands::keymap_overrides,
+            commands::open_folder,
+            commands::repo_status,
+            commands::list_branches,
+            commands::checkout,
+            commands::create_branch,
+            commands::set_upstream,
+            commands::delete_branch,
+            commands::delete_remote_branch,
+            commands::prune,
+            commands::fetch,
+            commands::pull,
+            commands::cancel_op,
+            commands::list_changes,
+            commands::compare_base,
+            commands::file_diff,
+            commands::list_files,
+            commands::read_file,
+            commands::read_image,
+            commands::open_in_zed,
+            commands::log,
+            commands::cancel_log,
+            commands::commit_details,
+            commands::branches_containing,
+            commands::merge_base,
+            commands::range_log,
+            commands::hunk_ranges,
+            commands::fetch_mr,
+            commands::list_accounts,
+            commands::save_account,
+            commands::remove_account,
+            commands::verify_account,
+            commands::repo_accounts,
+            commands::forge_hosts,
+            commands::commit_url,
+            commands::list_mrs,
+            commands::current_mr,
+            commands::get_mr,
+            commands::mr_threads,
+            commands::mr_action,
+            commands::new_mr,
+            commands::create_mr,
+            commands::list_pipelines,
+            commands::mr_pipelines,
+            commands::pipeline_jobs,
+            commands::pipeline_action,
+            commands::job_action,
+            commands::job_log,
+            commands::workflows,
+            commands::run_pipeline,
+            commands::quick_open,
+            commands::find_in_files,
+            commands::cancel_find,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

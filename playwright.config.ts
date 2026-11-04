@@ -21,7 +21,7 @@ export default defineConfig({
       url: `http://localhost:${APP_PORT}`,
     },
     {
-      command: `cargo run --quiet --manifest-path src-tauri/Cargo.toml --features e2e --bin e2e-bridge -- ${BRIDGE_PORT}`,
+      command: `cargo run --quiet -p detached-core --features e2e --bin e2e-bridge -- ${BRIDGE_PORT}`,
       url: `http://127.0.0.1:${BRIDGE_PORT}/`,
       timeout: 600_000,
     },

@@ -41,7 +41,7 @@ make dev         # run the app
 make check       # fmt, clippy, cargo test, svelte-check, bun test
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
 make sign-setup  # once: the "Detached Dev" signing identity that make build uses
-make build       # Detached.app under src-tauri/target/release/bundle
+make build       # Detached.app under target/release/bundle
 make e2e-app     # builds Detached.app, starts it like Finder does, checks PATH, node and hooks
 make release     # tags v<version in tauri.conf.json>; CI builds every platform and publishes it
 ```
@@ -56,9 +56,9 @@ base64 -i Detached.p12 | gh secret set MACOS_CERTIFICATE
 
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 
-The command contract between UI and backend is `src/lib/api.ts` and `src-tauri/src/types.rs`;
+The command contract between UI and backend is `src/lib/api.ts` and `crates/core/src/types.rs`;
 change both together. `make e2e` replaces only the Tauri IPC transport: `e2e/shim.ts` forwards
-`invoke` to `src-tauri/src/bin/e2e-bridge.rs` (cargo feature `e2e`), which calls the same code.
+`invoke` to `crates/core/src/bin/e2e-bridge.rs` (cargo feature `e2e`), which calls the same code.
 `e2e/forge.ts` fakes GitLab (`/gitlab`) and GitHub Enterprise (`/ghe`) for the MR and pipeline
 specs; `openForge()` in `e2e/fixture.ts` seeds it. `E2E_PORT` (default 1520) moves its three ports.
 

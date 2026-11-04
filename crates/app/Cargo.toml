@@ -1,0 +1,23 @@
+[package]
+name = "detached-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "detached-native"
+path = "src/main.rs"
+
+[dependencies]
+detached-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+gpui-kit = "=0.9.0"
+futures = "0.3"
+
+[dev-dependencies]
+detached-core = { workspace = true, features = ["testutil", "e2e"] }
+detached-forge-fake = { path = "../forge-fake" }
+gpui-kit = { version = "=0.9.0", features = ["test-support", "tree-sitter-rust"] }
+tempfile.workspace = true

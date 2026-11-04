@@ -1,0 +1,40 @@
+[package]
+name = "detached-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# HTTP bridge for the Playwright suite in e2e/.
+[[bin]]
+name = "e2e-bridge"
+required-features = ["e2e"]
+
+[features]
+# Plain http to localhost counts as https, for the fake forges. Test builds only.
+e2e = []
+# `git::testutil::Sandbox` for other crates' tests.
+testutil = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+base64 = "0.23"
+thiserror = "2"
+libc = "0.2"
+ureq = { version = "3.5", features = ["json"] }
+ignore = "0.4.34"
+grep-searcher = "0.1.17"
+grep-regex = "0.1.14"
+grep-matcher = "0.1.9"
+nucleo-matcher = "0.3.1"
+imara-diff = "0.2"
+dirs = "7"
+open = { version = "5.4", features = ["shellexecute-on-windows"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+keyring = "4.2"

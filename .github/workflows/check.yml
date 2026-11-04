@@ -1,0 +1,68 @@
+# The merge gate on every push and pull request, on all three OSes.
+name: Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: bun install --frozen-lockfile
+
+      # Tauri's webview, then GPUI's windowing and Vulkan.
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev libvulkan1
+
+      - name: GNU make
+        if: runner.os == 'Windows'
+        run: command -v make || choco install make --no-progress -y
+
+      - run: make check
+
+      # Linux draws through mesa's software Vulkan on a virtual display.
+      - name: Linux display
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb mesa-vulkan-drivers
+
+      - name: Smoke
+        timeout-minutes: 10
+        run: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }} make smoke
+
+      # A picture of the running app for the run's artifacts; not a check.
+      - name: Screenshot
+        if: runner.os != 'Windows'
+        continue-on-error: true
+        run: |
+          export DETACHED_CONFIG_DIR="$(mktemp -d)"
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" \
+              sh -c 'target/debug/detached-native & sleep 5; import -window root smoke.png; kill $!'
+          else
+            target/debug/detached-native & sleep 5; screencapture -x smoke.png; kill $!
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os != 'Windows'
+        with:
+          name: screenshot-${{ runner.os }}
+          path: smoke.png
+          if-no-files-found: ignore
