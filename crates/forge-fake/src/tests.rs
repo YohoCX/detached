@@ -28,20 +28,40 @@ fn seeded() -> Forge {
     f
 }
 
-/// Status, headers and JSON body (`Null` when empty) of a request to `url`.
-fn send(method: &str, url: &str, headers: &[(&str, &str)], body: &str) -> (u16, HeaderMap, Value) {
+/// Status, headers and body text of a request to `url`, redirects not followed.
+fn send_text(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, HeaderMap, String) {
     let mut req = ureq::http::Request::builder().method(method).uri(url);
     for (k, v) in headers {
         req = req.header(*k, *v);
     }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .max_redirects(0)
         .build()
         .into();
     let mut resp = agent.run(req.body(body.to_string()).unwrap()).unwrap();
     let text = resp.body_mut().read_to_string().unwrap();
-    let json = serde_json::from_str(&text).unwrap_or(Value::Null);
-    (resp.status().as_u16(), resp.headers().clone(), json)
+    (resp.status().as_u16(), resp.headers().clone(), text)
+}
+
+/// Status, headers and JSON body (`Null` when empty) of a request to `url`.
+fn send(method: &str, url: &str, headers: &[(&str, &str)], body: &str) -> (u16, HeaderMap, Value) {
+    let (status, headers, text) = send_text(method, url, headers, body);
+    (
+        status,
+        headers,
+        serde_json::from_str(&text).unwrap_or(Value::Null),
+    )
+}
+
+/// A GET's status, headers and body text.
+fn get_text(f: &Forge, path: &str, auth: &[(&str, &str)]) -> (u16, HeaderMap, String) {
+    send_text("GET", &format!("{}{path}", f.url()), auth, "")
 }
 
 /// A `Null` body sends none.
@@ -187,6 +207,8 @@ fn delay_slows_api_replies() {
     let t = Instant::now();
     assert_eq!(get(&f, "/gitlab/api/v4/version", &[GL]).0, 200);
     assert!(t.elapsed() >= Duration::from_millis(200));
+    f.delay(0);
+    assert_eq!(lock(&f.state).delay, 0);
 }
 
 #[test]
@@ -709,4 +731,67 @@ fn ghe_job_get_and_rerun() {
     let cancel = format!("{GH_R}/actions/jobs/101/cancel");
     assert_eq!(post(&f, &cancel, &[GH], Value::Null), missing);
     assert_eq!(get(&f, &format!("{GH_R}/actions/jobs/999"), &[GH]), missing);
+}
+
+#[test]
+fn append_grows_a_jobs_log_and_sets_its_status_unrecorded() {
+    let f = pipes();
+    let body = json!({ "forge": "gitlab", "path": "group/app", "job": 101, "text": "\nmore", "status": "running" });
+    assert_eq!(post(&f, "/__append", &[], body), (200, Value::Null));
+    f.append(Kind::Ghe, "owner/app", 102, "!", None);
+    let s = lock(&f.state);
+    let job = |p: usize, i: usize| {
+        let j = &s.projects[p].pipelines[0].jobs[i];
+        (j.log.as_str(), j.status)
+    };
+    assert_eq!(job(0, 0), ("x\nmore", Status::Running));
+    assert_eq!(job(1, 1), ("x!", Status::Failed));
+    assert_eq!(s.projects[0].pipelines[0].status, Status::Failed);
+    assert!(s.requests.is_empty());
+    drop(s);
+    let other = json!({ "forge": "ghe", "path": "group/app", "job": 101 });
+    let missing = (404, json!({ "message": "no such job" }));
+    assert_eq!(post(&f, "/__append", &[], other), missing);
+    assert_eq!(post(&f, "/__append", &[], json!({ "forge": "x" })).0, 400);
+}
+
+#[test]
+fn gitlab_trace_is_the_jobs_log_as_text() {
+    let f = pipes();
+    f.append(Kind::Gitlab, "group/app", 101, "\x1b[32mok\x1b[0m\n", None);
+    let trace = format!("{GL_P}/jobs/101/trace");
+    let (status, headers, text) = get_text(&f, &trace, &[GL]);
+    assert_eq!((status, text.as_str()), (200, "x\x1b[32mok\x1b[0m\n"));
+    assert_eq!(headers["content-type"], "text/plain");
+    assert_eq!(get(&f, &trace, &[]).0, 401);
+    assert_eq!(get(&f, &format!("{GL_P}/jobs/999/trace"), &[GL]).0, 404);
+}
+
+#[test]
+fn ghe_logs_are_missing_while_active_then_redirect_to_a_blob_that_refuses_the_token() {
+    let f = pipes();
+    let logs = format!("{GH_R}/actions/jobs/101/logs");
+    f.append(Kind::Ghe, "owner/app", 101, "", Some(Status::Running));
+    assert_eq!(
+        get(&f, &logs, &[GH]),
+        (404, json!({ "message": "Not Found" }))
+    );
+    f.append(Kind::Ghe, "owner/app", 101, " done", Some(Status::Success));
+    let (status, headers, _) = get_text(&f, &logs, &[GH]);
+    let to = headers["location"].to_str().unwrap();
+    let want = format!("{}/__blob/2/101?sig=fake", f.url());
+    assert_eq!((status, to), (302, want.as_str()));
+    let blob = to.strip_prefix(&f.url()).unwrap();
+    let (status, _, text) = get_text(&f, blob, &[]);
+    assert_eq!((status, text.as_str()), (200, "x done"));
+    let refused = json!({ "message": "the signed URL must not get the token" });
+    assert_eq!(get(&f, blob, &[GH]), (400, refused));
+    for missing in ["/__blob/0/101", "/__blob/3/101", "/__blob/2/999"] {
+        assert_eq!(get(&f, missing, &[]).0, 404, "{missing}");
+    }
+    let blobs = f
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.starts_with("/__blob"));
+    assert_eq!(blobs.count(), 0);
 }

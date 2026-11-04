@@ -1,5 +1,6 @@
 //! The MR, pipeline, job and GraphQL routes. Each returns `None` for a route it does not serve.
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::http::{Reply, Req, paged};
@@ -8,8 +9,59 @@ use crate::{Job, Kind, Pipeline, State, Status};
 pub(crate) const T: &str = "2026-10-01T10:00:00Z";
 
 /// Routes outside the APIs (`/__append`, `/__blob`): no auth, not recorded.
-pub(crate) fn control(_: &mut State, _: &Req) -> Option<Reply> {
-    None
+pub(crate) fn control(s: &mut State, req: &Req) -> Option<Reply> {
+    #[derive(Deserialize)]
+    struct Append {
+        forge: Kind,
+        path: String,
+        job: u64,
+        #[serde(default)]
+        text: String,
+        status: Option<Status>,
+    }
+    let seg: Vec<&str> = req.path.split('/').skip(1).collect();
+    let fail = |status, message: String| Some(Reply::json(status, json!({ "message": message })));
+    match (req.method.as_str(), seg.as_slice()) {
+        ("POST", ["__append"]) => match Append::deserialize(&req.body) {
+            Err(e) => fail(400, e.to_string()),
+            Ok(a) if append(s, a.forge, &a.path, a.job, &a.text, a.status) => {
+                Some(Reply::json(200, Value::Null))
+            }
+            Ok(_) => fail(404, "no such job".into()),
+        },
+        (_, ["__blob", p, id]) => {
+            if req.header("authorization").is_some() {
+                return fail(400, "the signed URL must not get the token".into());
+            }
+            let p = p.parse::<usize>().ok()?.checked_sub(1)?;
+            let (k, i) = job(s, p, id)?;
+            Some(text(s.projects[p].pipelines[k].jobs[i].log.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Grows a job's log and sets its status if given; false without such a job.
+pub(crate) fn append(
+    s: &mut State,
+    forge: Kind,
+    path: &str,
+    job: u64,
+    text: &str,
+    status: Option<Status>,
+) -> bool {
+    let mut jobs = s
+        .projects
+        .iter_mut()
+        .filter(|p| p.forge == forge && p.path == path)
+        .flat_map(|p| &mut p.pipelines)
+        .flat_map(|pl| &mut pl.jobs);
+    let Some(j) = jobs.find(|j| j.id == job) else {
+        return false;
+    };
+    j.log += text;
+    j.status = status.unwrap_or(j.status);
+    true
 }
 
 /// `POST /gitlab/api/graphql` and `POST /ghe/api/graphql`, after auth.
@@ -63,6 +115,10 @@ pub(crate) fn gitlab(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Re
             let (k, i) = job(s, p, id)?;
             let pl = &s.projects[p].pipelines[k];
             Some(Reply::json(200, gl_job(s, p, pl, &pl.jobs[i])))
+        }
+        ("GET", ["jobs", id, "trace"]) => {
+            let (k, i) = job(s, p, id)?;
+            Some(text(s.projects[p].pipelines[k].jobs[i].log.clone()))
         }
         ("POST", ["jobs", id, verb @ ("retry" | "cancel" | "play")]) => {
             let (k, i) = job(s, p, id)?;
@@ -141,6 +197,19 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             let pl = &s.projects[p].pipelines[k];
             Some(Reply::json(200, gh_job(s, p, pl, &pl.jobs[i])))
         }
+        ("GET", ["actions", "jobs", id, "logs"]) => {
+            let (k, i) = job(s, p, id)?;
+            let j = &s.projects[p].pipelines[k].jobs[i];
+            if active(j.status) {
+                return None;
+            }
+            let to = format!("{}/__blob/{}/{}?sig=fake", s.origin, p + 1, j.id);
+            Some(Reply {
+                body: None,
+                headers: vec![("Location", to)],
+                ..Reply::json(302, Value::Null)
+            })
+        }
         ("POST", ["actions", "jobs", id, "rerun"]) => {
             let (k, i) = job(s, p, id)?;
             let j = &mut s.projects[p].pipelines[k].jobs[i];
@@ -148,6 +217,13 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             empty(201)
         }
         _ => None,
+    }
+}
+
+fn text(log: String) -> Reply {
+    Reply {
+        text: Some(log),
+        ..Reply::json(200, Value::Null)
     }
 }
 
@@ -167,7 +243,7 @@ fn pipeline(s: &State, p: usize, id: &str) -> Option<usize> {
 /// The job's pipeline and its index there.
 fn job(s: &State, p: usize, id: &str) -> Option<(usize, usize)> {
     let id: u64 = id.parse().ok()?;
-    let pls = &s.projects[p].pipelines;
+    let pls = &s.projects.get(p)?.pipelines;
     pls.iter()
         .enumerate()
         .find_map(|(k, pl)| Some((k, pl.jobs.iter().position(|j| j.id == id)?)))

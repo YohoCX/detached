@@ -115,7 +115,10 @@ impl Forge {
     }
 
     /// Grows a job's log and sets its status if given, as `POST /__append`; panics without the job.
-    pub fn append(&self, _: Kind, _: &str, _: u64, _: &str, _: Option<Status>) {}
+    pub fn append(&self, forge: Kind, path: &str, job: u64, text: &str, status: Option<Status>) {
+        let found = mrs::append(&mut lock(&self.state), forge, path, job, text, status);
+        assert!(found, "no job {job} in {path}");
+    }
 
     /// Slows each API reply by `ms`, as `POST /__delay`.
     pub fn delay(&self, ms: u64) {
