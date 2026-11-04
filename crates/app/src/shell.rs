@@ -46,9 +46,9 @@ fn sidebar(_: &mut Window, cx: &mut App) -> AnyView {
     stub("Repositories", cx)
 }
 
-fn tool(tool: Tool, _: &mut Window, cx: &mut App) -> AnyView {
+fn tool(tool: Tool, window: &mut Window, cx: &mut App) -> AnyView {
     match tool {
-        Tool::Changes => stub("Changes", cx),
+        Tool::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
         Tool::Files => stub("Project", cx),
         Tool::Mrs => stub("Merge Requests", cx),
     }

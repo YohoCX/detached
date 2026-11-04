@@ -174,7 +174,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 **Context menu**: none (the web view menu is suppressed).
 
-### 1.3 Changes (`src/components/Changes.svelte`)
+### 1.3 Changes (`src/components/Changes.svelte`) [ported]
 
 **Header** (`:85-95`):
 - Title "Changes".

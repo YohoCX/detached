@@ -9,6 +9,7 @@ use detached_app::actions::{self, Group, Registration};
 use detached_app::files::{
     self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Location, Markdown, Side,
 };
+use detached_app::store::Tool;
 use detached_app::ui_state;
 use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
@@ -735,4 +736,271 @@ fn forge_markdown_breaks_lines_and_opens_only_web_links(cx: &mut TestAppContext)
         Some(docs),
         "javascript: does nothing"
     );
+}
+
+fn make_current(cx: &mut VisualTestContext, repo: &Path) {
+    let repo = repo.display().to_string();
+    cx.store(|s, cx| s.set_current(Some(repo), cx));
+    settle(cx);
+}
+
+/// The Changes list as drawn: "title: N files" for a group, "name status" for a file.
+fn changes(cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let text = |e: ElementSnapshot, sep| {
+            let (label, desc) = (e.label().unwrap_or(""), e.description().unwrap_or(""));
+            format!("{label}{sep}{desc}")
+        };
+        (0usize..)
+            .map_while(|i| match w.try_find(("changes.group", i)) {
+                Some(g) => Some(text(g, ": ")),
+                None => w.try_find(("changes.row", i)).map(|r| text(r, " ")),
+            })
+            .collect()
+    })
+}
+
+fn row_focused(cx: &mut VisualTestContext) -> Option<bool> {
+    cx.find("changes.rows").and_then(|e| e.focused())
+}
+
+fn double_click(cx: &mut VisualTestContext, id: impl Into<ElementId>) {
+    cx.update(|w, cx| w.double_click(id, cx));
+    settle(cx);
+}
+
+#[gpui_kit::test]
+fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_double_click(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    make_current(cx, &app);
+    let want = [
+        "Changes: 2 files",
+        "README.md modified",
+        "new.ts renamed",
+        "Unversioned Files: 1 file",
+        "notes.txt untracked",
+    ];
+    wait_until(cx, |cx| changes(cx) == want);
+    cx.click(("changes.row", 1usize));
+    wait_until(cx, |cx| cx.find("diff.pill").is_some());
+    assert_eq!(
+        label(cx, "diff.pill").as_deref(),
+        Some("HEAD ↔ Working tree")
+    );
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("README.md"));
+    assert_eq!(row_focused(cx), Some(true));
+    cx.press("secondary-down");
+    wait_until(cx, |cx| cx.find("diff.pill").is_none());
+    assert_eq!(label(cx, "viewer.name").as_deref(), Some("README.md"));
+
+    double_click(cx, ("changes.row", 1usize));
+    wait_until(cx, |cx| focused(cx) == Some(true));
+    assert_eq!(
+        label(cx, "diff.pill").as_deref(),
+        Some("HEAD ↔ Working tree")
+    );
+    assert_eq!(cursor(cx), "line 5 changed\n");
+    cx.press("f7");
+    assert_eq!(cursor(cx), "line 50 changed\n");
+}
+
+#[gpui_kit::test]
+fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = cx.sb.repo("lib");
+    make_current(cx, &lib);
+    cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
+    settle(cx);
+    wait_until(cx, |cx| cx.find("changes.ab").is_some());
+    assert_eq!(label(cx, "changes.ab").as_deref(), Some("↑2 ↓1"));
+    let want = [
+        "Changes since origin/main: 2 files",
+        "feature.txt added",
+        "index.ts modified",
+    ];
+    assert_eq!(changes(cx), want);
+    let field = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.within("changes.base").find("input-state")
+        })
+    };
+    assert_eq!(field(cx).placeholder(), Some("origin/main"));
+    assert_eq!(field(cx).value(), Some(""));
+
+    cx.click(("changes.row", 2usize));
+    wait_until(cx, |cx| {
+        text(cx, "new", 1).as_deref() == Some("export const touched = true")
+    });
+    let base = cx.sb.git(&lib, &["merge-base", "HEAD", "origin/main"]);
+    let pill = format!("{} ↔ Working tree", &base[..10]);
+    assert_eq!(label(cx, "diff.pill"), Some(pill));
+
+    cx.click("changes.base");
+    wait_until(cx, |cx| cx.find(("suggest", 0usize)).is_some());
+    let names: Vec<_> = (0usize..)
+        .map_while(|i| cx.find(("suggest", i)))
+        .filter_map(|e| e.label().map(String::from))
+        .collect();
+    assert!(names.contains(&"feature".to_string()), "{names:?}");
+    assert!(names.contains(&"origin/main".to_string()), "{names:?}");
+    cx.input("HEAD~1");
+    cx.press("enter");
+    let want = ["Changes since HEAD~1: 1 file", "index.ts modified"];
+    wait_until(cx, |cx| changes(cx) == want);
+    assert_eq!(label(cx, "changes.ab").as_deref(), Some("↑1 ↓0"));
+
+    // Reopened, the tool is still in Compare with the base, as Compare with Base Branch opens it.
+    cx.store(|s, cx| s.toggle_tool(Tool::Changes, cx));
+    assert!(changes(cx).is_empty());
+    cx.store(|s, cx| s.open_tool(Tool::Changes, cx));
+    wait_until(cx, |cx| changes(cx) == want);
+    assert_eq!(field(cx).value(), Some("HEAD~1"));
+
+    cx.update(|w, cx| w.within("changes.mode").click(0usize, cx));
+    settle(cx);
+    assert!(cx.find("changes.base").is_none());
+    wait_until(cx, |cx| changes(cx).is_empty());
+    assert_eq!(
+        label(cx, "changes.empty").as_deref(),
+        Some("No local changes")
+    );
+}
+
+#[gpui_kit::test]
+fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selection(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    make_current(cx, &app);
+    wait_until(cx, |cx| changes(cx).len() == 5);
+    let diff_of = |cx: &mut VisualTestContext, name: &str| {
+        wait_until(cx, |cx| {
+            label(cx, "viewer.name").as_deref() == Some(name) && focused(cx).is_some()
+        });
+    };
+    cx.click(("changes.row", 1usize));
+    cx.press("down");
+    diff_of(cx, "new.ts");
+    cx.press("down");
+    diff_of(cx, "notes.txt");
+    cx.press("down");
+    let selected = |cx: &mut VisualTestContext, i: usize| {
+        cx.find(("changes.row", i)).and_then(|e| e.selected())
+    };
+    assert_eq!(selected(cx, 4), Some(true), "the last stays selected");
+    assert_eq!(row_focused(cx), Some(true));
+    assert_eq!(focused(cx), Some(false));
+    cx.press("up");
+    diff_of(cx, "new.ts");
+    cx.press("enter");
+    wait_until(cx, |cx| focused(cx) == Some(true));
+
+    // A diff is shown: Show Diff gives the selected change.
+    let doc = readme(cx);
+    show(cx, doc, false);
+    diff_of(cx, "README.md");
+    cx.press("secondary-d");
+    diff_of(cx, "new.ts");
+    assert_eq!(
+        label(cx, "diff.pill").as_deref(),
+        Some("HEAD ↔ Working tree")
+    );
+    // A file is shown: Show Diff gives the file's own.
+    open(cx, &app, None, "src/index.ts", None);
+    shown(cx, "export {}");
+    cx.press("secondary-d");
+    diff_of(cx, "index.ts");
+    // Focus in Changes: the selected change again.
+    open(cx, &app, None, "src/index.ts", None);
+    shown(cx, "export {}");
+    cx.click(("changes.group", 0usize));
+    assert_eq!(row_focused(cx), Some(true));
+    cx.press("secondary-d");
+    diff_of(cx, "new.ts");
+}
+
+#[gpui_kit::test]
+fn changes_group_conflicts_changes_and_unversioned_files_and_collapse(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "c");
+        sb.git(&r, &["switch", "-qc", "side"]);
+        sb.commit_files(
+            &r,
+            "side",
+            [("README.md", "side\n"), ("side.txt", "side\n")],
+        );
+        sb.git(&r, &["switch", "-q", "main"]);
+        sb.commit(&r, "README.md", "main\n", "main");
+        // Exits 1 on the conflict.
+        run(
+            &sb.state.env(),
+            &r,
+            &["merge", "side"],
+            Kind::Write,
+            Opts::default(),
+        )
+        .unwrap();
+        write(&r, [("u.txt", "u\n")]);
+    });
+    let want = [
+        "Conflicts: 1 file",
+        "README.md conflict",
+        "Changes: 1 file",
+        "side.txt added",
+        "Unversioned Files: 1 file",
+        "u.txt untracked",
+    ];
+    wait_until(cx, |cx| changes(cx) == want);
+    cx.click(("changes.group", 0usize));
+    let collapsed = &want[..1]
+        .iter()
+        .chain(&want[2..])
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(&changes(cx), collapsed);
+    assert_eq!(
+        cx.find(("changes.group", 0usize))
+            .and_then(|e| e.expanded()),
+        Some(false)
+    );
+    cx.click(("changes.group", 0usize));
+    assert_eq!(changes(cx), want);
+}
+
+#[gpui_kit::test]
+fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let r = repo(sb, "solo");
+        sb.git(&r, &["branch", "-m", "trunk"]);
+    });
+    wait_until(cx, |cx| cx.find("changes.empty").is_some());
+    assert_eq!(
+        label(cx, "changes.empty").as_deref(),
+        Some("No local changes")
+    );
+    write(&cx.sb.path("repos/solo"), [("new.txt", "x\n")]);
+    cx.click("changes.refresh");
+    wait_until(cx, |cx| {
+        changes(cx) == ["Unversioned Files: 1 file", "new.txt untracked"]
+    });
+
+    cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
+    settle(cx);
+    let error = "no default branch found; type one to compare with";
+    wait_until(cx, |cx| {
+        label(cx, "changes.empty").as_deref() == Some(error)
+    });
+    cx.click("changes.base");
+    cx.input("trunk");
+    cx.press("enter");
+    let empty = "No changes since trunk";
+    wait_until(cx, |cx| {
+        label(cx, "changes.empty").as_deref() == Some(empty)
+    });
 }

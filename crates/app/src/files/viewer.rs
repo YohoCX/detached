@@ -10,6 +10,7 @@ use gpui_kit::{
 };
 
 use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
+use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
 use crate::store::{Doc, Event, Store};
@@ -59,9 +60,7 @@ impl Viewer {
                 Group::View,
                 none,
             ),
-            register(cx, "diff.show", "Show Diff", Group::Diff, |_, cx| {
-                diff_shown(cx)
-            }),
+            register(cx, "diff.show", "Show Diff", Group::Diff, diff_shown),
             register(cx, "file.openInZed", "Open in Zed", Group::Navigate, zed),
         ];
         Viewer {
@@ -92,7 +91,8 @@ impl Viewer {
                     }
                     _ => cx.new(|cx| DiffView::new(doc, DiffOptions::default(), cx)),
                 };
-                view.update(cx, |v, _| v.focus = focus);
+                // A show asking for focus wins over one in the same frame that does not.
+                view.update(cx, |v, _| v.focus |= focus);
                 self.shown = Some(Shown::Diff(view));
             }
             _ => return,
@@ -123,8 +123,12 @@ impl Render for Viewer {
     }
 }
 
-/// Show Diff: the shown file against its ref, or against HEAD from where the status says it was.
-fn diff_shown(cx: &mut App) {
+/// Show Diff: the selected change, or the shown file against its ref, or against HEAD from where
+/// the status says it was.
+fn diff_shown(window: &mut Window, cx: &mut App) {
+    if let Some(doc) = changes::selected_diff(window, cx) {
+        return show_diff(cx, doc, false);
+    }
     let s = Store::global(cx).read(cx);
     let Some(Doc::File(loc)) = s.shown() else {
         return;
