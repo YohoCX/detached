@@ -189,6 +189,8 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
     show(cx, doc, true);
     wait_until(cx, |cx| focused(cx) == Some(true));
     assert_eq!(text(cx, "new", 20).as_deref(), Some("line 20"));
+    cx.press("f7");
+    assert_eq!(cursor(cx), "line 50 changed\n");
     let edits = [
         (5, "line 5 changed"),
         (20, "line 20 edited"),
@@ -200,7 +202,7 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
         text(cx, "new", 20).as_deref() == Some("line 20 edited")
     });
     assert_eq!(focused(cx), Some(true), "the same view, still focused");
-    assert_eq!(cursor(cx), "line 5 changed\n", "the cursor stays");
+    assert_eq!(cursor(cx), "line 50 changed\n", "the cursor stays");
 }
 
 #[gpui_kit::test]

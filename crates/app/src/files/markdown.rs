@@ -90,6 +90,7 @@ impl Markdown {
     pub(super) fn set_text(&mut self, text: SharedString, cx: &mut Context<Self>) {
         let (links, breaks) = (self.links.clone(), self.breaks);
         if text.len() < PIECE {
+            self._prepare = Task::ready(());
             let text = prepare(&text, &links, breaks);
             return self.show(vec![text], cx);
         }
@@ -499,10 +500,20 @@ fn hidden<'a>(text: &'a str, code: &'a [Range<usize>]) -> impl Iterator<Item = R
 /// About how much text the kit lays out in a frame.
 const PIECE: usize = 4 << 10;
 
-/// `text` cut before top-level blocks into pieces of about `PIECE` bytes.
+/// `text` cut before top-level blocks into pieces of about `PIECE` bytes, or whole when it has
+/// definitions, as the kit resolves references only within a piece.
 fn pieces(text: String) -> Vec<String> {
-    let root = markdown::to_mdast(&text, &ParseOptions::gfm()).ok();
-    let starts = root.iter().flat_map(|r| r.children().into_iter().flatten());
+    let Ok(root) = markdown::to_mdast(&text, &ParseOptions::gfm()) else {
+        return vec![text];
+    };
+    let mut defs = false;
+    visit(&root, &mut |n| {
+        defs |= matches!(n, Node::Definition(_) | Node::FootnoteDefinition(_))
+    });
+    if defs {
+        return vec![text];
+    }
+    let starts = root.children().into_iter().flatten();
     let starts = starts.filter_map(|n| n.position().map(|p| p.start.offset));
     let (mut pieces, mut at) = (vec![], 0);
     for start in starts {
@@ -960,6 +971,32 @@ mod tests {
             resolve_url("src/a.ts", &gitlab()),
             "https://git.example.com/gitlab/group/app/src/a.ts"
         );
+    }
+
+    #[test]
+    fn keeps_a_long_text_with_definitions_in_one_piece() {
+        let body = "[a] and [^1]\n\n".to_string() + &"para\n\n".repeat(PIECE);
+        assert!(pieces(body.clone()).len() > 1);
+        for def in ["[a]: https://x/a", "[^1]: note"] {
+            assert_eq!(pieces(format!("{body}{def}\n")).len(), 1, "{def}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_short_text_drops_a_long_one_still_preparing(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.executor().allow_parking();
+        let long = "para\n\n".repeat(PIECE);
+        let m = cx.new(|cx| Markdown::new(long.clone(), repo("a.md"), false, cx));
+        m.update(cx, |m, cx| m.set_text("short".into(), cx));
+        // Queued later and longer, so its prepare ends after the first one's.
+        let probe = cx.new(|cx| Markdown::new(long.repeat(2), repo("a.md"), false, cx));
+        while probe.read_with(cx, |p, _| p.fed == 0) {
+            let tick = cx.executor().timer(Duration::from_millis(10));
+            cx.foreground_executor().block_test(tick);
+        }
+        cx.run_until_parked();
+        assert_eq!(m.read_with(cx, |m, _| m.fed), "short".len());
     }
 
     #[test]
