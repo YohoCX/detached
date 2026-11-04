@@ -69,7 +69,8 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
     }
 }
 
-/// Modals over the window, inside the shell's key context so the app's chords still reach it.
+/// Modals over the window and under the notices, inside the shell's key context so the app's
+/// chords still reach it.
 fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     vec![search::palette(window, cx), search::find(window, cx)]
 }
@@ -452,8 +453,8 @@ impl Render for Shell {
                             .children(bottom),
                     ),
             )
-            .child(self.notices.clone())
             .children(self.overlays.iter().cloned())
+            .child(self.notices.clone())
     }
 }
 

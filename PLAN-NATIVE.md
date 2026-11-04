@@ -278,9 +278,10 @@ provider then fills it in.
 - **Shell slots:** `Tool::{Changes, Files, Mrs}`, `Bottom::{Log, Pipelines, Terminal}`,
   `Doc::{File, Diff, Mr, Job}`, and the top bar's `TopBar::Left` (V1: workspaces, repo switcher,
   branch widget), `TopBar::Center` (V5: MR chip, pipeline badge), `TopBar::Right` (V3: search pill;
-  V1: Fetch All, Pull All), and `overlays`, modals drawn last inside the shell's key context so
-  chords still reach the app while one is open (V3: palette, find; V1: Settings). A vertical
-  provides each of its views through one constructor; F renders stubs until then.
+  V1: Fetch All, Pull All), and `overlays`, modals drawn over the window and under the notices,
+  inside the shell's key context so chords still reach the app while one is open (V3: palette,
+  find; V1: Settings). A vertical provides each of its views through one constructor; F renders
+  stubs until then.
 - **Cross-vertical calls** live in an `api.rs` in the providing vertical's directory. F writes the
   first version with the types and stub bodies; the provider implements the bodies without changing
   signatures; callers build against the stubs from day one.
