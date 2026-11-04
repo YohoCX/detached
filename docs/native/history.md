@@ -529,7 +529,7 @@ Rules behind them:
 | Key | Default | Min / max | Where |
 |---|---|---|---|
 | `size.bottom` | 280 | 120 / innerHeight−240 | `BottomPanel.svelte:9,13` |
-| `size.log.side` | 420 | 260 / 1000 | `Log.svelte:44,234` |
+| `size.log.side` | 420 | 260 / 1000 | `Log.svelte:44,234` [ported] |
 | `size.mr.side` | 420 | 260 / 1000 | `MrPage.svelte:26,244` |
 | `size.mr.files` | 280 | 180 / 700 | `MrPage.svelte:27,251` |
 | `size.tool` (MR list panel, shared) | 300 | 220 / 800 | `App.svelte:35,61` |

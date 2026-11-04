@@ -1,5 +1,6 @@
 //! The Log panel: the current repo's commits with their graph, streamed in batches, and its filters.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::time::Duration;
 
@@ -11,18 +12,18 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FontWeight, Global, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px,
-    uniform_list,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight, Global,
+    Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role,
+    ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::graph::{self, LANE, ROW};
-use super::{Chip, chip, lanes};
+use super::{Chip, CommitDetails, Pick, chip, lanes, pick};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
 use crate::store::{Bottom, Doc, Event, QueryId, Store};
-use crate::ui::{self, Icon, radius, text, theme};
+use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::when;
 
 /// The filters of the session, kept while the panel is closed.
@@ -152,6 +153,13 @@ pub struct Log {
     inputs: [Entity<InputState>; 3],
     /// A field's pending change, applied when its timer fires.
     timers: [Option<Task<()>>; 3],
+    /// The selected rows by SHA, so a reload keeps them.
+    sel: HashSet<String>,
+    /// Where Shift ranges and the arrows start.
+    anchor: usize,
+    focus: FocusHandle,
+    /// The side panel's commits, newest first, and their view.
+    details: Option<(Vec<String>, Entity<CommitDetails>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -211,6 +219,10 @@ impl Log {
             names: vec![],
             inputs,
             timers: Default::default(),
+            sel: HashSet::new(),
+            anchor: 0,
+            focus: cx.focus_handle(),
+            details: None,
             _subscriptions: subscriptions,
         };
         log.sync(window, cx);
@@ -251,10 +263,12 @@ impl Log {
                 input.update(cx, |i, cx| i.set_value(new.clone(), window, cx));
             }
         }
-        if f.repo != self.filters.repo
-            && let Some(repo) = f.repo.clone()
-        {
-            Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+        if f.repo != self.filters.repo {
+            self.sel.clear();
+            self.details = None;
+            if let Some(repo) = f.repo.clone() {
+                Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+            }
         }
         self.filters = f;
         self.load(cx);
@@ -291,6 +305,9 @@ impl Log {
                 this.update(cx, |this, cx| {
                     for e in events {
                         this.take(qid, graph, e, &mut fresh);
+                    }
+                    if !this.loading {
+                        this.show(cx);
                     }
                     cx.notify();
                 })
@@ -329,8 +346,57 @@ impl Log {
         self.load(cx);
     }
 
-    fn rows(&self, range: Range<usize>, cx: &App) -> Vec<impl IntoElement + use<>> {
+    fn choose(&mut self, i: usize, how: Pick, cx: &mut Context<Self>) {
+        self.sel = pick(&self.rows, &self.sel, self.anchor, i, how);
+        if how != Pick::Range {
+            self.anchor = i;
+        }
+        self.show(cx);
+    }
+
+    /// Up or down from the anchor, or row 0 when nothing is selected.
+    fn step(&mut self, down: bool, cx: &mut Context<Self>) {
+        let Some(last) = self.rows.len().checked_sub(1) else {
+            return;
+        };
+        let i = match (self.sel.is_empty(), down) {
+            (true, _) => 0,
+            (false, true) => self.anchor + 1,
+            (false, false) => self.anchor.saturating_sub(1),
+        }
+        .min(last);
+        self.choose(i, Pick::One, cx);
+        self.scroll.scroll_to_item(i, ScrollStrategy::Nearest);
+    }
+
+    /// Puts the selected rows in the side panel in list order. A reload calls it once done, so
+    /// the panel keeps its commits while the rows stream in.
+    fn show(&mut self, cx: &mut Context<Self>) {
+        let shas: Vec<String> = self
+            .rows
+            .iter()
+            .filter(|r| self.sel.contains(&r.sha))
+            .map(|r| r.sha.clone())
+            .collect();
+        if self.details.as_ref().map_or(&[][..], |d| &d.0) == shas {
+            return;
+        }
+        let repo = self.filters.repo.clone().unwrap_or_default();
+        self.details = (!shas.is_empty()).then(|| {
+            let view = cx.new(|cx| CommitDetails::new(repo, shas.clone(), cx));
+            (shas, view)
+        });
+        cx.notify();
+    }
+
+    fn rows(
+        &self,
+        range: Range<usize>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Vec<impl IntoElement + use<>> {
         let t = theme(cx);
+        let focused = self.focus.is_focused(window);
         let width = px(self.lanes.min(24) as f32 * LANE);
         let graph = self.graph;
         let pill = |id: SharedString, label: SharedString, tip: SharedString, color: Hsla| {
@@ -377,10 +443,12 @@ impl Log {
                         t.muted,
                     )
                 });
-                ui::row(("log.row", i), false, cx)
+                let on = self.sel.contains(&r.sha);
+                ui::list_row(("log.row", i), on, focused, cx)
                     .test_support()
                     .role(Role::ListBoxOption)
                     .aria_label(r.subject.clone())
+                    .aria_selected(on)
                     .w_full()
                     .h(px(ROW))
                     .gap(px(10.))
@@ -428,6 +496,15 @@ impl Log {
                             .text_color(t.muted)
                             .child(when(r.time)),
                     )
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        let m = e.modifiers();
+                        let how = match (m.shift, m.secondary(cx)) {
+                            (true, _) => Pick::Range,
+                            (_, true) => Pick::Toggle,
+                            _ => Pick::One,
+                        };
+                        this.choose(i, how, cx);
+                    }))
             })
             .collect()
     }
@@ -442,10 +519,10 @@ fn field<E: Styled + Sizable>(e: E, cx: &App) -> E {
         .text_size(text::SMALL)
 }
 
-fn message(label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
+fn message(id: &'static str, label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
     let label = label.into();
     div()
-        .id("log.message")
+        .id(id)
         .test_support()
         .aria_label(label.clone())
         .flex_1()
@@ -472,7 +549,7 @@ impl Render for Log {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         if Store::global(cx).read(cx).current().is_none() {
-            return message("No repository", t.muted).into_any_element();
+            return message("log.message", "No repository", t.muted).into_any_element();
         }
         let status = match self.loading {
             true => "Loading…".to_string(),
@@ -519,23 +596,52 @@ impl Render for Log {
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             );
         let body: AnyElement = if let Some(e) = &self.error {
-            message(e.clone(), t.error).into_any_element()
+            message("log.message", e.clone(), t.error).into_any_element()
         } else if self.rows.is_empty() && !self.loading {
-            message("No commits", t.muted).into_any_element()
+            message("log.message", "No commits", t.muted).into_any_element()
         } else {
-            let list = cx.processor(|this, range, _, cx| this.rows(range, cx));
-            uniform_list("log.rows", self.rows.len(), list)
-                .track_scroll(&self.scroll)
+            let list = cx.processor(|this, range, window, cx| this.rows(range, window, cx));
+            div()
+                .id("log.list")
+                .test_support()
+                .track_focus(&self.focus)
+                .role(Role::ListBox)
+                .flex()
                 .flex_1()
-                .px(px(6.))
+                .min_w_0()
+                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                    let down = match e.keystroke.key.as_str() {
+                        "down" => true,
+                        "up" => false,
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    this.step(down, cx);
+                }))
+                .child(
+                    uniform_list("log.rows", self.rows.len(), list)
+                        .track_scroll(&self.scroll)
+                        .flex_1()
+                        .px(px(6.)),
+                )
                 .into_any_element()
         };
+        let side = match &self.details {
+            Some((_, view)) => view.clone().into_any_element(),
+            None => message("log.select", "Select a commit", t.muted).into_any_element(),
+        };
+        let side = ui::pane("log.side", Edge::Left, 420., 260., 1000.)
+            .flex()
+            .flex_col()
+            .border_l_1()
+            .border_color(t.line)
+            .child(side);
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(bar)
-            .child(div().flex().flex_1().min_h_0().child(body))
+            .child(div().flex().flex_1().min_h_0().child(body).child(side))
             .into_any_element()
     }
 }

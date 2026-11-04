@@ -1,6 +1,9 @@
 //! What other verticals call to show commits.
 
-use gpui_kit::{Context, IntoElement, Render, Window};
+use gpui_kit::base::TestSupportExt;
+use gpui_kit::{
+    Context, InteractiveElement, IntoElement, Render, StatefulInteractiveElement, Window,
+};
 
 use crate::ui;
 
@@ -18,6 +21,10 @@ impl CommitDetails {
 impl Render for CommitDetails {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let short: Vec<_> = self.shas.iter().map(|s| &s[..s.len().min(10)]).collect();
-        ui::placeholder(short.join(", "), cx)
+        let short = short.join(", ");
+        ui::placeholder(short.clone(), cx)
+            .id("details")
+            .test_support()
+            .aria_label(short)
     }
 }

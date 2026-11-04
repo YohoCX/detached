@@ -7,6 +7,8 @@ mod log;
 pub use api::*;
 pub use log::{Log, init};
 
+use std::collections::HashSet;
+
 use detached_core::types::LogRow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +35,39 @@ fn chip(r: &str) -> (Chip, &str) {
 fn lanes(r: &LogRow) -> usize {
     let edges = r.top.iter().chain(&r.bottom).flat_map(|e| [e.from, e.to]);
     edges.fold(r.column, u32::max) as usize + 1
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Pick {
+    One,
+    Toggle,
+    Range,
+}
+
+/// Click selects one row, Cmd toggles one, Shift selects the range from the anchor.
+fn pick(
+    rows: &[LogRow],
+    sel: &HashSet<String>,
+    anchor: usize,
+    i: usize,
+    how: Pick,
+) -> HashSet<String> {
+    let sha = rows[i].sha.clone();
+    match how {
+        Pick::One => HashSet::from([sha]),
+        Pick::Toggle => {
+            let mut next = sel.clone();
+            if !next.remove(&sha) {
+                next.insert(sha);
+            }
+            next
+        }
+        // The anchor can be past the rows of a reload that brought fewer.
+        Pick::Range => rows[anchor.min(i)..=anchor.max(i).min(rows.len() - 1)]
+            .iter()
+            .map(|r| r.sha.clone())
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -81,5 +116,22 @@ mod tests {
         assert_eq!(lanes(&row(0, &[], &[])), 1);
         assert_eq!(lanes(&row(1, &[(0, 0)], &[])), 2);
         assert_eq!(lanes(&row(0, &[(2, 0)], &[(0, 0), (0, 3)])), 4);
+    }
+
+    #[test]
+    fn selects_one_toggles_with_cmd_and_ranges_with_shift() {
+        let rows: Vec<_> = ["a", "b", "c", "d"]
+            .map(|sha| LogRow {
+                sha: sha.into(),
+                ..row(0, &[], &[])
+            })
+            .into();
+        let set = |shas: &[&str]| shas.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
+        let one = pick(&rows, &set(&[]), 0, 1, Pick::One);
+        assert_eq!(one, set(&["b"]));
+        let two = pick(&rows, &one, 1, 3, Pick::Toggle);
+        assert_eq!(two, set(&["b", "d"]));
+        assert_eq!(pick(&rows, &two, 1, 3, Pick::Toggle), set(&["b"]));
+        assert_eq!(pick(&rows, &two, 3, 1, Pick::Range), set(&["b", "c", "d"]));
     }
 }

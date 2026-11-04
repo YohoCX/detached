@@ -7,11 +7,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::*;
-use detached_app::actions;
 use detached_app::store::{Bottom, DiffDoc, Doc, Location};
+use detached_app::{actions, ui_state};
 use detached_core::types::Side;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, TestAppContext, VisualTestContext, px};
+use gpui_kit::{ElementId, Modifiers, TestAppContext, VisualTestContext, point, px};
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))
@@ -178,10 +178,11 @@ fn rows_take_the_lists_width_so_their_columns_line_up(cx: &mut TestAppContext) {
         rows.iter()
             .all(|r| r.size == rows[0].size && r.left() == rows[0].left())
     );
-    let refresh = cx.find("log.refresh").unwrap().bounds();
+    let side = cx.find("grip.log.side").unwrap().bounds();
+    let gap = side.left() - rows[0].right();
     assert!(
-        rows[0].right() > refresh.left(),
-        "the rows reach the panel's right side"
+        gap >= px(0.) && gap < px(10.),
+        "the rows reach the side panel"
     );
 }
 
@@ -252,31 +253,34 @@ fn an_unborn_repo_shows_the_error_and_no_commits(cx: &mut TestAppContext) {
     });
 }
 
+/// `repos/long` with the commits "commit 1" to "commit <n>" on main, one after the other.
+fn linear(sb: &Sandbox, n: usize) {
+    let r = sb.path("repos/long");
+    std::fs::create_dir(&r).unwrap();
+    sb.git(&r, &["init", "-q"]);
+    let stream: String = (1..=n)
+        .map(|i| {
+            let t = 1_700_000_000 + i;
+            format!(
+                "commit refs/heads/main\ncommitter T <t@example.com> {t} +0000\n\
+                 data <<END\ncommit {i}\nEND\n\n"
+            )
+        })
+        .collect();
+    let mut git = Command::new(sb.state.env().git)
+        .args(["fast-import", "--quiet"])
+        .current_dir(&r)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = git.stdin.take();
+    stdin.unwrap().write_all(stream.as_bytes()).unwrap();
+    assert!(git.wait().unwrap().success());
+}
+
 #[gpui_kit::test]
 fn a_long_history_streams_in_to_the_full_count(cx: &mut TestAppContext) {
-    let cx = &mut open_app_with(cx, |sb| {
-        let r = sb.path("repos/long");
-        std::fs::create_dir(&r).unwrap();
-        sb.git(&r, &["init", "-q"]);
-        let stream: String = (1..=1200)
-            .map(|i| {
-                let t = 1_700_000_000 + i;
-                format!(
-                    "commit refs/heads/main\ncommitter T <t@example.com> {t} +0000\n\
-                     data <<END\ncommit {i}\nEND\n\n"
-                )
-            })
-            .collect();
-        let mut git = Command::new(sb.state.env().git)
-            .args(["fast-import", "--quiet"])
-            .current_dir(&r)
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdin = git.stdin.take();
-        stdin.unwrap().write_all(stream.as_bytes()).unwrap();
-        assert!(git.wait().unwrap().success());
-    });
+    let cx = &mut open_app_with(cx, |sb| linear(sb, 1200));
     cx.press("secondary-9");
     wait_for_status(cx, "1,200 commits");
     assert_eq!(subjects(cx)[0], "commit 1200");
@@ -475,4 +479,179 @@ fn file_history_without_a_shown_file_says_so(cx: &mut TestAppContext) {
         Some(("Open a file to show its history".into(), false))
     );
     assert_eq!(cx.store(|s, _| s.bottom), None);
+}
+
+/// What the side panel shows: the selected commits' short SHAs, or "Select a commit".
+fn side(cx: &mut VisualTestContext) -> String {
+    label(cx, "details")
+        .or_else(|| label(cx, "log.select"))
+        .unwrap()
+}
+
+/// The short SHAs of `revs` in `repo`, as the side panel lists them.
+fn short(sb: &Sandbox, repo: &Path, revs: &[&str]) -> String {
+    let sha = |rev: &&str| sb.git(repo, &["rev-parse", rev])[..10].to_string();
+    revs.iter().map(sha).collect::<Vec<_>>().join(", ")
+}
+
+fn click_row(cx: &mut VisualTestContext, i: usize, modifiers: Modifiers) {
+    cx.update(|w, cx| w.click_with_modifiers(("log.row", i), modifiers, cx));
+    settle(cx);
+}
+
+fn selected(cx: &mut VisualTestContext, i: usize) -> Option<bool> {
+    cx.find(("log.row", i)).and_then(|e| e.selected())
+}
+
+#[gpui_kit::test]
+fn click_cmd_click_and_shift_click_show_the_selection_newest_first(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let revs: [&[&str]; 3] = [
+        &["HEAD~1"],
+        &["HEAD", "HEAD~1"],
+        &["HEAD", "HEAD~1", "HEAD~2"],
+    ];
+    let [one, two, three] = revs.map(|revs| short(&cx.sb, &solo, revs));
+    let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    assert_eq!(side(cx), "Select a commit");
+
+    click_row(cx, 1, Modifiers::none());
+    assert_eq!(side(cx), one);
+    click_row(cx, 0, cmd);
+    assert_eq!(side(cx), two, "list order, not click order");
+    click_row(cx, 2, Modifiers::shift());
+    assert_eq!(side(cx), three, "the range from the toggled row");
+    click_row(cx, 1, Modifiers::shift());
+    assert_eq!(side(cx), two, "a range leaves the anchor where it was");
+    click_row(cx, 0, cmd);
+    assert_eq!(side(cx), one);
+    let rows: Vec<_> = (0..3).map(|i| selected(cx, i)).collect();
+    assert_eq!(rows, [Some(false), Some(true), Some(false)]);
+}
+
+#[gpui_kit::test]
+fn arrows_start_at_the_top_and_step_from_the_anchor(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let [top, middle, bottom] = ["HEAD", "HEAD~1", "HEAD~2"].map(|r| short(&cx.sb, &solo, &[r]));
+    let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 2, Modifiers::none());
+    let focused = cx.find("log.list").and_then(|e| e.focused());
+    assert_eq!(focused, Some(true), "a click focuses the rows");
+    click_row(cx, 2, cmd);
+    assert_eq!(side(cx), "Select a commit");
+    cx.press("down");
+    assert_eq!(side(cx), top, "nothing selected goes to the first row");
+    cx.press("up");
+    assert_eq!(side(cx), top);
+
+    click_row(cx, 2, Modifiers::shift());
+    cx.press("down");
+    assert_eq!(
+        side(cx),
+        middle,
+        "one below the anchor, not the range's end"
+    );
+    cx.press("down");
+    cx.press("down");
+    assert_eq!(side(cx), bottom);
+    cx.press("up");
+    assert_eq!(side(cx), middle);
+}
+
+#[gpui_kit::test]
+fn an_arrow_scrolls_its_row_into_view(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| linear(sb, 40));
+    cx.press("secondary-9");
+    wait_for_status(cx, "40 commits");
+    click_row(cx, 0, Modifiers::none());
+    let row = |cx: &mut VisualTestContext| cx.find(("log.row", 30usize));
+    assert!(row(cx).is_none_or(|r| !r.visible()));
+    for _ in 0..30 {
+        cx.press("down");
+    }
+    let (row, list) = (row(cx).unwrap(), cx.find("log.list").unwrap().bounds());
+    assert_eq!(row.label(), Some("commit 10"));
+    assert_eq!(row.selected(), Some(true));
+    let b = row.bounds();
+    assert!(b.top() >= list.top() && b.bottom() <= list.bottom());
+}
+
+#[gpui_kit::test]
+fn a_repo_change_clears_the_selection(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 2, Modifiers::none());
+    assert_ne!(side(cx), "Select a commit");
+    let app = cx.sb.repo("app");
+    let want = count(&cx.sb, &app);
+    set_current(cx, &app);
+    wait_for_status(cx, &want);
+    assert_eq!(
+        subjects(cx).last().unwrap(),
+        "initial",
+        "app has the commit too"
+    );
+    assert_eq!(side(cx), "Select a commit");
+    let n = subjects(cx).len();
+    assert!((0..n).all(|i| selected(cx, i) == Some(false)));
+}
+
+#[gpui_kit::test]
+fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo();
+    let picked = short(&cx.sb, &solo, &["HEAD~1"]);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    click_row(cx, 1, Modifiers::none());
+    cx.sb
+        .commit_files(&solo, "fresh work", [("fresh.txt", "fresh\n")]);
+    cx.click("log.refresh");
+    wait_for_status(cx, "4 commits");
+    assert_eq!(side(cx), picked);
+    let rows: Vec<_> = (0..4).map(|i| selected(cx, i)).collect();
+    assert_eq!(rows, [Some(false), Some(false), Some(true), Some(false)]);
+}
+
+#[gpui_kit::test]
+fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    let grip = |cx: &mut VisualTestContext| cx.find("grip.log.side").unwrap().bounds().center();
+    let stored =
+        |cx: &mut VisualTestContext| cx.update(|_, cx| ui_state::get::<f32>("size.log.side", cx));
+    let drag = |cx: &mut VisualTestContext, dx: f32| {
+        let from = grip(cx);
+        cx.update(|w, cx| w.drag(from, from + point(px(dx), px(0.)), cx));
+        settle(cx);
+    };
+    let start = grip(cx);
+    drag(cx, -60.);
+    assert_eq!(grip(cx).x, start.x - px(60.));
+    assert_eq!(stored(cx), Some(480.));
+    drag(cx, 400.);
+    assert_eq!(stored(cx), Some(260.), "no narrower than 260");
+    drag(cx, -900.);
+    assert_eq!(stored(cx), Some(1000.), "no wider than 1000");
+    assert_eq!(grip(cx).x, start.x - px(580.));
+
+    let dir = cx.sb.state.config_dir.clone();
+    cx.update(|_, cx| ui_state::init(&dir, cx));
+    assert_eq!(stored(cx), Some(1000.));
+    cx.press("secondary-9");
+    cx.press("secondary-9");
+    wait_for_status(cx, "3 commits");
+    assert_eq!(
+        grip(cx).x,
+        start.x - px(580.),
+        "reopened at the stored width"
+    );
 }
