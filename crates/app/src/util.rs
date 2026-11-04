@@ -8,14 +8,15 @@ pub fn dir_name(p: &str) -> &str {
     p.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
+/// The last segment of a disk path, which may use `\` on Windows.
 pub fn folder_name(p: &str) -> &str {
-    p.split('/').rfind(|s| !s.is_empty()).unwrap_or(p)
+    p.split(['/', '\\']).rfind(|s| !s.is_empty()).unwrap_or(p)
 }
 
 /// By path, not `RepoInfo::folder`: a repo listed once may sit in folders of several workspaces.
 pub fn in_folder(path: &str, folder: &str) -> bool {
     path.strip_prefix(folder)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,6 +222,9 @@ mod tests {
         assert!(in_folder("/dev/a", "/dev/a"));
         assert!(in_folder("/dev/a/b", "/dev/a"));
         assert!(!in_folder("/dev/ab", "/dev/a"));
+        assert_eq!(folder_name(r"C:\Users\me\dev\"), "dev");
+        assert!(in_folder(r"C:\dev\a\b", r"C:\dev\a"));
+        assert!(!in_folder(r"C:\dev\ab", r"C:\dev\a"));
     }
 
     #[test]
