@@ -217,7 +217,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 **Diffs from elsewhere**: CommitDetails sets `view.shown` to a diff between two revs, or a rev and the working tree, plus `focusDiff` (`src/components/CommitDetails.svelte:50-54`). `vcs.fileHistory` uses the shown file or diff path (`src/components/Log.svelte:10-16`).
 
-### 1.4 FindInFiles (`src/components/FindInFiles.svelte`)
+### 1.4 FindInFiles (`src/components/FindInFiles.svelte`) [ported]
 
 **Modal**: a scrim backdrop (click closes) and a centered glass dialog (min(860px, 92vw) × min(580px, 80vh)).
 
@@ -404,7 +404,7 @@ All paths are relative to the repo root. Everything below describes what the cod
 
 ---
 
-## 4. Find in files and quick open
+## 4. Find in files and quick open [ported]
 
 ### Find in files: frontend (`FindInFiles.svelte`)
 

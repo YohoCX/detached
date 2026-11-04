@@ -1,11 +1,13 @@
 mod common;
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
 use detached_app::store::{Doc, Location, Tool};
+use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
 
@@ -499,4 +501,171 @@ fn find_in_files_opens_the_selected_match_at_its_line_and_keeps_the_text(cx: &mu
     wait_status(cx, "1 match in 1 file");
     cx.press("escape");
     assert!(!find_open(cx));
+}
+
+/// The drawn match rows' texts, sorted.
+fn texts(cx: &mut VisualTestContext) -> Vec<String> {
+    let mut texts: Vec<_> = (found(cx).into_iter())
+        .filter_map(|(_, f)| match f {
+            Found::Match { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    texts.sort();
+    texts
+}
+
+fn focused(cx: &mut VisualTestContext, id: &'static str) -> bool {
+    cx.find(id).and_then(|e| e.focused()) == Some(true)
+}
+
+fn toggled(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
+    cx.find(id).and_then(|e| e.checked())
+}
+
+/// The drawn file headers' repo names and match counts, sorted.
+fn counts(cx: &mut VisualTestContext) -> Vec<String> {
+    let mut counts: Vec<String> = cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0..100)
+            .filter_map(|i: usize| w.try_find(("find.file", i)))
+            .map(|e| e.description().unwrap().into())
+            .collect()
+    });
+    counts.sort();
+    counts
+}
+
+fn note(cx: &mut VisualTestContext) -> Option<String> {
+    cx.find("find.note")
+        .and_then(|e| e.label().map(String::from))
+}
+
+/// Replaces the focused input's text.
+fn retype(cx: &mut VisualTestContext, text: &str) {
+    cx.press("secondary-a");
+    cx.input(text);
+}
+
+#[gpui_kit::test]
+fn find_at_a_ref_matches_a_regex_on_the_same_lines_as_the_working_tree(cx: &mut TestAppContext) {
+    let (mut app, solo) = open_solo(cx);
+    let cx = &mut app;
+    cx.press("secondary-shift-f");
+    cx.click("find.regex");
+    assert_eq!(toggled(cx, "find.regex"), Some(true));
+    cx.input(r"beta-\d+");
+    wait_status(cx, "2 matches in 2 files");
+    let worktree = texts(cx);
+    assert_eq!(worktree, ["beta-42 first", "beta-7 second"]);
+    cx.press("escape");
+
+    // Stands in for the tree ref input.
+    cx.store(|s, _| s.refs.insert(solo, "main".into()));
+    cx.press("secondary-shift-f");
+    let scope = cx.find("find.scope").unwrap();
+    assert_eq!(scope.label(), Some("solo @ main"));
+    wait_status(cx, "2 matches in 2 files");
+    assert_eq!(texts(cx), worktree);
+    cx.press("enter");
+    let Some(Doc::File(at)) = shown(cx) else {
+        panic!("no file shown");
+    };
+    assert_eq!(at.rev.as_deref(), Some("main"));
+}
+
+#[gpui_kit::test]
+fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        layout(sb);
+        let opts = "gamma\nGamma\ngammas\n".to_string();
+        write(
+            &sb.solo(),
+            [("opts.txt", opts), ("big.txt", "omega\n".repeat(10_001))],
+        );
+    });
+    let solo = app.sb.solo().display().to_string();
+    app.store(|s, cx| s.set_current(Some(solo.clone()), cx));
+    let cx = &mut app;
+    cx.press("secondary-shift-f");
+    cx.input("gamma");
+    wait_status(cx, "3 matches in 1 file");
+    cx.click("find.case");
+    assert_eq!(toggled(cx, "find.case"), Some(true));
+    assert!(
+        focused(cx, "find.text"),
+        "a toggle keeps focus in the input"
+    );
+    wait_status(cx, "2 matches in 1 file");
+    cx.click("find.word");
+    assert!(focused(cx, "find.text"));
+    wait_status(cx, "1 match in 1 file");
+    assert_eq!(texts(cx), ["gamma"]);
+    cx.click("find.case");
+    cx.click("find.word");
+    assert_eq!(toggled(cx, "find.word"), Some(false));
+    wait_status(cx, "3 matches in 1 file");
+
+    cx.click("find.all");
+    assert_eq!(cx.find("find.all").unwrap().checked(), Some(true));
+    assert!(focused(cx, "find.text"));
+    let scope = cx.find("find.scope").unwrap();
+    assert_eq!(scope.label(), Some("All repositories"));
+    retype(cx, "upstream");
+    let mut want: Vec<String> = cx.store(|s, _| {
+        let has = |r: &&RepoInfo| Path::new(&r.path).join("CHANGELOG.md").exists();
+        let repos = s.repos.iter().filter(has);
+        repos.map(|r| format!("{} 1", r.name)).collect()
+    });
+    want.sort();
+    assert!(want.len() > 1, "{want:?}");
+    let n = want.len();
+    wait_status(cx, &format!("{n} matches in {n} files"));
+    assert_eq!(counts(cx), want, "each header names its repo");
+    cx.click("find.all");
+    assert_eq!(cx.find("find.scope").unwrap().label(), Some("solo"));
+
+    cx.click("find.regex");
+    retype(cx, "(");
+    wait_until(cx, |cx| note(cx).is_some());
+    let error = note(cx).unwrap();
+    assert!(error.contains("unclosed group"), "{error}");
+    assert_eq!(status(cx).as_deref(), Some("0 matches in 0 files"));
+    cx.click("find.regex");
+
+    retype(cx, "omega");
+    wait_status(cx, "10000 matches in 1 file");
+    assert_eq!(
+        note(cx).as_deref(),
+        Some("Results truncated at 10,000 matches. Narrow the search.")
+    );
+
+    retype(cx, "beta-");
+    wait_status(cx, "2 matches in 2 files");
+    assert_eq!(note(cx), None);
+    cx.click("find.glob");
+    assert!(focused(cx, "find.glob"));
+    cx.input("!*-b.txt");
+    wait_status(cx, "1 match in 1 file");
+    assert_eq!(headers(cx), ["beta-a.txt"]);
+    // The mask shares the text's keys.
+    cx.press("enter");
+    assert!(!find_open(cx));
+    let at = Location {
+        repo: solo,
+        rev: None,
+        path: "data/beta-a.txt".into(),
+        line: Some(1),
+        doc: None,
+    };
+    assert_eq!(shown(cx), Some(Doc::File(at)));
+
+    cx.press("secondary-shift-f");
+    let glob = cx.find("find.glob").unwrap();
+    assert_eq!(
+        glob.value(),
+        Some("!*-b.txt"),
+        "the options last the session"
+    );
+    wait_status(cx, "1 match in 1 file");
 }

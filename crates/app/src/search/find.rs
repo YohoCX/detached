@@ -8,7 +8,9 @@ use std::time::Duration;
 use detached_core::api;
 use detached_core::types::{FindEvent, FindQuery};
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, BoxShadow, Context, Entity, FontWeight, InteractiveElement,
     IntoElement, MouseMoveEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy,
@@ -24,6 +26,13 @@ use crate::util::{base_name, dir_name};
 use crate::{blocking, files};
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
+const TRUNCATED: &str = "Results truncated at 10,000 matches. Narrow the search.";
+/// Match case, Words and Regex: id, label, title.
+const TOGGLES: [(&str, &str, &str); 3] = [
+    ("find.case", "Cc", "Match case"),
+    ("find.word", "W", "Words"),
+    ("find.regex", ".*", "Regex"),
+];
 
 struct Hit {
     line: u64,
@@ -44,18 +53,23 @@ enum Row {
     Hit(usize, usize),
 }
 
-/// The text, repos and rev a search runs over.
-type Ask = (String, Vec<String>, Option<String>);
+/// The query, repos and rev a search runs over.
+type Ask = (FindQuery, Vec<String>, Option<String>);
 
 pub struct Find {
     open: bool,
     input: Entity<InputState>,
+    glob: Entity<InputState>,
+    toggles: [bool; 3],
+    all: bool,
     /// The search running or waiting for the debounce.
     asked: Option<Ask>,
     wait: Option<Task<()>>,
     query: Option<QueryId>,
     run: Option<Task<()>>,
     running: bool,
+    truncated: bool,
+    error: Option<String>,
     /// The rev the rows were found at.
     rev: Option<String>,
     files: Vec<File>,
@@ -78,14 +92,18 @@ fn show(open: bool, cx: &mut App) {
 impl Find {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Text to find"));
+        let glob =
+            cx.new(|cx| InputState::new(window, cx).placeholder("File mask: *.ts, !*.test.ts"));
+        let edit = |this: &mut Self, _, e: &InputEvent, cx: &mut Context<Self>| {
+            if let InputEvent::Change = e {
+                this.changed(cx);
+            }
+        };
         let subscriptions = vec![
             cx.observe_global_in::<Search>(window, Self::opened),
             cx.observe(&Store::global(cx), |this, _, cx| this.changed(cx)),
-            cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
-                if let InputEvent::Change = e {
-                    this.changed(cx);
-                }
-            }),
+            cx.subscribe(&input, edit),
+            cx.subscribe(&glob, edit),
         ];
         let action = actions::register(
             cx,
@@ -97,11 +115,16 @@ impl Find {
         Find {
             open: false,
             input,
+            glob,
+            toggles: [false; 3],
+            all: false,
             asked: None,
             wait: None,
             query: None,
             run: None,
             running: false,
+            truncated: false,
+            error: None,
             rev: None,
             files: vec![],
             index: HashMap::new(),
@@ -133,13 +156,28 @@ impl Find {
         }
     }
 
-    /// The current repo at its tree ref.
+    /// The current repo at its tree ref, or every repo's working tree.
     fn ask(&self, cx: &App) -> Ask {
         let store = Store::global(cx).read(cx);
+        let [case_sensitive, whole_word, regex] = self.toggles;
+        let glob = self.glob.read(cx).value().trim().to_string();
+        let q = FindQuery {
+            text: self.input.read(cx).value().to_string(),
+            case_sensitive,
+            whole_word,
+            regex,
+            glob: (!glob.is_empty()).then_some(glob),
+        };
+        if self.all {
+            return (
+                q,
+                store.repos.iter().map(|r| r.path.clone()).collect(),
+                None,
+            );
+        }
         let repo = store.current();
         let rev = repo.and_then(|r| store.tree_ref(r)).map(String::from);
-        let text = self.input.read(cx).value().to_string();
-        (text, repo.into_iter().map(String::from).collect(), rev)
+        (q, repo.into_iter().map(String::from).collect(), rev)
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -148,6 +186,7 @@ impl Find {
             return;
         }
         self.asked = ask;
+        cx.notify();
         self.wait = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
             this.update(cx, |this, cx| this.start(cx)).ok();
@@ -157,27 +196,21 @@ impl Find {
     /// Drops the last search and its rows, then runs `asked` unless its text or repos are empty.
     fn start(&mut self, cx: &mut Context<Self>) {
         (self.query, self.run, self.running) = (None, None, false);
+        (self.truncated, self.error) = (false, None);
         self.files.clear();
         self.index.clear();
         self.rows.clear();
         (self.count, self.sel, self.scroll) = (0, None, UniformListScrollHandle::new());
         cx.notify();
-        let Some((text, repos, rev)) = self.asked.clone() else {
+        let Some((q, repos, rev)) = self.asked.clone() else {
             return;
         };
-        if text.is_empty() || repos.is_empty() {
+        if q.text.is_empty() || repos.is_empty() {
             return;
         }
         let store = Store::global(cx).read(cx);
         let (query, core) = (store.query_id(), store.core().clone());
         let (id, at) = (query.id, rev.clone());
-        let q = FindQuery {
-            text,
-            case_sensitive: false,
-            whole_word: false,
-            regex: false,
-            glob: None,
-        };
         let this = cx.weak_entity();
         self.run = Some(blocking::stream(
             cx,
@@ -216,10 +249,14 @@ impl Find {
                     self.count += 1;
                     found = true;
                 }
-                FindEvent::Done { query_id, .. } | FindEvent::Error { query_id, .. }
-                    if Some(query_id) == current =>
-                {
-                    self.running = false
+                FindEvent::Done {
+                    query_id,
+                    truncated,
+                } if Some(query_id) == current => {
+                    (self.running, self.truncated) = (false, truncated)
+                }
+                FindEvent::Error { query_id, error } if Some(query_id) == current => {
+                    (self.running, self.error) = (false, Some(error))
                 }
                 _ => {}
             }
@@ -271,11 +308,19 @@ impl Find {
         let (f, h) = match self.rows[i] {
             Row::File(f) => {
                 let file = &self.files[f];
-                let name = base_name(&file.path).to_string();
+                let (name, path) = (base_name(&file.path).to_string(), file.path.clone());
+                let count = match self.all {
+                    true => {
+                        let repo = Store::global(cx).read(cx).name_of(&file.repo);
+                        format!("{repo} {}", file.hits.len())
+                    }
+                    false => file.hits.len().to_string(),
+                };
                 return div()
                     .id(("find.file", i))
                     .test_support()
                     .aria_label(name.clone())
+                    .aria_description(count.clone())
                     .w_full()
                     .flex()
                     .items_center()
@@ -292,7 +337,8 @@ impl Find {
                             .text_color(t.muted)
                             .child(dir_name(&file.path).to_string()),
                     )
-                    .child(div().text_color(t.muted).child(file.hits.len().to_string()))
+                    .child(div().text_color(t.muted).child(count))
+                    .tooltip(move |window, cx| Tooltip::new(path.clone()).build(window, cx))
                     .into_any_element();
             }
             Row::Hit(f, h) => (f, h),
@@ -396,12 +442,16 @@ impl Render for Find {
         }
         let t = theme(cx);
         let store = Store::global(cx).read(cx);
-        let scope = store.current().map_or("No repository".into(), |r| {
-            let name = store.name_of(r);
-            store
-                .tree_ref(r)
-                .map_or(name.to_string(), |rev| format!("{name} @ {rev}"))
-        });
+        let scope = match (self.all, store.current()) {
+            (true, _) => "All repositories".into(),
+            (false, None) => "No repository".into(),
+            (false, Some(r)) => {
+                let name = store.name_of(r);
+                store
+                    .tree_ref(r)
+                    .map_or(name.to_string(), |rev| format!("{name} @ {rev}"))
+            }
+        };
         let n = |k: usize, one, many| format!("{k} {}", if k == 1 { one } else { many });
         let status = match self.running {
             true => format!("Searching… {}", self.count),
@@ -431,8 +481,20 @@ impl Render for Find {
                     .id("find.status")
                     .test_support()
                     .aria_label(status.clone())
+                    .flex_1()
                     .text_color(t.muted)
                     .child(status),
+            )
+            .child(
+                Checkbox::new("find.all")
+                    .checked(self.all)
+                    .label("All repositories")
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .on_click(cx.listener(|this, on: &bool, _, cx| {
+                        this.all = *on;
+                        this.changed(cx);
+                    })),
             );
         let line = || {
             div()
@@ -450,6 +512,43 @@ impl Render for Find {
             .font_family(theme::mono(cx))
             .text_size(text::TITLE)
             .rounded(radius::FIELD)
+            .bg(t.input);
+        let mono = theme::mono(cx);
+        let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
+            .spread_radius(px(1.))
+            .inset();
+        // Not focusable, so a click leaves focus in the input.
+        let toggles = TOGGLES.iter().enumerate().map(|(k, &(id, label, title))| {
+            let on = self.toggles[k];
+            ui::pressable(id)
+                .test_support()
+                .role(Role::Button)
+                .aria_label(title)
+                .aria_toggled(on.into())
+                .justify_center()
+                .min_w(px(32.))
+                .h(px(30.))
+                .rounded(radius::ICON_BUTTON)
+                .font_family(mono.clone())
+                .font_weight(FontWeight::BOLD)
+                .map(|b| match on {
+                    true => b.bg(t.selected).text_color(t.fg).shadow(vec![ring.clone()]),
+                    false => b.text_color(t.muted).hover(|s| s.bg(t.hover)),
+                })
+                .tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggles[k] ^= true;
+                    this.changed(cx);
+                }))
+                .child(label)
+        });
+        let glob = Input::new(&self.glob)
+            .id("find.glob")
+            .w(px(280.))
+            .h(px(28.))
+            .px(px(9.))
+            .text_size(text::SMALL)
+            .rounded(radius::ITEM)
             .bg(t.input);
         let scope = div()
             .id("find.scope")
@@ -477,6 +576,23 @@ impl Render for Find {
         .border_t_1()
         .border_color(t.line)
         .bg(t.code);
+        let note = match &self.error {
+            Some(e) => Some((e.clone(), t.error)),
+            None => self.truncated.then(|| (TRUNCATED.to_string(), t.warning)),
+        };
+        let note = note.map(|(note, color)| {
+            div()
+                .id("find.note")
+                .test_support()
+                .aria_label(note.clone())
+                .py(px(8.))
+                .px(px(16.))
+                .border_t_1()
+                .border_color(t.line)
+                .text_size(text::SMALL)
+                .text_color(color)
+                .child(note)
+        });
         let size = window.viewport_size();
         let dialog = div()
             .id("find")
@@ -505,9 +621,10 @@ impl Render for Find {
                 cx.stop_propagation();
             }))
             .child(head)
-            .child(line().child(input))
-            .child(line().child(scope))
-            .child(list);
+            .child(line().child(input).children(toggles))
+            .child(line().child(glob).child(scope))
+            .child(list)
+            .children(note);
         ui::modal(
             px(860.).min(size.width * 0.92),
             0.1,
