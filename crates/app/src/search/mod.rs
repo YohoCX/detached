@@ -1,5 +1,6 @@
 //! The palette, its pill in the top bar, and find in files.
 
+mod find;
 mod palette;
 
 use gpui_kit::base::TestSupportExt;
@@ -33,11 +34,13 @@ impl Mode {
     }
 }
 
-/// The open palette's mode, and "All repositories", which lasts the session.
+/// The open palette's mode, its "All repositories", which lasts the session, and whether Find in
+/// Files is open.
 #[derive(Default)]
 struct Search {
     mode: Option<Mode>,
     all: bool,
+    find: bool,
 }
 
 impl Global for Search {}
@@ -60,6 +63,12 @@ fn close(cx: &mut App) {
 pub fn palette(window: &mut Window, cx: &mut App) -> AnyView {
     cx.set_global(Search::default());
     cx.new(|cx| palette::Palette::new(window, cx)).into()
+}
+
+/// Find in Files, drawn over the window while open; it registers find.inFiles.
+pub fn find(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.default_global::<Search>();
+    cx.new(|cx| find::Find::new(window, cx)).into()
 }
 
 /// The top bar's "Search everywhere" pill.

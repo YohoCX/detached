@@ -1,11 +1,13 @@
 mod common;
 
+use std::time::{Duration, Instant};
+
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
 use detached_app::store::{Doc, Location, Tool};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
 
 /// e2e's layout with `app` current; returns its path.
 fn open(cx: &mut TestAppContext) -> (TestApp, String) {
@@ -315,4 +317,186 @@ fn the_search_pill_shows_its_chord_and_opens_search_everywhere(cx: &mut TestAppC
     assert_eq!(title(cx).as_deref(), Some("Search Everywhere"));
     let empty = cx.find("palette.empty").unwrap();
     assert_eq!(empty.label(), Some("Search files, branches and actions"));
+}
+
+/// e2e's layout with `solo` current; returns its path.
+fn open_solo(cx: &mut TestAppContext) -> (TestApp, String) {
+    let mut app = open_app_with(cx, layout);
+    let repo = app.sb.solo().display().to_string();
+    let r = repo.clone();
+    app.store(|s, cx| s.set_current(Some(r), cx));
+    (app, repo)
+}
+
+#[derive(Debug, PartialEq)]
+enum Found {
+    File(String),
+    Match {
+        text: String,
+        hits: Vec<String>,
+        on: bool,
+    },
+}
+
+/// The drawn rows of Find in Files by index.
+fn found(cx: &mut VisualTestContext) -> Vec<(usize, Found)> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0..100)
+            .filter_map(|i| {
+                if let Some(e) = w.try_find(("find.file", i)) {
+                    return Some((i, Found::File(e.label()?.into())));
+                }
+                let e = w.try_find(("find.match", i))?;
+                let marks = w.within(("find.match", i)).find_all_by_role(Role::Mark);
+                let hits = marks.iter().filter_map(|h| h.label().map(String::from));
+                let found = Found::Match {
+                    text: e.label()?.into(),
+                    hits: hits.collect(),
+                    on: e.selected() == Some(true),
+                };
+                Some((i, found))
+            })
+            .collect()
+    })
+}
+
+fn headers(cx: &mut VisualTestContext) -> Vec<String> {
+    let names = found(cx).into_iter().filter_map(|(_, f)| match f {
+        Found::File(name) => Some(name),
+        _ => None,
+    });
+    names.collect()
+}
+
+fn hits(cx: &mut VisualTestContext) -> Vec<String> {
+    let hits = found(cx).into_iter().flat_map(|(_, f)| match f {
+        Found::Match { hits, .. } => hits,
+        _ => vec![],
+    });
+    hits.collect()
+}
+
+/// The selected match's row.
+fn picked(cx: &mut VisualTestContext) -> Option<usize> {
+    let on = |(i, f): &(usize, Found)| matches!(f, Found::Match { on: true, .. }).then_some(*i);
+    found(cx).iter().find_map(on)
+}
+
+/// The row of `file`'s first match.
+fn match_of(cx: &mut VisualTestContext, file: &str) -> usize {
+    let header = found(cx)
+        .into_iter()
+        .find(|(_, f)| *f == Found::File(file.into()));
+    header.unwrap().0 + 1
+}
+
+fn status(cx: &mut VisualTestContext) -> Option<String> {
+    cx.find("find.status")
+        .and_then(|e| e.label().map(String::from))
+}
+
+fn wait_status(cx: &mut VisualTestContext, text: &str) {
+    wait_until(cx, |cx| status(cx).as_deref() == Some(text));
+}
+
+fn find_open(cx: &mut VisualTestContext) -> bool {
+    cx.find("find").is_some()
+}
+
+#[gpui_kit::test]
+fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
+    cx: &mut TestAppContext,
+) {
+    let (mut app, _) = open_solo(cx);
+    let cx = &mut app;
+    cx.press("secondary-shift-f");
+    assert_eq!(
+        cx.find("find").and_then(|e| e.label().map(String::from)),
+        Some("Find in Files".into())
+    );
+    let scope = cx.find("find.scope").unwrap();
+    assert_eq!(scope.label(), Some("solo"));
+    let text = cx.find("find.text").unwrap();
+    assert_eq!(text.placeholder(), Some("Text to find"));
+    assert_eq!(text.focused(), Some(true));
+
+    cx.input("alpha");
+    // Past the debounce, then the clock stays put: the stream's next batch waits for a frame.
+    cx.executor().advance_clock(Duration::from_millis(150));
+    let start = Instant::now();
+    while headers(cx).is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no results");
+        cx.run_until_parked();
+    }
+    let searching = status(cx).unwrap();
+    assert!(searching.starts_with("Searching… "), "{searching}");
+    let first = headers(cx).remove(0);
+    let item = first
+        .strip_prefix("item-")
+        .and_then(|s| s.strip_suffix(".txt"));
+    assert!(item.is_some_and(|n| n.parse::<u32>().is_ok()), "{first}");
+    assert_eq!(hits(cx)[0], "alpha");
+
+    cx.press("secondary-a");
+    cx.input("beta-");
+    wait_status(cx, "2 matches in 2 files");
+    let mut names = headers(cx);
+    names.sort();
+    assert_eq!(names, ["beta-a.txt", "beta-b.txt"]);
+    assert_eq!(hits(cx), ["beta-", "beta-"]);
+    let alpha = |f: &Found| matches!(f, Found::Match { text, .. } if text.contains("alpha"));
+    assert!(!found(cx).iter().any(|(_, f)| alpha(f)));
+}
+
+#[gpui_kit::test]
+fn find_in_files_opens_the_selected_match_at_its_line_and_keeps_the_text(cx: &mut TestAppContext) {
+    let (mut app, solo) = open_solo(cx);
+    let cx = &mut app;
+    let at = |path: &str, line| {
+        Some(Doc::File(Location {
+            repo: solo.clone(),
+            rev: None,
+            path: path.into(),
+            line: Some(line),
+            doc: None,
+        }))
+    };
+    cx.press("secondary-shift-f");
+    cx.input("beta-");
+    wait_status(cx, "2 matches in 2 files");
+    assert_eq!(picked(cx), Some(1), "the first match");
+    cx.press("up");
+    assert_eq!(picked(cx), Some(1), "no wrap");
+    cx.press("down");
+    assert_eq!(picked(cx), Some(3), "past the second file's header");
+    cx.press("down");
+    assert_eq!(picked(cx), Some(3), "no wrap");
+    let a = match_of(cx, "beta-a.txt");
+    cx.update(|w, cx| w.hover(("find.match", a), cx));
+    assert_eq!(picked(cx), Some(a), "the pointer selects");
+    cx.click(("find.match", a));
+    assert!(!find_open(cx));
+    assert_eq!(shown(cx), at("data/beta-a.txt", 1));
+
+    cx.press("secondary-shift-f");
+    let text = cx.find("find.text").unwrap();
+    assert_eq!(text.value(), Some("beta-"));
+    wait_status(cx, "2 matches in 2 files");
+    let b = match_of(cx, "beta-b.txt");
+    if b == 3 {
+        cx.press("down");
+    }
+    assert_eq!(picked(cx), Some(b));
+    cx.press("enter");
+    assert!(!find_open(cx));
+    assert_eq!(shown(cx), at("data/beta-b.txt", 2));
+
+    // The kept text is selected, so typing replaces it.
+    cx.press("secondary-shift-f");
+    cx.input("beta-7");
+    assert_eq!(cx.find("find.text").unwrap().value(), Some("beta-7"));
+    wait_status(cx, "1 match in 1 file");
+    cx.press("escape");
+    assert!(!find_open(cx));
 }

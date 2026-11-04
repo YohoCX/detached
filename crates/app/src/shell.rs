@@ -71,7 +71,7 @@ fn page(doc: &Doc, _: &mut Window, cx: &mut App) -> AnyView {
 
 /// Modals over the window, inside the shell's key context so the app's chords still reach it.
 fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
-    vec![search::palette(window, cx)]
+    vec![search::palette(window, cx), search::find(window, cx)]
 }
 
 fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
