@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use ureq::http::HeaderMap;
 
 use super::*;
+use crate::mrs::T;
 
 const GL: (&str, &str) = ("PRIVATE-TOKEN", "gitlab-token");
 const GH: (&str, &str) = ("Authorization", "Bearer ghe-token");
@@ -411,4 +412,301 @@ fn starts_on_a_given_port_and_stops_on_drop() {
     assert_eq!(get(&f, "/health", &[]).0, 200);
     drop(f);
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+}
+
+/// Both forges with MR 1 (`feature` at `h` into `main` at `b`) and pipelines 100 (failed, on
+/// `feature`) and 90 (a scheduled success on `main`).
+fn pipes() -> Forge {
+    let mr = json!({ "number": 1, "title": "t", "description": "", "author": "tester",
+        "state": "open", "draft": false, "sourceBranch": "feature", "targetBranch": "main",
+        "baseSha": "b", "headSha": "h" });
+    let job = |id, name: &str, status: &str| json!({ "id": id, "name": name, "stage": name, "status": status, "log": "x" });
+    let pipelines = json!([
+        { "id": 100, "ref": "feature", "sha": "h", "status": "failed",
+          "jobs": [job(101, "build", "success"), job(102, "test", "failed")] },
+        { "id": 90, "ref": "main", "sha": "b", "status": "success", "source": "schedule", "jobs": [] },
+    ]);
+    let project = |forge, path| json!({ "forge": forge, "path": path, "defaultBranch": "main", "mrs": [mr], "pipelines": pipelines });
+    let seed = json!({ "user": "tester", "projects": [project("gitlab", "group/app"), project("ghe", "owner/app")] });
+    let f = Forge::start().unwrap();
+    f.reset(serde_json::from_value(seed).unwrap());
+    f
+}
+
+const GL_P: &str = "/gitlab/api/v4/projects/1";
+const GH_R: &str = "/ghe/api/v3/repos/owner/app";
+
+/// The `id`s of a list, or of its `key` array.
+fn ids(v: &Value, key: Option<&str>) -> Vec<u64> {
+    let list = key.map_or(v, |k| &v[k]).as_array().unwrap();
+    list.iter().map(|x| x["id"].as_u64().unwrap()).collect()
+}
+
+fn statuses(f: &Forge, p: usize, pipeline: usize) -> Vec<Status> {
+    let s = lock(&f.state);
+    s.projects[p].pipelines[pipeline]
+        .jobs
+        .iter()
+        .map(|j| j.status)
+        .collect()
+}
+
+#[test]
+fn gitlab_lists_pipelines_by_ref_and_sha() {
+    let f = pipes();
+    let list = |q: &str| ids(&get(&f, &format!("{GL_P}/pipelines{q}"), &[GL]).1, None);
+    assert_eq!(list(""), [100, 90]);
+    assert_eq!(list("?ref=feature"), [100]);
+    assert_eq!(list("?ref=feature&sha=b"), [] as [u64; 0]);
+    assert_eq!(list("?ref=main&sha=b&per_page=20"), [90]);
+    let main = json!({
+        "id": 90, "iid": 90, "project_id": 1, "sha": "b", "ref": "main", "status": "success",
+        "source": "schedule", "created_at": T, "updated_at": T, "started_at": T, "finished_at": T,
+        "web_url": format!("{}/gitlab/group/app/-/pipelines/90", f.url()),
+    });
+    assert_eq!(
+        get(&f, &format!("{GL_P}/pipelines?ref=main"), &[GL]),
+        (200, json!([main]))
+    );
+}
+
+#[test]
+fn gitlab_post_pipeline_adds_a_pending_api_pipeline_first_with_a_build_job() {
+    let f = pipes();
+    let body = json!({ "ref": "feature", "variables": [{ "key": "K", "value": "v" }] });
+    let (status, p) = post(&f, &format!("{GL_P}/pipeline"), &[GL], body.clone());
+    assert_eq!(status, 201);
+    let got = [
+        &p["id"],
+        &p["sha"],
+        &p["status"],
+        &p["source"],
+        &p["started_at"],
+        &p["finished_at"],
+    ];
+    assert_eq!(
+        got,
+        [
+            &json!(1001),
+            &json!("h"),
+            &json!("pending"),
+            &json!("api"),
+            &Value::Null,
+            &Value::Null
+        ]
+    );
+    let list = get(&f, &format!("{GL_P}/pipelines"), &[GL]).1;
+    assert_eq!(ids(&list, None), [1001, 100, 90]);
+    let jobs = get(&f, &format!("{GL_P}/pipelines/1001/jobs"), &[GL]).1;
+    let job = &jobs[0];
+    assert_eq!(ids(&jobs, None), [1002]);
+    assert_eq!(
+        (&job["name"], &job["stage"], &job["status"]),
+        (&json!("build"), &json!("build"), &json!("pending"))
+    );
+    assert_eq!(job["duration"], Value::Null);
+    post(
+        &f,
+        "/reset",
+        &[],
+        json!({ "user": "tester", "projects": [{ "forge": "gitlab", "path": "group/app", "defaultBranch": "main" }] }),
+    );
+    let (_, p) = post(&f, &format!("{GL_P}/pipeline"), &[GL], body);
+    assert_eq!(
+        (&p["id"], &p["sha"]),
+        (&json!(1001), &json!("")),
+        "ids restart and an unknown branch has no SHA"
+    );
+}
+
+#[test]
+fn gitlab_pipeline_jobs_newest_first_retry_and_cancel() {
+    let f = pipes();
+    let jobs = get(&f, &format!("{GL_P}/pipelines/100/jobs"), &[GL]).1;
+    assert_eq!(ids(&jobs, None), [102, 101]);
+    let (status, p) = post(
+        &f,
+        &format!("{GL_P}/pipelines/100/retry"),
+        &[GL],
+        Value::Null,
+    );
+    assert_eq!((status, &p["status"]), (201, &json!("running")));
+    assert_eq!(statuses(&f, 0, 0), [Status::Success, Status::Pending]);
+    let (status, p) = post(
+        &f,
+        &format!("{GL_P}/pipelines/100/cancel"),
+        &[GL],
+        Value::Null,
+    );
+    assert_eq!((status, &p["status"]), (200, &json!("canceled")));
+    assert_eq!(statuses(&f, 0, 0), [Status::Success, Status::Canceled]);
+    let missing = (404, json!({ "message": "404 Not found" }));
+    assert_eq!(
+        post(
+            &f,
+            &format!("{GL_P}/pipelines/999/retry"),
+            &[GL],
+            Value::Null
+        ),
+        missing
+    );
+    assert_eq!(
+        get(&f, &format!("{GL_P}/pipelines/100/retry"), &[GL]),
+        missing
+    );
+    assert_eq!(
+        post(
+            &f,
+            &format!("{GL_P}/pipelines/x/cancel"),
+            &[GL],
+            Value::Null
+        ),
+        missing
+    );
+}
+
+#[test]
+fn gitlab_job_get_retry_cancel_and_play() {
+    let f = pipes();
+    let want = json!({
+        "id": 102, "name": "test", "stage": "test", "status": "failed", "duration": 60,
+        "allow_failure": false, "web_url": format!("{}/gitlab/group/app/-/jobs/102", f.url()),
+        "pipeline": { "id": 100, "project_id": 1, "ref": "feature", "sha": "h", "status": "failed" },
+    });
+    assert_eq!(get(&f, &format!("{GL_P}/jobs/102"), &[GL]), (200, want));
+    let act = |verb| post(&f, &format!("{GL_P}/jobs/102/{verb}"), &[GL], Value::Null);
+    let (status, j) = act("retry");
+    assert_eq!(
+        (status, &j["status"], &j["duration"]),
+        (201, &json!("pending"), &Value::Null)
+    );
+    assert_eq!(
+        lock(&f.state).projects[0].pipelines[0].jobs[1].log,
+        "",
+        "retry clears the log"
+    );
+    assert_eq!(act("cancel").1["status"], "canceled");
+    assert_eq!(act("play").1["status"], "pending");
+    let missing = (404, json!({ "message": "404 Not found" }));
+    assert_eq!(get(&f, &format!("{GL_P}/jobs/999"), &[GL]), missing);
+    assert_eq!(act("nothing"), missing);
+}
+
+#[test]
+fn ghe_runs_filter_by_branch_head_sha_and_event() {
+    let f = pipes();
+    let runs = |path: &str| {
+        ids(
+            &get(&f, &format!("{GH_R}/actions/{path}"), &[GH]).1,
+            Some("workflow_runs"),
+        )
+    };
+    assert_eq!(runs("runs"), [100, 90]);
+    assert_eq!(runs("runs?branch=feature&head_sha=h&per_page=20"), [100]);
+    assert_eq!(runs("runs?branch=feature&head_sha=b"), [] as [u64; 0]);
+    assert_eq!(runs("workflows/1/runs?event=schedule"), [90]);
+    assert_eq!(runs("workflows/1/runs?event=push"), [100]);
+    let want = json!({
+        "id": 100, "name": "CI", "workflow_id": 1, "head_branch": "feature", "head_sha": "h",
+        "event": "push", "status": "completed", "conclusion": "failure",
+        "created_at": T, "run_started_at": T, "updated_at": T,
+        "html_url": format!("{}/ghe/owner/app/actions/runs/100", f.url()),
+    });
+    let (status, list) = get(&f, &format!("{GH_R}/actions/runs?branch=feature"), &[GH]);
+    assert_eq!(
+        (status, list),
+        (
+            200,
+            json!({ "total_count": 1, "workflow_runs": [want.clone()] })
+        )
+    );
+    assert_eq!(
+        get(&f, &format!("{GH_R}/actions/runs/100"), &[GH]),
+        (200, want)
+    );
+}
+
+#[test]
+fn ghe_workflows_and_a_dispatch_adds_a_workflow_dispatch_run() {
+    let f = pipes();
+    let ci =
+        json!({ "id": 1, "name": "CI", "path": ".github/workflows/ci.yml", "state": "active" });
+    let want = json!({ "total_count": 1, "workflows": [ci] });
+    assert_eq!(
+        get(&f, &format!("{GH_R}/actions/workflows?per_page=100"), &[GH]),
+        (200, want)
+    );
+    let body = json!({ "ref": "feature", "inputs": { "level": "2" } });
+    let path = format!("{GH_R}/actions/workflows/1/dispatches");
+    assert_eq!(post(&f, &path, &[GH], body), (204, Value::Null));
+    let q = "workflows/1/runs?event=workflow_dispatch&branch=feature&per_page=1";
+    let (_, v) = get(&f, &format!("{GH_R}/actions/{q}"), &[GH]);
+    let run = &v["workflow_runs"][0];
+    assert_eq!(ids(&v, Some("workflow_runs")), [1001]);
+    assert_eq!(
+        (&run["status"], &run["conclusion"], &run["head_sha"]),
+        (&json!("queued"), &Value::Null, &json!("h"))
+    );
+}
+
+#[test]
+fn ghe_run_jobs_rerun_failed_cancel_and_rerun() {
+    let f = pipes();
+    let want = json!({
+        "id": 102, "run_id": 100, "workflow_name": "CI", "head_branch": "feature", "head_sha": "h",
+        "name": "test", "status": "completed", "conclusion": "failure", "started_at": T,
+        "completed_at": "2026-10-01T10:01:00Z",
+        "html_url": format!("{}/ghe/owner/app/actions/runs/100/job/102", f.url()),
+        "steps": [{ "name": "Run", "number": 1, "status": "completed", "conclusion": "failure" }],
+    });
+    let (status, jobs) = get(
+        &f,
+        &format!("{GH_R}/actions/runs/100/jobs?per_page=100"),
+        &[GH],
+    );
+    assert_eq!((status, ids(&jobs, Some("jobs"))), (200, vec![101, 102]));
+    assert_eq!((&jobs["total_count"], &jobs["jobs"][1]), (&json!(2), &want));
+    let act = |verb: &str| {
+        post(
+            &f,
+            &format!("{GH_R}/actions/runs/100/{verb}"),
+            &[GH],
+            Value::Null,
+        )
+    };
+    let run = || get(&f, &format!("{GH_R}/actions/runs/100"), &[GH]).1["status"].clone();
+    assert_eq!(act("rerun-failed-jobs"), (201, json!({})));
+    assert_eq!(statuses(&f, 1, 0), [Status::Success, Status::Pending]);
+    assert_eq!(run(), "queued");
+    assert_eq!(act("cancel"), (202, json!({})));
+    assert_eq!(statuses(&f, 1, 0), [Status::Success, Status::Canceled]);
+    assert_eq!(run(), "completed");
+    assert_eq!(act("rerun"), (201, json!({})));
+    assert_eq!(statuses(&f, 1, 0), [Status::Pending, Status::Pending]);
+    let missing = (404, json!({ "message": "Not Found" }));
+    assert_eq!(get(&f, &format!("{GH_R}/actions/runs/999"), &[GH]), missing);
+    assert_eq!(act("nothing"), missing);
+}
+
+#[test]
+fn ghe_job_get_and_rerun() {
+    let f = pipes();
+    let job = || get(&f, &format!("{GH_R}/actions/jobs/101"), &[GH]);
+    let (status, j) = job();
+    assert_eq!(
+        (status, &j["conclusion"], &j["run_id"]),
+        (200, &json!("success"), &json!(100))
+    );
+    let rerun = format!("{GH_R}/actions/jobs/101/rerun");
+    assert_eq!(post(&f, &rerun, &[GH], Value::Null), (201, json!({})));
+    let j = job().1;
+    assert_eq!(
+        (&j["status"], &j["completed_at"]),
+        (&json!("queued"), &Value::Null)
+    );
+    assert_eq!(lock(&f.state).projects[1].pipelines[0].jobs[0].log, "");
+    let missing = (404, json!({ "message": "Not Found" }));
+    let cancel = format!("{GH_R}/actions/jobs/101/cancel");
+    assert_eq!(post(&f, &cancel, &[GH], Value::Null), missing);
+    assert_eq!(get(&f, &format!("{GH_R}/actions/jobs/999"), &[GH]), missing);
 }

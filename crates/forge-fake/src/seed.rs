@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What `POST /reset` takes. `user` is the account every token belongs to.
 #[derive(Clone, Debug, Deserialize)]
@@ -71,7 +71,7 @@ pub struct Job {
     pub log: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Pending,

@@ -133,11 +133,12 @@ pub(crate) struct State {
     pub user: String,
     pub projects: Vec<Project>,
     /// Per project, each branch's SHA; reset takes them from the MRs' target and source.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the MR routes read it"))]
     pub branches: Vec<BTreeMap<String, String>>,
     pub requests: Vec<Request>,
     pub writes: Vec<Write>,
     pub delay: u64,
+    /// The last id given to a new pipeline or job.
+    pub next: u64,
 }
 
 impl State {
@@ -156,6 +157,7 @@ impl State {
             user: seed.user,
             branches: branches.collect(),
             projects: seed.projects,
+            next: 1000,
             ..State::default()
         };
     }

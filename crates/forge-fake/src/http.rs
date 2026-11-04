@@ -69,7 +69,6 @@ pub(crate) fn decode(s: &str) -> String {
 
 /// The page of `items` that `req` asks for (`per_page`, default 20, and `page`), with GitLab's
 /// `X-Next-Page` or GitHub's `Link`; `wrap` nests it as GitHub's `{total_count, <wrap>: [...]}`.
-#[allow(dead_code)] // For the list routes in mrs.rs.
 pub(crate) fn paged(origin: &str, req: &Req, items: Vec<Value>, wrap: Option<&str>) -> Reply {
     let num = |k, default| req.param(k).and_then(|v| v.parse().ok()).unwrap_or(default);
     let (per, page): (usize, usize) = (num("per_page", 20), num("page", 1));
