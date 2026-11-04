@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use detached_core::api;
 use detached_core::error::Result;
@@ -19,7 +18,7 @@ use gpui_kit::{
     px,
 };
 
-use super::{active, color, core, glyph, name, poll, took};
+use super::{active, color, core, glyph, name, now, poll, took};
 use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
 use crate::store::{DocRef, Location, Store};
@@ -881,9 +880,4 @@ fn empty(text: &'static str, cx: &App) -> Div {
         .py(px(12.))
         .text_color(theme(cx).muted)
         .child(text)
-}
-
-fn now() -> i64 {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH);
-    since.map_or(0, |d| d.as_secs() as i64)
 }

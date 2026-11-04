@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::actions;
-use detached_app::store::{Bottom, Doc};
+use detached_app::store::{Bottom, Doc, Tool};
 use detached_core::api;
-use detached_forge_fake::{Forge, Kind, Status};
+use detached_core::types::{AccountInput, MrAction, Provider};
+use detached_forge_fake::{Forge, Kind, Request, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
 use serde_json::{Value, json};
@@ -24,6 +25,17 @@ fn show(cx: &mut VisualTestContext, name: &str) {
         s.set_current(Some(repo), cx)
     });
     settle(cx);
+}
+
+fn shown_mr(cx: &mut VisualTestContext) -> Option<u64> {
+    match cx.store(|s, _| s.shown().cloned()) {
+        Some(Doc::Mr { number, .. }) => Some(number),
+        _ => None,
+    }
+}
+
+fn said(cx: &mut VisualTestContext) -> Option<String> {
+    cx.store(|s, _| s.message.clone().map(|m| m.text))
 }
 
 /// `id` below `scope` in a fresh frame.
@@ -409,4 +421,214 @@ fn a_followed_log_keeps_to_the_bottom_until_scrolled_up(cx: &mut TestAppContext)
         cx.find(line(101)).is_none(),
         "it stays where it was scrolled"
     );
+}
+
+#[gpui_kit::test]
+fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
+    let (mut app, _forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    cx.click("strip.mrs");
+    let row = ("mr", 1u64);
+    wait_until(cx, |cx| label(cx, row).is_some());
+    let l = label(cx, row).unwrap();
+    assert!(
+        l.starts_with("!1 Add feature feature → main tester "),
+        "{l}"
+    );
+    assert_eq!(cx.find(row).unwrap().selected(), Some(false));
+    cx.click(row);
+    assert_eq!(shown_mr(cx), Some(1));
+    assert_eq!(cx.find(row).unwrap().selected(), Some(true));
+
+    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    api::mr_action(&core, &repo, 1, &MrAction::Approve).unwrap();
+    cx.click("mrs.refresh");
+    wait_until(cx, |cx| label(cx, row).unwrap().contains(" tester ✓1 "));
+}
+
+#[gpui_kit::test]
+fn the_chip_opens_the_current_branchs_mr(cx: &mut TestAppContext) {
+    let (mut app, _forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "github");
+    wait_until(cx, |cx| label(cx, "mr.chip").is_some());
+    assert_eq!(label(cx, "mr.chip").as_deref(), Some("#1 Add feature"));
+    cx.click("mr.chip");
+    assert_eq!(shown_mr(cx), Some(1));
+}
+
+#[gpui_kit::test]
+fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    let repo = cx.sb.forge_dir().join("gitlab");
+    cx.sb.git(&repo, &["switch", "-qc", "topic"]);
+    cx.sb
+        .commit_files(&repo, "topic work", [("topic.txt", "topic\n")]);
+    cx.sb
+        .git(&repo, &["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+    cx.sb.git(
+        &repo,
+        &["branch", "-q", "--set-upstream-to", "origin/topic"],
+    );
+    show(cx, "gitlab");
+    cx.store(|s, cx| s.refresh_all(cx));
+    wait_until(cx, |cx| cx.find("mr.new").is_some());
+
+    cx.click("mr.new");
+    wait_until(cx, |cx| cx.find("mr.form").is_some());
+    cx.press("escape");
+    assert!(cx.find("mr.form").is_none(), "Escape closes the form");
+    cx.click("mr.new");
+    wait_until(cx, |cx| cx.find("mr.form").is_some());
+    let (icon, form) = (cx.find("mr.new").unwrap(), cx.find("mr.form").unwrap());
+    let (form, icon) = (form.bounds(), icon.bounds());
+    assert_eq!(
+        (form.top() - icon.bottom(), form.left()),
+        (px(8.), icon.left())
+    );
+    let from = label(cx, "mr.from");
+    assert_eq!(from.as_deref(), Some("group/app:topic into group/app"));
+    assert_eq!(value(cx, "mr.title").as_deref(), Some("topic work"));
+    assert_eq!(value(cx, "mr.target").as_deref(), Some("main"));
+    assert_eq!(cx.find("mr.title").unwrap().focused(), Some(true));
+    let draft = |cx: &mut VisualTestContext| cx.find("mr.draft").unwrap().checked();
+    assert_eq!(draft(cx), Some(false));
+    cx.click("mr.draft");
+    assert_eq!(draft(cx), Some(true));
+    cx.click("mr.draft");
+    type_into(cx, "mr.description", "Why");
+    cx.click("mr.submit");
+    wait_until(cx, |cx| shown_mr(cx) == Some(2));
+    let body = json!({ "source_branch": "topic", "target_branch": "main", "title": "topic work", "description": "Why" });
+    let api = "/gitlab/api/v4/projects/group/app/merge_requests";
+    assert!(wrote(&forge, api, Some(body)), "{:?}", forge.writes());
+    assert!(cx.find("mr.form").is_none());
+    wait_until(cx, |cx| {
+        label(cx, "mr.chip").as_deref() == Some("!2 topic work")
+    });
+}
+
+#[gpui_kit::test]
+fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    let core = cx.store(|s, _| s.core().clone());
+    let second = AccountInput {
+        id: None,
+        provider: Provider::GitlabSelfHosted,
+        base_url: forge.gitlab(),
+        username: "other".into(),
+        label: "Second GitLab".into(),
+        token: Some("gitlab-token".into()),
+    };
+    api::save_account(&core, second).unwrap();
+    show(cx, "gitlab");
+    cx.click("strip.mrs");
+    let ambiguous = |l: String| l.starts_with("Several accounts fit 127.0.0.1");
+    wait_until(cx, |cx| label(cx, "mrs.setup").is_some_and(ambiguous));
+    cx.click("mrs.settings");
+    assert_eq!(said(cx).as_deref(), Some("Settings… is not available yet"));
+
+    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let host = api::forge_hosts(&core, &repo).unwrap().hosts.remove(0).host;
+    let accounts = api::list_accounts(&core).unwrap();
+    let fake = accounts
+        .into_iter()
+        .find(|a| a.label == "Fake GitLab")
+        .unwrap();
+    api::set_forge_account(&core, repo, host, Some(fake.id)).unwrap();
+    cx.click("mrs.refresh");
+    wait_until(cx, |cx| label(cx, ("mr", 1u64)).is_some());
+    assert!(cx.find("mrs.setup").is_none());
+}
+
+#[gpui_kit::test]
+fn the_mr_list_is_one_request_and_a_repo_returned_to_shows_its_cache(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    wait_until(cx, |cx| label(cx, "mr.chip").is_some());
+    let before = forge.requests().len();
+    cx.click("strip.mrs");
+    let row = ("mr", 1u64);
+    wait_until(cx, |cx| label(cx, row).is_some());
+    let lists = forge.requests().split_off(before).into_iter();
+    let lists: Vec<_> = lists
+        .filter(|r| r.path.contains("merge_requests") || r.path.contains("graphql"))
+        .collect();
+    let graphql = Request {
+        method: "POST".into(),
+        path: "/gitlab/api/graphql".into(),
+    };
+    assert_eq!(lists, std::slice::from_ref(&graphql));
+
+    show(cx, "github");
+    wait_until(cx, |cx| {
+        label(cx, row).is_some_and(|l| l.starts_with("#1 "))
+    });
+    forge.delay(3000);
+    let back = forge.requests().len();
+    show(cx, "gitlab");
+    let l = label(cx, row).unwrap();
+    assert!(
+        l.starts_with("!1 Add feature "),
+        "the cached list shows at once: {l}"
+    );
+    wait_until(cx, |_| forge.requests()[back..].contains(&graphql));
+}
+
+#[gpui_kit::test]
+fn mr_create_without_an_upstream_says_so(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| drop(repo(sb, "solo")));
+    let cx = &mut app;
+    assert!(cx.update(|w, cx| actions::run(w, cx, "mr.create")));
+    let text = "Create Merge Request needs a branch with an upstream";
+    assert_eq!(said(cx).as_deref(), Some(text));
+    assert!(cx.find("mr.new").is_none() && cx.find("mr.chip").is_none());
+}
+
+#[gpui_kit::test]
+fn panel_merge_requests_toggles_the_list(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| drop(repo(sb, "solo")));
+    let cx = &mut app;
+    let run = |cx: &mut VisualTestContext| {
+        assert!(cx.update(|w, cx| actions::run(w, cx, "panel.mergeRequests")));
+        cx.store(|s, _| s.tool)
+    };
+    assert_eq!(run(cx), Some(Tool::Mrs));
+    assert!(cx.find("mrs.refresh").is_some());
+    assert_eq!(run(cx), None);
+}
+
+#[gpui_kit::test]
+fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
+    let (mut app, forge, _) = open_forge(cx);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    cx.click("strip.mrs");
+    let row = ("mr", 1u64);
+    wait_until(cx, |cx| label(cx, row).is_some());
+    let pick = |cx: &mut VisualTestContext, keys: &[&str]| {
+        cx.click("mrs.filter");
+        keys.iter().for_each(|k| cx.press(k));
+        value(cx, "mrs.filter")
+    };
+    let review = pick(cx, &["down", "down", "enter"]);
+    assert_eq!(review.as_deref(), Some("Review requested"));
+    let none = |cx: &mut VisualTestContext| label(cx, "mrs.note");
+    wait_until(cx, |cx| none(cx).as_deref() == Some("No merge requests"));
+    assert_eq!(pick(cx, &["up", "up", "enter"]).as_deref(), Some("Open"));
+    assert!(label(cx, row).is_some(), "the Open list is cached");
+
+    type_into(cx, "mrs.search", "feat");
+    assert!(label(cx, row).is_some());
+    cx.input("zz");
+    assert!(label(cx, row).is_none());
+    assert_eq!(none(cx).as_deref(), Some("No merge requests match"));
+
+    let n = requested(&forge, "/gitlab/api/graphql");
+    cx.executor().advance_clock(Duration::from_secs(60));
+    wait_until(cx, |_| requested(&forge, "/gitlab/api/graphql") > n);
 }

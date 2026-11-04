@@ -52,7 +52,7 @@ fn tool(tool: Tool, window: &mut Window, cx: &mut App) -> AnyView {
     match tool {
         Tool::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
         Tool::Files => cx.new(|cx| files::Tree::new(window, cx)).into(),
-        Tool::Mrs => stub("Merge Requests", cx),
+        Tool::Mrs => forge::mrs(window, cx),
     }
 }
 

@@ -2,18 +2,23 @@
 
 mod ansi;
 mod badge;
+mod chip;
 mod job_log;
+mod mr;
+mod mr_list;
 mod pipelines;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
 use gpui_kit::{AnyView, App, AppContext, Context, Hsla, Task, Window};
 
 pub use badge::PipelineBadge;
+pub use chip::MrChip;
 pub use job_log::JobLog;
+pub use mr_list::MrList;
 pub use pipelines::Pipelines;
 
 use crate::store::{Doc, Store};
@@ -21,7 +26,15 @@ use crate::ui::theme;
 
 /// The top bar's center.
 pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
-    vec![cx.new(|cx| PipelineBadge::new(window, cx)).into()]
+    vec![
+        cx.new(|cx| MrChip::new(window, cx)).into(),
+        cx.new(|cx| PipelineBadge::new(window, cx)).into(),
+    ]
+}
+
+/// The tool panel's Merge Requests.
+pub fn mrs(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| MrList::new(window, cx)).into()
 }
 
 /// The main area's page for a `Doc::Job`.
@@ -79,6 +92,11 @@ pub fn took(secs: Option<u64>) -> String {
         (0, _) => format!("{m}m {s:02}s"),
         _ => format!("{h}h {m:02}m"),
     }
+}
+
+fn now() -> i64 {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH);
+    since.map_or(0, |d| d.as_secs() as i64)
 }
 
 fn core(cx: &App) -> Arc<AppState> {

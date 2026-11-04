@@ -5,7 +5,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 
 ---
 
-## 0. Where these components are mounted and how they are opened
+## 0. Where these components are mounted and how they are opened [ported]
 
 - **Bottom panel** (`src/App.svelte:74`): `{#if app.bottom}<BottomPanel/>`. `app.bottom` is `'log' | 'pipelines' | null` and defaults to `null`, closed (`src/lib/app.svelte.ts:31`).
 - **Strip buttons** (`src/App.svelte:49-51`):
@@ -172,7 +172,7 @@ All paths are relative to the repo root. Citations are `file:line`.
 
 ## 2. Merge requests
 
-### 2.1 Setup states (`src/lib/mr.ts:5-11`), used by MrList
+### 2.1 Setup states (`src/lib/mr.ts:5-11`), used by MrList [ported]
 - No MR remote: "Choose the remote that holds the merge requests in Settings."
 - MR remote not on any forge host: "Remote X is not on a forge."
 - Host ambiguous: "Several accounts fit HOST; choose one in Settings."
@@ -188,7 +188,7 @@ Rules behind them:
   - Account select per host: "Choose an account", "Automatic (label)" or "No account fits".
   - With no forge remote: "No remote is on GitLab or GitHub."
 
-### 2.2 MrList (`src/components/MrList.svelte`)
+### 2.2 MrList (`src/components/MrList.svelte`) [ported]
 - **Header**: "Merge Requests" and a Refresh button (`:42-45`).
 - **Bar** (only with a repo): Search input, and a filter select with Open / Mine / Review requested / Assigned to me / All states.
   - The filter defaults to `open`. Filter and query are component-local, so they reset when the tool panel remounts (`:13-15,47-50`).
@@ -346,7 +346,7 @@ Rules behind them:
   - Unsupported, returning "X is not supported by this forge": GitLab requestChanges, GitHub unapprove (`gitlab.rs:371`, `github.rs:406`).
 - **Cache**: the backend keeps merged and closed MRs from `get_mr` for the session; any `mr_action` drops that entry (`src-tauri/src/forge/mod.rs:96,194-218`).
 
-### 2.6 MrChip and the create-MR flow (`src/components/MrChip.svelte`)
+### 2.6 MrChip and the create-MR flow (`src/components/MrChip.svelte`) [ported]
 - **Cache key**: only when the repo has a branch **with an upstream** (`:15`): `chip\0repo\0branch\0upstream`.
 - **Visibility**: rendered only if `mr !== undefined` (`:62`). It is hidden when unknown, on error with no cached value, or without an upstream.
 - **With an MR**: a pill chip with the MR icon, `!N` / `#N` and the bare title (title as tooltip); click opens the MR (`:64-67`).
