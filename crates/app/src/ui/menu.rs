@@ -1,4 +1,5 @@
 //! Context menus: drawn by the OS on macOS and Windows, by the kit elsewhere. Items run closures.
+//! The OS menu does not open in the headless tests, so they pick an item with `pick`.
 
 use std::rc::Rc;
 
@@ -7,13 +8,15 @@ use gpui_kit::{App, Global, Pixels, Point, SharedString, Window};
 
 type Run = Rc<dyn Fn(&mut Window, &mut App)>;
 
+struct Entry {
+    label: SharedString,
+    enabled: bool,
+    run: Run,
+}
+
 enum Item {
     Separator,
-    Entry {
-        label: SharedString,
-        enabled: bool,
-        run: Run,
-    },
+    Entry(Entry),
 }
 
 #[derive(Default)]
@@ -27,8 +30,7 @@ pub struct Menu {
 struct Pick(usize);
 
 /// The open menu's items; showing another menu replaces them.
-#[derive(Default)]
-struct Picks(Vec<Run>);
+struct Picks(Vec<Entry>);
 
 impl Global for Picks {}
 
@@ -48,11 +50,11 @@ impl Menu {
         label: impl Into<SharedString>,
         run: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Self {
-        self.items.push(Item::Entry {
+        self.items.push(Item::Entry(Entry {
             label: label.into(),
             enabled,
             run: Rc::new(run),
-        });
+        }));
         self
     }
 
@@ -65,7 +67,7 @@ impl Menu {
     pub fn show(self, position: Point<Pixels>, window: &mut Window, cx: &mut App) {
         if !cx.has_global::<Picks>() {
             cx.on_action(|p: &Pick, cx| {
-                let Some(run) = cx.global::<Picks>().0.get(p.0).cloned() else {
+                let Some(run) = cx.global::<Picks>().0.get(p.0).map(|e| e.run.clone()) else {
                     return;
                 };
                 let Some(window) = cx.active_window().or_else(|| cx.windows().first().copied())
@@ -78,24 +80,32 @@ impl Menu {
                 });
             });
         }
-        let mut runs = vec![];
+        let mut entries = vec![];
         let mut menu = NativeMenu::new();
         for item in self.items {
             menu = match item {
                 Item::Separator => menu.separator(),
-                Item::Entry {
-                    label,
-                    enabled,
-                    run,
-                } => {
-                    runs.push(run);
-                    menu.menu_with_disabled(label, !enabled, Box::new(Pick(runs.len() - 1)))
+                Item::Entry(e) => {
+                    let pick = Box::new(Pick(entries.len()));
+                    let menu = menu.menu_with_disabled(e.label.clone(), !e.enabled, pick);
+                    entries.push(e);
+                    menu
                 }
             };
         }
-        cx.set_global(Picks(runs));
+        cx.set_global(Picks(entries));
         menu.show(position, window, cx);
     }
+}
+
+/// Runs the shown menu's enabled item `label` as a click on it does; false when there is none.
+pub fn pick(label: &str, window: &mut Window, cx: &mut App) -> bool {
+    let entries = cx.try_global::<Picks>().map_or(&[][..], |p| &p.0);
+    let entry = entries.iter().find(|e| e.enabled && e.label == label);
+    entry
+        .map(|e| e.run.clone())
+        .map(|run| run(window, cx))
+        .is_some()
 }
 
 #[cfg(test)]
@@ -140,5 +150,12 @@ mod tests {
         cx.dispatch_action(Pick(0));
         cx.run_until_parked();
         assert_eq!(*ran.borrow(), [2, 1]);
+        let picked = ["Two", "Three", "Four"].map(|l| cx.update(|w, cx| pick(l, w, cx)));
+        assert_eq!(
+            picked,
+            [true, false, false],
+            "only an enabled item by its label"
+        );
+        assert_eq!(*ran.borrow(), [2, 1, 2]);
     }
 }
