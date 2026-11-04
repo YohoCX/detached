@@ -16,6 +16,9 @@ type Items = Box<dyn Fn(&App) -> Vec<SharedString>>;
 /// The value was committed: Enter, a picked suggestion, or leaving the field with it changed.
 pub struct Commit(pub SharedString);
 
+/// The field got focus, so the suggestions are about to show.
+pub struct Focused;
+
 pub struct Suggest {
     input: Entity<InputState>,
     items: Items,
@@ -25,11 +28,13 @@ pub struct Suggest {
     hi: Option<usize>,
     /// The value last committed or set.
     value: SharedString,
+    highlighted: bool,
     scroll: ScrollHandle,
     _input: Subscription,
 }
 
 impl EventEmitter<Commit> for Suggest {}
+impl EventEmitter<Focused> for Suggest {}
 
 impl Suggest {
     /// `items` is read on each render while the suggestions show.
@@ -45,7 +50,10 @@ impl Suggest {
                     this.closed = false;
                     this.hi = None;
                 }
-                InputEvent::Focus => this.closed = false,
+                InputEvent::Focus => {
+                    this.closed = false;
+                    cx.emit(Focused);
+                }
                 InputEvent::PressEnter { .. } => {
                     let hi = this.hi.and_then(|i| this.matches(cx).into_iter().nth(i));
                     match hi {
@@ -66,6 +74,7 @@ impl Suggest {
             closed: false,
             hi: None,
             value: SharedString::default(),
+            highlighted: false,
             scroll: ScrollHandle::new(),
             _input: events,
         }
@@ -85,6 +94,11 @@ impl Suggest {
         let p = placeholder.to_string();
         self.input
             .update(cx, |i, cx| i.set_placeholder(p, window, cx));
+    }
+
+    /// Draws the border in the selection ring's color.
+    pub fn set_highlighted(&mut self, on: bool) {
+        self.highlighted = on;
     }
 
     /// Items holding the field's text, ignoring case.
@@ -156,7 +170,8 @@ impl Render for Suggest {
                 Input::new(&self.input)
                     .small()
                     .bg(t.input)
-                    .rounded(radius::ITEM),
+                    .rounded(radius::ITEM)
+                    .when(self.highlighted, |i| i.border_color(t.selected_ring)),
             )
             .when(n > 0, |d| {
                 d.capture_action(cx.listener(move |this, _: &MoveDown, _, cx| {
@@ -205,7 +220,7 @@ mod tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn suggests_items_holding_the_text_and_commits_a_pick_or_a_change(cx: &mut TestAppContext) {
+    fn suggests_on_focus_and_commits_a_pick_or_a_change(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let (window, view) = cx
             .update(|cx| {
@@ -226,6 +241,12 @@ mod tests {
             })
             .detach()
         });
+        let focused = Rc::new(RefCell::new(0));
+        let sink = focused.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&view, move |_, _: &Focused, _| *sink.borrow_mut() += 1)
+                .detach()
+        });
         let shown = |cx: &mut VisualTestContext| {
             cx.update(|w, cx| {
                 w.render_frame(cx);
@@ -241,6 +262,7 @@ mod tests {
         };
         act(cx, &|w, cx| w.click("input-state", cx));
         assert_eq!(shown(cx), ["main", "dev", "origin/main"]);
+        assert_eq!(*focused.borrow(), 1);
         act(cx, &|w, cx| w.input("MA", cx));
         assert_eq!(shown(cx), ["main", "origin/main"]);
         act(cx, &|w, cx| w.press("down", cx));
