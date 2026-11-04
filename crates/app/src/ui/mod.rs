@@ -12,9 +12,9 @@ use std::rc::Rc;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, BoxShadow, Context, Div, ElementId, FontWeight, Hsla,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Role, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 pub use grip::{Edge, pane};
@@ -80,6 +80,70 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App
         .border_color(t.line)
         .rounded(radius::PILL)
         .bg(t.input)
+        .font_weight(FontWeight::BOLD)
+        .child(label.into())
+}
+
+/// A `button` the eye goes to first.
+pub fn primary_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = theme(cx);
+    button(id, label, cx)
+        .bg(t.primary)
+        .border_color(t.primary)
+        .text_color(t.primary_fg)
+}
+
+/// The group a row names with `.group(HOVER)` to show its `hover_button`s.
+pub const HOVER: &str = "hover";
+
+/// Names a button in its tooltip and for screen readers.
+pub fn titled(b: Stateful<Div>, title: impl Into<SharedString>) -> Stateful<Div> {
+    let title = title.into();
+    b.role(Role::Button)
+        .aria_label(title.clone())
+        .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+}
+
+/// An 18px titled icon button, shown only while its `HOVER` group is hovered.
+pub fn hover_button(
+    id: impl Into<ElementId>,
+    icon: impl IntoElement,
+    title: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    titled(icon_button(id, icon, cx), title)
+        .h(px(18.))
+        .min_w(px(18.))
+        .px(px(2.))
+        .invisible()
+        .group_hover(HOVER, |s| s.visible())
+}
+
+/// A 7px glowing dot, such as a repo's status.
+pub fn dot(color: Hsla) -> Div {
+    div()
+        .flex_none()
+        .size(px(7.))
+        .rounded_full()
+        .bg(color)
+        .shadow(vec![
+            BoxShadow::new(px(0.), px(0.), color).blur_radius(px(8.)),
+        ])
+}
+
+/// A small filled label, such as MERGING.
+pub fn badge(label: impl Into<SharedString>, color: Hsla, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .px(px(5.))
+        .rounded(radius::BADGE)
+        .bg(color)
+        .text_color(theme(cx).accent_fg)
+        .text_size(px(10.))
         .font_weight(FontWeight::BOLD)
         .child(label.into())
 }
