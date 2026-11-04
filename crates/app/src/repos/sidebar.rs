@@ -18,7 +18,8 @@ use gpui_kit::{
     relative, uniform_list,
 };
 
-use super::{add_folders, run_core, settings_call};
+use super::sync::{Kind, sync_one, sync_repos};
+use super::{State, add_folders, run_core, settings_call};
 use crate::store::{Store, Tool};
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::ui_state;
@@ -226,7 +227,22 @@ impl Sidebar {
                 return;
             }
             let (this, key) = (this.clone(), path.clone());
+            let idle = State::global(cx).read(cx).sync.is_none();
+            let s = Store::global(cx).read(cx);
+            let repos: Vec<_> = s
+                .repos
+                .iter()
+                .filter(|r| in_folder(&r.path, &path))
+                .map(|r| r.path.clone())
+                .collect();
+            let all = |kind| {
+                let repos = repos.clone();
+                move |_: &mut Window, cx: &mut App| sync_repos(kind, Some(repos.clone()), cx)
+            };
             Menu::default()
+                .item_if(idle, "Fetch All in Folder", all(Kind::Fetch))
+                .item_if(idle, "Pull All in Folder", all(Kind::Pull))
+                .separator()
                 .item(if open { "Collapse" } else { "Expand" }, move |_, cx| {
                     this.update(cx, |this, cx| this.toggle(key.clone(), cx))
                         .ok();
@@ -612,7 +628,14 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
             run_core(cx, move |core| api::open_in_zed(core, &r, "", None))
         }
     };
+    let one = |kind| {
+        let r = repo.to_string();
+        move |_: &mut Window, cx: &mut App| sync_one(kind, r.clone(), cx)
+    };
     Menu::default()
+        .item("Fetch", one(Kind::Fetch))
+        .item("Pull", one(Kind::Pull))
+        .separator()
         .item("Compare with Base Branch", compare)
         .separator()
         .item(format!("Open in {FILE_MANAGER}"), open_folder(repo))

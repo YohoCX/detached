@@ -702,7 +702,7 @@ All other actions are unbound by default.
 
 **Titles:** `chordFor(id)` provides the chord shown in titles (strip buttons, search pill, palette action rows).
 
-### 2.4 `src/lib/sync.ts`
+### 2.4 `src/lib/sync.ts` [ported]
 - **`pool(items, limit, fn)`** (:6-21): runs up to `limit` workers; results come back in input order; a rejection doesn't stop the others.
 - **`describe(result)`** (:25-33):
 

@@ -1,11 +1,14 @@
 mod common;
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::time::Duration;
 
 use common::*;
-use detached_app::ui_state;
+use detached_app::repos::{self, CheckoutTarget};
+use detached_app::store::{Level, Message};
+use detached_app::{actions, ui_state};
 use detached_core::api;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext};
@@ -224,4 +227,155 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
         Some(api),
         "right click selects"
     );
+}
+
+fn said(cx: &mut VisualTestContext) -> Option<Message> {
+    cx.store(|s, _| s.message.clone())
+}
+
+fn says(cx: &mut VisualTestContext, text: &str, error: bool) {
+    let want = Some(Message {
+        text: text.into(),
+        error,
+    });
+    wait_until(cx, |cx| said(cx) == want);
+}
+
+fn outcome(cx: &mut VisualTestContext, repo: &str) -> Option<String> {
+    cx.store(|s, _| s.outcomes.get(repo).map(|o| o.text.clone()))
+}
+
+#[gpui_kit::test]
+fn fetch_all_and_pull_all_report_per_repo_and_the_diverged_repo_is_left_as_it_was(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let [app, api, web, lib] =
+        ["app", "group/api", "group/web", "lib"].map(|n| path(cx.sb.repo(n)));
+    let solo = path(cx.sb.solo());
+    let rev =
+        |cx: &TestApp, repo: &str, rev: &str| cx.sb.git(&cx.sb.repo(repo), &["rev-parse", rev]);
+    let web_head = rev(cx, "group/web", "HEAD");
+
+    cx.click("sync.fetch");
+    says(cx, "Fetched 6 of 6 repositories", false);
+    for repo in [&app, &api, &web, &solo] {
+        assert!(row(cx, repo).status.ends_with(" Fetched"), "{repo}");
+    }
+
+    cx.click("sync.pull");
+    says(cx, "Pulled 5 of 6 repositories", true);
+    let ff = outcome(cx, &api).unwrap();
+    let (from, to) = ff
+        .strip_prefix("Fast-forwarded ")
+        .and_then(|s| s.split_once(".."))
+        .unwrap_or_else(|| panic!("{ff}"));
+    for sha in [from, to] {
+        assert!(
+            sha.len() == 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "{ff}"
+        );
+    }
+    let diverged = "Diverged (↑1 ↓1), not updated";
+    assert_eq!(outcome(cx, &web).as_deref(), Some(diverged));
+    assert_eq!(outcome(cx, &app).as_deref(), Some("Up to date"));
+    assert_eq!(outcome(cx, &lib).as_deref(), Some("No upstream"));
+    let notices = cx.store(|s, _| s.notices.clone());
+    let warned = notices.iter().filter(|n| n.level == Level::Warn);
+    let titles: Vec<_> = warned.map(|n| n.title.as_str()).collect();
+    assert_eq!(titles, ["Pull all: 1 not updated"]);
+    wait_until(cx, |cx| row(cx, &api).status == format!("main {ff}"));
+
+    cx.executor().advance_clock(Duration::from_secs(6));
+    settle(cx);
+    assert_eq!(outcome(cx, &api), None, "a success fades");
+    assert_eq!(outcome(cx, &web).as_deref(), Some(diverged));
+    assert_eq!(
+        rev(cx, "group/api", "HEAD"),
+        rev(cx, "group/api", "origin/main")
+    );
+    assert_eq!(rev(cx, "group/web", "HEAD"), web_head);
+}
+
+#[gpui_kit::test]
+fn checkout_over_conflicting_local_changes_keeps_the_stash_and_names_it(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = path(cx.sb.repo("app"));
+    let other = CheckoutTarget::Local {
+        name: "other".into(),
+    };
+    let task = cx.update(|_, cx| repos::checkout(cx, &app, other));
+    cx.foreground_executor().block_test(task);
+    let n = cx.store(|s, _| s.notices.last().cloned()).unwrap();
+    let title = "Checked out other, your changes did not apply cleanly";
+    assert_eq!((n.level, n.title.as_str()), (Level::Error, title));
+    let body = n.body.as_deref().unwrap();
+    assert!(
+        body.contains("Stash kept: detached: main -> other"),
+        "{body}"
+    );
+    assert_eq!(n.repo.as_deref(), Some(app.as_str()));
+    assert_eq!(n.files, ["README.md"]);
+    assert!(cx.find(("notice", n.id as usize)).unwrap().visible());
+    assert_eq!(
+        said(cx),
+        Some(Message {
+            text: title.into(),
+            error: true
+        })
+    );
+    let branch = cx.store(|s, _| s.status(&app).and_then(|st| st.branch.clone()));
+    assert_eq!(
+        branch.as_deref(),
+        Some("other"),
+        "refreshed when the task ends"
+    );
+    let stashes = cx.sb.git(&cx.sb.repo("app"), &["stash", "list"]);
+    assert!(stashes.contains("detached: main -> other"), "{stashes}");
+}
+
+#[gpui_kit::test]
+fn fetch_update_and_prune_run_on_the_current_repo_and_say_how_it_went(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = path(cx.sb.repo("app"));
+    let id = row(cx, &app).id;
+    cx.click(id);
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fetch")));
+    says(cx, "app: Fetched", false);
+    cx.press("secondary-t");
+    says(cx, "app: Up to date", false);
+    assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.prune")));
+    says(cx, "app: pruned stale remote branches", false);
+}
+
+#[gpui_kit::test]
+fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut TestAppContext) {
+    // Takes connections and never answers, so a fetch from it runs until cancelled.
+    let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/r.git", silent.local_addr().unwrap());
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "a");
+        let hang = repo(sb, "hang");
+        sb.git(&hang, &["remote", "add", "origin", &url]);
+        sb.git(&hang, &["config", "remote.origin.proxy", ""]);
+    });
+    let label = |cx: &mut VisualTestContext, id: &'static str| {
+        cx.find(id).unwrap().label().unwrap().to_string()
+    };
+    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    cx.click("sync.fetch");
+    wait_until(cx, |cx| label(cx, "sync.fetch") == "1/2");
+    assert_eq!(label(cx, "sync.pull"), "Pull All");
+    cx.click("sync.pull");
+    cx.click("sync.fetch");
+    let ops = cx.store(|s, _| s.ops.iter().map(|o| o.id).collect::<Vec<_>>());
+    assert_eq!(ops.len(), 1, "both buttons are disabled");
+    assert_eq!(label(cx, "sync.fetch"), "1/2");
+
+    cx.store(|s, _| s.cancel_op(ops[0]));
+    says(cx, "Fetched 1 of 2 repositories", true);
+    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    let n = cx.store(|s, _| s.notices.last().cloned()).unwrap();
+    let text = (n.title.as_str(), n.body.as_deref());
+    assert_eq!(text, ("Fetch all: 1 not updated", Some("hang: cancelled")));
 }

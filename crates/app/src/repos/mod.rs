@@ -2,18 +2,99 @@
 
 mod api;
 mod sidebar;
+mod sync;
+
+use std::collections::HashMap;
 
 use detached_core::api as core;
 use detached_core::error::Result;
 use detached_core::state::AppState;
 use detached_core::types::RepoInfo;
-use gpui_kit::{App, AsyncApp, PathPromptOptions, Task};
+use gpui_kit::{App, AppContext, AsyncApp, Entity, Global, PathPromptOptions, Task};
 
 pub use api::*;
 pub use sidebar::sidebar;
+pub use sync::{Bulk, Kind, sync_buttons};
 
+use crate::actions::{self, Registration};
 use crate::blocking;
 use crate::store::Store;
+
+/// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches.
+pub struct State {
+    pub sync: Option<Bulk>,
+    /// Bumped each time a repo's outcome is shown, so a fade clears only the outcome it was set for.
+    shown: HashMap<String, u64>,
+    /// Per repo, newest first; in memory only.
+    pub recent: HashMap<String, Vec<String>>,
+    _actions: Vec<Registration>,
+}
+
+struct GlobalState(Entity<State>);
+
+impl Global for GlobalState {}
+
+impl State {
+    /// Made on first use, by the shell's slot constructors at the latest; it registers the actions.
+    pub fn global(cx: &mut App) -> Entity<State> {
+        if let Some(g) = cx.try_global::<GlobalState>() {
+            return g.0.clone();
+        }
+        let state = cx.new(|cx| State {
+            sync: None,
+            shown: HashMap::new(),
+            recent: HashMap::new(),
+            _actions: register_actions(cx),
+        });
+        cx.set_global(GlobalState(state.clone()));
+        state
+    }
+}
+
+fn register_actions(cx: &mut App) -> Vec<Registration> {
+    use actions::Group::Vcs;
+    use actions::register;
+    let current = |f: fn(String, &mut App)| {
+        move |_: &mut _, cx: &mut App| {
+            if let Some(repo) = Store::global(cx).read(cx).current() {
+                f(repo.to_string(), cx)
+            }
+        }
+    };
+    vec![
+        register(
+            cx,
+            "vcs.update",
+            "Update Project (Pull)",
+            Vcs,
+            current(|r, cx| sync::sync_one(Kind::Pull, r, cx)),
+        ),
+        register(
+            cx,
+            "vcs.fetch",
+            "Fetch",
+            Vcs,
+            current(|r, cx| sync::sync_one(Kind::Fetch, r, cx)),
+        ),
+        register(
+            cx,
+            "vcs.fetchAll",
+            "Fetch All Repositories",
+            Vcs,
+            |_, cx| sync::sync_repos(Kind::Fetch, None, cx),
+        ),
+        register(cx, "vcs.pullAll", "Pull All Repositories", Vcs, |_, cx| {
+            sync::sync_repos(Kind::Pull, None, cx)
+        }),
+        register(
+            cx,
+            "vcs.prune",
+            "Prune Remote Branches",
+            Vcs,
+            current(sync::prune),
+        ),
+    ]
+}
 
 /// Runs a settings command, then reloads the repos it returns; its error is said in red.
 pub(crate) fn settings_call(

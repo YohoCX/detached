@@ -37,7 +37,7 @@ fn top_bar(slot: TopBar, _: &mut Window, cx: &mut App) -> Vec<AnyView> {
         TopBar::Center => vec![],
         TopBar::Right => vec![
             stub("Search everywhere", cx),
-            stub("Fetch All · Pull All", cx),
+            crate::repos::sync_buttons(cx),
         ],
     }
 }
