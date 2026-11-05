@@ -91,8 +91,7 @@ fn get(url: &str, cancel: &Cancel) -> Result<Vec<u8>> {
         .get(url)
         .call()
         .map_err(|e| fail(&e))?;
-    // ureq stops reading a body at 10 MB unless told otherwise; a package is larger.
-    let mut body = response.body_mut().with_config().limit(u64::MAX).reader();
+    let mut body = response.body_mut().as_reader();
     let (mut data, mut chunk) = (vec![], vec![0; 1 << 16]);
     while !cancel.load(Ordering::Relaxed) {
         match body.read(&mut chunk).map_err(|e| fail(&e))? {
@@ -299,7 +298,11 @@ fn install(cx: &mut App) {
     u.installing = Some(cancel.clone());
     let (install, release, c) = (u.install.clone(), u.release.clone(), cancel.clone());
     let job = blocking::run(cx, move || {
-        install.apply(&download(&release, PUBLIC_KEY, &c)?)
+        let data = download(&release, PUBLIC_KEY, &c)?;
+        if c.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        install.apply(&data)
     });
     cx.spawn(async move |cx| {
         let done = job.await;
