@@ -121,7 +121,7 @@ const NAMES: &[(&str, &str)] = &[
     ("gemfile", "ruby"),
 ];
 
-/// By extension; `.svelte`, `.vue` and `.astro` as HTML, as the Tauri client did.
+/// By extension; `.svelte`, `.vue` and `.astro` as HTML.
 const EXTENSIONS: &[(&str, &[&str])] = &[
     ("bash", &[".sh", ".bash"]),
     ("c", &[".c", ".h"]),

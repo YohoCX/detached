@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
-/// `DETACHED_CONFIG_DIR`, else `dev.wdevs.detached` in the OS config dir, where Tauri puts it.
+/// `DETACHED_CONFIG_DIR`, else `dev.wdevs.detached` in the OS config dir.
 pub fn config_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("DETACHED_CONFIG_DIR") {
         return Ok(dir.into());

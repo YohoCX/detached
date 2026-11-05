@@ -11,7 +11,7 @@ use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
 
-/// e2e's layout with `app` current; returns its path.
+/// The sandbox layout with `app` current; returns its path.
 fn open(cx: &mut TestAppContext) -> (TestApp, String) {
     let mut app = open_app_with(cx, layout);
     let repo = app.sb.repo("app").display().to_string();
@@ -358,7 +358,7 @@ fn the_search_pill_shows_its_chord_and_opens_search_everywhere(cx: &mut TestAppC
     assert_eq!(empty.label(), Some("Search files, branches and actions"));
 }
 
-/// e2e's layout with `solo` current; returns its path.
+/// The sandbox layout with `solo` current; returns its path.
 fn open_solo(cx: &mut TestAppContext) -> (TestApp, String) {
     let mut app = open_app_with(cx, layout);
     let repo = app.sb.solo().display().to_string();

@@ -1243,7 +1243,7 @@ fn compare_with_local_shows_the_working_tree_changes_since_the_commit(cx: &mut T
         head(cx).as_deref(),
         Some("2 files changed since, in the working tree")
     );
-    // Untracked notes.txt is not in `git diff <sha>`, as in the Tauri client.
+    // Untracked notes.txt is not in `git diff <sha>`.
     let want = [
         file("M", "README.md", "README.md"),
         file("R", "src/new.ts", "src/old.ts → src/new.ts"),

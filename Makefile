@@ -1,4 +1,4 @@
-.PHONY: check app ui-test smoke e2e e2e-app fmt dev build build-tauri sign-setup release
+.PHONY: check app ui-test smoke e2e-app fmt build sign-setup release
 
 check:
 	cargo fmt --all --check
@@ -6,11 +6,8 @@ check:
 # Core alone with e2e and testutil on, so no other crate is built with them.
 	cargo clippy -p detached-core --all-targets --all-features -- -D warnings
 	cargo test --workspace
-	bun run check
-	bun run test
 
-# The native client on its own copy of the config directory, made from the real one on first run,
-# so the Tauri client's files stay its own.
+# The native client on its own copy of the config directory, made from the real one on first run.
 app:
 	@case "$$(uname -s)" in \
 	  Darwin) base="$$HOME/Library/Application Support" ;; \
@@ -28,23 +25,12 @@ ui-test:
 smoke:
 	DETACHED_CONFIG_DIR="$$(mktemp -d)" cargo run -p detached-app -- --smoke
 
-# The real UI in WebKit against the real commands over the e2e bridge, on temp repos.
-e2e:
-	bunx playwright install webkit
-	bun run e2e
-
 fmt:
 	cargo fmt --all
-
-dev:
-	bun tauri dev
 
 # The native packages for this OS in target/package: Detached.app and its zip, NSIS, or deb and AppImage.
 build:
 	./scripts/package.sh
-
-build-tauri:
-	bun tauri build
 
 # One-time: a stable local code-signing identity, so Keychain access survives rebuilds.
 sign-setup:

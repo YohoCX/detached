@@ -614,7 +614,7 @@ fn md_preview(cx: &mut VisualTestContext) -> Option<bool> {
     cx.update(|_, cx| ui_state::get::<bool>("viewer.mdPreview", cx))
 }
 
-/// e2e's guide, longer than the piece the preview shows in one frame.
+/// A guide longer than the piece the preview shows in one frame.
 fn guide() -> String {
     let filler = "A filler paragraph, long enough to make this guide several pieces long.\n\n";
     let filler = filler.repeat(80);

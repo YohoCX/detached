@@ -1005,7 +1005,7 @@ async fn resolve(
             let rev = |r: &String| Side::Rev { rev: r.clone() };
             let commits = api::range_log(&core, &repo, &base, &head)?;
             let mut files = api::list_changes(&core, &repo, &rev(&base), &rev(&head))?;
-            // Case-insensitive, as the Tauri client's localeCompare.
+            // Case-insensitive, then by bytes for a stable order.
             files.sort_by_cached_key(|f| (f.path.to_lowercase(), f.path.clone()));
             let moved = head != m.head_sha;
             let ready = Ready {
@@ -1116,7 +1116,7 @@ mod tests {
 
     #[test]
     fn github_takes_line_comments_inside_the_pr_hunks_only() {
-        // The e2e fixture: README line 3 changed, src/old.ts renamed to src/new.ts with line 10 changed.
+        // The forge fixture: README line 3 changed, src/old.ts renamed to src/new.ts with line 10 changed.
         let sb = Sandbox::new();
         let repo = sb.path("app");
         fs::create_dir_all(repo.join("src")).unwrap();

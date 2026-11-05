@@ -1,4 +1,4 @@
-//! One function per command of the Tauri client (`src/lib/api.ts`), for every client.
+//! The backend's entry points for the client, one function per command.
 //! `repo` is a repo's path, its id everywhere; `op_id` and `query_id` are what `cancel` takes.
 
 use std::collections::BTreeMap;
@@ -156,17 +156,6 @@ pub fn list_changes(s: &AppState, repo: &str, from: &Side, to: &Side) -> Result<
 
 pub fn compare_base(s: &AppState, repo: &str, base: Option<&str>) -> Result<CompareBase> {
     diff::compare_base(&s.env(), Path::new(repo), base)
-}
-
-pub fn file_diff(
-    s: &AppState,
-    repo: &str,
-    path: &str,
-    orig_path: Option<&str>,
-    left: &Side,
-    right: &Side,
-) -> Result<FileDiff> {
-    diff::file_diff(s, Path::new(repo), path, orig_path, left, right)
 }
 
 pub fn file_patch(

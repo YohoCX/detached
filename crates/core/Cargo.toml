@@ -5,11 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# HTTP bridge for the Playwright suite in e2e/.
-[[bin]]
-name = "e2e-bridge"
-required-features = ["e2e"]
-
 [features]
 # Plain http to localhost counts as https, for the fake forges. Test builds only.
 e2e = []

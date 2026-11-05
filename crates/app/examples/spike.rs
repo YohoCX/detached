@@ -193,12 +193,16 @@ fn diff_view(patch: &str, line: usize, cx: &mut App) -> (Entity<DiffState>, Diff
     (state, DiffAnnotation::line("note", at))
 }
 
-/// The first 2,000 lines of the parity docs.
+/// 2,000 lines of the plans, repeated.
 fn markdown() -> String {
-    let docs = ["shell", "files", "history"]
-        .map(|d| std::fs::read_to_string(format!("{ROOT}/docs/native/{d}.md")).unwrap());
-    let lines: Vec<&str> = docs.iter().flat_map(|d| d.lines()).take(2000).collect();
-    lines.join("\n")
+    let docs = ["PLAN", "PLAN-M2", "PLAN-NATIVE"]
+        .map(|d| std::fs::read_to_string(format!("{ROOT}/{d}.md")).unwrap());
+    let all = docs.join("\n");
+    all.lines()
+        .cycle()
+        .take(2000)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A temp repo with a 5,000-line Rust file committed and edited in the worktree here and there;

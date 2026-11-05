@@ -1,14 +1,8 @@
-node_modules
-dist
 /target
-*.local
 *.log
 .DS_Store
 .vscode/
 .idea/
-
-test-results/
-playwright-report/
 
 .claude/worktrees/
 .revmux/tasks/

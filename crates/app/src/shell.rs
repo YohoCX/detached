@@ -90,7 +90,7 @@ pub fn window_options(cx: &App) -> WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("Detached".into()),
             appears_transparent: true,
-            // Tauri's (24, 35): tao keeps AppKit's 9 pt button inset, so the top edge lands at 26.
+            // Lands at (24, 35): AppKit adds its 9 pt button inset to the top edge.
             traffic_light_position: Some(point(px(24.), px(26.))),
         }),
         // The top bar moves the window itself, as the kit's title bar does.

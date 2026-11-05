@@ -52,7 +52,7 @@ pub fn forge(sb: &Sandbox, seed: Seed) -> Forge {
     forge
 }
 
-/// The paths of e2e/fixture.ts in the sandbox, filled by `layout` and `open_forge`.
+/// The sandbox's fixture paths, filled by `layout` and `open_forge`.
 pub trait Fixture {
     fn root(&self) -> PathBuf;
     /// Writes `files` below `repo`, stages everything and commits.
@@ -128,7 +128,7 @@ fn folders(sb: &Sandbox, folders: &[PathBuf]) {
     }
 }
 
-/// The repos of e2e's Fixture, with `ws/` and `solo` the workspace's folders: `ws/` holds app
+/// The fixture repos, with `ws/` and `solo` the workspace's folders: `ws/` holds app
 /// (with worktree app-wt), group/api (behind), group/web (diverged) and lib (on feature); `solo`
 /// is a repo added as its own folder. All clone the bare `origin.git`. A seed for `open_app_with`.
 pub fn layout(sb: &Sandbox) {
@@ -213,7 +213,7 @@ pub fn layout(sb: &Sandbox) {
     folders(sb, &[sb.ws(), solo]);
 }
 
-/// e2e's openForge: `forge/gitlab` and `forge/github`, each on `feature` tracking `origin`, which
+/// `forge/gitlab` and `forge/github`, each on `feature` tracking `origin`, which
 /// points at a fresh fake seeded from them, with an account on each of its mounts and `forge/` the
 /// only folder. MR 1 is `feature` (head) into `main` (base) and both commits are local, so nothing
 /// fetches from the fake. Keep the `Forge` bound: dropping it stops the fake.

@@ -1,4 +1,4 @@
-//! The stroke icons of src/components/Icon.svelte, drawn in the surrounding text color.
+//! Stroke icons, drawn in the surrounding text color.
 
 use std::time::Duration;
 
