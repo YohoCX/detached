@@ -28,7 +28,7 @@ use crate::store::Store;
 use crate::ui::{self, theme};
 
 /// The release key's public half: the second line of its `minisign.pub`.
-pub const PUBLIC_KEY: &str = "";
+pub const PUBLIC_KEY: &str = "RWQA2ncifHAARGR4m3nVLn/10nR/FZjkpUc8ObrB5Ca4FS9UyD/QIzeZ";
 const LATEST: &str = "https://github.com/YohoCX/detached/releases/latest/download";
 const RELEASES: &str = "https://github.com/YohoCX/detached/releases/latest";
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
