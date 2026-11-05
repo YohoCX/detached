@@ -10,18 +10,16 @@ Decided with the owner on 2026-11-04:
 - Mermaid renders in Rust; a block that fails shows its source.
 - Plan first, reviewed with revmux; the work runs as parallel verticals after a shared foundation.
 
-**Status (2026-11-05): steps 0 and 1 (V1–V5) done. Step 2 (V6): native packages, auto-update and the release workflow done; left are the release key, two native releases to check the update by hand, the Tauri removal and the real config directory for `make app`.**
+**Status (2026-11-05): steps 0–2 (F, V1–V6) done: the native client ships alone from 0.4.0 on the real config directory, the Tauri client and docs/native are removed. The update install is checked by hand from 0.4.0 to the next release (docs/TECHDEBT.md). Next: step 3, the terminal (V7).**
 
-The parity bar is the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
-does is surveyed in [docs/native/](docs/native/): [shell.md](docs/native/shell.md) (window, top bar,
-sidebar, workspaces, branches, palette, settings, keymap, design tokens),
-[files.md](docs/native/files.md) (viewer, diff, tree, Changes, find, markdown),
-[history.md](docs/native/history.md) (log, graph, MRs, pipelines, job logs, the fake forge),
-[core.md](docs/native/core.md) (the backend's Tauri boundary) and
-[gpui-kit.md](docs/native/gpui-kit.md) (what the kit can and cannot do). Every section has an owner
-in [Parity owners](#parity-owners); the owner ticks it off when its behavior is ported, ported
-differently (say how, in the commit), or dropped with the owner's OK. These files go when the Tauri
-client goes.
+The parity bar was the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
+did was surveyed in docs/native/: shell.md (window, top bar, sidebar, workspaces, branches, palette,
+settings, keymap, design tokens), files.md (viewer, diff, tree, Changes, find, markdown), history.md
+(log, graph, MRs, pipelines, job logs, the fake forge), core.md (the backend's Tauri boundary) and
+gpui-kit.md (what the kit can and cannot do). Every section had an owner in
+[Parity owners](#parity-owners), who ticked it off when its behavior was ported, ported differently
+(said how, in the commit), or dropped with the owner's OK. The survey went with the Tauri client in
+V6; the section references below (shell.md §5, ...) point into it in git history.
 
 ## Why
 
@@ -61,7 +59,7 @@ Not used: upstream `gpui` 0.2.2 from crates.io (a year old and type-incompatible
 Zed's `terminal`/`terminal_view` (they need Zed's workspace).
 
 Platform floors: macOS 15+ (the kit's stated minimum), Windows 10+, Linux with Vulkan or GL and
-xdg-desktop-portal. The Tauri client runs on older macOS; v0.3.0 stays downloadable for it.
+xdg-desktop-portal. v0.3.0, the last Tauri release, stays downloadable for older macOS.
 
 ## Layout
 
@@ -71,10 +69,9 @@ crates/core/               package detached-core: the backend from src-tauri/src
   src/paths.rs             config_dir(), DETACHED_CONFIG_DIR, the workbench rename
   src/api.rs               one function per command, taking op/query ids where today's commands do
   src/selftest.rs          --self-test <report>, unchanged (unix)
-  src/bin/e2e-bridge.rs    for the Tauri Playwright suite until V6 removes it
 crates/forge-fake/         package detached-forge-fake: e2e/forge.ts in Rust
 crates/app/                package detached-app, binary detached
-  icons/                   the app icons, also the Tauri bundle's until it goes
+  icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
   src/store.rs             app-wide state entity
   src/blocking.rs          runs core on worker threads, back on the UI thread with the result
@@ -95,13 +92,11 @@ crates/app/                package detached-app, binary detached
   src/forge/               V5: MR list and page, threads, merge widget, MR chip, pipelines, job log
   src/update.rs            V6
   tests/                   UI tests, one file per vertical, shared fixtures in tests/common
-src-tauri/, src/, e2e/     the Tauri client on top of crates/core until V6 removes it
 ```
 
-The Tauri package keeps its name `detached`, but its binary is `detached-tauri` (a local Tauri bundle
-has `Contents/MacOS/detached-tauri`): the native binary owns `target/*/detached` and the shipped
-`Detached.app/Contents/MacOS/detached`, which `install.sh` quits before replacing. Both clients take
-their version from the root `Cargo.toml`. Cargo's `target/` moves to the root.
+The binary `detached` is the shipped `Detached.app/Contents/MacOS/detached`, which `install.sh`
+quits before replacing. The version comes from the root `Cargo.toml`; Cargo's `target/` is at the
+root.
 
 ## Carried over unchanged
 
@@ -131,15 +126,11 @@ from `lib.rs` to `paths.rs` and `AppState::boot()`. During the move:
   `GIT_CONFIG_NOSYSTEM` without a shell wrapper; `testutil` becomes public behind a `testutil`
   feature for the UI tests;
 - the `e2e` feature (plain http to localhost counts as https) stays off by default and is never a
-  normal dependency of `crates/app`; only test builds turn it on. `e2e-bridge` compiles to an empty
-  `main` off Unix, so workspace clippy passes on Windows.
+  normal dependency of `crates/app`; only test builds turn it on.
 
-**Two clients, one machine.** While both exist, `paths::config_dir()` honors `DETACHED_CONFIG_DIR`.
-`make app` runs the native client with it set to a sibling `dev.wdevs.detached.native`, copied once
-from the real directory on first run, so the owner can use both clients without them writing the
-same files. Tokens stay shared (same Keychain service, same signing identity, same account ids):
-removing or re-saving an account in one client changes its token for the other too, which is
-accepted. The shipped native client (V6) uses the real directory.
+**Config directory.** `paths::config_dir()` honors `DETACHED_CONFIG_DIR`, which `make smoke` and CI
+set to a temp directory. While both clients existed, `make app` pointed it at a copy,
+`dev.wdevs.detached.native`; since V6 the native client, `make app` included, uses the real one.
 
 **Threads.** Core calls block, some for minutes (a fetch waits up to 120 s of silence, holding the
 repo lock). They never run on GPUI's executors: `blocking::run(cx, f)` sends `f` to a pool of std

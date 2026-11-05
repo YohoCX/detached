@@ -5,7 +5,7 @@ Override chords by action id in `keymap.json` in the app's config directory
 (`~/Library/Application Support/dev.wdevs.detached`, `%APPDATA%\dev.wdevs.detached`,
 `~/.config/dev.wdevs.detached`), e.g. `{"file.goto": "Cmd+Shift+N"}`; an override that does not
 parse unbinds the action. M3 rows keep their chords free until their actions exist. Owner is the
-[PLAN-NATIVE.md](../PLAN-NATIVE.md) vertical that registers the action's handler in the native client.
+[PLAN-NATIVE.md](../PLAN-NATIVE.md) vertical that registers the action's handler.
 
 | Action id | Action | Keys | Milestone | Owner |
 | --- | --- | --- | --- | --- |
@@ -39,8 +39,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `pipeline.run` | Run a pipeline for a branch | | M2 | V5 |
 | `markdown.preview` | Toggle the preview of an open markdown file | | M2 | V2 |
 
-In the Tauri client, bound chords are caught in the capture phase, so they win over Monaco and text
-inputs. In the native client they are bound in the window's context, so a focused text field or
-editor keeps its own binding of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable
-multi-line field, and on macOS Cmd+Shift+F (replace) in an editor. The viewer's read-only editor is
-the exception: there the app's chords win, while Cmd+F (its search) and Cmd+C stay its own.
+Chords are bound in the window's context, so a focused text field or editor keeps its own binding
+of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable multi-line field, and on macOS
+Cmd+Shift+F (replace) in an editor. The viewer's read-only editor is the exception: there the app's
+chords win, while Cmd+F (its search) and Cmd+C stay its own.

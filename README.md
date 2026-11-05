@@ -1,6 +1,7 @@
 # Detached
 
-A read-only, multi-repo git client for macOS with the JetBrains git features and keymap: one
+A read-only, multi-repo git client for macOS, Windows and Linux with the JetBrains git features
+and keymap, native (GPU-drawn, no web view): one
 sidebar for every repo under your folders with fetch and pull all, branches and smart checkout,
 diffs, file browsing and find in files at any ref, the git log, and merge requests and pipelines
 for GitLab and GitHub (including self-hosted GitLab and GitHub Enterprise). It does not commit,
@@ -14,7 +15,7 @@ project tree nests related files under their main file (`a.spec.ts` under `a.ts`
 
 ## Install
 
-macOS 15 or later:
+macOS 15 or later (a universal app for Apple silicon and Intel):
 
 ```sh
 curl -fsSL https://github.com/YohoCX/detached/releases/latest/download/install.sh | sh
@@ -30,9 +31,10 @@ curl -fsSL https://github.com/YohoCX/detached/releases/download/v0.3.0/install.s
   DETACHED_URL=https://github.com/YohoCX/detached/releases/download/v0.3.0/Detached-macos.zip sh
 ```
 
-Windows 10+ and Linux packages are on the [releases page](https://github.com/YohoCX/detached/releases/latest):
-`Detached-windows-x64-setup.exe` (unsigned, so SmartScreen asks once), `Detached-linux-x86_64.AppImage`
-and `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
+Windows 10+ and Linux (x86-64, with a Vulkan or GL driver) packages are on the
+[releases page](https://github.com/YohoCX/detached/releases/latest): `Detached-windows-x64-setup.exe`
+(unsigned, so SmartScreen asks once), `Detached-linux-x86_64.AppImage` and
+`Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
 Credential Manager or the Secret Service (GNOME Keyring, KWallet).
 
 The app looks for a new release at launch and daily and offers it in the status bar; a click
@@ -45,20 +47,21 @@ new `.deb`.
 
 ## Development
 
-Needs Rust 1.90+, Bun 1.3+, Node 24 (Playwright runs on it) and the Xcode command line tools.
+Needs Rust 1.90+ and git; on macOS the Xcode command line tools, on Linux the packages
+`.github/workflows/check.yml` installs.
 
 ```sh
-bun install
-make app         # the native client, on its own copy of the config directory
-make dev         # the Tauri client
-make check       # fmt, clippy, cargo test, svelte-check, bun test
-make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
+make app         # the app at release speed, on your real config directory
+make check       # fmt, clippy, cargo test (core, unit and headless UI tests)
+make ui-test     # the UI tests only
+make smoke       # boots, draws one frame and exits, on a throwaway config directory
 make sign-setup  # once: the "Detached Dev" signing identity that make build uses
-make build       # the native client's packages for this OS under target/package
-make build-tauri # the Tauri bundles under target/release/bundle
+make build       # the packages for this OS under target/package
 make e2e-app     # packages Detached.app, starts it like Finder does, checks PATH, node and hooks
 make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
+
+`DETACHED_CONFIG_DIR` points the app at another config directory; the tests use temp ones.
 
 `.github/workflows/release.yml` signs the macOS build with the same "Detached Dev" identity, or
 Keychain access breaks on update. Once, export it from Keychain Access (My Certificates, Detached
@@ -84,11 +87,10 @@ updates signed with the key it was built with.
 
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 
-The command contract between UI and backend is `src/lib/api.ts` and `crates/core/src/types.rs`;
-change both together. `make e2e` replaces only the Tauri IPC transport: `e2e/shim.ts` forwards
-`invoke` to `crates/core/src/bin/e2e-bridge.rs` (cargo feature `e2e`), which calls the same code.
-`e2e/forge.ts` fakes GitLab (`/gitlab`) and GitHub Enterprise (`/ghe`) for the MR and pipeline
-specs; `openForge()` in `e2e/fixture.ts` seeds it. `E2E_PORT` (default 1520) moves its three ports.
+`crates/core` is the backend (git, forges, accounts, search, settings), `crates/app` the GPUI
+client and `crates/forge-fake` a local GitLab and GitHub Enterprise for the UI tests in
+`crates/app/tests`, which drive real views headless against temp repos.
 
 Design and history: [PLAN.md](PLAN.md) (milestone 1), [PLAN-M2.md](PLAN-M2.md) (milestone 2),
-[docs/BACKLOG.md](docs/BACKLOG.md), [docs/TECHDEBT.md](docs/TECHDEBT.md).
+[PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [docs/BACKLOG.md](docs/BACKLOG.md),
+[docs/TECHDEBT.md](docs/TECHDEBT.md).
