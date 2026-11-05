@@ -1,4 +1,4 @@
-//! The status message and the running ops, inside the top bar.
+//! The status message, the running ops and an offered update, inside the top bar.
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
@@ -10,6 +10,7 @@ use gpui_kit::{
 
 use crate::store::Store;
 use crate::ui::{self, Icon, text, theme};
+use crate::update::{self, Update};
 
 pub struct StatusBar {
     _store: Subscription,
@@ -17,6 +18,7 @@ pub struct StatusBar {
 
 impl StatusBar {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        cx.observe_global::<Update>(|_, cx| cx.notify()).detach();
         StatusBar {
             _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
         }
@@ -90,5 +92,6 @@ impl Render for StatusBar {
             .children(message)
             .child(div().flex_1())
             .children(ops)
+            .children(update::item(cx))
     }
 }
