@@ -1478,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "detached-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "detached-core",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "detached-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "dirs 7.0.0",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "detached-forge-fake"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "form_urlencoded",
  "percent-encoding",
