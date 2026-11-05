@@ -1,15 +1,20 @@
-//! Auto-update: `latest.json` in the latest GitHub release names a minisign-signed package per
-//! platform; the status bar offers a newer release, and a click downloads, verifies and installs it.
+//! Auto-update: `latest.json` in the latest GitHub release names a package per platform, and
+//! minisign signs both; the status bar offers a newer release, and a click downloads, verifies and
+//! installs it.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{env, fs, process};
 
 use detached_core::error::{Error, Result};
+use detached_core::state::Cancel;
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, FontWeight, Global, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
     prelude::FluentBuilder, px,
@@ -36,15 +41,20 @@ pub struct Release {
     pub signature: String,
 }
 
-/// The release `{base}/latest.json` has for this platform, when it is newer than `current`.
-pub fn check(base: &str, current: &str) -> Result<Option<Release>> {
+/// The release `{base}/latest.json` has for this platform, when it is newer than `current` and the
+/// file's signature by `key` holds.
+pub fn check(base: &str, current: &str, key: &str) -> Result<Option<Release>> {
+    let get = |file| get(&format!("{base}/{file}"), &Cancel::default());
+    let json = get("latest.json")?;
+    let signature = get("latest.json.minisig")?;
+    verify(&json, &String::from_utf8_lossy(&signature), key)?;
     let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-    release(&get(&format!("{base}/latest.json"))?, &platform, current)
+    release(&json, &platform, current)
 }
 
 /// The release's package, once its signature by `key` holds.
-pub fn download(release: &Release, key: &str) -> Result<Vec<u8>> {
-    let package = get(&release.url)?;
+pub fn download(release: &Release, key: &str, cancel: &Cancel) -> Result<Vec<u8>> {
+    let package = get(&release.url, cancel)?;
     verify(&package, &release.signature, key)?;
     Ok(package)
 }
@@ -72,23 +82,32 @@ fn release(json: &[u8], platform: &str, current: &str) -> Result<Option<Release>
         }))
 }
 
-fn get(url: &str) -> Result<Vec<u8>> {
-    let fail = |e: ureq::Error| Error::Other(format!("{url}: {e}"));
-    let config = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(600)));
+fn get(url: &str, cancel: &Cancel) -> Result<Vec<u8>> {
+    let fail = |e: &dyn std::fmt::Display| Error::Other(format!("{url}: {e}"));
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(600)))
+        .timeout_per_read(Some(Duration::from_secs(30)));
     let mut response = ureq::Agent::new_with_config(config.build())
         .get(url)
         .call()
-        .map_err(fail)?;
+        .map_err(|e| fail(&e))?;
     // ureq stops reading a body at 10 MB unless told otherwise; a package is larger.
-    let body = response.body_mut().with_config().limit(u64::MAX);
-    body.read_to_vec().map_err(fail)
+    let mut body = response.body_mut().with_config().limit(u64::MAX).reader();
+    let (mut data, mut chunk) = (vec![], vec![0; 1 << 16]);
+    while !cancel.load(Ordering::Relaxed) {
+        match body.read(&mut chunk).map_err(|e| fail(&e))? {
+            0 => return Ok(data),
+            n => data.extend_from_slice(&chunk[..n]),
+        }
+    }
+    Err(Error::Cancelled)
 }
 
-fn verify(package: &[u8], signature: &str, key: &str) -> Result<()> {
+fn verify(data: &[u8], signature: &str, key: &str) -> Result<()> {
     let fail = |e: minisign_verify::Error| Error::Other(format!("signature: {e}"));
     let key = PublicKey::from_base64(key).map_err(fail)?;
     let signature = Signature::decode(signature).map_err(fail)?;
-    key.verify(package, &signature, false).map_err(fail)
+    key.verify(data, &signature, false).map_err(fail)
 }
 
 /// How this copy was installed, which decides how it updates.
@@ -210,7 +229,8 @@ fn run(cmd: &mut Command) -> Result<()> {
 pub struct Update {
     pub install: Install,
     pub release: Release,
-    pub installing: bool,
+    /// The running install's cancel flag.
+    pub installing: Option<Cancel>,
 }
 
 impl Global for Update {}
@@ -222,14 +242,15 @@ pub fn init(cx: &mut App) {
     };
     cx.spawn(async move |cx| {
         loop {
-            let found =
-                cx.update(|cx| blocking::run(cx, || check(LATEST, env!("CARGO_PKG_VERSION"))));
+            let found = cx.update(|cx| {
+                blocking::run(cx, || check(LATEST, env!("CARGO_PKG_VERSION"), PUBLIC_KEY))
+            });
             // Failures stay silent: offline, rate limited, or a release without latest.json.
             if let Ok(Some(release)) = found.await {
                 let update = Update {
                     install,
                     release,
-                    installing: false,
+                    installing: None,
                 };
                 return cx.update(|cx| cx.set_global(update));
             }
@@ -239,7 +260,8 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-/// The status bar's item for an offered update, with a spinner while it installs.
+/// The status bar's item for an offered update, with a spinner while it installs; a click then
+/// cancels.
 pub fn item(cx: &App) -> Option<impl IntoElement + use<>> {
     let u = cx.try_global::<Update>()?;
     let t = theme(cx);
@@ -255,29 +277,37 @@ pub fn item(cx: &App) -> Option<impl IntoElement + use<>> {
             .aria_label(label.clone())
             .text_color(t.accent)
             .font_weight(FontWeight::SEMIBOLD)
-            .when(u.installing, |d| d.child(ui::spinner(t.accent)))
+            .when(u.installing.is_some(), |d| {
+                d.child(ui::spinner(t.accent))
+                    .tooltip(|window, cx| Tooltip::new("Cancel").build(window, cx))
+            })
             .child(label)
             .on_click(|_, _, cx| install(cx)),
     )
 }
 
 fn install(cx: &mut App) {
-    let u = cx.global::<Update>();
-    if u.installing {
-        return;
+    let u = cx.global_mut::<Update>();
+    // Reset at once: a stalled download sees the flag only at its next read.
+    if let Some(cancel) = u.installing.take() {
+        return cancel.store(true, Ordering::Relaxed);
     }
     if u.install == Install::Deb {
         return cx.open_url(RELEASES);
     }
-    let (install, release) = (u.install.clone(), u.release.clone());
-    cx.global_mut::<Update>().installing = true;
-    let job = blocking::run(cx, move || install.apply(&download(&release, PUBLIC_KEY)?));
+    let cancel = Cancel::default();
+    u.installing = Some(cancel.clone());
+    let (install, release, c) = (u.install.clone(), u.release.clone(), cancel.clone());
+    let job = blocking::run(cx, move || {
+        install.apply(&download(&release, PUBLIC_KEY, &c)?)
+    });
     cx.spawn(async move |cx| {
         let done = job.await;
         cx.update(|cx| match done {
             Ok(()) => cx.quit(),
+            Err(_) if cancel.load(Ordering::Relaxed) => {}
             Err(e) => {
-                cx.global_mut::<Update>().installing = false;
+                cx.global_mut::<Update>().installing = None;
                 let text = format!("Update failed: {e}");
                 Store::global(cx).update(cx, |s, cx| s.say(text, true, cx));
             }
@@ -294,39 +324,13 @@ mod tests {
 
     use super::*;
 
-    const LATEST_JSON: &str = r#"{"version": "0.4.0", "platforms": {
-        "macos-aarch64": {"url": "https://x/Detached-macos.zip", "signature": "mac"},
-        "macos-x86_64": {"url": "https://x/Detached-macos.zip", "signature": "mac"},
-        "windows-x86_64": {"url": "https://x/Detached-windows-x64-setup.exe", "signature": "win"},
-        "linux-x86_64": {"url": "https://x/Detached-linux-x86_64.AppImage", "signature": "linux"}
-    }}"#;
-
-    #[test]
-    fn latest_json_names_each_platforms_package() {
-        let packages = [
-            ("macos-aarch64", "Detached-macos.zip", "mac"),
-            ("macos-x86_64", "Detached-macos.zip", "mac"),
-            ("windows-x86_64", "Detached-windows-x64-setup.exe", "win"),
-            ("linux-x86_64", "Detached-linux-x86_64.AppImage", "linux"),
-        ];
-        let json = LATEST_JSON.as_bytes();
-        for (platform, file, signature) in packages {
-            let want = Release {
-                version: Version::new(0, 4, 0),
-                url: format!("https://x/{file}"),
-                signature: signature.into(),
-            };
-            assert_eq!(release(json, platform, "0.3.0").unwrap(), Some(want));
-        }
-        assert_eq!(release(json, "linux-aarch64", "0.3.0").unwrap(), None);
-        assert!(release(&json[..40], "linux-x86_64", "0.3.0").is_err());
-    }
-
     #[test]
     fn only_a_newer_version_is_offered() {
         let newer = |version: &str, current| {
-            let json = LATEST_JSON.replace("0.4.0", version);
-            release(json.as_bytes(), "linux-x86_64", current).map(|r| r.is_some())
+            let package = serde_json::json!({"url": "u", "signature": "s"});
+            let json =
+                serde_json::json!({"version": version, "platforms": {"linux-x86_64": package}});
+            release(json.to_string().as_bytes(), "linux-x86_64", current).map(|r| r.is_some())
         };
         assert!(newer("0.10.0", "0.9.0").unwrap());
         assert!(!newer("0.3.0", "0.3.0").unwrap());
@@ -356,15 +360,26 @@ mod tests {
         assert!(verify(b"package", &signature, PUBLIC_KEY).is_err());
     }
 
-    /// Serves `latest.json`, offering `version` for this platform as `/package`, on localhost.
-    fn serve(version: &str, package: Vec<u8>, signature: &str) -> String {
+    /// Serves `latest.json` signed by `sign`, offering `version` for this platform as `/package`
+    /// with `signature`, on localhost.
+    fn serve(
+        sign: impl Fn(&[u8]) -> String,
+        version: &str,
+        package: Vec<u8>,
+        signature: &str,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let entry = serde_json::json!({"url": format!("{base}/package"), "signature": signature});
         let latest = serde_json::json!({"version": version, "platforms": {platform: entry}});
+        let latest = latest.to_string().into_bytes();
         let files = HashMap::from([
-            ("/latest.json".to_string(), latest.to_string().into_bytes()),
+            (
+                "/latest.json.minisig".to_string(),
+                sign(&latest).into_bytes(),
+            ),
+            ("/latest.json".to_string(), latest),
             ("/package".to_string(), package),
         ]);
         thread::spawn(move || {
@@ -395,60 +410,108 @@ mod tests {
     fn a_newer_release_is_offered_downloaded_and_verified() {
         let (key, sign) = keys();
         let package = b"the new app".to_vec();
-        let base = serve("9.9.9", package.clone(), &sign(&package));
-        let release = check(&base, "0.3.0").unwrap().expect("offered");
+        let base = serve(&sign, "9.9.9", package.clone(), &sign(&package));
+        let release = check(&base, "0.3.0", &key).unwrap().expect("offered");
         assert_eq!(release.version, Version::new(9, 9, 9));
-        assert_eq!(download(&release, &key).unwrap(), package);
+        assert_eq!(
+            download(&release, &key, &Cancel::default()).unwrap(),
+            package
+        );
     }
 
     #[test]
     fn the_running_version_is_not_offered() {
-        let base = serve("0.3.0", vec![], "");
-        assert_eq!(check(&base, "0.3.0").unwrap(), None);
+        let (key, sign) = keys();
+        let base = serve(sign, "0.3.0", vec![], "");
+        assert_eq!(check(&base, "0.3.0", &key).unwrap(), None);
     }
 
     #[test]
     fn a_missing_file_or_a_bad_signature_is_an_error() {
         let (key, sign) = keys();
-        let base = serve("9.9.9", b"tampered".to_vec(), &sign(b"signed"));
-        assert!(check(&format!("{base}/missing"), "0.3.0").is_err());
-        let release = check(&base, "0.3.0").unwrap().unwrap();
-        let err = download(&release, &key).unwrap_err().to_string();
-        assert!(err.starts_with("signature: "), "{err}");
+        let base = serve(&sign, "9.9.9", b"tampered".to_vec(), &sign(b"signed"));
+        assert!(check(&format!("{base}/missing"), "0.3.0", &key).is_err());
+        let release = check(&base, "0.3.0", &key).unwrap().unwrap();
+        let err = download(&release, &key, &Cancel::default()).unwrap_err();
+        assert!(err.to_string().starts_with("signature: "), "{err}");
         let missing = Release {
             url: format!("{base}/missing"),
             ..release
         };
-        assert!(download(&missing, &key).is_err());
+        assert!(download(&missing, &key, &Cancel::default()).is_err());
     }
 
-    /// release.yml's Sign step run with a throwaway key on dummy packages that hold their own names.
+    /// Its URL and signature would otherwise offer any signed package: an older release's, or
+    /// another platform's.
     #[test]
-    fn the_release_jobs_latest_json_verifies() {
-        let json = include_bytes!("../tests/fixtures/latest.json");
-        let key = "RWSUrxOBsW8Qz1tsiXZZmMfjLfKoJUKOiaZVjG1dzr3QgTgyRr/+j4ck";
-        let base = "https://github.com/YohoCX/detached/releases/download/v0.3.0";
+    fn a_latest_json_not_signed_by_the_key_is_not_offered() {
+        let (key, sign) = keys();
+        let package = b"an older app".to_vec();
+        let base = serve(keys().1, "9.9.9", package.clone(), &sign(&package));
+        let err = check(&base, "0.3.0", &key).unwrap_err();
+        assert!(err.to_string().starts_with("signature: "), "{err}");
+    }
+
+    #[test]
+    fn a_cancelled_download_stops() {
+        let (key, sign) = keys();
+        let base = serve(&sign, "9.9.9", b"package".to_vec(), &sign(b"package"));
+        let release = check(&base, "0.3.0", &key).unwrap().unwrap();
+        let cancel = Cancel::new(true.into());
+        assert!(matches!(
+            download(&release, &key, &cancel),
+            Err(Error::Cancelled)
+        ));
+    }
+
+    /// scripts/latest-json.sh, which the release job runs on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn the_release_jobs_latest_json_names_each_platforms_package() {
+        let (key, sign) = keys();
+        let dir = tempfile::tempdir().unwrap();
         let packages = [
             ("macos-aarch64", "Detached-macos.zip"),
             ("macos-x86_64", "Detached-macos.zip"),
             ("windows-x86_64", "Detached-windows-x64-setup.exe"),
             ("linux-x86_64", "Detached-linux-x86_64.AppImage"),
         ];
+        for (_, file) in packages {
+            fs::write(
+                dir.path().join(format!("{file}.minisig")),
+                sign(file.as_bytes()),
+            )
+            .unwrap();
+        }
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/latest-json.sh");
+        let out = Command::new("sh")
+            .args([script, "0.3.0", "https://x"])
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let json = &out.stdout;
         for (platform, file) in packages {
             let release = release(json, platform, "0.2.9").unwrap().unwrap();
-            assert_eq!(release.url, format!("{base}/{file}"));
-            verify(file.as_bytes(), &release.signature, key).unwrap();
-            assert!(verify(b"other", &release.signature, key).is_err());
+            assert_eq!(release.url, format!("https://x/{file}"));
+            verify(file.as_bytes(), &release.signature, &key).unwrap();
         }
+        assert_eq!(release(json, "linux-aarch64", "0.2.9").unwrap(), None);
+        assert!(release(&json[..40], "linux-x86_64", "0.2.9").is_err());
     }
 
     #[test]
     fn a_package_over_10_mb_downloads() {
         let (key, sign) = keys();
         let package = vec![7; 11 << 20];
-        let base = serve("9.9.9", package.clone(), &sign(&package));
-        let release = check(&base, "0.3.0").unwrap().unwrap();
-        assert_eq!(download(&release, &key).unwrap().len(), package.len());
+        let base = serve(&sign, "9.9.9", package.clone(), &sign(&package));
+        let release = check(&base, "0.3.0", &key).unwrap().unwrap();
+        let len = download(&release, &key, &Cancel::default()).unwrap().len();
+        assert_eq!(len, package.len());
     }
 
     #[test]

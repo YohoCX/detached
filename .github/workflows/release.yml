@@ -77,7 +77,7 @@ jobs:
           path: out
           merge-multiple: true
 
-      # The packages' minisign signatures and latest.json, which update.rs reads.
+      # latest.json, which update.rs reads, and minisign signatures of it and of the packages.
       - name: Sign
         env:
           SECRET: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -92,21 +92,11 @@ jobs:
 
           printf '%s\n' "$SECRET" > "$RUNNER_TEMP/release.key"
           minisign -S -s "$RUNNER_TEMP/release.key" -m out/*
+          scripts/latest-json.sh "$version" "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME" out > out/latest.json
+          minisign -S -s "$RUNNER_TEMP/release.key" -m out/latest.json
           rm "$RUNNER_TEMP/release.key"
           # A secret that does not match the key compiled in would make every update fail.
           for sig in out/*.minisig; do minisign -V -q -P "$key" -m "${sig%.minisig}"; done
-
-          url=https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME
-          jq -n --arg version "$version" --arg url "$url" \
-            --rawfile mac out/Detached-macos.zip.minisig \
-            --rawfile windows out/Detached-windows-x64-setup.exe.minisig \
-            --rawfile linux out/Detached-linux-x86_64.AppImage.minisig '
-            def package($file; $signature): {url: "\($url)/\($file)", $signature};
-            {$version, platforms: {
-              "macos-aarch64": package("Detached-macos.zip"; $mac),
-              "macos-x86_64": package("Detached-macos.zip"; $mac),
-              "windows-x86_64": package("Detached-windows-x64-setup.exe"; $windows),
-              "linux-x86_64": package("Detached-linux-x86_64.AppImage"; $linux)}}' > out/latest.json
 
       - name: Publish
         env:
