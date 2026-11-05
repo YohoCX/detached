@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| The AppImage replace test runs on Unix only (`#[cfg(unix)]`) | `crates/app` `update` tests | It checks the file mode 755, which Windows lacks; the replace runs on Linux only. The macOS bundle swap, the NSIS run and the relaunch have no automated test: they are checked by hand from the previous native release. |
 | The 100,000-commit log test fails on a loaded machine | `crates/core` `git::log` tests | It asserts the stream takes under 3 s of wall time; with four worktrees testing at once (load average 33) it took 4.0 s and failed `make check` once, then passed. Loose bound or a separate benchmark. |
 | `refresh_all` loses a call made while it lists the repos | `crates/app` `store::refresh_all` | `again` is cleared when the listing returns, so a repo added on disk just before the call is missed until the next refresh. Seen in V4's UI test, which now seeds its repo before boot; fix: clear `again` before `list_repos` starts. |
 | Tree and Changes order is not quite `localeCompare`'s | V2 `files::tree`, `files::changes` | Case is ignored and digit runs compare by value as in the Tauri client, but punctuation sorts by code point (ICU puts `_` before `-`, `.` and digits) and accents are not folded, so `a_b`/`a-b` or `é`/`e` names can swap places. |
