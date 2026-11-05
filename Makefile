@@ -7,16 +7,9 @@ check:
 	cargo clippy -p detached-core --all-targets --all-features -- -D warnings
 	cargo test --workspace
 
-# The native client on its own copy of the config directory, made from the real one on first run.
+# Release speed, on the real config directory.
 app:
-	@case "$$(uname -s)" in \
-	  Darwin) base="$$HOME/Library/Application Support" ;; \
-	  MINGW*|MSYS*|CYGWIN*) base="$$APPDATA" ;; \
-	  *) base="$${XDG_CONFIG_HOME:-$$HOME/.config}" ;; \
-	esac; \
-	dir="$$base/dev.wdevs.detached"; \
-	if [ ! -e "$$dir.native" ] && [ -d "$$dir" ]; then cp -R "$$dir" "$$dir.native"; fi; \
-	DETACHED_CONFIG_DIR="$$dir.native" cargo run -p detached-app --profile app
+	cargo run -p detached-app --profile app
 
 ui-test:
 	cargo test -p detached-app

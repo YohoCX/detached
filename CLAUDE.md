@@ -1,23 +1,20 @@
 # Detached
 
-Read-only multi-repo git client. Two clients share one backend while the native port runs:
+Read-only multi-repo git client, native on GPUI:
 - `crates/core`: the backend (git, forge, accounts, search, settings), blocking Rust, no UI types.
-- `crates/app`: the native client on GPUI (gpui-kit). The future; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
-- `src-tauri` + `src/`: the Tauri/Svelte client, kept working until PLAN-NATIVE step 2 removes it.
+- `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
+- `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
 
 ## Commands
 
 ```sh
 make check    # the merge gate: fmt, clippy -D warnings and cargo test over the whole workspace
-              # (core, ported unit tests, UI tests), plus svelte-check and bun test until V6
-make app      # the native client, against the dev.wdevs.detached.native config copy
-make ui-test  # the native UI tests only
-make smoke    # build and run `--smoke`
-make build    # the native packages for this OS under target/package (scripts/package.sh)
+              # (core, unit tests, UI tests)
+make app      # the client at release speed, on the real config directory (the owner's only)
+make ui-test  # the UI tests only
+make smoke    # build and run `--smoke` on a temp config directory
+make build    # the packages for this OS under target/package (scripts/package.sh)
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
-make e2e      # Playwright on the Tauri client (until removed)
-make dev      # the Tauri client
-make build-tauri  # the Tauri bundles (until removed)
 make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses
 make release  # tags v<version in Cargo.toml>; release.yml builds, signs and publishes it
 ```
@@ -40,7 +37,7 @@ Keep this list in sync with the Makefile.
 - `cargo fmt`, `clippy --all-targets -D warnings`, edition 2024.
 - Errors: `core::error::Result`; UI code shows them through notices or the status message, never
   `unwrap`/`expect` outside tests and true invariants.
-- Core stays blocking and UI-free: no gpui, no tauri, no async runtime in `crates/core`.
+- Core stays blocking and UI-free: no gpui, no async runtime in `crates/core`.
 - Never call core on the UI thread or on GPUI's executors: go through `blocking::run`/`stream`.
 - Long ops take an op id and honor cancel; streams are batched per frame on the UI side.
 - Platform code goes in `core::os` or behind `cfg` in the one place that needs it.
@@ -64,9 +61,9 @@ Keep this list in sync with the Makefile.
 - Core: unit tests next to the code, temp repos through `testutil::Sandbox`, no network except the
   local fakes.
 - Native UI: `crates/app/tests/<vertical>.rs` with the kit's headless harness, real git, the forge
-  fake. A behavior ported from the parity docs gets a test unless the doc marks it untested and a
-  test would be expensive; say which in the commit.
-- Logic ported from `src/lib/*.ts` brings its `*.test.ts` cases along as Rust unit tests.
+  fake. A new behavior gets a test unless it would be expensive; say so in the commit.
+- Tests and agents never touch the real config directory: `Sandbox` has a temp one and `make smoke`
+  sets a temp `DETACHED_CONFIG_DIR`; run the app yourself only that way, never through `make app`.
 - No sleeps for timing; wait on state with the fixtures' `settle`/`wait_until`.
 - Tests run on macOS, Windows and Linux CI. A test that can only work on Unix is `#[cfg(unix)]` and
   listed in docs/TECHDEBT.md.
@@ -80,11 +77,9 @@ Keep this list in sync with the Makefile.
   separate commit with a reason.
 - PLAN-NATIVE "Contracts": changing an existing signature takes a plan edit agreed with the owner;
   adding a missing piece is your own small commit on main (stub in the provider's `api.rs` or the
-  store, plus its line in the plan). "Parity owners" says which docs/native sections are yours.
-- Two clients share the machine: run the native one through `make app`, never against the real
-  config directory, until V6.
-- Before merge: rebase on main, `make check` green, parity sections ticked in docs/native, a revmux
-  round (claude-only profile, opus high) without blocking findings, the owner's check on macOS.
+  store, plus its line in the plan).
+- Before merge: rebase on main, `make check` green, a revmux round (claude-only profile, opus high)
+  without blocking findings, the owner's check on macOS.
 
 ## Docs
 
