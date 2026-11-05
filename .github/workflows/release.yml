@@ -17,12 +17,17 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # Also caches ~/.cargo/bin, so cargo-packager is installed once.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: bun install --frozen-lockfile
+
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev
 
       # Every release is signed with the same "Detached Dev" identity, or Keychain access breaks on update.
       - name: Import signing identity
@@ -44,35 +49,19 @@ jobs:
           security find-certificate -c "Detached Dev" -p "$kc" > "$RUNNER_TEMP/cert.pem"
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
 
-      - name: Build macOS
+      - run: scripts/package.sh
+
+      # package.sh falls back to an ad-hoc signature, which a release must not ship.
+      - name: Check signature
         if: runner.os == 'macOS'
         run: |
-          bun tauri build --bundles app --target universal-apple-darwin
-          app=target/universal-apple-darwin/release/bundle/macos/Detached.app
-          codesign --verify --deep --strict "$app"
-          codesign -dvv "$app" 2>&1 | grep -q 'Authority=Detached Dev'
-          mkdir out && ditto -c -k --keepParent "$app" out/Detached-macos.zip
-
-      - name: Build Windows
-        if: runner.os == 'Windows'
-        run: |
-          bun tauri build --bundles nsis
-          mkdir out && cp target/release/bundle/nsis/*-setup.exe out/Detached-windows-x64-setup.exe
-
-      - name: Build Linux
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf
-          bun tauri build --bundles appimage,deb
-          mkdir out
-          cp target/release/bundle/appimage/*.AppImage out/Detached-linux-x86_64.AppImage
-          cp target/release/bundle/deb/*.deb out/Detached-linux-amd64.deb
+          codesign --verify --deep --strict target/package/Detached.app
+          codesign -dvv target/package/Detached.app 2>&1 | grep 'Authority=Detached Dev'
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ runner.os }}
-          path: out/*
+          path: target/package/Detached-*
           if-no-files-found: error
 
   release:
@@ -87,9 +76,41 @@ jobs:
         with:
           path: out
           merge-multiple: true
-      - env:
-          GH_TOKEN: ${{ github.token }}
+
+      # The packages' minisign signatures and latest.json, which update.rs reads.
+      - name: Sign
+        env:
+          SECRET: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME, but Cargo.toml says $version."; exit 1; }
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Detached $version" --generate-notes out/* scripts/install.sh
+          key=$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";$/\1/p' crates/app/src/update.rs)
+          [ -n "$key" ] || { echo "::error::Set PUBLIC_KEY in crates/app/src/update.rs (see README)."; exit 1; }
+          [ -n "$SECRET" ] || { echo "::error::Set the UPDATE_SIGNING_KEY secret (see README)."; exit 1; }
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+          printf '%s\n' "$SECRET" > "$RUNNER_TEMP/release.key"
+          minisign -S -s "$RUNNER_TEMP/release.key" -m out/*
+          rm "$RUNNER_TEMP/release.key"
+          # A secret that does not match the key compiled in would make every update fail.
+          for sig in out/*.minisig; do minisign -V -q -P "$key" -m "${sig%.minisig}"; done
+
+          url=https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME
+          jq -n --arg version "$version" --arg url "$url" \
+            --rawfile mac out/Detached-macos.zip.minisig \
+            --rawfile windows out/Detached-windows-x64-setup.exe.minisig \
+            --rawfile linux out/Detached-linux-x86_64.AppImage.minisig '
+            def package($file; $signature): {url: "\($url)/\($file)", $signature};
+            {$version, platforms: {
+              "macos-aarch64": package("Detached-macos.zip"; $mac),
+              "macos-x86_64": package("Detached-macos.zip"; $mac),
+              "windows-x86_64": package("Detached-windows-x64-setup.exe"; $windows),
+              "linux-x86_64": package("Detached-linux-x86_64.AppImage"; $linux)}}' > out/latest.json
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Detached ${GITHUB_REF_NAME#v}" \
+            --generate-notes out/* scripts/install.sh

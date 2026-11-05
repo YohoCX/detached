@@ -10,7 +10,7 @@ Decided with the owner on 2026-11-04:
 - Mermaid renders in Rust; a block that fails shows its source.
 - Plan first, reviewed with revmux; the work runs as parallel verticals after a shared foundation.
 
-**Status (2026-11-04): step 0 (foundation) done and green on macOS; measured 48 MB idle, ~0.3 s to first frame. Next: step 1 (V1–V5) after the owner's hand check.**
+**Status (2026-11-05): steps 0 and 1 (V1–V5) done. Step 2 (V6): native packages, auto-update and the release workflow done; left are the release key, two native releases to check the update by hand, the Tauri removal and the real config directory for `make app`.**
 
 The parity bar is the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
 does is surveyed in [docs/native/](docs/native/): [shell.md](docs/native/shell.md) (window, top bar,
@@ -52,7 +52,7 @@ them; those are listed under Design.
 | Mermaid | `mermaid-rs-renderer` to SVG, drawn with `img()`; on error the source block |
 | Lists, tree | GPUI `uniform_list`/`list`, the kit's `Tree`; the commit graph on `canvas` |
 | Async | core stays blocking; a small pool of std threads runs it (see Threads) |
-| Packaging | `cargo-packager` 0.11.8 (`.app`, NSIS, deb, AppImage), configured in `crates/app/Cargo.toml` and run by `scripts/package.sh`, which signs the `.app` itself; its updater and signer are not used. Looked at in V6: `gpui-updater-release` (Sparkle, macOS-centric) and `cargo-bundle` (no NSIS or AppImage) |
+| Packaging | `cargo-packager` 0.11.8 (`.app`, NSIS, deb, AppImage), configured in `crates/app/Cargo.toml` and run by `scripts/package.sh`, which signs the `.app` itself; its updater and signer are not used. A `v*` tag has `release.yml` build them on the three OSes, sign each with minisign and publish them with `latest.json` and `install.sh`. Looked at in V6: `gpui-updater-release` (Sparkle, macOS-centric) and `cargo-bundle` (no NSIS or AppImage) |
 | Auto-update | ours, `src/update.rs`: `latest.json` in the latest GitHub release (`{version, platforms: {"<os>-<arch>": {url, signature}}}`), each package checked with `minisign-verify` against the key compiled in; checked at launch and daily when run from a package |
 | Terminal | step 3: a port of `zortax/gpui-terminal` (MIT/Apache-2.0, `alacritty_terminal`) onto gpui-pre |
 | Tests | `cargo test` for core and for ported logic; the kit's headless UI tests (`#[gpui_kit::test]`) against temp repos and a fake forge, on macOS, Windows and Linux runners |

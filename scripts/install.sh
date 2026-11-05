@@ -7,7 +7,11 @@ set -eu
 main() {
   url=${DETACHED_URL:-https://github.com/YohoCX/detached/releases/latest/download/Detached-macos.zip}
   dir=${DETACHED_DIR:-/Applications}
-  [ "$(uname -s)" = Darwin ] || { echo "Detached runs on macOS only." >&2; exit 1; }
+  [ "$(uname -s)" = Darwin ] || { echo "This script installs the macOS app only." >&2; exit 1; }
+  if [ -z "${DETACHED_URL:-}" ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 15 ]; then
+    echo "Detached needs macOS 15; older Macs can install v0.3.0 (see the README)." >&2
+    exit 1
+  fi
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 

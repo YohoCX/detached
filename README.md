@@ -14,18 +14,30 @@ project tree nests related files under their main file (`a.spec.ts` under `a.ts`
 
 ## Install
 
+macOS 15 or later:
+
 ```sh
 curl -fsSL https://github.com/YohoCX/detached/releases/latest/download/install.sh | sh
 ```
 
-Installs `/Applications/Detached.app` (`DETACHED_DIR=~/Applications` to change); run it again to update.
-The app is signed with a self-signed identity and not notarized, so a copy downloaded in a browser
-is blocked by Gatekeeper; the script avoids that. Account tokens are kept in the macOS Keychain.
+Installs `/Applications/Detached.app` (`DETACHED_DIR=~/Applications` to change). The app is signed
+with a self-signed identity and not notarized, so a copy downloaded in a browser is blocked by
+Gatekeeper; the script avoids that. Account tokens are kept in the macOS Keychain. Older Macs stay
+on v0.3.0:
 
-Windows and Linux builds are on the [releases page](https://github.com/YohoCX/detached/releases/latest):
+```sh
+curl -fsSL https://github.com/YohoCX/detached/releases/download/v0.3.0/install.sh |
+  DETACHED_URL=https://github.com/YohoCX/detached/releases/download/v0.3.0/Detached-macos.zip sh
+```
+
+Windows 10+ and Linux packages are on the [releases page](https://github.com/YohoCX/detached/releases/latest):
 `Detached-windows-x64-setup.exe` (unsigned, so SmartScreen asks once), `Detached-linux-x86_64.AppImage`
 and `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
 Credential Manager or the Secret Service (GNOME Keyring, KWallet).
+
+The app looks for a new release at launch and daily and offers it in the status bar; a click
+downloads it, checks its signature, installs it and restarts. A deb is updated by installing the
+new `.deb`.
 
 ## License
 
@@ -37,7 +49,8 @@ Needs Rust 1.90+, Bun 1.3+, Node 24 (Playwright runs on it) and the Xcode comman
 
 ```sh
 bun install
-make dev         # run the app
+make app         # the native client, on its own copy of the config directory
+make dev         # the Tauri client
 make check       # fmt, clippy, cargo test, svelte-check, bun test
 make e2e         # Playwright in WebKit: the real UI against the real commands and git (~1 min)
 make sign-setup  # once: the "Detached Dev" signing identity that make build uses
@@ -54,6 +67,19 @@ Dev, Export, `.p12` with an empty password), store it and delete the file:
 ```sh
 base64 -i Detached.p12 | gh secret set MACOS_CERTIFICATE
 ```
+
+Each package is also signed with a minisign key, whose public half is `PUBLIC_KEY` in
+`crates/app/src/update.rs`; the release job refuses to publish without both. Once
+(`brew install minisign`):
+
+```sh
+minisign -G -W -p minisign.pub -s minisign.key  # -W: no password, so CI can sign
+gh secret set UPDATE_SIGNING_KEY < minisign.key
+sed -n 2p minisign.pub                          # the PUBLIC_KEY value; commit it
+```
+
+Then keep `minisign.key` in a password manager and delete the file: an installed copy only takes
+updates signed with the key it was built with.
 
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 

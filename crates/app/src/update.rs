@@ -422,6 +422,26 @@ mod tests {
         assert!(download(&missing, &key).is_err());
     }
 
+    /// release.yml's Sign step run with a throwaway key on dummy packages that hold their own names.
+    #[test]
+    fn the_release_jobs_latest_json_verifies() {
+        let json = include_bytes!("../tests/fixtures/latest.json");
+        let key = "RWSUrxOBsW8Qz1tsiXZZmMfjLfKoJUKOiaZVjG1dzr3QgTgyRr/+j4ck";
+        let base = "https://github.com/YohoCX/detached/releases/download/v0.3.0";
+        let packages = [
+            ("macos-aarch64", "Detached-macos.zip"),
+            ("macos-x86_64", "Detached-macos.zip"),
+            ("windows-x86_64", "Detached-windows-x64-setup.exe"),
+            ("linux-x86_64", "Detached-linux-x86_64.AppImage"),
+        ];
+        for (platform, file) in packages {
+            let release = release(json, platform, "0.2.9").unwrap().unwrap();
+            assert_eq!(release.url, format!("{base}/{file}"));
+            verify(file.as_bytes(), &release.signature, key).unwrap();
+            assert!(verify(b"other", &release.signature, key).is_err());
+        }
+    }
+
     #[test]
     fn a_package_over_10_mb_downloads() {
         let (key, sign) = keys();

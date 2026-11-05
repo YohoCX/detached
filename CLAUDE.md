@@ -18,6 +18,8 @@ make e2e-app  # macOS: packages Detached.app and runs its --self-test through La
 make e2e      # Playwright on the Tauri client (until removed)
 make dev      # the Tauri client
 make build-tauri  # the Tauri bundles (until removed)
+make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses
+make release  # tags v<version in Cargo.toml>; release.yml builds, signs and publishes it
 ```
 
 Keep this list in sync with the Makefile.
