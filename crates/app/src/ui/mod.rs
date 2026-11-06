@@ -15,10 +15,10 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, BoxShadow, Context, Div, ElementId, Entity, FontWeight,
-    HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
-    Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window,
-    div, prelude::FluentBuilder, px, relative,
+    App, BoxShadow, Div, ElementId, Entity, FontWeight, HighlightStyle, Hsla, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, Pixels, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, StyledText, Window, div, prelude::FluentBuilder, px,
+    relative,
 };
 
 pub use disabled::disabled;
@@ -349,18 +349,4 @@ pub fn placeholder(text: impl Into<SharedString>, cx: &App) -> Div {
         .justify_center()
         .text_color(theme(cx).muted)
         .child(text.into())
-}
-
-/// What a slot shows until its vertical provides the view.
-pub struct Stub(SharedString);
-
-pub fn stub(label: impl Into<SharedString>, cx: &mut App) -> AnyView {
-    let label = label.into();
-    cx.new(|_| Stub(label)).into()
-}
-
-impl Render for Stub {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        placeholder(self.0.clone(), cx)
-    }
 }

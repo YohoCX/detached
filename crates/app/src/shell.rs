@@ -14,8 +14,8 @@ use gpui_kit::{
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
-use crate::ui::{self, Edge, GAP, Icon, radius, stub, text, theme};
-use crate::{actions, files, forge, history, keymap, search};
+use crate::ui::{self, Edge, GAP, Icon, radius, text, theme};
+use crate::{actions, files, forge, history, keymap, search, terminal};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -29,7 +29,7 @@ pub enum TopBar {
     Right,
 }
 
-// The slots. Each vertical puts its view's constructor in place of its stub.
+// The slots, one view constructor per vertical.
 
 fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     match slot {
@@ -79,7 +79,7 @@ fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
     match bottom {
         Bottom::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
         Bottom::Pipelines => forge::pipelines(window, cx),
-        Bottom::Terminal => stub("Terminal", cx),
+        Bottom::Terminal => terminal::panel(window, cx),
     }
 }
 
@@ -285,6 +285,13 @@ impl Shell {
                 "panel.pipelines",
             ))
             .child(run(
+                "strip.terminal",
+                Icon::Terminal,
+                titled("Terminal", "panel.terminal"),
+                bottom_on == Some(Bottom::Terminal),
+                "panel.terminal",
+            ))
+            .child(run(
                 "strip.settings",
                 Icon::Gear,
                 titled("Settings", "app.settings"),
@@ -302,7 +309,11 @@ impl Shell {
         let t = theme(cx);
         let max = f32::from(window.viewport_size().height) - 240.;
         let on = self.bottom.as_ref().map(|b| b.0);
-        let tabs = [(Bottom::Log, "Log"), (Bottom::Pipelines, "Pipelines")];
+        let tabs = [
+            (Bottom::Log, "Log"),
+            (Bottom::Pipelines, "Pipelines"),
+            (Bottom::Terminal, "Terminal"),
+        ];
         ui::panel(ui::pane("bottom", Edge::Top, 280., 120., max), cx)
             .flex()
             .flex_col()

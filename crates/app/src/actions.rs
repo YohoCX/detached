@@ -59,6 +59,7 @@ pub const ACTIONS: &[Action] = &[
     a("mr.create", "Create Merge Request…", Group::Vcs),
     a("pipeline.run", "Run Pipeline…", Group::Vcs),
     a("markdown.preview", "Toggle Markdown Preview", Group::View),
+    a("panel.terminal", "Terminal", Group::View),
 ];
 
 pub fn find(id: &str) -> Option<&'static Action> {

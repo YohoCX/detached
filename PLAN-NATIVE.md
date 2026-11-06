@@ -10,7 +10,7 @@ Decided with the owner on 2026-11-04:
 - Mermaid renders in Rust; a block that fails shows its source.
 - Plan first, reviewed with revmux; the work runs as parallel verticals after a shared foundation.
 
-**Status (2026-11-05): steps 0–2 (F, V1–V6) done: the native client ships alone from 0.4.0 on the real config directory, the Tauri client and docs/native are removed. The update install is checked by hand from 0.4.0 to the next release (docs/TECHDEBT.md). Next: step 3, the terminal (V7).**
+**Status (2026-11-06): steps 0–2 (F, V1–V6) done: the native client ships alone from 0.4.0 on the real config directory, the Tauri client and docs/native are removed. The update install is checked by hand from 0.4.0 to the next release (docs/TECHDEBT.md). Step 3, the terminal (V7), is on `native/v7-terminal`: tabs, keys, memory and scrollback in, waiting for the owner's check on macOS and a revmux round.**
 
 The parity bar was the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
 did was surveyed in docs/native/: shell.md (window, top bar, sidebar, workspaces, branches, palette,
@@ -384,6 +384,23 @@ Each step ends green (`make check`), checked by hand on macOS, and committed.
    lazygit), keys go to the terminal except a short list (Double Shift, Cmd+1, Cmd+9, Cmd+,);
    memory per terminal by session id (macOS `phys_footprint`, Linux `Pss`, Windows a job object),
    shown on its tab; scrollback 1,000 lines by default.
+
+   How (2026-11-06):
+   - `alacritty_terminal` 0.26 does the emulation and the PTY (ConPTY on Windows) on its own
+     thread; the UI reads its grid under its lock once a frame. Sessions live in a global, so
+     they outlive the bottom view when the panel switches to Log or closes.
+   - Each row is one `StyledText` in the mono font with a run per style; theme `ansi` colors, the
+     cursor and the selection are runs too. The view's size sets the grid's columns and rows.
+   - Keys: an app-level keystroke interceptor writes every keystroke to the focused terminal
+     before the app's bindings, except the chords of `panel.project`, `panel.log`, `app.settings`
+     and `panel.terminal` (with `keymap.json` overrides); Double Shift still works. On macOS, Cmd
+     chords the app does not bind go on to the system (Cmd+Q, Cmd+H); Cmd+C and Cmd+V copy and
+     paste, Ctrl+Shift+C and Ctrl+Shift+V elsewhere.
+   - `panel.terminal` (Alt+F12) toggles the panel; the shell's exit closes its tab; a new tab
+     starts in the current repo, or home without one.
+   - Memory: `core::os::Session` from the shell's pid sums its session's processes every 2 s
+     (macOS `phys_footprint` of the pids with that sid, Linux `Pss` from `smaps_rollup`, Windows
+     the private bytes of a job object's processes).
 
 ## Risks
 

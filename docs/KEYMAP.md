@@ -38,6 +38,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `mr.create` | Create a merge request from the current branch | | M2 | V5 |
 | `pipeline.run` | Run a pipeline for a branch | | M2 | V5 |
 | `markdown.preview` | Toggle the preview of an open markdown file | | M2 | V2 |
+| `panel.terminal` | Terminal tab of the bottom panel | Alt+F12 | M2 | V7 |
 
 Chords are bound in the window's context, so a focused text field or editor keeps its own binding
 of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable multi-line field, and on macOS

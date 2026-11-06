@@ -39,6 +39,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("diff.prev", "Shift+F7"),
     ("app.settings", "Cmd+,"),
     ("panel.log", "Cmd+9"),
+    ("panel.terminal", "Alt+F12"),
 ];
 
 /// Chords kept free for actions that do not exist yet.
@@ -209,6 +210,17 @@ impl Global for DoubleShift {}
 struct Bound(Vec<(&'static str, Chord)>);
 
 impl Global for Bound {}
+
+/// The action bound to `k`, if any.
+pub fn action_of(k: &Keystroke, cx: &App) -> Option<&'static str> {
+    let bound = cx.try_global::<Bound>()?;
+    bound.0.iter().find_map(|(id, c)| {
+        let Chord::Keys(c) = c else { return None };
+        let m = &k.modifiers;
+        let same = (c.ctrl, c.alt, c.shift, c.meta) == (m.control, m.alt, m.shift, m.platform);
+        (same && c.key == k.key).then_some(*id)
+    })
+}
 
 /// The chord shown next to an action's name; empty when unbound.
 pub fn chord_for(id: &str, cx: &App) -> String {

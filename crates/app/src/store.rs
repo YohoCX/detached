@@ -529,6 +529,7 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
             View,
             toggle_bottom(Bottom::Pipelines),
         ),
+        crate::terminal::register(cx),
         register(cx, "nav.back", "Back", Navigate, |_, cx| nav::back(cx)),
         register(cx, "nav.forward", "Forward", Navigate, |_, cx| {
             nav::forward(cx)

@@ -12,6 +12,7 @@ pub mod search;
 pub mod shell;
 pub mod status_bar;
 pub mod store;
+pub mod terminal;
 pub mod ui;
 pub mod ui_state;
 pub mod update;
