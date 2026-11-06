@@ -4,7 +4,8 @@ A read-only, multi-repo git client for macOS, Windows and Linux with the JetBrai
 and keymap, native (GPU-drawn, no web view): one
 sidebar for every repo under your folders with fetch and pull all, branches and smart checkout,
 diffs, file browsing and find in files at any ref, the git log, and merge requests and pipelines
-for GitLab and GitHub (including self-hosted GitLab and GitHub Enterprise). It does not commit,
+for GitLab and GitHub (including self-hosted GitLab and GitHub Enterprise), and terminal tabs in
+the current repo. It does not commit,
 stage or push code. Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md).
 
 Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
