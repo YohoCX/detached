@@ -32,6 +32,7 @@ pub enum Icon {
     Log,
     Pipeline,
     Gear,
+    Terminal,
 }
 
 macro_rules! svg16 {
@@ -80,6 +81,7 @@ impl Icon {
             Icon::Gear => svg16!(
                 "M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"
             ),
+            Icon::Terminal => svg16!("M2.5 3h11v10h-11zM5 6.5l2 1.5-2 1.5M8.5 10H11"),
         }
     }
 
