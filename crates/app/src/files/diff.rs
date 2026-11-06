@@ -403,6 +403,8 @@ impl DiffView {
         let views: Vec<_> = self.annotations.iter().map(|a| a.view.clone()).collect();
         let diff = Diff::new(&self.state)
             .header_visible(false)
+            // Split columns scroll as one strip, so a long line pushes the right one off screen (kit #3819).
+            .soft_wrap(self.split(cx))
             // One hunk from line 1: nothing hidden, so no separator either.
             .hunk_separator(DiffHunkSeparator::LineInfo)
             .bg(t.code)

@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Side-by-side diffs wrap long lines | V2 `files::diff` | The kit's split columns are half the widest line and scroll as one strip, so the right side went off screen (kit #3819). Wrapping keeps both on screen until each column can take half the viewport and scroll in sync. |
 | The terminal does not compose text | V7 `terminal` | Keys reach the shell through a keystroke interceptor and the session has no input handler, so IME marked text (Chinese, Japanese) and dead keys (Option+E, E on macOS) do not compose; layouts that type characters directly (Cyrillic) work. |
 | Wide characters can shift a terminal row | V7 `terminal::view` | A row is one `StyledText` in the mono font, so a CJK glyph or emoji whose advance is not two cells moves the rest of its row; painting cell by cell fixes it. |
 | The terminal's cwd test runs on Unix only (`#[cfg(unix)]`) | `crates/app` `tests/terminal.rs` | It compares `pwd -P` with the canonical repo path; PowerShell on Windows prints the runner's temp path in another spelling. |

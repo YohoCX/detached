@@ -160,6 +160,32 @@ fn unified_is_remembered_and_a_forced_side_by_side_ignores_it(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn a_long_line_keeps_both_sides_of_side_by_side_on_screen(cx: &mut TestAppContext) {
+    let app = &mut open_app_with(cx, layout);
+    let long = format!("line 5 {}", "long ".repeat(200));
+    write(
+        &app.sb.repo("app"),
+        [("README.md", readme_text(&[(5, &long)]))],
+    );
+    let forced = DiffOptions {
+        side_by_side: Some(true),
+        ..DiffOptions::default()
+    };
+    let doc = readme(app);
+    let cx = mount(app, doc, forced);
+    wait_until(cx, |cx| text(cx, "new", 10).is_some());
+    let (cell, width) = cx.update(|w, cx| {
+        w.render_frame(cx);
+        let gutter = w.within(("new", 9usize)).find(("line", 9usize)).bounds();
+        (gutter, w.viewport_size().width)
+    });
+    assert!(
+        cell.origin.x < width / 2. + px(40.),
+        "{cell:?} in {width:?}"
+    );
+}
+
+#[gpui_kit::test]
 fn a_pure_rename_shows_one_column(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let doc = diff(cx, "src/new.ts", Some("src/old.ts"));
