@@ -16,7 +16,9 @@ use detached_core::state::AppState;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
-use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext};
+use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext, px};
+
+pub use gpui_kit::base::dock::DockPlacement;
 
 pub use detached_core::git::testutil::Sandbox;
 
@@ -386,6 +388,14 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
         })
     });
     TestApp { cx, sb }
+}
+
+/// Sets a zone's size, as dragging its grip would.
+pub fn zone_size(cx: &mut VisualTestContext, zone: DockPlacement, size: f32) {
+    cx.update(|w, cx| {
+        let zones = detached_app::dock::zones(cx).expect("the window's dock");
+        zones.update(cx, |a, cx| a.set_dock_size(zone, px(size), w, cx));
+    });
 }
 
 /// Runs what is ready on the executor; core's threads go on meanwhile.

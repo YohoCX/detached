@@ -1290,7 +1290,7 @@ fn rows_take_their_change_status_and_the_working_tree_reloads_with_the_status(
 }
 
 #[gpui_kit::test]
-fn expansion_outlives_the_tool_and_the_selection_does_not(cx: &mut TestAppContext) {
+fn expansion_and_the_selection_outlive_the_tool(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     open_tree(cx, "lib");
     click_row(cx, "src");
@@ -1300,7 +1300,11 @@ fn expansion_outlives_the_tool_and_the_selection_does_not(cx: &mut TestAppContex
     cx.press("secondary-1");
     wait_until(cx, |cx| tree(cx).get(1).is_some_and(|r| r == "components"));
     assert_eq!(tree_row(cx, "src").1.expanded(), Some(true));
-    assert_eq!(selected_row(cx), None);
+    assert_eq!(
+        selected_row(cx).as_deref(),
+        Some("src"),
+        "the view stays alive"
+    );
 
     // Each repo has its own.
     let app = cx.sb.repo("app");

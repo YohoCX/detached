@@ -1,6 +1,7 @@
-//! The window: strip, top bar slots, sidebar, tool, main and bottom slots and their sizes.
+//! The window: strip, top bar slots, and the dock with each app's view.
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::dock::DockArea;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -11,10 +12,11 @@ use gpui_kit::{
     transparent_black,
 };
 
+use crate::dock::{self, Kind};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
-use crate::ui::{self, Edge, GAP, Icon, radius, text, theme};
+use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, chat, files, forge, history, keymap, search, terminal};
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -44,15 +46,24 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     }
 }
 
-fn sidebar(_: &mut Window, cx: &mut App) -> AnyView {
-    crate::repos::sidebar(cx)
+/// The view of one app in the dock.
+pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
+    match kind {
+        Kind::Repos => crate::repos::sidebar(cx),
+        Kind::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
+        Kind::Project => cx.new(|cx| files::Tree::new(window, cx)).into(),
+        Kind::Mrs => forge::mrs(window, cx),
+        Kind::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
+        Kind::Pipelines => forge::pipelines(window, cx),
+        Kind::Terminal => terminal::panel(cx),
+        Kind::Main => cx.new(|cx| Main::new(window, cx)).into(),
+    }
 }
 
-fn tool(tool: Tool, window: &mut Window, cx: &mut App) -> AnyView {
-    match tool {
-        Tool::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
-        Tool::Files => cx.new(|cx| files::Tree::new(window, cx)).into(),
-        Tool::Mrs => forge::mrs(window, cx),
+/// What an app does each time its tab comes on screen.
+pub fn shown(kind: Kind, window: &mut Window, cx: &mut App) {
+    if kind == Kind::Terminal {
+        terminal::shown(window, cx);
     }
 }
 
@@ -74,14 +85,6 @@ fn page(doc: &Doc, window: &mut Window, cx: &mut App) -> AnyView {
 /// chords still reach it.
 fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
     vec![search::palette(window, cx), search::find(window, cx)]
-}
-
-fn bottom(bottom: Bottom, window: &mut Window, cx: &mut App) -> AnyView {
-    match bottom {
-        Bottom::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
-        Bottom::Pipelines => forge::pipelines(window, cx),
-        Bottom::Terminal => terminal::panel(window, cx),
-    }
 }
 
 pub fn window_options(cx: &App) -> WindowOptions {
@@ -115,12 +118,9 @@ pub struct Shell {
     left: Vec<AnyView>,
     center: Vec<AnyView>,
     right: Vec<AnyView>,
-    /// Some while shown.
-    sidebar: Option<AnyView>,
-    tool: Option<(Tool, AnyView)>,
-    viewer: AnyView,
-    page: Option<(Doc, AnyView)>,
-    bottom: Option<(Bottom, AnyView)>,
+    dock: Entity<DockArea>,
+    /// The store's tool and bottom panel as last shown in the dock.
+    shown: (Option<Tool>, Option<Bottom>),
     overlays: Vec<AnyView>,
     status: Entity<StatusBar>,
     notices: Entity<Notices>,
@@ -137,10 +137,23 @@ impl Shell {
         let store = Store::global(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let dock = dock::area(window, cx);
+        // The saved layout says which tool and bottom panel are open.
+        let on = dock::shown(dock.read(cx), cx);
+        let shown = (
+            [Tool::Changes, Tool::Files, Tool::Mrs]
+                .into_iter()
+                .find(|t| on.contains(&Kind::of_tool(*t))),
+            [Bottom::Log, Bottom::Pipelines, Bottom::Terminal]
+                .into_iter()
+                .find(|b| on.contains(&Kind::of_bottom(*b))),
+        );
+        store.update(cx, |s, _| (s.tool, s.bottom) = shown);
         let subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&dock, |_, _, cx| cx.notify()),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
@@ -152,11 +165,8 @@ impl Shell {
             left: top_bar(TopBar::Left, window, cx),
             center: top_bar(TopBar::Center, window, cx),
             right: top_bar(TopBar::Right, window, cx),
-            sidebar: Some(sidebar(window, cx)),
-            tool: None,
-            viewer: viewer(window, cx),
-            page: None,
-            bottom: None,
+            dock,
+            shown,
             overlays: overlays(window, cx),
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
@@ -165,26 +175,24 @@ impl Shell {
         }
     }
 
-    /// Builds the views of the store's tool, bottom panel and page when they change.
+    /// Shows the store's tool and bottom panel in the dock when they change.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let s = Store::global(cx).read(cx);
-        let (want_tool, want_bottom) = (s.tool, s.bottom);
-        let want_page = s
-            .shown()
-            .filter(|d| matches!(d, Doc::Mr { .. } | Doc::Job { .. } | Doc::Chat { .. }))
-            .cloned();
-        if self.tool.as_ref().map(|t| t.0) != want_tool {
-            self.tool = want_tool.map(|t| (t, tool(t, window, cx)));
-        }
-        if self.bottom.as_ref().map(|b| b.0) != want_bottom {
-            self.bottom = want_bottom.map(|b| (b, bottom(b, window, cx)));
-        }
-        if self.page.as_ref().map(|p| &p.0) != want_page.as_ref() {
-            self.page = want_page.map(|d| {
-                let view = page(&d, window, cx);
-                (d, view)
-            });
-        }
+        let want = (s.tool, s.bottom);
+        let old = std::mem::replace(&mut self.shown, want);
+        let pairs = [
+            (old.0.map(Kind::of_tool), want.0.map(Kind::of_tool)),
+            (old.1.map(Kind::of_bottom), want.1.map(Kind::of_bottom)),
+        ];
+        self.dock.update(cx, |a, cx| {
+            for (was, now) in pairs {
+                match (was, now) {
+                    (was, Some(k)) if was != now => dock::show(a, k, window, cx),
+                    (Some(k), None) => dock::hide(a, k, window, cx),
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -217,16 +225,13 @@ impl Shell {
             let chord = keymap::chord_for(id, cx);
             format!("{title} {chord}").trim_end().to_string()
         };
-        let this = cx.weak_entity();
+        let repos_on = dock::shown(self.dock.read(cx), cx).contains(&Kind::Repos);
+        let area = self.dock.clone();
         let repos = move |window: &mut Window, cx: &mut App| {
-            this.update(cx, |this, cx| {
-                this.sidebar = match this.sidebar {
-                    Some(_) => None,
-                    None => Some(sidebar(window, cx)),
-                };
-                cx.notify();
+            area.update(cx, |a, cx| match repos_on {
+                true => dock::hide(a, Kind::Repos, window, cx),
+                false => dock::show(a, Kind::Repos, window, cx),
             })
-            .ok();
         };
         let tool = |id, icon, title: String, t: Tool| {
             let toggle = move |_: &mut Window, cx: &mut App| {
@@ -251,7 +256,7 @@ impl Shell {
                 "strip.repos",
                 Icon::Repo,
                 "Repositories".into(),
-                self.sidebar.is_some(),
+                repos_on,
                 repos,
                 cx,
             ))
@@ -310,52 +315,6 @@ impl Shell {
                 "app.settings",
             ))
     }
-
-    fn bottom_panel(
-        &self,
-        view: AnyView,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let t = theme(cx);
-        let max = f32::from(window.viewport_size().height) - 240.;
-        let on = self.bottom.as_ref().map(|b| b.0);
-        let tabs = [
-            (Bottom::Log, "Log"),
-            (Bottom::Pipelines, "Pipelines"),
-            (Bottom::Terminal, "Terminal"),
-        ];
-        ui::panel(ui::pane("bottom", Edge::Top, 280., 120., max), cx)
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .gap(px(4.))
-                    .px(px(8.))
-                    .py(px(6.))
-                    .border_b_1()
-                    .border_color(t.line)
-                    .children(tabs.into_iter().map(|(tab, label)| {
-                        div()
-                            .id(SharedString::from(format!("bottom.{label}")))
-                            .test_support()
-                            .role(Role::Tab)
-                            .aria_toggled((on == Some(tab)).into())
-                            .px(px(10.))
-                            .py(px(3.))
-                            .rounded(radius::ICON_BUTTON)
-                            .when(on == Some(tab), |d| d.bg(t.selected))
-                            .on_click(move |_, _, cx| {
-                                Store::global(cx).update(cx, |s, cx| s.open_bottom(tab, cx))
-                            })
-                            .child(label)
-                    })),
-            )
-            .child(div().flex().flex_col().flex_1().min_h_0().child(view))
-    }
 }
 
 fn strip_button<F: Fn(&mut Window, &mut App) + 'static>(
@@ -392,46 +351,6 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync(window, cx);
         let t = theme(cx);
-        let sidebar = self.sidebar.clone().map(|view| {
-            ui::panel(ui::pane("repos", Edge::Right, 280., 200., 600.), cx)
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(view)
-        });
-        let tool = self.tool.as_ref().map(|(_, view)| {
-            ui::panel(ui::pane("tool", Edge::Right, 300., 220., 800.), cx)
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(view.clone())
-        });
-        let main = div()
-            .id("main")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(radius::PANEL)
-            .bg(t.code)
-            .border_1()
-            .border_color(t.line)
-            .shadow(t.panel_shadow.clone())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .when(self.page.is_some(), |d| d.hidden())
-                    .child(self.viewer.clone()),
-            )
-            .children(self.page.as_ref().map(|(_, view)| view.clone()));
-        let bottom = self
-            .bottom
-            .as_ref()
-            .map(|(_, view)| view.clone())
-            .map(|view| self.bottom_panel(view, window, cx));
         div()
             .key_context(keymap::CONTEXT)
             .track_focus(&self.focus)
@@ -451,33 +370,67 @@ impl Render for Shell {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .gap(GAP)
-                    .p(GAP)
-                    .child(self.strip(cx))
-                    .children(sidebar)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .gap(GAP)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .gap(GAP)
-                                    .children(tool)
-                                    .child(main),
-                            )
-                            .children(bottom),
-                    ),
+                    .child(div().flex().py(GAP).pl(GAP).child(self.strip(cx)))
+                    .child(div().flex().flex_1().min_w_0().child(self.dock.clone())),
             )
             .children(self.overlays.iter().cloned())
             .child(self.notices.clone())
+    }
+}
+
+/// The center: the viewer, with an MR page, a job log or the chat over it.
+pub struct Main {
+    /// Shows `Doc::File` and `Doc::Diff`; it stays alive under the pages.
+    viewer: AnyView,
+    page: Option<(Doc, AnyView)>,
+    _store: Subscription,
+}
+
+impl Main {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Main {
+            viewer: viewer(window, cx),
+            page: None,
+            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for Main {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let want = Store::global(cx)
+            .read(cx)
+            .shown()
+            .filter(|d| matches!(d, Doc::Mr { .. } | Doc::Job { .. } | Doc::Chat { .. }))
+            .cloned();
+        if self.page.as_ref().map(|p| &p.0) != want.as_ref() {
+            self.page = want.map(|d| {
+                let view = page(&d, window, cx);
+                (d, view)
+            });
+        }
+        let t = theme(cx);
+        div()
+            .id("main")
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(radius::PANEL)
+            .bg(t.code)
+            .border_1()
+            .border_color(t.line)
+            .shadow(t.panel_shadow.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .when(self.page.is_some(), |d| d.hidden())
+                    .child(self.viewer.clone()),
+            )
+            .children(self.page.as_ref().map(|(_, view)| view.clone()))
     }
 }
 
@@ -574,37 +527,23 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_dragged_grip_resizes_within_its_range_and_is_remembered(cx: &mut TestAppContext) {
+    fn a_dragged_grip_resizes_its_zone_and_the_saved_layout_keeps_it(cx: &mut TestAppContext) {
         let (dir, w) = open_shell(cx);
-        let grip = |cx: &mut TestAppContext| {
+        let grip = |cx: &mut TestAppContext, w| {
             act(cx, w, |window, cx| {
                 window.render_frame(cx);
                 window.find("grip.repos").bounds().center()
             })
         };
-        let from = grip(cx);
+        let from = grip(cx, w);
         act(cx, w, |window, cx| {
             window.drag(from, from + point(px(60.), px(0.)), cx)
         });
-        let moved = grip(cx);
+        let moved = grip(cx, w);
         assert_eq!(moved.x - from.x, px(60.));
-        assert_eq!(
-            cx.update(|cx| ui_state::get::<f32>("size.repos", cx)),
-            Some(340.)
-        );
-
-        act(cx, w, |window, cx| {
-            window.drag(moved, moved + point(px(900.), px(0.)), cx)
-        });
-        assert_eq!(
-            cx.update(|cx| ui_state::get::<f32>("size.repos", cx)),
-            Some(600.)
-        );
         cx.update(|cx| ui_state::init(dir.path(), cx));
-        assert_eq!(
-            cx.update(|cx| ui_state::get::<f32>("size.repos", cx)),
-            Some(600.)
-        );
+        let again = cx.update(open).unwrap();
+        assert_eq!(grip(cx, again), moved);
     }
 
     #[gpui_kit::test]

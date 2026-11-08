@@ -12,7 +12,7 @@ Decided with the owner on 2026-11-07, after a revmux plan review
 - Detached moves off read-only one capability at a time, past the `switch`, `stash` and `pull` it already
   runs. Each new write gets its own decision and test.
 
-**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS; the Fleet layout is step 3.**
+**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS. Step 3's trial is on `native/dock`, uncommitted: the zones run on the kit's dock, see its verdict; the title bar, status bar and the strip's removal are next.**
 
 ## Steps
 
@@ -162,6 +162,24 @@ bar, no icon strip, status bar at the bottom, a place for each top bar widget. T
 
 Done when: a live terminal and a running chat move between zones in a headless test without losing their
 session, the layout survives a restart, and a saved panel that no longer exists shows a placeholder.
+
+Trial, 2026-11-08, on `native/dock`: the kit's `DockArea` stays, our code is the skin (`dock/skin.rs`)
+and one `Tab` entity per app (`dock/mod.rs`). Tested headless: a terminal with a live session dragged
+from the bottom zone to the right keeps its session and screen, the layout is saved in `ui_state`
+(`dock.layout`) and comes back on the next window, and a saved app this build lacks shows a placeholder
+that saves its state back. Base draws nothing and binds no keys; drag, drop targets and focus are its.
+What it costs:
+- A closed bottom zone keeps a 29 px strip of its tabs (`CLOSED_BOTTOM_STRIP`), so it can't vanish. Kept
+  for now: with no icon strip it is how the bottom apps open. The owner's call.
+- The last tab of a zone can't be dragged out, so Repos and the main area stay where they are.
+- A zone sizes from the pointer's position, so the grip keeps the grab offset itself. A side zone is
+  capped only by the other side, not by a maximum of ours.
+- The bottom zone spans the center, between the side zones, as in Fleet.
+- Hidden views stay alive, so a tab builds its view when first on screen (else the MR list fetches for
+  nobody). Project keeps its selection when closed now. The terminal starts its first shell when its
+  tab is shown, through `Panel::set_active`.
+- The store's `tool` and `bottom` still drive the strip and the actions, and the shell shows them in
+  whatever zone holds them: closing a tool that was dragged to the bottom closes the bottom zone.
 
 ### 4. Plugins from a folder
 

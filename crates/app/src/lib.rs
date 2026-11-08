@@ -2,6 +2,7 @@ pub mod actions;
 pub mod blocking;
 pub mod cache;
 pub mod chat;
+pub mod dock;
 pub mod files;
 pub mod forge;
 pub mod history;

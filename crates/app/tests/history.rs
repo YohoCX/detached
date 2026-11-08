@@ -657,6 +657,9 @@ fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    // The bottom zone is as wide as the center: the side zones close to give it 1000.
+    cx.click("strip.repos");
+    cx.click("strip.changes");
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
     let grip = |cx: &mut VisualTestContext| cx.find("grip.log.side").unwrap().bounds().center();
@@ -711,7 +714,7 @@ fn four(sb: &Sandbox) {
 
 /// Opens the Log tall enough for a commit's fields and four files.
 fn open_tall(cx: &mut VisualTestContext) {
-    cx.update(|_, cx| ui_state::set("size.bottom", 600., cx));
+    zone_size(cx, DockPlacement::Bottom, 600.);
     cx.press("secondary-9");
 }
 

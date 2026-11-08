@@ -120,21 +120,25 @@ impl Terminals {
     }
 }
 
-/// The bottom slot's view: the tabs over the active terminal.
-pub fn panel(window: &mut Window, cx: &mut App) -> AnyView {
+/// The tabs over the active terminal; the first shell starts when it is shown.
+pub fn panel(cx: &mut App) -> AnyView {
     let terminals = Terminals::global(cx);
-    terminals.update(cx, |t, cx| match t.active() {
+    cx.new(|cx| Panel {
+        terminals: terminals.clone(),
+        _subscription: cx.observe(&terminals, |_, _, cx| cx.notify()),
+    })
+    .into()
+}
+
+/// Focuses the active terminal, starting one when there is none.
+pub fn shown(window: &mut Window, cx: &mut App) {
+    Terminals::global(cx).update(cx, |t, cx| match t.active() {
         Some(s) => {
             let focus = s.read(cx).focus.clone();
             window.focus(&focus, cx)
         }
         None => t.open(window, cx),
     });
-    cx.new(|cx| Panel {
-        terminals: terminals.clone(),
-        _subscription: cx.observe(&terminals, |_, _, cx| cx.notify()),
-    })
-    .into()
 }
 
 pub fn register(cx: &mut App) -> actions::Registration {
