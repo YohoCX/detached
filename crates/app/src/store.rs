@@ -76,6 +76,9 @@ pub enum Doc {
         id: u64,
         name: String,
     },
+    Chat {
+        repo: String,
+    },
 }
 
 impl From<Location> for Doc {
@@ -530,6 +533,7 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
             toggle_bottom(Bottom::Pipelines),
         ),
         crate::terminal::register(cx),
+        crate::chat::register(cx),
         register(cx, "nav.back", "Back", Navigate, |_, cx| nav::back(cx)),
         register(cx, "nav.forward", "Forward", Navigate, |_, cx| {
             nav::forward(cx)

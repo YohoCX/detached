@@ -1,4 +1,4 @@
-.PHONY: check app ui-test smoke e2e-app fmt build sign-setup release
+.PHONY: check app ui-test smoke sidecar e2e-app fmt build sign-setup release
 
 check:
 	cargo fmt --all --check
@@ -13,6 +13,10 @@ app:
 
 ui-test:
 	cargo test -p detached-app
+
+# The Claude sidecar, into plugins/claude of the config directory (the owner's unless DETACHED_CONFIG_DIR is set).
+sidecar:
+	./scripts/sidecar.sh
 
 # Boots, draws one frame and exits, on a throwaway config directory.
 smoke:

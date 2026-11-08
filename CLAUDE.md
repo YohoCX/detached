@@ -1,9 +1,12 @@
 # Detached
 
-Read-only multi-repo git client, native on GPUI:
-- `crates/core`: the backend (git, forge, accounts, search, settings), blocking Rust, no UI types.
+Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, and the
+chat's turn snapshots (private refs) and restores:
+- `crates/core`: the backend (git, forge, accounts, search, settings, the agent's protocol and trust),
+  blocking Rust, no UI types.
 - `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
+- `sidecars/claude`: the chat's process on the Agent SDK, in TypeScript, kept out of the release packages.
 
 ## Commands
 
@@ -13,6 +16,7 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
 make app      # the client at release speed, on the real config directory (the owner's only)
 make ui-test  # the UI tests only
 make smoke    # build and run `--smoke` on a temp config directory
+make sidecar  # build the Claude sidecar (needs bun) and install it in the config directory
 make build    # the packages for this OS under target/package (scripts/package.sh)
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
 make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses

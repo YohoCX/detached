@@ -13,7 +13,7 @@ type Job = Box<dyn FnOnce() + Send>;
 
 /// Enough for fetch all's parallelism next to statuses, logs and finds.
 const THREADS: usize = 16;
-const FRAME: Duration = Duration::from_millis(16);
+pub const FRAME: Duration = Duration::from_millis(16);
 
 fn submit(job: Job) {
     static POOL: OnceLock<mpsc::Sender<Job>> = OnceLock::new();

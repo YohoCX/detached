@@ -15,7 +15,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Bottom, Doc, Store, Tool};
 use crate::ui::{self, Edge, GAP, Icon, radius, text, theme};
-use crate::{actions, files, forge, history, keymap, search, terminal};
+use crate::{actions, chat, files, forge, history, keymap, search, terminal};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -61,10 +61,11 @@ fn viewer(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| files::Viewer::new(window, cx)).into()
 }
 
-/// An MR page or a job log, over the viewer.
+/// An MR page, a job log or the chat, over the viewer.
 fn page(doc: &Doc, window: &mut Window, cx: &mut App) -> AnyView {
     match doc {
         Doc::Mr { repo, number } => forge::mr_page(repo.clone(), *number, window, cx),
+        Doc::Chat { repo } => chat::page(repo, window, cx),
         _ => forge::job_log(doc, cx),
     }
 }
@@ -168,7 +169,7 @@ impl Shell {
         let (want_tool, want_bottom) = (s.tool, s.bottom);
         let want_page = s
             .shown()
-            .filter(|d| matches!(d, Doc::Mr { .. } | Doc::Job { .. }))
+            .filter(|d| matches!(d, Doc::Mr { .. } | Doc::Job { .. } | Doc::Chat { .. }))
             .cloned();
         if self.tool.as_ref().map(|t| t.0) != want_tool {
             self.tool = want_tool.map(|t| (t, tool(t, window, cx)));
@@ -209,6 +210,7 @@ impl Shell {
     fn strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let s = Store::global(cx).read(cx);
         let (tool_on, bottom_on) = (s.tool, s.bottom);
+        let chat_on = matches!(s.shown(), Some(Doc::Chat { .. }));
         let titled = |title: &str, id: &str| {
             let chord = keymap::chord_for(id, cx);
             format!("{title} {chord}").trim_end().to_string()
@@ -268,6 +270,13 @@ impl Shell {
                 Icon::Mr,
                 "Merge Requests".into(),
                 Tool::Mrs,
+            ))
+            .child(run(
+                "strip.chat",
+                Icon::Chat,
+                titled("Claude", "agent.chat"),
+                chat_on,
+                "agent.chat",
             ))
             .child(div().flex_1())
             .child(run(
