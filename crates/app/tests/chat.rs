@@ -76,10 +76,12 @@ fn a_message_is_answered_and_the_turn_ends(cx: &mut TestAppContext) {
         ["You: hello", "said hello"],
         "the deltas became the text"
     );
-    let usage = cx
-        .find("chat.usage")
-        .and_then(|e| e.label().map(String::from));
-    assert_eq!(usage.as_deref(), Some("Context 25%"));
+    // Usage comes after the turn's end, as from the SDK.
+    wait_until(cx, |cx| {
+        cx.find("chat.usage")
+            .and_then(|e| e.label().map(String::from))
+            == Some("Context 25%".into())
+    });
 }
 
 #[gpui_kit::test]

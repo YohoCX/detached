@@ -5,6 +5,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 | Issue | Where | Notes |
 | --- | --- | --- |
 | Themes leave syntax colors to the kit | `ui::theme` | A theme file sets the editor's background and cursor line, not its token colors: those stay the kit's highlight theme until the format takes a `syntax` block. |
+| Find in Files test sometimes misses "Searching…" | `tests/search.rs` | Under a full `make check` the search can finish before the test reads the status (failed 1 of 4 runs, passes alone); the test wants a frame between batches it does not hold. |
 | A theme reload leaks the old tokens | `ui::theme` | `theme(cx)` hands out `&'static Theme` to its 100-odd callers, so each loaded theme is leaked, a few KB per edit of a theme file. |
 | Side-by-side diffs wrap long lines | V2 `files::diff` | The kit's split columns are half the widest line and scroll as one strip, so the right side went off screen (kit #3819). Wrapping keeps both on screen until each column can take half the viewport and scroll in sync. |
 | The terminal does not compose text | V7 `terminal` | Keys reach the shell through a keystroke interceptor and the session has no input handler, so IME marked text (Chinese, Japanese) and dead keys (Option+E, E on macOS) do not compose; layouts that type characters directly (Cyrillic) work. |

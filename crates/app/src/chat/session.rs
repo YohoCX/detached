@@ -19,6 +19,9 @@ use crate::store::Store;
 
 pub const AUTO: &str = "auto";
 
+/// A trust check's number, what it read, and whether that is trusted.
+type Check = (u64, Project, bool);
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Answer {
     Waiting,
@@ -108,6 +111,11 @@ pub struct Session {
     /// What the live session loaded of them; None when it runs on the user's alone.
     running: Option<String>,
     dismissed: Option<String>,
+    /// Trusted here: a check begun before the save still reads it as not.
+    accepted: Option<String>,
+    /// Checks begun, and the latest whose answer is shown: an older one may finish later.
+    checks: u64,
+    seen: u64,
     _tasks: Vec<Task<()>>,
     _work: Vec<Task<()>>,
 }
@@ -137,6 +145,9 @@ impl Session {
             review: None,
             running: None,
             dismissed: None,
+            accepted: None,
+            checks: 0,
+            seen: 0,
             _tasks: vec![],
             _work: vec![],
         }
@@ -159,7 +170,7 @@ impl Session {
         &mut self,
         text: String,
         start: Result<String, String>,
-        check: Option<(Project, bool)>,
+        check: Option<Check>,
         cx: &mut Context<Self>,
     ) {
         match start {
@@ -168,7 +179,7 @@ impl Session {
                 .items
                 .push(Item::Note(format!("No snapshot for this turn: {e}"))),
         }
-        let trusted = check.and_then(|(p, trusted)| self.saw(p, trusted));
+        let trusted = check.and_then(|c| self.saw(c));
         if !self.live {
             self.live = true;
             self.running = trusted.clone();
@@ -187,19 +198,26 @@ impl Session {
     }
 
     /// Reads the repo's own settings and whether the user trusts them.
-    fn check(&self, cx: &mut Context<Self>) -> Task<Option<(Project, bool)>> {
+    fn check(&mut self, cx: &mut Context<Self>) -> Task<Option<Check>> {
+        self.checks += 1;
+        let n = self.checks;
         let core = Store::global(cx).read(cx).core().clone();
         let repo = self.repo.clone();
         blocking::run(cx, move || {
             let p = trust::project(&core.env(), std::path::Path::new(&repo)).ok()?;
             let trusted = trust::trusted(&core.config_dir, &repo, &p);
-            Some((p, trusted))
+            Some((n, p, trusted))
         })
     }
 
     /// Shows the repo's settings for review until trusted; stops a session that loaded others.
     /// Returns what a new session may load.
-    fn saw(&mut self, p: Project, trusted: bool) -> Option<String> {
+    fn saw(&mut self, (n, p, trusted): Check) -> Option<String> {
+        let trusted = trusted || self.accepted.as_ref() == Some(&p.fingerprint);
+        if n < self.seen {
+            return trusted.then_some(p.fingerprint);
+        }
+        self.seen = n;
         if self.live && self.running.as_ref().is_some_and(|f| *f != p.fingerprint) {
             self.end_agent();
             self.items.push(Item::Note(
@@ -223,9 +241,9 @@ impl Session {
     pub fn check_trust(&mut self, cx: &mut Context<Self>) {
         let check = self.check(cx);
         self.work(cx, async move |this, cx| {
-            if let Some((p, trusted)) = check.await {
+            if let Some(c) = check.await {
                 this.update(cx, |s, cx| {
-                    s.saw(p, trusted);
+                    s.saw(c);
                     cx.notify();
                 })
                 .ok();
@@ -235,6 +253,7 @@ impl Session {
 
     pub fn trust(&mut self, cx: &mut Context<Self>) {
         let Some(p) = self.review.take() else { return };
+        self.accepted = Some(p.fingerprint.clone());
         let core = Store::global(cx).read(cx).core().clone();
         let repo = self.repo.clone();
         let saved = blocking::run(cx, move || {
@@ -251,9 +270,11 @@ impl Session {
                         ));
                     }
                     Ok(()) => {}
-                    Err(e) => s
-                        .items
-                        .push(Item::Note(format!("Cannot save the trust: {e}"))),
+                    Err(e) => {
+                        s.accepted = None;
+                        s.items
+                            .push(Item::Note(format!("Cannot save the trust: {e}")));
+                    }
                 }
                 cx.notify();
             })
@@ -304,8 +325,8 @@ impl Session {
         self.work(cx, async move |this, cx| {
             let (found, check) = (found.await, check.await);
             this.update(cx, |s, cx| {
-                if let Some((p, trusted)) = check {
-                    s.saw(p, trusted);
+                if let Some(c) = check {
+                    s.saw(c);
                 }
                 match found {
                     Ok((_, _, files)) if files.is_empty() => {}
