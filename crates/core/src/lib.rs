@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod agent;
 pub mod api;
 pub mod env;
 pub mod error;
@@ -11,4 +12,5 @@ pub mod search;
 pub mod selftest;
 pub mod settings;
 pub mod state;
+pub mod trust;
 pub mod types;

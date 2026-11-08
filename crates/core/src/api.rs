@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::error::Result;
 use crate::git::patch::{self, FilePatch};
+use crate::git::snapshot::{self, Restore};
 use crate::git::{branches, checkout as smart, diff, files, log as logs, pull as pulls, remotes};
 use crate::search::{find, quick};
 use crate::settings::Settings;
@@ -92,6 +93,21 @@ pub fn open_folder(path: &str) -> Result<()> {
 pub fn repo_status(s: &AppState, repo: &str) -> Result<RepoStatus> {
     s.quick.invalidate(repo);
     crate::git::status::status(&s.env(), Path::new(repo))
+}
+
+/// The worktree as a tree behind a private ref, for an agent's turn.
+pub fn snapshot(s: &AppState, repo: &str) -> Result<String> {
+    snapshot::snapshot(&s.env(), Path::new(repo))
+}
+
+/// What going back to `to` changes, `end` being the tree at the end of that turn.
+pub fn plan_restore(s: &AppState, repo: &str, to: &str, end: &str) -> Result<Restore> {
+    snapshot::plan(&s.env(), Path::new(repo), to, end)
+}
+
+/// Returns the tree after it, to undo against.
+pub fn restore(s: &AppState, repo: &str, r: &Restore) -> Result<String> {
+    snapshot::apply(&s.env(), Path::new(repo), r)
 }
 
 pub fn list_branches(s: &AppState, repo: &str) -> Result<Branches> {

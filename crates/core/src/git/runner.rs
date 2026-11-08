@@ -44,6 +44,8 @@ pub struct Opts<'a> {
     pub silence: Option<Duration>,
     /// Gets each stdout line as it arrives instead of collecting stdout; `false` stops git.
     pub lines: Option<LineFn<'a>>,
+    /// A private index in place of the repo's.
+    pub index: Option<&'a Path>,
 }
 
 pub type LineFn<'a> = &'a (dyn Fn(&[u8]) -> bool + Sync);
@@ -84,6 +86,9 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
         cmd.env_remove(k);
     }
     cmd.envs(env.vars.iter().map(|(k, v)| (k, v)));
+    if let Some(index) = opts.index {
+        cmd.env("GIT_INDEX_FILE", index);
+    }
     if let Some(c) = opts.cred {
         cmd.args(&c.args).envs(c.env.iter().map(|(k, v)| (k, v)));
     }

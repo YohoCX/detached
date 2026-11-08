@@ -11,6 +11,7 @@ pub mod patch;
 pub mod pull;
 pub mod remotes;
 pub mod runner;
+pub mod snapshot;
 pub mod status;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
