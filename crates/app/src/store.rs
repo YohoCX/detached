@@ -227,6 +227,11 @@ impl Store {
         store
     }
 
+    /// None before `init`.
+    pub fn try_global(cx: &App) -> Option<Entity<Store>> {
+        cx.try_global::<GlobalStore>().map(|g| g.0.clone())
+    }
+
     pub fn global(cx: &App) -> Entity<Store> {
         cx.global::<GlobalStore>().0.clone()
     }

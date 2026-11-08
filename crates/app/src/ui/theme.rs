@@ -1,48 +1,67 @@
-//! The tokens of src/app.css, light and dark following the system.
+//! Colors from theme files, the bundled ones and the user's `themes/*.json`, light and dark
+//! following the system. A file only needs the tokens it changes; the rest come from `extends`.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
+use std::time::{Duration, SystemTime};
 
 use gpui_kit::component::Theme as Kit;
-use gpui_kit::{App, BoxShadow, Hsla, Pixels, SharedString, Window, px, rgb};
+use gpui_kit::{App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, px, rgba};
+use serde_json::{Map, Value};
 
+use crate::blocking;
+use crate::store::Store;
+use crate::ui_state;
 use crate::util::Status;
 
-pub struct Theme {
-    pub ground: Hsla,
-    pub panel: Hsla,
-    pub panel_line: Hsla,
-    pub panel_shadow: Vec<BoxShadow>,
-    pub code: Hsla,
-    pub fg: Hsla,
-    pub muted: Hsla,
-    pub line: Hsla,
-    pub accent: Hsla,
-    pub accent_fg: Hsla,
-    pub primary: Hsla,
-    pub primary_fg: Hsla,
-    pub hover: Hsla,
-    pub selected: Hsla,
-    pub selected_ring: Hsla,
-    pub selected_inactive: Hsla,
-    pub hit: Hsla,
-    pub popup: Hsla,
-    pub shadow: Vec<BoxShadow>,
-    pub scrim: Hsla,
-    pub input: Hsla,
-    pub error: Hsla,
-    pub warning: Hsla,
-    pub success: Hsla,
-    pub added: Hsla,
-    pub modified: Hsla,
-    pub deleted: Hsla,
-    pub conflict: Hsla,
-    pub untracked: Hsla,
-    /// Monaco's cursor line and text selection.
-    pub line_highlight: Hsla,
-    pub text_selection: Hsla,
-    /// The 16 terminal colors: job logs, the terminal.
-    pub ansi: [Hsla; 16],
+pub const DEFAULT: &str = "Fleet";
+const BUNDLED: [&str; 2] = [
+    include_str!("../../themes/fleet.json"),
+    include_str!("../../themes/classic.json"),
+];
+const FONTS: [&[u8]; 7] = [
+    include_bytes!("../../fonts/Inter-Regular.ttf"),
+    include_bytes!("../../fonts/Inter-Medium.ttf"),
+    include_bytes!("../../fonts/Inter-SemiBold.ttf"),
+    include_bytes!("../../fonts/Inter-Bold.ttf"),
+    include_bytes!("../../fonts/Inter-ExtraBold.ttf"),
+    include_bytes!("../../fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../../fonts/JetBrainsMono-Bold.ttf"),
+];
+const KEY: &str = "theme.name";
+/// How often the themes folder is looked at for edits.
+const POLL: Duration = Duration::from_millis(500);
+
+macro_rules! tokens {
+    ($($color:ident),* ; $($shadow:ident),* ; $($list:ident: $n:literal),*) => {
+        pub struct Theme {
+            $(pub $color: Hsla,)*
+            $(pub $shadow: Vec<BoxShadow>,)*
+            $(pub $list: [Hsla; $n],)*
+        }
+
+        fn parse(m: &Map<String, Value>) -> Result<Theme, String> {
+            Ok(Theme {
+                $($color: color(m, stringify!($color))?,)*
+                $($shadow: shadows(m, stringify!($shadow))?,)*
+                $($list: colors(m, stringify!($list))?,)*
+            })
+        }
+    };
 }
+
+tokens!(
+    ground, panel, panel_line, code, fg, muted, line, accent, accent_fg, primary, primary_fg,
+    hover, selected, selected_ring, selected_inactive, hit, popup, scrim, input, error, warning,
+    success, added, modified, deleted, conflict, untracked,
+    // Monaco's cursor line and text selection.
+    line_highlight, text_selection;
+    panel_shadow, shadow;
+    // The 16 terminal colors, for job logs and the terminal; the log graph's lanes.
+    ansi: 16, lanes: 8
+);
 
 /// The gap between panes and around the window.
 pub const GAP: Pixels = px(10.);
@@ -99,111 +118,319 @@ pub mod doc {
     pub const CODE: Pixels = px(12.5);
 }
 
-fn c(hex: u32) -> Hsla {
-    rgb(hex).into()
+fn hex(s: &str) -> Option<Hsla> {
+    let h = s.strip_prefix('#')?;
+    let n = u32::from_str_radix(h, 16).ok()?;
+    let n = match h.len() {
+        6 => (n << 8) | 0xff,
+        8 => n,
+        _ => return None,
+    };
+    Some(rgba(n).into())
 }
 
-fn a(hex: u32, alpha: f32) -> Hsla {
-    Hsla { a: alpha, ..c(hex) }
+fn color(m: &Map<String, Value>, key: &str) -> Result<Hsla, String> {
+    let v = m.get(key).ok_or(format!("{key} is missing"))?;
+    v.as_str()
+        .and_then(hex)
+        .ok_or(format!("{key}: {v} is not #rrggbb or #rrggbbaa"))
 }
 
-fn shadow(y: f32, blur: f32, spread: f32, color: Hsla) -> BoxShadow {
-    BoxShadow::new(px(0.), px(y), color)
-        .blur_radius(px(blur))
-        .spread_radius(px(spread))
+fn colors<const N: usize>(m: &Map<String, Value>, key: &str) -> Result<[Hsla; N], String> {
+    let v = m
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or(format!("{key} is not a list"))?;
+    let all: Option<Vec<Hsla>> = v.iter().map(|c| c.as_str().and_then(hex)).collect();
+    let all = all.ok_or(format!("{key}: a color is not #rrggbb or #rrggbbaa"))?;
+    all.try_into()
+        .map_err(|_| format!("{key} needs {N} colors"))
 }
 
-static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme {
-    ground: c(0xeceff5),
-    panel: a(0xffffff, 0.72),
-    panel_line: a(0xffffff, 0.9),
-    panel_shadow: vec![
-        shadow(1., 0., 0., c(0xffffff)).inset(),
-        shadow(10., 30., 0., a(0x1e2950, 0.08)),
-        shadow(0., 0., 1., a(0x1e2950, 0.05)),
-    ],
-    code: c(0xffffff),
-    fg: c(0x0f172a),
-    muted: c(0x5b6478),
-    line: a(0x1e2950, 0.09),
-    accent: c(0x6366f1),
-    accent_fg: c(0xffffff),
-    primary: c(0x0f172a),
-    primary_fg: c(0xffffff),
-    hover: a(0x1e2950, 0.06),
-    selected: a(0x6366f1, 0.13),
-    selected_ring: a(0x6366f1, 0.35),
-    selected_inactive: a(0x1e2950, 0.06),
-    hit: c(0xb45309),
-    popup: a(0xffffff, 0.92),
-    shadow: vec![
-        shadow(1., 0., 0., c(0xffffff)).inset(),
-        shadow(24., 60., 0., a(0x1e2950, 0.18)),
-        shadow(0., 0., 1., a(0x1e2950, 0.06)),
-    ],
-    scrim: a(0x0f172a, 0.12),
-    input: c(0xffffff),
-    error: c(0xe11d48),
-    warning: c(0xb45309),
-    success: c(0x059669),
-    added: c(0x059669),
-    modified: c(0x4f46e5),
-    deleted: c(0x64748b),
-    conflict: c(0xe11d48),
-    untracked: c(0xb45309),
-    line_highlight: a(0x1e2950, 0.04),
-    text_selection: a(0x6366f1, 0.2),
-    ansi: [
-        0x1e293b, 0xdc2626, 0x059669, 0xb45309, 0x2563eb, 0xc026d3, 0x0891b2, 0x64748b, 0x475569,
-        0xef4444, 0x10b981, 0xd97706, 0x3b82f6, 0xd946ef, 0x06b6d4, 0x334155,
-    ]
-    .map(c),
+fn shadows(m: &Map<String, Value>, key: &str) -> Result<Vec<BoxShadow>, String> {
+    let v = m
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or(format!("{key} is not a list"))?;
+    v.iter()
+        .map(|s| {
+            let n = |k: &str| s[k].as_f64().unwrap_or(0.) as f32;
+            let color = s["color"].as_str().and_then(hex);
+            let color = color.ok_or(format!(
+                "{key}: a shadow's color is not #rrggbb or #rrggbbaa"
+            ))?;
+            let shadow = BoxShadow::new(px(n("x")), px(n("y")), color)
+                .blur_radius(px(n("blur")))
+                .spread_radius(px(n("spread")));
+            Ok(if s["inset"].as_bool() == Some(true) {
+                shadow.inset()
+            } else {
+                shadow
+            })
+        })
+        .collect()
+}
+
+/// A theme file's light and dark tokens over those of the theme it extends.
+fn pair(v: &Value, bases: &BTreeMap<String, Value>) -> Result<(Theme, Theme), String> {
+    let base = v["extends"].as_str().unwrap_or(DEFAULT);
+    let base = bases
+        .get(base)
+        .ok_or(format!("extends {base}, which is not a bundled theme"))?;
+    let side = |mode: &str| {
+        let mut m = base[mode].as_object().cloned().unwrap_or_default();
+        if let Some(own) = v[mode].as_object() {
+            m.extend(own.clone());
+        }
+        parse(&m).map_err(|e| format!("{mode}.{e}"))
+    };
+    Ok((side("light")?, side("dark")?))
+}
+
+fn bundled() -> BTreeMap<String, Value> {
+    BUNDLED
+        .iter()
+        .filter_map(|t| serde_json::from_str::<Value>(t).ok())
+        .map(|v| (v["name"].as_str().unwrap_or_default().to_string(), v))
+        .collect()
+}
+
+/// When each user theme file last changed.
+type Stamp = Vec<(PathBuf, Option<SystemTime>, u64)>;
+
+fn stamp(dir: &Path) -> Stamp {
+    let mut files: Stamp = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| {
+            let m = p.metadata().ok();
+            let len = m.as_ref().map_or(0, |m| m.len());
+            (p, m.and_then(|m| m.modified().ok()), len)
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+struct Loaded {
+    light: Theme,
+    dark: Theme,
+    /// The UI and the mono family; None keeps the system's.
+    font: Option<SharedString>,
+    mono: Option<SharedString>,
+    /// The user's file it came from.
+    file: Option<PathBuf>,
+}
+
+type Found = Result<Loaded, String>;
+
+/// Every theme's name, bundled ones first, and theme `name` with its file or why it can't be had.
+/// `last` is the file it came from before: if that no longer parses, that is why.
+fn find(dir: &Path, name: &str, last: Option<&Path>) -> (Vec<String>, Found) {
+    let bases = bundled();
+    let mut names: Vec<String> = BUNDLED
+        .iter()
+        .filter_map(|t| serde_json::from_str::<Value>(t).ok())
+        .filter_map(|v| v["name"].as_str().map(String::from))
+        .collect();
+    let mut found = bases.get(name).map(|v| (name.to_string(), v.clone(), None));
+    let mut broken = None;
+    for (path, ..) in stamp(dir) {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let file = format!(
+            "themes/{}",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+        );
+        let parsed = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()));
+        match parsed {
+            Ok(v) => {
+                let own = v["name"].as_str().map_or(stem, String::from);
+                if own == name {
+                    found = Some((file, v, Some(path.clone())));
+                }
+                if !names.contains(&own) {
+                    names.push(own);
+                }
+            }
+            Err(e) if stem == name || last == Some(path.as_path()) => {
+                broken = Some(format!("{file}: {e}"))
+            }
+            Err(_) => {}
+        }
+    }
+    let theme = match (broken, found) {
+        (Some(e), _) => Err(e),
+        (None, Some((file, v, path))) => pair(&v, &bases)
+            .map(|(light, dark)| {
+                let font = |k: &str| v[k].as_str().map(|f| SharedString::from(f.to_string()));
+                let (font, mono) = (font("font"), font("mono_font"));
+                Loaded {
+                    light,
+                    dark,
+                    font,
+                    mono,
+                    file: path,
+                }
+            })
+            .map_err(|e| format!("{file}: {e}")),
+        (None, None) => Err(format!("there is no theme named {name}")),
+    };
+    (names, theme)
+}
+
+static FALLBACK: LazyLock<(Theme, Theme)> = LazyLock::new(|| {
+    let bases = bundled();
+    pair(&bases[DEFAULT], &bases).expect("the bundled default theme parses")
 });
 
-static DARK: LazyLock<Theme> = LazyLock::new(|| Theme {
-    ground: c(0x090c15),
-    panel: a(0xffffff, 0.045),
-    panel_line: a(0xffffff, 0.09),
-    panel_shadow: vec![
-        shadow(1., 0., 0., a(0xffffff, 0.07)).inset(),
-        shadow(12., 40., 0., a(0x000000, 0.45)),
-    ],
-    code: c(0x0e1220),
-    fg: c(0xe8ecf6),
-    muted: c(0xa5b0c8),
-    line: a(0xffffff, 0.08),
-    accent: c(0x818cf8),
-    accent_fg: c(0x0b1020),
-    primary: c(0xffffff),
-    primary_fg: c(0x0b1020),
-    hover: a(0xffffff, 0.07),
-    selected: a(0x818cf8, 0.24),
-    selected_ring: a(0x818cf8, 0.5),
-    selected_inactive: a(0xffffff, 0.08),
-    hit: c(0xfcd34d),
-    popup: a(0x161b2c, 0.9),
-    shadow: vec![
-        shadow(1., 0., 0., a(0xffffff, 0.08)).inset(),
-        shadow(30., 80., 0., a(0x000000, 0.6)),
-    ],
-    scrim: a(0x000000, 0.35),
-    input: a(0xffffff, 0.07),
-    error: c(0xfb7185),
-    warning: c(0xfbbf24),
-    success: c(0x34d399),
-    added: c(0x34d399),
-    modified: c(0xa5b4fc),
-    deleted: c(0x94a3b8),
-    conflict: c(0xfb7185),
-    untracked: c(0xfbbf24),
-    line_highlight: a(0xffffff, 0.03),
-    text_selection: a(0x818cf8, 0.3),
-    ansi: [
-        0x64748b, 0xf87171, 0x34d399, 0xfbbf24, 0x60a5fa, 0xe879f9, 0x22d3ee, 0xcbd5e1, 0x94a3b8,
-        0xfca5a5, 0x6ee7b7, 0xfde68a, 0x93c5fd, 0xf0abfc, 0x67e8f9, 0xf8fafc,
-    ]
-    .map(c),
-});
+/// The theme in use, leaked so `theme` can hand out `&'static`: one pair, a few KB, per change.
+struct Active {
+    name: String,
+    names: Vec<String>,
+    light: &'static Theme,
+    dark: &'static Theme,
+    /// The theme's families, or the system's it found at start.
+    font: SharedString,
+    mono: SharedString,
+    system: (SharedString, SharedString),
+    /// Why the chosen theme did not load, when it didn't.
+    error: Option<String>,
+}
+
+impl Global for Active {}
+
+/// Loads the chosen theme and reloads it whenever its folder changes.
+pub fn init(config_dir: &Path, cx: &mut App) {
+    if cx.has_global::<Active>() {
+        return;
+    }
+    if let Err(e) = cx
+        .text_system()
+        .add_fonts(FONTS.map(Cow::Borrowed).to_vec())
+    {
+        eprintln!("detached: the bundled fonts did not load: {e}");
+    }
+    let dir = config_dir.join("themes");
+    let name = chosen(cx);
+    let mut seen = (name.clone(), stamp(&dir));
+    let (names, found) = find(&dir, &name, None);
+    let mut last = found.as_ref().ok().and_then(|f| f.file.clone());
+    let (light, dark) = (&FALLBACK.0, &FALLBACK.1);
+    let k = Kit::global(cx);
+    let system = (k.font_family.clone(), k.mono_font_family.clone());
+    cx.set_global(Active {
+        name: name.clone(),
+        names,
+        light,
+        dark,
+        font: system.0.clone(),
+        mono: system.1.clone(),
+        system,
+        error: None,
+    });
+    apply(name, found, cx);
+    // Ends with the store, which lives as long as the app.
+    let Some(store) = Store::try_global(cx).map(|s| s.downgrade()) else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(POLL).await;
+            if store.upgrade().is_none() {
+                return;
+            }
+            let d = dir.clone();
+            let (name, now) = cx.update(|cx| (chosen(cx), blocking::run(cx, move || stamp(&d))));
+            let now = (name.clone(), now.await);
+            if now == seen {
+                continue;
+            }
+            seen = now;
+            let (d, n, l) = (dir.clone(), name.clone(), last.clone());
+            let (names, found) = cx
+                .update(|cx| blocking::run(cx, move || find(&d, &n, l.as_deref())))
+                .await;
+            if let Ok(f) = &found {
+                last = f.file.clone();
+            }
+            cx.update(|cx| {
+                cx.global_mut::<Active>().names = names;
+                apply(name, found, cx);
+            });
+        }
+    })
+    .detach();
+}
+
+fn chosen(cx: &App) -> String {
+    ui_state::get(KEY, cx).unwrap_or(DEFAULT.into())
+}
+
+/// Shows `found`, or keeps the last good theme and says why.
+fn apply(name: String, found: Found, cx: &mut App) {
+    match found {
+        Ok(l) => {
+            let a = cx.global_mut::<Active>();
+            (a.light, a.dark) = (Box::leak(Box::new(l.light)), Box::leak(Box::new(l.dark)));
+            a.font = l.font.unwrap_or(a.system.0.clone());
+            a.mono = l.mono.unwrap_or(a.system.1.clone());
+            a.name = name;
+            a.error = None;
+            sync_kit(cx);
+            cx.refresh_windows();
+        }
+        Err(e) => {
+            let text = format!("Theme {name} not loaded, keeping the last one: {e}");
+            cx.global_mut::<Active>().error = Some(text.clone());
+            if let Some(store) = Store::try_global(cx) {
+                store.update(cx, |s, cx| s.say(text, true, cx));
+            }
+        }
+    }
+}
+
+/// Makes the user's themes folder, with a copy of the default to edit when it has none.
+pub fn seed(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    if stamp(dir).is_empty() {
+        let mine = BUNDLED[0].replacen(
+            &format!("\"name\": \"{DEFAULT}\""),
+            "\"name\": \"My theme\"",
+            1,
+        );
+        std::fs::write(dir.join("my-theme.json"), mine)?;
+    }
+    Ok(())
+}
+
+/// Every theme by name and the one in use.
+pub fn names(cx: &App) -> (Vec<String>, String) {
+    match cx.try_global::<Active>() {
+        Some(a) => (a.names.clone(), a.name.clone()),
+        None => (vec![DEFAULT.into()], DEFAULT.into()),
+    }
+}
+
+/// Switches to theme `name`, which the next look at the folder loads.
+pub fn choose(name: &str, cx: &mut App) {
+    ui_state::set(KEY, name, cx);
+}
+
+/// Why the chosen theme did not load, if it did not.
+pub fn error(cx: &App) -> Option<String> {
+    cx.try_global::<Active>()?.error.clone()
+}
 
 impl Theme {
     pub fn status(&self, s: Status) -> Hsla {
@@ -224,18 +451,22 @@ pub fn is_dark(cx: &App) -> bool {
 
 /// The tokens for the system appearance the kit's theme last synced to.
 pub fn theme(cx: &App) -> &'static Theme {
-    if is_dark(cx) { &DARK } else { &LIGHT }
+    let dark = is_dark(cx);
+    let (light, night) = match cx.try_global::<Active>() {
+        Some(a) => (a.light, a.dark),
+        None => (&FALLBACK.0, &FALLBACK.1),
+    };
+    if dark { night } else { light }
 }
 
-/// A log graph lane's color: mid tones that read on both the light and the dark panel.
-pub fn lane(color: u32) -> Hsla {
-    const LANES: [u32; 8] = [
-        0x6366f1, 0x10b981, 0xf59e0b, 0xec4899, 0x06b6d4, 0x8b5cf6, 0xef4444, 0x84cc16,
-    ];
-    c(LANES[color as usize % LANES.len()])
+impl Theme {
+    /// A log graph lane's color.
+    pub fn lane(&self, color: u32) -> Hsla {
+        self.lanes[color as usize % self.lanes.len()]
+    }
 }
 
-/// The platform's monospace family, which the kit makes sure is installed.
+/// The theme's monospace family, or the platform's, which the kit makes sure is installed.
 pub fn mono(cx: &App) -> SharedString {
     Kit::global(cx).mono_font_family.clone()
 }
@@ -243,8 +474,21 @@ pub fn mono(cx: &App) -> SharedString {
 /// Follows the window's appearance and gives the kit's own widgets our colors and text size.
 pub fn sync(window: &mut Window, cx: &mut App) {
     Kit::sync_system_appearance(Some(window), cx);
+    sync_kit(cx);
+}
+
+fn sync_kit(cx: &mut App) {
+    if !cx.has_global::<Kit>() {
+        return;
+    }
     let t = theme(cx);
+    let fonts = cx
+        .try_global::<Active>()
+        .map(|a| (a.font.clone(), a.mono.clone()));
     Kit::update(cx, |k| {
+        if let Some((font, mono)) = fonts {
+            (k.font_family, k.mono_font_family) = (font, mono);
+        }
         k.font_size = text::BODY;
         k.background = t.ground;
         k.foreground = t.fg;
@@ -270,4 +514,29 @@ pub fn sync(window: &mut Window, cx: &mut App) {
         code.style.editor_active_line = Some(t.line_highlight);
         k.highlight_theme = Arc::new(code);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundled_themes_are_complete_on_their_own() {
+        for (name, v) in bundled() {
+            for mode in ["light", "dark"] {
+                let m = v[mode].as_object().unwrap();
+                parse(m).unwrap_or_else(|e| panic!("{name} {mode}: {e}"));
+            }
+        }
+        assert_eq!(bundled().len(), BUNDLED.len());
+    }
+
+    #[test]
+    fn a_bad_token_says_which_and_why() {
+        let v: Value = serde_json::from_str(r##"{"dark": {"fg": "red"}}"##).unwrap();
+        let e = pair(&v, &bundled()).err().unwrap();
+        assert_eq!(e, r#"dark.fg: "red" is not #rrggbb or #rrggbbaa"#);
+        let v: Value = serde_json::from_str(r#"{"extends": "Nope"}"#).unwrap();
+        assert!(pair(&v, &bundled()).is_err());
+    }
 }

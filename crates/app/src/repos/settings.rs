@@ -355,7 +355,9 @@ struct Dialog {
     /// The Accounts section's.
     error: Option<String>,
     form: Option<Form>,
+    theme: Pick,
     _focus_in: Subscription,
+    _theme: Subscription,
 }
 
 impl EventEmitter<DismissEvent> for Dialog {}
@@ -365,6 +367,21 @@ impl Dialog {
         let (focus, accounts) = (cx.focus_handle(), cx.focus_handle());
         window.focus(&focus, cx);
         let git = "git binary (empty: from your shell PATH)";
+        let (names, current) = theme::names(cx);
+        let ix = names.iter().position(|n| *n == current).map(IndexPath::new);
+        let opts = names
+            .into_iter()
+            .map(|n| Opt(n.clone(), n.into()))
+            .collect();
+        let theme_pick = cx.new(|cx| SelectState::new(opts, ix, window, cx));
+        let _theme = cx.subscribe(
+            &theme_pick,
+            |_, _, e: &SelectEvent<Vec<Opt<String>>>, cx| {
+                if let SelectEvent::Confirm(Some(name)) = e {
+                    theme::choose(name, cx);
+                }
+            },
+        );
         let mut this = Dialog {
             repo: Store::global(cx).read(cx).current().map(String::from),
             _focus_in: cx.on_focus_in(&accounts, window, Self::reload),
@@ -379,6 +396,8 @@ impl Dialog {
             removing: None,
             error: None,
             form: None,
+            theme: theme_pick,
+            _theme,
         };
         // The Accounts section also shows its list's error inline on open.
         let open = |core: &AppState| {
@@ -772,6 +791,44 @@ impl Dialog {
             .when(none, |s| s.child(muted("None.", cx)))
     }
 
+    fn appearance_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let dir = Store::global(cx).read(cx).core().config_dir.join("themes");
+        let error = theme::error(cx).map(|e| {
+            labeled("settings.themeError", e)
+                .text_color(theme(cx).warning)
+                .text_size(text::SMALL)
+        });
+        section("settings.appearance", "Appearance".into(), cx)
+            .child(
+                row()
+                    .child(div().w(px(240.)).child(select(&self.theme, "settings.theme", cx)))
+                    .child(button(
+                        "settings.themes",
+                        "Open themes folder",
+                        true,
+                        cx,
+                        move |_, _, cx| {
+                            let dir = dir.clone();
+                            let opened = blocking::run(cx, move || {
+                                theme::seed(&dir)?;
+                                api::open_folder(&dir.to_string_lossy())
+                            });
+                            cx.spawn(async move |_, cx| {
+                                if let Err(e) = opened.await {
+                                    cx.update(|cx| say(e.to_string(), true, cx));
+                                }
+                            })
+                            .detach();
+                        },
+                    )),
+            )
+            .child(muted(
+                "Each file there is a theme, and an edit shows at once. A file needs only the colors it changes over the theme it extends.",
+                cx,
+            ))
+            .children(error)
+    }
+
     fn git_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let env = self.data.env.as_ref().map(|e| {
@@ -995,7 +1052,8 @@ impl Render for Dialog {
             .children(repo.map(|r| self.repo_view(&r, cx)))
             .children(mrs.map(|r| self.mrs_view(&r, cx)))
             .child(self.removed_view(cx))
-            .child(self.git_view(cx));
+            .child(self.git_view(cx))
+            .child(self.appearance_view(cx));
         let scrim = div()
             .id("settings.scrim")
             .test_support()

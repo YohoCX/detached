@@ -130,6 +130,8 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let config_dir = Store::global(cx).read(cx).core().config_dir.clone();
+        ui::theme::init(&config_dir, cx);
         ui::theme::sync(window, cx);
         history::init(cx);
         let store = Store::global(cx);

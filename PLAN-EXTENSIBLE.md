@@ -12,7 +12,7 @@ Decided with the owner on 2026-11-07, after a revmux plan review
 - Detached moves off read-only one capability at a time, past the `switch`, `stash` and `pull` it already
   runs. Each new write gets its own decision and test.
 
-**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `native/chat`, uncommitted: everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice.**
+**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS; the Fleet layout is step 3.**
 
 ## Steps
 
@@ -136,6 +136,12 @@ bundled theme. Inter and JetBrains Mono bundled (closes the fonts line in docs/T
 
 Done when: editing a theme file changes the running app, a broken file keeps the last good theme and
 says why, and a test covers both.
+
+Decided 2026-11-08: our own format, not the kit's `ThemeConfig` and `watch_dir`. Its schema has none
+of our tokens, and its watcher only logs a broken file. A file holds what it changes over the theme it
+`extends`, plus `font` and `mono_font`; see docs/THEMES.md. The folder is polled every 500 ms instead
+of watched, which needs no new dependency and sees an editor's atomic save. Syntax colors stay the
+kit's for now (TECHDEBT).
 
 ### 3. Dock and zones
 

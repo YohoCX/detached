@@ -3,7 +3,7 @@
 use detached_core::types::{Edge, LogRow};
 use gpui_kit::{Bounds, IntoElement, PathBuilder, Styled, canvas, fill, point, px, size};
 
-use crate::ui::theme::lane;
+use crate::ui::theme::theme;
 
 pub const LANE: f32 = 14.;
 pub const ROW: f32 = 28.;
@@ -13,7 +13,8 @@ pub fn paint(row: &LogRow) -> impl IntoElement {
     let (top, bottom, column, color) = (row.top.clone(), row.bottom.clone(), row.column, row.color);
     canvas(
         |_, _, _| {},
-        move |b, _, window, _| {
+        move |b, _, window, cx| {
+            let t = theme(cx);
             let at = |c: u32, y: f32| b.origin + point(px(c as f32 * LANE + LANE / 2.), px(y));
             let halves = [(&top, 0., ROW / 2.), (&bottom, ROW / 2., ROW)];
             // Butt caps: lyon's LineCap is not exported, and each end is clipped or under a dot.
@@ -28,12 +29,12 @@ pub fn paint(row: &LogRow) -> impl IntoElement {
                         p.cubic_bezier_to(at(to, y2), at(from, mid), at(to, mid));
                     }
                     if let Ok(path) = p.build() {
-                        window.paint_path(path, lane(color));
+                        window.paint_path(path, t.lane(color));
                     }
                 }
             }
             let dot = Bounds::centered_at(at(column, ROW / 2.), size(px(8.), px(8.)));
-            window.paint_quad(fill(dot, lane(color)).corner_radii(px(4.)));
+            window.paint_quad(fill(dot, t.lane(color)).corner_radii(px(4.)));
         },
     )
     .size_full()
