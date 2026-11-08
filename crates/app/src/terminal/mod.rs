@@ -15,7 +15,8 @@ use gpui_kit::{
 
 pub use session::{SCROLLBACK, Session};
 
-use crate::store::{Bottom, Store};
+use crate::dock::{self, Kind};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
 
@@ -101,11 +102,7 @@ impl Terminals {
                 let focus = s.read(cx).focus.clone();
                 window.focus(&focus, cx);
             }
-            None => Store::global(cx).update(cx, |s, cx| {
-                if s.bottom == Some(Bottom::Terminal) {
-                    s.toggle_bottom(Bottom::Terminal, cx);
-                }
-            }),
+            None => dock::close(Kind::Terminal, window, cx),
         }
         cx.notify();
     }
@@ -147,7 +144,7 @@ pub fn register(cx: &mut App) -> actions::Registration {
         "panel.terminal",
         "Terminal",
         actions::Group::View,
-        |_, cx| Store::global(cx).update(cx, |s, cx| s.toggle_bottom(Bottom::Terminal, cx)),
+        |window, cx| dock::toggle(Kind::Terminal, window, cx),
     )
 }
 

@@ -1,22 +1,22 @@
-//! The main area's file or diff; it stays alive under MR pages and job logs.
+//! A tab's file or diff.
 
 use detached_core::api;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, px,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px,
 };
 
 use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
 use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
-use crate::store::{Doc, Event, Store};
+use crate::blocking;
+use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
-use crate::{blocking, keymap};
 
 /// Set by `show_diff`, read by the next show.
 pub(super) struct FocusDiff(pub(super) bool);
@@ -31,18 +31,10 @@ enum Shown {
 pub struct Viewer {
     shown: Option<Shown>,
     _actions: Vec<Registration>,
-    _store: Subscription,
 }
 
 impl Viewer {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = Store::global(cx);
-        let store = cx.subscribe_in(&store, window, |this: &mut Self, store, e, window, cx| {
-            if let Event::Shown = e {
-                let shown = store.read(cx).shown().cloned();
-                this.show(shown, window, cx);
-            }
-        });
+    pub fn new(cx: &mut Context<Self>) -> Self {
         let this = cx.weak_entity();
         let zed = move |_: &mut Window, cx: &mut App| {
             this.update(cx, |v, cx| v.zed(cx)).ok();
@@ -66,11 +58,20 @@ impl Viewer {
         Viewer {
             shown: None,
             _actions: actions,
-            _store: store,
         }
     }
 
-    fn show(&mut self, shown: Option<Doc>, window: &mut Window, cx: &mut Context<Self>) {
+    /// Its keys go to this viewer's file or diff, over any other tab's.
+    pub fn raise(&self, cx: &App) {
+        crate::actions::raise(&self._actions, cx);
+        match &self.shown {
+            Some(Shown::File(v)) => v.read(cx).raise(cx),
+            Some(Shown::Diff(v)) => v.read(cx).raise(cx),
+            None => {}
+        }
+    }
+
+    pub fn show(&mut self, shown: Option<Doc>, window: &mut Window, cx: &mut Context<Self>) {
         let focus = cx.try_global::<FocusDiff>().is_some_and(|f| f.0);
         cx.set_global(FocusDiff(false));
         match shown {
@@ -114,11 +115,11 @@ impl Viewer {
 }
 
 impl Render for Viewer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         match &self.shown {
             Some(Shown::File(view)) => view.clone().into_any_element(),
             Some(Shown::Diff(view)) => view.clone().into_any_element(),
-            None => hints(cx).into_any_element(),
+            None => div().into_any_element(),
         }
     }
 }
@@ -234,28 +235,4 @@ pub(super) fn open_in_zed(repo: &str, path: &str, line: Option<u32>, cx: &mut Ap
         }
     })
     .detach();
-}
-
-fn hints(cx: &App) -> Div {
-    let hint = |label: &str, id: &str| {
-        let chord = div()
-            .font_family(ui::theme::mono(cx))
-            .child(keymap::chord_for(id, cx));
-        div()
-            .flex()
-            .gap(px(6.))
-            .child(label.to_string())
-            .child(chord)
-    };
-    div()
-        .flex()
-        .flex_col()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap(px(8.))
-        .text_color(theme(cx).muted)
-        .child(hint("Go to file", "file.goto"))
-        .child(hint("Search everywhere", "search.everywhere"))
-        .child(hint("Find in files", "find.inFiles"))
 }

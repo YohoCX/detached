@@ -21,7 +21,8 @@ use gpui_kit::{
 use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
-use crate::store::{Store, Tool};
+use crate::dock;
+use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::ui_state;
 use crate::util::{folder_name, in_folder};
@@ -616,13 +617,13 @@ fn remove_repo(
 
 fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
     let r = repo.to_string();
-    let compare = move |_: &mut Window, cx: &mut App| {
+    let compare = move |window: &mut Window, cx: &mut App| {
         let r = r.clone();
         Store::global(cx).update(cx, |s, cx| {
             s.compare.entry(r.clone()).or_default();
             s.set_current(Some(r), cx);
-            s.open_tool(Tool::Changes, cx);
-        })
+        });
+        dock::open(dock::Kind::Changes, window, cx);
     };
     let zed = {
         let r = repo.to_string();

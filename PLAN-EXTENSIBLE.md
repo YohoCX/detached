@@ -12,7 +12,7 @@ Decided with the owner on 2026-11-07, after a revmux plan review
 - Detached moves off read-only one capability at a time, past the `switch`, `stash` and `pull` it already
   runs. Each new write gets its own decision and test.
 
-**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS. Step 3's trial is on `native/dock`, uncommitted: the zones run on the kit's dock, see its verdict; the title bar, status bar and the strip's removal are next.**
+**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS. Step 3 is on `main` (local), waiting for the owner's look on macOS: zones on the kit's dock, documents in tabs, a flat title bar and a status bar, no icon strip.**
 
 ## Steps
 
@@ -178,8 +178,25 @@ What it costs:
 - Hidden views stay alive, so a tab builds its view when first on screen (else the MR list fetches for
   nobody). Project keeps its selection when closed now. The terminal starts its first shell when its
   tab is shown, through `Panel::set_active`.
-- The store's `tool` and `bottom` still drive the strip and the actions, and the shell shows them in
-  whatever zone holds them: closing a tool that was dragged to the bottom closes the bottom zone.
+
+Done, 2026-11-08:
+- The dock is the only record of what is open: `Tool`, `Bottom`, `open_tool` and `open_bottom` are
+  gone for `dock::open`, `toggle`, `close` and `is_shown` (PLAN-NATIVE's contracts changed with it).
+  `store.shown()` is the document of the tab last on screen; `store.show` opens a tab or brings its
+  tab forward, in whatever zone it is.
+- Documents are tabs (`dock::DocTab`), saved with the layout. Files and diffs share one preview tab,
+  in italics, which a double click keeps; MR pages, job logs and the chat get a tab each. A tab closes
+  on its button or a middle click. With no document, the center shows the hints.
+- Keys go to the tab on screen: a tab coming forward raises its actions (`actions::raise`), so with two
+  diffs F7 steps the one shown.
+- Navigation history stays one for the window: back and forward reopen a document wherever its tab is.
+- Tabs follow the current repo, as the panes did; a document and a chat carry their own repo.
+- The title bar is flat, with buttons for the chat, each zone and Settings; the status bar is at the
+  bottom; the icon strip is gone. The closed bottom zone's strip of tabs stays, until the owner says.
+- Tests moved to the tab ids (`tool.*`, `bottom.*`) through `on_screen` and `open_tab`, then the enums
+  went. Covered headless: a running chat and a live terminal moved between zones, documents back
+  after a restart, the preview tab, F7 on two diffs.
+- The kit gives an empty center no tab group, so nothing can be dropped there.
 
 ### 4. Plugins from a folder
 

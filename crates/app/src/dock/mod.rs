@@ -1,6 +1,9 @@
-//! The window's zones on the kit's dock: one `Tab` per app, the skin, and the saved layout.
+//! The window's zones on the kit's dock: a tab per app and per document, the skin, the saved layout.
 
+mod doc;
 mod skin;
+
+pub use doc::DocTab;
 
 use std::sync::Arc;
 
@@ -15,12 +18,12 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
-use crate::store::{Bottom, Store, Tool};
+use crate::store::Doc;
 use crate::ui::theme;
 use crate::ui_state;
 
 const KEY: &str = "dock.layout";
-const VERSION: usize = 1;
+const VERSION: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -31,11 +34,10 @@ pub enum Kind {
     Log,
     Pipelines,
     Terminal,
-    Main,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Repos,
         Kind::Changes,
         Kind::Project,
@@ -43,7 +45,6 @@ impl Kind {
         Kind::Log,
         Kind::Pipelines,
         Kind::Terminal,
-        Kind::Main,
     ];
 
     /// The name a saved layout knows it by.
@@ -56,7 +57,6 @@ impl Kind {
             Kind::Log => "log",
             Kind::Pipelines => "pipelines",
             Kind::Terminal => "terminal",
-            Kind::Main => "main",
         }
     }
 
@@ -69,7 +69,6 @@ impl Kind {
             Kind::Log => "Log",
             Kind::Pipelines => "Pipelines",
             Kind::Terminal => "Terminal",
-            Kind::Main => "Main",
         }
     }
 
@@ -83,42 +82,11 @@ impl Kind {
             Kind::Log => "bottom.Log",
             Kind::Pipelines => "bottom.Pipelines",
             Kind::Terminal => "bottom.Terminal",
-            Kind::Main => "tab.main",
         }
     }
 
-    pub fn of_tool(t: Tool) -> Kind {
-        match t {
-            Tool::Changes => Kind::Changes,
-            Tool::Files => Kind::Project,
-            Tool::Mrs => Kind::Mrs,
-        }
-    }
-
-    pub fn of_bottom(b: Bottom) -> Kind {
-        match b {
-            Bottom::Log => Kind::Log,
-            Bottom::Pipelines => Kind::Pipelines,
-            Bottom::Terminal => Kind::Terminal,
-        }
-    }
-
-    /// Tells the store a tab was picked, so the strip and the actions agree with the dock.
-    fn picked(self, cx: &mut App) {
-        let tool = [Tool::Changes, Tool::Files, Tool::Mrs]
-            .into_iter()
-            .find(|t| Kind::of_tool(*t) == self);
-        let bottom = [Bottom::Log, Bottom::Pipelines, Bottom::Terminal]
-            .into_iter()
-            .find(|b| Kind::of_bottom(*b) == self);
-        Store::global(cx).update(cx, |s, cx| {
-            if let Some(t) = tool {
-                s.open_tool(t, cx);
-            }
-            if let Some(b) = bottom {
-                s.open_bottom(b, cx);
-            }
-        });
+    pub fn from_id(id: &str) -> Option<Kind> {
+        Kind::ALL.into_iter().find(|k| k.id() == id)
     }
 }
 
@@ -254,6 +222,9 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
             Arc::new(Tab::new(kind, cx))
         });
     }
+    register_panel(cx, doc::NAME, |b, _, cx| {
+        doc::load(b.state(), cx).unwrap_or_else(|| missing(b.state(), cx))
+    });
     let saved = ui_state::get::<DockAreaState>(KEY, cx);
     let area = cx.new(|cx| {
         let mut area =
@@ -288,26 +259,128 @@ fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<Doc
             .iter()
             .fold(DockLayout::tabs(), |l, k| l.panel(Tab::new(*k, cx)))
     };
-    let (left, right, bottom, center) = (
-        tabs(&[Kind::Repos], cx),
-        tabs(&[Kind::Changes, Kind::Project, Kind::Mrs], cx),
-        tabs(&[Kind::Log, Kind::Pipelines, Kind::Terminal], cx),
-        tabs(&[Kind::Main], cx),
-    );
-    area.set_center(center, window, cx);
-    for (placement, layout, size) in [
-        (DockPlacement::Left, left, 280.),
-        (DockPlacement::Right, right, 300.),
-        (DockPlacement::Bottom, bottom, 280.),
+    for (placement, kinds, size) in [
+        (DockPlacement::Left, &[Kind::Repos][..], 280.),
+        (
+            DockPlacement::Right,
+            &[Kind::Changes, Kind::Project, Kind::Mrs],
+            300.,
+        ),
+        (
+            DockPlacement::Bottom,
+            &[Kind::Log, Kind::Pipelines, Kind::Terminal],
+            280.,
+        ),
     ] {
+        let layout = tabs(kinds, cx);
         area.set_dock(placement, layout, window, cx);
         area.set_dock_size(placement, px(size), window, cx);
     }
     area.toggle_dock(DockPlacement::Bottom, window, cx);
 }
 
-/// Where `kind` is and the tab's id, if the layout has it.
-pub fn find(area: &DockArea, kind: Kind, cx: &App) -> Option<(DockPlacement, PanelId)> {
+fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
+    if let Some(area) = zones(cx) {
+        area.update(cx, f);
+    }
+}
+
+/// Shows `kind`, opening its zone.
+pub fn open(kind: Kind, window: &mut Window, cx: &mut App) {
+    with(cx, |a, cx| {
+        if let Some((_, id)) = find(a, kind, cx) {
+            reveal(a, id, window, cx);
+        }
+    });
+}
+
+/// Shows `kind`, or closes its zone when `kind` is on screen there.
+pub fn toggle(kind: Kind, window: &mut Window, cx: &mut App) {
+    match is_shown(kind, cx) {
+        true => close(kind, window, cx),
+        false => open(kind, window, cx),
+    }
+}
+
+/// Closes the zone `kind` is on screen in.
+pub fn close(kind: Kind, window: &mut Window, cx: &mut App) {
+    if !is_shown(kind, cx) {
+        return;
+    }
+    with(cx, |a, cx| {
+        if let Some((p, _)) = find(a, kind, cx) {
+            set_open(a, p, false, window, cx);
+        }
+    });
+}
+
+/// Whether `kind` is the tab on screen in an open zone.
+pub fn is_shown(kind: Kind, cx: &App) -> bool {
+    zones(cx).is_some_and(|a| shown(a.read(cx), cx).contains(&kind))
+}
+
+pub fn is_open(p: DockPlacement, cx: &App) -> bool {
+    zones(cx).is_some_and(|a| a.read(cx).is_dock_open(p))
+}
+
+pub fn toggle_zone(p: DockPlacement, window: &mut Window, cx: &mut App) {
+    with(cx, |a, cx| a.toggle_dock(p, window, cx));
+}
+
+/// Selects the tab `id` and opens its zone.
+pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Context<DockArea>) {
+    area.select_panel(id, window, cx);
+    if let Some(p) = placements()
+        .into_iter()
+        .find(|p| area.layout(*p).is_some_and(|t| t.panels().any(|x| x == id)))
+    {
+        set_open(area, p, true, window, cx);
+    }
+}
+
+/// Brings forward the tab holding `doc`, else shows a file or diff in the center's preview tab,
+/// else opens a new tab in the center.
+pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Context<DockArea>) {
+    let file = doc::is_file(&doc);
+    let tabs = docs(area);
+    let found = tabs
+        .iter()
+        .find(|(_, _, t)| doc::same(&t.read(cx).doc, &doc))
+        .or_else(|| {
+            let preview = |(p, _, t): &&(_, _, Entity<DocTab>)| {
+                *p == DockPlacement::Center && !t.read(cx).keep
+            };
+            tabs.iter().find(preview).filter(|_| file)
+        })
+        .map(|(_, id, t)| (*id, t.clone()));
+    match found {
+        Some((id, tab)) => {
+            tab.update(cx, |t, cx| t.set_doc(doc, window, cx));
+            reveal(area, id, window, cx);
+        }
+        None => {
+            let tab = DocTab::new(doc, !file, cx);
+            area.add_panel(tab, DockPlacement::Center, None, window, cx);
+        }
+    }
+}
+
+/// Every document tab and its zone.
+pub fn docs(area: &DockArea) -> Vec<(DockPlacement, PanelId, Entity<DocTab>)> {
+    placements()
+        .into_iter()
+        .filter_map(|p| Some((p, area.layout(p)?)))
+        .flat_map(|(p, tree)| {
+            let ids: Vec<_> = tree.panels().collect();
+            ids.into_iter().filter_map(move |id| {
+                let tab = area.panel(id)?.view().downcast::<DocTab>().ok()?;
+                Some((p, id, tab))
+            })
+        })
+        .collect()
+}
+
+fn find(area: &DockArea, kind: Kind, cx: &App) -> Option<(DockPlacement, PanelId)> {
     placements().into_iter().find_map(|p| {
         let tree = area.layout(p)?;
         tree.panels()
@@ -316,8 +389,8 @@ pub fn find(area: &DockArea, kind: Kind, cx: &App) -> Option<(DockPlacement, Pan
     })
 }
 
-/// The tab on screen in each open zone.
-pub fn shown(area: &DockArea, cx: &App) -> Vec<Kind> {
+/// The app on screen in each open zone.
+fn shown(area: &DockArea, cx: &App) -> Vec<Kind> {
     placements()
         .into_iter()
         .filter(|p| *p == DockPlacement::Center || area.is_dock_open(*p))
@@ -335,22 +408,7 @@ pub fn shown(area: &DockArea, cx: &App) -> Vec<Kind> {
         .collect()
 }
 
-/// Shows `kind` in its zone, opening the zone.
-pub fn show(area: &mut DockArea, kind: Kind, window: &mut Window, cx: &mut Context<DockArea>) {
-    if let Some((p, id)) = find(area, kind, cx) {
-        area.select_panel(id, window, cx);
-        set_open(area, p, true, window, cx);
-    }
-}
-
-/// Closes the zone `kind` is in, unless that is the center.
-pub fn hide(area: &mut DockArea, kind: Kind, window: &mut Window, cx: &mut Context<DockArea>) {
-    if let Some((p, _)) = find(area, kind, cx) {
-        set_open(area, p, false, window, cx);
-    }
-}
-
-pub fn set_open(
+fn set_open(
     area: &mut DockArea,
     p: DockPlacement,
     open: bool,

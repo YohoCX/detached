@@ -25,8 +25,9 @@ use super::graph::{self, LANE, ROW};
 use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
+use crate::dock::{self, Kind};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Bottom, Doc, Event, Level, Notice, QueryId, Store};
+use crate::store::{Doc, Event, Level, Notice, QueryId, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::when;
 
@@ -82,7 +83,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// The Log on the shown file's repo and path; refs, text and author stay.
-fn file_history(_: &mut Window, cx: &mut App) {
+fn file_history(window: &mut Window, cx: &mut App) {
     let store = Store::global(cx);
     let (repo, path) = match store.read(cx).shown() {
         Some(Doc::File(l)) => (l.repo.clone(), l.path.clone()),
@@ -96,10 +97,8 @@ fn file_history(_: &mut Window, cx: &mut App) {
     let f = cx.default_global::<Filters>();
     f.repo = Some(repo.clone());
     f.fields[PATH] = path;
-    store.update(cx, |s, cx| {
-        s.set_current(Some(repo), cx);
-        s.open_bottom(Bottom::Log, cx);
-    });
+    store.update(cx, |s, cx| s.set_current(Some(repo), cx));
+    dock::open(Kind::Log, window, cx);
 }
 
 #[derive(Clone)]

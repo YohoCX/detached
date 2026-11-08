@@ -10,26 +10,14 @@ use detached_core::state::AppState;
 use detached_core::types::{Project, RepoInfo, RepoStatus, Side};
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
+use serde::{Deserialize, Serialize};
 
 use crate::actions::{self, Registration};
+use crate::dock::{self, Kind};
 use crate::{blocking, nav};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tool {
-    Changes,
-    Files,
-    Mrs,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bottom {
-    Log,
-    Pipelines,
-    Terminal,
-}
-
 /// A file at `rev` (None is the working tree), or with `doc` set an MR page or job log.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Location {
     pub repo: String,
     pub rev: Option<String>,
@@ -38,7 +26,7 @@ pub struct Location {
     pub doc: Option<DocRef>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DocRef {
     Mr {
         repo: String,
@@ -52,7 +40,7 @@ pub enum DocRef {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DiffDoc {
     pub repo: String,
     pub path: String,
@@ -61,8 +49,8 @@ pub struct DiffDoc {
     pub right: Side,
 }
 
-/// What the main area shows.
-#[derive(Clone, Debug, PartialEq)]
+/// A document in a tab.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Doc {
     File(Location),
     Diff(DiffDoc),
@@ -145,7 +133,7 @@ pub struct Message {
 pub enum Event {
     /// A repo's status was refreshed, changed or not; views showing its files reload.
     Status(String),
-    /// `show` ran, even with the same doc: the main area reveals and focuses it.
+    /// `show` ran, even with the same doc: its tab comes forward and focuses it.
     Shown,
 }
 
@@ -174,8 +162,6 @@ pub struct Store {
     pub notices: Vec<Notice>,
     pub message: Option<Message>,
     shown: Option<Doc>,
-    pub tool: Option<Tool>,
-    pub bottom: Option<Bottom>,
     /// The ref each repo's tree browses; absent is the working tree.
     pub refs: HashMap<String, String>,
     /// Repos whose Changes compare with a base branch; "" is the default branch.
@@ -210,8 +196,6 @@ impl Store {
                 notices: vec![],
                 message: None,
                 shown: None,
-                tool: Some(Tool::Changes),
-                bottom: None,
                 refs: HashMap::new(),
                 compare: HashMap::new(),
                 branch_names: HashMap::new(),
@@ -276,35 +260,24 @@ impl Store {
         self.compare.get(repo).map(String::as_str)
     }
 
+    /// The document of the tab last on screen.
     pub fn shown(&self) -> Option<&Doc> {
         self.shown.as_ref()
     }
 
+    /// Opens `doc` in a tab, or brings forward the tab that has it.
     pub fn show(&mut self, doc: Doc, cx: &mut Context<Self>) {
         self.shown = Some(doc);
         cx.emit(Event::Shown);
         cx.notify();
     }
 
-    /// Opens the tool panel; never closes it, unlike `toggle_tool`.
-    pub fn open_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        self.tool = Some(tool);
-        cx.notify();
-    }
-
-    pub fn toggle_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        self.tool = (self.tool != Some(tool)).then_some(tool);
-        cx.notify();
-    }
-
-    pub fn open_bottom(&mut self, bottom: Bottom, cx: &mut Context<Self>) {
-        self.bottom = Some(bottom);
-        cx.notify();
-    }
-
-    pub fn toggle_bottom(&mut self, bottom: Bottom, cx: &mut Context<Self>) {
-        self.bottom = (self.bottom != Some(bottom)).then_some(bottom);
-        cx.notify();
+    /// A tab came on screen or went: no tab opens.
+    pub fn set_shown(&mut self, doc: Option<Doc>, cx: &mut Context<Self>) {
+        if self.shown != doc {
+            self.shown = doc;
+            cx.notify();
+        }
     }
 
     /// The single status message slot; it stays until replaced or clicked away.
@@ -513,29 +486,22 @@ impl Store {
 fn register_actions(cx: &mut App) -> Vec<Registration> {
     use actions::Group::{Navigate, View};
     use actions::register;
-    let toggle_tool = |tool| {
-        move |_: &mut _, cx: &mut App| Store::global(cx).update(cx, |s, cx| s.toggle_tool(tool, cx))
-    };
-    let toggle_bottom = |bottom| {
-        move |_: &mut _, cx: &mut App| {
-            Store::global(cx).update(cx, |s, cx| s.toggle_bottom(bottom, cx))
-        }
-    };
+    let toggle = |kind| move |window: &mut _, cx: &mut App| dock::toggle(kind, window, cx);
     vec![
         register(
             cx,
             "panel.project",
             "Project Tree",
             View,
-            toggle_tool(Tool::Files),
+            toggle(Kind::Project),
         ),
-        register(cx, "panel.log", "Git Log", View, toggle_bottom(Bottom::Log)),
+        register(cx, "panel.log", "Git Log", View, toggle(Kind::Log)),
         register(
             cx,
             "panel.pipelines",
             "Pipelines",
             View,
-            toggle_bottom(Bottom::Pipelines),
+            toggle(Kind::Pipelines),
         ),
         crate::terminal::register(cx),
         crate::chat::register(cx),
@@ -603,7 +569,6 @@ mod tests {
                 Some("main")
             );
             assert_eq!(s.workspaces.len(), 1);
-            assert_eq!(s.tool, Some(Tool::Changes));
         });
     }
 
@@ -710,29 +675,6 @@ mod tests {
             let ids: Vec<_> = store.read(cx).notices.iter().map(|n| n.id).collect();
             assert_eq!(ids, [warn]);
         });
-    }
-
-    #[gpui_kit::test]
-    fn panel_actions_toggle_and_open_only_opens(cx: &mut TestAppContext) {
-        let (_dir, store) = boot(cx);
-        let cx = cx.add_empty_window();
-        let tool = |cx: &mut gpui_kit::VisualTestContext| cx.update(|_, cx| store.read(cx).tool);
-        cx.update(|w, cx| actions::run(w, cx, "panel.project"));
-        assert_eq!(tool(cx), Some(Tool::Files));
-        cx.update(|w, cx| actions::run(w, cx, "panel.project"));
-        assert_eq!(tool(cx), None);
-        for _ in 0..2 {
-            cx.update(|_, cx| store.update(cx, |s, cx| s.open_tool(Tool::Mrs, cx)));
-        }
-        assert_eq!(tool(cx), Some(Tool::Mrs));
-        cx.update(|w, cx| actions::run(w, cx, "panel.log"));
-        cx.update(|_, cx| store.update(cx, |s, cx| s.open_bottom(Bottom::Log, cx)));
-        assert_eq!(cx.update(|_, cx| store.read(cx).bottom), Some(Bottom::Log));
-        cx.update(|w, cx| actions::run(w, cx, "panel.pipelines"));
-        assert_eq!(
-            cx.update(|_, cx| store.read(cx).bottom),
-            Some(Bottom::Pipelines)
-        );
     }
 
     #[gpui_kit::test]

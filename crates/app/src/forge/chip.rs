@@ -15,7 +15,8 @@ use super::mr::{bare_title, number, show_mr};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
 use crate::cache::{self, Cache};
-use crate::store::{Store, Tool};
+use crate::dock::{self, Kind};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 
 struct Form {
@@ -58,7 +59,7 @@ impl MrChip {
                 "panel.mergeRequests",
                 "Merge Requests",
                 Group::View,
-                |_, cx| Store::global(cx).update(cx, |s, cx| s.toggle_tool(Tool::Mrs, cx)),
+                |window, cx| dock::toggle(Kind::Mrs, window, cx),
             ),
         ];
         let subscriptions = vec![

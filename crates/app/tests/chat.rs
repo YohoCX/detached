@@ -11,7 +11,7 @@ fn open_bare(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);
     let solo = app.sb.solo().display().to_string();
     app.store(|s, cx| s.set_current(Some(solo), cx));
-    app.click("strip.chat");
+    app.click("top.chat");
     app
 }
 
@@ -29,7 +29,7 @@ fn open_seeded(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> TestApp 
     });
     let solo = app.sb.solo().display().to_string();
     app.store(|s, cx| s.set_current(Some(solo), cx));
-    app.click("strip.chat");
+    app.click("top.chat");
     app
 }
 
@@ -159,7 +159,7 @@ fn the_session_outlives_its_page(cx: &mut TestAppContext) {
     });
     settle(cx);
     assert!(cx.find("chat").is_none());
-    cx.click("strip.chat");
+    cx.click("top.chat");
     wait_for_item(cx, "said hello");
     say(cx, "again");
     wait_for_item(cx, "said again");
@@ -198,7 +198,7 @@ fn a_new_conversation_ends_the_sidecar(cx: &mut TestAppContext) {
 fn no_repo_selected_says_so(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, layout);
     app.store(|s, cx| s.set_current(None, cx));
-    app.click("strip.chat");
+    app.click("top.chat");
     assert!(app.store(|s, _| s.shown().is_none()));
     assert!(app.store(|s, _| s.message.is_some()));
 }
@@ -322,7 +322,7 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
     assert!(
         matches!(shown, Some(Doc::Diff(d)) if d.path == "README.md" && matches!(d.right, detached_core::types::Side::Rev { .. }))
     );
-    cx.click("strip.chat");
+    cx.click("top.chat");
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
     cx.click(("chat.back.confirm", i));

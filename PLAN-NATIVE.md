@@ -82,7 +82,8 @@ crates/app/                package detached-app, binary detached
   src/nav.rs               back/forward and recent files
   src/ui_state.rs          ui.json
   src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip
-  src/shell.rs             strip, top bar slots, sidebar, tool, main and bottom slots, sizes
+  src/shell.rs             title bar slots, each app's view, the status bar
+  src/dock/                the zones on the kit's dock: app and document tabs, the saved layout
   src/status_bar.rs, notices.rs
   src/repos/               V1: sidebar, workspaces, repo switcher, branches, sync, settings, accounts;
                            api.rs is the contract
@@ -140,8 +141,8 @@ task that batches per frame. Each op or query has an id from the store; dropping
 starting a new query cancels the old id.
 
 **Store.** One GPUI entity holds what `src/lib/app.svelte.ts` holds today: repos, workspaces,
-current repo, statuses, outcomes, ops, notices, the status message, what the main area shows
-(`shown: Option<Doc>`), which tool and bottom panel are open (`tool`, `bottom`), the per-repo
+current repo, statuses, outcomes, ops, notices, the status message, the document of the tab last
+on screen (`shown: Option<Doc>`), the per-repo
 session maps other verticals read (tree ref `refs`, Compare base `compare`) and branch names per
 repo for the ref inputs (`branch_names`, loaded on demand). Views observe it and read what they
 need. Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
@@ -153,10 +154,10 @@ their own keys. Double Shift comes from `observe_keystrokes`: two lone Shift rel
 Off macOS, Cmd is Ctrl and the VCS popup is Alt+`, as today. Native menus (macOS) list the actions
 with their current chords and are rebuilt when the keymap changes.
 
-**Window.** macOS: transparent title bar, traffic lights at (24, 35), the top bar as the drag
-region. Windows and Linux: the kit's title bar with window controls at the right of the top bar.
-Minimum 900×600, default 1400×900. The Viewer stays alive under MR and job pages, as today
-(files.md §0).
+**Window.** macOS: transparent title bar, traffic lights at (16, 23), the title bar as the drag
+region. Windows and Linux: the kit's title bar with window controls at its right. Minimum 900×600,
+default 1400×900. Which zone holds which app and the open documents are the dock's (`dock/`), saved
+in `dock.layout` (PLAN-EXTENSIBLE step 3).
 
 **Self-test and smoke.** `--self-test <report>` keeps today's meaning: the backend check from
 `core::selftest` (login-shell PATH, node and git-lfs, a checkout with a node hook), run in `main`
@@ -251,16 +252,18 @@ commit on main, with the matching line in this section, without changing what is
 provider then fills it in.
 
 - **Store:** fields and events above; `store.current()`, `store.status(repo)`, `store.run_op(...)`,
-  `store.tree_ref(repo)`, `store.compare(repo)`, `store.shown()`, `store.show(Doc)`, and
-  `store.open_tool(Tool)`, `store.open_bottom(Bottom)`, which open that panel (never toggle; the
-  `panel.*` actions toggle), for Compare with Base (V1 opens Changes), file history (V4 opens Log)
-  and Run Pipeline and the badge (V5 open Pipelines).
+  `store.tree_ref(repo)`, `store.compare(repo)`, `store.shown()`, `store.show(Doc)`, which opens
+  the doc in a tab or brings its tab forward.
+- **Dock:** `dock::open(Kind, window, cx)`, which shows an app in its zone (never toggles; the
+  `panel.*` actions toggle with `dock::toggle`), for Compare with Base (V1 opens Changes), file
+  history (V4 opens Log) and Run Pipeline and the badge (V5 open Pipelines); `dock::is_shown(Kind)`.
 - **Threads:** `blocking::run`, `blocking::stream`, the op and query id rules.
 - **Core:** `api::file_patch` returns `FilePatch::Patch` (the whole file as one hunk),
   `Unchanged(text)` for equal sides, or `Sides(FileDiff)` when the sides are not two texts.
 - **Actions:** `actions::register(cx, id, title, group, handler) -> Registration`. The latest
   registration of an id wins; dropping it restores the previous one (how the MR page's diff takes
-  F7, Shift+F7 and Cmd+L from the main viewer while mounted). `actions::run(window, cx, id) -> bool` says
+  F7, Shift+F7 and Cmd+L from the main viewer while mounted); `actions::raise` puts a tab's back on
+  top when it comes on screen. `actions::run(window, cx, id) -> bool` says
   whether a handler ran. A vertical adds its ids to the list in `actions.rs` and default chords to
   `keymap.rs` (append-only). Each action's handler is registered by the vertical that owns its
   behavior; step 0 adds an owner column to docs/KEYMAP.md's table, covering every action of today's
@@ -269,8 +272,8 @@ provider then fills it in.
   → V1; the palette modes (`search.everywhere`, `file.goto`, `action.find`, `file.recent`,
   `vcs.popup`) and `find.inFiles` → V3; viewer and diff actions → V2; `vcs.fileHistory` → V4;
   `mr.*`, `pipeline.*`, `panel.mergeRequests` → V5.
-- **Shell slots:** `Tool::{Changes, Files, Mrs}`, `Bottom::{Log, Pipelines, Terminal}`,
-  `Doc::{File, Diff, Mr, Job}`, and the top bar's `TopBar::Left` (V1: workspaces, repo switcher,
+- **Shell slots:** `dock::Kind::{Repos, Changes, Project, Mrs, Log, Pipelines, Terminal}` with
+  `shell::app`, `Doc::{File, Diff, Mr, Job, Chat}`, and the title bar's `TopBar::Left` (V1: workspaces, repo switcher,
   branch widget), `TopBar::Center` (V5: MR chip, pipeline badge), `TopBar::Right` (V3: search pill;
   V1: Fetch All, Pull All), and `overlays`, modals drawn over the window and under the notices,
   inside the shell's key context so chords still reach the app while one is open (V3: palette,

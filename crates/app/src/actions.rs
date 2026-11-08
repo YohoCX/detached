@@ -122,6 +122,20 @@ pub fn register(
     }
 }
 
+/// Puts `regs` over every other registration of their ids, as for the tab that came on screen.
+pub fn raise(regs: &[Registration], cx: &App) {
+    let Some(r) = cx.try_global::<Registry>() else {
+        return;
+    };
+    let mut h = r.0.borrow_mut();
+    for reg in regs {
+        if let Some(i) = h.stack.iter().position(|(_, key, _)| *key == reg.key) {
+            let entry = h.stack.remove(i);
+            h.stack.push(entry);
+        }
+    }
+}
+
 fn registered(cx: &App, id: &str) -> Option<(Action, Handler)> {
     let h = cx.try_global::<Registry>()?.0.borrow();
     let (a, _, f) = h.stack.iter().rev().find(|(a, ..)| a.id == id)?;
@@ -206,6 +220,19 @@ mod tests {
         drop(over);
         cx.update(|w, cx| run(w, cx, "diff.next"));
         assert_eq!((main.get(), mr.get()), (1, 1));
+    }
+
+    #[gpui_kit::test]
+    fn a_raised_registration_wins_again(cx: &mut TestAppContext) {
+        let (a, b) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let cx = cx.add_empty_window();
+        let first = cx.update(|_, cx| reg(cx, "diff.next", counter(&a)));
+        let _second = cx.update(|_, cx| reg(cx, "diff.next", counter(&b)));
+        cx.update(|w, cx| {
+            raise(std::slice::from_ref(&first), cx);
+            run(w, cx, "diff.next")
+        });
+        assert_eq!((a.get(), b.get()), (1, 0));
     }
 
     #[gpui_kit::test]

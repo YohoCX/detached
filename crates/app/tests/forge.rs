@@ -5,7 +5,7 @@ use std::time::Duration;
 use common::*;
 use detached_app::actions;
 use detached_app::files::{self, DiffDoc, Side};
-use detached_app::store::{Bottom, Doc, Tool};
+use detached_app::store::Doc;
 use detached_core::api;
 use detached_core::types::{AccountInput, MrAction, Provider};
 use detached_forge_fake::{Forge, Kind, Pipeline, Request, Status};
@@ -118,7 +118,7 @@ fn open_pipeline(cx: &mut VisualTestContext, id: u64) {
         label(cx, "pipeline.badge").as_deref() == Some("✓success")
     });
     cx.click("pipeline.badge");
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Pipelines));
+    assert!(on_screen(cx, "bottom.Pipelines"));
     let row = ("pipeline", id);
     wait_until(cx, |cx| label(cx, row).is_some());
     let l = label(cx, row).unwrap();
@@ -265,7 +265,7 @@ fn pipeline_run_opens_the_panel_with_the_form(cx: &mut TestAppContext) {
     show(cx, "gitlab");
     assert!(cx.update(|w, cx| actions::run(w, cx, "pipeline.run")));
     settle(cx);
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Pipelines));
+    assert!(on_screen(cx, "bottom.Pipelines"));
     wait_until(cx, |cx| {
         value(cx, "run.branch").as_deref() == Some("feature")
     });
@@ -280,7 +280,7 @@ fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     seed.projects[0].pipelines[0].status = Status::Running;
     forge.reset(seed.clone());
     show(cx, "gitlab");
-    cx.store(|s, cx| s.open_bottom(Bottom::Pipelines, cx));
+    open_tab(cx, "bottom.Pipelines");
     let shows = |cx: &mut VisualTestContext, glyph: &str| {
         let is = |l: Option<String>| l.is_some_and(|l| l.starts_with(glyph));
         is(label(cx, ("pipeline", 100u64))) && is(label(cx, "pipeline.badge"))
@@ -465,7 +465,7 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    cx.click("strip.mrs");
+    open_tab(cx, "tool.MRs");
     let row = ("mr", 1u64);
     wait_until(cx, |cx| label(cx, row).is_some());
     let l = label(cx, row).unwrap();
@@ -568,7 +568,7 @@ fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppCont
     };
     api::save_account(&core, second).unwrap();
     show(cx, "gitlab");
-    cx.click("strip.mrs");
+    open_tab(cx, "tool.MRs");
     let ambiguous = |l: String| l.starts_with("Several accounts fit 127.0.0.1");
     wait_until(cx, |cx| label(cx, "mrs.setup").is_some_and(ambiguous));
     cx.click("mrs.settings");
@@ -598,7 +598,7 @@ fn the_mr_list_is_one_request_and_a_repo_returned_to_shows_its_cache(cx: &mut Te
     show(cx, "gitlab");
     wait_until(cx, |cx| label(cx, "mr.chip").is_some());
     let before = forge.requests().len();
-    cx.click("strip.mrs");
+    open_tab(cx, "tool.MRs");
     let row = ("mr", 1u64);
     wait_until(cx, |cx| label(cx, row).is_some());
     let lists = forge.requests().split_off(before).into_iter();
@@ -642,11 +642,12 @@ fn panel_merge_requests_toggles_the_list(cx: &mut TestAppContext) {
     let cx = &mut app;
     let run = |cx: &mut VisualTestContext| {
         assert!(cx.update(|w, cx| actions::run(w, cx, "panel.mergeRequests")));
-        cx.store(|s, _| s.tool)
+        settle(cx);
+        on_screen(cx, "tool.MRs")
     };
-    assert_eq!(run(cx), Some(Tool::Mrs));
+    assert!(run(cx));
     assert!(cx.find("mrs.refresh").is_some());
-    assert_eq!(run(cx), None);
+    assert!(!run(cx));
 }
 
 #[gpui_kit::test]
@@ -654,7 +655,7 @@ fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    cx.click("strip.mrs");
+    open_tab(cx, "tool.MRs");
     let row = ("mr", 1u64);
     wait_until(cx, |cx| label(cx, row).is_some());
     let pick = |cx: &mut VisualTestContext, keys: &[&str]| {

@@ -398,6 +398,19 @@ pub fn zone_size(cx: &mut VisualTestContext, zone: DockPlacement, size: f32) {
     });
 }
 
+/// Whether the app with tab id `id` (`tool.Changes`, `bottom.Log`, ...) is on screen.
+pub fn on_screen(cx: &mut VisualTestContext, id: &str) -> bool {
+    let kind = detached_app::dock::Kind::from_id(id).expect("an app's tab id");
+    cx.update(|_, cx| detached_app::dock::is_shown(kind, cx))
+}
+
+/// Shows the app with tab id `id`, opening its zone.
+pub fn open_tab(cx: &mut VisualTestContext, id: &str) {
+    let kind = detached_app::dock::Kind::from_id(id).expect("an app's tab id");
+    cx.update(|w, cx| detached_app::dock::open(kind, w, cx));
+    settle(cx);
+}
+
 /// Runs what is ready on the executor; core's threads go on meanwhile.
 pub fn settle(cx: &TestAppContext) {
     cx.executor().allow_parking();

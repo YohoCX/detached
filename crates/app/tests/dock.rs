@@ -1,8 +1,11 @@
 mod common;
 
 use common::*;
+use detached_app::chat;
+use detached_app::files::{self, DiffDoc, Side};
 use detached_app::terminal::Terminals;
 use detached_app::{shell, ui_state};
+use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, AppContext, Pixels, TestAppContext, VisualTestContext, px};
 
@@ -114,4 +117,115 @@ fn a_saved_app_this_build_lacks_shows_a_placeholder_and_is_saved_back(cx: &mut T
         ui_state::get::<serde_json::Value>("dock.layout", cx)
     });
     assert!(saved.unwrap().to_string().contains("\"plugin.gone\""));
+}
+
+fn diff(cx: &TestApp, path: &str) -> DiffDoc {
+    DiffDoc {
+        repo: cx.sb.repo("app").display().to_string(),
+        path: path.into(),
+        orig_path: None,
+        left: Side::Head,
+        right: Side::Worktree,
+    }
+}
+
+fn show_diff(cx: &mut VisualTestContext, doc: &DiffDoc) {
+    cx.update(|_, cx| files::show_diff(cx, doc.clone(), true));
+    settle(cx);
+}
+
+/// The selected line, as Copy takes it from the focused diff.
+fn cursor(cx: &mut VisualTestContext) -> String {
+    cx.press("secondary-c");
+    let copied = cx.read_from_clipboard().and_then(|c| c.text());
+    copied.unwrap_or_default()
+}
+
+#[gpui_kit::test]
+fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let (readme, notes) = (diff(cx, "README.md"), diff(cx, "notes.txt"));
+    show_diff(cx, &readme);
+    show_diff(cx, &notes);
+    assert!(
+        cx.find("doc.diff.README.md").is_none(),
+        "the preview took the next diff"
+    );
+    show_diff(cx, &readme);
+    cx.update(|w, cx| w.double_click("doc.diff.README.md", cx));
+    settle(cx);
+    show_diff(cx, &notes);
+    assert!(cx.find("doc.diff.README.md").is_some(), "a kept tab stays");
+    assert_eq!(cx.find("doc.diff.notes.txt").unwrap().checked(), Some(true));
+
+    // The notes diff came last, so its keys were on top until the README tab came back.
+    cx.click("doc.diff.README.md");
+    show_diff(cx, &readme);
+    wait_until(cx, |cx| {
+        cx.find("diff-body").and_then(|e| e.focused()) == Some(true)
+    });
+    assert_eq!(cursor(cx), "line 5 changed\n");
+    cx.press("f7");
+    assert_eq!(cursor(cx), "line 50 changed\n");
+}
+
+#[gpui_kit::test]
+fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let solo = cx.sb.solo().display().to_string();
+    cx.store(|s, cx| s.set_current(Some(solo), cx));
+    let readme = diff(cx, "README.md");
+    show_diff(cx, &readme);
+    cx.click("top.chat");
+    let again = reopen(cx);
+    let tabs = in_window(cx, again, |w, _| {
+        ["doc.diff.README.md", "doc.chat"].map(|id| w.try_find(id).is_some())
+    });
+    assert_eq!(tabs, [true, true]);
+    in_window(cx, again, |w, cx| {
+        w.within("doc.chat").click("tab.close", cx)
+    });
+    settle(cx);
+    let left = in_window(cx, again, |w, _| w.try_find("doc.chat").is_none());
+    assert!(left, "closed");
+}
+
+#[gpui_kit::test]
+fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        let installed = agent::sidecar(&sb.state.config_dir);
+        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_fake_sidecar"), installed).unwrap();
+    });
+    let solo = cx.sb.solo().display().to_string();
+    cx.store(|s, cx| s.set_current(Some(solo.clone()), cx));
+    // A second document, since the last tab of the center can't be dragged out.
+    let readme = diff(cx, "README.md");
+    show_diff(cx, &readme);
+    cx.click("top.chat");
+    cx.input("hang");
+    cx.press("enter");
+    let working = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("chat.item", i)))
+                .any(|e| e.label().is_some_and(|l| l.contains("Working")))
+        })
+    };
+    wait_until(cx, working);
+    let session = cx.update(|_, cx| chat::session(&solo, cx).entity_id());
+    assert!(x(cx, "doc.chat") < px(1000.), "in the center");
+
+    drag_tab(cx, "doc.chat", "tool.Changes");
+    assert!(x(cx, "doc.chat") > px(1000.), "in the right zone");
+    assert!(working(cx), "the same feed");
+    assert!(cx.find("chat.stop").is_some(), "the turn goes on");
+    let now = cx.update(|_, cx| chat::session(&solo, cx).entity_id());
+    assert_eq!(now, session, "the same session");
+    cx.click("chat.stop");
+    wait_until(cx, |cx| cx.find("chat.stop").is_none());
 }

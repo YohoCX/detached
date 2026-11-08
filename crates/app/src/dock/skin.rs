@@ -10,14 +10,15 @@ use gpui_kit::base::dock::{
     PanelState, PanelView, TabGroupContext, TabGroupRenderer,
 };
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Context, Div, Empty, InteractiveElement, IntoElement,
-    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas, div,
-    point, prelude::FluentBuilder, px, size,
+    AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement,
+    Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
 };
 
-use super::{Kind, Tab, missing};
-use crate::ui::{self, GAP, radius, theme};
+use super::{DocTab, Kind, Tab, missing};
+use crate::keymap;
+use crate::ui::{self, GAP, Icon, radius, theme};
 
 /// The zone whose grip is held, and the pointer's distance from that zone's edge.
 type Held = Rc<Cell<Option<(DockPlacement, Point<Pixels>)>>>;
@@ -39,6 +40,14 @@ impl Skin {
 impl DockAreaRenderer for Skin {
     fn frame(&self, _: &mut Window, _: &mut App) -> Stateful<Div> {
         div().id("dock").size_full().p(GAP)
+    }
+
+    /// The hints lie under the center's tabs, so they show when no document is open.
+    fn center_frame(&self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
+        div()
+            .id("dock.center")
+            .relative()
+            .child(hints(cx).absolute().size_full())
     }
 
     fn render_dock(
@@ -155,78 +164,138 @@ fn grip(p: DockPlacement) -> &'static str {
 
 struct Group;
 
-fn kinds(group: &TabGroupContext, cx: &App) -> Vec<Option<Kind>> {
-    group
-        .panels()
-        .iter()
-        .map(|p| p.view().downcast::<Tab>().ok().map(|t| t.read(cx).kind))
-        .collect()
+/// What a tab shows: an app, a document, or a saved panel this build lacks.
+struct Label {
+    id: SharedString,
+    title: SharedString,
+    kind: Option<Kind>,
+    doc: Option<Entity<DocTab>>,
 }
 
-/// Repos and the main area bring their own chrome, so alone they get no tab bar.
-fn bare(group: &TabGroupContext, cx: &App) -> bool {
-    matches!(
-        kinds(group, cx).as_slice(),
-        [Some(Kind::Repos | Kind::Main)]
-    )
+fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
+    let label = |(ix, p): (usize, &Arc<dyn PanelView>)| {
+        let view = p.view();
+        if let Ok(t) = view.clone().downcast::<Tab>() {
+            let k = t.read(cx).kind;
+            return Label {
+                id: k.id().into(),
+                title: k.title().into(),
+                kind: Some(k),
+                doc: None,
+            };
+        }
+        match view.downcast::<DocTab>() {
+            Ok(d) => Label {
+                id: d.read(cx).id(),
+                title: d.read(cx).title(cx),
+                kind: None,
+                doc: Some(d),
+            },
+            Err(_) => Label {
+                id: format!("tab.{ix}").into(),
+                title: "Missing".into(),
+                kind: None,
+                doc: None,
+            },
+        }
+    };
+    group.panels().iter().enumerate().map(label).collect()
 }
 
 impl TabGroupRenderer for Group {
     fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let docs = labels(group, cx).iter().any(|l| l.doc.is_some());
         let id = ("group", group.node().as_u64() as usize);
-        match kinds(group, cx).as_slice() {
-            [Some(Kind::Main)] => div().id(id),
-            _ => ui::panel(div().id(id), cx).overflow_hidden(),
-        }
+        ui::panel(div().id(id), cx)
+            .overflow_hidden()
+            .when(docs, |f| f.bg(theme(cx).code))
     }
 
     fn render_tab_bar(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> AnyElement {
-        if bare(group, cx) {
+        let labels = labels(group, cx);
+        // Repos brings its own chrome, so alone it gets no tab bar.
+        if matches!(
+            labels.as_slice(),
+            [Label {
+                kind: Some(Kind::Repos),
+                ..
+            }]
+        ) {
             return Empty.into_any_element();
         }
         let t = theme(cx);
         let active = (!group.is_collapsed()).then(|| group.active_ix());
         let count = group.panels().len();
-        let tabs = kinds(group, cx).into_iter().enumerate().map(|(ix, kind)| {
-            let (id, title): (SharedString, &'static str) = match kind {
-                Some(k) => (k.id().into(), k.title()),
-                None => (format!("tab.{ix}").into(), "Missing"),
-            };
-            let on = active == Some(ix);
-            let (clicked, dropped) = (group.clone(), group.clone());
+        let ids: Vec<_> = group.panels().iter().map(|p| p.panel_id(cx)).collect();
+        let tabs = labels.into_iter().enumerate().map(|(ix, l)| {
+            let (on, id) = (active == Some(ix), ids[ix]);
+            let preview = l.doc.as_ref().is_some_and(|d| !d.read(cx).keep);
+            let closable = group.is_panel_closable(id, cx);
+            let (clicked, dropped, closed) = (group.clone(), group.clone(), group.clone());
+            let (title, kept) = (l.title.clone(), l.doc.clone());
+            let close = closable.then(|| {
+                let closed = closed.clone();
+                ui::icon_button("tab.close", Icon::Close.size(px(10.)), cx)
+                    .test_support()
+                    .size(px(16.))
+                    .min_w(px(16.))
+                    .px_0()
+                    .when(!on, |b| b.invisible().group_hover("tab", |s| s.visible()))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        closed.close(id, window, cx)
+                    })
+            });
             div()
-                .id(id)
+                .id(l.id)
                 .test_support()
                 .role(Role::Tab)
                 .aria_toggled(on.into())
-                .px(px(10.))
+                .aria_label(l.title.clone())
+                .group("tab")
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .pl(px(10.))
+                .pr(px(if closable { 4. } else { 10. }))
                 .py(px(3.))
                 .rounded(radius::ICON_BUTTON)
+                .when(preview, |d| d.italic())
                 .map(|d| match on {
                     true => d.bg(t.selected).text_color(t.fg),
                     false => d
                         .text_color(t.muted)
                         .hover(|s| s.bg(t.hover).text_color(t.fg)),
                 })
-                .on_click(move |_, window, cx| {
+                .on_click(move |e, window, cx| {
                     clicked.select_tab(ix, window, cx);
-                    if let Some(k) = kind {
-                        k.picked(cx);
+                    if let Some(a) = super::zones(cx) {
+                        a.update(cx, |a, cx| super::reveal(a, id, window, cx));
                     }
+                    if let (2, Some(d)) = (e.click_count(), &kept) {
+                        d.update(cx, |d, cx| d.keep(cx));
+                    }
+                })
+                .when(closable, |d| {
+                    d.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                        closed.close(id, window, cx)
+                    })
                 })
                 .when_some(group.drag_panel(ix, cx), |d, drag| {
                     d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
                         cx.stop_propagation();
                         drag.set_drag_offset(offset);
                         drag.set_preview_size(size(px(120.), px(28.)));
-                        cx.new(|_| Preview(title))
+                        cx.new(|_| Preview(title.clone()))
                     })
                 })
                 .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
                 .on_drop(move |drag: &DragPanel, window, cx| {
                     dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
                 })
-                .child(title)
+                .child(l.title)
+                .children(close)
         });
         let end = group.clone();
         let node = group.node();
@@ -296,10 +365,37 @@ impl TabGroupRenderer for Group {
     }
 }
 
-struct Preview(&'static str);
+struct Preview(SharedString);
 
 impl Render for Preview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        ui::glass(div(), cx).px(px(10.)).py(px(4.)).child(self.0)
+        ui::glass(div(), cx)
+            .px(px(10.))
+            .py(px(4.))
+            .child(self.0.clone())
     }
+}
+
+fn hints(cx: &App) -> Div {
+    let hint = |label: &str, id: &str| {
+        let chord = div()
+            .font_family(ui::theme::mono(cx))
+            .child(keymap::chord_for(id, cx));
+        div()
+            .flex()
+            .gap(px(6.))
+            .child(label.to_string())
+            .child(chord)
+    };
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme(cx).muted)
+        .child(hint("Go to file", "file.goto"))
+        .child(hint("Search everywhere", "search.everywhere"))
+        .child(hint("Find in files", "find.inFiles"))
 }

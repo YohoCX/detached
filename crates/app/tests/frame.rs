@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
-use detached_app::store::Tool;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
@@ -16,7 +15,7 @@ fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
 }
 
 #[gpui_kit::test]
-fn cmd_9_and_the_strip_open_and_switch_the_bottom_panel(cx: &mut TestAppContext) {
+fn cmd_9_the_tabs_and_the_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     // A closed bottom zone keeps its tabs as a strip, none of them on.
     assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
@@ -32,14 +31,16 @@ fn cmd_9_and_the_strip_open_and_switch_the_bottom_panel(cx: &mut TestAppContext)
     cx.press("secondary-9");
     assert_eq!(on(cx, "bottom.Log"), Some(false));
 
-    cx.click("strip.pipelines");
-    assert_eq!(on(cx, "bottom.Pipelines"), Some(true));
-    assert_eq!(on(cx, "strip.pipelines"), Some(true));
-    cx.click("strip.log");
-    assert_eq!(on(cx, "bottom.Log"), Some(true));
-    assert_eq!(on(cx, "strip.pipelines"), Some(false));
-    cx.click("strip.log");
+    cx.click("zone.bottom");
+    assert_eq!(
+        on(cx, "bottom.Log"),
+        Some(true),
+        "the zone opens on its last tab"
+    );
+    assert_eq!(on(cx, "zone.bottom"), Some(true));
+    cx.click("zone.bottom");
     assert_eq!(on(cx, "bottom.Log"), Some(false));
+    assert_eq!(on(cx, "zone.bottom"), Some(false));
 }
 
 #[gpui_kit::test]
@@ -57,7 +58,7 @@ fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
     cx.press("secondary-shift-l");
     assert_eq!(on(cx, "bottom.Log"), Some(true));
     cx.press("secondary-1");
-    assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Changes));
+    assert!(on_screen(cx, "tool.Changes"));
 }
 
 fn names(cx: &mut VisualTestContext) -> Vec<String> {

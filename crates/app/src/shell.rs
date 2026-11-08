@@ -1,7 +1,7 @@
-//! The window: strip, top bar slots, and the dock with each app's view.
+//! The window: the title bar with each vertical's widgets, the dock, the status bar.
 
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockArea;
+use gpui_kit::base::dock::{DockArea, DockPlacement};
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -9,15 +9,14 @@ use gpui_kit::{
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
     WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px, relative, size,
-    transparent_black,
 };
 
 use crate::dock::{self, Kind};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
-use crate::store::{Bottom, Doc, Store, Tool};
+use crate::store::{Doc, Event, Store};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
-use crate::{actions, chat, files, forge, history, keymap, search, terminal};
+use crate::{actions, files, forge, history, keymap, search, terminal};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -56,7 +55,6 @@ pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
         Kind::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
         Kind::Pipelines => forge::pipelines(window, cx),
         Kind::Terminal => terminal::panel(cx),
-        Kind::Main => cx.new(|cx| Main::new(window, cx)).into(),
     }
 }
 
@@ -64,20 +62,6 @@ pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
 pub fn shown(kind: Kind, window: &mut Window, cx: &mut App) {
     if kind == Kind::Terminal {
         terminal::shown(window, cx);
-    }
-}
-
-/// Shows `Doc::File` and `Doc::Diff`; it stays alive under MR pages and job logs.
-fn viewer(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| files::Viewer::new(window, cx)).into()
-}
-
-/// An MR page, a job log or the chat, over the viewer.
-fn page(doc: &Doc, window: &mut Window, cx: &mut App) -> AnyView {
-    match doc {
-        Doc::Mr { repo, number } => forge::mr_page(repo.clone(), *number, window, cx),
-        Doc::Chat { repo } => chat::page(repo, window, cx),
-        _ => forge::job_log(doc, cx),
     }
 }
 
@@ -94,10 +78,10 @@ pub fn window_options(cx: &App) -> WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("Detached".into()),
             appears_transparent: true,
-            // Lands at (24, 35): AppKit adds its 9 pt button inset to the top edge.
-            traffic_light_position: Some(point(px(24.), px(26.))),
+            // AppKit adds its 9 pt button inset to the top edge.
+            traffic_light_position: Some(point(px(16.), px(14.))),
         }),
-        // The top bar moves the window itself, as the kit's title bar does.
+        // The title bar moves the window itself, as the kit's does.
         app_owns_titlebar_drag: true,
         window_decorations: Some(WindowDecorations::Client),
         app_id: Some("dev.wdevs.detached".into()),
@@ -119,8 +103,6 @@ pub struct Shell {
     center: Vec<AnyView>,
     right: Vec<AnyView>,
     dock: Entity<DockArea>,
-    /// The store's tool and bottom panel as last shown in the dock.
-    shown: (Option<Tool>, Option<Bottom>),
     overlays: Vec<AnyView>,
     status: Entity<StatusBar>,
     notices: Entity<Notices>,
@@ -138,22 +120,17 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let dock = dock::area(window, cx);
-        // The saved layout says which tool and bottom panel are open.
-        let on = dock::shown(dock.read(cx), cx);
-        let shown = (
-            [Tool::Changes, Tool::Files, Tool::Mrs]
-                .into_iter()
-                .find(|t| on.contains(&Kind::of_tool(*t))),
-            [Bottom::Log, Bottom::Pipelines, Bottom::Terminal]
-                .into_iter()
-                .find(|b| on.contains(&Kind::of_bottom(*b))),
-        );
-        store.update(cx, |s, _| (s.tool, s.bottom) = shown);
         let subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.observe(&dock, |_, _, cx| cx.notify()),
+            cx.subscribe_in(&store, window, |this, store, e: &Event, window, cx| {
+                if let (Event::Shown, Some(doc)) = (e, store.read(cx).shown().cloned()) {
+                    this.dock
+                        .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
+                }
+            }),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
@@ -166,7 +143,6 @@ impl Shell {
             center: top_bar(TopBar::Center, window, cx),
             right: top_bar(TopBar::Right, window, cx),
             dock,
-            shown,
             overlays: overlays(window, cx),
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
@@ -175,149 +151,80 @@ impl Shell {
         }
     }
 
-    /// Shows the store's tool and bottom panel in the dock when they change.
-    fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let want = (s.tool, s.bottom);
-        let old = std::mem::replace(&mut self.shown, want);
-        let pairs = [
-            (old.0.map(Kind::of_tool), want.0.map(Kind::of_tool)),
-            (old.1.map(Kind::of_bottom), want.1.map(Kind::of_bottom)),
-        ];
-        self.dock.update(cx, |a, cx| {
-            for (was, now) in pairs {
-                match (was, now) {
-                    (was, Some(k)) if was != now => dock::show(a, k, window, cx),
-                    (Some(k), None) => dock::hide(a, k, window, cx),
-                    _ => {}
-                }
-            }
-        });
-    }
-
-    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let bar = ui::panel(div(), cx)
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .items_center()
-            .gap(px(6.))
-            .h_full()
-            .px(px(8.))
-            .when(MAC, |b| b.pl(px(90.)))
-            .children(self.left.iter().cloned())
-            .children(self.center.iter().cloned())
-            .child(self.status.clone())
-            .children(self.right.iter().cloned());
-        TitleBar::new()
-            .h(px(56.))
-            .pl_0()
-            .border_b(px(0.))
-            .bg(transparent_black())
-            .child(div().flex().flex_1().h_full().pt(GAP).px(GAP).child(bar))
-    }
-
-    fn strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let s = Store::global(cx).read(cx);
-        let (tool_on, bottom_on) = (s.tool, s.bottom);
-        let chat_on = matches!(s.shown(), Some(Doc::Chat { .. }));
+    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = theme(cx);
         let titled = |title: &str, id: &str| {
             let chord = keymap::chord_for(id, cx);
             format!("{title} {chord}").trim_end().to_string()
         };
-        let repos_on = dock::shown(self.dock.read(cx), cx).contains(&Kind::Repos);
-        let area = self.dock.clone();
-        let repos = move |window: &mut Window, cx: &mut App| {
-            area.update(cx, |a, cx| match repos_on {
-                true => dock::hide(a, Kind::Repos, window, cx),
-                false => dock::show(a, Kind::Repos, window, cx),
-            })
-        };
-        let tool = |id, icon, title: String, t: Tool| {
-            let toggle = move |_: &mut Window, cx: &mut App| {
-                Store::global(cx).update(cx, |s, cx| s.toggle_tool(t, cx))
-            };
-            strip_button(id, icon, title, tool_on == Some(t), toggle, cx)
+        let zone = |id, icon, title: &str, p: DockPlacement| {
+            let toggle = move |window: &mut Window, cx: &mut App| dock::toggle_zone(p, window, cx);
+            bar_button(id, icon, title.into(), dock::is_open(p, cx), toggle, cx)
         };
         let run = |id, icon, title: String, on: bool, action: &'static str| {
             let run =
                 move |window: &mut Window, cx: &mut App| actions::dispatch(window, cx, action);
-            strip_button(id, icon, title, on, run, cx)
+            bar_button(id, icon, title, on, run, cx)
         };
-        ui::panel(div(), cx)
-            .flex()
-            .flex_none()
-            .flex_col()
-            .items_center()
-            .gap(px(6.))
-            .w(px(48.))
-            .py(px(8.))
-            .child(strip_button(
-                "strip.repos",
-                Icon::Repo,
-                "Repositories".into(),
-                repos_on,
-                repos,
-                cx,
-            ))
-            .child(tool(
-                "strip.project",
-                Icon::Tree,
-                titled("Project", "panel.project"),
-                Tool::Files,
-            ))
-            .child(tool(
-                "strip.changes",
-                Icon::Changes,
-                "Changes".into(),
-                Tool::Changes,
-            ))
-            .child(tool(
-                "strip.mrs",
-                Icon::Mr,
-                "Merge Requests".into(),
-                Tool::Mrs,
-            ))
-            .child(run(
-                "strip.chat",
-                Icon::Chat,
-                titled("Claude", "agent.chat"),
-                chat_on,
-                "agent.chat",
-            ))
-            .child(div().flex_1())
-            .child(run(
-                "strip.log",
-                Icon::Log,
-                titled("Git Log", "panel.log"),
-                bottom_on == Some(Bottom::Log),
-                "panel.log",
-            ))
-            .child(run(
-                "strip.pipelines",
-                Icon::Pipeline,
-                "Pipelines".into(),
-                bottom_on == Some(Bottom::Pipelines),
-                "panel.pipelines",
-            ))
-            .child(run(
-                "strip.terminal",
-                Icon::Terminal,
-                titled("Terminal", "panel.terminal"),
-                bottom_on == Some(Bottom::Terminal),
-                "panel.terminal",
-            ))
-            .child(run(
-                "strip.settings",
-                Icon::Gear,
-                titled("Settings", "app.settings"),
-                false,
-                "app.settings",
-            ))
+        let chat_on = matches!(Store::global(cx).read(cx).shown(), Some(Doc::Chat { .. }));
+        TitleBar::new()
+            .h(px(40.))
+            .pl_0()
+            .bg(t.ground)
+            .border_b_1()
+            .border_color(t.line)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .gap(px(6.))
+                    .px(px(8.))
+                    .when(MAC, |b| b.pl(px(80.)))
+                    .children(self.left.iter().cloned())
+                    .child(div().flex_1())
+                    .children(self.center.iter().cloned())
+                    .child(div().flex_1())
+                    .children(self.right.iter().cloned())
+                    .child(run(
+                        "top.chat",
+                        Icon::Chat,
+                        titled("Claude", "agent.chat"),
+                        chat_on,
+                        "agent.chat",
+                    ))
+                    .child(zone(
+                        "zone.left",
+                        Icon::PanelLeft,
+                        "Left Zone",
+                        DockPlacement::Left,
+                    ))
+                    .child(zone(
+                        "zone.bottom",
+                        Icon::PanelBottom,
+                        "Bottom Zone",
+                        DockPlacement::Bottom,
+                    ))
+                    .child(zone(
+                        "zone.right",
+                        Icon::PanelRight,
+                        "Right Zone",
+                        DockPlacement::Right,
+                    ))
+                    .child(run(
+                        "top.settings",
+                        Icon::Gear,
+                        titled("Settings", "app.settings"),
+                        false,
+                        "app.settings",
+                    )),
+            )
     }
 }
 
-fn strip_button<F: Fn(&mut Window, &mut App) + 'static>(
+fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
     id: &'static str,
     icon: Icon,
     title: String,
@@ -327,17 +234,17 @@ fn strip_button<F: Fn(&mut Window, &mut App) + 'static>(
 ) -> impl IntoElement + use<F> {
     let t = theme(cx);
     let tip: SharedString = title.into();
-    let glow = gpui_kit::BoxShadow::new(px(0.), px(0.), t.selected).blur_radius(px(18.));
     ui::pressable(id)
         .test_support()
         .justify_center()
-        .size(px(34.))
+        .flex_none()
+        .size(px(28.))
         .rounded(radius::WIDGET)
         .role(Role::Button)
         .aria_label(tip.clone())
         .aria_toggled(on.into())
         .map(|b| match on {
-            true => b.bg(t.selected).text_color(t.fg).shadow(vec![glow]),
+            true => b.bg(t.selected).text_color(t.fg),
             false => b
                 .text_color(t.muted)
                 .hover(|s| s.bg(t.hover).text_color(t.fg)),
@@ -348,8 +255,7 @@ fn strip_button<F: Fn(&mut Window, &mut App) + 'static>(
 }
 
 impl Render for Shell {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync(window, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         div()
             .key_context(keymap::CONTEXT)
@@ -364,73 +270,20 @@ impl Render for Shell {
             .text_size(text::BODY)
             .line_height(relative(1.4))
             .font_weight(FontWeight::MEDIUM)
-            .child(self.top_bar(cx))
+            .child(self.title_bar(cx))
+            .child(div().flex().flex_1().min_h_0().child(self.dock.clone()))
             .child(
                 div()
                     .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(div().flex().py(GAP).pl(GAP).child(self.strip(cx)))
-                    .child(div().flex().flex_1().min_w_0().child(self.dock.clone())),
+                    .flex_none()
+                    .h(px(26.))
+                    .px(GAP)
+                    .border_t_1()
+                    .border_color(t.line)
+                    .child(self.status.clone()),
             )
             .children(self.overlays.iter().cloned())
             .child(self.notices.clone())
-    }
-}
-
-/// The center: the viewer, with an MR page, a job log or the chat over it.
-pub struct Main {
-    /// Shows `Doc::File` and `Doc::Diff`; it stays alive under the pages.
-    viewer: AnyView,
-    page: Option<(Doc, AnyView)>,
-    _store: Subscription,
-}
-
-impl Main {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Main {
-            viewer: viewer(window, cx),
-            page: None,
-            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
-        }
-    }
-}
-
-impl Render for Main {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let want = Store::global(cx)
-            .read(cx)
-            .shown()
-            .filter(|d| matches!(d, Doc::Mr { .. } | Doc::Job { .. } | Doc::Chat { .. }))
-            .cloned();
-        if self.page.as_ref().map(|p| &p.0) != want.as_ref() {
-            self.page = want.map(|d| {
-                let view = page(&d, window, cx);
-                (d, view)
-            });
-        }
-        let t = theme(cx);
-        div()
-            .id("main")
-            .flex()
-            .flex_col()
-            .size_full()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(radius::PANEL)
-            .bg(t.code)
-            .border_1()
-            .border_color(t.line)
-            .shadow(t.panel_shadow.clone())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .when(self.page.is_some(), |d| d.hidden())
-                    .child(self.viewer.clone()),
-            )
-            .children(self.page.as_ref().map(|(_, view)| view.clone()))
     }
 }
 
@@ -490,27 +343,34 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_strip_toggles_the_sidebar_and_one_tool_at_a_time(cx: &mut TestAppContext) {
+    fn the_title_bar_opens_and_closes_the_zones_and_the_keys_switch_their_apps(
+        cx: &mut TestAppContext,
+    ) {
         let (_dir, w) = open_shell(cx);
-        assert_eq!(checked(cx, w, "strip.repos"), Some(true));
+        assert_eq!(checked(cx, w, "zone.left"), Some(true));
         assert_eq!(
-            checked(cx, w, "strip.changes"),
+            checked(cx, w, "tool.Changes"),
             Some(true),
-            "Changes opens at start"
+            "Changes at start"
         );
-        act(cx, w, |window, cx| window.click("strip.repos", cx));
-        assert_eq!(checked(cx, w, "strip.repos"), Some(false));
+        act(cx, w, |window, cx| window.click("zone.left", cx));
+        assert_eq!(checked(cx, w, "zone.left"), Some(false));
         act(cx, w, |window, cx| {
+            window.render_frame(cx);
             assert!(window.try_find("grip.repos").is_none());
-            window.click("strip.project", cx)
+            window.press("secondary-1", cx)
         });
-        assert_eq!(checked(cx, w, "strip.project"), Some(true));
-        assert_eq!(checked(cx, w, "strip.changes"), Some(false));
+        assert_eq!(checked(cx, w, "tool.Project"), Some(true));
+        assert_eq!(checked(cx, w, "tool.Changes"), Some(false));
         act(cx, w, |window, cx| window.press("secondary-1", cx));
-        assert_eq!(checked(cx, w, "strip.project"), Some(false));
-        act(cx, w, |window, cx| window.click("strip.mrs", cx));
-        assert_eq!(store(cx, |s, _| s.tool), Some(Tool::Mrs));
-        act(cx, w, |window, cx| window.click("strip.settings", cx));
+        assert_eq!(
+            checked(cx, w, "zone.right"),
+            Some(false),
+            "a second press closes it"
+        );
+        act(cx, w, |window, cx| window.click("zone.right", cx));
+        assert_eq!(checked(cx, w, "tool.Project"), Some(true));
+        act(cx, w, |window, cx| window.click("top.settings", cx));
         act(cx, w, |window, cx| {
             window.render_frame(cx);
             assert!(window.find("settings").visible(), "Settings opens");
@@ -523,7 +383,7 @@ mod tests {
         act(cx, w, |window, cx| window.blur(cx));
         act(cx, w, |window, cx| window.render_frame(cx));
         act(cx, w, |window, cx| window.press("secondary-1", cx));
-        assert_eq!(store(cx, |s, _| s.tool), Some(Tool::Files));
+        assert_eq!(checked(cx, w, "tool.Project"), Some(true));
     }
 
     #[gpui_kit::test]

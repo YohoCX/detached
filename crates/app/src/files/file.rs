@@ -41,6 +41,10 @@ pub(super) struct FileView {
 }
 
 impl FileView {
+    pub fn raise(&self, cx: &App) {
+        actions::raise(&self._actions, cx);
+    }
+
     pub(super) fn new(loc: Location, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let this = cx.weak_entity();
         let goto = move |window: &mut Window, cx: &mut App| {

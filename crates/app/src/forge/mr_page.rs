@@ -96,6 +96,12 @@ pub struct MrPage {
 }
 
 impl MrPage {
+    pub fn raise(&self, cx: &App) {
+        if let Some(d) = &self.diff {
+            d.read(cx).raise(cx);
+        }
+    }
+
     pub fn new(repo: String, number: u64, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let page = cx.weak_entity();
         let comment = cx.new(|cx| Thread::comment(page, window, cx));

@@ -1,7 +1,6 @@
 mod common;
 
 use common::*;
-use detached_app::store::Bottom;
 use detached_app::terminal::Terminals;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, VisualTestContext};
@@ -58,7 +57,7 @@ fn sessions(cx: &mut VisualTestContext) -> usize {
 #[gpui_kit::test]
 fn alt_f12_opens_a_shell_that_runs_what_is_typed(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Terminal));
+    assert!(on_screen(cx, "bottom.Terminal"));
     run(cx, ANSWER);
     wait_for_line(cx, "answer-42");
 }
@@ -78,7 +77,7 @@ fn the_session_outlives_the_panel_switching_to_the_log(cx: &mut TestAppContext) 
     run(cx, ANSWER);
     wait_for_line(cx, "answer-42");
     cx.press("secondary-9");
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Log));
+    assert!(on_screen(cx, "bottom.Log"));
     cx.press("alt-f12");
     assert!(rows(cx).iter().any(|r| r.trim() == "answer-42"));
     assert_eq!(sessions(cx), 1);
@@ -93,7 +92,7 @@ fn app_chords_go_to_the_shell_except_the_short_list(cx: &mut TestAppContext) {
     assert!(cx.find("palette").is_none());
     // Cmd+9 still reaches the app.
     cx.press("secondary-9");
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Log));
+    assert!(on_screen(cx, "bottom.Log"));
 }
 
 #[gpui_kit::test]
@@ -103,10 +102,10 @@ fn exiting_the_shell_closes_its_tab_and_the_last_one_the_panel(cx: &mut TestAppC
     wait_until(cx, |cx| sessions(cx) == 2);
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 1);
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Terminal));
+    assert!(on_screen(cx, "bottom.Terminal"));
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 0);
-    assert_eq!(cx.store(|s, _| s.bottom), None);
+    assert!(!on_screen(cx, "bottom.Terminal"));
 }
 
 #[gpui_kit::test]

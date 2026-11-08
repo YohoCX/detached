@@ -190,8 +190,8 @@ fn collapsing_persists_in_ui_json(cx: &mut TestAppContext) {
     assert_eq!(saved, Some(vec![ws.clone()]));
     let file = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(file.contains("sidebar.collapsed"), "{file}");
-    cx.click("strip.repos");
-    cx.click("strip.repos");
+    cx.click("zone.left");
+    cx.click("zone.left");
     assert_eq!(
         paths(cx),
         [path(cx.sb.solo())],
@@ -984,11 +984,11 @@ fn settings_opens_from_its_chord_and_the_strip_and_closes_on_escape_close_and_th
     assert!(cx.find("settings").unwrap().visible());
     cx.press("escape");
     assert!(cx.find("settings").is_none());
-    cx.click("strip.settings");
+    cx.click("top.settings");
     assert!(cx.find("settings").is_some());
     cx.click("settings.close");
     assert!(cx.find("settings").is_none());
-    cx.click("strip.settings");
+    cx.click("top.settings");
     cx.update(|w, cx| w.click_at("settings.scrim", point(px(4.), px(4.)), cx));
     settle(cx);
     assert!(cx.find("settings").is_none());

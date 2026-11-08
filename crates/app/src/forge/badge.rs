@@ -10,7 +10,8 @@ use gpui_kit::{
 use super::{active, color, core, glyph, name, pipelines::Session, poll};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
-use crate::store::{Bottom, Store};
+use crate::dock::{self, Kind};
+use crate::store::Store;
 use crate::ui::{self, radius, theme};
 
 /// The current branch's latest pipeline; a click opens Pipelines. It also runs `pipeline.run`.
@@ -30,9 +31,9 @@ impl PipelineBadge {
             "pipeline.run",
             "Run Pipeline…",
             Group::Vcs,
-            |_, cx| {
+            |window, cx| {
                 cx.default_global::<Session>().run = true;
-                Store::global(cx).update(cx, |s, cx| s.open_bottom(Bottom::Pipelines, cx));
+                dock::open(Kind::Pipelines, window, cx);
             },
         );
         let subscriptions = vec![
@@ -106,9 +107,7 @@ impl Render for PipelineBadge {
             .whitespace_nowrap()
             .hover(|s| s.bg(t.hover))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(|_, _, cx| {
-                Store::global(cx).update(cx, |s, cx| s.open_bottom(Bottom::Pipelines, cx))
-            })
+            .on_click(|_, window, cx| dock::open(Kind::Pipelines, window, cx))
             .child(div().text_color(color(&p.status, cx)).child(glyph))
             .child(status)
             .into_any_element()

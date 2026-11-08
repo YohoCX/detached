@@ -79,6 +79,10 @@ pub struct DiffView {
 }
 
 impl DiffView {
+    pub fn raise(&self, cx: &App) {
+        actions::raise(&self._actions, cx);
+    }
+
     pub fn new(doc: DiffDoc, options: DiffOptions, cx: &mut Context<Self>) -> Self {
         let split = options
             .side_by_side

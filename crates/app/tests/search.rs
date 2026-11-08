@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
-use detached_app::store::{Doc, Level, Location, Notice, Tool};
+use detached_app::store::{Doc, Level, Location, Notice};
 use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
@@ -311,7 +311,7 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
 fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let cx = &mut app;
-    assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Changes));
+    assert!(on_screen(cx, "tool.Changes"));
     cx.press("secondary-shift-a");
     search(cx, "project tree", "Project Tree");
     let chord = cx.update(|_, cx| keymap::chord_for("panel.project", cx));
@@ -320,7 +320,7 @@ fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContex
     assert_eq!(first.disabled(), None);
     cx.press("enter");
     assert_eq!(title(cx), None);
-    assert_eq!(cx.store(|s, _| s.tool), Some(Tool::Files));
+    assert!(on_screen(cx, "tool.Project"));
 
     // Reopened, the list starts at the top again.
     cx.press("secondary-shift-a");

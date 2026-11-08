@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::history::CommitDetails;
-use detached_app::store::{Bottom, DiffDoc, Doc, Level, Location};
+use detached_app::store::{DiffDoc, Doc, Level, Location};
 use detached_app::ui::menu;
 use detached_app::util::when;
 use detached_app::{actions, ui_state};
@@ -442,7 +442,7 @@ fn file_history_opens_the_log_on_the_shown_files_path(cx: &mut TestAppContext) {
         doc: None,
     };
     file_history(cx, Doc::File(file));
-    assert_eq!(cx.store(|s, _| s.bottom), Some(Bottom::Log));
+    assert!(on_screen(cx, "bottom.Log"));
     wait_for_rows(cx, &["upstream change"]);
     assert_eq!(value(cx, "log.path").as_deref(), Some("CHANGELOG.md"));
 }
@@ -484,7 +484,7 @@ fn file_history_without_a_shown_file_says_so(cx: &mut TestAppContext) {
         said,
         Some(("Open a file to show its history".into(), false))
     );
-    assert_eq!(cx.store(|s, _| s.bottom), None);
+    assert!(!on_screen(cx, "bottom.Log"));
 }
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -658,8 +658,8 @@ fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
 fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     // The bottom zone is as wide as the center: the side zones close to give it 1000.
-    cx.click("strip.repos");
-    cx.click("strip.changes");
+    cx.click("zone.left");
+    cx.click("zone.right");
     cx.press("secondary-9");
     wait_for_status(cx, "3 commits");
     let grip = |cx: &mut VisualTestContext| cx.find("grip.log.side").unwrap().bounds().center();

@@ -34,6 +34,9 @@ pub enum Icon {
     Gear,
     Terminal,
     Chat,
+    PanelLeft,
+    PanelBottom,
+    PanelRight,
 }
 
 macro_rules! svg16 {
@@ -84,6 +87,9 @@ impl Icon {
             ),
             Icon::Terminal => svg16!("M2.5 3h11v10h-11zM5 6.5l2 1.5-2 1.5M8.5 10H11"),
             Icon::Chat => svg16!("M2.5 3h11v8H7l-3 2.5V11H2.5zM5 6h6M5 8.5h4"),
+            Icon::PanelLeft => svg16!("M2.5 3h11v10h-11zM6.5 3v10"),
+            Icon::PanelBottom => svg16!("M2.5 3h11v10h-11zM2.5 9.5h11"),
+            Icon::PanelRight => svg16!("M2.5 3h11v10h-11zM9.5 3v10"),
         }
     }
 
