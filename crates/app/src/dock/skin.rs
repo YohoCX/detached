@@ -386,6 +386,7 @@ impl TabGroupRenderer for Group {
                 .on_drop(move |drag: &DragPanel, window, cx| {
                     dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
                 })
+                .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
                 .child(l.title)
                 .children(close)
         });

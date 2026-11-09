@@ -7,12 +7,18 @@ mod view;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gpui_kit::{AnyView, App, AppContext, Entity, Global, Window};
+use gpui_kit::base::TestSupportExt;
+use gpui_kit::{
+    AnyElement, AnyView, App, AppContext, Entity, Global, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, SystemNotification, Window,
+    div, px,
+};
 
 pub use session::{Item, Session, State};
 
 use crate::actions;
 use crate::store::{Doc, Store};
+use crate::ui::{self, Icon, theme};
 
 /// Sessions outlive their page, which goes when another document is shown.
 #[derive(Default)]
@@ -56,6 +62,17 @@ pub fn page(repo: &str, n: u32, window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 pub fn register(cx: &mut App) -> actions::Registration {
+    cx.on_system_notification_response(|r, cx| {
+        let chat = r.tag.strip_prefix("chat:").and_then(|t| t.split_once(':'));
+        if let Some((n, repo)) = chat
+            && let Ok(n) = n.parse()
+            && find(repo, n, cx).is_some()
+        {
+            let repo = repo.to_string();
+            Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo, n }, cx));
+            cx.activate(true);
+        }
+    });
     actions::register(
         cx,
         "agent.chat",
@@ -158,8 +175,67 @@ pub fn focus(page: &AnyView, window: &mut Window, cx: &mut App) {
 }
 
 /// The Chats app.
-pub fn list(cx: &mut App) -> AnyView {
-    cx.new(list::ChatList::new).into()
+pub fn list(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| list::ChatList::new(window, cx)).into()
+}
+
+/// How a chat stands: working, waiting for you, done, stopped, or not started.
+fn state_icon(state: State, cx: &App) -> AnyElement {
+    let t = theme(cx);
+    let (icon, color) = match state {
+        State::Working => return ui::spinner(t.accent).into_any_element(),
+        State::Waiting => (Icon::Question, t.warning),
+        State::Done => (Icon::Check, t.success),
+        State::Stopped => (Icon::Close, t.error),
+        State::Idle => (Icon::Chat, t.muted),
+    };
+    div()
+        .text_color(color)
+        .child(icon.size(px(12.)))
+        .into_any_element()
+}
+
+/// The mark on chat `n`'s tab while it works or waits for you; `id` is the tab's.
+pub fn badge(repo: &str, n: u32, id: &str, cx: &App) -> Option<AnyElement> {
+    let state = find(repo, n, cx)?.read(cx).state();
+    matches!(state, State::Working | State::Waiting).then(|| {
+        div()
+            .id(SharedString::from(format!("{id}.state")))
+            .test_support()
+            .aria_label(SharedString::from(format!("{state:?}")))
+            .child(state_icon(state, cx))
+            .into_any_element()
+    })
+}
+
+/// Tells the system that a chat that was working now waits for the user or is done, when no
+/// window of ours has focus.
+fn alert(s: &Session, me: &Entity<Session>, cx: &mut App) {
+    let title = match s.state() {
+        State::Waiting => "Claude is waiting for you",
+        State::Done => "Claude is done",
+        _ => return,
+    };
+    let windows = cx.windows();
+    let focused = windows.iter().any(|w| {
+        w.update(cx, |_, w, _| w.is_window_active())
+            .unwrap_or(false)
+    });
+    let chats = cx.try_global::<Chats>().map(|c| &c.0);
+    let chat = chats.and_then(|c| c.iter().find(|(_, e)| *e == me));
+    let Some((repo, n)) = chat.map(|(k, _)| k.clone()).filter(|_| !focused) else {
+        return;
+    };
+    let body = format!("{} · {}", label(&repo, cx), s.topic().unwrap_or("New chat"));
+    cx.show_system_notification(SystemNotification {
+        tag: format!("chat:{n}:{repo}").into(),
+        title: title.into(),
+        body: body.into(),
+        actions: vec![],
+    });
+    for w in windows {
+        w.update(cx, |_, w, _| w.request_attention()).ok();
+    }
 }
 
 pub fn now() -> u64 {

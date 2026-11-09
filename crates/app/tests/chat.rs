@@ -5,7 +5,7 @@ use detached_app::store::Doc;
 use detached_app::ui::menu;
 use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{SharedString, TestAppContext, VisualTestContext};
+use gpui_kit::{SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext};
 
 fn open_bare(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);
@@ -384,6 +384,114 @@ fn a_past_conversation_shows_and_the_next_message_resumes_it(cx: &mut TestAppCon
     say(cx, "more");
     wait_for_item(cx, "resumed old1");
     wait_for_item(cx, "said more");
+}
+
+#[gpui_kit::test]
+fn an_empty_chat_brings_forward_the_chat_that_already_shows_a_past_conversation(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    assert!(cx.find("chat.empty").is_some());
+    assert_eq!(label(cx, "chat.header").as_deref(), Some("New chat solo"));
+    wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
+    cx.click(("chat.past", 0usize));
+    wait_for_item(cx, "fixed");
+    assert!(cx.find("chat.empty").is_none());
+    assert_eq!(label(cx, "chat.header").as_deref(), Some("fix it solo"));
+
+    cx.click("chat.new");
+    wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
+    cx.click(("chat.past", 0usize));
+    let repo = cx.sb.solo().display().to_string();
+    assert_eq!(
+        cx.store(|s, _| s.shown().cloned()),
+        Some(Doc::Chat { repo, n: 0 })
+    );
+    assert_eq!(items(cx), ["You: fix it", "fixed"]);
+}
+
+#[gpui_kit::test]
+fn a_chat_s_tab_shows_while_it_works_or_waits_for_you(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    assert!(cx.find("doc.chat.state").is_none());
+    say(cx, "hang");
+    wait_for_item(cx, "Working");
+    assert_eq!(label(cx, "doc.chat.state").as_deref(), Some("Working"));
+    cx.click("chat.stop");
+    idle(cx);
+    assert!(cx.find("doc.chat.state").is_none(), "stopped");
+    say(cx, "ask");
+    wait_for_item(cx, "waiting");
+    assert_eq!(label(cx, "doc.chat.state").as_deref(), Some("Waiting"));
+}
+
+#[gpui_kit::test]
+fn a_chat_that_needs_you_while_the_window_is_away_notifies_and_the_notice_shows_it(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    cx.update(|w, _| w.activate_window());
+    settle(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    assert!(
+        cx.shown_system_notifications().is_empty(),
+        "the window has focus"
+    );
+    cx.deactivate_window();
+    say(cx, "ask");
+    wait_until(cx, |cx| !cx.shown_system_notifications().is_empty());
+    let notice = cx.shown_system_notifications().remove(0);
+    assert_eq!(notice.title, "Claude is waiting for you");
+    assert_eq!(notice.body, "solo · hello");
+
+    let solo = cx.sb.solo().display().to_string();
+    cx.store(|s, cx| {
+        s.show(
+            Doc::Mr {
+                repo: solo,
+                number: 1,
+            },
+            cx,
+        )
+    });
+    settle(cx);
+    cx.simulate_system_notification_response(SystemNotificationResponse {
+        tag: notice.tag,
+        action_id: None,
+    });
+    settle(cx);
+    assert!(cx.find("chat").is_some());
+}
+
+#[gpui_kit::test]
+fn the_chats_search_keeps_the_rows_that_match_and_escape_clears_it(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo().display().to_string();
+        let past = serde_json::json!([
+            {"id": "a", "title": "Fix the build", "modified": 2, "cwd": solo},
+            {"id": "b", "title": "Add tests", "modified": 1, "cwd": solo},
+        ]);
+        let beside = agent::sidecar(&sb.state.config_dir).with_file_name("sessions.json");
+        std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+        std::fs::write(beside, past.to_string()).unwrap();
+    });
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| cx.find(("chats.past", 1usize)).is_some());
+    cx.click("chats.search");
+    cx.input("TESTS");
+    assert_eq!(
+        label(cx, ("chats.past", 0usize)).as_deref(),
+        Some("Add tests")
+    );
+    assert!(cx.find(("chats.past", 1usize)).is_none());
+    assert!(
+        cx.find(("chats.open", 0usize)).is_none(),
+        "solo says nothing of tests"
+    );
+    cx.press("escape");
+    assert!(cx.find(("chats.past", 1usize)).is_some() && cx.find(("chats.open", 0usize)).is_some());
 }
 
 #[gpui_kit::test]

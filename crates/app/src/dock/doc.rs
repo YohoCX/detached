@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, div,
+    AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
 };
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +100,14 @@ impl DocTab {
                 Some(View::Terminal(s)) => s.read(cx).title().to_string().into(),
                 _ => "Terminal".into(),
             },
+        }
+    }
+
+    /// A mark before the title: a chat's working or waiting for you.
+    pub fn badge(&self, cx: &App) -> Option<AnyElement> {
+        match &self.doc {
+            Doc::Chat { repo, n } => chat::badge(repo, *n, &self.id(), cx),
+            _ => None,
         }
     }
 

@@ -50,6 +50,8 @@ const MODES: &[(&str, &str, Option<&str>)] = &[
 /// How close to the end still counts as following it.
 const FOLLOW: f32 = 24.;
 const SUGGESTIONS: u32 = 8;
+/// Past conversations an empty chat offers.
+const PAST: usize = 5;
 
 /// What the word at the cursor could become.
 struct Suggest {
@@ -238,8 +240,16 @@ impl ChatView {
         let t = theme(cx);
         let s = self.session.read(cx);
         let name = super::label(&s.repo, cx);
+        let topic = s
+            .topic()
+            .and_then(|t| t.lines().next())
+            .unwrap_or("New chat")
+            .to_string();
         let session = self.session.clone();
         div()
+            .id("chat.header")
+            .test_support()
+            .aria_label(SharedString::from(format!("{topic} {name}")))
             .flex()
             .flex_none()
             .items_center()
@@ -249,8 +259,14 @@ impl ChatView {
             .border_b_1()
             .border_color(t.line)
             .child(div().text_color(t.accent).child(Icon::Chat))
-            .child(div().font_weight(FontWeight::BOLD).child("Claude"))
-            .child(div().min_w_0().truncate().text_color(t.muted).child(name))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(topic),
+            )
+            .child(div().flex_none().text_color(t.muted).child(name))
             .child(div().flex_1())
             .child(
                 ui::titled(ui::icon_button("chat.new", Icon::Plus, cx), "New chat")
@@ -1080,43 +1096,100 @@ impl ChatView {
         Some(card.into_any_element())
     }
 
-    /// Past conversations, for an empty one.
-    fn past(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// An empty chat: what to ask, the keys of the box, and the latest past conversations.
+    fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
-        let past = self
-            .session
-            .read(cx)
-            .past
-            .as_ref()
-            .filter(|p| p.iter().any(|p| !p.archived()))?;
-        let rows = past
-            .iter()
-            .filter(|p| !p.archived())
+        let s = self.session.read(cx);
+        let mut past: Vec<_> = s.past.iter().flatten().filter(|p| !p.archived()).collect();
+        past.sort_by_key(|p| std::cmp::Reverse(p.modified));
+        let rows: Vec<_> = past
+            .into_iter()
+            .take(PAST)
             .enumerate()
             .map(|(i, p)| {
-                let id = p.id.clone();
+                let (cwd, id) = (s.repo.clone(), p.id.clone());
                 ui::row(("chat.past", i), false, cx)
                     .test_support()
                     .aria_label(SharedString::from(p.title.clone()))
+                    .h(px(28.))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.session.update(cx, |s, cx| s.open_past(id.clone(), cx));
-                        this.input.update(cx, |s, cx| s.focus(window, cx));
+                        // Another chat that shows it comes forward; else it opens here.
+                        let open = super::open(cx);
+                        match open.iter().any(|(.., s)| s.read(cx).shows(&id)) {
+                            true => super::resume(cwd.clone(), id.clone(), cx),
+                            false => {
+                                this.session.update(cx, |s, cx| s.open_past(id.clone(), cx));
+                                this.focus(window, cx);
+                            }
+                        }
                     }))
-                    .child(div().min_w_0().truncate().child(p.title.clone()))
-            });
-        let list = div()
+                    .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(text::SMALL)
+                            .text_color(t.muted)
+                            .child(super::ago(now().saturating_sub(p.modified))),
+                    )
+            })
+            .collect();
+        let hint = |key: &'static str, what: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(ui::kbd(key, cx))
+                .child(what)
+        };
+        let recent = (!rows.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .pt(px(16.))
+                .child(
+                    div()
+                        .px(px(10.))
+                        .pb(px(4.))
+                        .text_size(text::LABEL)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(t.muted)
+                        .child("Recent conversations"),
+                )
+                .children(rows)
+        });
+        div()
+            .id("chat.empty")
+            .test_support()
             .flex()
             .flex_col()
-            .gap(px(2.))
+            .items_center()
+            .gap(px(10.))
+            .w_full()
+            .max_w(px(440.))
+            .mx_auto()
+            .child(div().text_color(t.accent).child(Icon::Chat.size(px(20.))))
             .child(
                 div()
-                    .pb(px(4.))
+                    .text_size(text::TITLE)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("Ask Claude about {}", super::label(&s.repo, cx))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(px(12.))
                     .text_size(text::SMALL)
                     .text_color(t.muted)
-                    .child("Recent conversations"),
+                    .child(hint("/", "commands"))
+                    .child(hint("@", "files"))
+                    .child(hint("Enter", "sends"))
+                    .child(hint("Shift Enter", "new line")),
             )
-            .children(rows);
-        Some(list.into_any_element())
+            .children(recent)
+            .into_any_element()
     }
 
     fn footer(&self, cx: &App) -> Option<AnyElement> {
@@ -1233,7 +1306,7 @@ impl Render for ChatView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let items = self.feed(cx);
-        let past = items.is_empty().then(|| self.past(cx)).flatten();
+        let empty = items.is_empty().then(|| self.empty(cx));
         let review = self.review(cx);
         let footer = self.footer(cx);
         let suggestions = self.suggestions(cx);
@@ -1259,7 +1332,13 @@ impl Render for ChatView {
                     .py(px(16.))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .child(column().gap(px(12.)).children(items).children(past)),
+                    .child(
+                        column()
+                            .gap(px(12.))
+                            .when(empty.is_some(), |c| c.flex_1().justify_center())
+                            .children(items)
+                            .children(empty),
+                    ),
             )
             .child(
                 div()

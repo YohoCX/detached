@@ -7,14 +7,16 @@ use detached_core::agent::{self, Agent, Command, Event, Past};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
-    AnyElement, App, Context, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
+    AnyElement, App, AppContext, Context, ElementId, Entity, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 
-use super::{Session, State, label, open};
+use super::{Item, Session, label, open, state_icon};
 use crate::blocking;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, radius, text, theme};
@@ -39,7 +41,8 @@ enum Key {
 }
 
 enum Line {
-    Heading(String),
+    /// A section, with a repo's or a folder's icon.
+    Heading(String, Option<Icon>),
     Open(String, u32, Entity<Session>),
     Past(Past),
     Archived(usize),
@@ -48,7 +51,7 @@ enum Line {
 impl Line {
     fn key(&self) -> Option<Key> {
         match self {
-            Line::Heading(_) => None,
+            Line::Heading(..) => None,
             Line::Open(repo, n, _) => Some(Key::Open(repo.clone(), *n)),
             Line::Past(p) => Some(Key::Past(p.id.clone())),
             Line::Archived(_) => Some(Key::Archived),
@@ -61,6 +64,7 @@ pub struct ChatList {
     /// A sidecar asked for the list; it goes once it answers.
     asking: Option<Agent>,
     filter: Filter,
+    query: Entity<InputState>,
     show_archived: bool,
     selected: Option<Key>,
     /// The row whose delete waits for a confirm.
@@ -68,11 +72,16 @@ pub struct ChatList {
     focus: FocusHandle,
     scroll: ScrollHandle,
     _tasks: Vec<Task<()>>,
-    _store: Subscription,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ChatList {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let query = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search")
+                .clean_on_escape()
+        });
         let mut list = ChatList {
             past: vec![],
             asking: None,
@@ -83,7 +92,11 @@ impl ChatList {
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             _tasks: vec![],
-            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            _subscriptions: vec![
+                cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
+            ],
+            query,
         };
         list.refresh(cx);
         list
@@ -208,6 +221,7 @@ impl ChatList {
 
     /// Past conversations in the workspace's folders, archived or not, newest place first.
     fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<&Past>)> {
+        let q = self.query(cx);
         let s = Store::global(cx).read(cx);
         let ours = |cwd: &str| {
             s.workspaces
@@ -223,6 +237,7 @@ impl ChatList {
                 .cwd
                 .as_deref()
                 .filter(|c| ours(c) && p.archived() == archived)
+                .filter(|c| has(&q, &p.title) || has(&q, &label(c, cx)))
             else {
                 continue;
             };
@@ -235,13 +250,22 @@ impl ChatList {
         places
     }
 
+    fn query(&self, cx: &App) -> String {
+        self.query.read(cx).value().trim().to_lowercase()
+    }
+
     /// The rows in order, headings included.
     fn lines(&self, cx: &App) -> Vec<Line> {
         let mut out = vec![];
         if self.filter != Filter::Inactive {
-            let open = open(cx);
+            let q = self.query(cx);
+            let mut open = open(cx);
+            open.retain(|(r, _, s)| {
+                let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
+                has(&q, &label(r, cx)) || s.read(cx).items.iter().any(said)
+            });
             if !open.is_empty() {
-                out.push(Line::Heading("Active".into()));
+                out.push(Line::Heading("Active".into(), None));
                 out.extend(open.into_iter().map(|(r, n, s)| Line::Open(r, n, s)));
             }
         }
@@ -249,7 +273,12 @@ impl ChatList {
             return out;
         }
         let place = |out: &mut Vec<Line>, (cwd, past): (String, Vec<&Past>)| {
-            out.push(Line::Heading(label(&cwd, cx)));
+            let name = label(&cwd, cx);
+            let icon = match name.ends_with('/') {
+                true => Icon::Folder,
+                false => Icon::Repo,
+            };
+            out.push(Line::Heading(name, Some(icon)));
             out.extend(past.into_iter().map(|p| Line::Past(p.clone())));
         };
         for p in self.places(false, cx) {
@@ -364,7 +393,7 @@ impl ChatList {
                 }))
         };
         match line {
-            Line::Heading(text) => div()
+            Line::Heading(text, icon) => div()
                 .flex()
                 .flex_none()
                 .items_end()
@@ -375,10 +404,7 @@ impl ChatList {
                 .text_size(text::SMALL)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.muted)
-                .child(match text.ends_with('/') {
-                    true => Icon::Folder.size(px(12.)),
-                    false => Icon::Repo.size(px(12.)),
-                })
+                .children(icon.map(|i| i.size(px(12.))))
                 .child(div().truncate().child(text.clone()))
                 .into_any_element(),
             Line::Open(repo, chat, session) => {
@@ -392,7 +418,7 @@ impl ChatList {
                 let state = s.state();
                 let said = s.conversation().is_some();
                 let last = s.items.iter().rev().find_map(|it| match it {
-                    super::Item::User(text) => Some(text.clone()),
+                    Item::User(text) => Some(text.clone()),
                     _ => None,
                 });
                 let name = label(repo, cx);
@@ -433,7 +459,7 @@ impl ChatList {
                             .min_w_0()
                             .truncate()
                             .text_color(t.muted)
-                            .children(last),
+                            .child(last.unwrap_or("New chat".into())),
                     )
                     .child(slot)
                     .into_any_element()
@@ -584,20 +610,8 @@ impl ChatList {
     }
 }
 
-/// How a chat stands: working, waiting for you, done, stopped, or not started.
-fn state_icon(state: State, cx: &App) -> AnyElement {
-    let t = theme(cx);
-    let (icon, color) = match state {
-        State::Working => return ui::spinner(t.accent).into_any_element(),
-        State::Waiting => (Icon::Question, t.warning),
-        State::Done => (Icon::Check, t.success),
-        State::Stopped => (Icon::Close, t.error),
-        State::Idle => (Icon::Chat, t.muted),
-    };
-    div()
-        .text_color(color)
-        .child(icon.size(px(12.)))
-        .into_any_element()
+fn has(q: &str, text: &str) -> bool {
+    text.to_lowercase().contains(q)
 }
 
 impl Render for ChatList {
@@ -610,6 +624,7 @@ impl Render for ChatList {
             .map(|l| self.line(l, &mut n, window, cx))
             .collect();
         let empty = match self.filter {
+            _ if !self.query(cx).is_empty() => "No chat matches.",
             Filter::Active => "No chat is open. Start one with +.",
             _ => "No chats yet. Open one on a repo or a folder.",
         };
@@ -671,6 +686,16 @@ impl Render for ChatList {
                         .test_support()
                         .on_click(cx.listener(|l, _, _, cx| l.refresh(cx))),
                     ),
+            )
+            // Its own row: beside the filter it would have no room in a side zone.
+            .child(
+                div()
+                    .id("chats.search")
+                    .test_support()
+                    .flex_none()
+                    .px(px(8.))
+                    .pb(px(6.))
+                    .child(Input::new(&self.query).small()),
             )
             .child(
                 div()

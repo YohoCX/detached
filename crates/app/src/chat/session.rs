@@ -965,7 +965,13 @@ fn events(mut rx: mpsc::UnboundedReceiver<Event>, cx: &mut Context<Session>) -> 
         while let Some(first) = rx.next().await {
             let mut batch = vec![first];
             batch.extend(std::iter::from_fn(|| rx.try_recv().ok()));
-            let alive = this.update(cx, |s, cx| batch.into_iter().for_each(|e| s.on(e, cx)));
+            let alive = this.update(cx, |s, cx| {
+                let was = s.state();
+                batch.into_iter().for_each(|e| s.on(e, cx));
+                if was == State::Working && s.state() != was {
+                    super::alert(s, &cx.entity(), cx);
+                }
+            });
             if alive.is_err() {
                 return;
             }
