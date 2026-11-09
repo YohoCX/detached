@@ -38,6 +38,8 @@ pub enum Icon {
     PanelBottom,
     PanelRight,
     Copy,
+    Archive,
+    Trash,
 }
 
 macro_rules! svg16 {
@@ -92,6 +94,8 @@ impl Icon {
             Icon::PanelBottom => svg16!("M2.5 3h11v10h-11zM2.5 9.5h11"),
             Icon::PanelRight => svg16!("M2.5 3h11v10h-11zM9.5 3v10"),
             Icon::Copy => svg16!("M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"),
+            Icon::Archive => svg16!("M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3"),
+            Icon::Trash => svg16!("M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 9h6l.5-9"),
         }
     }
 

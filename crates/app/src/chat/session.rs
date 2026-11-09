@@ -625,6 +625,10 @@ impl Session {
         self.command(Command::Load { cwd, id }, cx);
     }
 
+    pub fn shows(&self, id: &str) -> bool {
+        self.session_id.as_deref() == Some(id)
+    }
+
     /// Ends the sidecar and forgets the conversation.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         *self = Session {

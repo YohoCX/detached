@@ -92,6 +92,17 @@ pub enum Command {
         cwd: String,
         id: String,
     },
+    /// Removes a past conversation for good; needs no `Start`.
+    Delete {
+        cwd: String,
+        id: String,
+    },
+    /// Hides a past conversation from the lists, or shows it again.
+    Archive {
+        cwd: String,
+        id: String,
+        archived: bool,
+    },
     /// The account and its plan limits; needs no `Start`.
     Info {
         cwd: String,
@@ -159,6 +170,15 @@ pub struct Past {
     pub modified: u64,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// "archived" once archived.
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
+impl Past {
+    pub fn archived(&self) -> bool {
+        self.tag.as_deref() == Some("archived")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

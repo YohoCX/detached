@@ -486,7 +486,10 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
         "outside the workspace"
     );
     assert_eq!(label(cx, ("chats.open", 0usize)).as_deref(), Some("solo"));
-    cx.click(("chats.past", 0usize));
+    // On its title: the hover buttons sit right of it.
+    let at = gpui_kit::point(gpui_kit::px(12.), gpui_kit::px(9.));
+    cx.update(|w, cx| w.click_at(("chats.past", 0usize), at, cx));
+    settle(cx);
     wait_for_item(cx, "fixed");
 }
 
@@ -508,4 +511,52 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     let readme = std::fs::read_to_string(group.join("api/README.md")).unwrap();
     assert_ne!(readme, "agent\n", "back in api");
     assert!(group.join("web/by-agent.txt").exists(), "web stays");
+}
+
+#[gpui_kit::test]
+fn a_past_chat_archives_unarchives_and_deletes_after_a_confirm(cx: &mut TestAppContext) {
+    let file = std::cell::RefCell::new(None);
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo().display().to_string();
+        let past = serde_json::json!([
+            {"id": "a", "title": "Keep me", "modified": 2, "cwd": solo},
+            {"id": "b", "title": "Drop me", "modified": 1, "cwd": solo},
+        ]);
+        let beside = agent::sidecar(&sb.state.config_dir).with_file_name("sessions.json");
+        std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+        std::fs::write(&beside, past.to_string()).unwrap();
+        *file.borrow_mut() = Some(beside);
+    });
+    let file = file.into_inner().unwrap();
+    let on_hover = |cx: &mut VisualTestContext, row: usize, button: &'static str| {
+        cx.update(|w, cx| w.hover(("chats.past", row), cx));
+        cx.click((button, row));
+    };
+    let title = |cx: &mut VisualTestContext, row: usize| label(cx, ("chats.past", row));
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| title(cx, 1).is_some());
+
+    on_hover(cx, 0, "chats.archive");
+    wait_until(cx, |cx| {
+        label(cx, "chats.archived").as_deref() == Some("Archived (1)")
+    });
+    assert_eq!(title(cx, 0).as_deref(), Some("Drop me"));
+    cx.click("chats.archived");
+    assert_eq!(
+        title(cx, 1).as_deref(),
+        Some("Keep me"),
+        "shown under Archived"
+    );
+    on_hover(cx, 1, "chats.archive");
+    wait_until(cx, |cx| cx.find("chats.archived").is_none());
+    assert_eq!(title(cx, 0).as_deref(), Some("Keep me"), "back in place");
+
+    on_hover(cx, 1, "chats.delete");
+    assert!(title(cx, 1).is_none(), "asks first");
+    cx.click(("chats.delete.confirm", 1usize));
+    assert!(title(cx, 1).is_none() && title(cx, 0).is_some());
+    wait_until(cx, |_| {
+        !std::fs::read_to_string(&file).unwrap().contains("Drop me")
+    });
+    assert!(std::fs::read_to_string(&file).unwrap().contains("Keep me"));
 }

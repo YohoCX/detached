@@ -1078,18 +1078,22 @@ impl ChatView {
             .read(cx)
             .past
             .as_ref()
-            .filter(|p| !p.is_empty())?;
-        let rows = past.iter().enumerate().map(|(i, p)| {
-            let id = p.id.clone();
-            ui::row(("chat.past", i), false, cx)
-                .test_support()
-                .aria_label(SharedString::from(p.title.clone()))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.session.update(cx, |s, cx| s.open_past(id.clone(), cx));
-                    this.input.update(cx, |s, cx| s.focus(window, cx));
-                }))
-                .child(div().min_w_0().truncate().child(p.title.clone()))
-        });
+            .filter(|p| p.iter().any(|p| !p.archived()))?;
+        let rows = past
+            .iter()
+            .filter(|p| !p.archived())
+            .enumerate()
+            .map(|(i, p)| {
+                let id = p.id.clone();
+                ui::row(("chat.past", i), false, cx)
+                    .test_support()
+                    .aria_label(SharedString::from(p.title.clone()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.session.update(cx, |s, cx| s.open_past(id.clone(), cx));
+                        this.input.update(cx, |s, cx| s.focus(window, cx));
+                    }))
+                    .child(div().min_w_0().truncate().child(p.title.clone()))
+            });
         let list = div()
             .flex()
             .flex_col()

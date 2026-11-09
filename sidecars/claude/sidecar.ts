@@ -1,5 +1,5 @@
 // Between Detached and Claude Code: the host's JSON lines on stdin and stdout, the Agent SDK on the other side.
-import { getSessionMessages, listSessions, query } from "@anthropic-ai/claude-agent-sdk";
+import { deleteSession, getSessionMessages, listSessions, query, tagSession } from "@anthropic-ai/claude-agent-sdk";
 import { createInterface } from "node:readline";
 
 // `auto` and its model checks settled at this CLI.
@@ -312,11 +312,15 @@ async function command(c: any) {
     case "sessions": {
       // No folder lists every project's, for the Chats app.
       const all = await listSessions(c.cwd ? { dir: c.cwd, limit: 50 } : { limit: 300 });
-      const sessions = all.map((s: any) => ({ id: s.sessionId, title: s.customTitle ?? s.summary, modified: s.lastModified, cwd: s.cwd ?? null }));
+      const sessions = all.map((s: any) => ({ id: s.sessionId, title: s.customTitle ?? s.summary, modified: s.lastModified, cwd: s.cwd ?? null, tag: s.tag ?? null }));
       return emit({ type: "sessions", sessions });
     }
     case "info":
       return info(c.cwd);
+    case "delete":
+      return deleteSession(c.id, { dir: c.cwd });
+    case "archive":
+      return tagSession(c.id, c.archived ? "archived" : null, { dir: c.cwd });
     case "load": {
       const events: Record<string, unknown>[] = [];
       for (const m of await getSessionMessages(c.id, { dir: c.cwd })) if (!m.parent_tool_use_id) feed(m, (e) => events.push(e));

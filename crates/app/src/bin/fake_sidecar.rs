@@ -146,6 +146,22 @@ fn main() {
                 let mode = if model == "old" { "default" } else { "auto" };
                 emit(json!({"type": "mode", "mode": mode}));
             }
+            "delete" | "archive" => {
+                let file = std::env::current_exe()
+                    .unwrap()
+                    .with_file_name("sessions.json");
+                let mut past: Vec<Value> =
+                    serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+                past.retain(|p| p["id"] != c["id"] || c["type"] == "archive");
+                for p in past.iter_mut().filter(|p| p["id"] == c["id"]) {
+                    p["tag"] = if c["archived"] == true {
+                        json!("archived")
+                    } else {
+                        Value::Null
+                    };
+                }
+                std::fs::write(file, Value::from(past).to_string()).unwrap();
+            }
             "sessions" if c["cwd"] == "" => {
                 // A test lists every folder's past conversations in a file beside the sidecar.
                 let file = std::env::current_exe()

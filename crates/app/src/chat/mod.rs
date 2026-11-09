@@ -69,6 +69,17 @@ pub fn open(cx: &App) -> Vec<Entity<Session>> {
     all
 }
 
+/// Ends the open chat showing past conversation `id`, which is going away.
+pub fn forget(id: &str, cx: &mut App) {
+    for s in open(cx) {
+        s.update(cx, |s, cx| {
+            if s.shows(id) && !s.busy {
+                s.reset(cx)
+            }
+        });
+    }
+}
+
 /// The Chats app.
 pub fn list(cx: &mut App) -> AnyView {
     cx.new(list::ChatList::new).into()

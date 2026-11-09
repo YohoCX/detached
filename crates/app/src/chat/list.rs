@@ -7,14 +7,14 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
+    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::{label, open, session, span};
 use crate::store::{Doc, Store};
-use crate::ui::{self, Icon, text, theme};
+use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, blocking};
 
 /// Past conversations shown per repo or folder.
@@ -24,6 +24,9 @@ pub struct ChatList {
     past: Vec<Past>,
     /// A sidecar asked for the list; it goes once it answers.
     asking: Option<Agent>,
+    show_archived: bool,
+    /// The conversation whose delete waits for a confirm.
+    deleting: Option<String>,
     _tasks: Vec<Task<()>>,
     _store: Subscription,
 }
@@ -33,6 +36,8 @@ impl ChatList {
         let mut list = ChatList {
             past: vec![],
             asking: None,
+            show_archived: false,
+            deleting: None,
             _tasks: vec![],
             _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
         };
@@ -41,6 +46,28 @@ impl ChatList {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.run(vec![], cx);
+    }
+
+    fn archive(&mut self, cwd: String, id: String, archived: bool, cx: &mut Context<Self>) {
+        let tag = archived.then(|| "archived".to_string());
+        for p in self.past.iter_mut().filter(|p| p.id == id) {
+            p.tag = tag.clone();
+        }
+        super::forget(&id, cx);
+        self.run(vec![Command::Archive { cwd, id, archived }], cx);
+    }
+
+    fn delete(&mut self, cwd: String, id: String, cx: &mut Context<Self>) {
+        self.past.retain(|p| p.id != id);
+        self.deleting = None;
+        super::forget(&id, cx);
+        self.run(vec![Command::Delete { cwd, id }], cx);
+    }
+
+    /// Sends `first` to a sidecar of its own, then takes the list it gives back.
+    fn run(&mut self, first: Vec<Command>, cx: &mut Context<Self>) {
+        cx.notify();
         let core = Store::global(cx).read(cx).core().clone();
         let program = agent::sidecar(&core.config_dir);
         if !program.is_file() {
@@ -54,24 +81,35 @@ impl ChatList {
         });
         self._tasks = vec![cx.spawn(async move |this, cx| {
             let Ok(agent) = started.await else { return };
+            for c in first {
+                agent.send(&c);
+            }
             agent.send(&Command::Sessions { cwd: String::new() });
             this.update(cx, |l, _| l.asking = Some(agent)).ok();
             while let Some(e) = rx.next().await {
-                if let Event::Sessions { sessions } = e {
-                    this.update(cx, |l, cx| {
-                        l.past = sessions;
-                        l.asking = None;
-                        cx.notify();
-                    })
-                    .ok();
-                    return;
+                match e {
+                    Event::Sessions { sessions } => {
+                        this.update(cx, |l, cx| {
+                            l.past = sessions;
+                            l.asking = None;
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                    Event::Error { message } => {
+                        cx.update(|cx| {
+                            Store::global(cx).update(cx, |s, cx| s.say(message, true, cx))
+                        });
+                    }
+                    _ => {}
                 }
             }
         })];
     }
 
-    /// Past conversations in the workspace's folders, newest place first.
-    fn places(&self, cx: &App) -> Vec<(String, Vec<&Past>)> {
+    /// Past conversations in the workspace's folders, archived or not, newest place first.
+    fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<&Past>)> {
         let s = Store::global(cx).read(cx);
         let ours = |cwd: &str| {
             s.workspaces
@@ -83,7 +121,11 @@ impl ChatList {
         let mut past: Vec<&Past> = self.past.iter().collect();
         past.sort_by_key(|p| std::cmp::Reverse(p.modified));
         for p in past {
-            let Some(cwd) = p.cwd.as_deref().filter(|c| ours(c)) else {
+            let Some(cwd) = p
+                .cwd
+                .as_deref()
+                .filter(|c| ours(c) && p.archived() == archived)
+            else {
                 continue;
             };
             match places.iter_mut().find(|(c, _)| c == cwd) {
@@ -147,39 +189,47 @@ impl Render for ChatList {
         });
         let live: Vec<_> = live.collect();
         let mut k = 0usize;
-        let places = self.places(cx).into_iter().map(|(cwd, past)| {
-            let rows = past.into_iter().map(|p| {
-                k += 1;
-                let (cwd, id) = (cwd.clone(), p.id.clone());
-                ui::row(("chats.past", k - 1), false, cx)
-                    .test_support()
-                    .aria_label(SharedString::from(p.title.clone()))
-                    .gap(px(8.))
-                    .on_click(move |_, _, cx| {
-                        let s = session(&cwd, cx);
-                        s.update(cx, |s, cx| {
-                            if !s.busy {
-                                s.open_past(id.clone(), cx)
-                            }
-                        });
-                        show(cwd.clone(), cx);
-                    })
-                    .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(text::SMALL)
-                            .text_color(t.muted)
-                            .child(span(now.saturating_sub(p.modified))),
-                    )
-            });
-            div()
-                .flex()
-                .flex_col()
-                .child(heading(label(&cwd, cx)))
-                .children(rows)
+        let mut group = |places: Vec<(String, Vec<&Past>)>, cx: &mut Context<Self>| {
+            places
+                .into_iter()
+                .map(|(cwd, past)| {
+                    let rows: Vec<_> = past
+                        .into_iter()
+                        .map(|p| {
+                            k += 1;
+                            self.past_row(k - 1, &cwd, p, now, cx)
+                        })
+                        .collect();
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(heading(label(&cwd, cx)))
+                        .children(rows)
+                })
+                .collect::<Vec<_>>()
+        };
+        let places = group(self.places(false, cx), cx);
+        let archived = self.places(true, cx);
+        let n: usize = archived.iter().map(|(_, p)| p.len()).sum();
+        let shown = self.show_archived;
+        let archived = if shown { group(archived, cx) } else { vec![] };
+        let toggle = (n > 0).then(|| {
+            ui::row("chats.archived", false, cx)
+                .test_support()
+                .aria_label(SharedString::from(format!("Archived ({n})")))
+                .mt(px(8.))
+                .text_size(text::SMALL)
+                .text_color(t.muted)
+                .on_click(cx.listener(|l, _, _, cx| {
+                    l.show_archived = !l.show_archived;
+                    cx.notify();
+                }))
+                .child(match shown {
+                    true => Icon::Down.size(px(12.)).into_any_element(),
+                    false => Icon::Chevron.size(px(12.)).into_any_element(),
+                })
+                .child(format!("Archived ({n})"))
         });
-        let places: Vec<_> = places.collect();
         let empty = live.is_empty() && places.is_empty();
         div()
             .id("chats")
@@ -226,6 +276,8 @@ impl Render for ChatList {
                         d.child(heading("Open".into())).children(live)
                     })
                     .children(places)
+                    .children(toggle)
+                    .children(archived)
                     .when(empty, |d| {
                         d.child(
                             div()
@@ -235,6 +287,111 @@ impl Render for ChatList {
                         )
                     }),
             )
+    }
+}
+
+impl ChatList {
+    /// A past conversation: it opens on a click, and archives or deletes from its hover buttons.
+    fn past_row(
+        &self,
+        k: usize,
+        cwd: &str,
+        p: &Past,
+        now: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = theme(cx);
+        let (cwd, id) = (cwd.to_string(), p.id.clone());
+        if self.deleting.as_ref() == Some(&p.id) {
+            let (c, i) = (cwd.clone(), id.clone());
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .mx(px(4.))
+                .p(px(8.))
+                .rounded(radius::FIELD)
+                .border_1()
+                .border_color(t.error)
+                .child(format!(
+                    "Delete \u{201c}{}\u{201d}? Its transcript goes for good.",
+                    p.title
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(6.))
+                        .child(
+                            ui::button(("chats.delete.cancel", k), "Cancel", cx)
+                                .test_support()
+                                .on_click(cx.listener(|l, _, _, cx| {
+                                    l.deleting = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            ui::button(("chats.delete.confirm", k), "Delete", cx)
+                                .test_support()
+                                .text_color(t.error)
+                                .on_click(cx.listener(move |l, _, _, cx| {
+                                    l.delete(c.clone(), i.clone(), cx)
+                                })),
+                        ),
+                )
+                .into_any_element();
+        }
+        let archived = p.archived();
+        let (open_cwd, open_id) = (cwd.clone(), id.clone());
+        let (a_cwd, a_id) = (cwd.clone(), id.clone());
+        let archive = ui::hover_button(
+            ("chats.archive", k),
+            Icon::Archive.size(px(12.)),
+            if archived { "Unarchive" } else { "Archive" },
+            cx,
+        )
+        .test_support()
+        .on_click(cx.listener(move |l, _, _, cx| {
+            cx.stop_propagation();
+            l.archive(a_cwd.clone(), a_id.clone(), !archived, cx)
+        }));
+        let delete = ui::hover_button(
+            ("chats.delete", k),
+            Icon::Trash.size(px(12.)),
+            "Delete…",
+            cx,
+        )
+        .test_support()
+        .on_click(cx.listener(move |l, _, _, cx| {
+            cx.stop_propagation();
+            l.deleting = Some(id.clone());
+            cx.notify();
+        }));
+        ui::row(("chats.past", k), false, cx)
+            .test_support()
+            .aria_label(SharedString::from(p.title.clone()))
+            .group(ui::HOVER)
+            .gap(px(6.))
+            .on_click(move |_, _, cx| {
+                let s = session(&open_cwd, cx);
+                s.update(cx, |s, cx| {
+                    if !s.busy {
+                        s.open_past(open_id.clone(), cx)
+                    }
+                });
+                show(open_cwd.clone(), cx);
+            })
+            .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
+            .child(archive)
+            .child(delete)
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(span(now.saturating_sub(p.modified))),
+            )
+            .into_any_element()
     }
 }
 
