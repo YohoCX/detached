@@ -6,7 +6,17 @@ sidebar for every repo under your folders with fetch and pull all, branches and 
 diffs, file browsing and find in files at any ref, the git log, and merge requests and pipelines
 for GitLab and GitHub (including self-hosted GitLab and GitHub Enterprise), and terminal tabs in
 the current repo. It does not commit,
-stage or push code. Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md).
+stage or push code. Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md); Settings › Keymap lists
+them all, and `keymap.json` in the config folder overrides them.
+
+The window is three zones around the open documents, Fleet-style: every app (Repositories, Chats,
+Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a tab you can drag to any
+zone; drag a zone's edge to resize it, double-click to reset it, drag it nearly shut to close it.
+Errors and warnings from everywhere collect in Events. Themes: Fleet and Classic, or your own JSON
+in the config folder's `themes`, reloaded as you edit.
+
+A Claude chat on a repo or a whole folder is in development: its tabs are there, but the sidecar it
+runs on is not in the packages yet, so the chat says it is not installed.
 
 Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
 bar, and everything (sidebar, fetch and pull all, quick open, search) covers their repos. The

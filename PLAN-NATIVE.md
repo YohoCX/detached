@@ -10,7 +10,7 @@ Decided with the owner on 2026-11-04:
 - Mermaid renders in Rust; a block that fails shows its source.
 - Plan first, reviewed with revmux; the work runs as parallel verticals after a shared foundation.
 
-**Status (2026-11-06): steps 0–2 (F, V1–V6) done: the native client ships alone from 0.4.0 on the real config directory, the Tauri client and docs/native are removed. The update install is checked by hand from 0.4.0 to the next release (docs/TECHDEBT.md). Step 3, the terminal (V7), is on `native/v7-terminal`: tabs, keys, memory and scrollback in, waiting for the owner's check on macOS and a revmux round.**
+**Status (2026-11-09): steps 0–2 (F, V1–V6) done: the native client ships alone from 0.4.0 on the real config directory, the Tauri client and docs/native are removed. The update install is checked by hand from 0.4.0 to the next release (docs/TECHDEBT.md). Step 3, the terminal (V7), shipped in 0.4.1; a shell can move to a tab of its own in the center since 0.5.0.**
 
 The parity bar was the Tauri client as of v0.3.0 plus the strip's Log/Pipelines buttons. What it
 did was surveyed in docs/native/: shell.md (window, top bar, sidebar, workspaces, branches, palette,

@@ -12,7 +12,7 @@ Decided with the owner on 2026-11-07, after a revmux plan review
 - Detached moves off read-only one capability at a time, past the `switch`, `stash` and `pull` it already
   runs. Each new write gets its own decision and test.
 
-**Status (2026-11-08): step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS. Step 3 is on `main` (local), waiting for the owner's look on macOS: zones on the kit's dock, documents in tabs, a flat title bar and a status bar, no icon strip.**
+**Status (2026-11-09): 0.5.0 ships steps 1–3 as below; the chat's sidecar is not in the packages. Step 0 answered on macOS, see [its answers](#spike-answers), Linux and Windows open; the owner took the sidecar. Step 1's first slice is on `main` (local): everything listed below is in. Context shows as a percent with its breakdown in a menu; the ring waits for step 2. Opening the chat starts the sidecar so it can list past conversations. Left before Done: the owner's week of real use, Linux and Windows, then the second slice. Step 2's colors and fonts are on `main` (local), waiting for the owner's look on macOS. Step 3 is on `main` (local), waiting for the owner's look on macOS: zones on the kit's dock, documents in tabs, a flat title bar and a status bar, no icon strip.**
 
 ## Steps
 
@@ -225,6 +225,11 @@ Added 2026-11-09, on the owner's look:
   message; + opens another. Chats ends, archives or deletes an active one. The bar under the box
   shows Claude (plan in the tooltip), the mode in a menu, the model running (the last one before a
   session says), then context and limits on the right.
+- Polish before 0.5.0: the status bar shows repo and branch, Events filters errors and warnings,
+  the sidebar filters repos, Settings has a section nav and a Keymap page; palettes fit the window,
+  recent files persist; an empty chat lists recent conversations, chat tabs mark working or waiting,
+  a system notice when a chat needs you away; Chats searches. A restore re-checks the worktree
+  before it writes, and "Always allow" keeps its rule to the session.
 
 ### 4. Plugins from a folder
 
