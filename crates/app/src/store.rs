@@ -68,6 +68,11 @@ pub enum Doc {
     Chat {
         repo: String,
     },
+    /// A shell moved out of the Terminal app; after a restart, a new one in `cwd`.
+    Terminal {
+        id: u64,
+        cwd: String,
+    },
 }
 
 impl From<Location> for Doc {

@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::{
-    DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, PaneNode, PaneRef, Panel,
-    PanelEvent, PanelId, PanelState, PanelView, register_panel,
+    DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, NodeId, PaneNode, PaneRef,
+    Panel, PanelEvent, PanelId, PanelState, PanelView, register_panel,
 };
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use crate::store::Doc;
+use crate::terminal::{Session, Terminals};
 use crate::ui::theme;
 use crate::ui_state;
 
@@ -375,6 +376,47 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
             area.add_panel(tab, DockPlacement::Center, None, window, cx);
         }
     }
+}
+
+/// Moves a shell out of the Terminal app into a tab of its own, in the zone of `node`, else the
+/// center.
+pub fn dock_terminal(
+    session: Entity<Session>,
+    node: Option<NodeId>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    Terminals::global(cx).update(cx, |t, cx| t.undock(&session, cx));
+    let doc = Doc::Terminal {
+        id: session.entity_id().as_u64(),
+        cwd: session.read(cx).cwd.display().to_string(),
+    };
+    with(cx, |a, cx| {
+        let p = node.and_then(|n| {
+            placements()
+                .into_iter()
+                .find(|p| a.layout(*p).is_some_and(|t| t.find_node(n).is_some()))
+        });
+        let tab = DocTab::new(doc, true, cx);
+        a.add_panel(tab, p.unwrap_or(DockPlacement::Center), None, window, cx);
+    });
+}
+
+pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
+    with(cx, |a, cx| a.remove_panel(tab, window, cx));
+}
+
+/// Closes the tab of a shell that ended.
+pub fn close_terminal(session: &Entity<Session>, window: &mut Window, cx: &mut App) {
+    let id = session.entity_id().as_u64();
+    with(cx, |a, cx| {
+        let tab = docs(a)
+            .into_iter()
+            .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { id: i, .. } if i == id));
+        if let Some((_, _, tab)) = tab {
+            a.remove_panel(tab, window, cx);
+        }
+    });
 }
 
 /// Every document tab and its zone.

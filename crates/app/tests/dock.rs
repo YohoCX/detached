@@ -29,7 +29,11 @@ fn x(cx: &mut VisualTestContext, id: &'static str) -> Pixels {
 }
 
 /// Drags tab `id` onto tab `onto`, as a hand would.
-fn drag_tab(cx: &mut VisualTestContext, id: &'static str, onto: &'static str) {
+fn drag_tab(
+    cx: &mut VisualTestContext,
+    id: impl Into<gpui_kit::ElementId>,
+    onto: impl Into<gpui_kit::ElementId>,
+) {
     let from = cx.find(id).unwrap().bounds().center();
     let to = cx.find(onto).unwrap().bounds().center();
     cx.update(|w, cx| w.drag(from, to, cx));
@@ -228,4 +232,39 @@ fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppC
     assert_eq!(now, session, "the same session");
     cx.click("chat.stop");
     wait_until(cx, |cx| cx.find("chat.stop").is_none());
+}
+
+#[gpui_kit::test]
+fn a_shell_dragged_out_of_the_terminal_is_a_tab_of_its_own_and_ends_with_it(
+    cx: &mut TestAppContext,
+) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, layout);
+    cx.press("alt-f12");
+    cx.input(ANSWER);
+    cx.press("enter");
+    let answered = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("terminal.row", i)))
+                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
+        })
+    };
+    wait_until(cx, answered);
+    drag_tab(cx, ("terminal.tab", 0usize), "dock.hints");
+    let (left, docked) = cx.update(|_, cx| {
+        let t = Terminals::global(cx).read(cx);
+        (t.sessions.len(), t.docked.clone())
+    });
+    assert_eq!((left, docked.len()), (0, 1), "out of the Terminal app");
+    let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
+    let tab = gpui_kit::SharedString::from(id);
+    assert_eq!(cx.find(tab.clone()).unwrap().checked(), Some(true));
+    assert!(answered(cx), "the same screen, now in the center");
+
+    cx.update(|w, cx| w.within(tab).click("tab.close", cx));
+    settle(cx);
+    let gone = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.is_empty());
+    assert!(gone, "closing the tab ends the shell");
 }

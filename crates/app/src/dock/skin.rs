@@ -19,6 +19,7 @@ use gpui_kit::{
 
 use super::{DocTab, Tab, missing};
 use crate::keymap;
+use crate::terminal::Dragged;
 use crate::ui::{self, GAP, Icon, radius, theme};
 
 /// The zone whose grip is held, and the pointer's distance from that zone's edge.
@@ -45,10 +46,16 @@ impl DockAreaRenderer for Skin {
 
     /// The hints lie under the center's tabs, so they show when no document is open.
     fn center_frame(&self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
-        div()
-            .id("dock.center")
-            .relative()
-            .child(hints(cx).absolute().size_full())
+        let t = theme(cx);
+        let hints = hints(cx)
+            .id("dock.hints")
+            .test_support()
+            .absolute()
+            .size_full()
+            .rounded(radius::PANEL)
+            .drag_over::<Dragged>(move |d, _, _, _| d.bg(t.selected))
+            .on_drop(|d: &Dragged, window, cx| super::dock_terminal(d.0.clone(), None, window, cx));
+        div().id("dock.center").relative().child(hints)
     }
 
     fn render_dock(
@@ -228,8 +235,15 @@ impl TabGroupRenderer for Group {
         let tabs = labels.into_iter().enumerate().map(|(ix, l)| {
             let (on, id) = (active == Some(ix), ids[ix]);
             let preview = l.doc.as_ref().is_some_and(|d| !d.read(cx).keep);
-            let closable = group.is_panel_closable(id, cx);
-            let (clicked, dropped, closed) = (group.clone(), group.clone(), group.clone());
+            // The kit keeps the last tab of a zone; a document still closes, to an empty center.
+            let closable = l.doc.is_some() || group.is_panel_closable(id, cx);
+            let (clicked, dropped, group_) = (group.clone(), group.clone(), group.clone());
+            let doc = l.doc.clone();
+            let closed = move |window: &mut Window, cx: &mut App| match &doc {
+                Some(d) => super::close_doc(d.clone(), window, cx),
+                None => group_.close(id, window, cx),
+            };
+            let closed = Rc::new(closed);
             let (title, kept) = (l.title.clone(), l.doc.clone());
             let close = closable.then(|| {
                 let closed = closed.clone();
@@ -242,7 +256,7 @@ impl TabGroupRenderer for Group {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
-                        closed.close(id, window, cx)
+                        closed(window, cx)
                     })
             });
             div()
@@ -279,9 +293,7 @@ impl TabGroupRenderer for Group {
                     }
                 })
                 .when(closable, |d| {
-                    d.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
-                        closed.close(id, window, cx)
-                    })
+                    d.on_mouse_down(MouseButton::Middle, move |_, window, cx| closed(window, cx))
                 })
                 .when_some(group.drag_panel(ix, cx), |d, drag| {
                     d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
@@ -301,9 +313,14 @@ impl TabGroupRenderer for Group {
         let end = group.clone();
         let node = group.node();
         div()
+            .id(("tabs", node.as_u64() as usize))
             .flex()
             .flex_none()
             .items_center()
+            .drag_over::<Dragged>(move |d, _, _, _| d.bg(t.hover))
+            .on_drop(move |d: &Dragged, window, cx| {
+                super::dock_terminal(d.0.clone(), Some(node), window, cx)
+            })
             .gap(px(4.))
             .map(|d| match collapsed {
                 true => d.h_full().px(px(2.)),

@@ -1,14 +1,16 @@
-//! The bottom panel's terminals: tabs of shells, each started in the current repo.
+//! The Terminal app: tabs of shells, each started in the current repo; a shell dragged out of it
+//! becomes a tab of its own.
 
 mod keys;
 mod session;
 mod view;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, Global, InteractiveElement, IntoElement,
+    AnyView, App, AppContext, Context, Entity, EntityId, Global, InteractiveElement, IntoElement,
     ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
     Window, div, prelude::FluentBuilder, px,
 };
@@ -30,9 +32,22 @@ const PASS: &[&str] = &[
 
 #[derive(Default)]
 pub struct Terminals {
+    /// The Terminal app's tabs.
     pub sessions: Vec<Entity<Session>>,
     pub active: usize,
-    subscriptions: Vec<Subscription>,
+    /// Shells moved out to tabs of their own.
+    pub docked: Vec<Entity<Session>>,
+    subscriptions: HashMap<EntityId, Subscription>,
+}
+
+/// A shell's tab being dragged out of the Terminal app.
+pub struct Dragged(pub Entity<Session>);
+
+impl Render for Dragged {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.0.read(cx).title().to_string();
+        ui::glass(div(), cx).px(px(10.)).py(px(4.)).child(title)
+    }
 }
 
 struct Global_(Entity<Terminals>);
@@ -61,13 +76,40 @@ impl Terminals {
             .current()
             .map(PathBuf::from)
             .or_else(std::env::home_dir);
-        let cwd = cwd.unwrap_or_default();
+        let Some(session) = self.start(cwd.unwrap_or_default(), window, cx) else {
+            return;
+        };
+        self.sessions.push(session.clone());
+        self.active = self.sessions.len() - 1;
+        let focus = session.read(cx).focus.clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    /// A shell in `cwd` for a tab of its own, as one restored after a restart.
+    pub fn open_docked(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Session>> {
+        let session = self.start(cwd, window, cx)?;
+        self.docked.push(session.clone());
+        Some(session)
+    }
+
+    fn start(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Session>> {
         let session = match session::start(cwd) {
             Ok(started) => cx.new(|cx| Session::new(started, cx)),
             Err(e) => {
                 let e = format!("Cannot start the shell: {e}");
                 Store::global(cx).update(cx, |s, cx| s.say(e, true, cx));
-                return;
+                return None;
             }
         };
         let sub = cx.subscribe_in(
@@ -75,12 +117,19 @@ impl Terminals {
             window,
             |this, s, _: &session::Exited, window, cx| this.close(s, window, cx),
         );
-        self.subscriptions.push(sub);
-        self.sessions.push(session.clone());
-        self.active = self.sessions.len() - 1;
-        let focus = session.read(cx).focus.clone();
-        window.focus(&focus, cx);
-        cx.notify();
+        self.subscriptions.insert(session.entity_id(), sub);
+        Some(session)
+    }
+
+    /// Moves a shell out of the Terminal app, for a tab of its own.
+    pub fn undock(&mut self, session: &Entity<Session>, cx: &mut Context<Self>) {
+        if let Some(i) = self.sessions.iter().position(|s| s == session) {
+            self.docked.push(self.sessions.remove(i));
+            if self.active >= i && self.active > 0 {
+                self.active -= 1;
+            }
+            cx.notify();
+        }
     }
 
     pub fn close(
@@ -89,11 +138,16 @@ impl Terminals {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.subscriptions.remove(&session.entity_id());
+        if let Some(i) = self.docked.iter().position(|s| s == session) {
+            self.docked.remove(i);
+            dock::close_terminal(session, window, cx);
+            return cx.notify();
+        }
         let Some(i) = self.sessions.iter().position(|s| s == session) else {
             return;
         };
         self.sessions.remove(i);
-        drop(self.subscriptions.remove(i));
         if self.active >= i && self.active > 0 {
             self.active -= 1;
         }
@@ -167,6 +221,7 @@ impl Render for Panel {
             let on = i == terminals.active;
             let (select, close) = (self.terminals.clone(), self.terminals.clone());
             let session = terminals.sessions[i].clone();
+            let dragged = session.clone();
             div()
                 .id(("terminal.tab", i))
                 .test_support()
@@ -185,6 +240,9 @@ impl Render for Panel {
                 .when(on, |d| d.bg(t.selected))
                 .hover(|d| d.bg(t.hover))
                 .on_click(move |_, window, cx| select.update(cx, |t, cx| t.select(i, window, cx)))
+                .on_drag(Dragged(dragged), |d: &Dragged, _, _, cx| {
+                    cx.new(|_| Dragged(d.0.clone()))
+                })
                 .child(div().truncate().child(label))
                 .child(
                     ui::icon_button(("terminal.close", i), Icon::Close.size(px(10.)), cx)
@@ -239,11 +297,12 @@ fn intercept(cx: &mut App) {
         let Some(g) = cx.try_global::<Global_>() else {
             return;
         };
-        let focused =
-            g.0.read(cx)
-                .sessions
-                .iter()
-                .find(|s| s.read(cx).focus.is_focused(window));
+        let t = g.0.read(cx);
+        let focused = t
+            .sessions
+            .iter()
+            .chain(&t.docked)
+            .find(|s| s.read(cx).focus.is_focused(window));
         let Some(session) = focused.cloned() else {
             return;
         };

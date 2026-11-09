@@ -1,5 +1,6 @@
 //! A document in a tab: a file or diff in a viewer, an MR page, a job log or a chat.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
@@ -13,6 +14,7 @@ use crate::chat;
 use crate::files::Viewer;
 use crate::forge::{self, MrPage};
 use crate::store::{Doc, Store};
+use crate::terminal::{Session, Terminals};
 use crate::util::base_name;
 
 pub const NAME: &str = "doc";
@@ -20,6 +22,7 @@ pub const NAME: &str = "doc";
 enum View {
     Viewer(Entity<Viewer>),
     Page(AnyView),
+    Terminal(Entity<Session>),
 }
 
 pub struct DocTab {
@@ -71,6 +74,7 @@ impl DocTab {
             Doc::Mr { number, .. } => format!("doc.mr.{number}").into(),
             Doc::Job { id, .. } => format!("doc.job.{id}").into(),
             Doc::Chat { .. } => "doc.chat".into(),
+            Doc::Terminal { id, .. } => format!("doc.terminal.{id}").into(),
         }
     }
 
@@ -83,6 +87,10 @@ impl DocTab {
             Doc::Chat { repo } => {
                 format!("Claude · {}", Store::global(cx).read(cx).name_of(repo)).into()
             }
+            Doc::Terminal { .. } => match &self.view {
+                Some(View::Terminal(s)) => s.read(cx).title().to_string().into(),
+                _ => "Terminal".into(),
+            },
         }
     }
 
@@ -94,7 +102,7 @@ impl DocTab {
                     mr.read(cx).raise(cx);
                 }
             }
-            None => {}
+            Some(View::Terminal(_)) | None => {}
         }
     }
 }
@@ -121,7 +129,27 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
     Some(Arc::new(DocTab::new(s.doc, s.keep, cx)))
 }
 
-fn build(doc: &Doc, window: &mut Window, cx: &mut App) -> View {
+fn build(doc: &mut Doc, window: &mut Window, cx: &mut App) -> View {
+    if let Doc::Terminal { id, cwd } = doc {
+        let terminals = Terminals::global(cx);
+        let live = terminals
+            .read(cx)
+            .docked
+            .iter()
+            .find(|s| s.entity_id().as_u64() == *id);
+        let session = match live.cloned() {
+            Some(s) => Some(s),
+            None => terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&*cwd), window, cx)),
+        };
+        return match session {
+            Some(s) => {
+                *id = s.entity_id().as_u64();
+                View::Terminal(s)
+            }
+            // The shell did not start; the status bar says why.
+            None => View::Page(cx.new(|_| Blank).into()),
+        };
+    }
     match doc {
         Doc::File(_) | Doc::Diff(_) => {
             let v = cx.new(Viewer::new);
@@ -131,6 +159,15 @@ fn build(doc: &Doc, window: &mut Window, cx: &mut App) -> View {
         Doc::Mr { repo, number } => View::Page(forge::mr_page(repo.clone(), *number, window, cx)),
         Doc::Chat { repo } => View::Page(chat::page(repo, window, cx)),
         Doc::Job { .. } => View::Page(forge::job_log(doc, cx)),
+        Doc::Terminal { .. } => unreachable!(),
+    }
+}
+
+struct Blank;
+
+impl Render for Blank {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
     }
 }
 
@@ -145,11 +182,12 @@ impl Focusable for DocTab {
 impl Render for DocTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.view.is_none() {
-            self.view = Some(build(&self.doc, window, cx));
+            self.view = Some(build(&mut self.doc, window, cx));
         }
         let view = match &self.view {
             Some(View::Viewer(v)) => v.clone().into_any_element(),
             Some(View::Page(p)) => p.clone().into_any_element(),
+            Some(View::Terminal(s)) => s.clone().into_any_element(),
             None => div().into_any_element(),
         };
         div().flex().flex_col().size_full().min_h_0().child(view)
@@ -165,7 +203,10 @@ impl Panel for DocTab {
         false
     }
 
-    fn set_active(&mut self, active: bool, _: &mut Window, cx: &mut Context<Self>) {
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let (true, Some(View::Terminal(s))) = (active, &self.view) {
+            window.focus(&s.read(cx).focus.clone(), cx);
+        }
         if active {
             let doc = self.doc.clone();
             Store::global(cx).update(cx, |s, cx| s.set_shown(Some(doc), cx));
@@ -173,7 +214,14 @@ impl Panel for DocTab {
         }
     }
 
-    fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Closing the tab ends its shell, once the dock is done removing it.
+        if let Some(View::Terminal(s)) = &self.view {
+            let s = s.clone();
+            window.defer(cx, move |window, cx| {
+                Terminals::global(cx).update(cx, |t, cx| t.close(&s, window, cx))
+            });
+        }
         let doc = self.doc.clone();
         Store::global(cx).update(cx, |s, cx| {
             if s.shown() == Some(&doc) {

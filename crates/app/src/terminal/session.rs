@@ -62,6 +62,8 @@ pub struct Session {
     pub term: Arc<FairMutex<Term<Listener>>>,
     tx: Notifier,
     shell: String,
+    /// Where it started, for a new shell in its place after a restart.
+    pub cwd: PathBuf,
     pub title: Option<String>,
     pub memory: Option<u64>,
     pub focus: FocusHandle,
@@ -82,6 +84,7 @@ pub struct Started {
     term: Arc<FairMutex<Term<Listener>>>,
     tx: Notifier,
     pid: u32,
+    cwd: PathBuf,
     rx: mpsc::UnboundedReceiver<Event>,
 }
 
@@ -91,7 +94,7 @@ pub fn start(cwd: PathBuf) -> std::io::Result<Started> {
     let grid = Grid { cols: 80, rows: 24 };
     let env = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
     let options = tty::Options {
-        working_directory: Some(cwd),
+        working_directory: Some(cwd.clone()),
         env: env.map(|(k, v)| (k.into(), v.into())).into(),
         ..Default::default()
     };
@@ -108,7 +111,13 @@ pub fn start(cwd: PathBuf) -> std::io::Result<Started> {
     let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
     let tx = Notifier(event_loop.channel());
     event_loop.spawn();
-    Ok(Started { term, tx, pid, rx })
+    Ok(Started {
+        term,
+        tx,
+        pid,
+        cwd,
+        rx,
+    })
 }
 
 impl Session {
@@ -118,6 +127,7 @@ impl Session {
             term: s.term,
             tx: s.tx,
             shell: shell_name(),
+            cwd: s.cwd,
             title: None,
             memory: None,
             focus: cx.focus_handle(),
