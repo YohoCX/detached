@@ -1,44 +1,20 @@
-//! libghostty-vt as the emulator, in alacritty's vocabulary (modes, flags, scrolls, events), and
-//! the loop that feeds it from alacritty's PTY.
+//! libghostty-vt, the emulator: its C API and the screen, modes and selection on top of it.
 
 use std::ffi::{c_int, c_void};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io;
 use std::ptr::{null, null_mut};
-use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use alacritty_terminal::event::{Event, EventListener, OnResize};
-use alacritty_terminal::event_loop::Msg;
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{ClipboardType, TermMode};
-use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
-use alacritty_terminal::vte::ansi::Rgb;
-use polling::{Events, PollMode, Poller};
-
-use super::session::{Grid, Listener};
+use super::session::{Event, Grid, Listener};
 
 type Handle = *mut c_void;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Color {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-
-impl From<Rgb> for Color {
-    fn from(Rgb { r, g, b }: Rgb) -> Color {
-        Color { r, g, b }
-    }
-}
-
-impl From<Color> for Rgb {
-    fn from(Color { r, g, b }: Color) -> Rgb {
-        Rgb { r, g, b }
-    }
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
 #[repr(C)]
@@ -175,7 +151,7 @@ struct Geometry {
     screen_height: u32,
 }
 
-#[link(name = "ghostty-vt", kind = "static")]
+// Linked by build.rs, whose library name differs per OS.
 unsafe extern "C" {
     fn ghostty_terminal_new(alloc: *const c_void, out: *mut Handle, cols: u16, rows: u16) -> c_int;
     fn ghostty_terminal_free(t: Handle);
@@ -204,7 +180,7 @@ unsafe extern "C" {
         values: *mut *mut c_void,
         written: *mut usize,
     ) -> c_int;
-    fn ghostty_color_palette_default(out: *mut Color);
+    fn ghostty_color_palette_default(out: *mut Rgb);
     fn ghostty_formatter_terminal_new(alloc: *const c_void, out: *mut Handle, t: Handle) -> c_int;
     fn ghostty_formatter_set(f: Handle, opt: c_int, value: *const c_void) -> c_int;
     fn ghostty_formatter_format_alloc(
@@ -310,9 +286,33 @@ pub struct Cell<'a> {
     /// None for the default colors.
     pub fg: Option<Rgb>,
     pub bg: Option<Rgb>,
-    pub flags: Flags,
+    pub attrs: Attrs,
     pub selected: bool,
     pub cursor: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Attrs {
+    pub bold: bool,
+    pub italic: bool,
+    pub dim: bool,
+    pub inverse: bool,
+    pub hidden: bool,
+    pub underline: bool,
+    pub strike: bool,
+}
+
+/// The DEC modes the keys, the mouse and the wheel follow.
+#[derive(Clone, Copy, Default)]
+pub struct Mode {
+    pub app_cursor: bool,
+    pub bracketed_paste: bool,
+    /// Mouse reports of clicks; `mouse_drag` adds drags and motion.
+    pub mouse: bool,
+    pub mouse_drag: bool,
+    pub sgr_mouse: bool,
+    pub alt_screen: bool,
+    pub alt_scroll: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -330,7 +330,7 @@ pub struct Term {
     gesture: Handle,
     /// Where the callbacks send their events; boxed, as the terminal holds its address.
     listener: Box<Listener>,
-    mode: TermMode,
+    mode: Mode,
     colors: Option<([Rgb; 16], Rgb, Rgb)>,
     grid: Grid,
     epoch: Instant,
@@ -338,12 +338,12 @@ pub struct Term {
     woken: bool,
 }
 
-// SAFETY: the handles have no thread affinity, and the FairMutex around Term makes calls on them
-// one at a time, which is all libghostty-vt asks.
+// SAFETY: the handles have no thread affinity, and the mutex around Term makes calls on them one at
+// a time, which is all libghostty-vt asks.
 unsafe impl Send for Term {}
 
 impl Term {
-    fn new(grid: Grid, scrollback: usize, listener: Listener) -> io::Result<Term> {
+    pub fn new(grid: Grid, scrollback: usize, listener: Listener) -> io::Result<Term> {
         let listener = Box::new(listener);
         let mut term = Term {
             t: null_mut(),
@@ -352,7 +352,7 @@ impl Term {
             cells: null_mut(),
             gesture: null_mut(),
             listener,
-            mode: TermMode::empty(),
+            mode: Mode::default(),
             colors: None,
             grid,
             epoch: Instant::now(),
@@ -392,44 +392,37 @@ impl Term {
     }
 
     /// Parses what the shell wrote; true when the UI needs a wakeup to draw it.
-    fn advance(&mut self, bytes: &[u8]) -> bool {
+    pub fn advance(&mut self, bytes: &[u8]) -> bool {
         // SAFETY: a live handle and a slice for the length of the call.
         unsafe { ghostty_terminal_vt_write(self.t, bytes.as_ptr(), bytes.len()) };
         self.mode = self.modes();
         !std::mem::replace(&mut self.woken, true)
     }
 
-    fn modes(&self) -> TermMode {
+    fn modes(&self) -> Mode {
         let on = |mode: u16| {
             let mut c = ModeConfig { mode, value: false };
             // SAFETY: a live handle and the ModeConfig MODE takes.
             unsafe { ghostty_terminal_get(self.t, data::MODE, out(&mut c)) };
             c.value
         };
-        let mut mode = TermMode::empty();
-        for (n, flag) in [
-            (1, TermMode::APP_CURSOR),
-            (9, TermMode::MOUSE_REPORT_CLICK),
-            (1000, TermMode::MOUSE_REPORT_CLICK),
-            (1002, TermMode::MOUSE_DRAG),
-            (1003, TermMode::MOUSE_MOTION),
-            (1006, TermMode::SGR_MOUSE),
-            (1007, TermMode::ALTERNATE_SCROLL),
-            (2004, TermMode::BRACKETED_PASTE),
-        ] {
-            if on(n) {
-                mode |= flag;
-            }
-        }
         let mut screen: c_int = 0;
         // SAFETY: a live handle and the c_int ACTIVE_SCREEN writes.
         unsafe { ghostty_terminal_get(self.t, data::ACTIVE_SCREEN, out(&mut screen)) };
-        mode.set(TermMode::ALT_SCREEN, screen == 1);
-        mode
+        let mouse_drag = on(1002) || on(1003);
+        Mode {
+            app_cursor: on(1),
+            bracketed_paste: on(2004),
+            mouse: mouse_drag || on(9) || on(1000),
+            mouse_drag,
+            sgr_mouse: on(1006),
+            alt_screen: screen == 1,
+            alt_scroll: on(1007),
+        }
     }
 
-    pub fn mode(&self) -> &TermMode {
-        &self.mode
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 
     pub fn resize(&mut self, grid: Grid, cell_width: u16, cell_height: u16) {
@@ -439,13 +432,16 @@ impl Term {
         unsafe { ghostty_terminal_resize(self.t, cols, rows, w.into(), h.into()) };
     }
 
-    pub fn scroll_display(&mut self, scroll: Scroll) {
-        let (tag, delta) = match scroll {
-            // DELTA and BOTTOM; up is negative for ghostty, positive for alacritty.
-            Scroll::Delta(n) => (2, -n as isize),
-            Scroll::Bottom => (1, 0),
-            _ => return,
-        };
+    /// Scrolls `up` lines into the history, or down when negative.
+    pub fn scroll(&mut self, up: isize) {
+        self.viewport(2, -up); // DELTA
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.viewport(1, 0); // BOTTOM
+    }
+
+    fn viewport(&mut self, tag: c_int, delta: isize) {
         let value = ScrollValue { delta };
         // SAFETY: a live handle and a ScrollViewport by value.
         unsafe { ghostty_terminal_scroll_viewport(self.t, ScrollViewport { tag, value }) };
@@ -560,14 +556,11 @@ impl Term {
             return;
         }
         self.colors = Some((ansi, fg, bg));
-        let mut palette = [Color::default(); 256];
-        let (fg, bg) = (Color::from(fg), Color::from(bg));
+        let mut palette = [Rgb::default(); 256];
         // SAFETY: a live handle; the palette is the 256 colors COLOR_PALETTE reads.
         unsafe {
             ghostty_color_palette_default(palette.as_mut_ptr());
-            for (p, c) in palette.iter_mut().zip(ansi) {
-                *p = c.into();
-            }
+            palette[..16].copy_from_slice(&ansi);
             ghostty_terminal_set(self.t, opt::COLOR_PALETTE, ptr(&palette));
             ghostty_terminal_set(self.t, opt::COLOR_FOREGROUND, ptr(&fg));
             ghostty_terminal_set(self.t, opt::COLOR_BACKGROUND, ptr(&bg));
@@ -628,9 +621,9 @@ impl Term {
                     };
                     let (mut style, mut fg, mut bg) = (Style::default(), None, None);
                     let color = |key, c: &mut Option<Rgb>| {
-                        let mut v = Color::default();
+                        let mut v = Rgb::default();
                         if get(key, out(&mut v)) == OK {
-                            *c = Some(v.into());
+                            *c = Some(v);
                         }
                     };
                     // Blank cells can carry a background without a style.
@@ -649,7 +642,7 @@ impl Term {
                         wide: wide == 1,
                         fg,
                         bg,
-                        flags: flags(style.flags),
+                        attrs: attrs(style.flags),
                         selected: (sel.start..=sel.end).contains(&x),
                         cursor: cursor == Some((row as u16, x)),
                     });
@@ -673,20 +666,17 @@ impl Drop for Term {
     }
 }
 
-fn flags(bits: u16) -> Flags {
-    let mut f = Flags::empty();
-    for (bit, flag) in [
-        (0, Flags::BOLD),
-        (1, Flags::ITALIC),
-        (2, Flags::DIM),
-        (4, Flags::INVERSE),
-        (5, Flags::HIDDEN),
-        (6, Flags::STRIKEOUT),
-    ] {
-        f.set(flag, bits & 1 << bit != 0);
+fn attrs(bits: u16) -> Attrs {
+    let on = |bit: u16| bits & 1 << bit != 0;
+    Attrs {
+        bold: on(0),
+        italic: on(1),
+        dim: on(2),
+        inverse: on(4),
+        hidden: on(5),
+        strike: on(6),
+        underline: bits >> 8 & 7 != 0,
     }
-    f.set(Flags::UNDERLINE, bits >> 8 & 7 != 0);
-    f
 }
 
 extern "C" fn write_pty(_: Handle, ud: *mut c_void, data: *const u8, len: usize) {
@@ -697,7 +687,7 @@ extern "C" fn write_pty(_: Handle, ud: *mut c_void, data: *const u8, len: usize)
             std::slice::from_raw_parts(data, len),
         )
     };
-    listener.send_event(Event::PtyWrite(String::from_utf8_lossy(bytes).into_owned()));
+    listener.write(bytes.to_vec());
 }
 
 extern "C" fn title_changed(t: Handle, ud: *mut c_void) {
@@ -717,10 +707,7 @@ extern "C" fn title_changed(t: Handle, ud: *mut c_void) {
             String::from_utf8_lossy(bytes).into_owned(),
         )
     };
-    listener.send_event(match title.is_empty() {
-        true => Event::ResetTitle,
-        false => Event::Title(title),
-    });
+    listener.send(Event::Title(Some(title).filter(|t| !t.is_empty())));
 }
 
 /// OSC 52 and its kin: the text they carry goes to the clipboard.
@@ -740,8 +727,7 @@ extern "C" fn clipboard_write(_: Handle, ud: *mut c_void, w: *const ClipboardWri
         if let Some(c) = text.filter(|c| c.data.len > 0) {
             let data = std::slice::from_raw_parts(c.data.ptr, c.data.len);
             let text = String::from_utf8_lossy(data).into_owned();
-            (*ud.cast::<Listener>())
-                .send_event(Event::ClipboardStore(ClipboardType::Clipboard, text));
+            (*ud.cast::<Listener>()).send(Event::Clipboard(text));
         }
         let reply = ClipboardReply {
             size: size_of::<ClipboardReply>(),
@@ -750,115 +736,4 @@ extern "C" fn clipboard_write(_: Handle, ud: *mut c_void, w: *const ClipboardWri
         };
         (w.reply)(w, &reply);
     }
-}
-
-/// Sends to the loop of a shell, waking it.
-pub struct Pipe {
-    tx: mpsc::Sender<Msg>,
-    poller: Arc<Poller>,
-}
-
-impl Pipe {
-    pub fn send(&self, msg: Msg) -> io::Result<()> {
-        self.tx
-            .send(msg)
-            .map_err(|_| io::Error::from(ErrorKind::BrokenPipe))?;
-        self.poller.notify()
-    }
-}
-
-/// A terminal on `pty` and the thread that feeds it the shell's output and writes the shell's input.
-pub fn spawn(
-    grid: Grid,
-    scrollback: usize,
-    mut pty: tty::Pty,
-    listener: Listener,
-) -> io::Result<(Arc<FairMutex<Term>>, Pipe)> {
-    let term = Arc::new(FairMutex::new(Term::new(
-        grid,
-        scrollback,
-        listener.clone(),
-    )?));
-    let poller = Arc::new(Poller::new()?);
-    let (tx, rx) = mpsc::channel();
-    let (t, p) = (term.clone(), poller.clone());
-    std::thread::Builder::new()
-        .name("PTY".into())
-        .spawn(move || {
-            let _ = pump(&t, &mut pty, &p, &rx, &listener);
-            listener.send_event(Event::Exit);
-        })?;
-    Ok((term, Pipe { tx, poller }))
-}
-
-fn pump(
-    term: &FairMutex<Term>,
-    pty: &mut tty::Pty,
-    poller: &Arc<Poller>,
-    rx: &mpsc::Receiver<Msg>,
-    listener: &Listener,
-) -> io::Result<()> {
-    let mut interest = polling::Event::readable(0);
-    // SAFETY: the PTY is deregistered before this returns and outlives the poller's use of it.
-    unsafe { pty.register(poller, interest, PollMode::Level)? };
-    let mut events = Events::new();
-    let mut buf = vec![0; 1 << 16];
-    let mut input = Vec::new();
-    let r = (|| loop {
-        events.clear();
-        match poller.wait(&mut events, None) {
-            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            r => r?,
-        };
-        for msg in rx.try_iter() {
-            match msg {
-                Msg::Input(bytes) => input.extend_from_slice(&bytes),
-                Msg::Resize(size) => pty.on_resize(size),
-                Msg::Shutdown => return Ok(()),
-            }
-        }
-        for e in events.iter() {
-            // The child's token is 1 on every OS; alacritty keeps the constants private on Unix.
-            match e.key {
-                1 => {
-                    if let Some(ChildEvent::Exited(_)) = pty.next_child_event() {
-                        return Ok(());
-                    }
-                }
-                _ if e.readable => {
-                    let mut wake = false;
-                    loop {
-                        match pty.reader().read(&mut buf) {
-                            Ok(0) => return Ok(()),
-                            Ok(n) => wake |= term.lock().advance(&buf[..n]),
-                            Err(e) if blocked(&e) => break,
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    if wake {
-                        listener.send_event(Event::Wakeup);
-                    }
-                }
-                _ => {}
-            }
-        }
-        while !input.is_empty() {
-            match pty.writer().write(&input) {
-                Ok(0) => break,
-                Ok(n) => drop(input.drain(..n)),
-                Err(e) if blocked(&e) => break,
-                Err(e) => return Err(e),
-            }
-        }
-        if interest.writable != !input.is_empty() {
-            interest.writable = !input.is_empty();
-            pty.reregister(poller, interest, PollMode::Level)?;
-        }
-    })();
-    let _ = pty.deregister(poller);
-    r
-}
-
-fn blocked(e: &io::Error) -> bool {
-    matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
 }

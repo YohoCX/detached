@@ -1,47 +1,50 @@
-//! One shell on a PTY: the emulator and its I/O thread, with their events on the UI thread.
+//! One shell on a PTY: the emulator, the threads around the PTY, and their events on the UI thread.
 
-use std::borrow::Cow;
+#[cfg(unix)]
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc as channel};
 use std::time::Duration;
 
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::Msg;
-#[cfg(not(feature = "ghostty"))]
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender as Pipe};
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Point, Side};
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::TermMode;
-#[cfg(not(feature = "ghostty"))]
-use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty;
-use alacritty_terminal::vte::ansi::Rgb;
 use detached_core::os;
 use futures::StreamExt;
 use futures::channel::mpsc;
-use gpui_kit::{
-    Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Hsla, Pixels, Rgba, Task,
-};
+use gpui_kit::{Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Pixels, Task};
+#[cfg(unix)]
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+use parking_lot::Mutex;
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use super::ghostty::{Mode, Term};
 use super::keys;
 use crate::blocking;
-use crate::ui::theme;
 
-#[cfg(feature = "ghostty")]
-pub use super::ghostty::{Pipe, Term as Emulator};
-#[cfg(not(feature = "ghostty"))]
-pub type Emulator = Term<Listener>;
-
-pub const SCROLLBACK: usize = 1000;
+const SCROLLBACK: usize = 1000;
 const MEMORY_EVERY: Duration = Duration::from_secs(2);
 
-#[derive(Clone)]
-pub struct Listener(mpsc::UnboundedSender<Event>);
+pub enum Event {
+    /// None resets it to the shell's name.
+    Title(Option<String>),
+    Clipboard(String),
+    Wakeup,
+    Exit,
+}
 
-impl EventListener for Listener {
-    fn send_event(&self, e: Event) {
-        let _ = self.0.unbounded_send(e);
+/// Where the emulator sends its events, and its replies to the shell.
+#[derive(Clone)]
+pub struct Listener {
+    events: mpsc::UnboundedSender<Event>,
+    pty: channel::Sender<Vec<u8>>,
+}
+
+impl Listener {
+    pub fn send(&self, e: Event) {
+        let _ = self.events.unbounded_send(e);
+    }
+
+    pub fn write(&self, bytes: Vec<u8>) {
+        let _ = self.pty.send(bytes);
     }
 }
 
@@ -52,24 +55,15 @@ pub struct Grid {
     pub rows: usize,
 }
 
-impl Dimensions for Grid {
-    fn total_lines(&self) -> usize {
-        self.rows
-    }
-    fn screen_lines(&self) -> usize {
-        self.rows
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
-
 /// The shell has exited.
 pub struct Exited;
 
 pub struct Session {
-    pub term: Arc<FairMutex<Emulator>>,
-    tx: Pipe,
+    pub term: Arc<Mutex<Term>>,
+    pty: Box<dyn MasterPty + Send>,
+    _stop: Stop,
+    listener: Listener,
+    killer: Box<dyn ChildKiller + Send + Sync>,
     shell: String,
     /// Where it started, for a new shell in its place after a restart.
     pub cwd: PathBuf,
@@ -79,8 +73,8 @@ pub struct Session {
     pub grid: Grid,
     /// Where the rows are drawn and the size of a cell, from the last frame.
     pub layout: Option<(Bounds<Pixels>, gpui_kit::Size<Pixels>)>,
-    /// Where a left press started, for a drag to select from.
-    pub pressed: Option<(Point, Side)>,
+    /// A left press started a selection.
+    pub pressed: bool,
     /// Wheel lines not scrolled yet.
     pub scrolled: f32,
     _tasks: [Task<()>; 2],
@@ -90,49 +84,172 @@ impl EventEmitter<Exited> for Session {}
 
 /// A shell started on its PTY, not yet on the UI thread.
 pub struct Started {
-    term: Arc<FairMutex<Emulator>>,
-    tx: Pipe,
+    term: Arc<Mutex<Term>>,
+    pty: Box<dyn MasterPty + Send>,
+    stop: Stop,
+    listener: Listener,
+    killer: Box<dyn ChildKiller + Send + Sync>,
     pid: u32,
     cwd: PathBuf,
     rx: mpsc::UnboundedReceiver<Event>,
 }
 
-pub fn start(cwd: PathBuf) -> std::io::Result<Started> {
-    let (tx, rx) = mpsc::unbounded();
-    let listener = Listener(tx);
+/// The shell in `cwd`, a thread reading its output into the emulator, one writing its input and
+/// one waiting for its exit.
+pub fn start(cwd: PathBuf) -> io::Result<Started> {
     let grid = Grid { cols: 80, rows: 24 };
-    let env = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")];
-    let options = tty::Options {
-        working_directory: Some(cwd.clone()),
-        env: env.map(|(k, v)| (k.into(), v.into())).into(),
-        ..Default::default()
+    let pair = native_pty_system()
+        .openpty(pty_size(grid, (8, 16)))
+        .map_err(io::Error::other)?;
+    let mut cmd = if cfg!(windows) {
+        CommandBuilder::new("powershell")
+    } else {
+        CommandBuilder::new_default_prog()
     };
-    let pty = tty::new(&options, window_size(grid, None), 0)?;
-    #[cfg(unix)]
-    let pid = pty.child().id();
-    #[cfg(windows)]
-    let pid = pty.child_watcher().pid().map_or(0, |p| p.get());
-    #[cfg(feature = "ghostty")]
-    let (term, tx) = super::ghostty::spawn(grid, SCROLLBACK, pty, listener)?;
-    #[cfg(not(feature = "ghostty"))]
-    let (term, tx) = {
-        let config = Config {
-            scrolling_history: SCROLLBACK,
-            ..Config::default()
-        };
-        let term = Arc::new(FairMutex::new(Term::new(config, &grid, listener.clone())));
-        let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
-        let tx = event_loop.channel();
-        event_loop.spawn();
-        (term, tx)
-    };
+    cmd.cwd(&cwd);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    let mut child = pair.slave.spawn_command(cmd).map_err(io::Error::other)?;
+    drop(pair.slave);
+    let (mut reader, mut writer, stop) = pipes(&*pair.master)?;
+    let (tx, rx) = mpsc::unbounded();
+    let (pty, input) = channel::channel::<Vec<u8>>();
+    let listener = Listener { events: tx, pty };
+    let term = Arc::new(Mutex::new(Term::new(grid, SCROLLBACK, listener.clone())?));
+    let (t, events) = (term.clone(), listener.events.clone());
+    thread("PTY read", move || {
+        let mut buf = vec![0; 1 << 16];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => return,
+                Ok(n) => {
+                    let wake = t.lock().advance(&buf[..n]);
+                    if wake {
+                        let _ = events.unbounded_send(Event::Wakeup);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return,
+            }
+        }
+    })?;
+    // Ends once the session and its emulator are gone, the holders of the input's senders.
+    thread("PTY write", move || {
+        for bytes in input {
+            if writer.write_all(&bytes).is_err() {
+                return;
+            }
+        }
+    })?;
+    let (pid, killer) = (child.process_id().unwrap_or(0), child.clone_killer());
+    let events = listener.events.clone();
+    thread("PTY wait", move || {
+        let _ = child.wait();
+        let _ = events.unbounded_send(Event::Exit);
+    })?;
     Ok(Started {
         term,
-        tx,
+        pty: pair.master,
+        stop,
+        listener,
+        killer,
         pid,
         cwd,
         rx,
     })
+}
+
+/// The PTY's reader and writer, and the stop that ends both when dropped, whoever still holds the
+/// shell's side; ConPTY ends them itself once its master is closed.
+type Pipes = (Box<dyn Read + Send>, Box<dyn Write + Send>, Stop);
+#[cfg(unix)]
+type Stop = io::PipeWriter;
+#[cfg(windows)]
+type Stop = ();
+
+#[cfg(windows)]
+fn pipes(pty: &dyn MasterPty) -> io::Result<Pipes> {
+    let reader = pty.try_clone_reader().map_err(io::Error::other)?;
+    Ok((reader, pty.take_writer().map_err(io::Error::other)?, ()))
+}
+
+#[cfg(unix)]
+fn pipes(pty: &dyn MasterPty) -> io::Result<Pipes> {
+    use std::os::fd::{AsRawFd, BorrowedFd};
+    let raw = pty.as_raw_fd().ok_or_else(|| io::Error::other("no PTY"))?;
+    // SAFETY: the master is open for the length of this call, and the dup outlives it.
+    let fd = unsafe { BorrowedFd::borrow_raw(raw) }.try_clone_to_owned()?;
+    // Shared by every dup of the master, so no read or write blocks past the stop.
+    let flags = nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK);
+    nix::fcntl::fcntl(fd.as_raw_fd(), flags)?;
+    let (stopped, stop) = io::pipe()?;
+    let reader = Polled {
+        file: fd.try_clone()?.into(),
+        stopped: stopped.try_clone()?,
+    };
+    let writer = Polled {
+        file: fd.into(),
+        stopped,
+    };
+    Ok((Box::new(reader), Box::new(writer), stop))
+}
+
+/// The PTY's master, read and written until the stop is dropped.
+#[cfg(unix)]
+struct Polled {
+    file: File,
+    stopped: io::PipeReader,
+}
+
+#[cfg(unix)]
+impl Polled {
+    fn retry<T>(
+        &mut self,
+        events: PollFlags,
+        mut f: impl FnMut(&mut File) -> io::Result<T>,
+    ) -> io::Result<T> {
+        use std::os::fd::AsFd;
+        // The stop first, so a job that never lets the PTY go quiet cannot outrun it.
+        loop {
+            let mut fds = [
+                PollFd::new(self.file.as_fd(), events),
+                PollFd::new(self.stopped.as_fd(), PollFlags::POLLIN),
+            ];
+            poll(&mut fds, PollTimeout::NONE)?;
+            if fds[1].any() == Some(true) {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            match f(&mut self.file) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                r => return r,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Read for Polled {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.retry(PollFlags::POLLIN, |f| f.read(buf))
+    }
+}
+
+#[cfg(unix)]
+impl Write for Polled {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.retry(PollFlags::POLLOUT, |f| f.write(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn thread(name: &str, f: impl FnOnce() + Send + 'static) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(f)
+        .map(drop)
 }
 
 impl Session {
@@ -140,7 +257,10 @@ impl Session {
         let memory = memory(Arc::new(os::Session::new(s.pid)), cx);
         Session {
             term: s.term,
-            tx: s.tx,
+            pty: s.pty,
+            _stop: s.stop,
+            listener: s.listener,
+            killer: s.killer,
             shell: shell_name(),
             cwd: s.cwd,
             title: None,
@@ -148,7 +268,7 @@ impl Session {
             focus: cx.focus_handle(),
             grid: Grid { cols: 80, rows: 24 },
             layout: None,
-            pressed: None,
+            pressed: false,
             scrolled: 0.,
             _tasks: [events(s.rx, cx), memory],
         }
@@ -158,27 +278,21 @@ impl Session {
         self.title.as_deref().unwrap_or(&self.shell)
     }
 
-    pub fn mode(&self) -> TermMode {
-        *self.term.lock().mode()
+    pub fn mode(&self) -> Mode {
+        self.term.lock().mode()
     }
 
-    pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        let bytes = bytes.into();
+    pub fn write(&self, bytes: Vec<u8>) {
         if !bytes.is_empty() {
-            let _ = self.tx.send(Msg::Input(bytes));
+            self.listener.write(bytes);
         }
     }
 
     /// What the user types: it scrolls back to the prompt and drops the selection.
     pub fn input(&self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         let mut term = self.term.lock();
-        term.scroll_display(Scroll::Bottom);
-        #[cfg(feature = "ghostty")]
+        term.scroll_to_bottom();
         term.clear_selection();
-        #[cfg(not(feature = "ghostty"))]
-        {
-            term.selection = None;
-        }
         drop(term);
         self.write(bytes);
         cx.notify();
@@ -202,34 +316,18 @@ impl Session {
     pub fn resize(&mut self, grid: Grid, cell: gpui_kit::Size<Pixels>) {
         if grid != self.grid && grid.cols > 1 && grid.rows > 0 {
             self.grid = grid;
-            let size = window_size(grid, Some(cell));
-            #[cfg(feature = "ghostty")]
-            self.term
-                .lock()
-                .resize(grid, size.cell_width, size.cell_height);
-            #[cfg(not(feature = "ghostty"))]
-            self.term.lock().resize(grid);
-            let _ = self.tx.send(Msg::Resize(size));
+            let cell = (f32::from(cell.width) as u16, f32::from(cell.height) as u16);
+            self.term.lock().resize(grid, cell.0, cell.1);
+            let _ = self.pty.resize(pty_size(grid, cell));
         }
     }
 
     fn on(&mut self, e: Event, cx: &mut Context<Self>) {
         match e {
-            Event::Title(t) => self.title = Some(t),
-            Event::ResetTitle => self.title = None,
-            Event::PtyWrite(s) => self.write(s.into_bytes()),
-            Event::ClipboardStore(_, s) => cx.write_to_clipboard(ClipboardItem::new_string(s)),
-            Event::ClipboardLoad(_, f) => {
-                let text = cx.read_from_clipboard().and_then(|c| c.text());
-                self.write(f(&text.unwrap_or_default()).into_bytes());
-            }
-            Event::ColorRequest(i, f) => self.write(f(color_of(i, cx)).into_bytes()),
-            Event::TextAreaSizeRequest(f) => {
-                let size = window_size(self.grid, self.layout.map(|l| l.1));
-                self.write(f(size).into_bytes());
-            }
-            Event::ChildExit(_) | Event::Exit => cx.emit(Exited),
-            _ => {}
+            Event::Title(t) => self.title = t,
+            Event::Clipboard(s) => cx.write_to_clipboard(ClipboardItem::new_string(s)),
+            Event::Exit => cx.emit(Exited),
+            Event::Wakeup => {}
         }
         cx.notify();
     }
@@ -237,8 +335,14 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // The loop drops the PTY, which hangs up on the shell.
-        let _ = self.tx.send(Msg::Shutdown);
+        // A hangup for the shell and the job in front of it. Dropping the stop then ends the PTY's
+        // threads, even if a job that outlives them still holds the shell's side.
+        #[cfg(unix)]
+        if let Some(pg) = self.pty.process_group_leader() {
+            use nix::sys::signal::{SIGHUP, killpg};
+            let _ = killpg(nix::unistd::Pid::from_raw(pg), SIGHUP);
+        }
+        let _ = self.killer.kill();
     }
 }
 
@@ -281,33 +385,13 @@ fn memory(session: Arc<os::Session>, cx: &mut Context<Session>) -> Task<()> {
     })
 }
 
-fn window_size(grid: Grid, cell: Option<gpui_kit::Size<Pixels>>) -> WindowSize {
-    let (w, h) = cell.map_or((8., 16.), |c| (f32::from(c.width), f32::from(c.height)));
-    WindowSize {
-        num_lines: grid.rows as u16,
-        num_cols: grid.cols as u16,
-        cell_width: w as u16,
-        cell_height: h as u16,
-    }
-}
-
-/// The theme's color for an OSC 4, 10 or 11 query.
-fn color_of(i: usize, cx: &Context<Session>) -> Rgb {
-    let t = theme(cx);
-    rgb(match i {
-        0..16 => t.ansi[i],
-        256 => t.fg,
-        _ => t.code,
-    })
-}
-
-pub fn rgb(c: Hsla) -> Rgb {
-    let Rgba { r, g, b, .. } = c.to_rgb();
-    let u = |v: f32| (v * 255.).round() as u8;
-    Rgb {
-        r: u(r),
-        g: u(g),
-        b: u(b),
+fn pty_size(grid: Grid, (w, h): (u16, u16)) -> PtySize {
+    let (cols, rows) = (grid.cols as u16, grid.rows as u16);
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(w),
+        pixel_height: rows.saturating_mul(h),
     }
 }
 

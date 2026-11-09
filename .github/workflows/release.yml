@@ -22,6 +22,12 @@ jobs:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       # Also caches ~/.cargo/bin, so cargo-packager is installed once.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # libghostty-vt is built from its release's source with Zig on Linux and Windows, uncached.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        if: runner.os != 'macOS'
+        with:
+          version: 0.17.1
+          use-cache: false
 
       - name: Linux libraries
         if: runner.os == 'Linux'

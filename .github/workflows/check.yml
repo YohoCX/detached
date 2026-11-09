@@ -22,6 +22,18 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # libghostty-vt: built with Zig on Linux and Windows (crates/app/build.rs), kept across runs.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        if: runner.os != 'macOS'
+        with:
+          version: 0.17.1
+          use-cache: false
+      - run: echo "GHOSTTY_VT_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ghostty-vt
+          key: ghostty-vt-${{ runner.os }}-${{ hashFiles('crates/app/build.rs') }}
+
       # GPUI's windowing and Vulkan; zsh for core's login-shell tests.
       - name: Linux libraries
         if: runner.os == 'Linux'

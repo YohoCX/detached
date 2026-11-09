@@ -47,22 +47,21 @@ futures = "0.3"
 markdown = "1.0.0"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 minisign-verify = "0.3"
+parking_lot = "0.12"
 percent-encoding = "2.3"
+portable-pty = "0.9"
 semver = { version = "1", features = ["serde"] }
 tempfile.workspace = true
 tree-sitter = "0.26"
 tree-sitter-containerfile = "0.9.2"
 ureq = "3.5"
-alacritty_terminal = "0.26"
 url = "2.5"
-polling = { version = "3.11", optional = true }
 
-[features]
-# libghostty-vt as the terminal's emulator, on the PTY of alacritty_terminal; macOS only for now.
-ghostty = ["dep:polling", "dep:sha2"]
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["fs", "poll", "signal"] }
 
 [build-dependencies]
-sha2 = { version = "0.10", optional = true }
+sha2 = "0.10"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3.0"

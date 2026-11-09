@@ -1,7 +1,6 @@
 //! The Terminal app: tabs of shells, each started in the current repo; a shell dragged out of it
 //! becomes a tab of its own.
 
-#[cfg(feature = "ghostty")]
 mod ghostty;
 mod keys;
 mod session;
@@ -17,7 +16,8 @@ use gpui_kit::{
     Window, div, prelude::FluentBuilder, px,
 };
 
-pub use session::{SCROLLBACK, Session};
+pub use ghostty::Rgb;
+pub use session::Session;
 
 use crate::dock::{self, Kind};
 use crate::store::Store;

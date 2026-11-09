@@ -1,17 +1,18 @@
 //! Keystrokes to the bytes an xterm sends.
 
-use alacritty_terminal::term::TermMode;
 use gpui_kit::Keystroke;
 
+use super::ghostty::Mode;
+
 /// None for keys a terminal has no bytes for (Cmd chords, lone modifiers).
-pub fn bytes(k: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
+pub fn bytes(k: &Keystroke, mode: Mode) -> Option<Vec<u8>> {
     let m = &k.modifiers;
     if m.platform {
         return None;
     }
     // xterm's modifier parameter: 1 + Shift 1, Alt 2, Ctrl 4.
     let p = 1 + m.shift as u8 + 2 * m.alt as u8 + 4 * m.control as u8;
-    let app = mode.contains(TermMode::APP_CURSOR);
+    let app = mode.app_cursor;
     let csi = |s: &str| format!("\x1b[{s}").into_bytes();
     let tilde = |n: u8| match p {
         1 => csi(&format!("{n}~")),
@@ -73,9 +74,9 @@ pub fn bytes(k: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
 }
 
 /// What a paste writes: bracketed when the app asked for it, newlines as Enter.
-pub fn paste(text: &str, mode: TermMode) -> Vec<u8> {
+pub fn paste(text: &str, mode: Mode) -> Vec<u8> {
     let text = text.replace("\r\n", "\r").replace('\n', "\r");
-    if mode.contains(TermMode::BRACKETED_PASTE) {
+    if mode.bracketed_paste {
         // A paste must not end the bracket early.
         let text = text.replace("\x1b[201~", "");
         format!("\x1b[200~{text}\x1b[201~").into_bytes()
@@ -89,10 +90,10 @@ mod tests {
     use super::*;
 
     fn key(s: &'static str) -> Vec<u8> {
-        key_in(s, TermMode::empty())
+        key_in(s, Mode::default())
     }
 
-    fn key_in(s: &'static str, mode: TermMode) -> Vec<u8> {
+    fn key_in(s: &'static str, mode: Mode) -> Vec<u8> {
         let mut k = Keystroke::parse(s).unwrap();
         if k.key_char.is_none() && k.key.chars().count() == 1 && !k.modifiers.control {
             k.key_char = Some(if k.modifiers.shift {
@@ -127,7 +128,11 @@ mod tests {
     #[test]
     fn arrows_follow_the_cursor_mode_and_modifiers() {
         assert_eq!(key("up"), b"\x1b[A");
-        assert_eq!(key_in("up", TermMode::APP_CURSOR), b"\x1bOA");
+        let app = Mode {
+            app_cursor: true,
+            ..Mode::default()
+        };
+        assert_eq!(key_in("up", app), b"\x1bOA");
         assert_eq!(key("ctrl-left"), b"\x1b[1;5D");
         assert_eq!(key("shift-end"), b"\x1b[1;2F");
     }
@@ -149,10 +154,11 @@ mod tests {
 
     #[test]
     fn paste_brackets_when_asked_and_sends_newlines_as_enter() {
-        assert_eq!(paste("a\nb", TermMode::empty()), b"a\rb");
-        assert_eq!(
-            paste("a\x1b[201~b", TermMode::BRACKETED_PASTE),
-            b"\x1b[200~ab\x1b[201~"
-        );
+        assert_eq!(paste("a\nb", Mode::default()), b"a\rb");
+        let bracketed = Mode {
+            bracketed_paste: true,
+            ..Mode::default()
+        };
+        assert_eq!(paste("a\x1b[201~b", bracketed), b"\x1b[200~ab\x1b[201~");
     }
 }
