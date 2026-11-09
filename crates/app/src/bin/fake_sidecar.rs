@@ -160,7 +160,10 @@ fn main() {
                         Value::Null
                     };
                 }
-                std::fs::write(file, Value::from(past).to_string()).unwrap();
+                // Renamed into place, so a list run beside this one never reads it half written.
+                let tmp = file.with_extension(format!("{}", std::process::id()));
+                std::fs::write(&tmp, Value::from(past).to_string()).unwrap();
+                std::fs::rename(tmp, file).unwrap();
             }
             "sessions" if c["cwd"] == "" => {
                 // A test lists every folder's past conversations in a file beside the sidecar.

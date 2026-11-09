@@ -703,8 +703,10 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     settle(cx);
     assert!(label(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
     say(cx, "edit both");
-    let api = index_of(cx, "in this turn in group/api");
-    index_of(cx, "in this turn in group/web");
+    // Nested repo names hold `\` on Windows (docs/TECHDEBT.md).
+    let sep = std::path::MAIN_SEPARATOR;
+    let api = index_of(cx, &format!("in this turn in group{sep}api"));
+    index_of(cx, &format!("in this turn in group{sep}web"));
     cx.click(("chat.back", api));
     wait_until(cx, |cx| items(cx)[api].ends_with("planned"));
     cx.click(("chat.back.confirm", api));
@@ -757,9 +759,9 @@ fn a_past_chat_archives_unarchives_and_deletes_after_a_confirm(cx: &mut TestAppC
     cx.click(("chats.delete.confirm", 1usize));
     assert!(title(cx, 1).is_none() && title(cx, 0).is_some());
     wait_until(cx, |_| {
-        !std::fs::read_to_string(&file).unwrap().contains("Drop me")
+        let past = std::fs::read_to_string(&file).unwrap();
+        past.contains("Keep me") && !past.contains("Drop me")
     });
-    assert!(std::fs::read_to_string(&file).unwrap().contains("Keep me"));
 }
 
 #[gpui_kit::test]
