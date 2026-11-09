@@ -10,12 +10,14 @@ use detached_core::settings::Workspace;
 use detached_core::state::AppState;
 use detached_core::types::{InProgress, RepoInfo, RepoStatus};
 use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
-    prelude::FluentBuilder, px, relative, uniform_list,
+    AnyView, App, AppContext, BoxShadow, ClickEvent, ClipboardItem, Context, Div, Entity,
+    FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window,
+    div, prelude::FluentBuilder, px, relative, uniform_list,
 };
 
 use super::branches::{self, Intent};
@@ -71,8 +73,21 @@ struct RepoRow {
 }
 
 /// The rows per active workspace. `collapsed` holds `workspace:<name>`, folder paths and repo paths
-/// (their worktrees hidden).
-fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<String>) -> Vec<Row> {
+/// (their worktrees hidden). A `filter` keeps the repos whose path from their added folder's name
+/// holds it, ignoring case, all unfolded.
+fn rows(
+    repos: &[RepoInfo],
+    workspaces: &[Workspace],
+    collapsed: &BTreeSet<String>,
+    filter: &str,
+) -> Vec<Row> {
+    let filter = filter.to_lowercase();
+    let unfolded = BTreeSet::new();
+    let collapsed = if filter.is_empty() {
+        collapsed
+    } else {
+        &unfolded
+    };
     let listed: HashSet<&str> = repos.iter().map(|r| r.path.as_str()).collect();
     let active: Vec<_> = workspaces.iter().filter(|w| w.active).collect();
     let mut out = vec![];
@@ -100,7 +115,14 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
                 .iter()
                 .filter(|r| in_folder(&r.path, folder) && !main_listed(r))
                 .map(|r| (r.path[folder.len()..].get(1..).unwrap_or(""), r))
+                .filter(|(rel, _)| {
+                    let shown = format!("{}/{rel}", folder_name(folder));
+                    shown.to_lowercase().contains(&filter)
+                })
                 .collect();
+            if inside.is_empty() && !filter.is_empty() {
+                continue;
+            }
             let solo = matches!(inside[..], [(_, r)] if r.path == folder);
             if !solo {
                 tree.out.push(Row::Folder {
@@ -233,20 +255,26 @@ fn badge_text(p: InProgress) -> &'static str {
     }
 }
 
-pub fn sidebar(cx: &mut App) -> AnyView {
-    cx.new(Sidebar::new).into()
+pub fn sidebar(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| Sidebar::new(window, cx)).into()
 }
 
 struct Sidebar {
     collapsed: BTreeSet<String>,
-    _store: Subscription,
+    filter: Entity<InputState>,
+    _subs: [Subscription; 2],
 }
 
 impl Sidebar {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
         Sidebar {
             collapsed: ui_state::get(COLLAPSED, cx).unwrap_or_default(),
-            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            _subs: [
+                cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()),
+            ],
+            filter,
         }
     }
 
@@ -501,19 +529,39 @@ impl Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let s = Store::global(cx).read(cx);
-        let rows = Rc::new(rows(&s.repos, &s.workspaces, &self.collapsed));
+        let filter = self.filter.read(cx).value();
+        let rows = Rc::new(rows(&s.repos, &s.workspaces, &self.collapsed, &filter));
         let none_on = !s.workspaces.is_empty() && !s.workspaces.iter().any(|w| w.active);
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
             Store::global(cx).update(cx, |s, cx| s.refresh_all(cx))
         };
+        let t = theme(cx);
         let toolbar = div()
             .flex()
             .flex_none()
             .items_center()
-            .justify_end()
             .gap(px(4.))
             .h(px(36.))
             .px(px(8.))
+            .child(
+                div()
+                    .id("sidebar.filter")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .capture_action(cx.listener(|this, _: &Escape, window, cx| {
+                        if !this.filter.read(cx).value().is_empty() {
+                            this.filter.update(cx, |f, cx| f.set_value("", window, cx));
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(
+                        Input::new(&self.filter)
+                            .small()
+                            .bg(t.input)
+                            .rounded(radius::ITEM),
+                    ),
+            )
             .when(!none_on, |d| {
                 d.child(
                     ui::titled(ui::icon_button("sidebar.add", Icon::Plus, cx), "Add folder")
@@ -537,6 +585,8 @@ impl Render for Sidebar {
             uniform_list("sidebar.rows", n, render)
                 .flex_1()
                 .into_any_element()
+        } else if !filter.is_empty() {
+            empty("No repository matches.", cx).into_any_element()
         } else if none_on {
             empty("No workspace is on. Turn one on in the top bar.", cx).into_any_element()
         } else {
@@ -831,9 +881,18 @@ mod tests {
     /// `ws:<name>`, `dir:<folder>`, then the tree indented two spaces a level: folders as `<name>/`,
     /// repos as their path, `+` marking a solo one and `>` a worktree.
     fn show(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &[&str]) -> Vec<String> {
+        filtered(repos, workspaces, collapsed, "")
+    }
+
+    fn filtered(
+        repos: &[RepoInfo],
+        workspaces: &[Workspace],
+        collapsed: &[&str],
+        filter: &str,
+    ) -> Vec<String> {
         let collapsed = collapsed.iter().map(|c| c.to_string()).collect();
         let pad = |depth| "  ".repeat(depth);
-        rows(repos, workspaces, &collapsed)
+        rows(repos, workspaces, &collapsed, filter)
             .into_iter()
             .map(|r| match r {
                 Row::Workspace(w) => format!("ws:{w}"),
@@ -881,6 +940,22 @@ mod tests {
         assert_eq!(show(&repos, &w, &[]), tree);
         let folded = ["dir:/w", "c/", "a/b/", "p/", "  /w/p/q", "/w/top"];
         assert_eq!(show(&repos, &w, &["/w/c", "/w/a/b"]), folded);
+    }
+
+    #[test]
+    fn a_filter_keeps_matching_repos_in_their_folders_unfolded() {
+        let paths = ["/w/c/api", "/w/c/web", "/w/top", "/s"];
+        let repos = paths.map(|p| repo(p, None));
+        let w = [ws("A", &["/w", "/s"], true)];
+        let f = |q| filtered(&repos, &w, &["/w/c"], q);
+        assert_eq!(f("API"), ["dir:/w", "c/", "  /w/c/api"]);
+        assert_eq!(f("c/"), ["dir:/w", "c/", "  /w/c/api", "  /w/c/web"]);
+        assert_eq!(
+            f("w/"),
+            ["dir:/w", "c/", "  /w/c/api", "  /w/c/web", "/w/top"]
+        );
+        assert_eq!(f("s"), ["+/s"]);
+        assert!(f("nope").is_empty());
     }
 
     #[test]
@@ -945,7 +1020,7 @@ mod tests {
             show(&repos, &w, &["/a/app"]),
             ["dir:/a", "/a/app", "dir:/b", "/b/lone-wt"]
         );
-        let Row::Repo(app) = &rows(&repos, &w, &BTreeSet::new())[1] else {
+        let Row::Repo(app) = &rows(&repos, &w, &BTreeSet::new(), "")[1] else {
             panic!("not a repo row")
         };
         assert_eq!(app.worktrees, 2);

@@ -1,5 +1,5 @@
-//! The Settings dialog: accounts, the current repo's accounts and merge request remote, removed
-//! repositories, the git binary.
+//! The Settings dialog, one page at a time: accounts, the current repo's accounts and merge request
+//! remote with the removed repositories, the git binary, the theme, the keymap.
 
 use std::collections::HashMap;
 use std::iter::once;
@@ -24,9 +24,9 @@ use gpui_kit::{
 };
 
 use super::{Section, State, say, settings_call};
-use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
+use crate::{actions, blocking, keymap};
 
 /// Asks for the dialog at a section, opening it if needed.
 pub struct Open(pub Section);
@@ -344,8 +344,7 @@ struct Dialog {
     /// The Accounts section's: focus coming into it reloads, for the selects below.
     accounts: FocusHandle,
     scroll: ScrollHandle,
-    /// Shown once the first load is in.
-    reveal: Option<Section>,
+    page: Section,
     data: Data,
     picks: Picks,
     git: Entity<InputState>,
@@ -388,7 +387,7 @@ impl Dialog {
             focus,
             accounts,
             scroll: ScrollHandle::new(),
-            reveal: Some(section),
+            page: section,
             data: Data::default(),
             picks: Picks::default(),
             git: field(String::new(), git, window, cx),
@@ -413,12 +412,8 @@ impl Dialog {
     }
 
     fn show(&mut self, section: Section, cx: &mut Context<Self>) {
-        match section {
-            Section::Accounts => self.scroll.set_offset(point(px(0.), px(0.))),
-            // 'Account for', or with no repo 'Removed repositories'.
-            Section::Repos => self.scroll.scroll_to_top_of_item(1),
-            Section::Git => self.scroll.scroll_to_bottom(),
-        }
+        self.page = section;
+        self.scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
 
@@ -489,9 +484,6 @@ impl Dialog {
             window.focus(&focus, cx);
         }
         self.data = data;
-        if let Some(s) = self.reveal.take() {
-            self.show(s, cx);
-        }
     }
 
     fn check(&mut self, id: String, cx: &mut Context<Self>) {
@@ -684,18 +676,12 @@ impl Dialog {
             .flex()
             .flex_col()
             .gap(px(10.))
-            .child(heading("Accounts", cx))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_size(text::TITLE)
-                            .font_weight(FontWeight::EXTRA_BOLD)
-                            .child("Accounts"),
-                    )
+                    .child(heading("Accounts", cx))
                     .child(button(
                         "accounts.add",
                         "Add account",
@@ -867,6 +853,90 @@ impl Dialog {
                     )),
             )
     }
+
+    fn keymap_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use actions::Group::*;
+        let t = theme(cx);
+        let file = Store::global(cx)
+            .read(cx)
+            .core()
+            .config_dir
+            .join("keymap.json");
+        let note = format!(
+            "To change a chord, map the action's id to one in {}, such as \"file.goto\": \"Cmd+P\"; an empty one unbinds it. Read at launch.",
+            file.display()
+        );
+        let groups = [Search, Navigate, Vcs, Diff, View].map(|g| {
+            let rows = actions::ACTIONS.iter().filter(|a| a.group == g).map(|a| {
+                let chord = keymap::chord_for(a.id, cx);
+                row()
+                    .id(SharedString::from(format!("keymap.{}", a.id)))
+                    .test_support()
+                    .aria_label(a.title)
+                    .aria_description(SharedString::from(chord.clone()))
+                    .mb(px(2.))
+                    .child(div().flex_1().min_w_0().truncate().child(a.title))
+                    .child(
+                        div()
+                            .text_color(t.muted)
+                            .font_family(mono(cx))
+                            .text_size(text::SMALL)
+                            .child(a.id),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .w(px(90.))
+                            .when(!chord.is_empty(), |d| d.child(ui::kbd(chord, cx))),
+                    )
+            });
+            div()
+                .flex()
+                .flex_col()
+                .child(heading(&format!("{g:?}"), cx).mb(px(8.)))
+                .children(rows)
+        });
+        div()
+            .id("settings.keymap")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap(px(22.))
+            .child(labeled("settings.keymapNote", note).text_color(t.muted))
+            .children(groups)
+    }
+
+    fn nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pages = [
+            (Section::Accounts, "settings.nav.accounts", "Accounts"),
+            (Section::Repos, "settings.nav.repository", "Repository"),
+            (Section::Git, "settings.nav.git", "Git"),
+            (Section::Appearance, "settings.nav.appearance", "Appearance"),
+            (Section::Keymap, "settings.nav.keymap", "Keymap"),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(2.))
+            .w(px(150.))
+            .p(px(8.))
+            .border_r_1()
+            .border_color(theme(cx).line)
+            .children(pages.map(|(section, id, label)| {
+                let on = self.page == section;
+                ui::row(id, on, cx)
+                    .test_support()
+                    .h(px(28.))
+                    .role(Role::Tab)
+                    .aria_label(label)
+                    .aria_selected(on)
+                    .when(on, |r| r.font_weight(FontWeight::BOLD))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show(section, cx)))
+                    .child(label)
+            }))
+    }
 }
 
 fn form_view(f: &Form, cx: &mut Context<Dialog>) -> impl IntoElement + use<> {
@@ -1014,7 +1084,7 @@ impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let vp = window.viewport_size();
-        let w = px(720.).min(vp.width * 0.92);
+        let w = px(840.).min(vp.width * 0.92);
         let head = div()
             .flex()
             .items_center()
@@ -1036,24 +1106,36 @@ impl Render for Dialog {
                     .test_support()
                     .on_click(close(cx)),
             );
-        let repo = self.repo.clone();
-        let mrs = repo.clone().filter(|_| self.data.forge.is_some());
-        let body = div()
+        let page = div()
             .id("settings.body")
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
-            .min_h_0()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .gap(px(22.))
             .px(px(20.))
-            .py(px(18.))
-            .child(self.accounts_view(cx))
-            .children(repo.map(|r| self.repo_view(&r, cx)))
-            .children(mrs.map(|r| self.mrs_view(&r, cx)))
-            .child(self.removed_view(cx))
-            .child(self.git_view(cx))
-            .child(self.appearance_view(cx));
+            .py(px(18.));
+        let page = match self.page {
+            Section::Accounts => page.child(self.accounts_view(cx)),
+            Section::Repos => {
+                let repo = self.repo.clone();
+                let mrs = repo.clone().filter(|_| self.data.forge.is_some());
+                page.children(repo.map(|r| self.repo_view(&r, cx)))
+                    .children(mrs.map(|r| self.mrs_view(&r, cx)))
+                    .child(self.removed_view(cx))
+            }
+            Section::Git => page.child(self.git_view(cx)),
+            Section::Appearance => page.child(self.appearance_view(cx)),
+            Section::Keymap => page.child(self.keymap_view(cx)),
+        };
+        let body = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .child(self.nav(cx))
+            .child(page);
         let scrim = div()
             .id("settings.scrim")
             .test_support()
@@ -1072,7 +1154,7 @@ impl Render for Dialog {
             .top(vp.height * 0.08)
             .left((vp.width - w) / 2.)
             .w(w)
-            .max_h(vp.height * 0.84)
+            .h(vp.height * 0.84)
             .flex()
             .flex_col()
             .overflow_hidden()

@@ -16,6 +16,8 @@ pub enum Section {
     Accounts,
     Repos,
     Git,
+    Appearance,
+    Keymap,
 }
 
 /// Smart checkout with its dialogs and notices; the task ends after the repo's status refresh.

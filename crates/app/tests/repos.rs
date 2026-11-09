@@ -1215,7 +1215,7 @@ fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_bro
     select(cx, "app");
     save_mine(cx);
     cx.update(|_, cx| repos::open_settings(cx, Section::Git));
-    wait_until(cx, |cx| labels(cx, "accounts.row") == ["Mine"]);
+    wait_until(cx, |cx| cx.find("settings.env").is_some());
     let git = path(cx.sb.root().join("no-git"));
     type_into(cx, "settings.gitPath", &git);
     cx.click("settings.apply");
@@ -1228,7 +1228,9 @@ fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_bro
         f.and_then(|f| f.value().map(String::from))
     };
     wait_until(cx, |cx| field(cx) == Some(git.clone()));
+    cx.click("settings.nav.accounts");
     assert_eq!(labels(cx, "accounts.row"), ["Mine"]);
+    cx.click("settings.nav.repository");
     assert_eq!(label(cx, ("settings.excluded", 0usize)), lib);
     assert!(said(cx).unwrap().error, "the repo's accounts need git");
 }
@@ -1242,6 +1244,7 @@ fn an_unreadable_accounts_file_is_said_in_accounts_and_in_the_status_bar(cx: &mu
     let said = said(cx).unwrap();
     assert!(said.error);
     assert_eq!(label(cx, "accounts.error"), said.text);
+    cx.click("settings.nav.git");
     assert!(cx.find("settings.env").is_some());
 }
 
@@ -1253,6 +1256,7 @@ fn a_repo_removed_from_the_list_is_restored_from_settings(cx: &mut TestAppContex
     click_in(cx, &id, "remove");
     wait_until(cx, |cx| !paths(cx).contains(&api));
     cx.press("secondary-,");
+    cx.click("settings.nav.repository");
     wait_until(cx, |cx| label(cx, ("settings.excluded", 0usize)) == api);
     let restore = ElementId::from(("settings.excluded", 0usize));
     click_in(cx, &restore, "restore");
@@ -1293,4 +1297,57 @@ fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_acc
     assert_eq!(remote.as_deref(), Some("Automatic (origin)"));
     let host = value(cx, ("settings.forgeAccount", 0usize).into());
     assert_eq!(host.as_deref(), Some("Automatic (Fake GitLab)"));
+}
+
+#[gpui_kit::test]
+fn the_settings_nav_shows_one_page_and_keymap_lists_each_action_with_its_chord(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app(cx);
+    cx.press("secondary-,");
+    let on = |cx: &mut VisualTestContext, id: &'static str| cx.find(id).unwrap().selected();
+    assert_eq!(on(cx, "settings.nav.accounts"), Some(true));
+    assert!(cx.find("settings.accounts").is_some());
+    cx.click("settings.nav.keymap");
+    assert_eq!(on(cx, "settings.nav.keymap"), Some(true));
+    assert_eq!(on(cx, "settings.nav.accounts"), Some(false));
+    assert!(cx.find("settings.accounts").is_none(), "one page at a time");
+    let row = cx.find("keymap.app.settings").unwrap();
+    let chord = if cfg!(target_os = "macos") {
+        "⌘,"
+    } else {
+        "Ctrl+,"
+    };
+    assert_eq!(
+        (row.label(), row.description()),
+        (Some("Settings…"), Some(chord))
+    );
+    assert_eq!(cx.find("keymap.vcs.fetch").unwrap().description(), Some(""));
+    let file = path(cx.sb.state.config_dir.join("keymap.json"));
+    assert!(label(cx, "settings.keymapNote").contains(&file));
+    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    assert_eq!(on(cx, "settings.nav.git"), Some(true));
+}
+
+#[gpui_kit::test]
+fn the_sidebar_filter_keeps_matching_repos_in_their_folders_and_escape_clears_it(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        for n in ["console/api", "console/web", "top"] {
+            repo(sb, n);
+        }
+    });
+    let shown = |cx: &mut VisualTestContext| -> Vec<String> {
+        rows(cx).into_iter().map(|r| r.label).collect()
+    };
+    let all = ["repos", "console", "api", "web", "top"];
+    assert_eq!(shown(cx), all);
+    type_into(cx, "sidebar.filter", "WEB");
+    assert_eq!(shown(cx), ["repos", "console", "web"]);
+    cx.input("x");
+    assert!(shown(cx).is_empty());
+    assert_eq!(label(cx, "sidebar.empty"), "No repository matches.");
+    cx.press("escape");
+    assert_eq!(shown(cx), all);
 }

@@ -1,4 +1,5 @@
-//! The status bar: the message, the running ops, an offered update, and what Events holds.
+//! The status bar: the message or the current repo and branch, the running ops, an offered update,
+//! and what Events holds.
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
@@ -12,6 +13,7 @@ use crate::dock::{self, Kind};
 use crate::store::{Level, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::update::{self, Update};
+use crate::{actions, keymap};
 
 pub struct StatusBar {
     _store: Subscription,
@@ -31,22 +33,75 @@ impl Render for StatusBar {
         let t = theme(cx);
         let store = Store::global(cx);
         let s = store.read(cx);
-        let message = s.message.as_ref().map(|m| {
-            let full = m.text.clone();
-            div()
-                .id("status.message")
-                .test_support()
-                .min_w_0()
-                .max_w(relative(0.5))
-                .truncate()
-                .when(m.error, |d| d.text_color(t.error))
-                .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
-                .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation()
-                })
-                .on_click(|_, _, cx| Store::global(cx).update(cx, |s, cx| s.clear_message(cx)))
-                .child(m.text.clone())
-        });
+        let left = match &s.message {
+            Some(m) => {
+                let full = m.text.clone();
+                div()
+                    .id("status.message")
+                    .test_support()
+                    .min_w_0()
+                    .max_w(relative(0.5))
+                    .truncate()
+                    .when(m.error, |d| d.text_color(t.error))
+                    .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+                    .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation()
+                    })
+                    .on_click(|_, _, cx| Store::global(cx).update(cx, |s, cx| s.clear_message(cx)))
+                    .child(m.text.clone())
+                    .into_any_element()
+            }
+            None => s.current().map_or(div().into_any_element(), |repo| {
+                let st = s.status(repo);
+                let branch = st.map(|st| {
+                    let head = st.head.as_deref().unwrap_or("?");
+                    let head = head.get(..8).unwrap_or(head);
+                    st.branch.clone().unwrap_or(format!("{head} (detached)"))
+                });
+                let ab: Vec<_> = st
+                    .into_iter()
+                    .flat_map(|st| [("↑", st.ahead), ("↓", st.behind)])
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(arrow, n)| format!("{arrow}{n}"))
+                    .collect();
+                let name = s.name_of(repo).to_string();
+                let mut said = vec![name.clone()];
+                said.extend(branch.clone().into_iter().chain(ab.clone()));
+                let tip = keymap::tip("Checkout Branch…", "vcs.checkout", cx);
+                ui::pressable("status.repo")
+                    .test_support()
+                    .aria_label(SharedString::from(said.join(" ")))
+                    .min_w_0()
+                    .max_w(relative(0.5))
+                    .gap(px(4.))
+                    .px(px(6.))
+                    .h(px(20.))
+                    .rounded(radius::ICON_BUTTON)
+                    .hover(|s| s.bg(t.hover).text_color(t.fg))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(|_, window, cx| actions::dispatch(window, cx, "vcs.checkout"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name),
+                    )
+                    .children(branch.map(|b| {
+                        div()
+                            .flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap(px(3.))
+                            .child(Icon::Branch.size(px(11.)))
+                            .child(div().min_w_0().truncate().child(b))
+                    }))
+                    .children(
+                        ab.into_iter()
+                            .map(|ab| div().flex_none().text_color(t.fg).child(ab)),
+                    )
+                    .into_any_element()
+            }),
+        };
         let ops = s.ops.iter().map(|op| {
             let (id, line) = (op.id, op.line.clone());
             div()
@@ -120,7 +175,7 @@ impl Render for StatusBar {
             .px(px(8.))
             .text_size(text::SMALL)
             .text_color(t.muted)
-            .children(message)
+            .child(left)
             .child(div().flex_1())
             .children(ops)
             .children(update::item(cx))

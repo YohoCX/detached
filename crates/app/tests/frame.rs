@@ -257,3 +257,55 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
         "read"
     );
 }
+
+#[gpui_kit::test]
+fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_branches(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let api = cx.sb.repo("group/api").display().to_string();
+    let name = cx.store(|s, cx| {
+        s.set_current(Some(api.clone()), cx);
+        s.name_of(&api).to_string()
+    });
+    let repo = |cx: &mut VisualTestContext| {
+        cx.find("status.repo")
+            .and_then(|e| e.label().map(String::from))
+    };
+    assert_eq!(repo(cx), Some(format!("{name} main ↓1")));
+    cx.store(|s, cx| s.say("Fetched", false, cx));
+    assert_eq!(repo(cx), None, "the message takes its place");
+    cx.click("status.message");
+    cx.click("status.repo");
+    assert!(cx.find("branches.popup").is_some());
+}
+
+#[gpui_kit::test]
+fn events_filter_errors_and_warnings_and_hide_their_bar_when_empty(cx: &mut TestAppContext) {
+    use detached_app::store::Level;
+    use gpui_kit::test::TestWindowExt;
+    let cx = &mut open_app(cx);
+    open_tab(cx, "bottom.Events");
+    assert!(cx.find("events.filter").is_none(), "no bar over nothing");
+    cx.store(|s, cx| {
+        s.record(Level::Error, "bad", cx);
+        s.record(Level::Warn, "odd", cx);
+    });
+    let rows = |cx: &mut VisualTestContext| -> Vec<String> {
+        (0usize..)
+            .map_while(|i| cx.find(("events.row", i)))
+            .map(|e| e.label().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert_eq!(rows(cx), ["odd", "bad"]);
+    let pick = |cx: &mut VisualTestContext, i: usize| {
+        cx.update(|w, cx| w.within("events.filter").click(i, cx));
+        settle(cx);
+    };
+    pick(cx, 1);
+    assert_eq!(rows(cx), ["bad"]);
+    pick(cx, 2);
+    assert_eq!(rows(cx), ["odd"]);
+    cx.click("events.clear");
+    assert!(cx.find("events.filter").is_none());
+}

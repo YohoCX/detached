@@ -12,6 +12,7 @@ use crate::ui::{self, Icon, text, theme};
 
 pub fn view(cx: &mut App) -> AnyView {
     cx.new(|cx| Events {
+        filter: None,
         _store: cx.observe(&Store::global(cx), |_, store, cx| {
             // What comes in while the list is on screen is read.
             if store.read(cx).unread > 0 && crate::dock::is_shown(crate::dock::Kind::Events, cx) {
@@ -29,6 +30,8 @@ pub fn shown(cx: &mut App) {
 }
 
 struct Events {
+    /// The level shown; None shows all.
+    filter: Option<Level>,
     _store: Subscription,
 }
 
@@ -37,7 +40,13 @@ impl Render for Events {
         let t = theme(cx);
         let s = Store::global(cx).read(cx);
         let now = crate::chat::now();
-        let rows = s.log.iter().rev().enumerate().map(|(i, e)| {
+        let filter = self.filter;
+        let shown = s
+            .log
+            .iter()
+            .rev()
+            .filter(|e| filter.is_none_or(|l| e.level == l));
+        let rows = shown.enumerate().map(|(i, e)| {
             let (icon, color) = match e.level {
                 Level::Error => (Icon::Close, t.error),
                 _ => (Icon::Question, t.warning),
@@ -81,30 +90,51 @@ impl Render for Events {
                         .child(crate::chat::ago(now.saturating_sub(e.at))),
                 )
         });
-        let empty = s.log.is_empty();
+        let rows: Vec<_> = rows.collect();
+        let empty = rows.is_empty().then_some(match filter {
+            None => "No errors or warnings.",
+            Some(Level::Error) => "No errors.",
+            _ => "No warnings.",
+        });
+        let this = cx.weak_entity();
+        let bar = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .px(px(8.))
+            .py(px(4.))
+            .border_b_1()
+            .border_color(t.line)
+            .child(ui::segmented(
+                "events.filter",
+                &[
+                    (None, "All"),
+                    (Some(Level::Error), "Errors"),
+                    (Some(Level::Warn), "Warnings"),
+                ],
+                filter,
+                move |f, _, cx| {
+                    this.update(cx, |e, cx| {
+                        e.filter = f;
+                        cx.notify();
+                    })
+                    .ok();
+                },
+                cx,
+            ))
+            .child(div().flex_1())
+            .child(
+                ui::titled(ui::icon_button("events.clear", Icon::Trash, cx), "Clear")
+                    .test_support()
+                    .on_click(|_, _, cx| Store::global(cx).update(cx, |s, cx| s.clear_log(cx))),
+            );
         div()
             .id("events")
             .test_support()
             .flex()
             .flex_col()
             .size_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .justify_end()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .border_b_1()
-                    .border_color(t.line)
-                    .child(
-                        ui::titled(ui::icon_button("events.clear", Icon::Trash, cx), "Clear")
-                            .test_support()
-                            .on_click(|_, _, cx| {
-                                Store::global(cx).update(cx, |s, cx| s.clear_log(cx))
-                            }),
-                    ),
-            )
+            .when(!s.log.is_empty(), |d| d.child(bar))
             .child(
                 div()
                     .id("events.list")
@@ -114,14 +144,7 @@ impl Render for Events {
                     .min_h_0()
                     .overflow_y_scroll()
                     .children(rows)
-                    .when(empty, |d| {
-                        d.child(
-                            div()
-                                .p(px(16.))
-                                .text_color(t.muted)
-                                .child("No errors or warnings."),
-                        )
-                    }),
+                    .children(empty.map(|e| div().p(px(16.)).text_color(t.muted).child(e))),
             )
     }
 }
