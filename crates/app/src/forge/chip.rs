@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use super::core;
-use super::mr::{bare_title, number, show_mr};
+use super::mr::{bare_title, number, setup_problem, show_mr};
 use crate::actions::{self, Group, Registration};
 use crate::blocking;
 use crate::cache::{self, Cache};
@@ -117,22 +117,29 @@ impl MrChip {
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(repo), Some(_)) = (self.repo.clone(), &self.key) else {
             let text = "Create Merge Request needs a branch with an upstream";
-            return Store::global(cx).update(cx, |s, cx| s.say(text, true, cx));
+            return Store::global(cx).update(cx, |s, cx| s.say(text, false, cx));
         };
         if let Some(Some(m)) = self.mr(cx) {
             return show_mr(cx, repo, m.number);
         }
         let (core, r) = (core(cx), repo.clone());
-        let new = blocking::run(cx, move || api::new_mr(&core, &r));
+        // A repo off any forge gets a hint, not an error.
+        let new = blocking::run(cx, move || {
+            match setup_problem(&api::forge_hosts(&core, &r)?) {
+                Some(s) => Ok(Err(s)),
+                None => api::new_mr(&core, &r).map(Ok),
+            }
+        });
         cx.spawn_in(window, async move |this, cx| {
             let new = new.await;
             this.update_in(cx, |this, window, cx| match new {
                 // Not the key: new_mr reads the branch on disk, which the status may catch up with later.
-                Ok(new) if this.repo.as_ref() == Some(&repo) => {
+                Ok(Ok(new)) if this.repo.as_ref() == Some(&repo) => {
                     this.form = Some(Form::new(new, window, cx));
                     cx.notify();
                 }
-                Ok(_) => {}
+                Ok(Ok(_)) => {}
+                Ok(Err(hint)) => Store::global(cx).update(cx, |s, cx| s.say(hint, false, cx)),
                 Err(e) => Store::global(cx).update(cx, |s, cx| s.say(e.to_string(), true, cx)),
             })
             .ok();

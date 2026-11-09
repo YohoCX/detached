@@ -7,7 +7,7 @@ use detached_app::terminal::Terminals;
 use detached_app::{shell, ui_state};
 use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, AppContext, Pixels, TestAppContext, VisualTestContext, px};
+use gpui_kit::{AnyWindowHandle, AppContext, Pixels, TestAppContext, VisualTestContext, point, px};
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
 fn plain_shell() {
@@ -34,7 +34,9 @@ fn drag_tab(
     id: impl Into<gpui_kit::ElementId>,
     onto: impl Into<gpui_kit::ElementId>,
 ) {
-    let from = cx.find(id).unwrap().bounds().center();
+    // By its left padding: the center of a short tab can fall on its close button.
+    let tab = cx.find(id).unwrap().bounds();
+    let from = point(tab.left() + px(4.), tab.center().y);
     let to = cx.find(onto).unwrap().bounds().center();
     cx.update(|w, cx| w.drag(from, to, cx));
     settle(cx);
@@ -138,13 +140,6 @@ fn show_diff(cx: &mut VisualTestContext, doc: &DiffDoc) {
     settle(cx);
 }
 
-/// The selected line, as Copy takes it from the focused diff.
-fn cursor(cx: &mut VisualTestContext) -> String {
-    cx.press("secondary-c");
-    let copied = cx.read_from_clipboard().and_then(|c| c.text());
-    copied.unwrap_or_default()
-}
-
 #[gpui_kit::test]
 fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen(
     cx: &mut TestAppContext,
@@ -172,10 +167,10 @@ fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen
     });
     // Showing it again reloads it, and an F7 before the load lands is lost; press until it moves.
     wait_until(cx, |cx| {
-        if cursor(cx) == "line 5 changed\n" {
+        if current_line(cx) == "line 5 changed" {
             cx.press("f7");
         }
-        cursor(cx) == "line 50 changed\n"
+        current_line(cx) == "line 50 changed"
     });
 }
 

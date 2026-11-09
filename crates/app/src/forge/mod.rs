@@ -12,7 +12,7 @@ mod pipelines;
 mod thread;
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
@@ -30,8 +30,10 @@ pub use mr_list::MrList;
 pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
+use crate::repos::{self, Section};
 use crate::store::{Doc, Store};
-use crate::ui::theme;
+use crate::ui::{self, theme};
+use crate::util::now;
 
 /// The top bar's center.
 pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
@@ -108,11 +110,6 @@ pub fn took(secs: Option<u64>) -> String {
     }
 }
 
-fn now() -> i64 {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH);
-    since.map_or(0, |d| d.as_secs() as i64)
-}
-
 fn core(cx: &App) -> Arc<AppState> {
     Store::global(cx).read(cx).core().clone()
 }
@@ -134,6 +131,24 @@ fn note(id: &'static str, text: impl Into<SharedString>, color: Hsla) -> AnyElem
         .px(px(16.))
         .py(px(12.))
         .text_color(color)
+        .into_any_element()
+}
+
+/// Why a repo's forge view is empty, and the way to Settings.
+fn setup_note(id: &'static str, button: &'static str, text: String, cx: &App) -> AnyElement {
+    labelled(id, text.clone())
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(10.))
+        .px(px(16.))
+        .py(px(12.))
+        .child(div().text_color(theme(cx).muted).child(text))
+        .child(
+            ui::button(button, "Open Settings", cx)
+                .test_support()
+                .on_click(|_, _, cx| repos::open_settings(cx, Section::Repos)),
+        )
         .into_any_element()
 }
 

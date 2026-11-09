@@ -12,13 +12,12 @@ use gpui_kit::{
     prelude::FluentBuilder, px, relative, transparent_black,
 };
 
-use super::mr::{ago, bare_title, number, setup_problem, show_mr, tone};
-use super::{core, name, note, now, poll};
+use super::mr::{bare_title, number, setup_problem, show_mr, tone};
+use super::{core, name, note, now, poll, setup_note};
 use crate::cache::{self, Cache};
-use crate::repos::{self, Section};
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::util::fuzzy;
+use crate::util::{ago, fuzzy};
 
 const FILTERS: [(MrFilter, &str); 5] = [
     (MrFilter::Open, "Open"),
@@ -250,23 +249,7 @@ impl Render for MrList {
         let body = match (&self.repo, value.clone()) {
             (None, _) => note("mrs.note", "No repository", t.muted),
             (_, None) if !loaded => note("mrs.note", "Loading…", t.muted),
-            (_, Some(Listed::Setup(s))) => div()
-                .id("mrs.setup")
-                .test_support()
-                .aria_label(s.clone())
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(10.))
-                .px(px(16.))
-                .py(px(12.))
-                .child(div().text_color(t.muted).child(s))
-                .child(
-                    ui::button("mrs.settings", "Open Settings", cx)
-                        .test_support()
-                        .on_click(|_, _, cx| repos::open_settings(cx, Section::Repos)),
-                )
-                .into_any_element(),
+            (_, Some(Listed::Setup(s))) => setup_note("mrs.setup", "mrs.settings", s, cx),
             (_, None) => note("mrs.note", error.clone().unwrap_or_default(), t.error),
             (_, Some(Listed::Mrs(mrs))) => {
                 let keyed: Vec<_> = mrs

@@ -21,7 +21,7 @@ use gpui_kit::{
 };
 
 use super::merge::MergeWidget;
-use super::mr::{ago, bare_title, is_gitlab, links, tone};
+use super::mr::{bare_title, is_gitlab, links, tone};
 use super::thread::Thread;
 use super::{Pipelines, core, labelled, name, note, now, text_of};
 use crate::blocking;
@@ -29,7 +29,7 @@ use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, 
 use crate::history::CommitDetails;
 use crate::store::Store;
 use crate::ui::{self, Edge, Icon, radius, text, theme};
-use crate::util::{base_name, dir_name, status_of, when};
+use crate::util::{ago, ago_text, base_name, dir_name, status_of, when};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -96,6 +96,11 @@ pub struct MrPage {
 }
 
 impl MrPage {
+    /// None until the MR loads.
+    pub fn title(&self) -> Option<&str> {
+        self.mr.as_ref().map(bare_title)
+    }
+
     pub fn raise(&self, cx: &App) {
         if let Some(d) = &self.diff {
             d.read(cx).raise(cx);
@@ -475,7 +480,7 @@ impl MrPage {
             true => m.source_branch.clone(),
             false => format!("{}:{}", m.source_project.path, m.source_branch),
         };
-        let updated = format!("· updated {} ago", ago(m.updated, now()));
+        let updated = format!("· updated {}", ago_text(m.updated, now()));
         let said = format!(
             "{} wants to merge {source} into {} {updated}",
             m.author, m.target_branch

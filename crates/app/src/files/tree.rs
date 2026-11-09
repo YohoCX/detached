@@ -373,8 +373,15 @@ impl Tree {
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.activate(&row, cx)))
             .child(chevron)
-            .when(r.dir, |d| d.child(Icon::Folder.size(px(14.))))
-            .child(div().min_w_0().truncate().child(name))
+            .child(if r.dir { Icon::Folder } else { Icon::File }.size(px(14.)))
+            .child(
+                div()
+                    .id("name")
+                    .test_support()
+                    .min_w_0()
+                    .truncate()
+                    .child(name),
+            )
             .into_any_element()
     }
 }

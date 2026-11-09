@@ -2,7 +2,6 @@
 
 use detached_core::api;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
@@ -13,10 +12,10 @@ use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
 use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
-use crate::blocking;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
+use crate::{blocking, keymap};
 
 /// Set by `show_diff`, read by the next show.
 pub(super) struct FocusDiff(pub(super) bool);
@@ -195,9 +194,15 @@ pub(super) fn zed_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> impl IntoElement {
-    ui::icon_button("viewer.zed", Icon::Zed, cx)
-        .tooltip(|window, cx| Tooltip::new("Open in Zed").build(window, cx))
-        .on_click(on_click)
+    let tip = keymap::tip("Open in Zed", "file.openInZed", cx);
+    ui::titled(
+        ui::icon_button("viewer.zed", Icon::External.size(px(14.)), cx),
+        tip,
+    )
+    .test_support()
+    .text_size(text::SMALL)
+    .child("Zed")
+    .on_click(on_click)
 }
 
 pub(super) fn conflict_bar(

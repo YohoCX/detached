@@ -437,6 +437,26 @@ pub fn wait_until(
     }
 }
 
+/// The text of the line the diff's current-change bar marks; empty without one.
+pub fn current_line(cx: &mut VisualTestContext) -> String {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let Some(bar) = w.try_find("diff.current") else {
+            return String::new();
+        };
+        let is_cell = |id: &&ElementId| {
+            matches!(id, ElementId::NamedInteger(side, _) if side == "old" || side == "new")
+        };
+        let Some(cell) = bar.path().iter().find(is_cell).cloned() else {
+            return String::new();
+        };
+        let line = w.find_all("source").into_iter();
+        line.filter(|e| e.path().contains(&cell))
+            .find_map(|e| e.label().map(String::from))
+            .unwrap_or_default()
+    })
+}
+
 /// Drives the window as a user does; each step runs the app until it is idle.
 pub trait Drive {
     fn click(&mut self, id: impl Into<ElementId>);

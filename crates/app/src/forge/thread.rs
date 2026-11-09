@@ -7,11 +7,11 @@ use gpui_kit::{
     div, prelude::FluentBuilder, px,
 };
 
-use super::mr::ago;
 use super::mr_page::{MrPage, button};
 use super::now;
 use crate::files::{Links, Markdown};
 use crate::ui::{radius, text, theme};
+use crate::util::ago;
 
 /// An MR thread: its notes, Reply and Resolve. Without a thread, the box for a new comment.
 pub struct Thread {

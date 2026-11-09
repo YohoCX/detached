@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use detached_core::types::FileChange;
 
 pub fn base_name(p: &str) -> &str {
@@ -67,6 +69,40 @@ pub fn when(t: i64) -> String {
         tm.tm_hour,
         tm.tm_min,
     )
+}
+
+/// `Nm`, `Nh` or `Nd` before `now`; the date after 30 days.
+pub fn ago(t: i64, now: i64) -> String {
+    let s = (now - t) as f64;
+    if s < 3600. {
+        format!("{}m", (s / 60.).round().max(1.))
+    } else if s < 86400. {
+        format!("{}h", (s / 3600.).round())
+    } else if s < MONTH {
+        format!("{}d", (s / 86400.).round())
+    } else {
+        when(t)
+            .rsplit_once(", ")
+            .map_or_else(String::new, |d| d.0.into())
+    }
+}
+
+/// `ago` in a sentence: "3d ago", or the bare date.
+pub fn ago_text(t: i64, now: i64) -> String {
+    let a = ago(t, now);
+    if ((now - t) as f64) < MONTH {
+        format!("{a} ago")
+    } else {
+        a
+    }
+}
+
+const MONTH: f64 = 30. * 86400.;
+
+/// Unix seconds.
+pub fn now() -> i64 {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH);
+    since.map_or(0, |d| d.as_secs() as i64)
 }
 
 fn stamp(year: i32, month: i32, day: i32, hour: i32, min: i32) -> String {
@@ -233,5 +269,19 @@ mod tests {
         assert_eq!(stamp(2026, 0, 1, 0, 30), "Jan 1, 2026, 12:30 AM");
         assert_eq!(stamp(2026, 0, 1, 12, 0), "Jan 1, 2026, 12:00 PM");
         assert!(when(0).contains("19"));
+    }
+
+    #[test]
+    fn counts_minutes_hours_and_days_then_shows_the_date() {
+        let now = 1_800_000_000;
+        let got = [10, 90, 7200, 3 * 86400, 31 * 86400].map(|s| ago(now - s, now));
+        assert_eq!(got[..4], ["1m", "2m", "2h", "3d"]);
+        assert!(got[4].ends_with(", 2026"), "{}", got[4]);
+        assert_eq!(ago_text(now - 7200, now), "2h ago");
+        assert_eq!(
+            ago_text(now - 31 * 86400, now),
+            got[4],
+            "no ago after a date"
+        );
     }
 }

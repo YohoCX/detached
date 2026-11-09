@@ -170,6 +170,53 @@ fn a_new_commit_reloads_the_log_on_the_status_refresh(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_narrow_log_keeps_the_subject_over_long_refs_and_drops_the_author(cx: &mut TestAppContext) {
+    let subject = "A subject long enough to want the room it gets";
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        let solo = sb.solo();
+        sb.commit_files(&solo, subject, [("long.txt", "long\n")]);
+        let long = "a-name-long-enough-to-fill-the-row-on-its-own";
+        sb.git(&solo, &["branch", &format!("feature/{long}")]);
+        sb.git(&solo, &["tag", &format!("v1-{long}")]);
+    });
+    // The bottom zone is as wide as the center: the side zones close to give it 1000.
+    cx.click("zone.left");
+    cx.click("zone.right");
+    cx.press("secondary-9");
+    wait_for_status(cx, "4 commits");
+    let top = |cx: &mut VisualTestContext, id: &'static str| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            let row = w.within(("log.row", 0usize));
+            row.try_find(id)
+                .map(|e| (e.bounds(), e.label().map(String::from)))
+        })
+    };
+    wait_until(cx, |cx| top(cx, "author").is_some());
+    let date = top(cx, "date").unwrap().1.unwrap();
+    assert!(
+        date.ends_with(" AM") || date.ends_with(" PM"),
+        "the full date in its tip: {date}"
+    );
+
+    let grip = cx.find("grip.log.side").unwrap().bounds().center();
+    let list = cx.find("log.list").unwrap().bounds();
+    let to = point(list.left() + px(380.), grip.y);
+    cx.update(|w, cx| w.drag(grip, to, cx));
+    settle(cx);
+    wait_until(cx, |cx| top(cx, "author").is_none());
+    let list = cx.find("log.list").unwrap().bounds();
+    let ((s, _), (chips, _)) = (top(cx, "subject").unwrap(), top(cx, "chips").unwrap());
+    assert!(list.size.width < px(400.), "{list:?}");
+    assert!(
+        s.size.width > chips.size.width * 1.5,
+        "{s:?} by chips {chips:?}"
+    );
+    assert!(s.right() <= list.right());
+}
+
+#[gpui_kit::test]
 fn rows_take_the_lists_width_so_their_columns_line_up(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     cx.press("secondary-9");

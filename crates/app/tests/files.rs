@@ -63,7 +63,7 @@ fn hover(cx: &mut VisualTestContext, side: &'static str, n: usize) {
     settle(cx);
 }
 
-/// The selected line, as Copy takes it; the diff must have focus.
+/// The editor's selection, as Copy takes it.
 fn cursor(cx: &mut VisualTestContext) -> String {
     cx.press("secondary-c");
     let copied = cx.read_from_clipboard().and_then(|c| c.text());
@@ -97,16 +97,17 @@ fn the_readme_diff_starts_on_its_first_change_and_steps_with_f7(cx: &mut TestApp
         label(cx, "diff.pill").as_deref(),
         Some("HEAD ↔ Working tree")
     );
+    assert_eq!(label(cx, "viewer.zed").as_deref(), Some("Open in Zed"));
     assert_eq!(text(cx, "old", 5).as_deref(), Some("line 5"));
-    assert_eq!(cursor(cx), "line 5 changed\n");
+    assert_eq!(current_line(cx), "line 5 changed");
     cx.press("f7");
-    assert_eq!(cursor(cx), "line 50 changed\n");
+    assert_eq!(current_line(cx), "line 50 changed");
     cx.press("f7");
-    assert_eq!(cursor(cx), "line 5 changed\n", "wraps to the first");
+    assert_eq!(current_line(cx), "line 5 changed", "wraps to the first");
     cx.press("shift-f7");
-    assert_eq!(cursor(cx), "line 50 changed\n");
+    assert_eq!(current_line(cx), "line 50 changed");
     cx.press("shift-f7");
-    assert_eq!(cursor(cx), "line 5 changed\n");
+    assert_eq!(current_line(cx), "line 5 changed");
 }
 
 #[gpui_kit::test]
@@ -119,12 +120,16 @@ fn a_diff_mounted_later_takes_f7_until_it_goes(cx: &mut TestAppContext) {
     wait_until(later, |cx| text(cx, "new", 10).is_some());
     let later = later.window_handle();
     app.press("f7");
-    assert_eq!(cursor(app), "line 5 changed\n", "F7 went to the later diff");
+    assert_eq!(
+        current_line(app),
+        "line 5 changed",
+        "F7 went to the later diff"
+    );
     app.update(|_, cx| cx.update_window(later, |_, w, _| w.remove_window()))
         .unwrap();
     settle(app);
     app.press("f7");
-    assert_eq!(cursor(app), "line 50 changed\n");
+    assert_eq!(current_line(app), "line 50 changed");
 }
 
 #[gpui_kit::test]
@@ -216,7 +221,7 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
     wait_until(cx, |cx| focused(cx) == Some(true));
     assert_eq!(text(cx, "new", 20).as_deref(), Some("line 20"));
     cx.press("f7");
-    assert_eq!(cursor(cx), "line 50 changed\n");
+    assert_eq!(current_line(cx), "line 50 changed");
     let edits = [
         (5, "line 5 changed"),
         (20, "line 20 edited"),
@@ -228,7 +233,7 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
         text(cx, "new", 20).as_deref() == Some("line 20 edited")
     });
     assert_eq!(focused(cx), Some(true), "the same view, still focused");
-    assert_eq!(cursor(cx), "line 50 changed\n", "the cursor stays");
+    assert_eq!(current_line(cx), "line 50 changed", "the cursor stays");
 }
 
 #[gpui_kit::test]
@@ -839,9 +844,9 @@ fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_doubl
         label(cx, "diff.pill").as_deref(),
         Some("HEAD ↔ Working tree")
     );
-    assert_eq!(cursor(cx), "line 5 changed\n");
+    assert_eq!(current_line(cx), "line 5 changed");
     cx.press("f7");
-    assert_eq!(cursor(cx), "line 50 changed\n");
+    assert_eq!(current_line(cx), "line 50 changed");
 }
 
 #[gpui_kit::test]
@@ -1139,6 +1144,26 @@ fn related_files_nest_under_their_main_file_and_the_switch_flattens_the_tree(
     let loc = shown_file(cx).unwrap();
     assert_eq!((loc.path.as_str(), loc.rev), ("src/b.ts", None));
     assert_eq!(selected_row(cx).as_deref(), Some("b.ts"));
+}
+
+#[gpui_kit::test]
+fn file_names_line_up_with_folder_names(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, nest_layout);
+    open_tree(cx, "lib");
+    assert_eq!(tree(cx), ["src", "feature.txt", "README.md"]);
+    let left = cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0..3usize)
+            .map(|i| {
+                w.within(("tree.row", i))
+                    .try_find("name")
+                    .unwrap()
+                    .bounds()
+                    .left()
+            })
+            .collect::<Vec<_>>()
+    });
+    assert!(left.iter().all(|x| *x == left[0]), "{left:?}");
 }
 
 #[gpui_kit::test]

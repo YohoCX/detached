@@ -17,7 +17,7 @@ use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Entity, FocusHandle,
     FontWeight, Global, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
     Point, Render, Role, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px,
+    Subscription, Task, UniformListScrollHandle, Window, canvas, div, prelude::FluentBuilder, px,
     uniform_list,
 };
 
@@ -29,7 +29,7 @@ use crate::dock::{self, Kind};
 use crate::repos::{self, CheckoutTarget};
 use crate::store::{Doc, Event, Level, Notice, QueryId, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
-use crate::util::when;
+use crate::util::{ago, now, when};
 
 /// The filters of the session, kept while the panel is closed.
 #[derive(Clone, PartialEq)]
@@ -158,6 +158,8 @@ pub struct Log {
     head: Head,
     query: Option<(QueryId, Task<()>)>,
     scroll: UniformListScrollHandle,
+    /// The list's width, which decides whether rows show the author.
+    width: Pixels,
     filters: Filters,
     refs: Entity<SelectState<Vec<Refs>>>,
     names: Vec<String>,
@@ -234,6 +236,7 @@ impl Log {
             head: None,
             query: None,
             scroll: UniformListScrollHandle::new(),
+            width: px(0.),
             filters: Filters::default(),
             refs,
             names: vec![],
@@ -596,13 +599,15 @@ impl Log {
         let focused = self.focus.is_focused(window);
         let width = px(self.lanes.min(24) as f32 * LANE);
         let graph = self.graph;
+        let author = self.width - if graph { width } else { px(0.) } > px(520.);
+        let now = now();
         let pill = |id: SharedString, label: SharedString, tip: SharedString, color: Hsla| {
             div()
                 .id(id)
                 .test_support()
                 .aria_label(tip.clone())
-                .flex_none()
-                .max_w(px(160.))
+                .min_w_0()
+                .max_w(px(120.))
                 .px(px(6.))
                 .rounded(radius::KBD)
                 .border_1()
@@ -639,7 +644,9 @@ impl Log {
                         rest.into(),
                         t.muted,
                     )
+                    .flex_none()
                 });
+                let at = when(r.time);
                 let on = self.sel.contains(&r.sha);
                 // A click can land before the next paint, after a reload moved the rows.
                 let sha = r.sha.clone();
@@ -674,26 +681,55 @@ impl Log {
                             .items_center()
                             .gap(px(4.))
                             .overflow_hidden()
-                            .children(chips)
-                            .children(more)
-                            .child(div().min_w_0().truncate().child(r.subject.clone())),
+                            .when(!r.refs.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .id("chips")
+                                        .test_support()
+                                        .flex()
+                                        .min_w_0()
+                                        // The chips give way to the subject three times as fast.
+                                        .map(|mut d| {
+                                            d.style().flex_shrink = Some(3.);
+                                            d
+                                        })
+                                        .gap(px(4.))
+                                        .overflow_hidden()
+                                        .children(chips)
+                                        .children(more),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id("subject")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(r.subject.clone()),
+                            ),
                     )
+                    .when(author, |row| {
+                        row.child(
+                            div()
+                                .id("author")
+                                .test_support()
+                                .flex_none()
+                                .w(px(110.))
+                                .truncate()
+                                .text_color(t.muted)
+                                .child(r.author.clone()),
+                        )
+                    })
                     .child(
                         div()
+                            .id("date")
+                            .test_support()
+                            .aria_label(at.clone())
                             .flex_none()
-                            .w(px(140.))
-                            .truncate()
-                            .text_color(t.muted)
-                            .child(r.author.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(150.))
-                            .text_right()
                             .text_size(text::SMALL)
                             .text_color(t.muted)
-                            .child(when(r.time)),
+                            .tooltip(move |window, cx| Tooltip::new(at.clone()).build(window, cx))
+                            .child(ago(r.time, now)),
                     )
                     .on_click(cx.listener({
                         let sha = sha.clone();
@@ -797,14 +833,26 @@ impl Render for Log {
             message("log.message", "No commits", t.muted).into_any_element()
         } else {
             let list = cx.processor(|this, range, window, cx| this.rows(range, window, cx));
+            let this = cx.weak_entity();
+            let measure = move |b: gpui_kit::Bounds<Pixels>, _: &mut Window, cx: &mut App| {
+                this.update(cx, |log, cx| {
+                    if log.width != b.size.width {
+                        log.width = b.size.width;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            };
             div()
                 .id("log.list")
                 .test_support()
                 .track_focus(&self.focus)
                 .role(Role::ListBox)
+                .relative()
                 .flex()
                 .flex_1()
                 .min_w_0()
+                .child(canvas(measure, |_, _, _, _| {}).absolute().size_full())
                 .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                     let down = match e.keystroke.key.as_str() {
                         "down" => true,

@@ -86,7 +86,16 @@ impl DocTab {
         match &self.doc {
             Doc::File(l) => base_name(&l.path).to_string().into(),
             Doc::Diff(d) => format!("{} (diff)", base_name(&d.path)).into(),
-            Doc::Mr { number, .. } => format!("!{number}").into(),
+            Doc::Mr { number, .. } => {
+                let page = match &self.view {
+                    Some(View::Page(p)) => p.clone().downcast::<MrPage>().ok(),
+                    _ => None,
+                };
+                match page.as_ref().and_then(|p| p.read(cx).title().map(short)) {
+                    Some(t) => format!("!{number} {t}").into(),
+                    None => format!("!{number}").into(),
+                }
+            }
             Doc::Job { name, .. } => name.clone().into(),
             Doc::Chat { repo, n } => {
                 let place = chat::label(repo, cx);
@@ -124,7 +133,7 @@ impl DocTab {
     }
 }
 
-/// A chat's first words, cut to fit a tab.
+/// The first line, cut to fit a tab.
 fn short(text: &str) -> String {
     let line = text.lines().next().unwrap_or_default();
     match line.char_indices().nth(24) {

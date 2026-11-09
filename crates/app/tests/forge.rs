@@ -249,13 +249,35 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
     show(cx, "gitlab");
     cx.press("secondary-9");
     cx.click("bottom.Pipelines");
-    let says = |e: &str| e.starts_with("No account for ") && e.ends_with("; add one in Settings");
+    let says = |e: &str| e.starts_with("No account for ") && e.ends_with("; add one in Settings.");
     wait_until(cx, |cx| {
-        label(cx, "pipelines.error").is_some_and(|e| says(&e))
+        label(cx, "pipelines.setup").is_some_and(|e| says(&e))
     });
     assert!(cx.find("pipeline.badge").is_none());
     cx.click("pipelines.settings");
     wait_until(cx, |cx| cx.find("settings").is_some_and(|s| s.visible()));
+}
+
+#[gpui_kit::test]
+fn a_repo_off_any_forge_says_so_as_mrs_do_and_its_actions_only_hint(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, layout);
+    let cx = &mut app;
+    let off = "Remote origin is not on a forge.";
+    open_tab(cx, "bottom.Pipelines");
+    wait_until(cx, |cx| {
+        label(cx, "pipelines.setup").as_deref() == Some(off)
+    });
+    assert!(cx.find("pipelines.error").is_none());
+    assert_eq!(cx.find("pipelines.run").unwrap().disabled(), Some(true));
+    cx.click("pipelines.run");
+    assert!(cx.find("run.branch").is_none());
+    assert_eq!(label(cx, "pipelines.note").as_deref(), Some(""));
+
+    assert!(cx.update(|w, cx| actions::run(w, cx, "mr.create")));
+    wait_until(cx, |cx| said(cx).as_deref() == Some(off));
+    assert!(!cx.store(|s, _| s.message.as_ref().unwrap().error));
+    open_tab(cx, "tool.MRs");
+    wait_until(cx, |cx| label(cx, "mrs.setup").as_deref() == Some(off));
 }
 
 #[gpui_kit::test]
@@ -705,6 +727,7 @@ fn gitlab_overview_comment_approve_squash_merge(cx: &mut TestAppContext) {
     open_mr(cx, "gitlab");
     assert_eq!(label(cx, "mr.number").as_deref(), Some("!1"));
     assert_eq!(label(cx, "mr.title").as_deref(), Some("Add feature"));
+    assert_eq!(label(cx, "doc.mr.1").as_deref(), Some("!1 Add feature"));
     assert_eq!(label(cx, "mr.state").as_deref(), Some("open"));
     let description = label(cx, "mr.description").unwrap();
     assert!(description.contains("Adds the feature."), "{description}");
@@ -1184,15 +1207,9 @@ fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut Test
         left: Side::Head,
         right: Side::Worktree,
     };
-    let copied = |cx: &mut VisualTestContext| {
-        cx.press("secondary-c");
-        cx.read_from_clipboard()
-            .and_then(|c| c.text())
-            .unwrap_or_default()
-    };
     let shown = worktree.clone();
     cx.update(|_, cx| files::show_diff(cx, shown, true));
-    wait_until(cx, |cx| copied(cx) == "line 20 edited\n");
+    wait_until(cx, |cx| current_line(cx) == "line 20 edited");
 
     cx.store(|s, cx| s.show(Doc::Mr { repo, number: 1 }, cx));
     wait_until(cx, |cx| label(cx, "mr.title").is_some());
@@ -1204,16 +1221,20 @@ fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut Test
     );
     cx.input("20");
     cx.press("enter");
-    assert_eq!(copied(cx), "line 20\n");
+    assert_eq!(current_line(cx), "line 20");
     cx.press("f7");
     assert_eq!(
-        copied(cx),
-        "line 3 changed\n",
+        current_line(cx),
+        "line 3 changed",
         "wrapped to the MR's one change"
     );
 
     cx.update(|_, cx| files::show_diff(cx, worktree, true));
-    wait_until(cx, |cx| copied(cx) == "line 20 edited\n");
-    cx.press("f7");
-    assert_eq!(copied(cx), "line 25 edited\n", "the viewer's again");
+    // Showing it again reloads it, and an F7 before the load lands is lost; press until it moves.
+    wait_until(cx, |cx| {
+        if current_line(cx) == "line 20 edited" {
+            cx.press("f7");
+        }
+        current_line(cx) == "line 25 edited"
+    });
 }

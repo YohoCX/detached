@@ -214,8 +214,8 @@ impl Render for Panel {
         let active = terminals.active().cloned();
         let tabs = terminals.sessions.iter().enumerate().map(|(i, s)| {
             let s = s.read(cx);
-            let label = match s.memory {
-                Some(b) => format!("{} · {}", s.title(), mb(b)),
+            let label = match s.memory.and_then(mb) {
+                Some(mb) => format!("{} · {mb}", s.title()),
                 None => s.title().to_string(),
             };
             let on = i == terminals.active;
@@ -283,8 +283,10 @@ impl Render for Panel {
     }
 }
 
-fn mb(bytes: u64) -> String {
-    format!("{} MB", (bytes + (1 << 19)) >> 20)
+/// None under half a megabyte, which reads as no reading.
+fn mb(bytes: u64) -> Option<String> {
+    let mb = (bytes + (1 << 19)) >> 20;
+    (mb > 0).then(|| format!("{mb} MB"))
 }
 
 /// Every keystroke into a focused terminal goes to its shell before the app's bindings see it.
@@ -336,4 +338,13 @@ fn intercept(cx: &mut App) {
         });
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hides_a_reading_under_half_a_megabyte() {
+        assert_eq!(super::mb(0), None);
+        assert_eq!(super::mb(3 << 20).as_deref(), Some("3 MB"));
+    }
 }

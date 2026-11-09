@@ -8,7 +8,7 @@ use detached_core::types::{Content, FileDiff};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::diff::{
     Diff, DiffAnnotation, DiffEvent, DiffFile, DiffGutterMarker, DiffHunkSeparator,
-    DiffLinePosition, DiffLineRange, DiffMode, DiffState,
+    DiffLinePosition, DiffMode, DiffState,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -66,6 +66,8 @@ pub struct DiffView {
     changes: Rc<Vec<LineChange>>,
     /// What the shown files came from; an equal reload changes nothing.
     last: Option<Result<FilePatch, String>>,
+    /// The cursor when no lines are selected: a gutter bar, so the change keeps its colors.
+    at: Option<(DiffSide, u32)>,
     /// Put the cursor on the first change once loaded.
     reveal: bool,
     /// Focus the diff once loaded.
@@ -126,6 +128,7 @@ impl DiffView {
             goto: None,
             changes: Rc::default(),
             last: None,
+            at: None,
             reveal: true,
             focus: false,
             hover: None,
@@ -149,7 +152,7 @@ impl DiffView {
         if doc != self.doc {
             self.doc = doc;
             self.last = None;
-            self.hover = None;
+            (self.hover, self.at) = (None, None);
         }
         self.reveal = true;
         self.load(cx);
@@ -204,10 +207,10 @@ impl DiffView {
         cx.notify();
     }
 
-    /// The selected line, which F7 and Shift+F7 step from.
+    /// The selected line, else the current change's, which F7 and Shift+F7 step from.
     fn cursor(&self, cx: &App) -> Option<(DiffSide, u32)> {
-        let r = self.state.read(cx).selected_lines()?;
-        Some((r.side(), r.start() as u32))
+        let r = self.state.read(cx).selected_lines();
+        r.map(|r| (r.side(), r.start() as u32)).or(self.at)
     }
 
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -232,10 +235,10 @@ impl DiffView {
 
     fn move_to(&mut self, (side, line): (DiffSide, u32), cx: &mut Context<Self>) {
         let Some(path) = self.path(cx) else { return };
+        self.at = Some((side, line));
         let line = line as usize;
         self.state.update(cx, |s, cx| {
-            let range = DiffLineRange::new(path.clone(), side, line, line);
-            s.set_selected_lines(Some(range), cx);
+            s.set_selected_lines(None, cx);
             // A few lines above the change stay in view.
             s.scroll_to_line(
                 DiffLinePosition::new(path, side, line.saturating_sub(3)),
@@ -420,39 +423,56 @@ impl DiffView {
                     .find(|v| ElementId::View(v.entity_id()) == *a.id());
                 div().children(view.cloned())
             });
-        let Some(on_add) = self.on_add.clone() else {
-            return diff;
-        };
-        let this = cx.weak_entity();
+        let current = self.at.map(|(side, line)| {
+            let at = DiffLinePosition::new(path.clone(), side, line as usize);
+            DiffGutterMarker::new("current", at)
+        });
+        // The first marker of a line shows, so the hover's "+" goes over the bar.
+        let add = self.on_add.as_ref().map(|_| {
+            let at = self.hover.clone();
+            DiffGutterMarker::new(
+                "add",
+                at.unwrap_or_else(|| DiffLinePosition::new("", DiffSide::Modified, 1)),
+            )
+        });
         let changes = self.changes.clone();
-        // An unmatched marker keeps the lane, so the code does not shift as the hover comes and goes.
-        let marker = self
-            .hover
-            .clone()
-            .unwrap_or_else(|| DiffLinePosition::new("", DiffSide::Modified, 1));
+        let on_add = self.on_add.clone();
+        let diff = diff
+            .gutter_markers(add.into_iter().chain(current))
+            .render_gutter_marker(move |m, _, cx| {
+                let t = theme(cx);
+                let (side, line) = (m.position().side(), m.position().line() as u32);
+                let other = other_line(&changes, side, line);
+                match on_add.clone().filter(|_| *m.id() == "add".into()) {
+                    Some(on_add) => ui::pressable("diff.add")
+                        .test_support()
+                        .justify_center()
+                        .size(px(16.))
+                        .rounded(radius::LETTER)
+                        .bg(t.accent)
+                        .text_color(t.accent_fg)
+                        .cursor_pointer()
+                        .on_click(move |_, window, cx| on_add(side, line, other, window, cx))
+                        .child(Icon::Plus.size(px(12.))),
+                    None => div()
+                        .id("diff.current")
+                        .test_support()
+                        .w(px(3.))
+                        .h_full()
+                        .rounded(radius::BADGE)
+                        .bg(t.accent),
+                }
+            });
+        if self.on_add.is_none() {
+            return diff;
+        }
+        let this = cx.weak_entity();
         diff.on_line_hover(move |p, _, cx| {
             // Leaving a line can be reported after entering the next, so only leaving the body clears it.
             if let Some(p) = p {
                 this.update(cx, |v, cx| v.set_hover(Some(p.clone()), cx))
                     .ok();
             }
-        })
-        .gutter_markers([DiffGutterMarker::new("add", marker)])
-        .render_gutter_marker(move |m, _, cx| {
-            let t = theme(cx);
-            let (side, line) = (m.position().side(), m.position().line() as u32);
-            let other = other_line(&changes, side, line);
-            let on_add = on_add.clone();
-            ui::pressable("diff.add")
-                .test_support()
-                .justify_center()
-                .size(px(16.))
-                .rounded(radius::LETTER)
-                .bg(t.accent)
-                .text_color(t.accent_fg)
-                .cursor_pointer()
-                .on_click(move |_, window, cx| on_add(side, line, other, window, cx))
-                .child(Icon::Plus.size(px(12.)))
         })
     }
 }

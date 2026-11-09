@@ -18,7 +18,8 @@ use gpui_kit::{
     px,
 };
 
-use super::{active, color, core, glyph, name, note, now, poll, took};
+use super::mr::setup_problem;
+use super::{active, color, core, glyph, name, note, now, poll, setup_note, took};
 use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
 use crate::store::{DocRef, Location, Store};
@@ -69,6 +70,8 @@ pub struct Pipelines {
     note: Option<String>,
     busy: bool,
     github: HashSet<String>,
+    /// Why the repo has no forge to list or run pipelines on.
+    setup: Option<String>,
     run: Option<RunForm>,
     stages: HashMap<u64, Jobs>,
     poll: Option<Task<()>>,
@@ -104,6 +107,7 @@ impl Pipelines {
             note: None,
             busy: false,
             github: HashSet::new(),
+            setup: None,
             run: None,
             stages: HashMap::new(),
             poll: None,
@@ -127,7 +131,7 @@ impl Pipelines {
         let at = repo.as_deref().unwrap_or_default();
         let key = format!("pipes {at} {} {}", self.mr.unwrap_or(0), Self::all(cx));
         if repo != self.repo {
-            self.run = None;
+            (self.run, self.setup) = (None, None);
             self.github.clear();
             if let Some(r) = repo.clone() {
                 self.load_hosts(r, cx);
@@ -144,12 +148,14 @@ impl Pipelines {
 
     fn load_hosts(&mut self, repo: String, cx: &mut Context<Self>) {
         let (core, r) = (core(cx), repo.clone());
-        let hosts = blocking::run(cx, move || github_hosts(&core, &r));
+        let hosts = blocking::run(cx, move || hosts(&core, &r));
         cx.spawn(async move |this, cx| {
-            let Ok(hosts) = hosts.await else { return };
+            let Ok((github, setup)) = hosts.await else {
+                return;
+            };
             this.update(cx, |this, cx| {
                 if this.repo.as_ref() == Some(&repo) {
-                    this.github = hosts;
+                    (this.github, this.setup) = (github, setup);
                     cx.notify();
                 }
             })
@@ -272,16 +278,19 @@ impl Pipelines {
         let branch = st.and_then(|s| s.branch.clone()).unwrap_or_default();
         let (core, r) = (core(cx), repo.clone());
         let form = blocking::run(cx, move || -> Result<_> {
-            let project = match listed {
-                Some(p) => p,
-                None => api::new_mr(&core, &r)?.source_project,
+            let (github, setup) = hosts(&core, &r)?;
+            let project = match (listed, setup) {
+                (Some(p), _) => p,
+                // The panel says why in its body.
+                (None, Some(_)) => return Ok(None),
+                (None, None) => api::new_mr(&core, &r)?.source_project,
             };
-            let github = github_hosts(&core, &r)?.contains(&project.host);
+            let github = github.contains(&project.host);
             let workflows = match github {
                 true => api::workflows(&core, &r, &project)?,
                 false => vec![],
             };
-            Ok((project, github, workflows))
+            Ok(Some((project, github, workflows)))
         });
         cx.spawn_in(window, async move |this, cx| {
             let form = form.await;
@@ -291,7 +300,8 @@ impl Pipelines {
                         return;
                     }
                     match form {
-                        Ok((project, github, workflows)) => {
+                        Ok(None) => {}
+                        Ok(Some((project, github, workflows))) => {
                             let branch =
                                 cx.new(|cx| InputState::new(window, cx).default_value(branch));
                             this.run = Some(RunForm {
@@ -412,7 +422,7 @@ impl Pipelines {
             .child(label)
     }
 
-    fn bar(&self, note: Option<String>, cx: &Context<Self>) -> impl IntoElement + use<> {
+    fn bar(&self, note: Option<String>, off: bool, cx: &Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let scope = [(false, "Current branch"), (true, "All branches")];
         let note = note.unwrap_or_default();
@@ -451,14 +461,13 @@ impl Pipelines {
                     .child(note),
             )
             .when(self.mr.is_none(), |d| {
-                d.child(
-                    ui::button("pipelines.run", "Run Pipeline…", cx)
-                        .test_support()
-                        .when(self.busy, |b| b.opacity(0.5))
-                        .when(!self.busy, |b| {
-                            b.on_click(cx.listener(|this, _, window, cx| this.open_run(window, cx)))
-                        }),
-                )
+                let off = off || self.busy;
+                let run = ui::button("pipelines.run", "Run Pipeline…", cx)
+                    .when(off, |b| b.opacity(0.5))
+                    .when(!off, |b| {
+                        b.on_click(cx.listener(|this, _, window, cx| this.open_run(window, cx)))
+                    });
+                d.child(ui::disabled(run, off).test_support())
             })
             .child(
                 ui::icon_button("pipelines.refresh", Icon::Refresh, cx)
@@ -794,8 +803,10 @@ impl Render for Pipelines {
         if self.repo.is_none() {
             return note("pipelines.note", "No repository", t.muted);
         }
-        let body = match (&list, error.clone()) {
-            (None, Some(e)) => {
+        let setup = self.setup.clone().filter(|_| list.is_none());
+        let body = match (&list, error.clone(), setup.clone()) {
+            (None, _, Some(s)) => setup_note("pipelines.setup", "pipelines.settings", s, cx),
+            (None, Some(e), None) => {
                 let settings = e.ends_with("in Settings");
                 div()
                     .id("pipelines.error")
@@ -819,9 +830,9 @@ impl Render for Pipelines {
                     })
                     .into_any_element()
             }
-            (None, None) => note("pipelines.note", "Loading…", t.muted),
-            (Some(l), _) if l.is_empty() => note("pipelines.note", "No pipelines", t.muted),
-            (Some(l), _) => div()
+            (None, None, None) => note("pipelines.note", "Loading…", t.muted),
+            (Some(l), ..) if l.is_empty() => note("pipelines.note", "No pipelines", t.muted),
+            (Some(l), ..) => div()
                 .children(l.iter().flat_map(|p| {
                     let row = self.row(p, cx).into_any_element();
                     let jobs = self
@@ -837,7 +848,7 @@ impl Render for Pipelines {
             .flex()
             .flex_col()
             .size_full()
-            .child(self.bar(note, cx))
+            .child(self.bar(note, setup.is_some(), cx))
             .children(self.run.as_ref().map(|f| self.form(f, cx)))
             .child(
                 div()
@@ -852,19 +863,19 @@ impl Render for Pipelines {
     }
 }
 
-/// Hosts whose account is GitHub's: only they retry failed jobs and dispatch workflows.
-fn github_hosts(core: &AppState, repo: &str) -> Result<HashSet<String>> {
+/// Hosts whose account is GitHub's, which alone retry failed jobs and dispatch workflows, and
+/// why the repo has no forge.
+fn hosts(core: &AppState, repo: &str) -> Result<(HashSet<String>, Option<String>)> {
     let github = |p: &Provider| matches!(p, Provider::Github | Provider::GithubEnterprise);
     let accounts = api::list_accounts(core)?
         .into_iter()
         .filter(|a| github(&a.provider));
     let ids: HashSet<_> = accounts.map(|a| a.id).collect();
-    let hosts = api::forge_hosts(core, repo)?.hosts.into_iter();
+    let hosts = api::forge_hosts(core, repo)?;
+    let setup = setup_problem(&hosts);
     let ours = |id: &Option<String>| id.as_ref().is_some_and(|id| ids.contains(id));
-    Ok(hosts
-        .filter(|h| ours(&h.account_id))
-        .map(|h| h.host)
-        .collect())
+    let github = hosts.hosts.into_iter().filter(|h| ours(&h.account_id));
+    Ok((github.map(|h| h.host).collect(), setup))
 }
 
 /// A status glyph in its color, the status as its tooltip.

@@ -7,7 +7,6 @@ use crate::files::Links;
 use crate::nav;
 use crate::store::{DocRef, Location};
 use crate::ui::theme;
-use crate::util;
 
 /// Why MRs cannot load for a repo; None when they can.
 pub fn setup_problem(h: &ForgeHosts) -> Option<String> {
@@ -76,23 +75,6 @@ pub fn tone(s: &PipelineStatus, cx: &App) -> Hsla {
     }
 }
 
-/// `Nm`, `Nh` or `Nd` before `now`; a date after 30 days.
-pub fn ago(t: i64, now: i64) -> String {
-    let s = (now - t) as f64;
-    if s < 3600. {
-        format!("{}m", (s / 60.).round().max(1.))
-    } else if s < 86400. {
-        format!("{}h", (s / 3600.).round())
-    } else if s < 30. * 86400. {
-        format!("{}d", (s / 86400.).round())
-    } else {
-        // "Nov 4, 2026, 3:05 PM" without the time.
-        util::when(t)
-            .rsplit_once(", ")
-            .map_or_else(String::new, |d| d.0.into())
-    }
-}
-
 /// Records and shows the MR page.
 pub fn show_mr(cx: &mut App, repo: String, number: u64) {
     let doc = DocRef::Mr {
@@ -135,14 +117,6 @@ mod tests {
             says(h(Some("a"), false, Some("up"))),
             "Remote up is not on a forge."
         );
-    }
-
-    #[test]
-    fn counts_minutes_hours_and_days_then_shows_the_date() {
-        let now = 1_800_000_000;
-        let got = [10, 90, 7200, 3 * 86400, 31 * 86400].map(|s| ago(now - s, now));
-        assert_eq!(got[..4], ["1m", "2m", "2h", "3d"]);
-        assert!(got[4].ends_with(", 2026"), "{}", got[4]);
     }
 
     fn mr(title: &str, draft: bool) -> MergeRequest {
