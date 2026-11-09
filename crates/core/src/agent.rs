@@ -117,7 +117,7 @@ pub struct Choice {
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SlashCommand {
     pub name: String,
     pub description: String,

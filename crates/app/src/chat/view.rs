@@ -61,6 +61,8 @@ pub struct ChatView {
     input: Entity<TextareaState>,
     scroll: ScrollHandle,
     suggest: Option<Suggest>,
+    /// A `/` typed before any session listed its commands.
+    unlisted: bool,
     _files: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -100,6 +102,7 @@ impl ChatView {
             input,
             scroll,
             suggest: None,
+            unlisted: false,
             _files: None,
             _subscriptions: subscriptions,
         }
@@ -128,9 +131,11 @@ impl ChatView {
         let word = before[at..].to_string();
         self.suggest = None;
         self._files = None;
+        self.unlisted = false;
         if at == 0 && word.starts_with('/') {
             let q = word[1..].to_lowercase();
             let s = self.session.read(cx);
+            self.unlisted = s.commands.is_empty();
             let mut items: Vec<_> = s
                 .commands
                 .iter()
@@ -830,6 +835,18 @@ impl ChatView {
     }
 
     fn suggestions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.unlisted {
+            let text = "Commands show once Claude has answered here.";
+            let hint = div()
+                .id("chat.unlisted")
+                .test_support()
+                .aria_label(text)
+                .px(px(10.))
+                .py(px(4.))
+                .text_color(theme(cx).muted)
+                .child(text);
+            return Some(hint.into_any_element());
+        }
         let s = self.suggest.as_ref()?;
         let rows = s.items.iter().enumerate().map(|(i, (label, _))| {
             ui::row(("chat.suggest", i), i == s.hi, cx)

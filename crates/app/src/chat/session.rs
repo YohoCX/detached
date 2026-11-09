@@ -16,6 +16,10 @@ use gpui_kit::{AppContext, Context, Entity, Task};
 use crate::blocking;
 use crate::files::{Links, Markdown};
 use crate::store::Store;
+use crate::ui_state;
+
+/// The last commands each repo's session listed, for `/` before a session runs.
+const COMMANDS: &str = "chat.commands";
 
 pub const AUTO: &str = "auto";
 
@@ -524,6 +528,13 @@ impl Session {
         cx.notify();
     }
 
+    /// The commands this repo's last session listed: the sidecar lists them only once a turn runs.
+    pub fn remember(&mut self, cx: &mut Context<Self>) {
+        let mut all: BTreeMap<String, Vec<SlashCommand>> =
+            ui_state::get(COMMANDS, cx).unwrap_or_default();
+        self.commands = all.remove(&self.repo).unwrap_or_default();
+    }
+
     /// Asks the sidecar for this folder's past conversations, unless it is not installed.
     pub fn load_past(&mut self, cx: &mut Context<Self>) {
         let core = Store::global(cx).read(cx).core().clone();
@@ -547,6 +558,7 @@ impl Session {
             effort: self.effort.take(),
             ..Session::new(std::mem::take(&mut self.repo))
         };
+        self.remember(cx);
         self.load_past(cx);
         self.check_trust(cx);
         cx.notify();
@@ -644,7 +656,13 @@ impl Session {
                 self.set_reported_mode(mode);
             }
             Event::Models { models } => self.models = models,
-            Event::Commands { commands } => self.commands = commands,
+            Event::Commands { commands } => {
+                let mut all: BTreeMap<String, Vec<SlashCommand>> =
+                    ui_state::get(COMMANDS, cx).unwrap_or_default();
+                all.insert(self.repo.clone(), commands.clone());
+                ui_state::set(COMMANDS, all, cx);
+                self.commands = commands;
+            }
             Event::User { text } => self.items.push(Item::User(text)),
             Event::Delta { text } => match self.items.last_mut() {
                 Some(Item::Text(t, None)) => t.push_str(&text),

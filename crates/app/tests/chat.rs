@@ -283,6 +283,27 @@ fn a_past_conversation_shows_and_the_next_message_resumes_it(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    cx.input("/");
+    assert!(
+        cx.find("chat.unlisted").is_some(),
+        "no session has listed any"
+    );
+    cx.press("backspace");
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    // A new conversation has no session yet; the last one's list stands in.
+    cx.click("chat.new");
+    cx.input("/rev");
+    assert_eq!(
+        label(cx, ("chat.suggest", 0usize)).as_deref(),
+        Some("/review <pr> Review")
+    );
+}
+
+#[gpui_kit::test]
 fn slash_suggests_commands_and_at_suggests_files(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");

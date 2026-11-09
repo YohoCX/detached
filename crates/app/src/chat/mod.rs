@@ -23,7 +23,11 @@ pub fn session(repo: &str, cx: &mut App) -> Entity<Session> {
     if let Some(s) = cx.default_global::<Chats>().0.get(repo) {
         return s.clone();
     }
-    let s = cx.new(|_| Session::new(repo.to_string()));
+    let s = cx.new(|cx| {
+        let mut s = Session::new(repo.to_string());
+        s.remember(cx);
+        s
+    });
     cx.global_mut::<Chats>().0.insert(repo.into(), s.clone());
     s
 }
