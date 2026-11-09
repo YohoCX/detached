@@ -560,3 +560,76 @@ fn a_past_chat_archives_unarchives_and_deletes_after_a_confirm(cx: &mut TestAppC
     });
     assert!(std::fs::read_to_string(&file).unwrap().contains("Keep me"));
 }
+
+#[gpui_kit::test]
+fn the_keys_walk_the_chats_archive_and_delete_and_the_filter_splits_active_from_past(
+    cx: &mut TestAppContext,
+) {
+    let file = std::cell::RefCell::new(None);
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo().display().to_string();
+        let past = serde_json::json!([
+            {"id": "a", "title": "First", "modified": 3, "cwd": solo},
+            {"id": "b", "title": "Second", "modified": 2, "cwd": solo},
+        ]);
+        let beside = agent::sidecar(&sb.state.config_dir).with_file_name("sessions.json");
+        std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+        std::fs::write(&beside, past.to_string()).unwrap();
+        *file.borrow_mut() = Some(beside);
+    });
+    let file = file.into_inner().unwrap();
+    let title = |cx: &mut VisualTestContext, row: usize| label(cx, ("chats.past", row));
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| title(cx, 1).is_some());
+    let open = cx.find(("chats.open", 0usize)).unwrap();
+    assert_eq!(open.description(), Some("Idle"), "no turn yet");
+
+    // A click on the open chat puts the keys in the list.
+    cx.click(("chats.open", 0usize));
+    cx.press("down");
+    cx.press("e");
+    wait_until(cx, |cx| {
+        label(cx, "chats.archived").as_deref() == Some("Archived (1)")
+    });
+    assert_eq!(title(cx, 0).as_deref(), Some("Second"));
+
+    cx.press("backspace");
+    assert!(
+        cx.find(("chats.confirm", 0usize)).is_some(),
+        "asks in the row's place"
+    );
+    cx.press("escape");
+    assert_eq!(title(cx, 0).as_deref(), Some("Second"));
+    cx.press("backspace");
+    cx.press("enter");
+    wait_until(cx, |_| {
+        !std::fs::read_to_string(&file).unwrap().contains("Second")
+    });
+
+    let pick = |cx: &mut VisualTestContext, option: usize| {
+        cx.update(|w, cx| w.within("chats.filter").click(option, cx));
+        settle(cx);
+    };
+    pick(cx, 1);
+    assert!(cx.find(("chats.open", 0usize)).is_some() && cx.find("chats.archived").is_none());
+    pick(cx, 2);
+    assert!(cx.find(("chats.open", 0usize)).is_none() && cx.find("chats.archived").is_some());
+}
+
+#[gpui_kit::test]
+fn an_open_chat_shows_whether_it_waits_for_you_or_is_done(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let state = |cx: &mut VisualTestContext| {
+        cx.find(("chats.open", 0usize))
+            .and_then(|e| e.description().map(String::from))
+    };
+    say(cx, "ask");
+    wait_for_item(cx, "waiting");
+    open_tab(cx, "tab.chats");
+    assert_eq!(state(cx).as_deref(), Some("Waiting"));
+    cx.click("top.chat");
+    let i = index_of(cx, "waiting");
+    cx.click(("chat.allow", i));
+    idle(cx);
+    assert_eq!(state(cx).as_deref(), Some("Done"));
+}

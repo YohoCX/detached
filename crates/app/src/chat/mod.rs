@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::{AnyView, App, AppContext, Entity, Global, Window};
 
-pub use session::{Item, Session};
+pub use session::{Item, Session, State};
 
 use crate::actions;
 use crate::store::{Doc, Store};
@@ -77,6 +77,13 @@ pub fn forget(id: &str, cx: &mut App) {
                 s.reset(cx)
             }
         });
+    }
+}
+
+/// Puts the cursor in a chat page's box; other pages are left alone.
+pub fn focus(page: &AnyView, window: &mut Window, cx: &mut App) {
+    if let Ok(v) = page.clone().downcast::<view::ChatView>() {
+        v.update(cx, |v, cx| v.focus(window, cx));
     }
 }
 

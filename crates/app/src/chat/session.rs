@@ -47,6 +47,17 @@ pub enum Answer {
     Gone,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    /// A question or a permission waits for the user.
+    Waiting,
+    Working,
+    Done,
+    Stopped,
+    /// No turn yet.
+    Idle,
+}
+
 /// Where going back to before a turn stands.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Back {
@@ -623,6 +634,30 @@ impl Session {
     pub fn open_past(&mut self, id: String, cx: &mut Context<Self>) {
         let cwd = self.repo.clone();
         self.command(Command::Load { cwd, id }, cx);
+    }
+
+    /// Where the chat stands, for its icon in the lists.
+    pub fn state(&self) -> State {
+        let waiting = self.items.iter().any(|i| {
+            matches!(
+                i,
+                Item::Ask {
+                    answer: Answer::Waiting,
+                    ..
+                }
+            )
+        });
+        let last = self.items.iter().rev().find_map(|i| match i {
+            Item::End { ok, .. } => Some(*ok),
+            _ => None,
+        });
+        match (waiting, self.busy, last) {
+            (true, ..) => State::Waiting,
+            (_, true, _) => State::Working,
+            (_, _, Some(true)) => State::Done,
+            (_, _, Some(false)) => State::Stopped,
+            _ => State::Idle,
+        }
     }
 
     pub fn shows(&self, id: &str) -> bool {

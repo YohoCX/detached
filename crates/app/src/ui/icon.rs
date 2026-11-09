@@ -40,6 +40,7 @@ pub enum Icon {
     Copy,
     Archive,
     Trash,
+    Question,
 }
 
 macro_rules! svg16 {
@@ -95,6 +96,9 @@ impl Icon {
             Icon::PanelRight => svg16!("M2.5 3h11v10h-11zM9.5 3v10"),
             Icon::Copy => svg16!("M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"),
             Icon::Archive => svg16!("M2.5 3.5h11v3h-11zM3.5 6.5v6h9v-6M6.5 9h3"),
+            Icon::Question => svg16!(
+                "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11M6.5 6.5a1.5 1.5 0 1 1 2 1.4c-.4.2-.5.5-.5.9v.4M8 11h.01"
+            ),
             Icon::Trash => svg16!("M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 9h6l.5-9"),
         }
     }

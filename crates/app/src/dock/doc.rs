@@ -55,6 +55,9 @@ impl DocTab {
             Some(View::Viewer(v)) if is_file(&doc) => {
                 v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx))
             }
+            // The same page shown again keeps its view and scroll; a chat takes the cursor.
+            Some(View::Page(p)) if doc == self.doc => chat::focus(p, window, cx),
+            _ if doc == self.doc => {}
             _ => self.view = None,
         }
         self.doc = doc;

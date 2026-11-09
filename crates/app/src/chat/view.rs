@@ -122,6 +122,10 @@ impl ChatView {
         }
     }
 
+    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |s, cx| s.focus(window, cx));
+    }
+
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input.read(cx).value().trim().to_string();
         if text.is_empty() || self.session.read(cx).busy {
