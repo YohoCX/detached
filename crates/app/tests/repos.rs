@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::repos::{self, Section};
-use detached_app::store::{Level, Message, Notice};
-use detached_app::{actions, ui_state};
+use detached_app::store::{Doc, Level, Message, Notice};
+use detached_app::ui::menu;
+use detached_app::{actions, shell, ui_state};
 use detached_core::api;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
@@ -18,7 +19,8 @@ use gpui_kit::{
     VisualTestContext, point, px,
 };
 
-/// A sidebar row as drawn: a repo's path (None for a header), its label and its second line.
+/// A sidebar row as drawn: a repo's path (None for a header or folder), its label, its branch and
+/// where its name starts.
 #[derive(Debug)]
 struct Row {
     id: ElementId,
@@ -38,16 +40,15 @@ fn rows(cx: &mut VisualTestContext) -> Vec<Row> {
                 let repo = row.role() == Some(Role::ListItem);
                 let path = repo.then(|| row.description().unwrap().lines().next().unwrap().into());
                 let status = repo.then(|| w.within(id.clone()).find("status"));
+                let name = w.within(id.clone()).try_find("name");
                 Some(Row {
                     id,
                     path,
                     label: row.label().unwrap_or_default().into(),
                     status: status
-                        .as_ref()
-                        .and_then(|s| s.label())
-                        .unwrap_or_default()
-                        .into(),
-                    x: status.map_or(row.bounds().origin.x, |s| s.bounds().origin.x),
+                        .and_then(|s| s.label().map(String::from))
+                        .unwrap_or_default(),
+                    x: name.map_or(row.bounds().origin.x, |n| n.bounds().origin.x),
                 })
             })
             .collect()
@@ -85,21 +86,19 @@ fn adding_a_folder_lists_nested_repos_worktrees_under_their_repo_and_branch_stat
     let [app, wt, api, web, lib] =
         ["app", "app-wt", "group/api", "group/web", "lib"].map(|n| path(cx.sb.repo(n)));
     let solo = path(cx.sb.solo());
-    assert_eq!(paths(cx), [app.as_str(), &wt, &api, &web, &lib, &solo]);
+    assert_eq!(paths(cx), [api.as_str(), &web, &app, &wt, &lib, &solo]);
     let rows_now = rows(cx);
     let headers: Vec<_> = rows_now.iter().filter(|r| r.path.is_none()).collect();
-    assert_eq!(headers.iter().map(|r| &r.label).collect::<Vec<_>>(), ["ws"]);
-    // Windows: names hold `\` and the worktree's link is unchecked (docs/TECHDEBT.md).
+    let headers: Vec<_> = headers.iter().map(|r| &r.label).collect();
+    assert_eq!(headers, ["ws", "group"]);
+    // Windows: the worktree's link is unchecked (docs/TECHDEBT.md).
     if cfg!(unix) {
         let names: Vec<_> = rows_now
             .iter()
             .filter(|r| r.path.is_some())
             .map(|r| &r.label)
             .collect();
-        assert_eq!(
-            names,
-            ["app", "app-wt", "group/api", "group/web", "lib", "solo"]
-        );
+        assert_eq!(names, ["api", "web", "app", "app-wt", "lib", "solo"]);
         assert!(row(cx, &wt).x > row(cx, &app).x, "the worktree is indented");
     }
     assert_eq!(row(cx, &api).status, "main ↓1");
@@ -111,7 +110,7 @@ fn adding_a_folder_lists_nested_repos_worktrees_under_their_repo_and_branch_stat
         let toggle = cx.update(|w, _| w.within(app_row.clone()).find("worktrees"));
         assert_eq!(toggle.label(), Some("Hide 1 worktree"));
         cx.update(|w, cx| w.within(app_row.clone()).click("worktrees", cx));
-        assert_eq!(paths(cx), [app.as_str(), &api, &web, &lib, &solo]);
+        assert_eq!(paths(cx), [api.as_str(), &web, &app, &lib, &solo]);
     }
     let ws = rows(cx).into_iter().find(|r| r.path.is_none()).unwrap();
     cx.click(ws.id);
@@ -128,7 +127,7 @@ fn a_worktree_deleted_on_disk_drops_out_when_the_window_gets_focus(cx: &mut Test
     cx.deactivate_window();
     cx.update(|w, _| w.activate_window());
     wait_until(cx, |cx| {
-        paths(cx) == [app.as_str(), &api, &web, &lib, &solo]
+        paths(cx) == [api.as_str(), &web, &app, &lib, &solo]
     });
     wait_until(cx, |cx| {
         cx.store(|s, _| {
@@ -197,6 +196,83 @@ fn collapsing_persists_in_ui_json(cx: &mut TestAppContext) {
         [path(cx.sb.solo())],
         "a new sidebar keeps it collapsed"
     );
+}
+
+fn row_named(cx: &mut VisualTestContext, label: &str) -> Row {
+    rows(cx)
+        .into_iter()
+        .find(|r| r.label == label)
+        .unwrap_or_else(|| panic!("no row {label}"))
+}
+
+#[gpui_kit::test]
+fn repos_nest_under_their_folders_and_a_folder_of_one_folder_shares_its_row(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        for n in ["console/api", "console/web", "deep/er/x", "top"] {
+            repo(sb, n);
+        }
+    });
+    let labels: Vec<_> = rows(cx).into_iter().map(|r| r.label).collect();
+    let tree = ["repos", "console", "api", "web", "deep/er", "x", "top"];
+    assert_eq!(labels, tree);
+    let deep = path(cx.sb.path("repos").join("deep").join("er"));
+    let id = row_named(cx, "deep/er").id;
+    assert_eq!(cx.find(id).unwrap().description(), Some(deep.as_str()));
+    let x = |cx: &mut VisualTestContext, label| row_named(cx, label).x;
+    assert!(x(cx, "api") > x(cx, "console"), "a repo sits in its folder");
+    assert_eq!(x(cx, "console"), x(cx, "top"));
+}
+
+#[gpui_kit::test]
+fn a_folded_folder_sums_its_changes_shows_its_worst_dot_and_stays_folded_after_a_reopen(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        write(&sb.repo("group/api"), [("a.txt", "a"), ("b.txt", "b")]);
+        write(&sb.repo("group/web"), [("c.txt", "c")]);
+    });
+    let [api, lib, group] = ["group/api", "lib", "group"].map(|n| path(cx.sb.repo(n)));
+    let id = row_named(cx, "group").id;
+    let inside = |cx: &mut VisualTestContext, el: &'static str| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            let e = w.within(id.clone()).try_find(el);
+            e.and_then(|e| e.label().map(String::from))
+        })
+    };
+    assert_eq!(inside(cx, "dirty"), None, "open, its repos show their own");
+    cx.click(id.clone());
+    assert!(!paths(cx).contains(&api));
+    assert_eq!(inside(cx, "dirty").as_deref(), Some("3"));
+    assert_eq!(inside(cx, "dot").as_deref(), Some("Warning"));
+    let saved = cx.update(|_, cx| ui_state::get::<Vec<String>>("sidebar.collapsed", cx));
+    assert_eq!(saved, Some(vec![group]));
+
+    cx.update(|w, _| w.remove_window());
+    settle(cx);
+    let w = cx.cx.cx.update(shell::open).unwrap();
+    let again = &mut VisualTestContext::from_window(w, &cx.cx.cx);
+    wait_until(again, |cx| paths(cx).contains(&lib));
+    assert!(!paths(again).contains(&api), "still folded");
+}
+
+#[gpui_kit::test]
+fn chat_here_on_a_folder_opens_a_chat_on_it(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    for (label, folder) in [("group", cx.sb.repo("group")), ("ws", cx.sb.ws())] {
+        let id = row_named(cx, label).id;
+        cx.update(|w, cx| w.right_click(id, cx));
+        cx.update(|w, cx| assert!(menu::pick("Chat here", w, cx)));
+        settle(cx);
+        let repo = path(folder);
+        assert_eq!(
+            cx.store(|s, _| s.shown().cloned()),
+            Some(Doc::Chat { repo })
+        );
+    }
 }
 
 #[gpui_kit::test]

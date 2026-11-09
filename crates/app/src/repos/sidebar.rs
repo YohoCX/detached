@@ -1,4 +1,4 @@
-//! The Repositories pane: workspace and folder headers over the repos and their worktrees.
+//! The Repositories pane: workspace and folder headers over a tree of the repos and their worktrees.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
@@ -13,21 +13,27 @@ use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, BoxShadow, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
-    relative, uniform_list,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder, px, relative, uniform_list,
 };
 
 use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
 use crate::dock;
-use crate::store::Store;
+use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::ui_state;
 use crate::util::{folder_name, in_folder};
 
 const COLLAPSED: &str = "sidebar.collapsed";
+
+/// Every row's height: the list lays them out as uniform.
+const ROW: Pixels = px(28.);
+/// Where a tree row's chevron slot starts at depth 0, and how far each level moves it.
+const BASE: f32 = 16.;
+const INDENT: f32 = 16.;
 
 const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
     "Finder"
@@ -40,7 +46,16 @@ const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
     Workspace(String),
-    Folder { workspace: String, folder: String },
+    Folder {
+        workspace: String,
+        folder: String,
+    },
+    /// A folder inside an added one; `name` may span a chain of them, `a/b`.
+    Dir {
+        path: String,
+        name: String,
+        depth: usize,
+    },
     Repo(RepoRow),
 }
 
@@ -52,6 +67,7 @@ struct RepoRow {
     solo: bool,
     worktree: bool,
     worktrees: usize,
+    depth: usize,
 }
 
 /// The rows per active workspace. `collapsed` holds `workspace:<name>`, folder paths and repo paths
@@ -61,16 +77,6 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
     let active: Vec<_> = workspaces.iter().filter(|w| w.active).collect();
     let mut out = vec![];
     for w in &active {
-        let repo_row = |repo: &RepoInfo, solo, worktree, worktrees| {
-            let workspace = w.name.clone();
-            Row::Repo(RepoRow {
-                workspace,
-                repo: repo.clone(),
-                solo,
-                worktree,
-                worktrees,
-            })
-        };
         // Headers only tell several workspaces apart.
         if active.len() > 1 {
             out.push(Row::Workspace(w.name.clone()));
@@ -78,6 +84,12 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
                 continue;
             }
         }
+        let mut tree = Tree {
+            repos,
+            collapsed,
+            workspace: &w.name,
+            out: &mut out,
+        };
         let mut seen = HashSet::new();
         let folders = w.folders.iter().map(|f| f.trim_end_matches(['/', '\\']));
         for folder in folders.filter(|f| seen.insert(*f)) {
@@ -87,10 +99,11 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
             let inside: Vec<_> = repos
                 .iter()
                 .filter(|r| in_folder(&r.path, folder) && !main_listed(r))
+                .map(|r| (r.path[folder.len()..].get(1..).unwrap_or(""), r))
                 .collect();
-            let solo = matches!(inside[..], [r] if r.path == folder);
+            let solo = matches!(inside[..], [(_, r)] if r.path == folder);
             if !solo {
-                out.push(Row::Folder {
+                tree.out.push(Row::Folder {
                     workspace: w.name.clone(),
                     folder: folder.into(),
                 });
@@ -98,21 +111,87 @@ fn rows(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &BTreeSet<Strin
                     continue;
                 }
             }
-            for repo in inside {
-                let of_repo = |wt: &&RepoInfo| wt.worktree_of.as_ref() == Some(&repo.path);
-                let wts: Vec<_> = repos.iter().filter(of_repo).collect();
-                out.push(repo_row(repo, solo, false, wts.len()));
-                if !collapsed.contains(&repo.path) {
-                    out.extend(wts.into_iter().map(|wt| repo_row(wt, false, true, 0)));
-                }
-            }
+            tree.level(folder, group(inside), 0, solo);
         }
     }
     out
 }
 
-/// The status dot: error, local changes, diverged from upstream, no upstream, in sync.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Repos with their path below a folder.
+type Entries<'a> = Vec<(&'a str, &'a RepoInfo)>;
+/// The repos right in a folder, and its subfolders by name with theirs.
+type Group<'a> = (Vec<&'a RepoInfo>, Vec<(&'a str, Entries<'a>)>);
+
+fn group(inside: Entries) -> Group {
+    let (mut here, mut dirs) = (vec![], Vec::<(&str, Entries)>::new());
+    for (rel, r) in inside {
+        let Some((first, rest)) = rel.split_once(['/', '\\']) else {
+            here.push(r);
+            continue;
+        };
+        match dirs.iter_mut().find(|d| d.0 == first) {
+            Some(d) => d.1.push((rest, r)),
+            None => dirs.push((first, vec![(rest, r)])),
+        }
+    }
+    (here, dirs)
+}
+
+struct Tree<'a> {
+    repos: &'a [RepoInfo],
+    collapsed: &'a BTreeSet<String>,
+    workspace: &'a str,
+    out: &'a mut Vec<Row>,
+}
+
+impl<'a> Tree<'a> {
+    /// The subfolders of `dir`, each over its own rows unless collapsed, then its repos.
+    fn level(&mut self, dir: &str, (here, dirs): Group<'a>, depth: usize, solo: bool) {
+        for (first, inside) in dirs {
+            let any = inside[0].1;
+            let (mut name, mut g) = (first.to_string(), group(inside));
+            while g.0.is_empty() && g.1.len() == 1 {
+                let (next, inside) = g.1.remove(0);
+                name = format!("{name}/{next}");
+                g = group(inside);
+            }
+            // A `\` in the repo's path takes the byte of the name's `/`.
+            let path = any.path[..dir.len() + 1 + name.len()].to_string();
+            let open = !self.collapsed.contains(&path);
+            self.out.push(Row::Dir {
+                path: path.clone(),
+                name,
+                depth,
+            });
+            if open {
+                self.level(&path, g, depth + 1, false);
+            }
+        }
+        for repo in here {
+            let of_repo = |wt: &&RepoInfo| wt.worktree_of.as_ref() == Some(&repo.path);
+            let wts: Vec<_> = self.repos.iter().filter(of_repo).collect();
+            let row = |repo: &RepoInfo, worktree: bool, worktrees, depth| {
+                Row::Repo(RepoRow {
+                    workspace: self.workspace.into(),
+                    repo: repo.clone(),
+                    solo: solo && !worktree,
+                    worktree,
+                    worktrees,
+                    depth,
+                })
+            };
+            self.out.push(row(repo, false, wts.len(), depth));
+            if !self.collapsed.contains(&repo.path) {
+                let wts = wts.into_iter().map(|wt| row(wt, true, 0, depth + 1));
+                self.out.extend(wts);
+            }
+        }
+    }
+}
+
+/// The status dot: error, local changes, diverged from upstream, no upstream, in sync; the first is
+/// the worst.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Tone {
     Error,
     Warning,
@@ -185,6 +264,7 @@ impl Sidebar {
         match row {
             Row::Workspace(name) => item.child(self.workspace(ix, name, cx)),
             Row::Folder { workspace, folder } => item.child(self.folder(ix, workspace, folder, cx)),
+            Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, *depth, cx)),
             Row::Repo(r) => item.child(self.repo(ix, r, cx)),
         }
     }
@@ -224,38 +304,15 @@ impl Sidebar {
         let (ws, path) = (workspace.to_string(), folder.to_string());
         let (key, tip) = (path.clone(), SharedString::from(path.clone()));
         let menu = move |e: &ClickEvent, window: &mut Window, cx: &mut App| {
-            if !e.is_secondary() {
-                return;
+            if e.is_secondary() {
+                folder_menu(this.clone(), &path, open, cx)
+                    .separator()
+                    .item(
+                        "Remove Folder",
+                        in_workspace(api::remove_folder, &ws, &path),
+                    )
+                    .show(e.position(), window, cx);
             }
-            let (this, key) = (this.clone(), path.clone());
-            let idle = State::global(cx).read(cx).sync.is_none();
-            let s = Store::global(cx).read(cx);
-            let repos: Vec<_> = s
-                .repos
-                .iter()
-                .filter(|r| in_folder(&r.path, &path))
-                .map(|r| r.path.clone())
-                .collect();
-            let all = |kind| {
-                let repos = repos.clone();
-                move |_: &mut Window, cx: &mut App| sync_repos(kind, Some(repos.clone()), cx)
-            };
-            Menu::default()
-                .item_if(idle, "Fetch All in Folder", all(Kind::Fetch))
-                .item_if(idle, "Pull All in Folder", all(Kind::Pull))
-                .separator()
-                .item(if open { "Collapse" } else { "Expand" }, move |_, cx| {
-                    this.update(cx, |this, cx| this.toggle(key.clone(), cx))
-                        .ok();
-                })
-                .item(format!("Open in {FILE_MANAGER}"), open_folder(&path))
-                .item("Copy Path", copy_path(&path))
-                .separator()
-                .item(
-                    "Remove Folder",
-                    in_workspace(api::remove_folder, &ws, &path),
-                )
-                .show(e.position(), window, cx);
         };
         header(ix, open, cx)
             .test_support()
@@ -275,6 +332,47 @@ impl Sidebar {
             )
     }
 
+    /// A folder in the tree; folded, it sums its repos' changes and shows the worst of their dots.
+    fn dir(
+        &self,
+        ix: usize,
+        path: &str,
+        name: &str,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let t = theme(cx);
+        let open = !self.collapsed.contains(path);
+        let s = Store::global(cx).read(cx);
+        let inside = s.repos.iter().filter(|r| !open && in_folder(&r.path, path));
+        let statuses: Vec<_> = inside.filter_map(|r| s.statuses.get(&r.path)).collect();
+        let changes: usize = statuses
+            .iter()
+            .filter_map(|s| s.as_ref().ok())
+            .map(|s| s.changes.len())
+            .sum();
+        let tone = statuses.into_iter().filter_map(|s| tone_of(Some(s))).min();
+        let this = cx.weak_entity();
+        let (key, menu, tip) = (path.to_string(), path.to_string(), SharedString::from(path));
+        line(ix, depth, cx)
+            .hover(|s| s.bg(t.hover))
+            .role(Role::Button)
+            .aria_expanded(open)
+            .aria_label(name.to_string())
+            .aria_description(tip.clone())
+            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
+            .on_aux_click(move |e, window, cx| {
+                if e.is_secondary() {
+                    folder_menu(this.clone(), &menu, open, cx).show(e.position(), window, cx)
+                }
+            })
+            .child(slot().text_color(t.muted).child(chevron(open)))
+            .child(name_of(name.to_string()))
+            .children((changes > 0).then(|| changed(changes, t)))
+            .children(tone.map(|tone| dot(tone, t)))
+    }
+
     fn repo(&self, ix: usize, r: &RepoRow, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let s = Store::global(cx).read(cx);
@@ -282,17 +380,14 @@ impl Sidebar {
         let status = s.statuses.get(&path);
         let st = status.and_then(|s| s.as_ref().ok());
         let selected = s.current() == Some(path.as_str());
-        let name = match r.worktree {
-            true => folder_name(&path).to_string(),
-            false => r.repo.name.clone(),
-        };
+        let name = folder_name(&path).to_string();
         let tip: SharedString = match st.and_then(|s| s.last_commit.as_ref()) {
             Some(c) => format!("{path}\n{}", c.subject).into(),
             None => path.clone().into(),
         };
 
         let open = !self.collapsed.contains(&path);
-        let chevron = (r.worktrees > 0).then(|| {
+        let toggle = (r.worktrees > 0).then(|| {
             let n = r.worktrees;
             let verb = if open { "Hide" } else { "Show" };
             let title = format!("{verb} {n} worktree{}", if n > 1 { "s" } else { "" });
@@ -300,130 +395,79 @@ impl Sidebar {
             ui::titled(ui::pressable("worktrees"), title)
                 .test_support()
                 .aria_expanded(open)
-                .absolute()
-                .left(px(8.))
-                .top(px(3.))
                 .justify_center()
-                .size(px(16.))
+                .size_full()
                 .rounded(radius::BADGE)
                 .text_color(t.muted)
                 .hover(|s| s.bg(t.hover))
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
                 .child(chevron(open))
         });
-        let line1 = div()
-            .flex()
-            .items_center()
-            .gap(px(5.))
-            .h(px(17.))
-            .text_size(text::BODY)
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-            .children(
-                st.and_then(|s| s.in_progress.clone())
-                    .map(|p| ui::badge(badge_text(p), t.warning, cx)),
-            )
-            .children(st.filter(|s| !s.changes.is_empty()).map(|s| {
-                div()
-                    .id("dirty")
-                    .text_size(text::LABEL)
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(t.warning)
-                    .tooltip(|window, cx| Tooltip::new("Changed files").build(window, cx))
-                    .child(s.changes.len().to_string())
-            }))
-            .child(
-                ui::hover_button("remove", Icon::Close.size(px(12.)), "Remove from list", cx)
-                    .test_support()
-                    .on_click(click(remove_repo(&r.workspace, &path, r.solo))),
-            )
-            .children(tone_of(status).map(|tone| ui::dot(tone.color(t))));
 
+        // The branch, or an error or the last sync's outcome in its place; the tooltip says all.
         let outcome = s.outcomes.get(&path);
-        let mut said = vec![];
-        let line2 = div()
-            .flex()
-            .items_center()
-            .gap(px(5.))
-            .h(px(17.))
-            .text_size(text::SMALL)
-            .text_color(t.muted)
-            .map(|d| match status {
-                Some(Err(e)) => {
-                    said.push(e.clone());
-                    d.child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(t.error)
-                            .child(e.clone()),
-                    )
-                }
-                Some(Ok(st)) => {
-                    let head = st.head.as_deref().map_or("?", |h| &h[..h.len().min(8)]);
-                    let branch = st.branch.clone().unwrap_or(format!("{head} (detached)"));
-                    let ab = [("↑", st.ahead), ("↓", st.behind)]
-                        .into_iter()
-                        .filter(|(_, n)| *n > 0)
-                        .map(|(arrow, n)| format!("{arrow}{n}"));
-                    said.push(branch.clone());
-                    said.extend(ab.clone());
-                    said.extend(outcome.map(|o| o.text.clone()));
-                    d.child(Icon::Branch.size(px(12.)))
-                        .child(
-                            div()
-                                .flex_none()
-                                .max_w(relative(0.75))
-                                .truncate()
-                                .child(branch),
-                        )
-                        .children(ab.map(|ab| div().text_color(t.fg).child(ab)))
-                        .children(outcome.map(|o| {
-                            let tip = SharedString::from(o.text.clone());
-                            div()
-                                .id("outcome")
-                                .ml_auto()
-                                .min_w_0()
-                                .truncate()
-                                .when(!o.ok, |d| d.text_color(t.error))
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(tip.clone()).build(window, cx)
-                                })
-                                .child(o.text.clone())
-                        }))
-                }
-                None => d,
-            });
-        let line2 = div()
+        let (mut said, mut ab) = (vec![], vec![]);
+        let shown = match status {
+            Some(Err(e)) => {
+                said.push(e.clone());
+                Some((e.clone(), t.error))
+            }
+            Some(Ok(st)) => {
+                let head = st.head.as_deref().map_or("?", |h| &h[..h.len().min(8)]);
+                let branch = st.branch.clone().unwrap_or(format!("{head} (detached)"));
+                ab = [("↑", st.ahead), ("↓", st.behind)]
+                    .into_iter()
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(arrow, n)| format!("{arrow}{n}"))
+                    .collect();
+                said.push(branch.clone());
+                said.extend(ab.clone());
+                said.extend(outcome.map(|o| o.text.clone()));
+                Some(match outcome {
+                    Some(o) => (o.text.clone(), if o.ok { t.muted } else { t.error }),
+                    None => (branch, t.muted),
+                })
+            }
+            None => None,
+        };
+        let said = SharedString::from(said.join(" "));
+        let tone = tone_of(status);
+        let status = div()
             .id("status")
             .test_support()
             .role(Role::Label)
-            .aria_label(said.join(" "))
-            .child(line2);
+            .aria_label(said.clone())
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .min_w_0()
+            .max_w(relative(0.5))
+            .text_size(text::SMALL)
+            .text_color(t.muted)
+            .when(!said.is_empty(), |d| {
+                d.tooltip(move |window, cx| Tooltip::new(said.clone()).build(window, cx))
+            })
+            .children(
+                shown.map(|(text, color)| div().min_w_0().truncate().text_color(color).child(text)),
+            )
+            .children(
+                ab.into_iter()
+                    .map(|ab| div().flex_none().text_color(t.fg).child(ab)),
+            );
 
         let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
             .spread_radius(px(1.))
             .inset();
         let (ws, solo, select) = (r.workspace.clone(), r.solo, path.clone());
-        div()
-            .id(("sidebar.row", ix))
-            .test_support()
+        line(ix, r.depth, cx)
             .group(ui::HOVER)
-            .relative()
-            .flex()
-            .flex_col()
-            .h(px(40.))
-            .mx(px(6.))
-            .py(px(3.))
-            .pr(px(10.))
-            .pl(px(if r.worktree { 44. } else { 28. }))
-            .rounded(radius::WIDGET)
             .map(|d| match selected {
                 true => d.bg(t.selected).shadow(vec![ring]),
                 false => d.hover(|s| s.bg(t.hover)),
             })
             .role(Role::ListItem)
-            .aria_label(name)
+            .aria_label(name.clone())
             .aria_description(tip.clone())
             .aria_selected(selected)
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
@@ -434,9 +478,23 @@ impl Sidebar {
                     repo_menu(&ws, &path, solo).show(e.position(), window, cx);
                 }
             })
-            .children(chevron)
-            .child(line1)
-            .child(line2)
+            .child(slot().children(toggle))
+            .child(name_of(name).font_weight(FontWeight::SEMIBOLD))
+            .children(
+                st.and_then(|s| s.in_progress.clone())
+                    .map(|p| ui::badge(badge_text(p), t.warning, cx)),
+            )
+            .children(
+                st.filter(|s| !s.changes.is_empty())
+                    .map(|s| changed(s.changes.len(), t)),
+            )
+            .child(status)
+            .child(
+                ui::hover_button("remove", Icon::Close.size(px(12.)), "Remove from list", cx)
+                    .test_support()
+                    .on_click(click(remove_repo(&r.workspace, &r.repo.path, r.solo))),
+            )
+            .children(tone.map(|tone| dot(tone, t)))
     }
 }
 
@@ -448,21 +506,14 @@ impl Render for Sidebar {
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
             Store::global(cx).update(cx, |s, cx| s.refresh_all(cx))
         };
-        let header = div()
+        let toolbar = div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(2.))
-            .h(px(44.))
-            .pl(px(16.))
-            .pr(px(8.))
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .child("Repositories"),
-            )
+            .justify_end()
+            .gap(px(4.))
+            .h(px(36.))
+            .px(px(8.))
             .when(!none_on, |d| {
                 d.child(
                     ui::titled(ui::icon_button("sidebar.add", Icon::Plus, cx), "Add folder")
@@ -503,40 +554,92 @@ impl Render for Sidebar {
             .size_full()
             .min_w_0()
             .pb(px(6.))
-            .child(header)
+            .child(toolbar)
             .child(body)
     }
 }
 
-/// A workspace or folder row: chevron, then the caller's children, bottom-aligned.
+/// A workspace or folder header: chevron, then the caller's children.
 fn header(ix: usize, open: bool, cx: &App) -> Stateful<Div> {
     div()
         .id(("sidebar.row", ix))
         .group(ui::HOVER)
         .flex()
-        .items_end()
+        .items_center()
         .gap(px(6.))
-        .h(px(40.))
+        .h(ROW)
         .px(px(8.))
-        .pb(px(6.))
         .font_weight(FontWeight::BOLD)
         .role(Role::Button)
         .aria_expanded(open)
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .size(px(16.))
-                .items_center()
-                .justify_center()
-                .text_color(theme(cx).muted)
-                .child(chevron(open)),
-        )
+        .child(slot().text_color(theme(cx).muted).child(chevron(open)))
+}
+
+/// A tree row at `depth`, with a guide down each level it is nested in.
+fn line(ix: usize, depth: usize, cx: &App) -> ObservedElement<Stateful<Div>> {
+    let t = theme(cx);
+    let x = |level: usize| px(BASE + level as f32 * INDENT);
+    div()
+        .id(("sidebar.row", ix))
+        .test_support()
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .h(ROW)
+        .mx(px(6.))
+        .pl(x(depth))
+        .pr(px(8.))
+        .rounded(radius::WIDGET)
+        .children((0..depth).map(|level| {
+            let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
+            guide.left(x(level) + px(8.))
+        }))
+}
+
+/// The 16 px box a row's chevron sits in.
+fn slot() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .size(px(16.))
+        .items_center()
+        .justify_center()
 }
 
 fn chevron(open: bool) -> impl IntoElement {
     let icon = if open { Icon::Down } else { Icon::Chevron };
     icon.size(px(12.))
+}
+
+fn name_of(name: String) -> ObservedElement<Stateful<Div>> {
+    div()
+        .id("name")
+        .test_support()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .text_size(text::BODY)
+        .child(name)
+}
+
+fn changed(n: usize, t: &Theme) -> impl IntoElement {
+    div()
+        .id("dirty")
+        .test_support()
+        .aria_label(n.to_string())
+        .text_size(text::LABEL)
+        .font_weight(FontWeight::BOLD)
+        .text_color(t.warning)
+        .tooltip(|window, cx| Tooltip::new("Changed files").build(window, cx))
+        .child(n.to_string())
+}
+
+fn dot(tone: Tone, t: &Theme) -> impl IntoElement {
+    ui::dot(tone.color(t))
+        .id("dot")
+        .test_support()
+        .aria_label(format!("{tone:?}"))
 }
 
 fn label(text: &str) -> Div {
@@ -560,6 +663,38 @@ fn empty(text: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
         .py(px(24.))
         .text_color(theme(cx).muted)
         .child(text)
+}
+
+/// The menu of an added folder or one in the tree.
+fn folder_menu(this: WeakEntity<Sidebar>, path: &str, open: bool, cx: &mut App) -> Menu {
+    let idle = State::global(cx).read(cx).sync.is_none();
+    let s = Store::global(cx).read(cx);
+    let repos: Vec<_> = s
+        .repos
+        .iter()
+        .filter(|r| in_folder(&r.path, path))
+        .map(|r| r.path.clone())
+        .collect();
+    let all = |kind| {
+        let repos = repos.clone();
+        move |_: &mut Window, cx: &mut App| sync_repos(kind, Some(repos.clone()), cx)
+    };
+    let (chat, key) = (path.to_string(), path.to_string());
+    Menu::default()
+        .item("Chat here", move |_, cx| {
+            let repo = chat.clone();
+            Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo }, cx))
+        })
+        .separator()
+        .item_if(idle, "Fetch All in Folder", all(Kind::Fetch))
+        .item_if(idle, "Pull All in Folder", all(Kind::Pull))
+        .separator()
+        .item(if open { "Collapse" } else { "Expand" }, move |_, cx| {
+            this.update(cx, |this, cx| this.toggle(key.clone(), cx))
+                .ok();
+        })
+        .item(format!("Open in {FILE_MANAGER}"), open_folder(path))
+        .item("Copy Path", copy_path(path))
 }
 
 fn select_repo(path: &str, cx: &mut App) {
@@ -694,19 +829,59 @@ mod tests {
         }
     }
 
-    /// `ws:<name>`, `dir:<folder>`, then repos as their path, `+` marking a solo one and `>` a worktree.
+    /// `ws:<name>`, `dir:<folder>`, then the tree indented two spaces a level: folders as `<name>/`,
+    /// repos as their path, `+` marking a solo one and `>` a worktree.
     fn show(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &[&str]) -> Vec<String> {
         let collapsed = collapsed.iter().map(|c| c.to_string()).collect();
+        let pad = |depth| "  ".repeat(depth);
         rows(repos, workspaces, &collapsed)
             .into_iter()
             .map(|r| match r {
                 Row::Workspace(w) => format!("ws:{w}"),
                 Row::Folder { folder, .. } => format!("dir:{folder}"),
-                Row::Repo(r) if r.solo => format!("+{}", r.repo.path),
-                Row::Repo(r) if r.worktree => format!(">{}", r.repo.path),
-                Row::Repo(r) => r.repo.path,
+                Row::Dir { name, depth, .. } => format!("{}{name}/", pad(depth)),
+                Row::Repo(r) => {
+                    let mark = if r.solo {
+                        "+"
+                    } else if r.worktree {
+                        ">"
+                    } else {
+                        ""
+                    };
+                    format!("{}{mark}{}", pad(r.depth), r.repo.path)
+                }
             })
             .collect()
+    }
+
+    #[test]
+    fn groups_repos_in_folders_first_and_a_folder_of_one_folder_shares_its_row() {
+        let paths = [
+            "/w/top",
+            "/w/c/api",
+            "/w/c/web",
+            "/w/a/b/x",
+            "/w/a/b/y/z",
+            "/w/p/q",
+        ];
+        let repos = paths.map(|p| repo(p, None));
+        let w = [ws("A", &["/w"], true)];
+        let tree = [
+            "dir:/w",
+            "c/",
+            "  /w/c/api",
+            "  /w/c/web",
+            "a/b/",
+            "  y/",
+            "    /w/a/b/y/z",
+            "  /w/a/b/x",
+            "p/",
+            "  /w/p/q",
+            "/w/top",
+        ];
+        assert_eq!(show(&repos, &w, &[]), tree);
+        let folded = ["dir:/w", "c/", "a/b/", "p/", "  /w/p/q", "/w/top"];
+        assert_eq!(show(&repos, &w, &["/w/c", "/w/a/b"]), folded);
     }
 
     #[test]
@@ -761,8 +936,8 @@ mod tests {
             [
                 "dir:/a",
                 "/a/app",
-                ">/a/app-wt",
-                ">/b/far-wt",
+                "  >/a/app-wt",
+                "  >/b/far-wt",
                 "dir:/b",
                 "/b/lone-wt"
             ]
