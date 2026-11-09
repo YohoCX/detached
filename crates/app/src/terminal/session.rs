@@ -1,4 +1,4 @@
-//! One shell on a PTY: alacritty's emulator and its I/O thread, with their events on the UI thread.
+//! One shell on a PTY: the emulator and its I/O thread, with their events on the UI thread.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -6,11 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
+use alacritty_terminal::event_loop::Msg;
+#[cfg(not(feature = "ghostty"))]
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender as Pipe};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Point, Side};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::TermMode;
+#[cfg(not(feature = "ghostty"))]
+use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Rgb;
 use detached_core::os;
@@ -23,6 +27,11 @@ use gpui_kit::{
 use super::keys;
 use crate::blocking;
 use crate::ui::theme;
+
+#[cfg(feature = "ghostty")]
+pub use super::ghostty::{Pipe, Term as Emulator};
+#[cfg(not(feature = "ghostty"))]
+pub type Emulator = Term<Listener>;
 
 pub const SCROLLBACK: usize = 1000;
 const MEMORY_EVERY: Duration = Duration::from_secs(2);
@@ -59,8 +68,8 @@ impl Dimensions for Grid {
 pub struct Exited;
 
 pub struct Session {
-    pub term: Arc<FairMutex<Term<Listener>>>,
-    tx: Notifier,
+    pub term: Arc<FairMutex<Emulator>>,
+    tx: Pipe,
     shell: String,
     /// Where it started, for a new shell in its place after a restart.
     pub cwd: PathBuf,
@@ -81,8 +90,8 @@ impl EventEmitter<Exited> for Session {}
 
 /// A shell started on its PTY, not yet on the UI thread.
 pub struct Started {
-    term: Arc<FairMutex<Term<Listener>>>,
-    tx: Notifier,
+    term: Arc<FairMutex<Emulator>>,
+    tx: Pipe,
     pid: u32,
     cwd: PathBuf,
     rx: mpsc::UnboundedReceiver<Event>,
@@ -103,14 +112,20 @@ pub fn start(cwd: PathBuf) -> std::io::Result<Started> {
     let pid = pty.child().id();
     #[cfg(windows)]
     let pid = pty.child_watcher().pid().map_or(0, |p| p.get());
-    let config = Config {
-        scrolling_history: SCROLLBACK,
-        ..Config::default()
+    #[cfg(feature = "ghostty")]
+    let (term, tx) = super::ghostty::spawn(grid, SCROLLBACK, pty, listener)?;
+    #[cfg(not(feature = "ghostty"))]
+    let (term, tx) = {
+        let config = Config {
+            scrolling_history: SCROLLBACK,
+            ..Config::default()
+        };
+        let term = Arc::new(FairMutex::new(Term::new(config, &grid, listener.clone())));
+        let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
+        let tx = event_loop.channel();
+        event_loop.spawn();
+        (term, tx)
     };
-    let term = Arc::new(FairMutex::new(Term::new(config, &grid, listener.clone())));
-    let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
-    let tx = Notifier(event_loop.channel());
-    event_loop.spawn();
     Ok(Started {
         term,
         tx,
@@ -150,7 +165,7 @@ impl Session {
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         if !bytes.is_empty() {
-            let _ = self.tx.0.send(Msg::Input(bytes));
+            let _ = self.tx.send(Msg::Input(bytes));
         }
     }
 
@@ -158,7 +173,12 @@ impl Session {
     pub fn input(&self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         let mut term = self.term.lock();
         term.scroll_display(Scroll::Bottom);
-        term.selection = None;
+        #[cfg(feature = "ghostty")]
+        term.clear_selection();
+        #[cfg(not(feature = "ghostty"))]
+        {
+            term.selection = None;
+        }
         drop(term);
         self.write(bytes);
         cx.notify();
@@ -182,8 +202,14 @@ impl Session {
     pub fn resize(&mut self, grid: Grid, cell: gpui_kit::Size<Pixels>) {
         if grid != self.grid && grid.cols > 1 && grid.rows > 0 {
             self.grid = grid;
+            let size = window_size(grid, Some(cell));
+            #[cfg(feature = "ghostty")]
+            self.term
+                .lock()
+                .resize(grid, size.cell_width, size.cell_height);
+            #[cfg(not(feature = "ghostty"))]
             self.term.lock().resize(grid);
-            let _ = self.tx.0.send(Msg::Resize(window_size(grid, Some(cell))));
+            let _ = self.tx.send(Msg::Resize(size));
         }
     }
 
@@ -212,7 +238,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         // The loop drops the PTY, which hangs up on the shell.
-        let _ = self.tx.0.send(Msg::Shutdown);
+        let _ = self.tx.send(Msg::Shutdown);
     }
 }
 
@@ -268,11 +294,14 @@ fn window_size(grid: Grid, cell: Option<gpui_kit::Size<Pixels>>) -> WindowSize {
 /// The theme's color for an OSC 4, 10 or 11 query.
 fn color_of(i: usize, cx: &Context<Session>) -> Rgb {
     let t = theme(cx);
-    let c: Hsla = match i {
+    rgb(match i {
         0..16 => t.ansi[i],
         256 => t.fg,
         _ => t.code,
-    };
+    })
+}
+
+pub fn rgb(c: Hsla) -> Rgb {
     let Rgba { r, g, b, .. } = c.to_rgb();
     let u = |v: f32| (v * 255.).round() as u8;
     Rgb {

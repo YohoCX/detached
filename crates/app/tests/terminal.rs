@@ -108,6 +108,140 @@ fn exiting_the_shell_closes_its_tab_and_the_last_one_the_panel(cx: &mut TestAppC
     assert!(!on_screen(cx, "bottom.Terminal"));
 }
 
+#[cfg(feature = "ghostty")]
+mod ghostty {
+    use super::*;
+    use alacritty_terminal::grid::Scroll;
+    use alacritty_terminal::vte::ansi::Rgb;
+    use detached_app::terminal::Session;
+    use gpui_kit::{Modifiers, MouseButton, point};
+
+    struct Cell {
+        row: usize,
+        col: usize,
+        text: String,
+        wide: bool,
+        fg: Option<Rgb>,
+    }
+
+    fn session<R>(cx: &mut VisualTestContext, f: impl FnOnce(&Session) -> R) -> R {
+        cx.update(|_, cx| f(Terminals::global(cx).read(cx).active().unwrap().read(cx)))
+    }
+
+    /// The cells of the row that reads `line`.
+    fn line(cx: &mut VisualTestContext, line: &str) -> Vec<Cell> {
+        let row = rows(cx).iter().position(|r| r.trim() == line).unwrap();
+        let mut cells = Vec::new();
+        session(cx, |s| {
+            s.term.lock().screen(|c| {
+                if c.row == row {
+                    cells.push(Cell {
+                        row: c.row,
+                        col: c.col,
+                        text: c.text.to_string(),
+                        wide: c.wide,
+                        fg: c.fg,
+                    })
+                }
+            })
+        });
+        assert!(cells.iter().all(|c| c.row == row));
+        cells
+    }
+
+    /// Runs `stty size` and waits for it to print the session's grid.
+    fn shell_sees_the_grid(cx: &mut VisualTestContext) {
+        run(cx, "stty size");
+        wait_until(cx, |cx| {
+            let grid = session(cx, |s| s.grid);
+            let size = format!("{} {}", grid.rows, grid.cols);
+            rows(cx).iter().any(|r| r.trim() == size)
+        });
+    }
+
+    #[gpui_kit::test]
+    fn colors_come_from_the_theme_and_the_app(cx: &mut TestAppContext) {
+        let cx = &mut open(cx);
+        run(cx, r"printf '\033[31mR\033[38;2;1;2;3mT\033[0m\n'");
+        wait_for_line(cx, "RT");
+        let cells = line(cx, "RT");
+        let red = cx.update(|_, cx| detached_app::ui::theme(cx).ansi[1].to_rgb());
+        let r = cells[0].fg.unwrap();
+        let near = |a: u8, b: f32| (f32::from(a) - b * 255.).abs() <= 1.;
+        assert!(near(r.r, red.r) && near(r.g, red.g) && near(r.b, red.b));
+        assert_eq!(cells[1].fg, Some(Rgb { r: 1, g: 2, b: 3 }));
+    }
+
+    #[gpui_kit::test]
+    fn a_wide_character_takes_two_columns(cx: &mut TestAppContext) {
+        let cx = &mut open(cx);
+        run(cx, r"printf '\344\270\255x\n'");
+        wait_for_line(cx, "中x");
+        let cells = line(cx, "中x");
+        let first = (cells[0].text.as_str(), cells[0].col, cells[0].wide);
+        assert_eq!(first, ("中", 0, true));
+        assert_eq!((cells[1].text.as_str(), cells[1].col), ("x", 2));
+    }
+
+    #[gpui_kit::test]
+    fn the_shell_sees_the_new_size(cx: &mut TestAppContext) {
+        let cx = &mut open(cx);
+        zone_size(cx, DockPlacement::Bottom, 500.);
+        shell_sees_the_grid(cx);
+        let before = session(cx, |s| s.grid.rows);
+        zone_size(cx, DockPlacement::Bottom, 300.);
+        wait_until(cx, |cx| {
+            cx.update(|w, cx| w.render_frame(cx));
+            session(cx, |s| s.grid.rows) < before
+        });
+        shell_sees_the_grid(cx);
+    }
+
+    #[gpui_kit::test]
+    fn scrolling_back_shows_history_and_typing_returns(cx: &mut TestAppContext) {
+        let cx = &mut open(cx);
+        run(cx, "seq 1 300");
+        wait_for_line(cx, "300");
+        assert!(!rows(cx).iter().any(|r| r.trim() == "1"));
+        session(cx, |s| s.term.lock().scroll_display(Scroll::Delta(1000)));
+        assert!(rows(cx).iter().any(|r| r.trim() == "1"));
+        cx.input("x");
+        assert!(rows(cx).iter().any(|r| r.trim() == "300"));
+    }
+
+    #[gpui_kit::test]
+    fn a_drag_selects_what_copy_takes(cx: &mut TestAppContext) {
+        let cx = &mut open(cx);
+        run(cx, "echo hello-world");
+        wait_for_line(cx, "hello-world");
+        let row = rows(cx)
+            .iter()
+            .position(|r| r.trim() == "hello-world")
+            .unwrap();
+        let (b, cell) = session(cx, |s| s.layout.unwrap());
+        let at = |col: f32| {
+            let y = b.origin.y + cell.height * (row as f32 + 0.5);
+            point(b.origin.x + cell.width * col, y)
+        };
+        let none = Modifiers::none();
+        let copy = |cx: &mut VisualTestContext| {
+            settle(cx);
+            cx.update(|_, cx| {
+                let s = Terminals::global(cx).read(cx).active().unwrap().clone();
+                s.update(cx, |s, cx| assert!(s.copy(cx)));
+            });
+            cx.read_from_clipboard().and_then(|c| c.text())
+        };
+        cx.simulate_mouse_down(at(0.2), MouseButton::Left, none);
+        cx.simulate_mouse_move(at(4.8), MouseButton::Left, none);
+        cx.simulate_mouse_up(at(4.8), MouseButton::Left, none);
+        assert_eq!(copy(cx).as_deref(), Some("hello"));
+        cx.simulate_click(at(8.5), none);
+        cx.simulate_click(at(8.5), none);
+        assert_eq!(copy(cx).as_deref(), Some("hello-world"));
+    }
+}
+
 #[gpui_kit::test]
 fn the_tab_shows_the_memory_of_the_shell(cx: &mut TestAppContext) {
     let cx = &mut open(cx);

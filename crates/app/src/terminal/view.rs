@@ -1,12 +1,18 @@
-//! A session's screen: one styled text per row, the cursor and the selection as runs.
+//! A session's screen: styled texts per row, the cursor and the selection as runs.
 
-use alacritty_terminal::grid::{Dimensions, Scroll};
+#[cfg(not(feature = "ghostty"))]
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point as Cell, Side};
+#[cfg(not(feature = "ghostty"))]
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::color::Colors;
-use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
+#[cfg(not(feature = "ghostty"))]
+use alacritty_terminal::term::{Term, color::Colors};
+use alacritty_terminal::vte::ansi::Rgb;
+#[cfg(not(feature = "ghostty"))]
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     Context, Font, FontStyle, FontWeight, Hsla, InteractiveElement, IntoElement, Modifiers,
@@ -15,7 +21,13 @@ use gpui_kit::{
     TextRun, UnderlineStyle, Window, canvas, div, font, px, rgb, size, transparent_black,
 };
 
-use super::session::{Grid, Listener, Session};
+#[cfg(feature = "ghostty")]
+use super::ghostty::Gesture;
+#[cfg(feature = "ghostty")]
+use super::session::Emulator;
+#[cfg(not(feature = "ghostty"))]
+use super::session::Listener;
+use super::session::{Grid, Session};
 use crate::ui::theme::{Theme, mono};
 use crate::ui::{text, theme};
 
@@ -29,8 +41,7 @@ impl Render for Session {
         let advance = window.text_system().advance(id, text::BODY, 'm');
         let cell = size(advance.map_or(px(8.), |a| a.width), line);
         let rows = rows(
-            &self.term.lock(),
-            &font,
+            &mut self.term.lock(),
             self.focus.is_focused(window),
             theme(cx),
         );
@@ -74,14 +85,22 @@ impl Render for Session {
                     .size_full()
                     .overflow_hidden()
                     .child(canvas(measure, |_, _, _, _| {}).absolute().size_full())
-                    .children(rows.into_iter().enumerate().map(|(i, (text, runs))| {
+                    .children(rows.into_iter().enumerate().map(|(i, pieces)| {
+                        let label: String = pieces.iter().map(|p| p.text.as_str()).collect();
                         div()
                             .id(("terminal.row", i))
                             .test_support()
-                            .aria_label(text.trim_end().to_string())
+                            .aria_label(label.trim_end().to_string())
+                            .relative()
                             .h(line)
                             .whitespace_nowrap()
-                            .child(StyledText::new(text).with_runs(runs))
+                            .children(pieces.into_iter().map(|p| {
+                                let runs = p.runs.into_iter().map(|r| run(r, &font)).collect();
+                                div()
+                                    .absolute()
+                                    .left(cell.width * p.col as f32)
+                                    .child(StyledText::new(p.text).with_runs(runs))
+                            }))
                     })),
             )
     }
@@ -101,9 +120,22 @@ impl Session {
         } else {
             Side::Left
         };
+        #[cfg(not(feature = "ghostty"))]
         let offset = self.term.lock().grid().display_offset() as i32;
+        #[cfg(feature = "ghostty")]
+        let offset = 0;
         let point = Cell::new(Line(row as i32 - offset), Column(col));
         Some((point, row, col, side))
+    }
+
+    #[cfg(feature = "ghostty")]
+    fn select(&self, g: Gesture, pos: Point<Pixels>) {
+        let (Some((b, cell)), Some((_, row, col, _))) = (self.layout, self.cell_at(pos)) else {
+            return;
+        };
+        let at = (f32::from(pos.x - b.origin.x), f32::from(pos.y - b.origin.y));
+        let size = (f32::from(cell.width), f32::from(cell.height));
+        self.term.lock().select(g, (row, col), at, size);
     }
 
     /// Mouse reports go to apps that asked for them, unless Shift is held to select.
@@ -142,14 +174,18 @@ impl Session {
         if e.button != MouseButton::Left {
             return;
         }
-        let ty = match e.click_count {
-            2 => SelectionType::Semantic,
-            3.. => SelectionType::Lines,
-            _ => SelectionType::Simple,
-        };
-        let mut term = self.term.lock();
-        term.selection = (e.click_count > 1).then(|| Selection::new(ty, point, side));
-        drop(term);
+        #[cfg(feature = "ghostty")]
+        self.select(Gesture::Press, e.position);
+        #[cfg(not(feature = "ghostty"))]
+        {
+            let ty = match e.click_count {
+                2 => SelectionType::Semantic,
+                3.. => SelectionType::Lines,
+                _ => SelectionType::Simple,
+            };
+            let mut term = self.term.lock();
+            term.selection = (e.click_count > 1).then(|| Selection::new(ty, point, side));
+        }
         self.pressed = Some((point, side));
         cx.notify();
     }
@@ -174,16 +210,27 @@ impl Session {
         let Some(start) = self.pressed else {
             return;
         };
-        let mut term = self.term.lock();
-        let selection = term
-            .selection
-            .get_or_insert_with(|| Selection::new(SelectionType::Simple, start.0, start.1));
-        selection.update(point, side);
-        drop(term);
+        #[cfg(feature = "ghostty")]
+        {
+            let _ = (start, point, side);
+            self.select(Gesture::Drag, e.position);
+        }
+        #[cfg(not(feature = "ghostty"))]
+        {
+            let mut term = self.term.lock();
+            let selection = term
+                .selection
+                .get_or_insert_with(|| Selection::new(SelectionType::Simple, start.0, start.1));
+            selection.update(point, side);
+        }
         cx.notify();
     }
 
     fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        #[cfg(feature = "ghostty")]
+        if self.pressed.is_some() {
+            self.select(Gesture::Release, e.position);
+        }
         self.pressed = None;
         if let Some((_, row, col, _)) = self.cell_at(e.position)
             && self.reports(&e.modifiers)
@@ -241,69 +288,136 @@ struct Style {
     strike: bool,
 }
 
-/// The screen's rows as text and runs.
-fn rows(
-    term: &Term<Listener>,
-    font: &Font,
+/// Cells from a column on, drawn as one text.
+struct Piece {
+    col: usize,
+    wide: bool,
+    text: String,
+    runs: Vec<(usize, Style)>,
+}
+
+/// Appends a cell to its row. A wide one gets a piece of its own, so the cells after it keep their
+/// columns whatever the font's advance for it.
+fn push(row: &mut Vec<Piece>, col: usize, text: &str, style: Style, wide: bool) {
+    if wide || row.last().is_none_or(|p| p.wide) {
+        row.push(Piece {
+            col,
+            wide,
+            text: String::new(),
+            runs: Vec::new(),
+        });
+    }
+    let Some(p) = row.last_mut() else {
+        return;
+    };
+    p.text.push_str(text);
+    match p.runs.last_mut() {
+        Some((n, s)) if *s == style => *n += text.len(),
+        _ => p.runs.push((text.len(), style)),
+    }
+}
+
+/// A cell's style from its colors (no background is the default one) and flags.
+fn style(
+    mut fg: Hsla,
+    mut bg: Option<Hsla>,
+    flags: Flags,
+    selected: bool,
+    cursor: bool,
     focused: bool,
     t: &Theme,
-) -> Vec<(String, Vec<TextRun>)> {
+) -> Style {
+    if flags.contains(Flags::INVERSE) {
+        (fg, bg) = (bg.unwrap_or(t.panel), Some(fg));
+    }
+    if flags.contains(Flags::DIM) {
+        fg = fg.opacity(0.7);
+    }
+    if flags.contains(Flags::HIDDEN) {
+        fg = transparent_black();
+    }
+    let mut underline = flags.intersects(Flags::ALL_UNDERLINES);
+    if selected {
+        bg = Some(t.text_selection);
+    }
+    if cursor {
+        if focused {
+            (fg, bg) = (bg.unwrap_or(t.panel), Some(t.fg));
+        } else {
+            underline = true;
+        }
+    }
+    Style {
+        fg,
+        bg,
+        bold: flags.contains(Flags::BOLD),
+        italic: flags.contains(Flags::ITALIC),
+        underline,
+        strike: flags.contains(Flags::STRIKEOUT),
+    }
+}
+
+/// The screen's rows.
+#[cfg(not(feature = "ghostty"))]
+fn rows(term: &mut Term<Listener>, focused: bool, t: &Theme) -> Vec<Vec<Piece>> {
     let c = term.renderable_content();
     let offset = c.display_offset as i32;
-    let mut rows = vec![(String::new(), Vec::<(usize, Style)>::new()); term.screen_lines()];
+    let mut rows: Vec<Vec<Piece>> = (0..term.screen_lines()).map(|_| Vec::new()).collect();
     let cursor = (c.cursor.shape != CursorShape::Hidden).then_some(c.cursor.point);
+    let mut text = String::new();
     for cell in c.display_iter {
         let flags = cell.flags;
-        let Some((text, runs)) = rows.get_mut((cell.point.line.0 + offset) as usize) else {
+        let Some(row) = rows.get_mut((cell.point.line.0 + offset) as usize) else {
             continue;
         };
         if flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
-        let mut fg = color(cell.fg, c.colors, t).unwrap_or(t.fg);
-        let mut bg = color(cell.bg, c.colors, t);
-        if flags.contains(Flags::INVERSE) {
-            (fg, bg) = (bg.unwrap_or(t.panel), Some(fg));
-        }
-        if flags.contains(Flags::DIM) {
-            fg = fg.opacity(0.7);
-        }
-        if flags.contains(Flags::HIDDEN) {
-            fg = transparent_black();
-        }
-        let mut underline = flags.intersects(Flags::ALL_UNDERLINES);
-        if c.selection.is_some_and(|s| s.contains(cell.point)) {
-            bg = Some(t.text_selection);
-        }
-        if cursor == Some(cell.point) {
-            if focused {
-                (fg, bg) = (bg.unwrap_or(t.panel), Some(t.fg));
-            } else {
-                underline = true;
-            }
-        }
-        let style = Style {
-            fg,
-            bg,
-            bold: flags.contains(Flags::BOLD),
-            italic: flags.contains(Flags::ITALIC),
-            underline,
-            strike: flags.contains(Flags::STRIKEOUT),
-        };
-        let start = text.len();
+        let fg = color(cell.fg, c.colors, t).unwrap_or(t.fg);
+        let bg = color(cell.bg, c.colors, t);
+        let selected = c.selection.is_some_and(|s| s.contains(cell.point));
+        let at_cursor = cursor == Some(cell.point);
+        let style = style(fg, bg, flags, selected, at_cursor, focused, t);
+        text.clear();
         text.push(if flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
             ' '
         } else {
             cell.c
         });
         text.extend(cell.zerowidth().into_iter().flatten());
-        let len = text.len() - start;
-        match runs.last_mut() {
-            Some((n, s)) if *s == style => *n += len,
-            _ => runs.push((len, style)),
-        }
+        push(row, cell.point.column.0, &text, style, false);
     }
-    let run = |(len, s): (usize, Style)| TextRun {
+    rows
+}
+
+/// The screen's rows, wide characters at their columns.
+#[cfg(feature = "ghostty")]
+fn rows(term: &mut Emulator, focused: bool, t: &Theme) -> Vec<Vec<Piece>> {
+    use super::session::rgb as to_rgb;
+    let ansi = std::array::from_fn(|i| to_rgb(t.ansi[i]));
+    term.set_colors(ansi, to_rgb(t.fg), to_rgb(t.panel));
+    let mut rows: Vec<Vec<Piece>> = Vec::new();
+    term.screen(|c| {
+        let fg = c.fg.map_or(t.fg, hsla);
+        let style = style(
+            fg,
+            c.bg.map(hsla),
+            c.flags,
+            c.selected,
+            c.cursor,
+            focused,
+            t,
+        );
+        if rows.len() <= c.row {
+            rows.resize_with(c.row + 1, Vec::new);
+        }
+        push(&mut rows[c.row], c.col, c.text, style, c.wide);
+    });
+    rows
+}
+
+fn run((len, s): (usize, Style), font: &Font) -> TextRun {
+    TextRun {
         len,
         font: Font {
             weight: if s.bold {
@@ -329,10 +443,7 @@ fn rows(
             thickness: px(1.),
             color: Some(s.fg),
         }),
-    };
-    rows.into_iter()
-        .map(|(text, runs)| (text, runs.into_iter().map(run).collect()))
-        .collect()
+    }
 }
 
 fn hsla(c: Rgb) -> Hsla {
@@ -340,6 +451,7 @@ fn hsla(c: Rgb) -> Hsla {
 }
 
 /// None is the default background.
+#[cfg(not(feature = "ghostty"))]
 fn color(c: Color, colors: &Colors, t: &Theme) -> Option<Hsla> {
     let i = match c {
         Color::Spec(c) => return Some(hsla(c)),

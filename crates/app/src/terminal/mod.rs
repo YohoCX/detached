@@ -1,6 +1,8 @@
 //! The Terminal app: tabs of shells, each started in the current repo; a shell dragged out of it
 //! becomes a tab of its own.
 
+#[cfg(feature = "ghostty")]
+mod ghostty;
 mod keys;
 mod session;
 mod view;
