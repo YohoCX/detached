@@ -1,7 +1,6 @@
 //! The chat page: what is set for the session, the conversation, and the box to write in.
 
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use detached_core::agent::Limit;
 use detached_core::api;
@@ -17,9 +16,10 @@ use gpui_kit::{
 };
 
 use detached_core::git::snapshot::Skip;
-use detached_core::types::{FileChange, Side};
+use detached_core::types::Side;
 
 use super::session::{Answer, Back, Item, Session};
+use super::{now, span};
 use crate::blocking;
 use crate::store::{DiffDoc, Doc, Location, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
@@ -233,7 +233,7 @@ impl ChatView {
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let s = self.session.read(cx);
-        let name = Store::global(cx).read(cx).name_of(&s.repo).to_string();
+        let name = super::label(&s.repo, cx);
         let session = self.session.clone();
         div()
             .flex()
@@ -654,12 +654,7 @@ impl ChatView {
                 line(label, icon, format!("Blocked {tool}"), reason.clone()).into_any_element()
             }
             Item::Ask { .. } => self.ask(i, item, cx),
-            Item::Changes {
-                start,
-                end,
-                files,
-                back,
-            } => self.changes(i, start, end, files, back, cx),
+            Item::Changes { .. } => self.changes(i, item, cx),
             Item::Note(text) => row(text.clone())
                 .text_size(text::SMALL)
                 .text_color(t.warning)
@@ -873,26 +868,31 @@ impl ChatView {
     }
 
     /// What a turn changed, each file opening its diff, and going back to before it.
-    fn changes(
-        &self,
-        i: usize,
-        start: &str,
-        end: &str,
-        files: &[FileChange],
-        back: &Back,
-        cx: &App,
-    ) -> AnyElement {
+    fn changes(&self, i: usize, item: &Item, cx: &App) -> AnyElement {
+        let Item::Changes {
+            repo,
+            start,
+            end,
+            files,
+            back,
+        } = item
+        else {
+            unreachable!()
+        };
         let t = theme(cx);
         let busy = self.session.read(cx).busy;
         let n = files.len();
-        let title = match n {
+        let mut title = match n {
             1 => "1 file changed in this turn".to_string(),
             _ => format!("{n} files changed in this turn"),
         };
-        let repo = self.session.read(cx).repo.clone();
+        // A folder's chat says which of its repos.
+        if self.session.read(cx).repo != *repo {
+            title += &format!(" in {}", Store::global(cx).read(cx).name_of(repo));
+        }
         let rows = files.iter().enumerate().map(|(j, f)| {
             let doc = Doc::Diff(DiffDoc {
-                repo: repo.clone(),
+                repo: repo.to_string(),
                 path: f.path.clone(),
                 orig_path: f.orig_path.clone(),
                 left: Side::Rev { rev: start.into() },
@@ -1277,27 +1277,10 @@ impl Render for ChatView {
     }
 }
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
 fn seconds(ms: u64) -> String {
     match ms {
         0..60_000 => format!("{:.1} s", ms as f64 / 1000.),
         _ => format!("{} min {} s", ms / 60_000, ms % 60_000 / 1000),
-    }
-}
-
-/// A span of time, coarse: "13 min", "2 h 5 min", "3 d 4 h".
-fn span(ms: u64) -> String {
-    let m = ms / 60_000;
-    match m {
-        0 => "under a minute".into(),
-        1..60 => format!("{m} min"),
-        60..1440 => format!("{} h {} min", m / 60, m % 60),
-        _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
     }
 }
 

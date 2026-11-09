@@ -310,8 +310,9 @@ async function command(c: any) {
       if (asked === "auto" && models.find((m) => m.value === c.model)?.auto) await q?.setPermissionMode("auto");
       return;
     case "sessions": {
-      const all = await listSessions({ dir: c.cwd, limit: 50 });
-      const sessions = all.map((s: any) => ({ id: s.sessionId, title: s.customTitle ?? s.summary, modified: s.lastModified }));
+      // No folder lists every project's, for the Chats app.
+      const all = await listSessions(c.cwd ? { dir: c.cwd, limit: 50 } : { limit: 300 });
+      const sessions = all.map((s: any) => ({ id: s.sessionId, title: s.customTitle ?? s.summary, modified: s.lastModified, cwd: s.cwd ?? null }));
       return emit({ type: "sessions", sessions });
     }
     case "info":

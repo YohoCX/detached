@@ -462,3 +462,50 @@ fn a_repo_whose_settings_run_nothing_loads_them_unasked(cx: &mut TestAppContext)
     wait_for_item(cx, "project settings on");
     assert!(cx.find("chat.trust").is_none());
 }
+
+#[gpui_kit::test]
+fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo().display().to_string();
+        let past = serde_json::json!([
+            {"id": "old1", "title": "Fix the build", "modified": 1, "cwd": solo},
+            {"id": "far", "title": "Elsewhere", "modified": 2, "cwd": "/not/in/the/workspace"},
+        ]);
+        let beside = agent::sidecar(&sb.state.config_dir).with_file_name("sessions.json");
+        std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+        std::fs::write(beside, past.to_string()).unwrap();
+    });
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| cx.find(("chats.past", 0usize)).is_some());
+    assert_eq!(
+        label(cx, ("chats.past", 0usize)).as_deref(),
+        Some("Fix the build")
+    );
+    assert!(
+        cx.find(("chats.past", 1usize)).is_none(),
+        "outside the workspace"
+    );
+    assert_eq!(label(cx, ("chats.open", 0usize)).as_deref(), Some("solo"));
+    cx.click(("chats.past", 0usize));
+    wait_for_item(cx, "fixed");
+}
+
+#[gpui_kit::test]
+fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let group = cx.sb.ws().join("group");
+    let repo = group.display().to_string();
+    cx.store(|s, cx| s.show(Doc::Chat { repo }, cx));
+    settle(cx);
+    assert!(label(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
+    say(cx, "edit both");
+    let api = index_of(cx, "in this turn in group/api");
+    index_of(cx, "in this turn in group/web");
+    cx.click(("chat.back", api));
+    wait_until(cx, |cx| items(cx)[api].ends_with("planned"));
+    cx.click(("chat.back.confirm", api));
+    wait_until(cx, |cx| items(cx)[api].ends_with("restored"));
+    let readme = std::fs::read_to_string(group.join("api/README.md")).unwrap();
+    assert_ne!(readme, "agent\n", "back in api");
+    assert!(group.join("web/by-agent.txt").exists(), "web stays");
+}

@@ -12,7 +12,7 @@ use detached_core::trust::{self, Project};
 use detached_core::types::{FileChange, Side};
 use futures::StreamExt;
 use futures::channel::mpsc;
-use gpui_kit::{AppContext, Context, Entity, Task};
+use gpui_kit::{App, AppContext, Context, Entity, Task};
 use serde::{Deserialize, Serialize};
 
 use crate::blocking;
@@ -95,8 +95,9 @@ pub enum Item {
         picked: Vec<Vec<usize>>,
         answer: Answer,
     },
-    /// What a turn changed in the worktree, between two snapshots.
+    /// What a turn changed in one repo's worktree, between two snapshots.
     Changes {
+        repo: String,
         start: String,
         end: String,
         files: Vec<FileChange>,
@@ -130,8 +131,8 @@ pub struct Session {
     /// What waits for the sidecar to start.
     queued: Vec<Command>,
     starting: bool,
-    /// The worktree's tree when the running turn began.
-    turn_start: Option<String>,
+    /// Each repo's tree when the running turn began.
+    turn_start: Option<Vec<(String, String)>>,
     /// The repo's own settings, for the user to trust.
     pub review: Option<Project>,
     /// What the live session loaded of them; None when it runs on the user's alone.
@@ -196,16 +197,21 @@ impl Session {
     fn begin(
         &mut self,
         text: String,
-        start: Result<String, String>,
+        start: Vec<(String, Result<String, String>)>,
         check: Option<Check>,
         cx: &mut Context<Self>,
     ) {
-        match start {
-            Ok(tree) => self.turn_start = Some(tree),
-            Err(e) => self
-                .items
-                .push(Item::Note(format!("No snapshot for this turn: {e}"))),
+        let mut trees = vec![];
+        for (repo, tree) in start {
+            match tree {
+                Ok(tree) => trees.push((repo, tree)),
+                Err(e) => self.items.push(Item::Note(format!(
+                    "No snapshot of {} for this turn: {e}",
+                    crate::util::base_name(&repo)
+                ))),
+            }
         }
+        self.turn_start = Some(trees);
         let trusted = check.and_then(|c| self.saw(c));
         if !self.live {
             self.live = true;
@@ -315,11 +321,30 @@ impl Session {
         cx.notify();
     }
 
-    fn snapshot(&self, cx: &mut Context<Self>) -> Task<Result<String, String>> {
+    /// The repos this chat works in: its own, or every one inside its folder.
+    pub fn repos(&self, cx: &App) -> Vec<String> {
+        let s = Store::global(cx).read(cx);
+        if s.repos.iter().any(|r| r.path == self.repo) {
+            return vec![self.repo.clone()];
+        }
+        let folder = std::path::Path::new(&self.repo);
+        s.repos
+            .iter()
+            .filter(|r| std::path::Path::new(&r.path).starts_with(folder))
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    fn snapshot(&self, cx: &mut Context<Self>) -> Task<Vec<(String, Result<String, String>)>> {
         let core = Store::global(cx).read(cx).core().clone();
-        let repo = self.repo.clone();
+        let repos = self.repos(cx);
         blocking::run(cx, move || {
-            api::snapshot(&core, &repo).map_err(|e| e.to_string())
+            let snap = |r: &String| api::snapshot(&core, r).map_err(|e| e.to_string());
+            repos
+                .into_iter()
+                .map(|r| (snap(&r), r))
+                .map(|(t, r)| (r, t))
+                .collect()
         })
     }
 
@@ -334,20 +359,25 @@ impl Session {
 
     /// Snapshots the end of the turn and lists what it changed.
     fn end_turn(&mut self, cx: &mut Context<Self>) {
-        let Some(start) = self.turn_start.take() else {
+        let Some(starts) = self.turn_start.take() else {
             return;
         };
         let core = Store::global(cx).read(cx).core().clone();
-        let repo = self.repo.clone();
         let check = self.check(cx);
         let found = blocking::run(cx, move || {
-            let end = api::snapshot(&core, &repo)?;
-            let (from, to) = (
-                Side::Rev { rev: start.clone() },
-                Side::Rev { rev: end.clone() },
-            );
-            let files = api::list_changes(&core, &repo, &from, &to)?;
-            Ok::<_, detached_core::error::Error>((start, end, files))
+            let changes = |repo: &str, start: String| {
+                let end = api::snapshot(&core, repo)?;
+                let (from, to) = (
+                    Side::Rev { rev: start.clone() },
+                    Side::Rev { rev: end.clone() },
+                );
+                let files = api::list_changes(&core, repo, &from, &to)?;
+                Ok::<_, detached_core::error::Error>((start, end, files))
+            };
+            starts
+                .into_iter()
+                .map(|(repo, start)| (changes(&repo, start), repo))
+                .collect::<Vec<_>>()
         });
         self.work(cx, async move |this, cx| {
             let (found, check) = (found.await, check.await);
@@ -355,25 +385,29 @@ impl Session {
                 if let Some(c) = check {
                     s.saw(c);
                 }
-                match found {
-                    Ok((_, _, files)) if files.is_empty() => {}
-                    Ok((start, end, files)) => {
-                        // Above the turn's summary, which came first.
-                        let at = match s.items.last() {
-                            Some(Item::End { .. }) => s.items.len() - 1,
-                            _ => s.items.len(),
-                        };
-                        let changes = Item::Changes {
-                            start,
-                            end,
-                            files,
-                            back: Back::Idle,
-                        };
-                        s.items.insert(at, changes);
+                for (found, repo) in found {
+                    match found {
+                        Ok((_, _, files)) if files.is_empty() => {}
+                        Ok((start, end, files)) => {
+                            // Above the turn's summary, which came first.
+                            let at = match s.items.last() {
+                                Some(Item::End { .. }) => s.items.len() - 1,
+                                _ => s.items.len(),
+                            };
+                            let changes = Item::Changes {
+                                repo,
+                                start,
+                                end,
+                                files,
+                                back: Back::Idle,
+                            };
+                            s.items.insert(at, changes);
+                        }
+                        Err(e) => s.items.push(Item::Note(format!(
+                            "No snapshot of {} after the turn: {e}",
+                            crate::util::base_name(&repo)
+                        ))),
                     }
-                    Err(e) => s
-                        .items
-                        .push(Item::Note(format!("No snapshot after the turn: {e}"))),
                 }
                 cx.notify();
             })
@@ -440,12 +474,12 @@ impl Session {
         + 'static,
         cx: &mut Context<Self>,
     ) {
-        let Some(Item::Changes { back, .. }) = self.items.get_mut(item) else {
+        let Some(Item::Changes { back, repo, .. }) = self.items.get_mut(item) else {
             return;
         };
         let was = std::mem::replace(back, Back::Working);
+        let repo = repo.clone();
         let core = Store::global(cx).read(cx).core().clone();
-        let repo = self.repo.clone();
         let done = blocking::run(cx, move || step(&core, &repo).map_err(|e| e.to_string()));
         self.work(cx, async move |this, cx| {
             let done = done.await;
@@ -458,8 +492,8 @@ impl Session {
                 if let Some(Item::Changes { back: b, .. }) = s.items.get_mut(item) {
                     *b = back;
                 }
-                if restored {
-                    let repo = s.repo.clone();
+                if restored && let Some(Item::Changes { repo, .. }) = s.items.get(item) {
+                    let repo = repo.clone();
                     Store::global(cx).update(cx, |st, cx| st.refresh(repo, cx).detach());
                 }
                 cx.notify();
@@ -790,8 +824,9 @@ impl Session {
                 self.busy = false;
                 self.ask_gone(None);
                 self.end_turn(cx);
-                let repo = self.repo.clone();
-                Store::global(cx).update(cx, |s, cx| s.refresh(repo, cx).detach());
+                for repo in self.repos(cx) {
+                    Store::global(cx).update(cx, |s, cx| s.refresh(repo, cx).detach());
+                }
             }
             Event::Sessions { sessions } => self.past = Some(sessions),
             Event::History { id, events } => {

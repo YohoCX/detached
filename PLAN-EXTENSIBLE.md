@@ -205,6 +205,19 @@ Done, 2026-11-08:
   after a restart, the preview tab, F7 on two diffs.
 - The kit gives an empty center no tab group, so nothing can be dropped there.
 
+Added 2026-11-09, on the owner's look:
+- Repositories draws the same tab bar as every app, and shares the left zone with Chats, so it moves
+  like the others. Tooltips name an app's or a button's chord; Cmd+B, Cmd+J and Cmd+Alt+B open and
+  close the zones.
+- A shell dragged out of the Terminal app onto the center or any tab bar becomes a tab of its own
+  (`Doc::Terminal`); closing the tab ends it, and after a restart it comes back as a new shell in
+  its folder. A lone document closes too, to an empty center, through `DockArea::remove_panel`: the
+  kit keeps the last tab of a zone from its own close.
+- Chats lists the chats open in this run, then past conversations in the workspace's folders by
+  repo and folder (the sidecar's `sessions` with no folder lists every project's).
+- A chat runs on a folder as well as a repo ("Chat here" on a folder): each turn snapshots every
+  repo inside, and its changes and going back come per repo.
+
 ### 4. Plugins from a folder
 
 - Manifest with themes and TUI tabs through the terminal.

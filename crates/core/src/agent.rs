@@ -84,7 +84,7 @@ pub enum Command {
     StopTask {
         id: String,
     },
-    /// Needs no `Start`.
+    /// Needs no `Start`; an empty `cwd` lists every folder's.
     Sessions {
         cwd: String,
     },
@@ -157,6 +157,8 @@ pub struct Past {
     pub title: String,
     /// Milliseconds since the epoch.
     pub modified: u64,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

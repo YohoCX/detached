@@ -29,6 +29,7 @@ const VERSION: usize = 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Repos,
+    Chats,
     Changes,
     Project,
     Mrs,
@@ -38,8 +39,9 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Repos,
+        Kind::Chats,
         Kind::Changes,
         Kind::Project,
         Kind::Mrs,
@@ -52,6 +54,7 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Repos => "repos",
+            Kind::Chats => "chats",
             Kind::Changes => "changes",
             Kind::Project => "project",
             Kind::Mrs => "mrs",
@@ -64,6 +67,7 @@ impl Kind {
     pub fn title(self) -> &'static str {
         match self {
             Kind::Repos => "Repositories",
+            Kind::Chats => "Chats",
             Kind::Changes => "Changes",
             Kind::Project => "Project",
             Kind::Mrs => "Merge Requests",
@@ -77,6 +81,7 @@ impl Kind {
     pub fn id(self) -> &'static str {
         match self {
             Kind::Repos => "tab.repos",
+            Kind::Chats => "tab.chats",
             Kind::Changes => "tool.Changes",
             Kind::Project => "tool.Project",
             Kind::Mrs => "tool.MRs",
@@ -94,7 +99,16 @@ impl Kind {
             Kind::Log => Some("panel.log"),
             Kind::Pipelines => Some("panel.pipelines"),
             Kind::Terminal => Some("panel.terminal"),
-            Kind::Repos | Kind::Changes => None,
+            Kind::Repos | Kind::Chats | Kind::Changes => None,
+        }
+    }
+
+    /// Where it opens when a layout does not place it.
+    fn home(self) -> (DockPlacement, f32) {
+        match self {
+            Kind::Repos | Kind::Chats => (DockPlacement::Left, 280.),
+            Kind::Changes | Kind::Project | Kind::Mrs => (DockPlacement::Right, 300.),
+            Kind::Log | Kind::Pipelines | Kind::Terminal => (DockPlacement::Bottom, 280.),
         }
     }
 
@@ -248,6 +262,17 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
         if !matches!(loaded, Some(Ok(()))) {
             default_layout(&mut area, window, cx);
         }
+        // An app newer than the saved layout goes where it would by default, behind the tab shown.
+        let shown = active(&area);
+        for kind in Kind::ALL {
+            if find(&area, kind, cx).is_none() {
+                let (p, size) = kind.home();
+                area.add_panel(Tab::new(kind, cx), p, Some(px(size)), window, cx);
+            }
+        }
+        for id in shown {
+            area.select_panel(id, window, cx);
+        }
         area
     });
     cx.set_global(Zones(area.downgrade()));
@@ -267,27 +292,19 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
 }
 
 fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
-    let tabs = |kinds: &[Kind], cx: &mut Context<DockArea>| {
-        kinds
-            .iter()
-            .fold(DockLayout::tabs(), |l, k| l.panel(Tab::new(*k, cx)))
-    };
-    for (placement, kinds, size) in [
-        (DockPlacement::Left, &[Kind::Repos][..], 280.),
-        (
-            DockPlacement::Right,
-            &[Kind::Changes, Kind::Project, Kind::Mrs],
-            300.,
-        ),
-        (
-            DockPlacement::Bottom,
-            &[Kind::Log, Kind::Pipelines, Kind::Terminal],
-            280.,
-        ),
+    for p in [
+        DockPlacement::Left,
+        DockPlacement::Right,
+        DockPlacement::Bottom,
     ] {
-        let layout = tabs(kinds, cx);
-        area.set_dock(placement, layout, window, cx);
-        area.set_dock_size(placement, px(size), window, cx);
+        let kinds = Kind::ALL.into_iter().filter(|k| k.home().0 == p);
+        let size = Kind::ALL
+            .iter()
+            .find(|k| k.home().0 == p)
+            .map_or(280., |k| k.home().1);
+        let layout = kinds.fold(DockLayout::tabs(), |l, k| l.panel(Tab::new(k, cx)));
+        area.set_dock(p, layout, window, cx);
+        area.set_dock_size(p, px(size), window, cx);
     }
     area.toggle_dock(DockPlacement::Bottom, window, cx);
 }
@@ -445,21 +462,32 @@ fn find(area: &DockArea, kind: Kind, cx: &App) -> Option<(DockPlacement, PanelId
 
 /// The app on screen in each open zone.
 fn shown(area: &DockArea, cx: &App) -> Vec<Kind> {
+    let open = |p: &DockPlacement| *p == DockPlacement::Center || area.is_dock_open(*p);
+    let ids = placements()
+        .into_iter()
+        .filter(open)
+        .flat_map(|p| tabs_shown(area, p));
+    ids.filter_map(|id| kind_of(area, id, cx)).collect()
+}
+
+/// The tab shown in each group, open zone or not.
+fn active(area: &DockArea) -> Vec<PanelId> {
     placements()
         .into_iter()
-        .filter(|p| *p == DockPlacement::Center || area.is_dock_open(*p))
-        .filter_map(|p| area.layout(p))
-        .flat_map(|tree| {
-            let mut active = vec![];
-            tree.root().walk(&mut |n: &PaneNode| {
-                if let PaneRef::Tabs { panels, active_ix } = n.kind() {
-                    active.extend(panels.get(active_ix).copied());
-                }
-            });
-            active
-        })
-        .filter_map(|id| kind_of(area, id, cx))
+        .flat_map(|p| tabs_shown(area, p))
         .collect()
+}
+
+fn tabs_shown(area: &DockArea, p: DockPlacement) -> Vec<PanelId> {
+    let mut active = vec![];
+    if let Some(tree) = area.layout(p) {
+        tree.root().walk(&mut |n: &PaneNode| {
+            if let PaneRef::Tabs { panels, active_ix } = n.kind() {
+                active.extend(panels.get(active_ix).copied());
+            }
+        });
+    }
+    active
 }
 
 fn set_open(

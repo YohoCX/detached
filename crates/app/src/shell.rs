@@ -49,6 +49,7 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
 pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
     match kind {
         Kind::Repos => crate::repos::sidebar(cx),
+        Kind::Chats => crate::chat::list(cx),
         Kind::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
         Kind::Project => cx.new(|cx| files::Tree::new(window, cx)).into(),
         Kind::Mrs => forge::mrs(window, cx),

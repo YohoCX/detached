@@ -84,9 +84,7 @@ impl DocTab {
             Doc::Diff(d) => format!("{} (diff)", base_name(&d.path)).into(),
             Doc::Mr { number, .. } => format!("!{number}").into(),
             Doc::Job { name, .. } => name.clone().into(),
-            Doc::Chat { repo } => {
-                format!("Claude · {}", Store::global(cx).read(cx).name_of(repo)).into()
-            }
+            Doc::Chat { repo } => format!("Claude · {}", chat::label(repo, cx)).into(),
             Doc::Terminal { .. } => match &self.view {
                 Some(View::Terminal(s)) => s.read(cx).title().to_string().into(),
                 _ => "Terminal".into(),

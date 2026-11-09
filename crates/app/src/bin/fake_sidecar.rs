@@ -95,6 +95,12 @@ fn main() {
                     std::fs::write(dir.join("made-by-agent.txt"), "x\n").unwrap();
                     turn_end(true);
                 }
+                "edit both" => {
+                    let dir = std::path::Path::new(&cwd);
+                    std::fs::write(dir.join("api/README.md"), "agent\n").unwrap();
+                    std::fs::write(dir.join("web/by-agent.txt"), "x\n").unwrap();
+                    turn_end(true);
+                }
                 "settings" => {
                     let on = if project { "on" } else { "off" };
                     emit(json!({"type": "text", "text": format!("project settings {on}")}));
@@ -139,6 +145,15 @@ fn main() {
                 let model = c["model"].as_str().unwrap();
                 let mode = if model == "old" { "default" } else { "auto" };
                 emit(json!({"type": "mode", "mode": mode}));
+            }
+            "sessions" if c["cwd"] == "" => {
+                // A test lists every folder's past conversations in a file beside the sidecar.
+                let file = std::env::current_exe()
+                    .unwrap()
+                    .with_file_name("sessions.json");
+                let past: Value = std::fs::read_to_string(file)
+                    .map_or(json!([]), |s| serde_json::from_str(&s).unwrap());
+                emit(json!({"type": "sessions", "sessions": past}));
             }
             "sessions" => {
                 let past = [json!({"id": "old1", "title": "Fix the build", "modified": 1})];
