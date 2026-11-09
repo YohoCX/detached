@@ -71,45 +71,39 @@ pub fn when(t: i64) -> String {
     )
 }
 
-/// `Nm`, `Nh` or `Nd` before `now`; the date after 30 days.
-pub fn ago(t: i64, now: i64) -> String {
-    let s = (now - t) as f64;
-    if s < 3600. {
-        format!("{}m", (s / 60.).round().max(1.))
-    } else if s < 86400. {
-        format!("{}h", (s / 3600.).round())
-    } else if s < MONTH {
-        format!("{}d", (s / 86400.).round())
-    } else {
-        when(t)
-            .rsplit_once(", ")
-            .map_or_else(String::new, |d| d.0.into())
-    }
-}
-
-/// `ago` in a sentence: "3d ago", or the bare date.
-pub fn ago_text(t: i64, now: i64) -> String {
-    let a = ago(t, now);
-    if ((now - t) as f64) < MONTH {
-        format!("{a} ago")
-    } else {
-        a
-    }
-}
-
-const MONTH: f64 = 30. * 86400.;
-
-/// An age that fits a narrow slot, from seconds: "now", "5m", "3h", "12d", "4w", "3mo".
-pub fn age(s: i64) -> String {
+/// "now", "5m", "3h" or "12d"; None from 30 days on.
+fn short(s: i64) -> Option<String> {
     let m = s / 60;
-    match m {
+    Some(match m {
         ..1 => "now".into(),
         1..60 => format!("{m}m"),
         60..1440 => format!("{}h", m / 60),
-        1440..10_080 => format!("{}d", m / 1440),
-        10_080..43_200 => format!("{}w", m / 10_080),
-        _ => format!("{}mo", m / 43_200),
+        1440..43_200 => format!("{}d", m / 1440),
+        _ => return None,
+    })
+}
+
+/// `short` before `now`, else the date.
+pub fn ago(t: i64, now: i64) -> String {
+    short(now - t).unwrap_or_else(|| {
+        when(t)
+            .rsplit_once(", ")
+            .map_or_else(String::new, |d| d.0.into())
+    })
+}
+
+/// `ago` in a sentence: "3d ago", "just now", or the bare date.
+pub fn ago_text(t: i64, now: i64) -> String {
+    match short(now - t) {
+        Some(a) if a == "now" => "just now".into(),
+        Some(a) => format!("{a} ago"),
+        None => ago(t, now),
     }
+}
+
+/// `short` for a slot too narrow for a date: months from 30 days on.
+pub fn age(s: i64) -> String {
+    short(s).unwrap_or_else(|| format!("{}mo", s / 2_592_000))
 }
 
 /// A span of seconds, coarse: "13 min", "2 h 5 min", "3 d 4 h".
@@ -298,8 +292,11 @@ mod tests {
     #[test]
     fn counts_minutes_hours_and_days_then_shows_the_date() {
         let now = 1_800_000_000;
-        let got = [10, 90, 7200, 3 * 86400, 31 * 86400].map(|s| ago(now - s, now));
-        assert_eq!(got[..4], ["1m", "2m", "2h", "3d"]);
+        let got = [10, 90, 7200, 12 * 86400, 31 * 86400].map(|s| ago(now - s, now));
+        assert_eq!(got[..4], ["now", "1m", "2h", "12d"]);
+        assert_eq!(age(12 * 86400), "12d");
+        assert_eq!(age(65 * 86400), "2mo");
+        assert_eq!(ago_text(now - 10, now), "just now");
         assert!(got[4].ends_with(", 2026"), "{}", got[4]);
         assert_eq!(ago_text(now - 7200, now), "2h ago");
         assert_eq!(
