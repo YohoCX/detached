@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
+use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
@@ -19,6 +20,14 @@ fn cmd_9_the_tabs_and_the_zone_button_open_and_switch_the_bottom_zone(cx: &mut T
     let cx = &mut open_app(cx);
     // A closed bottom zone keeps its tabs as a strip, none of them on.
     assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
+    let (tab, dock) = (cx.find("bottom.Log").unwrap(), cx.find("dock").unwrap());
+    // The kit keeps 29 px of a closed bottom zone.
+    let strip = dock.bounds().bottom() - GAP - gpui_kit::px(29.);
+    let b = tab.bounds();
+    assert!(
+        b.top() >= strip && b.bottom() <= dock.bounds().bottom() - GAP,
+        "{b:?} fits the strip"
+    );
 
     cx.press("secondary-9");
     assert!(cx.find("bottom.Log").unwrap().visible());

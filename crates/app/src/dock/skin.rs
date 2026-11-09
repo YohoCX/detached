@@ -59,7 +59,7 @@ impl DockAreaRenderer for Skin {
     ) -> AnyElement {
         let p = dock.placement();
         let (key, resizing, area) = (grip(p), self.resizing.clone(), self.area.clone());
-        let size = dock.size();
+        let (size, open) = (dock.size(), dock.is_open());
         let t = theme(cx);
         let handle = div()
             .id(key)
@@ -131,7 +131,9 @@ impl DockAreaRenderer for Skin {
             .map(|d| match p {
                 DockPlacement::Left => d.pr(GAP),
                 DockPlacement::Right => d.pl(GAP),
-                _ => d.pt(GAP),
+                // Closed, the bottom zone is the kit's 29 px strip: a row of tabs, no room to pad.
+                _ if open => d.pt(GAP),
+                _ => d,
             })
             .child(content)
             .child(handle)
@@ -206,6 +208,9 @@ impl TabGroupRenderer for Group {
     fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
         let docs = labels(group, cx).iter().any(|l| l.doc.is_some());
         let id = ("group", group.node().as_u64() as usize);
+        if group.is_collapsed() {
+            return div().id(id).size_full();
+        }
         ui::panel(div().id(id), cx)
             .overflow_hidden()
             .when(docs, |f| f.bg(theme(cx).code))
@@ -224,7 +229,8 @@ impl TabGroupRenderer for Group {
             return Empty.into_any_element();
         }
         let t = theme(cx);
-        let active = (!group.is_collapsed()).then(|| group.active_ix());
+        let collapsed = group.is_collapsed();
+        let active = (!collapsed).then(|| group.active_ix());
         let count = group.panels().len();
         let ids: Vec<_> = group.panels().iter().map(|p| p.panel_id(cx)).collect();
         let tabs = labels.into_iter().enumerate().map(|(ix, l)| {
@@ -259,7 +265,7 @@ impl TabGroupRenderer for Group {
                 .gap(px(4.))
                 .pl(px(10.))
                 .pr(px(if closable { 4. } else { 10. }))
-                .py(px(3.))
+                .py(px(if collapsed { 1. } else { 3. }))
                 .rounded(radius::ICON_BUTTON)
                 .when(preview, |d| d.italic())
                 .map(|d| match on {
@@ -304,9 +310,10 @@ impl TabGroupRenderer for Group {
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .px(px(8.))
-            .py(px(6.))
-            .when(active.is_some(), |d| d.border_b_1().border_color(t.line))
+            .map(|d| match collapsed {
+                true => d.h_full().px(px(2.)),
+                false => d.px(px(8.)).py(px(6.)).border_b_1().border_color(t.line),
+            })
             .children(tabs)
             .child(
                 div()
