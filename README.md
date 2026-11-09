@@ -58,8 +58,11 @@ new `.deb`.
 
 ## Development
 
-Needs Rust 1.90+ and git; on macOS the Xcode command line tools, on Linux the packages
-`.github/workflows/check.yml` installs.
+Needs Rust 1.90+, git and curl; on macOS the Xcode command line tools, on Linux the packages
+`.github/workflows/check.yml` installs. The terminal's emulator, libghostty-vt 1.0, is fetched by
+the build: prebuilt on macOS, built from Ghostty's source with [Zig](https://ziglang.org) 0.17 on
+`PATH` on Linux and Windows (a few minutes, once per target directory; `GHOSTTY_VT_DIR` keeps it
+in a directory of your choice).
 
 ```sh
 make app         # the app at release speed, on your real config directory
