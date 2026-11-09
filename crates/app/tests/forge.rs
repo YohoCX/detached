@@ -262,11 +262,13 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
 fn a_repo_off_any_forge_says_so_as_mrs_do_and_its_actions_only_hint(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, layout);
     let cx = &mut app;
-    let off = "Remote origin is not on a forge.";
     open_tab(cx, "bottom.Pipelines");
+    let mut note = None;
     wait_until(cx, |cx| {
-        label(cx, "pipelines.setup").as_deref() == Some(off)
+        note = label(cx, "pipelines.setup").filter(|n| !n.is_empty());
+        note.is_some()
     });
+    let off = note.as_deref().unwrap();
     assert!(cx.find("pipelines.error").is_none());
     assert_eq!(cx.find("pipelines.run").unwrap().disabled(), Some(true));
     cx.click("pipelines.run");

@@ -283,10 +283,9 @@ impl Render for Panel {
     }
 }
 
-/// None under half a megabyte, which reads as no reading.
+/// None without a reading; a small shell reads as 1 MB.
 fn mb(bytes: u64) -> Option<String> {
-    let mb = (bytes + (1 << 19)) >> 20;
-    (mb > 0).then(|| format!("{mb} MB"))
+    (bytes > 0).then(|| format!("{} MB", ((bytes + (1 << 19)) >> 20).max(1)))
 }
 
 /// Every keystroke into a focused terminal goes to its shell before the app's bindings see it.
@@ -343,8 +342,9 @@ fn intercept(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn hides_a_reading_under_half_a_megabyte() {
+    fn hides_no_reading_and_rounds_a_small_one_up() {
         assert_eq!(super::mb(0), None);
+        assert_eq!(super::mb(300 << 10).as_deref(), Some("1 MB"));
         assert_eq!(super::mb(3 << 20).as_deref(), Some("3 MB"));
     }
 }
