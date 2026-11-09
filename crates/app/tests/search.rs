@@ -333,11 +333,14 @@ fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContex
     cx.press(VCS);
     let vcs: Vec<String> = actions::ACTIONS
         .iter()
-        .filter(|a| a.group == Group::Vcs)
+        .filter(|a| a.group == Group::Vcs && a.id != "vcs.popup")
         .map(|a| a.title.into())
         .collect();
-    let titles: Vec<String> = rows(cx).into_iter().map(|r| r.0).collect();
+    let rows = rows(cx);
+    let titles: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
     assert_eq!(titles, vcs);
+    let pull = cx.update(|_, cx| keymap::chord_for("vcs.update", cx));
+    assert_eq!(rows[0], ("Update Project (Pull)".into(), pull));
 }
 
 #[gpui_kit::test]
@@ -356,6 +359,104 @@ fn the_search_pill_shows_its_chord_and_opens_search_everywhere(cx: &mut TestAppC
     assert_eq!(title(cx).as_deref(), Some("Search Everywhere"));
     let empty = cx.find("palette.empty").unwrap();
     assert_eq!(empty.label(), Some("Search files, branches and actions"));
+}
+
+#[gpui_kit::test]
+fn find_action_stays_inside_the_window_and_scrolls_its_list(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    cx.update(|w, _| w.resize(gpui_kit::size(px(1000.), px(500.))));
+    cx.press("secondary-shift-a");
+    let palette = cx.find("palette").unwrap().bounds();
+    let height = cx.update(|w, _| w.viewport_size().height);
+    assert!(palette.bottom() <= height, "{palette:?} in {height:?}");
+    cx.press("up");
+    let (last, _) = selected(cx).expect("the last row is drawn");
+    assert!(last > 10);
+    let row = cx.find(row(last)).unwrap().bounds();
+    assert!(row.bottom() <= palette.bottom(), "{row:?} in {palette:?}");
+}
+
+fn empty(cx: &mut VisualTestContext) -> Option<String> {
+    cx.find("palette.empty")
+        .and_then(|e| e.label().map(String::from))
+}
+
+#[gpui_kit::test]
+fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        layout(sb);
+        let at = |repo: &Path, path: &str| {
+            let repo = repo.display().to_string();
+            serde_json::json!({"repo": repo, "rev": null, "path": path, "line": null, "doc": null})
+        };
+        let recent = [
+            at(&sb.repo("lib"), "feature.txt"),
+            at(&sb.root().join("gone"), "gone.txt"),
+            at(&sb.repo("app"), "README.md"),
+        ];
+        let ui = serde_json::json!({ "nav.recent": recent });
+        std::fs::write(sb.state.config_dir.join("ui.json"), ui.to_string()).unwrap();
+    });
+    let repo = app.sb.repo("app").display().to_string();
+    app.store(|s, cx| s.set_current(Some(repo), cx));
+    let cx = &mut app;
+    let row = |path: &str, repo: &str| (path.to_string(), repo.to_string());
+
+    cx.press("secondary-shift-o");
+    assert_eq!(rows(cx), [row("README.md", "app")]);
+    cx.click("palette.all");
+    let both = [row("feature.txt", "lib"), row("README.md", "app")];
+    assert_eq!(rows(cx), both, "a repo no longer listed is dropped");
+    cx.click("palette.all");
+    cx.press("secondary-e");
+    assert_eq!(rows(cx), both);
+
+    cx.press("secondary-shift-o");
+    search(cx, "index", "src/index.ts");
+    cx.press("enter");
+    opened(cx, "export {}");
+    let saved = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
+    let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(saved["nav.recent"][0]["path"], "src/index.ts");
+
+    let solo = cx.sb.solo().display().to_string();
+    cx.store(|s, cx| s.set_current(Some(solo), cx));
+    cx.press("secondary-shift-o");
+    assert_eq!(empty(cx).as_deref(), Some("No recent files"));
+    cx.input("zzzz");
+    assert_eq!(empty(cx).as_deref(), Some("Nothing found"));
+}
+
+#[gpui_kit::test]
+fn the_empty_centers_hints_open_their_palettes_and_show_their_chords(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let cx = &mut app;
+    let hints = [
+        ("file.goto", "Go to File"),
+        ("search.everywhere", "Search Everywhere"),
+    ];
+    for (i, (id, palette)) in hints.into_iter().enumerate() {
+        let chord = cx.update(|_, cx| keymap::chord_for(id, cx));
+        assert!(!chord.is_empty());
+        assert_eq!(
+            cx.find(("dock.hint", i)).unwrap().description(),
+            Some(chord.as_str())
+        );
+        cx.click(("dock.hint", i));
+        assert_eq!(title(cx).as_deref(), Some(palette));
+        cx.press("escape");
+    }
+    cx.click(("dock.hint", 2usize));
+    assert!(find_open(cx));
+    cx.press("escape");
+
+    cx.press("secondary-shift-o");
+    search(cx, "readme", "README.md");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("markdown").is_some());
+    cx.click(("dock.hint", 0usize));
+    assert_eq!(title(cx), None, "a document over the hints takes the click");
 }
 
 /// The sandbox layout with `solo` current; returns its path.

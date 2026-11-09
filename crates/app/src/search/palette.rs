@@ -8,19 +8,18 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{
     App, AppContext, BoxShadow, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ListSizingBehavior, MouseMoveEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy,
+    MouseMoveEvent, ParentElement, Pixels, Point, Render, Role, ScrollStrategy,
     StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::{Mode, Search, close, open};
 use crate::actions::{self, Action, Group, Registration};
-use crate::nav::Nav;
 use crate::repos::{self, CheckoutTarget};
 use crate::store::{Location, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
-use crate::{blocking, files, keymap};
+use crate::{blocking, files, keymap, nav};
 
 #[derive(Clone)]
 enum Item {
@@ -62,6 +61,8 @@ fn hits(items: &[Item], query: &str) -> Vec<Row> {
         .collect()
 }
 
+const ROW: Pixels = px(30.);
+
 /// The query, repos, rev and limit quick open was last asked; None when it was not asked.
 type Ask = Option<(String, Vec<String>, Option<String>, u32)>;
 
@@ -73,6 +74,8 @@ pub struct Palette {
     files: Vec<Row>,
     asked: Ask,
     seq: u64,
+    /// Recent files, of the current repo in Go to File unless "All repositories".
+    recent: Vec<Item>,
     /// Search Everywhere's branches of the current repo, read once per open by `load`.
     branches: Vec<Item>,
     load: Option<Task<()>>,
@@ -115,6 +118,7 @@ impl Palette {
             files: vec![],
             asked: None,
             seq: 0,
+            recent: vec![],
             branches: vec![],
             load: None,
             scroll: UniformListScrollHandle::new(),
@@ -144,11 +148,15 @@ impl Palette {
         self.sync(window, cx);
     }
 
-    /// Follows the mode, `all`, the query and the current repo with the placeholder, quick open
-    /// and the branches.
+    /// Follows the mode, `all`, the query and the current repo with the placeholder, quick open,
+    /// the recent files and the branches.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = cx.global::<Search>().all;
+        let recent = nav::recent(cx);
         let store = Store::global(cx).read(cx);
+        let mine =
+            |l: &Location| all || self.mode != Some(Mode::File) || store.current() == Some(&l.repo);
+        self.recent = recent.into_iter().filter(mine).map(Item::File).collect();
         let placeholder = match (self.mode, all, store.current()) {
             (Some(Mode::File), false, Some(repo)) => format!("Files in {}", store.name_of(repo)),
             (Some(Mode::File), false, None) => "Files in no repository".into(),
@@ -264,18 +272,14 @@ impl Palette {
         let actions = |vcs: bool| {
             let all: Vec<Item> = actions::all(cx)
                 .into_iter()
-                .filter(|(a, _)| !vcs || a.group == Group::Vcs)
+                .filter(|(a, _)| !vcs || a.group == Group::Vcs && a.id != "vcs.popup")
                 .map(|(a, on)| Item::Action(a, on))
                 .collect();
             hits(&all, &query)
         };
         match self.mode {
             Some(Mode::File) if !query.is_empty() => self.files.clone(),
-            Some(Mode::File | Mode::Recent) => {
-                let recent = cx.try_global::<Nav>().map_or(&[][..], |n| &n.recent);
-                let recent: Vec<Item> = recent.iter().cloned().map(Item::File).collect();
-                hits(&recent, &query)
-            }
+            Some(Mode::File | Mode::Recent) => hits(&self.recent, &query),
             Some(Mode::Action) => actions(false),
             Some(Mode::Vcs) => actions(true),
             Some(Mode::Everywhere) if !query.is_empty() => {
@@ -349,7 +353,7 @@ impl Palette {
             .flex()
             .items_center()
             .gap(px(8.))
-            .h(px(30.))
+            .h(ROW)
             .px(px(10.))
             .rounded(radius::ITEM)
             .when(on, |r| r.bg(t.selected).shadow(vec![ring]))
@@ -450,15 +454,17 @@ impl Render for Palette {
                 range.map(|i| this.row(i, &rows[i], cx)).collect::<Vec<_>>()
             }),
         )
-        .with_sizing_behavior(ListSizingBehavior::Infer)
         .track_scroll(&self.scroll)
         .test_support()
+        .h(ROW * n as f32 + px(8.))
         .max_h(px(420.))
+        .min_h_0()
         .px(px(8.))
         .pb(px(8.));
-        let empty = match mode == Mode::Everywhere && self.input.read(cx).value().is_empty() {
-            true => "Search files, branches and actions",
-            false => "Nothing found",
+        let empty = match (mode, self.input.read(cx).value().is_empty()) {
+            (Mode::Everywhere, true) => "Search files, branches and actions",
+            (Mode::File | Mode::Recent, true) => "No recent files",
+            _ => "Nothing found",
         };
         let empty = div()
             .id("palette.empty")
@@ -476,6 +482,7 @@ impl Render for Palette {
             .aria_label(mode.title())
             .flex()
             .flex_col()
+            .max_h(window.viewport_size().height * 0.8)
             .capture_action(cx.listener(|_, _: &Escape, _, cx| {
                 close(cx);
                 cx.stop_propagation();

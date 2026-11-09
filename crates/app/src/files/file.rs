@@ -16,7 +16,6 @@ use super::goto::{Goto, GotoLine};
 use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
-use crate::nav::Nav;
 use crate::store::{Event, Location, Store};
 use crate::{blocking, ui, ui_state};
 
@@ -198,7 +197,7 @@ impl FileView {
                         line: Some(line),
                         ..this.loc.clone()
                     };
-                    cx.default_global::<Nav>().visit(&at);
+                    crate::nav::visit(cx, &at);
                 }
                 Goto::Back => this.code.update(cx, |c, cx| c.focus(window, cx)),
                 Goto::Closed => {}

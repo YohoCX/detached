@@ -1,8 +1,11 @@
 use gpui_kit::{App, Global};
 
 use crate::store::{Doc, Location, Store};
+use crate::ui_state;
 
-/// Back/forward over files, MR pages and job logs; recent files. In memory only.
+const RECENT: &str = "nav.recent";
+
+/// Back/forward over files, MR pages and job logs, in memory; recent files, kept in `ui_state`.
 #[derive(Default)]
 pub struct Nav {
     /// Files only, newest first, `line` dropped.
@@ -51,20 +54,49 @@ impl Nav {
     }
 }
 
+fn nav(cx: &mut App) -> &mut Nav {
+    if !cx.has_global::<Nav>() {
+        let recent = ui_state::get(RECENT, cx).unwrap_or_default();
+        cx.set_global(Nav {
+            recent,
+            ..Nav::default()
+        });
+    }
+    cx.global_mut::<Nav>()
+}
+
+/// Recent files in repos still listed, newest first.
+pub fn recent(cx: &mut App) -> Vec<Location> {
+    let mut recent = nav(cx).recent.clone();
+    let repos = &Store::global(cx).read(cx).repos;
+    recent.retain(|l| repos.iter().any(|r| r.path == l.repo));
+    recent
+}
+
+/// Records `loc`.
+pub fn visit(cx: &mut App, loc: &Location) {
+    let n = nav(cx);
+    n.visit(loc);
+    if loc.doc.is_none() {
+        let recent = n.recent.clone();
+        ui_state::set(RECENT, recent, cx);
+    }
+}
+
 /// Records `loc` and shows it.
 pub fn open(cx: &mut App, loc: Location) {
-    cx.default_global::<Nav>().visit(&loc);
+    visit(cx, &loc);
     show(loc, cx);
 }
 
 pub fn back(cx: &mut App) {
-    if let Some(loc) = cx.default_global::<Nav>().back() {
+    if let Some(loc) = nav(cx).back() {
         show(loc, cx);
     }
 }
 
 pub fn forward(cx: &mut App) {
-    if let Some(loc) = cx.default_global::<Nav>().forward() {
+    if let Some(loc) = nav(cx).forward() {
         show(loc, cx);
     }
 }

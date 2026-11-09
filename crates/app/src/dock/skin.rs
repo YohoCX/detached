@@ -18,9 +18,9 @@ use gpui_kit::{
 };
 
 use super::{DocTab, Tab, missing};
-use crate::keymap;
 use crate::terminal::Dragged;
 use crate::ui::{self, GAP, Icon, radius, theme};
+use crate::{actions, keymap};
 
 /// A side zone dragged narrower than this closes on release.
 const CLOSE_BELOW: Pixels = px(50.);
@@ -59,7 +59,7 @@ impl DockAreaRenderer for Skin {
     /// The hints lie under the center's tabs, so they show when no document is open.
     fn center_frame(&self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
         let t = theme(cx);
-        let hints = hints(cx)
+        let hints = hints(self.area.clone(), cx)
             .id("dock.hints")
             .test_support()
             .absolute()
@@ -474,26 +474,50 @@ impl Render for Preview {
     }
 }
 
-fn hints(cx: &App) -> Div {
-    let hint = |label: &str, id: &str| {
-        let chord = div()
-            .font_family(ui::theme::mono(cx))
-            .child(keymap::chord_for(id, cx));
+/// Rows that run their action, each with its chord.
+fn hints(area: WeakEntity<DockArea>, cx: &App) -> Div {
+    let t = theme(cx);
+    let hints = [
+        ("Go to file", "file.goto"),
+        ("Search everywhere", "search.everywhere"),
+        ("Find in files", "find.inFiles"),
+    ];
+    let row = |(i, (label, id)): (usize, (&'static str, &'static str))| {
+        let chord = keymap::chord_for(id, cx);
+        let area = area.clone();
         div()
+            .id(("dock.hint", i))
+            .test_support()
+            .role(Role::Button)
+            .aria_label(label)
+            .aria_description(chord.clone())
             .flex()
-            .gap(px(6.))
-            .child(label.to_string())
-            .child(chord)
+            .items_center()
+            .gap(px(16.))
+            .w(px(260.))
+            .h(px(28.))
+            .px(px(10.))
+            .rounded(radius::ITEM)
+            .hover(|s| s.bg(t.hover))
+            .on_click(move |_, window, cx| {
+                // A document over the hints does not take their clicks.
+                let empty = area
+                    .upgrade()
+                    .is_some_and(|a| a.read(cx).is_empty(DockPlacement::Center, cx));
+                if empty {
+                    actions::dispatch(window, cx, id);
+                }
+            })
+            .child(div().flex_1().child(label))
+            .child(div().font_family(ui::theme::mono(cx)).child(chord))
     };
     div()
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(8.))
+        .gap(px(4.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(theme(cx).muted)
-        .child(hint("Go to file", "file.goto"))
-        .child(hint("Search everywhere", "search.everywhere"))
-        .child(hint("Find in files", "find.inFiles"))
+        .text_color(t.muted)
+        .children(hints.into_iter().enumerate().map(row))
 }
