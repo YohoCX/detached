@@ -92,7 +92,7 @@ pub fn list(cx: &mut App) -> AnyView {
     cx.new(list::ChatList::new).into()
 }
 
-pub(crate) fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -106,5 +106,18 @@ pub(crate) fn span(ms: u64) -> String {
         1..60 => format!("{m} min"),
         60..1440 => format!("{} h {} min", m / 60, m % 60),
         _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
+    }
+}
+
+/// An age, short: "now", "5m", "3h", "12d", "4w", "3mo".
+pub fn ago(ms: u64) -> String {
+    let m = ms / 60_000;
+    match m {
+        0 => "now".into(),
+        1..60 => format!("{m}m"),
+        60..1440 => format!("{}h", m / 60),
+        1440..10_080 => format!("{}d", m / 1440),
+        10_080..43_200 => format!("{}w", m / 10_080),
+        _ => format!("{}mo", m / 43_200),
     }
 }

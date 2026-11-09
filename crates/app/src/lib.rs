@@ -3,6 +3,7 @@ pub mod blocking;
 pub mod cache;
 pub mod chat;
 pub mod dock;
+pub mod events;
 pub mod files;
 pub mod forge;
 pub mod history;

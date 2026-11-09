@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::blocking;
 use crate::files::{Links, Markdown};
-use crate::store::Store;
+use crate::store::{Level, Store};
 use crate::ui_state;
 
 /// The last commands each repo's session listed, for `/` before a session runs.
@@ -875,7 +875,11 @@ impl Session {
                 }
                 self.session_id = Some(id);
             }
-            Event::Error { message } => self.items.push(Item::Note(message)),
+            Event::Error { message } => {
+                let logged = format!("Claude in {}: {message}", super::label(&self.repo, cx));
+                Store::global(cx).update(cx, |s, cx| s.record(Level::Warn, logged, cx));
+                self.items.push(Item::Note(message))
+            }
             Event::Exited { code, stderr } => {
                 self.agent = None;
                 self.live = false;

@@ -198,3 +198,28 @@ fn cmd_b_cmd_j_and_cmd_alt_b_open_and_close_the_zones(cx: &mut TestAppContext) {
         assert_ne!(on(cx, zone), was, "{key} toggles {zone}");
     }
 }
+
+#[gpui_kit::test]
+fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let label = |cx: &mut VisualTestContext, id: &'static str| {
+        cx.find(id).and_then(|e| e.label().map(String::from))
+    };
+    cx.store(|s, cx| s.say("Boom", true, cx));
+    assert_eq!(label(cx, "status.events").as_deref(), Some("Events: 1 new"));
+    cx.executor().advance_clock(Duration::from_secs(11));
+    settle(cx);
+    assert!(cx.find("status.message").is_none(), "gone from the bar");
+
+    cx.click("status.events");
+    assert_eq!(on(cx, "bottom.Events"), Some(true));
+    let row = cx
+        .find(("events.row", 0usize))
+        .and_then(|e| e.label().map(String::from));
+    assert_eq!(row.as_deref(), Some("Boom"), "kept in Events");
+    assert_eq!(
+        label(cx, "status.events").as_deref(),
+        Some("Events"),
+        "read"
+    );
+}

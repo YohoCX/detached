@@ -56,13 +56,16 @@ pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
         Kind::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
         Kind::Pipelines => forge::pipelines(window, cx),
         Kind::Terminal => terminal::panel(cx),
+        Kind::Events => crate::events::view(cx),
     }
 }
 
 /// What an app does each time its tab comes on screen.
 pub fn shown(kind: Kind, window: &mut Window, cx: &mut App) {
-    if kind == Kind::Terminal {
-        terminal::shown(window, cx);
+    match kind {
+        Kind::Terminal => terminal::shown(window, cx),
+        Kind::Events => crate::events::shown(cx),
+        _ => {}
     }
 }
 

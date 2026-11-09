@@ -217,6 +217,8 @@ Added 2026-11-09, on the owner's look:
   repo and folder (the sidecar's `sessions` with no folder lists every project's).
 - A chat runs on a folder as well as a repo ("Chat here" on a folder): each turn snapshots every
   repo inside, and its changes and going back come per repo.
+- Events, in the bottom zone, keeps every error and warning the app shows (status messages, notices,
+  the chat's errors); the status bar counts the unread ones and its message goes after 10 s.
 
 ### 4. Plugins from a folder
 

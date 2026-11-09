@@ -170,9 +170,13 @@ fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen
     wait_until(cx, |cx| {
         cx.find("diff-body").and_then(|e| e.focused()) == Some(true)
     });
-    assert_eq!(cursor(cx), "line 5 changed\n");
-    cx.press("f7");
-    assert_eq!(cursor(cx), "line 50 changed\n");
+    // Showing it again reloads it, and an F7 before the load lands is lost; press until it moves.
+    wait_until(cx, |cx| {
+        if cursor(cx) == "line 5 changed\n" {
+            cx.press("f7");
+        }
+        cursor(cx) == "line 50 changed\n"
+    });
 }
 
 #[gpui_kit::test]

@@ -130,6 +130,18 @@ pub struct Notice {
     pub files: Vec<String>,
 }
 
+/// An error or a warning, kept for the Events app.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Logged {
+    /// Milliseconds since the epoch.
+    pub at: u64,
+    pub level: Level,
+    pub text: String,
+}
+
+/// What the Events app keeps at most.
+const LOG: usize = 500;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub text: String,
@@ -167,6 +179,10 @@ pub struct Store {
     pub ops: Vec<Op>,
     pub notices: Vec<Notice>,
     pub message: Option<Message>,
+    /// Errors and warnings, oldest first.
+    pub log: Vec<Logged>,
+    /// Log entries since the Events app was last on screen.
+    pub unread: usize,
     shown: Option<Doc>,
     /// The ref each repo's tree browses; absent is the working tree.
     pub refs: HashMap<String, String>,
@@ -201,6 +217,8 @@ impl Store {
                 ops: vec![],
                 notices: vec![],
                 message: None,
+                log: vec![],
+                unread: 0,
                 shown: None,
                 refs: HashMap::new(),
                 compare: HashMap::new(),
@@ -286,12 +304,57 @@ impl Store {
         }
     }
 
-    /// The single status message slot; it stays until replaced or clicked away.
+    /// The single status message slot, for 10 s or until replaced or clicked away; an error stays
+    /// in the log.
     pub fn say(&mut self, text: impl Into<String>, error: bool, cx: &mut Context<Self>) {
-        self.message = Some(Message {
+        let text = text.into();
+        if error {
+            self.record(Level::Error, text.clone(), cx);
+        }
+        let said = Message { text, error };
+        self.message = Some(said.clone());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs(10))
+                .await;
+            this.update(cx, |s, cx| {
+                if s.message.as_ref() == Some(&said) {
+                    s.clear_message(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Keeps an error or warning for the Events app.
+    pub fn record(&mut self, level: Level, text: impl Into<String>, cx: &mut Context<Self>) {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        self.log.push(Logged {
+            at,
+            level,
             text: text.into(),
-            error,
         });
+        if self.log.len() > LOG {
+            self.log.remove(0);
+        }
+        self.unread += 1;
+        cx.notify();
+    }
+
+    pub fn read_log(&mut self, cx: &mut Context<Self>) {
+        if self.unread > 0 {
+            self.unread = 0;
+            cx.notify();
+        }
+    }
+
+    pub fn clear_log(&mut self, cx: &mut Context<Self>) {
+        self.log.clear();
+        self.unread = 0;
         cx.notify();
     }
 
@@ -305,6 +368,13 @@ impl Store {
         self.last_notice += 1;
         let id = self.last_notice;
         n.id = id;
+        if n.level != Level::Info {
+            let text = match &n.body {
+                Some(body) => format!("{}\n{body}", n.title),
+                None => n.title.clone(),
+            };
+            self.record(n.level, text, cx);
+        }
         if n.level == Level::Info {
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(Duration::from_secs(6)).await;

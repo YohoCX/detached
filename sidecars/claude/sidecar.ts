@@ -317,10 +317,12 @@ async function command(c: any) {
     }
     case "info":
       return info(c.cwd);
+    // Every project is searched: a conversation's file need not sit under its folder's, as for one
+    // started in a worktree.
     case "delete":
-      return deleteSession(c.id, { dir: c.cwd });
+      return deleteSession(c.id);
     case "archive":
-      return tagSession(c.id, c.archived ? "archived" : null, { dir: c.cwd });
+      return tagSession(c.id, c.archived ? "archived" : null);
     case "load": {
       const events: Record<string, unknown>[] = [];
       for (const m of await getSessionMessages(c.id, { dir: c.cwd })) if (!m.parent_tool_use_id) feed(m, (e) => events.push(e));

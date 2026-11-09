@@ -1,15 +1,16 @@
-//! The status message, the running ops and an offered update, inside the top bar.
+//! The status bar: the message, the running ops, an offered update, and what Events holds.
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
+    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
     relative,
 };
 
-use crate::store::Store;
-use crate::ui::{self, Icon, text, theme};
+use crate::dock::{self, Kind};
+use crate::store::{Level, Store};
+use crate::ui::{self, Icon, radius, text, theme};
 use crate::update::{self, Update};
 
 pub struct StatusBar {
@@ -79,6 +80,36 @@ impl Render for StatusBar {
                         .on_click(move |_, _, cx| Store::global(cx).read(cx).cancel_op(id)),
                 )
         });
+        let events = (!s.log.is_empty()).then(|| {
+            let unread = s.unread;
+            let errors = s
+                .log
+                .iter()
+                .rev()
+                .take(unread)
+                .any(|e| e.level == Level::Error);
+            let tip = match unread {
+                0 => "Events".to_string(),
+                n => format!("Events: {n} new"),
+            };
+            ui::pressable("status.events")
+                .test_support()
+                .aria_label(SharedString::from(tip.clone()))
+                .gap(px(4.))
+                .px(px(6.))
+                .h(px(20.))
+                .rounded(radius::ICON_BUTTON)
+                .hover(|s| s.bg(t.hover))
+                .text_color(match (unread, errors) {
+                    (0, _) => t.muted,
+                    (_, true) => t.error,
+                    _ => t.warning,
+                })
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_click(|_, window, cx| dock::open(Kind::Events, window, cx))
+                .child(Icon::Question.size(px(12.)))
+                .when(unread > 0, |d| d.child(unread.to_string()))
+        });
         div()
             .flex()
             .flex_1()
@@ -93,5 +124,6 @@ impl Render for StatusBar {
             .child(div().flex_1())
             .children(ops)
             .children(update::item(cx))
+            .children(events)
     }
 }

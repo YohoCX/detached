@@ -403,7 +403,7 @@ impl ChatList {
                     .text_color(t.muted)
                     .when(on, |d| d.invisible())
                     .group_hover(ui::HOVER, |s| s.invisible())
-                    .child(ago(super::now().saturating_sub(p.modified)));
+                    .child(super::ago(super::now().saturating_sub(p.modified)));
                 let slot = div()
                     .relative()
                     .flex()
@@ -505,19 +505,6 @@ fn state_icon(state: State, cx: &App) -> AnyElement {
         .text_color(color)
         .child(icon.size(px(12.)))
         .into_any_element()
-}
-
-/// An age, short: "now", "5m", "3h", "12d", "4w", "3mo".
-fn ago(ms: u64) -> String {
-    let m = ms / 60_000;
-    match m {
-        0 => "now".into(),
-        1..60 => format!("{m}m"),
-        60..1440 => format!("{}h", m / 60),
-        1440..10_080 => format!("{}d", m / 1440),
-        10_080..43_200 => format!("{}w", m / 10_080),
-        _ => format!("{}mo", m / 43_200),
-    }
 }
 
 impl Render for ChatList {

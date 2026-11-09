@@ -36,10 +36,11 @@ pub enum Kind {
     Log,
     Pipelines,
     Terminal,
+    Events,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Repos,
         Kind::Chats,
         Kind::Changes,
@@ -48,6 +49,7 @@ impl Kind {
         Kind::Log,
         Kind::Pipelines,
         Kind::Terminal,
+        Kind::Events,
     ];
 
     /// The name a saved layout knows it by.
@@ -61,6 +63,7 @@ impl Kind {
             Kind::Log => "log",
             Kind::Pipelines => "pipelines",
             Kind::Terminal => "terminal",
+            Kind::Events => "events",
         }
     }
 
@@ -74,6 +77,7 @@ impl Kind {
             Kind::Log => "Log",
             Kind::Pipelines => "Pipelines",
             Kind::Terminal => "Terminal",
+            Kind::Events => "Events",
         }
     }
 
@@ -88,6 +92,7 @@ impl Kind {
             Kind::Log => "bottom.Log",
             Kind::Pipelines => "bottom.Pipelines",
             Kind::Terminal => "bottom.Terminal",
+            Kind::Events => "bottom.Events",
         }
     }
 
@@ -99,7 +104,7 @@ impl Kind {
             Kind::Log => Some("panel.log"),
             Kind::Pipelines => Some("panel.pipelines"),
             Kind::Terminal => Some("panel.terminal"),
-            Kind::Repos | Kind::Chats | Kind::Changes => None,
+            Kind::Repos | Kind::Chats | Kind::Changes | Kind::Events => None,
         }
     }
 
@@ -108,7 +113,9 @@ impl Kind {
         match self {
             Kind::Repos | Kind::Chats => (DockPlacement::Left, 280.),
             Kind::Changes | Kind::Project | Kind::Mrs => (DockPlacement::Right, 300.),
-            Kind::Log | Kind::Pipelines | Kind::Terminal => (DockPlacement::Bottom, 280.),
+            Kind::Log | Kind::Pipelines | Kind::Terminal | Kind::Events => {
+                (DockPlacement::Bottom, 280.)
+            }
         }
     }
 
