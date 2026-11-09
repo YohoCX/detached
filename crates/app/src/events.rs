@@ -39,7 +39,7 @@ impl Render for Events {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let s = Store::global(cx).read(cx);
-        let now = crate::chat::now();
+        let now = crate::util::now();
         let filter = self.filter;
         let shown = s
             .log
@@ -87,7 +87,7 @@ impl Render for Events {
                         .w(px(32.))
                         .text_size(text::SMALL)
                         .text_color(t.muted)
-                        .child(crate::chat::ago(now.saturating_sub(e.at))),
+                        .child(crate::util::age(now - e.at)),
                 )
         });
         let rows: Vec<_> = rows.collect();

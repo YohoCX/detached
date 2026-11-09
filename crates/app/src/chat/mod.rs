@@ -5,7 +5,6 @@ mod session;
 mod view;
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
@@ -156,7 +155,7 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Session>)> {
     all
 }
 
-/// Ends the open chat showing past conversation `id`, which is going away.
+/// Resets the idle open chat that shows past conversation `id`, which is going away.
 pub fn forget(id: &str, cx: &mut App) {
     for (.., s) in open(cx) {
         s.update(cx, |s, cx| {
@@ -235,35 +234,5 @@ fn alert(s: &Session, me: &Entity<Session>, cx: &mut App) {
     });
     for w in windows {
         w.update(cx, |_, w, _| w.request_attention()).ok();
-    }
-}
-
-pub fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
-/// A span of time, coarse: "13 min", "2 h 5 min", "3 d 4 h".
-pub(crate) fn span(ms: u64) -> String {
-    let m = ms / 60_000;
-    match m {
-        0 => "under a minute".into(),
-        1..60 => format!("{m} min"),
-        60..1440 => format!("{} h {} min", m / 60, m % 60),
-        _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
-    }
-}
-
-/// An age, short: "now", "5m", "3h", "12d", "4w", "3mo".
-pub fn ago(ms: u64) -> String {
-    let m = ms / 60_000;
-    match m {
-        0 => "now".into(),
-        1..60 => format!("{m}m"),
-        60..1440 => format!("{}h", m / 60),
-        1440..10_080 => format!("{}d", m / 1440),
-        10_080..43_200 => format!("{}w", m / 10_080),
-        _ => format!("{}mo", m / 43_200),
     }
 }

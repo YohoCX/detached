@@ -40,6 +40,8 @@ pub struct Change {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Restore {
     pub to: String,
+    /// The tree at the end of the turn.
+    pub end: String,
     /// The worktree before the restore.
     pub undo: String,
     pub changes: Vec<Change>,
@@ -143,13 +145,18 @@ pub fn plan(env: &Env, repo: &Path, to: &str, end: &str) -> Result<Restore> {
         .collect();
     Ok(Restore {
         to: to.into(),
+        end: end.into(),
         undo,
         changes,
     })
 }
 
-/// Applies `r`, all but what it skips, and returns the worktree's tree after it.
-pub fn apply(env: &Env, repo: &Path, r: &Restore) -> Result<String> {
+/// Applies `r`, all but what it skips, and returns the worktree's tree after it; None, with nothing
+/// applied, when the worktree changed since `r` was planned.
+pub fn apply(env: &Env, repo: &Path, r: &Restore) -> Result<Option<String>> {
+    if snapshot(env, repo)? != r.undo {
+        return Ok(None);
+    }
     let todo = || r.changes.iter().filter(|c| c.skip.is_none());
     let writes: Vec<&str> = todo()
         .filter(|c| !c.remove)
@@ -172,7 +179,7 @@ pub fn apply(env: &Env, repo: &Path, r: &Restore) -> Result<String> {
             _ => {}
         }
     }
-    snapshot(env, repo)
+    snapshot(env, repo).map(Some)
 }
 
 /// Path to (mode, object) for every file in `tree`.
@@ -273,13 +280,13 @@ mod tests {
                 ("src/made.rs", true, false, None)
             ]
         );
-        let after = apply(&env, &r, &plan).unwrap();
+        let after = apply(&env, &r, &plan).unwrap().unwrap();
         assert_eq!(read(&r, "a.txt").as_deref(), Some("a\n"));
         assert!(read(&r, "src/made.rs").is_none());
         assert_eq!(after, start);
 
         let undo = super::plan(&env, &r, &plan.undo, &after).unwrap();
-        apply(&env, &r, &undo).unwrap();
+        apply(&env, &r, &undo).unwrap().unwrap();
         assert_eq!(read(&r, "a.txt").as_deref(), Some("by the agent\n"));
         assert_eq!(read(&r, "src/made.rs").as_deref(), Some("x\n"));
     }
@@ -308,8 +315,28 @@ mod tests {
                 ("made.txt", true, Some(Skip::Edited))
             ]
         );
-        apply(&env, &r, &plan).unwrap();
+        apply(&env, &r, &plan).unwrap().unwrap();
         assert_eq!(read(&r, "a.txt").as_deref(), Some("a\n"));
+        assert_eq!(read(&r, "made.txt").as_deref(), Some("user\n"));
+    }
+
+    #[test]
+    fn a_plan_the_worktree_moved_on_from_applies_nothing() {
+        let sb = Sandbox::new();
+        let r = repo(&sb);
+        let env = sb.state.env();
+        let (start, end) = turn(&sb, &r, || {
+            fs::write(r.join("a.txt"), "agent\n").unwrap();
+            fs::write(r.join("made.txt"), "agent\n").unwrap();
+        });
+        let stale = plan(&env, &r, &start, &end).unwrap();
+        fs::write(r.join("a.txt"), "user\n").unwrap();
+        fs::write(r.join("made.txt"), "user\n").unwrap();
+        assert_eq!(apply(&env, &r, &stale).unwrap(), None);
+        assert_eq!(read(&r, "a.txt").as_deref(), Some("user\n"));
+        assert_eq!(read(&r, "made.txt").as_deref(), Some("user\n"));
+        let fresh = plan(&env, &r, &stale.to, &stale.end).unwrap();
+        assert!(apply(&env, &r, &fresh).unwrap().is_some());
         assert_eq!(read(&r, "made.txt").as_deref(), Some("user\n"));
     }
 
@@ -335,7 +362,7 @@ mod tests {
             paths,
             [(".gitignore", None), ("secret.txt", Some(Skip::Ignored))]
         );
-        apply(&env, &r, &plan).unwrap();
+        apply(&env, &r, &plan).unwrap().unwrap();
         assert_eq!(read(&r, ".gitignore").as_deref(), Some("*.log\n"));
         assert_eq!(read(&r, "secret.txt").as_deref(), Some("new\n"));
         assert_eq!(read(&r, "x.log").as_deref(), Some("new\n"));

@@ -19,10 +19,10 @@ use detached_core::git::snapshot::Skip;
 use detached_core::types::Side;
 
 use super::session::{Answer, Back, Item, Session};
-use super::{now, span};
 use crate::blocking;
 use crate::store::{DiffDoc, Doc, Location, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
+use crate::util::{age, now, span};
 
 const MODES: &[(&str, &str, Option<&str>)] = &[
     (
@@ -983,7 +983,7 @@ impl ChatView {
                     };
                     small(format!("{}: {what}", c.path))
                 });
-                let confirm = (todo > 0).then(|| {
+                let confirm = (todo > 0 && !busy).then(|| {
                     let label = match todo {
                         1 => "Restore 1 file".to_string(),
                         _ => format!("Restore {todo} files"),
@@ -1129,7 +1129,7 @@ impl ChatView {
                             .flex_none()
                             .text_size(text::SMALL)
                             .text_color(t.muted)
-                            .child(super::ago(now().saturating_sub(p.modified))),
+                            .child(age(now() - p.modified as i64 / 1000)),
                     )
             })
             .collect();
@@ -1400,7 +1400,7 @@ fn seconds(ms: u64) -> String {
 }
 
 /// A plan limit as a short bar of what is used, with what is left and when it resets.
-fn limit(l: &Limit, at: u64, cx: &App) -> impl IntoElement + use<> {
+fn limit(l: &Limit, at: i64, cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let used = l.used.clamp(0., 100.);
     let color = match used {
@@ -1416,9 +1416,9 @@ fn limit(l: &Limit, at: u64, cx: &App) -> impl IntoElement + use<> {
     let now = now();
     let mut tip = format!("{name} limit: {used:.0}% used");
     if let Some(r) = l.resets {
-        tip += &format!(", resets in {}", span(r.saturating_sub(now)));
+        tip += &format!(", resets in {}", span(r as i64 / 1000 - now));
     }
-    if now.saturating_sub(at) > 10 * 60_000 {
+    if now - at > 10 * 60 {
         tip += &format!(" (as of {} ago)", span(now - at));
     }
     let left = format!("{:.0}% left", 100. - used);

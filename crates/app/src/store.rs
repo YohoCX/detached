@@ -136,8 +136,8 @@ pub struct Notice {
 /// An error or a warning, kept for the Events app.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Logged {
-    /// Milliseconds since the epoch.
-    pub at: u64,
+    /// Unix seconds.
+    pub at: i64,
     pub level: Level,
     pub text: String,
 }
@@ -333,11 +333,8 @@ impl Store {
 
     /// Keeps an error or warning for the Events app.
     pub fn record(&mut self, level: Level, text: impl Into<String>, cx: &mut Context<Self>) {
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
         self.log.push(Logged {
-            at,
+            at: crate::util::now(),
             level,
             text: text.into(),
         });

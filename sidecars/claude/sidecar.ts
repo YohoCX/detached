@@ -89,7 +89,9 @@ function ask(tool: string, input: any, o: any): Promise<any> {
       asks.delete(id);
       if (!a.allow) return resolve({ behavior: "deny", message: "The user declined this." });
       const updatedInput = a.answers ? { ...input, answers: a.answers } : input;
-      resolve({ behavior: "allow", updatedInput, ...(a.always ? { updatedPermissions: o.suggestions } : {}) });
+      // Kept to this session: the repo's settings files are the user's to trust, not ours to write.
+      const updatedPermissions = o.suggestions?.map((s: any) => ({ ...s, destination: "session" }));
+      resolve({ behavior: "allow", updatedInput, ...(a.always ? { updatedPermissions } : {}) });
     };
     asks.set(id, done);
     o.signal?.addEventListener("abort", () => {
@@ -331,12 +333,16 @@ async function command(c: any) {
   }
 }
 
+let running: Promise<unknown> = Promise.resolve();
 createInterface({ input: process.stdin })
   .on("line", (line) => {
-    command(JSON.parse(line)).catch((e) => emit({ type: "error", message: String(e?.message ?? e) }));
+    const done = command(JSON.parse(line)).catch((e) => emit({ type: "error", message: String(e?.message ?? e) }));
+    running = Promise.all([running, done]);
   })
-  // The host is gone, however it went: take everything down with it.
-  .on("close", () => {
+  // The host is gone, however it went: take everything down with it, once a delete or an archive it
+  // sent is done.
+  .on("close", async () => {
     q?.close();
+    await running;
     process.exit(0);
   });

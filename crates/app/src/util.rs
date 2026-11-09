@@ -99,6 +99,30 @@ pub fn ago_text(t: i64, now: i64) -> String {
 
 const MONTH: f64 = 30. * 86400.;
 
+/// An age that fits a narrow slot, from seconds: "now", "5m", "3h", "12d", "4w", "3mo".
+pub fn age(s: i64) -> String {
+    let m = s / 60;
+    match m {
+        ..1 => "now".into(),
+        1..60 => format!("{m}m"),
+        60..1440 => format!("{}h", m / 60),
+        1440..10_080 => format!("{}d", m / 1440),
+        10_080..43_200 => format!("{}w", m / 10_080),
+        _ => format!("{}mo", m / 43_200),
+    }
+}
+
+/// A span of seconds, coarse: "13 min", "2 h 5 min", "3 d 4 h".
+pub fn span(s: i64) -> String {
+    let m = s / 60;
+    match m {
+        ..1 => "under a minute".into(),
+        1..60 => format!("{m} min"),
+        60..1440 => format!("{} h {} min", m / 60, m % 60),
+        _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
+    }
+}
+
 /// Unix seconds.
 pub fn now() -> i64 {
     let since = SystemTime::now().duration_since(UNIX_EPOCH);

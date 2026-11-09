@@ -31,8 +31,8 @@ const MODEL: &str = "chat.model";
 pub struct Info {
     pub provider: String,
     pub limits: Vec<Limit>,
-    /// When it was read, in milliseconds since the epoch.
-    pub at: u64,
+    /// When it was read, in Unix seconds.
+    pub at: i64,
 }
 
 pub const AUTO: &str = "auto";
@@ -217,6 +217,8 @@ impl Session {
         check: Option<Check>,
         cx: &mut Context<Self>,
     ) {
+        // Before the turn starts: a session ended here ends no turn.
+        let trusted = check.and_then(|c| self.saw(c, cx));
         let mut trees = vec![];
         for (repo, tree) in start {
             match tree {
@@ -228,7 +230,6 @@ impl Session {
             }
         }
         self.turn_start = Some(trees);
-        let trusted = check.and_then(|c| self.saw(c));
         if !self.live {
             self.live = true;
             self.running = trusted.clone();
@@ -261,14 +262,14 @@ impl Session {
 
     /// Shows the repo's settings for review until trusted; stops a session that loaded others.
     /// Returns what a new session may load.
-    fn saw(&mut self, (n, p, trusted): Check) -> Option<String> {
+    fn saw(&mut self, (n, p, trusted): Check, cx: &mut Context<Self>) -> Option<String> {
         let trusted = trusted || self.accepted.as_ref() == Some(&p.fingerprint);
         if n < self.seen {
             return trusted.then_some(p.fingerprint);
         }
         self.seen = n;
         if self.live && self.running.as_ref().is_some_and(|f| *f != p.fingerprint) {
-            self.end_agent();
+            self.end_agent(cx);
             self.items.push(Item::Note(
                 "The repo's Claude settings changed, so the session stopped. It goes on without them until you trust them again."
                     .into(),
@@ -279,12 +280,18 @@ impl Session {
         trusted.then_some(p.fingerprint)
     }
 
-    /// Ends the sidecar without a note; the next message starts another and resumes.
-    fn end_agent(&mut self) {
-        self.agent = None;
-        self.live = false;
-        self.running = None;
+    /// Ends the sidecar without a note, and the turn it ran; the next message starts another and
+    /// resumes.
+    fn end_agent(&mut self, cx: &mut Context<Self>) {
+        (self.agent, self.live, self.running, self.starting) = (None, false, None, false);
         self._tasks.clear();
+        self.queued.clear();
+        if self.turn_start.is_some() {
+            self.busy = false;
+            self.tasks.clear();
+            self.ask_gone(None);
+            self.end_turn(cx);
+        }
     }
 
     pub fn check_trust(&mut self, cx: &mut Context<Self>) {
@@ -292,7 +299,7 @@ impl Session {
         self.work(cx, async move |this, cx| {
             if let Some(c) = check.await {
                 this.update(cx, |s, cx| {
-                    s.saw(c);
+                    s.saw(c, cx);
                     cx.notify();
                 })
                 .ok();
@@ -313,7 +320,7 @@ impl Session {
             this.update(cx, |s, cx| {
                 match saved {
                     Ok(()) if s.live && s.running.is_none() => {
-                        s.end_agent();
+                        s.end_agent(cx);
                         s.items.push(Item::Note(
                             "Trusted: the repo's settings load from the next message.".into(),
                         ));
@@ -399,7 +406,7 @@ impl Session {
             let (found, check) = (found.await, check.await);
             this.update(cx, |s, cx| {
                 if let Some(c) = check {
-                    s.saw(c);
+                    s.saw(c, cx);
                 }
                 for (found, repo) in found {
                     match found {
@@ -464,12 +471,12 @@ impl Session {
         let plan = plan.clone();
         self.restore_step(
             item,
-            move |core, repo| {
-                let after = api::restore(core, repo, &plan)?;
-                Ok(Back::Done {
-                    undo: plan.undo.clone(),
+            move |core, repo| match api::restore(core, repo, &plan)? {
+                Some(after) => Ok(Back::Done {
+                    undo: plan.undo,
                     after,
-                })
+                }),
+                None => api::plan_restore(core, repo, &plan.to, &plan.end).map(Back::Planned),
             },
             cx,
         );
@@ -501,6 +508,12 @@ impl Session {
             let done = done.await;
             this.update(cx, |s, cx| {
                 let restored = matches!(done, Ok(Back::Done { .. }));
+                if matches!((&was, &done), (Back::Planned(_), Ok(Back::Planned(_)))) {
+                    s.items.push(Item::Note(
+                        "The files changed since that list, so nothing was restored. Check the new one."
+                            .into(),
+                    ));
+                }
                 let back = done.unwrap_or_else(|e| {
                     s.items.push(Item::Note(format!("Cannot go back: {e}")));
                     was
@@ -853,13 +866,10 @@ impl Session {
                 }
             }
             Event::Info { provider, limits } => {
-                let at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis() as u64);
                 let info = Info {
                     provider,
                     limits,
-                    at,
+                    at: crate::util::now(),
                 };
                 ui_state::set(INFO, &info, cx);
                 self.info = Some(info);

@@ -570,6 +570,28 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
     assert_eq!(read("made-by-agent.txt").as_deref(), Some("x\n"));
 }
 
+#[gpui_kit::test]
+fn a_restore_the_files_moved_on_from_restores_nothing_and_plans_again(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let solo = cx.sb.solo();
+    let read = |p: &str| std::fs::read_to_string(solo.join(p)).ok();
+    let before = read("README.md");
+    say(cx, "edit");
+    let i = index_of(cx, "made-by-agent.txt");
+    idle(cx);
+    cx.click(("chat.back", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
+    std::fs::write(solo.join("made-by-agent.txt"), "mine\n").unwrap();
+    cx.click(("chat.back.confirm", i));
+    wait_for_item(cx, "nothing was restored");
+    assert!(items(cx)[i].ends_with("planned"));
+    assert_eq!(read("README.md").as_deref(), Some("agent\n"));
+    cx.click(("chat.back.confirm", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("restored"));
+    assert_eq!(read("README.md"), before);
+    assert_eq!(read("made-by-agent.txt").as_deref(), Some("mine\n"));
+}
+
 const HOOK: &str = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#;
 
 #[gpui_kit::test]
@@ -606,6 +628,25 @@ fn the_repo_s_settings_load_once_trusted_and_a_change_asks_again(cx: &mut TestAp
     );
     cx.click("chat.trust.later");
     assert!(cx.find("chat.trust").is_none());
+}
+
+#[gpui_kit::test]
+fn trusting_during_a_turn_ends_it_and_keeps_its_changes(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        std::fs::create_dir_all(sb.solo().join(".claude")).unwrap();
+        std::fs::write(sb.solo().join(".claude/settings.json"), HOOK).unwrap();
+    });
+    wait_until(cx, |cx| cx.find("chat.trust").is_some());
+    say(cx, "hang");
+    wait_for_item(cx, "Working");
+    std::fs::write(cx.sb.solo().join("during.txt"), "x\n").unwrap();
+    cx.click("chat.trust.accept");
+    wait_for_item(cx, "load from the next message");
+    idle(cx);
+    // The fake sidecar's end marker may show beside it.
+    wait_for_item(cx, "changed in this turn: during.txt");
+    say(cx, "settings");
+    wait_for_item(cx, "project settings on");
 }
 
 #[gpui_kit::test]

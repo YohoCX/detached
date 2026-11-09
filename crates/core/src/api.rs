@@ -105,8 +105,8 @@ pub fn plan_restore(s: &AppState, repo: &str, to: &str, end: &str) -> Result<Res
     snapshot::plan(&s.env(), Path::new(repo), to, end)
 }
 
-/// Returns the tree after it, to undo against.
-pub fn restore(s: &AppState, repo: &str, r: &Restore) -> Result<String> {
+/// Returns the tree after it, to undo against; None when the worktree changed since the plan.
+pub fn restore(s: &AppState, repo: &str, r: &Restore) -> Result<Option<String>> {
     snapshot::apply(&s.env(), Path::new(repo), r)
 }
 

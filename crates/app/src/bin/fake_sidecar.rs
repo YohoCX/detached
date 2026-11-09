@@ -196,5 +196,7 @@ fn main() {
             other => panic!("unknown command {other}"),
         }
     }
-    std::fs::write(std::path::Path::new(&cwd).join("sidecar-eof"), "").unwrap();
+    if !cwd.is_empty() {
+        std::fs::write(std::path::Path::new(&cwd).join("sidecar-eof"), "").unwrap();
+    }
 }

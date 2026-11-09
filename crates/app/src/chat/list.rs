@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use detached_core::agent::{self, Agent, Command, Event, Past};
+use detached_core::agent::{self, Command, Event, Past};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::base::TestSupportExt;
@@ -20,6 +20,7 @@ use super::{Item, Session, label, open, state_icon};
 use crate::blocking;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, radius, text, theme};
+use crate::util::{age, now};
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
@@ -61,8 +62,6 @@ impl Line {
 
 pub struct ChatList {
     past: Vec<Past>,
-    /// A sidecar asked for the list; it goes once it answers.
-    asking: Option<Agent>,
     filter: Filter,
     query: Entity<InputState>,
     show_archived: bool,
@@ -71,7 +70,10 @@ pub struct ChatList {
     deleting: Option<Key>,
     focus: FocusHandle,
     scroll: ScrollHandle,
-    _tasks: Vec<Task<()>>,
+    /// The last command's run, which waits for the one before.
+    _run: Option<Task<()>>,
+    /// Runs begun: only the last one's list is shown, as an earlier one's misses later commands.
+    runs: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -84,14 +86,14 @@ impl ChatList {
         });
         let mut list = ChatList {
             past: vec![],
-            asking: None,
             filter: Filter::All,
             show_archived: false,
             selected: None,
             deleting: None,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            _tasks: vec![],
+            _run: None,
+            runs: 0,
             _subscriptions: vec![
                 cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
                 cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
@@ -176,7 +178,8 @@ impl ChatList {
         self.run(vec![Command::Delete { cwd, id }], cx);
     }
 
-    /// Sends `first` to a sidecar of its own, then takes the list it gives back.
+    /// Sends `first` to a sidecar of its own once earlier runs are done, then takes the list it gives
+    /// back.
     fn run(&mut self, first: Vec<Command>, cx: &mut Context<Self>) {
         cx.notify();
         let core = Store::global(cx).read(cx).core().clone();
@@ -190,20 +193,26 @@ impl ChatList {
                 let _ = tx.unbounded_send(e);
             })
         });
-        self._tasks = vec![cx.spawn(async move |this, cx| {
+        let before = self._run.take();
+        self.runs += 1;
+        let run = self.runs;
+        self._run = Some(cx.spawn(async move |this, cx| {
+            if let Some(b) = before {
+                b.await;
+            }
             let Ok(agent) = started.await else { return };
             for c in first {
                 agent.send(&c);
             }
             agent.send(&Command::Sessions { cwd: String::new() });
-            this.update(cx, |l, _| l.asking = Some(agent)).ok();
             while let Some(e) = rx.next().await {
                 match e {
                     Event::Sessions { sessions } => {
                         this.update(cx, |l, cx| {
-                            l.past = sessions;
-                            l.asking = None;
-                            cx.notify();
+                            if l.runs == run {
+                                l.past = sessions;
+                                cx.notify();
+                            }
                         })
                         .ok();
                         return;
@@ -216,7 +225,7 @@ impl ChatList {
                     _ => {}
                 }
             }
-        })];
+        }));
     }
 
     /// Past conversations in the workspace's folders, archived or not, newest place first.
@@ -485,7 +494,7 @@ impl ChatList {
                     .text_color(t.muted)
                     .when(on, |d| d.invisible())
                     .group_hover(ui::HOVER, |s| s.invisible())
-                    .child(super::ago(super::now().saturating_sub(p.modified)));
+                    .child(age(now() - p.modified as i64 / 1000));
                 let slot = div()
                     .relative()
                     .flex()
