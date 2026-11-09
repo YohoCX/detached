@@ -15,9 +15,9 @@ use alacritty_terminal::vte::ansi::Rgb;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    Context, Font, FontStyle, FontWeight, Hsla, InteractiveElement, IntoElement, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    Render, ScrollEvent, StatefulInteractiveElement, StrikethroughStyle, Styled, StyledText,
+    Context, Font, FontFallbacks, FontStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Point, Render, ScrollEvent, StatefulInteractiveElement, StrikethroughStyle, Styled, StyledText,
     TextRun, UnderlineStyle, Window, canvas, div, font, px, rgb, size, transparent_black,
 };
 
@@ -35,7 +35,13 @@ pub const CONTEXT: &str = "Terminal";
 
 impl Render for Session {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let font = font(mono(cx));
+        // TUIs draw Nerd Font icons, which no text font has.
+        let font = Font {
+            fallbacks: Some(FontFallbacks::from_fonts(vec![
+                "Symbols Nerd Font Mono".into(),
+            ])),
+            ..font(mono(cx))
+        };
         let line = px((f32::from(text::BODY) * 1.35).round());
         let id = window.text_system().resolve_font(&font);
         let advance = window.text_system().advance(id, text::BODY, 'm');
@@ -291,18 +297,19 @@ struct Style {
 /// Cells from a column on, drawn as one text.
 struct Piece {
     col: usize,
-    wide: bool,
+    alone: bool,
     text: String,
     runs: Vec<(usize, Style)>,
 }
 
-/// Appends a cell to its row. A wide one gets a piece of its own, so the cells after it keep their
-/// columns whatever the font's advance for it.
+/// Appends a cell to its row. A wide or non-ASCII one gets a piece of its own, so the cells after
+/// it keep their columns whatever its font's advance.
 fn push(row: &mut Vec<Piece>, col: usize, text: &str, style: Style, wide: bool) {
-    if wide || row.last().is_none_or(|p| p.wide) {
+    let alone = wide || !text.is_ascii();
+    if alone || row.last().is_none_or(|p| p.alone) {
         row.push(Piece {
             col,
-            wide,
+            alone,
             text: String::new(),
             runs: Vec::new(),
         });
@@ -482,4 +489,30 @@ fn color(c: Color, colors: &Colors, t: &Theme) -> Option<Hsla> {
         _ if i == NamedColor::DimForeground as usize => t.fg.opacity(0.7),
         _ => t.fg,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_non_ascii_cell_and_the_one_after_it_start_at_their_columns() {
+        let style = Style {
+            fg: transparent_black(),
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strike: false,
+        };
+        let mut row = Vec::new();
+        for (col, c) in ["a", "b", "│", "\u{f07b}", "c", "d"]
+            .into_iter()
+            .enumerate()
+        {
+            push(&mut row, col, c, style, false);
+        }
+        let got: Vec<_> = row.iter().map(|p| (p.col, p.text.as_str())).collect();
+        assert_eq!(got, [(0, "ab"), (2, "│"), (3, "\u{f07b}"), (4, "cd")]);
+    }
 }

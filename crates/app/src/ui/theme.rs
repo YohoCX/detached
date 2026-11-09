@@ -21,7 +21,7 @@ const BUNDLED: [&str; 2] = [
     include_str!("../../themes/fleet.json"),
     include_str!("../../themes/classic.json"),
 ];
-const FONTS: [&[u8]; 7] = [
+const FONTS: [&[u8]; 8] = [
     include_bytes!("../../fonts/Inter-Regular.ttf"),
     include_bytes!("../../fonts/Inter-Medium.ttf"),
     include_bytes!("../../fonts/Inter-SemiBold.ttf"),
@@ -29,6 +29,7 @@ const FONTS: [&[u8]; 7] = [
     include_bytes!("../../fonts/Inter-ExtraBold.ttf"),
     include_bytes!("../../fonts/JetBrainsMono-Regular.ttf"),
     include_bytes!("../../fonts/JetBrainsMono-Bold.ttf"),
+    include_bytes!("../../fonts/SymbolsNerdFontMono-Regular.ttf"),
 ];
 const KEY: &str = "theme.name";
 /// How often the themes folder is looked at for edits.
