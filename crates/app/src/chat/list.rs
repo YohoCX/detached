@@ -205,6 +205,8 @@ impl ChatList {
                 agent.send(&c);
             }
             agent.send(&Command::Sessions { cwd: String::new() });
+            // Closing stdin lets the sidecar finish these and exit, so `rx` always ends.
+            drop(agent);
             while let Some(e) = rx.next().await {
                 match e {
                     Event::Sessions { sessions } => {
@@ -221,8 +223,6 @@ impl ChatList {
                         cx.update(|cx| {
                             Store::global(cx).update(cx, |s, cx| s.say(message, true, cx))
                         });
-                        // A failed command may never send its reply, and later runs wait on this one.
-                        return;
                     }
                     _ => {}
                 }
