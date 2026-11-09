@@ -61,6 +61,9 @@ pub const ACTIONS: &[Action] = &[
     a("markdown.preview", "Toggle Markdown Preview", Group::View),
     a("panel.terminal", "Terminal", Group::View),
     a("agent.chat", "Claude", Group::View),
+    a("zone.left", "Left Zone", Group::View),
+    a("zone.bottom", "Bottom Zone", Group::View),
+    a("zone.right", "Right Zone", Group::View),
 ];
 
 pub fn find(id: &str) -> Option<&'static Action> {

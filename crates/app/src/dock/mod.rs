@@ -85,6 +85,18 @@ impl Kind {
         }
     }
 
+    /// The action that toggles it, for its chord.
+    pub fn action(self) -> Option<&'static str> {
+        match self {
+            Kind::Project => Some("panel.project"),
+            Kind::Mrs => Some("panel.mergeRequests"),
+            Kind::Log => Some("panel.log"),
+            Kind::Pipelines => Some("panel.pipelines"),
+            Kind::Terminal => Some("panel.terminal"),
+            Kind::Repos | Kind::Changes => None,
+        }
+    }
+
     pub fn from_id(id: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|k| k.id() == id)
     }

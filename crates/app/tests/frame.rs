@@ -184,3 +184,17 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
         );
     }
 }
+
+#[gpui_kit::test]
+fn cmd_b_cmd_j_and_cmd_alt_b_open_and_close_the_zones(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    for (key, zone) in [
+        ("secondary-b", "zone.left"),
+        ("secondary-j", "zone.bottom"),
+        ("secondary-alt-b", "zone.right"),
+    ] {
+        let was = on(cx, zone);
+        cx.press(key);
+        assert_ne!(on(cx, zone), was, "{key} toggles {zone}");
+    }
+}

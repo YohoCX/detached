@@ -16,6 +16,7 @@ use gpui_kit::{
 };
 
 use super::State;
+use crate::keymap;
 use crate::store::{Level, Notice, Outcome, Store};
 use crate::ui::{self, Icon, radius, theme};
 
@@ -305,7 +306,13 @@ impl Render for SyncButtons {
                 .role(Role::Button)
                 .aria_label(label.clone())
                 .aria_description(title.clone())
-                .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+                .tooltip(move |window, cx| {
+                    let id = match kind {
+                        Kind::Pull => "vcs.pullAll",
+                        Kind::Fetch => "vcs.fetchAll",
+                    };
+                    Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
+                })
                 .map(|b| match idle {
                     true => b.on_click(move |_, _, cx| sync_repos(kind, None, cx)),
                     false => b.opacity(0.5),

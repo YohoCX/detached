@@ -153,13 +153,17 @@ impl Shell {
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let titled = |title: &str, id: &str| {
-            let chord = keymap::chord_for(id, cx);
-            format!("{title} {chord}").trim_end().to_string()
-        };
-        let zone = |id, icon, title: &str, p: DockPlacement| {
+        let titled = |title: &str, id: &str| keymap::tip(title, id, cx);
+        let zone = |id: &'static str, icon, title: &str, p: DockPlacement| {
             let toggle = move |window: &mut Window, cx: &mut App| dock::toggle_zone(p, window, cx);
-            bar_button(id, icon, title.into(), dock::is_open(p, cx), toggle, cx)
+            bar_button(
+                id,
+                icon,
+                titled(title, id),
+                dock::is_open(p, cx),
+                toggle,
+                cx,
+            )
         };
         let run = |id, icon, title: String, on: bool, action: &'static str| {
             let run =

@@ -9,6 +9,7 @@ use gpui_kit::base::dock::{
     DockArea, DockAreaRenderer, DockContext, DockEvent, DockPlacement, DragPanel, DropIndicator,
     PanelState, PanelView, TabGroupContext, TabGroupRenderer,
 };
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity, FontWeight,
     InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement,
@@ -16,7 +17,7 @@ use gpui_kit::{
     WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
 };
 
-use super::{DocTab, Kind, Tab, missing};
+use super::{DocTab, Tab, missing};
 use crate::keymap;
 use crate::ui::{self, GAP, Icon, radius, theme};
 
@@ -170,7 +171,8 @@ struct Group;
 struct Label {
     id: SharedString,
     title: SharedString,
-    kind: Option<Kind>,
+    /// The tooltip, with the chord that toggles the app.
+    tip: Option<SharedString>,
     doc: Option<Entity<DocTab>>,
 }
 
@@ -182,7 +184,7 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
             return Label {
                 id: k.id().into(),
                 title: k.title().into(),
-                kind: Some(k),
+                tip: k.action().map(|a| keymap::tip(k.title(), a, cx).into()),
                 doc: None,
             };
         }
@@ -190,13 +192,13 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
             Ok(d) => Label {
                 id: d.read(cx).id(),
                 title: d.read(cx).title(cx),
-                kind: None,
+                tip: None,
                 doc: Some(d),
             },
             Err(_) => Label {
                 id: format!("tab.{ix}").into(),
                 title: "Missing".into(),
-                kind: None,
+                tip: None,
                 doc: None,
             },
         }
@@ -218,16 +220,6 @@ impl TabGroupRenderer for Group {
 
     fn render_tab_bar(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> AnyElement {
         let labels = labels(group, cx);
-        // Repos brings its own chrome, so alone it gets no tab bar.
-        if matches!(
-            labels.as_slice(),
-            [Label {
-                kind: Some(Kind::Repos),
-                ..
-            }]
-        ) {
-            return Empty.into_any_element();
-        }
         let t = theme(cx);
         let collapsed = group.is_collapsed();
         let active = (!collapsed).then(|| group.active_ix());
@@ -268,6 +260,9 @@ impl TabGroupRenderer for Group {
                 .py(px(if collapsed { 1. } else { 3. }))
                 .rounded(radius::ICON_BUTTON)
                 .when(preview, |d| d.italic())
+                .when_some(l.tip.clone(), |d, tip| {
+                    d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                })
                 .map(|d| match on {
                     true => d.bg(t.selected).text_color(t.fg),
                     false => d

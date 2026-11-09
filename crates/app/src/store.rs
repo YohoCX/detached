@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::actions::{self, Registration};
 use crate::dock::{self, Kind};
 use crate::{blocking, nav};
+use gpui_kit::base::dock::DockPlacement;
 
 /// A file at `rev` (None is the working tree), or with `doc` set an MR page or job log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -505,6 +506,15 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
         ),
         crate::terminal::register(cx),
         crate::chat::register(cx),
+        register(cx, "zone.left", "Left Zone", View, |w, cx| {
+            dock::toggle_zone(DockPlacement::Left, w, cx)
+        }),
+        register(cx, "zone.bottom", "Bottom Zone", View, |w, cx| {
+            dock::toggle_zone(DockPlacement::Bottom, w, cx)
+        }),
+        register(cx, "zone.right", "Right Zone", View, |w, cx| {
+            dock::toggle_zone(DockPlacement::Right, w, cx)
+        }),
         register(cx, "nav.back", "Back", Navigate, |_, cx| nav::back(cx)),
         register(cx, "nav.forward", "Forward", Navigate, |_, cx| {
             nav::forward(cx)

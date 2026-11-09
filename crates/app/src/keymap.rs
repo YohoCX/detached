@@ -40,6 +40,9 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("app.settings", "Cmd+,"),
     ("panel.log", "Cmd+9"),
     ("panel.terminal", "Alt+F12"),
+    ("zone.left", "Cmd+B"),
+    ("zone.bottom", "Cmd+J"),
+    ("zone.right", "Cmd+Alt+B"),
 ];
 
 /// Chords kept free for actions that do not exist yet.
@@ -220,6 +223,13 @@ pub fn action_of(k: &Keystroke, cx: &App) -> Option<&'static str> {
         let same = (c.ctrl, c.alt, c.shift, c.meta) == (m.control, m.alt, m.shift, m.platform);
         (same && c.key == k.key).then_some(*id)
     })
+}
+
+/// A tooltip: the title, and the action's chord when it has one.
+pub fn tip(title: &str, id: &str, cx: &App) -> String {
+    format!("{title}  {}", chord_for(id, cx))
+        .trim_end()
+        .to_string()
 }
 
 /// The chord shown next to an action's name; empty when unbound.
