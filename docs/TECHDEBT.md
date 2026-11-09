@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Plan limits come from an experimental SDK call | `sidecars/claude` `info` | `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET` gives the 5-hour and weekly windows; the SDK says it will be renamed. The sidecar checks it exists and shows no limits without it. Before a session runs, a `claude` with no settings answers for about a second. |
 | Themes leave syntax colors to the kit | `ui::theme` | A theme file sets the editor's background and cursor line, not its token colors: those stay the kit's highlight theme until the format takes a `syntax` block. |
 | Find in Files test sometimes misses "Searching…" | `tests/search.rs` | Under a full `make check` the search can finish before the test reads the status (failed 1 of 4 runs, passes alone); the test wants a frame between batches it does not hold. |
 | A theme reload leaks the old tokens | `ui::theme` | `theme(cx)` hands out `&'static Theme` to its 100-odd callers, so each loaded theme is leaked, a few KB per edit of a theme file. |

@@ -109,6 +109,13 @@ Rules from the first line of code:
   session until the new list is accepted.
 - UI text says "Claude", never "Claude Code".
 
+Added 2026-11-09, on the owner's look: the bar under the box shows the agent, the provider or plan
+(`accountInfo`) and what is left of the 5-hour and weekly limits, read on open and after each turn;
+before a session runs, a `claude` with no settings, so no hooks, answers. Tool calls in a row fold
+into one line, edits show the lines they add and remove, a command's output opens on a click, and
+each turn ends with its time and a button that copies the answer; code blocks copy too. The last
+limits and commands are kept in `ui_state` for the next open.
+
 Second slice: subagents and tasks, MCP status, fork, open in terminal via `--resume` (without injected env),
 Detached data as tools through the sidecar.
 

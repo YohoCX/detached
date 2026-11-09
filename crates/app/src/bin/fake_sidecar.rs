@@ -15,7 +15,7 @@ fn note(text: String) {
 }
 
 fn turn_end(ok: bool) {
-    emit(json!({"type": "turn_end", "ok": ok}));
+    emit(json!({"type": "turn_end", "ok": ok, "ms": 12400}));
     let parts = [{ json!({"name": "Messages", "tokens": 200}) }];
     emit(json!({"type": "usage", "used": 250, "max": 1000, "parts": parts}));
 }
@@ -55,9 +55,12 @@ fn main() {
                         emit(json!({"type": "tool", "id": id, "name": "Bash", "detail": cmd}))
                     };
                     start("a", "echo a");
-                    emit(json!({"type": "tool_done", "id": "a", "ok": true}));
+                    emit(json!({"type": "tool_done", "id": "a", "ok": true, "output": "a"}));
                     start("b", "false");
                     emit(json!({"type": "tool_done", "id": "b", "ok": false}));
+                    let edit = json!({"type": "tool", "id": "c", "name": "Edit", "detail": "README.md", "lines": [3, 1]});
+                    emit(edit);
+                    emit(json!({"type": "tool_done", "id": "c", "ok": true}));
                     turn_end(true);
                 }
                 "deny" => {
@@ -140,6 +143,17 @@ fn main() {
             "sessions" => {
                 let past = [json!({"id": "old1", "title": "Fix the build", "modified": 1})];
                 emit(json!({"type": "sessions", "sessions": past}));
+            }
+            "info" => {
+                let hours = |h: u64| {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+                    now.unwrap().as_millis() as u64 + h * 3_600_000 + 60_000
+                };
+                let limits = [
+                    json!({"name": "5h", "used": 34, "resets": hours(2)}),
+                    json!({"name": "Week", "used": 17, "resets": hours(72)}),
+                ];
+                emit(json!({"type": "info", "provider": "Claude Max", "limits": limits}));
             }
             "load" => {
                 let events = [

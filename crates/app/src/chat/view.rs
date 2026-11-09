@@ -1,14 +1,19 @@
 //! The chat page: what is set for the session, the conversation, and the box to write in.
 
+use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use detached_core::agent::Limit;
 use detached_core::api;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
 };
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder, px, relative,
 };
 
 use detached_core::git::snapshot::Skip;
@@ -16,7 +21,7 @@ use detached_core::types::{FileChange, Side};
 
 use super::session::{Answer, Back, Item, Session};
 use crate::blocking;
-use crate::store::{DiffDoc, Doc, Store};
+use crate::store::{DiffDoc, Doc, Location, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 
 const MODES: &[(&str, &str, Option<&str>)] = &[
@@ -61,6 +66,11 @@ pub struct ChatView {
     input: Entity<TextareaState>,
     scroll: ScrollHandle,
     suggest: Option<Suggest>,
+    /// Groups of tool calls opened or closed against their default, by their first call's id.
+    toggled: HashSet<String>,
+    /// Tool calls whose output shows.
+    outputs: HashSet<String>,
+    me: WeakEntity<ChatView>,
     /// A `/` typed before any session listed its commands.
     unlisted: bool,
     _files: Option<Task<()>>,
@@ -95,6 +105,7 @@ impl ChatView {
                 s.load_past(cx);
             }
             s.check_trust(cx);
+            s.ask_info(cx);
         });
         scroll.scroll_to_bottom();
         ChatView {
@@ -102,6 +113,9 @@ impl ChatView {
             input,
             scroll,
             suggest: None,
+            toggled: HashSet::new(),
+            outputs: HashSet::new(),
+            me: cx.weak_entity(),
             unlisted: false,
             _files: None,
             _subscriptions: subscriptions,
@@ -220,6 +234,34 @@ impl ChatView {
         let t = theme(cx);
         let s = self.session.read(cx);
         let name = Store::global(cx).read(cx).name_of(&s.repo).to_string();
+        let session = self.session.clone();
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.))
+            .px(px(12.))
+            .py(px(6.))
+            .border_b_1()
+            .border_color(t.line)
+            .child(div().text_color(t.accent).child(Icon::Chat))
+            .child(div().font_weight(FontWeight::BOLD).child("Claude"))
+            .child(div().min_w_0().truncate().text_color(t.muted).child(name))
+            .child(div().flex_1())
+            .child(
+                ui::titled(
+                    ui::icon_button("chat.new", Icon::Plus, cx),
+                    "New conversation",
+                )
+                .test_support()
+                .on_click(move |_, _, cx| session.update(cx, |s, cx| s.reset(cx))),
+            )
+    }
+
+    /// Under the box: who answers and on what plan, the session's settings, what is left.
+    fn bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = theme(cx);
+        let s = self.session.read(cx);
         let asked = MODES.iter().position(|(m, ..)| *m == s.asked);
         let options: Vec<_> = MODES
             .iter()
@@ -298,31 +340,169 @@ impl ChatView {
             .aria_label(SharedString::from(label))
             .text_color(t.muted)
         });
-        let session = self.session.clone();
+        let provider = s.info.as_ref().map(|i| {
+            div()
+                .id("chat.provider")
+                .test_support()
+                .aria_label(SharedString::from(i.provider.clone()))
+                .text_color(t.muted)
+                .child(i.provider.clone())
+        });
+        let limits = s
+            .info
+            .iter()
+            .flat_map(|i| {
+                i.limits
+                    .iter()
+                    .filter(|l| l.name == "5h" || l.name == "Week")
+            })
+            .map(|l| limit(l, s.info.as_ref().map_or(0, |i| i.at), cx));
         div()
             .flex()
-            .flex_none()
+            .flex_wrap()
             .items_center()
-            .gap(px(8.))
-            .px(px(12.))
-            .py(px(8.))
-            .border_b_1()
-            .border_color(t.line)
-            .child(div().font_weight(FontWeight::BOLD).child("Claude"))
-            .child(div().min_w_0().truncate().text_color(t.muted).child(name))
-            .child(div().flex_1())
-            .children(usage)
+            .gap(px(6.))
+            .text_size(text::SMALL)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .pr(px(4.))
+                    .child(div().text_color(t.accent).child(Icon::Chat.size(px(12.))))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Claude"))
+                    .children(provider.map(|p| div().flex().gap(px(6.)).child("·").child(p))),
+            )
+            .child(modes)
             .child(picker)
             .children(effort)
-            .child(modes)
-            .child(
-                ui::titled(
-                    ui::icon_button("chat.new", Icon::Plus, cx),
-                    "New conversation",
+            .child(div().flex_1())
+            .children(usage)
+            .children(limits)
+    }
+
+    /// The items, with each run of tool calls folded into one group.
+    fn feed(&self, cx: &App) -> Vec<AnyElement> {
+        let items = &self.session.read(cx).items;
+        let mut out = vec![];
+        let mut i = 0;
+        while i < items.len() {
+            let run = items[i..]
+                .iter()
+                .take_while(|it| matches!(it, Item::Tool { .. }))
+                .count();
+            match run {
+                0 | 1 => {
+                    out.push(self.item(i, &items[i], cx));
+                    i += 1;
+                }
+                n => {
+                    out.push(self.group(i, &items[i..i + n], cx));
+                    i += n;
+                }
+            }
+        }
+        out
+    }
+
+    /// Tool calls in a row: one line saying what ran, open while one runs or when one failed.
+    fn group(&self, first: usize, tools: &[Item], cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let state = |it: &Item| match it {
+            Item::Tool { ok, .. } => *ok,
+            _ => Some(true),
+        };
+        let running = tools.iter().any(|it| state(it).is_none());
+        let failed = tools.iter().any(|it| state(it) == Some(false));
+        let Some(Item::Tool { id, .. }) = tools.first() else {
+            return div().into_any_element();
+        };
+        let key = id.clone();
+        let open = self.toggled.contains(&key) != (running || failed);
+        let mut counts: Vec<(&str, usize)> = vec![];
+        for it in tools {
+            if let Item::Tool { name, .. } = it {
+                match counts.iter_mut().find(|(n, _)| n == name) {
+                    Some((_, c)) => *c += 1,
+                    None => counts.push((name, 1)),
+                }
+            }
+        }
+        let names = counts
+            .iter()
+            .map(|(n, c)| match c {
+                1 => n.to_string(),
+                c => format!("{n} ×{c}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let summary = format!("{} actions · {names}", tools.len());
+        let icon = match (running, failed) {
+            (true, _) => ui::spinner(t.accent).into_any_element(),
+            (_, true) => div()
+                .text_color(t.error)
+                .child(Icon::Close.size(px(12.)))
+                .into_any_element(),
+            _ => div()
+                .text_color(t.success)
+                .child(Icon::Check.size(px(12.)))
+                .into_any_element(),
+        };
+        let header = div()
+            .id(("chat.group", first))
+            .test_support()
+            .aria_label(SharedString::from(summary.clone()))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(radius::WIDGET)
+            .text_size(text::SMALL)
+            .text_color(t.muted)
+            .cursor_pointer()
+            .hover(|s| s.bg(t.hover).text_color(t.fg))
+            .on_click({
+                let me = self.me.clone();
+                move |_, _, cx| {
+                    me.update(cx, |this, cx| {
+                        if !this.toggled.remove(&key) {
+                            this.toggled.insert(key.clone());
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .child(icon)
+            .child(div().flex_1().min_w_0().truncate().child(summary))
+            .child(match open {
+                true => Icon::Down.size(px(12.)).into_any_element(),
+                false => Icon::Chevron.size(px(12.)).into_any_element(),
+            });
+        let lines = open.then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .ml(px(14.))
+                .pl(px(10.))
+                .border_l_1()
+                .border_color(t.line)
+                .children(
+                    tools
+                        .iter()
+                        .enumerate()
+                        .map(|(k, it)| self.item(first + k, it, cx)),
                 )
-                .test_support()
-                .on_click(move |_, _, cx| session.update(cx, |s, cx| s.reset(cx))),
-            )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(header)
+            .children(lines)
+            .into_any_element()
     }
 
     fn item(&self, i: usize, item: &Item, cx: &App) -> AnyElement {
@@ -358,12 +538,19 @@ impl ChatView {
                 )
         };
         match item {
-            Item::User(text) => row(format!("You: {text}"))
-                .px(px(12.))
-                .py(px(8.))
-                .rounded(radius::FIELD)
-                .bg(t.hover)
-                .child(text.clone())
+            Item::User(text) => div()
+                .flex()
+                .justify_end()
+                .child(
+                    row(format!("You: {text}"))
+                        .w_auto()
+                        .max_w(relative(0.85))
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(radius::FIELD)
+                        .bg(t.hover)
+                        .child(text.clone()),
+                )
                 .into_any_element(),
             Item::Text(text, md) => {
                 let body = match md {
@@ -373,7 +560,12 @@ impl ChatView {
                 row(text.clone()).child(body).into_any_element()
             }
             Item::Tool {
-                name, detail, ok, ..
+                id,
+                name,
+                detail,
+                lines,
+                output,
+                ok,
             } => {
                 let icon = match ok {
                     None => ui::spinner(t.accent).into_any_element(),
@@ -388,8 +580,71 @@ impl ChatView {
                 };
                 let state = ok.map_or("running", |ok| if ok { "ok" } else { "failed" });
                 let label = format!("{name} {detail} {state}");
-                line(label, icon, name.clone(), detail.clone()).into_any_element()
+                let shown = self.outputs.contains(id);
+                let key = id.clone();
+                let stats = lines.map(|(add, del)| {
+                    div()
+                        .flex()
+                        .flex_none()
+                        .gap(px(4.))
+                        .font_family(theme::mono(cx))
+                        .child(div().text_color(t.success).child(format!("+{add}")))
+                        .child(div().text_color(t.error).child(format!("−{del}")))
+                });
+                let file = self.file_of(name, detail, cx);
+                let head = line(label, icon, name.clone(), detail.clone())
+                    .children(stats)
+                    .when(!output.is_empty(), |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.text_color(t.fg))
+                            .child(match shown {
+                                true => Icon::Down.size(px(12.)).into_any_element(),
+                                false => Icon::Chevron.size(px(12.)).into_any_element(),
+                            })
+                            .on_click({
+                                let me = self.me.clone();
+                                move |_, _, cx| {
+                                    me.update(cx, |this, cx| {
+                                        if !this.outputs.remove(&key) {
+                                            this.outputs.insert(key.clone());
+                                        }
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                }
+                            })
+                    })
+                    .when_some(file, |d, loc| {
+                        d.cursor_pointer()
+                            .hover(|s| s.text_color(t.fg))
+                            .on_click(move |_, _, cx| crate::nav::open(cx, loc.clone()))
+                    });
+                let out = (shown && !output.is_empty()).then(|| {
+                    div()
+                        .id(("chat.output", i))
+                        .test_support()
+                        .aria_label(SharedString::from(output.clone()))
+                        .max_h(px(240.))
+                        .overflow_y_scroll()
+                        .ml(px(18.))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .rounded(radius::WIDGET)
+                        .bg(t.ground)
+                        .text_size(text::SMALL)
+                        .font_family(theme::mono(cx))
+                        .whitespace_normal()
+                        .child(output.clone())
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(head)
+                    .children(out)
+                    .into_any_element()
             }
+            Item::End { ms, ok } => self.end(i, *ms, *ok, cx),
             Item::Denied { tool, reason } => {
                 let icon = div()
                     .text_color(t.warning)
@@ -411,6 +666,78 @@ impl ChatView {
                 .child(text.clone())
                 .into_any_element(),
         }
+    }
+
+    /// The file a file tool worked on, to open on a click; None outside the repo.
+    fn file_of(&self, name: &str, detail: &str, cx: &App) -> Option<Location> {
+        if !matches!(
+            name,
+            "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit"
+        ) {
+            return None;
+        }
+        let repo = &self.session.read(cx).repo;
+        let path = detail
+            .strip_prefix(repo.as_str())?
+            .trim_start_matches(['/', '\\']);
+        Some(Location {
+            repo: repo.clone(),
+            rev: None,
+            path: path.to_string(),
+            line: None,
+            doc: None,
+        })
+    }
+
+    /// How the turn went and how long it took, and a button that copies its answer.
+    fn end(&self, i: usize, ms: u64, ok: bool, cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let items = &self.session.read(cx).items[..i];
+        let from = items
+            .iter()
+            .rposition(|it| matches!(it, Item::User(_)))
+            .map_or(0, |u| u + 1);
+        let answer = items[from..]
+            .iter()
+            .filter_map(|it| match it {
+                Item::Text(text, _) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let tools = items[from..]
+            .iter()
+            .filter(|it| matches!(it, Item::Tool { .. }))
+            .count();
+        let mut label = match ok {
+            true => format!("Done in {}", seconds(ms)),
+            false => format!("Stopped after {}", seconds(ms)),
+        };
+        if tools > 0 {
+            label += &format!(" · {tools} actions");
+        }
+        let copy = (!answer.is_empty()).then(|| {
+            ui::titled(
+                ui::icon_button(("chat.copy", i), Icon::Copy.size(px(12.)), cx),
+                "Copy the answer",
+            )
+            .test_support()
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(answer.clone()))
+            })
+        });
+        div()
+            .id(("chat.item", i))
+            .test_support()
+            .aria_label(SharedString::from(label.clone()))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(text::SMALL)
+            .text_color(t.muted)
+            .child(label)
+            .children(copy)
+            .into_any_element()
     }
 
     /// A permission prompt or Claude's questions, with the buttons that answer them.
@@ -869,17 +1196,14 @@ fn tokens(n: u64) -> String {
 impl Render for ChatView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let s = self.session.read(cx);
-        let items: Vec<_> = s
-            .items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| self.item(i, item, cx))
-            .collect();
+        let items = self.feed(cx);
         let past = items.is_empty().then(|| self.past(cx)).flatten();
         let review = self.review(cx);
         let footer = self.footer(cx);
         let suggestions = self.suggestions(cx);
+        let bar = self.bar(cx);
+        // A column to read in, as wide as a line of text should be.
+        let column = || div().flex().flex_col().w_full().max_w(px(860.)).mx_auto();
         div()
             .id("chat")
             .test_support()
@@ -895,53 +1219,133 @@ impl Render for ChatView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .gap(px(10.))
-                    .p(px(16.))
+                    .px(px(20.))
+                    .py(px(16.))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .children(review)
-                    .children(items)
-                    .children(past),
+                    .child(column().gap(px(12.)).children(items).children(past)),
             )
             .child(
                 div()
-                    .id("chat.input")
-                    .test_support()
-                    .flex()
-                    .flex_col()
                     .flex_none()
-                    .gap(px(8.))
-                    .p(px(12.))
+                    .px(px(20.))
+                    .pt(px(10.))
+                    .pb(px(8.))
                     .border_t_1()
                     .border_color(t.line)
-                    .children(footer)
-                    .children(suggestions)
-                    // Taken before the textarea, which would act on them first.
-                    .capture_action(cx.listener(|this, _: &Enter, window, cx| {
-                        if this.suggest.is_some() {
-                            cx.stop_propagation();
-                            let hi = this.suggest.as_ref().map_or(0, |s| s.hi);
-                            this.accept(hi, window, cx);
-                        } else if !window.modifiers().shift {
-                            cx.stop_propagation();
-                            this.send(window, cx);
-                        }
-                    }))
-                    .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
-                        if let Some(hi) = this.suggest.as_ref().map(|s| s.hi) {
-                            cx.stop_propagation();
-                            this.accept(hi, window, cx);
-                        }
-                    }))
-                    .capture_action(cx.listener(|this, _: &Escape, _, cx| {
-                        if this.suggest.take().is_some() {
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }))
-                    .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.step(false, cx)))
-                    .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)))
-                    .child(Textarea::new(&self.input)),
+                    .child(
+                        column()
+                            .id("chat.input")
+                            .test_support()
+                            .gap(px(8.))
+                            .children(review)
+                            .children(footer)
+                            .children(suggestions)
+                            // Taken before the textarea, which would act on them first.
+                            .capture_action(cx.listener(|this, _: &Enter, window, cx| {
+                                if this.suggest.is_some() {
+                                    cx.stop_propagation();
+                                    let hi = this.suggest.as_ref().map_or(0, |s| s.hi);
+                                    this.accept(hi, window, cx);
+                                } else if !window.modifiers().shift {
+                                    cx.stop_propagation();
+                                    this.send(window, cx);
+                                }
+                            }))
+                            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                                if let Some(hi) = this.suggest.as_ref().map(|s| s.hi) {
+                                    cx.stop_propagation();
+                                    this.accept(hi, window, cx);
+                                }
+                            }))
+                            .capture_action(cx.listener(|this, _: &Escape, _, cx| {
+                                if this.suggest.take().is_some() {
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            }))
+                            .capture_action(
+                                cx.listener(|this, _: &MoveUp, _, cx| this.step(false, cx)),
+                            )
+                            .capture_action(
+                                cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)),
+                            )
+                            .child(Textarea::new(&self.input))
+                            .child(bar),
+                    ),
             )
     }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn seconds(ms: u64) -> String {
+    match ms {
+        0..60_000 => format!("{:.1} s", ms as f64 / 1000.),
+        _ => format!("{} min {} s", ms / 60_000, ms % 60_000 / 1000),
+    }
+}
+
+/// A span of time, coarse: "13 min", "2 h 5 min", "3 d 4 h".
+fn span(ms: u64) -> String {
+    let m = ms / 60_000;
+    match m {
+        0 => "under a minute".into(),
+        1..60 => format!("{m} min"),
+        60..1440 => format!("{} h {} min", m / 60, m % 60),
+        _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
+    }
+}
+
+/// A plan limit as a short bar of what is used, with what is left and when it resets.
+fn limit(l: &Limit, at: u64, cx: &App) -> impl IntoElement + use<> {
+    let t = theme(cx);
+    let used = l.used.clamp(0., 100.);
+    let color = match used {
+        u if u >= 90. => t.error,
+        u if u >= 70. => t.warning,
+        _ => t.accent,
+    };
+    let name = match l.name.as_str() {
+        "5h" => "5-hour",
+        "Week" => "Weekly",
+        n => n,
+    };
+    let now = now();
+    let mut tip = format!("{name} limit: {used:.0}% used");
+    if let Some(r) = l.resets {
+        tip += &format!(", resets in {}", span(r.saturating_sub(now)));
+    }
+    if now.saturating_sub(at) > 10 * 60_000 {
+        tip += &format!(" (as of {} ago)", span(now - at));
+    }
+    let left = format!("{:.0}% left", 100. - used);
+    div()
+        .id(SharedString::from(format!("chat.limit.{}", l.name)))
+        .test_support()
+        .aria_label(SharedString::from(format!("{} {left}", l.name)))
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(radius::WIDGET)
+        .text_color(t.muted)
+        .hover(|s| s.bg(t.hover).text_color(t.fg))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .child(l.name.clone())
+        .child(
+            div().w(px(36.)).h(px(4.)).rounded_full().bg(t.line).child(
+                div()
+                    .h_full()
+                    .rounded_full()
+                    .bg(color)
+                    .w(relative(used as f32 / 100.)),
+            ),
+        )
+        .child(left)
 }

@@ -15,10 +15,10 @@ use futures::channel::oneshot;
 use gpui_kit::base::markdown_ast::Node;
 use gpui_kit::base::{MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle};
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FontWeight, HighlightStyle, Image, ImageFormat,
-    ImageSource, InteractiveElement, IntoElement, ListOffset, ParentElement, Pixels, Render,
-    SharedString, SharedUri, StatefulInteractiveElement, StyleRefinement, Styled, Task, WeakEntity,
-    Window, div, img, px, relative,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, HighlightStyle, Image,
+    ImageFormat, ImageSource, InteractiveElement, IntoElement, ListOffset, ParentElement, Pixels,
+    Render, SharedString, SharedUri, StatefulInteractiveElement, StyleRefinement, Styled, Task,
+    WeakEntity, Window, div, img, px, relative,
 };
 use markdown::ParseOptions;
 use percent_encoding::percent_decode_str;
@@ -28,7 +28,8 @@ use super::api::{Links, Location, open};
 use super::code::fence_language;
 use crate::blocking;
 use crate::store::Store;
-use crate::ui::theme::{self, doc, radius, text};
+use crate::ui::theme::{self, doc, radius, text, theme};
+use crate::ui::{self, Icon};
 
 type Diagram = Result<Arc<Image>, SharedString>;
 
@@ -240,7 +241,7 @@ impl Render for Markdown {
             .style(style(file, cx))
             .image_source(self.image_source())
             // In place of the kit's language label, which Monaco's colorized blocks did not have.
-            .code_block_actions(|_, _, _| div())
+            .code_block_actions(|block, _, cx| copy_button(block.code(), cx))
             .on_link_click(move |url, _, _, cx| {
                 click.update(cx, |m, cx| m.click(url, cx)).ok();
             })
@@ -273,6 +274,15 @@ impl Render for Markdown {
             )
             .into_any_element()
     }
+}
+
+fn copy_button(code: SharedString, cx: &App) -> impl IntoElement + use<> {
+    let id = SharedString::from(format!("md.copy.{}", code.len()));
+    ui::titled(ui::icon_button(id, Icon::Copy.size(px(12.)), cx), "Copy")
+        .text_color(theme(cx).muted)
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()))
+        })
 }
 
 fn mermaid_block(node: &Node) -> Option<MarkdownNode> {

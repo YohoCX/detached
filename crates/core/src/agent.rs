@@ -92,6 +92,10 @@ pub enum Command {
         cwd: String,
         id: String,
     },
+    /// The account and its plan limits; needs no `Start`.
+    Info {
+        cwd: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -122,6 +126,17 @@ pub struct SlashCommand {
     pub name: String,
     pub description: String,
     pub hint: String,
+}
+
+/// A plan limit's window, as `/usage` shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Limit {
+    /// "5h", "Week", or a model's weekly window by its name.
+    pub name: String,
+    /// Percent of the window used.
+    pub used: f64,
+    /// Milliseconds since the epoch.
+    pub resets: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -174,10 +189,16 @@ pub enum Event {
         id: String,
         name: String,
         detail: String,
+        /// Lines an edit adds and removes.
+        #[serde(default)]
+        lines: Option<(u32, u32)>,
     },
     ToolDone {
         id: String,
         ok: bool,
+        /// The end of what a command printed.
+        #[serde(default)]
+        output: String,
     },
     Denied {
         tool: String,
@@ -216,6 +237,15 @@ pub enum Event {
     },
     TurnEnd {
         ok: bool,
+        #[serde(default)]
+        ms: u64,
+    },
+    /// Who answers and what is left of the plan.
+    Info {
+        /// "Claude Max", "Anthropic API", "Amazon Bedrock", ...
+        provider: String,
+        #[serde(default)]
+        limits: Vec<Limit>,
     },
     Sessions {
         sessions: Vec<Past>,
@@ -358,7 +388,8 @@ mod tests {
             e,
             Event::ToolDone {
                 id: "a".into(),
-                ok: true
+                ok: true,
+                output: String::new(),
             }
         );
         let e: Event = serde_json::from_str(r#"{"type":"from_the_future","x":1}"#).unwrap();

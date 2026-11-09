@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use detached_core::agent::{
-    self, Agent, Command, Event, Model, Part, Past, Question, SlashCommand, Task as Background,
+    self, Agent, Command, Event, Limit, Model, Part, Past, Question, SlashCommand,
+    Task as Background,
 };
 use detached_core::api;
 use detached_core::git::snapshot::Restore;
@@ -12,6 +13,7 @@ use detached_core::types::{FileChange, Side};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::{AppContext, Context, Entity, Task};
+use serde::{Deserialize, Serialize};
 
 use crate::blocking;
 use crate::files::{Links, Markdown};
@@ -20,6 +22,16 @@ use crate::ui_state;
 
 /// The last commands each repo's session listed, for `/` before a session runs.
 const COMMANDS: &str = "chat.commands";
+/// The account's provider and limits as last read, shown at once on the next open.
+const INFO: &str = "chat.info";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Info {
+    pub provider: String,
+    pub limits: Vec<Limit>,
+    /// When it was read, in milliseconds since the epoch.
+    pub at: u64,
+}
 
 pub const AUTO: &str = "auto";
 
@@ -56,8 +68,17 @@ pub enum Item {
         id: String,
         name: String,
         detail: String,
+        /// Lines an edit adds and removes.
+        lines: Option<(u32, u32)>,
+        /// The end of what a command printed.
+        output: String,
         /// None while it runs.
         ok: Option<bool>,
+    },
+    /// A turn ended, after `ms`.
+    End {
+        ms: u64,
+        ok: bool,
     },
     Denied {
         tool: String,
@@ -97,6 +118,7 @@ pub struct Session {
     pub usage: Option<(u64, u64)>,
     pub parts: Vec<Part>,
     pub commands: Vec<SlashCommand>,
+    pub info: Option<Info>,
     pub tasks: Vec<Background>,
     /// Past conversations in this folder, once asked for.
     pub past: Option<Vec<Past>>,
@@ -138,6 +160,7 @@ impl Session {
             usage: None,
             parts: vec![],
             commands: vec![],
+            info: None,
             tasks: vec![],
             past: None,
             session_id: None,
@@ -334,12 +357,20 @@ impl Session {
                 }
                 match found {
                     Ok((_, _, files)) if files.is_empty() => {}
-                    Ok((start, end, files)) => s.items.push(Item::Changes {
-                        start,
-                        end,
-                        files,
-                        back: Back::Idle,
-                    }),
+                    Ok((start, end, files)) => {
+                        // Above the turn's summary, which came first.
+                        let at = match s.items.last() {
+                            Some(Item::End { .. }) => s.items.len() - 1,
+                            _ => s.items.len(),
+                        };
+                        let changes = Item::Changes {
+                            start,
+                            end,
+                            files,
+                            back: Back::Idle,
+                        };
+                        s.items.insert(at, changes);
+                    }
                     Err(e) => s
                         .items
                         .push(Item::Note(format!("No snapshot after the turn: {e}"))),
@@ -533,6 +564,16 @@ impl Session {
         let mut all: BTreeMap<String, Vec<SlashCommand>> =
             ui_state::get(COMMANDS, cx).unwrap_or_default();
         self.commands = all.remove(&self.repo).unwrap_or_default();
+        self.info = self.info.take().or_else(|| ui_state::get(INFO, cx));
+    }
+
+    /// Reads the account's provider and limits again, unless the sidecar is not installed.
+    pub fn ask_info(&mut self, cx: &mut Context<Self>) {
+        let core = Store::global(cx).read(cx).core().clone();
+        if agent::sidecar(&core.config_dir).is_file() {
+            let cwd = self.repo.clone();
+            self.command(Command::Info { cwd }, cx);
+        }
     }
 
     /// Asks the sidecar for this folder's past conversations, unless it is not installed.
@@ -675,20 +716,45 @@ impl Session {
                 let md = Self::markdown(text.clone(), cx);
                 self.items.push(Item::Text(text, Some(md)));
             }
-            Event::Tool { id, name, detail } => self.items.push(Item::Tool {
+            Event::Tool {
                 id,
                 name,
                 detail,
+                lines,
+            } => self.items.push(Item::Tool {
+                id,
+                name,
+                detail,
+                lines,
+                output: String::new(),
                 ok: None,
             }),
-            Event::ToolDone { id, ok } => {
+            Event::ToolDone { id, ok, output } => {
                 let found = self.items.iter_mut().rev().find_map(|i| match i {
-                    Item::Tool { id: tool, ok, .. } if *tool == id => Some(ok),
+                    Item::Tool {
+                        id: tool,
+                        ok,
+                        output,
+                        ..
+                    } if *tool == id => Some((ok, output)),
                     _ => None,
                 });
-                if let Some(state) = found {
+                if let Some((state, out)) = found {
                     *state = Some(ok);
+                    *out = output;
                 }
+            }
+            Event::Info { provider, limits } => {
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as u64);
+                let info = Info {
+                    provider,
+                    limits,
+                    at,
+                };
+                ui_state::set(INFO, &info, cx);
+                self.info = Some(info);
             }
             Event::Denied { tool, reason } => self.items.push(Item::Denied { tool, reason }),
             Event::Ask {
@@ -719,7 +785,8 @@ impl Session {
                 self.usage = Some((used, max));
                 self.parts = parts;
             }
-            Event::TurnEnd { .. } => {
+            Event::TurnEnd { ok, ms } => {
+                self.items.push(Item::End { ms, ok });
                 self.busy = false;
                 self.ask_gone(None);
                 self.end_turn(cx);

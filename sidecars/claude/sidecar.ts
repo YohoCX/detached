@@ -20,6 +20,7 @@ async function* prompts() {
 }
 
 let q: ReturnType<typeof query> | undefined;
+let cwd = "";
 let asked = "auto";
 let models: { value: string; auto: boolean }[] = [];
 let told = false;
@@ -32,6 +33,7 @@ const stopTask = (id: string) => q?.stopTask(id).catch(() => {});
 
 function start(c: any) {
   asked = c.mode;
+  cwd = c.cwd;
   const claude = Bun.which("claude");
   if (!claude) {
     emit({ type: "error", message: "claude is not on PATH" });
@@ -111,19 +113,44 @@ const detail = (input: any) =>
     .split("\n")[0]
     .slice(0, 200);
 
+const count = (s: unknown) => (typeof s === "string" && s ? s.split("\n").length : 0);
+
+// What an edit adds and removes, in lines.
+function lines(name: string, i: any): [number, number] | null {
+  if (name === "Edit") return [count(i?.new_string), count(i?.old_string)];
+  if (name === "MultiEdit")
+    return (i?.edits ?? []).reduce((a: number[], e: any) => [a[0] + count(e.new_string), a[1] + count(e.old_string)], [0, 0]);
+  if (name === "Write") return [count(i?.content), 0];
+  return null;
+}
+
+// The end of what a command printed; other tools' results are files and searches the feed does not show.
+function output(b: any): string {
+  const text = typeof b.content === "string" ? b.content : (b.content ?? []).map((c: any) => c.text ?? "").join("\n");
+  return text.split("\n").slice(-40).join("\n").slice(-4000);
+}
+
+const tools = new Map<string, string>();
+
 // The feed's events for one live or saved message.
 function feed(m: any, out: (e: Record<string, unknown>) => void) {
   const content = m.message?.content;
   if (m.type === "assistant") {
     for (const b of content ?? []) {
       if (b.type === "text") out({ type: "text", text: b.text });
-      if (b.type === "tool_use") out({ type: "tool", id: b.id, name: b.name, detail: detail(b.input) });
+      if (b.type === "tool_use") {
+        tools.set(b.id, b.name);
+        out({ type: "tool", id: b.id, name: b.name, detail: detail(b.input), lines: lines(b.name, b.input) });
+      }
     }
   }
   if (m.type === "user") {
     if (typeof content === "string") return void (NOISE.test(content) || out({ type: "user", text: content }));
     for (const b of content ?? []) {
-      if (b.type === "tool_result") out({ type: "tool_done", id: b.tool_use_id, ok: !b.is_error });
+      if (b.type === "tool_result") {
+        const shown = tools.get(b.tool_use_id) === "Bash" ? output(b) : "";
+        out({ type: "tool_done", id: b.tool_use_id, ok: !b.is_error, output: shown });
+      }
       if (b.type === "text" && !NOISE.test(b.text)) out({ type: "user", text: b.text });
     }
   }
@@ -144,7 +171,8 @@ async function on(m: any) {
       feed({ ...m, message: { content: Array.isArray(m.message.content) ? m.message.content.filter((b: any) => b.type === "tool_result") : [] } }, emit);
       break;
     case "result":
-      emit({ type: "turn_end", ok: m.subtype === "success" });
+      emit({ type: "turn_end", ok: m.subtype === "success", ms: m.duration_ms ?? 0 });
+      info(cwd).catch(() => {});
       await q?.getContextUsage({ detail: "summary" }).then(
         (u: any) =>
           emit({
@@ -198,6 +226,56 @@ async function init(m: any) {
   commands(await q!.supportedCommands());
 }
 
+const PROVIDERS: Record<string, string> = {
+  bedrock: "Amazon Bedrock",
+  vertex: "Google Vertex AI",
+  foundry: "Microsoft Foundry",
+  anthropicAws: "Claude on AWS",
+  anthropicGoogleCloud: "Claude on Google Cloud",
+  gateway: "Gateway",
+};
+
+function provider(a: any): string {
+  if (a.apiProvider && a.apiProvider !== "firstParty") return PROVIDERS[a.apiProvider] ?? a.apiProvider;
+  const plan = String(a.subscriptionType ?? "");
+  if (plan) return plan.startsWith("Claude") ? plan : `Claude ${plan[0].toUpperCase()}${plan.slice(1)}`;
+  return "Anthropic API";
+}
+
+function limits(r: any) {
+  const w = (name: string, x: any) =>
+    x?.utilization != null ? [{ name, used: x.utilization, resets: x.resets_at ? Date.parse(x.resets_at) : null }] : [];
+  if (!r) return [];
+  const models = (r.model_scoped ?? []).flatMap((m: any) => w(m.display_name, m));
+  return [...w("5h", r.five_hour), ...w("Week", r.seven_day), ...w("Opus", r.seven_day_opus), ...w("Sonnet", r.seven_day_sonnet), ...models];
+}
+
+// The account and its plan limits. Before a session runs, a process with no settings answers: no hooks, no prompt.
+async function info(dir: string) {
+  const claude = Bun.which("claude");
+  if (!claude) return;
+  let p: any = q;
+  if (!p) {
+    p = query({
+      prompt: (async function* () {
+        await new Promise(() => {});
+      })() as never,
+      options: { cwd: dir, settingSources: [], pathToClaudeCodeExecutable: claude } as never,
+    });
+    (async () => {
+      for await (const _ of p);
+    })().catch(() => {});
+  }
+  try {
+    const a = await p.accountInfo();
+    const usage = p.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    const u = usage ? await usage.call(p, { skipBehaviors: true }).catch(() => null) : null;
+    emit({ type: "info", provider: provider(a), limits: limits(u?.rate_limits) });
+  } finally {
+    if (p !== q) p.close();
+  }
+}
+
 async function command(c: any) {
   switch (c.type) {
     case "start":
@@ -236,6 +314,8 @@ async function command(c: any) {
       const sessions = all.map((s: any) => ({ id: s.sessionId, title: s.customTitle ?? s.summary, modified: s.lastModified }));
       return emit({ type: "sessions", sessions });
     }
+    case "info":
+      return info(c.cwd);
     case "load": {
       const events: Record<string, unknown>[] = [];
       for (const m of await getSessionMessages(c.id, { dir: c.cwd })) if (!m.parent_tool_use_id) feed(m, (e) => events.push(e));

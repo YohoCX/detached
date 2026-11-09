@@ -73,8 +73,8 @@ fn a_message_is_answered_and_the_turn_ends(cx: &mut TestAppContext) {
     let got = items(cx);
     assert_eq!(
         got,
-        ["You: hello", "said hello"],
-        "the deltas became the text"
+        ["You: hello", "said hello", "Done in 12.4 s"],
+        "the deltas became the text, and the turn says how long it took"
     );
     // Usage comes after the turn's end, as from the SDK.
     wait_until(cx, |cx| {
@@ -93,6 +93,58 @@ fn enter_does_not_send_an_empty_message_or_during_a_turn(cx: &mut TestAppContext
     wait_for_item(cx, "Working");
     say(cx, "second");
     assert_eq!(items(cx).len(), 2, "the second message waits in the box");
+}
+
+#[gpui_kit::test]
+fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    wait_until(cx, |cx| cx.find("chat.provider").is_some());
+    assert_eq!(label(cx, "chat.provider").as_deref(), Some("Claude Max"));
+    assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
+    assert_eq!(
+        label(cx, "chat.limit.Week").as_deref(),
+        Some("Week 83% left")
+    );
+    assert!(items(cx).is_empty(), "no message was needed");
+}
+
+#[gpui_kit::test]
+fn a_turn_s_tools_fold_into_one_line_and_a_command_s_output_opens_on_a_click(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    say(cx, "tool");
+    wait_for_item(cx, "false failed");
+    let group = ("chat.group", 1usize);
+    assert_eq!(
+        label(cx, group).as_deref(),
+        Some("3 actions · Bash ×2, Edit")
+    );
+    assert!(
+        items(cx).iter().any(|i| i == "Edit README.md ok"),
+        "open, as one failed"
+    );
+    let echo = index_of(cx, "Bash echo a ok");
+    cx.click(("chat.item", echo));
+    assert_eq!(label(cx, ("chat.output", echo)).as_deref(), Some("a"));
+    cx.click(group);
+    assert!(cx.find(("chat.item", echo)).is_none(), "folded");
+    let end = ("chat.item", 4usize);
+    assert_eq!(
+        label(cx, end).as_deref(),
+        Some("Done in 12.4 s · 3 actions")
+    );
+}
+
+#[gpui_kit::test]
+fn the_answer_copies_from_under_the_turn(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "Done in");
+    let end = index_of(cx, "Done in");
+    cx.click(("chat.copy", end));
+    let copied = cx.read_from_clipboard().and_then(|c| c.text());
+    assert_eq!(copied.as_deref(), Some("said hello"));
 }
 
 #[gpui_kit::test]
@@ -384,9 +436,9 @@ fn the_repo_s_settings_load_once_trusted_and_a_change_asks_again(cx: &mut TestAp
     say(cx, "settings");
     wait_for_item(cx, "settings changed, so the session stopped");
     wait_until(cx, |cx| {
-        items(cx)
-            .last()
-            .is_some_and(|i| i == "project settings off")
+        let got = items(cx);
+        let mut answers = got.iter().rev().skip_while(|i| i.starts_with("Done "));
+        answers.next().is_some_and(|i| i == "project settings off")
     });
     assert_eq!(
         label(cx, "chat.trust").as_deref(),
