@@ -219,6 +219,12 @@ Added 2026-11-09, on the owner's look:
   repo inside, and its changes and going back come per repo.
 - Events, in the bottom zone, keeps every error and warning the app shows (status messages, notices,
   the chat's errors); the status bar counts the unread ones and its message goes after 10 s.
+- A zone's grip is the whole gap beside it, lit by a thin line while hovered or held; a double click
+  gives the zone its default size back, and a side zone dragged nearly shut closes, keeping its size.
+- Any number of chats per repo or folder (`Doc::Chat { repo, n }`), each a tab named by its first
+  message; + opens another. Chats ends, archives or deletes an active one. The bar under the box
+  shows Claude (plan in the tooltip), the mode in a menu, the model running (the last one before a
+  session says), then context and limits on the right.
 
 ### 4. Plugins from a folder
 

@@ -270,7 +270,7 @@ fn chat_here_on_a_folder_opens_a_chat_on_it(cx: &mut TestAppContext) {
         let repo = path(folder);
         assert_eq!(
             cx.store(|s, _| s.shown().cloned()),
-            Some(Doc::Chat { repo })
+            Some(Doc::Chat { repo, n: 0 })
         );
     }
 }

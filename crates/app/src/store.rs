@@ -65,8 +65,11 @@ pub enum Doc {
         id: u64,
         name: String,
     },
+    /// The `n`th chat open on `repo`.
     Chat {
         repo: String,
+        #[serde(default)]
+        n: u32,
     },
     /// A shell moved out of the Terminal app; after a restart, a new one in `cwd`.
     Terminal {

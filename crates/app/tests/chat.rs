@@ -98,8 +98,9 @@ fn enter_does_not_send_an_empty_message_or_during_a_turn(cx: &mut TestAppContext
 #[gpui_kit::test]
 fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    wait_until(cx, |cx| cx.find("chat.provider").is_some());
-    assert_eq!(label(cx, "chat.provider").as_deref(), Some("Claude Max"));
+    wait_until(cx, |cx| {
+        label(cx, "chat.provider").as_deref() == Some("Claude Max")
+    });
     assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
     assert_eq!(
         label(cx, "chat.limit.Week").as_deref(),
@@ -235,15 +236,66 @@ fn the_end_of_a_turn_refreshes_the_repo(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_new_conversation_ends_the_sidecar(cx: &mut TestAppContext) {
+fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");
     wait_for_item(cx, "said hello");
     idle(cx);
     cx.click("chat.new");
+    settle(cx);
     assert!(items(cx).is_empty());
+    assert!(cx.find("doc.chat.1").is_some() && cx.find("doc.chat").is_some());
+    assert!(
+        label(cx, "doc.chat").is_some_and(|l| l == "solo · hello"),
+        "named by what was said"
+    );
+    open_tab(cx, "tab.chats");
+    assert!(cx.find(("chats.open", 1usize)).is_some(), "both are active");
+    cx.update(|w, cx| w.hover(("chats.open", 0usize), cx));
+    cx.click(("chats.open.end", 0usize));
+    settle(cx);
+    assert!(cx.find("doc.chat").is_none() && cx.find(("chats.open", 1usize)).is_none());
     let eof = cx.sb.solo().join("sidecar-eof");
     wait_until(cx, |_| eof.exists());
+}
+
+#[gpui_kit::test]
+fn an_active_chat_archives_or_deletes_its_conversation_and_ends(cx: &mut TestAppContext) {
+    let file = std::cell::RefCell::new(None);
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo().display().to_string();
+        let past =
+            serde_json::json!([{"id": "fresh", "title": "Hello", "modified": 1, "cwd": solo}]);
+        let beside = agent::sidecar(&sb.state.config_dir).with_file_name("sessions.json");
+        std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+        std::fs::write(&beside, past.to_string()).unwrap();
+        *file.borrow_mut() = Some(beside);
+    });
+    let file = file.into_inner().unwrap();
+    let read = |f: &std::path::Path| std::fs::read_to_string(f).unwrap();
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    open_tab(cx, "tab.chats");
+    cx.update(|w, cx| w.hover(("chats.open", 0usize), cx));
+    cx.click(("chats.open.archive", 0usize));
+    wait_until(cx, |_| read(&file).contains("archived"));
+    assert!(cx.find(("chats.open", 0usize)).is_none() && cx.find("doc.chat").is_none());
+
+    cx.click("top.chat");
+    say(cx, "again");
+    wait_for_item(cx, "said again");
+    idle(cx);
+    open_tab(cx, "tab.chats");
+    cx.click(("chats.open", 0usize));
+    cx.press("backspace");
+    assert!(
+        cx.find(("chats.open.confirm", 0usize)).is_some(),
+        "asks first"
+    );
+    cx.press("enter");
+    wait_until(cx, |_| !read(&file).contains("fresh"));
+    assert!(cx.find(("chats.open", 0usize)).is_none());
 }
 
 #[gpui_kit::test]
@@ -498,7 +550,7 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     let cx = &mut open(cx);
     let group = cx.sb.ws().join("group");
     let repo = group.display().to_string();
-    cx.store(|s, cx| s.show(Doc::Chat { repo }, cx));
+    cx.store(|s, cx| s.show(Doc::Chat { repo, n: 0 }, cx));
     settle(cx);
     assert!(label(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
     say(cx, "edit both");

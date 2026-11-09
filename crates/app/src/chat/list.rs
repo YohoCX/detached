@@ -8,15 +8,16 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyElement, App, Context, ElementId, FocusHandle, FontWeight, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, Context, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    px,
 };
 
-use super::{State, label, open, session};
+use super::{Session, State, label, open};
+use crate::blocking;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::{actions, blocking, keymap};
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
@@ -32,14 +33,14 @@ enum Filter {
 /// What a row stands for, which stays when the list is rebuilt.
 #[derive(Clone, PartialEq)]
 enum Key {
-    Open(String),
+    Open(String, u32),
     Past(String),
     Archived,
 }
 
 enum Line {
     Heading(String),
-    Open(String),
+    Open(String, u32, Entity<Session>),
     Past(Past),
     Archived(usize),
 }
@@ -48,7 +49,7 @@ impl Line {
     fn key(&self) -> Option<Key> {
         match self {
             Line::Heading(_) => None,
-            Line::Open(repo) => Some(Key::Open(repo.clone())),
+            Line::Open(repo, n, _) => Some(Key::Open(repo.clone(), *n)),
             Line::Past(p) => Some(Key::Past(p.id.clone())),
             Line::Archived(_) => Some(Key::Archived),
         }
@@ -62,8 +63,8 @@ pub struct ChatList {
     filter: Filter,
     show_archived: bool,
     selected: Option<Key>,
-    /// The conversation whose delete waits for a confirm.
-    deleting: Option<String>,
+    /// The row whose delete waits for a confirm.
+    deleting: Option<Key>,
     focus: FocusHandle,
     scroll: ScrollHandle,
     _tasks: Vec<Task<()>>,
@@ -92,39 +93,73 @@ impl ChatList {
         self.run(vec![], cx);
     }
 
-    /// The row after `id`'s, or the one before at the end, to take the selection when it goes.
-    fn next(&self, id: &str, cx: &App) -> Option<Key> {
+    /// The row after `key`'s, or the one before at the end, to take the selection when it goes.
+    fn next(&self, key: &Key, cx: &App) -> Option<Key> {
         let keys: Vec<_> = self.lines(cx).iter().filter_map(Line::key).collect();
-        let i = keys.iter().position(|k| *k == Key::Past(id.into()))?;
+        let i = keys.iter().position(|k| k == key)?;
         keys.get(i + 1)
             .or(i.checked_sub(1).and_then(|i| keys.get(i)))
             .cloned()
     }
 
-    fn archive(&mut self, id: &str, cx: &mut Context<Self>) {
-        let next = self.next(id, cx);
-        let Some(p) = self.past.iter_mut().find(|p| p.id == id) else {
+    /// The conversation a row stands for, and its folder.
+    fn conversation(&self, key: &Key, cx: &App) -> Option<(String, String)> {
+        match key {
+            Key::Open(repo, n) => {
+                let s = super::find(repo, *n, cx)?;
+                let id = s.read(cx).conversation()?.to_string();
+                Some((repo.clone(), id))
+            }
+            Key::Past(id) => {
+                let p = self.past.iter().find(|p| p.id == *id)?;
+                Some((p.cwd.clone().unwrap_or_default(), id.clone()))
+            }
+            Key::Archived => None,
+        }
+    }
+
+    /// Ends an open chat; its conversation stays with the past ones.
+    fn end(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        if let Key::Open(repo, n) = key {
+            if self.selected.as_ref() == Some(key) {
+                self.selected = self.next(key, cx);
+            }
+            super::end(repo, *n, window, cx);
+            self.refresh(cx);
+        }
+    }
+
+    fn archive(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((cwd, id)) = self.conversation(key, cx) else {
             return;
         };
-        if !self.show_archived && self.selected == Some(Key::Past(id.into())) {
+        let next = self.next(key, cx);
+        let past = self.past.iter_mut().find(|p| p.id == id);
+        let archived = matches!(key, Key::Open(..)) || !past.as_ref().is_some_and(|p| p.archived());
+        if let Some(p) = past {
+            p.tag = archived.then(|| "archived".to_string());
+        }
+        if archived && !self.show_archived && self.selected.as_ref() == Some(key) {
             self.selected = next;
         }
-        let archived = !p.archived();
-        p.tag = archived.then(|| "archived".to_string());
-        let (cwd, id) = (p.cwd.clone().unwrap_or_default(), p.id.clone());
-        super::forget(&id, cx);
+        match key {
+            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            _ => super::forget(&id, cx),
+        }
         self.run(vec![Command::Archive { cwd, id, archived }], cx);
     }
 
-    fn delete(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(p) = self.past.iter().find(|p| p.id == id) else {
+    fn delete(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
+        self.deleting = None;
+        let Some((cwd, id)) = self.conversation(key, cx) else {
             return;
         };
-        let (cwd, id) = (p.cwd.clone().unwrap_or_default(), p.id.clone());
-        self.selected = self.next(&id, cx);
+        self.selected = self.next(key, cx);
         self.past.retain(|p| p.id != id);
-        self.deleting = None;
-        super::forget(&id, cx);
+        match key {
+            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            _ => super::forget(&id, cx),
+        }
         self.run(vec![Command::Delete { cwd, id }], cx);
     }
 
@@ -204,10 +239,10 @@ impl ChatList {
     fn lines(&self, cx: &App) -> Vec<Line> {
         let mut out = vec![];
         if self.filter != Filter::Inactive {
-            let open: Vec<_> = open(cx).iter().map(|s| s.read(cx).repo.clone()).collect();
+            let open = open(cx);
             if !open.is_empty() {
                 out.push(Line::Heading("Active".into()));
-                out.extend(open.into_iter().map(Line::Open));
+                out.extend(open.into_iter().map(|(r, n, s)| Line::Open(r, n, s)));
             }
         }
         if self.filter == Filter::Active {
@@ -236,18 +271,19 @@ impl ChatList {
     /// Opens the row's chat beside the list, which keeps the keys, as a mail list does.
     fn activate(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
         match key {
-            Key::Open(repo) => show(repo.clone(), cx),
+            Key::Open(repo, n) => {
+                let doc = Doc::Chat {
+                    repo: repo.clone(),
+                    n: *n,
+                };
+                Store::global(cx).update(cx, |s, cx| s.show(doc, cx));
+            }
             Key::Past(id) => {
                 let past = self.past.iter().find(|p| p.id == *id);
                 let Some(cwd) = past.and_then(|p| p.cwd.clone()) else {
                     return;
                 };
-                session(&cwd, cx).update(cx, |s, cx| {
-                    if !s.busy {
-                        s.open_past(id.clone(), cx)
-                    }
-                });
-                show(cwd, cx);
+                super::resume(cwd, id.clone(), cx);
             }
             Key::Archived => self.show_archived = !self.show_archived,
         }
@@ -267,13 +303,13 @@ impl ChatList {
         let at = keys
             .iter()
             .position(|(_, k)| Some(k) == self.selected.as_ref());
-        let past = match &self.selected {
-            Some(Key::Past(id)) => Some(id.clone()),
-            _ => None,
-        };
+        let said = self
+            .selected
+            .clone()
+            .filter(|k| self.conversation(k, cx).is_some());
         let k = &e.keystroke;
         match (k.key.as_str(), self.deleting.clone()) {
-            ("enter", Some(id)) => self.delete(&id, cx),
+            ("enter", Some(key)) => self.delete(&key, window, cx),
             ("escape", Some(_)) => self.deleting = None,
             (_, Some(_)) => {}
             ("down" | "up", None) if !keys.is_empty() => {
@@ -288,10 +324,11 @@ impl ChatList {
                 Some(key) => self.activate(&key, window, cx),
                 None => return,
             },
-            ("backspace" | "delete", None) if past.is_some() => self.deleting = past,
-            ("e", None) if !k.modifiers.modified() && past.is_some() => {
-                self.archive(&past.unwrap_or_default(), cx)
-            }
+            ("backspace" | "delete", None) if said.is_some() => self.deleting = said,
+            ("e", None) if !k.modifiers.modified() => match said {
+                Some(key) => self.archive(&key, window, cx),
+                None => return,
+            },
             _ => return,
         }
         cx.stop_propagation();
@@ -344,59 +381,78 @@ impl ChatList {
                 })
                 .child(div().truncate().child(text.clone()))
                 .into_any_element(),
-            Line::Open(repo) => {
+            Line::Open(repo, chat, session) => {
                 let i = n.0;
                 n.0 += 1;
-                let s = session(repo, cx).read(cx);
+                let key = Key::Open(repo.clone(), *chat);
+                if self.deleting.as_ref() == Some(&key) {
+                    return self.confirm(i, key, cx);
+                }
+                let s = session.read(cx);
                 let state = s.state();
+                let said = s.conversation().is_some();
                 let last = s.items.iter().rev().find_map(|it| match it {
                     super::Item::User(text) => Some(text.clone()),
                     _ => None,
                 });
                 let name = label(repo, cx);
+                let mut buttons =
+                    vec![self.button(("chats.open.end", i), Icon::Close, "End chat", &key, on, cx)];
+                if said {
+                    buttons.push(self.button(
+                        ("chats.open.archive", i),
+                        Icon::Archive,
+                        "Archive  E",
+                        &key,
+                        on,
+                        cx,
+                    ));
+                    buttons.push(self.button(
+                        ("chats.open.delete", i),
+                        Icon::Trash,
+                        "Delete  ⌫",
+                        &key,
+                        on,
+                        cx,
+                    ));
+                }
+                let slot = div()
+                    .flex()
+                    .flex_none()
+                    .justify_end()
+                    .gap(px(2.))
+                    .w(px(58.))
+                    .children(buttons);
                 row(("chats.open", i).into(), name.clone(), cx)
                     .aria_description(SharedString::from(format!("{state:?}")))
                     .child(state_icon(state, cx))
                     .child(div().flex_none().child(name))
-                    .children(last.map(|l| div().min_w_0().truncate().text_color(t.muted).child(l)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(t.muted)
+                            .children(last),
+                    )
+                    .child(slot)
                     .into_any_element()
             }
             Line::Past(p) => {
                 let k = n.1;
                 n.1 += 1;
-                if self.deleting.as_ref() == Some(&p.id) {
-                    return self.confirm(k, &p.id, cx);
+                let key = Key::Past(p.id.clone());
+                if self.deleting.as_ref() == Some(&key) {
+                    return self.confirm(k, key, cx);
                 }
-                let (a, d) = (p.id.clone(), p.id.clone());
                 let archive = match p.archived() {
                     true => "Unarchive  E",
                     false => "Archive  E",
                 };
-                let archive = ui::hover_button(
-                    ("chats.archive", k),
-                    Icon::Archive.size(px(12.)),
-                    archive,
-                    cx,
-                )
-                .test_support()
-                .when(on, |b| b.visible())
-                .on_click(cx.listener(move |l, _, _, cx| {
-                    cx.stop_propagation();
-                    l.archive(&a, cx)
-                }));
-                let delete = ui::hover_button(
-                    ("chats.delete", k),
-                    Icon::Trash.size(px(12.)),
-                    "Delete  ⌫",
-                    cx,
-                )
-                .test_support()
-                .when(on, |b| b.visible())
-                .on_click(cx.listener(move |l, _, _, cx| {
-                    cx.stop_propagation();
-                    l.deleting = Some(d.clone());
-                    cx.notify();
-                }));
+                let archive =
+                    self.button(("chats.archive", k), Icon::Archive, archive, &key, on, cx);
+                let delete =
+                    self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, on, cx);
                 // The age gives way to the buttons, so the title keeps its width.
                 let age = div()
                     .text_size(text::SMALL)
@@ -440,11 +496,49 @@ impl ChatList {
         }
     }
 
+    /// A row's hover button: end, archive or delete, by its icon.
+    fn button(
+        &self,
+        id: (&'static str, usize),
+        icon: Icon,
+        title: &'static str,
+        key: &Key,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = key.clone();
+        ui::hover_button(id, icon.size(px(12.)), title, cx)
+            .when(on, |b| b.visible())
+            .test_support()
+            .on_click(cx.listener(move |l, _, window, cx| {
+                cx.stop_propagation();
+                match icon {
+                    Icon::Close => l.end(&key, window, cx),
+                    Icon::Archive => l.archive(&key, window, cx),
+                    _ => l.deleting = Some(key.clone()),
+                }
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     /// A delete waiting for its confirm, in the row's own place and height.
-    fn confirm(&self, k: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn confirm(&self, ix: usize, key: Key, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
-        let small = |id: (&'static str, usize), label: &'static str| {
-            ui::pressable(id)
+        let (row, yes, no) = match key {
+            Key::Open(..) => (
+                "chats.open.confirm",
+                "chats.open.delete.confirm",
+                "chats.open.delete.cancel",
+            ),
+            _ => (
+                "chats.confirm",
+                "chats.delete.confirm",
+                "chats.delete.cancel",
+            ),
+        };
+        let small = |id: &'static str, label: &'static str| {
+            ui::pressable((id, ix))
                 .test_support()
                 .h(px(20.))
                 .px(px(8.))
@@ -454,9 +548,8 @@ impl ChatList {
                 .hover(|s| s.bg(t.hover))
                 .child(label)
         };
-        let id = id.to_string();
         div()
-            .id(("chats.confirm", k))
+            .id((row, ix))
             .test_support()
             .flex()
             .flex_none()
@@ -475,7 +568,7 @@ impl ChatList {
                     .child("Delete for good?"),
             )
             .child(
-                small(("chats.delete.cancel", k), "Cancel")
+                small(no, "Cancel")
                     .text_color(t.muted)
                     .on_click(cx.listener(|l, _, _, cx| {
                         l.deleting = None;
@@ -483,9 +576,9 @@ impl ChatList {
                     })),
             )
             .child(
-                small(("chats.delete.confirm", k), "Delete")
+                small(yes, "Delete")
                     .text_color(t.error)
-                    .on_click(cx.listener(move |l, _, _, cx| l.delete(&id, cx))),
+                    .on_click(cx.listener(move |l, _, window, cx| l.delete(&key, window, cx))),
             )
             .into_any_element()
     }
@@ -557,10 +650,18 @@ impl Render for ChatList {
                     .child(
                         ui::titled(
                             ui::icon_button("chats.new", Icon::Plus, cx),
-                            keymap::tip("New chat in the current repo", "agent.chat", cx),
+                            "New chat in the current repo",
                         )
                         .test_support()
-                        .on_click(|_, window, cx| actions::dispatch(window, cx, "agent.chat")),
+                        .on_click(|_, _, cx| {
+                            let store = Store::global(cx);
+                            match store.read(cx).current().map(String::from) {
+                                Some(repo) => super::new_chat(repo, None, cx),
+                                None => store.update(cx, |s, cx| {
+                                    s.say("Select a repository to chat about", false, cx)
+                                }),
+                            }
+                        }),
                     )
                     .child(
                         ui::titled(
@@ -591,8 +692,4 @@ impl Render for ChatList {
                     }),
             )
     }
-}
-
-fn show(repo: String, cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo }, cx));
 }

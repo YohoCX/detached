@@ -4,11 +4,11 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::{
     DockArea, DockAreaRenderer, DockContext, DockEvent, DockPlacement, DragPanel, DropIndicator,
     PanelState, PanelView, TabGroupContext, TabGroupRenderer,
 };
+use gpui_kit::base::{ResizeHandleContext, ResizeHandleState, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity, FontWeight,
@@ -22,8 +22,20 @@ use crate::keymap;
 use crate::terminal::Dragged;
 use crate::ui::{self, GAP, Icon, radius, theme};
 
-/// The zone whose grip is held, and the pointer's distance from that zone's edge.
-type Held = Rc<Cell<Option<(DockPlacement, Point<Pixels>)>>>;
+/// A side zone dragged narrower than this closes on release.
+const CLOSE_BELOW: Pixels = px(50.);
+
+/// A grip held: its zone, the pointer's distance from the zone's edge, the zone's size when it
+/// was taken, and whether letting go closes the zone.
+#[derive(Clone, Copy)]
+struct Hold {
+    at: DockPlacement,
+    off: Point<Pixels>,
+    from: Pixels,
+    closing: bool,
+}
+
+type Held = Rc<Cell<Option<Hold>>>;
 
 pub struct Skin {
     area: WeakEntity<DockArea>,
@@ -69,64 +81,119 @@ impl DockAreaRenderer for Skin {
         let (key, resizing, area) = (grip(p), self.resizing.clone(), self.area.clone());
         let (size, open) = (dock.size(), dock.is_open());
         let t = theme(cx);
+        let held = self.resizing.get().filter(|h| h.at == p);
+        // A thin line in the middle of the gap, lit while the grip is hovered or held.
+        let mid = if open { GAP / 2. - px(1.) } else { px(0.) };
+        let line = div()
+            .absolute()
+            .rounded_full()
+            .bg(match held {
+                Some(h) if h.closing => t.error,
+                _ => t.selected_ring,
+            })
+            .when(held.is_none(), |l| {
+                l.invisible().group_hover("grip", |s| s.visible())
+            })
+            .map(|l| match p {
+                DockPlacement::Bottom => l
+                    .h(px(2.))
+                    .top(mid)
+                    .left(radius::PANEL)
+                    .right(radius::PANEL),
+                _ => l
+                    .w(px(2.))
+                    .left(mid)
+                    .top(radius::PANEL)
+                    .bottom(radius::PANEL),
+            });
         let handle = div()
             .id(key)
             .test_support()
+            .group("grip")
             .absolute()
-            .hover(|s| s.bg(t.selected_ring))
             .map(|g| match p {
                 DockPlacement::Bottom => g
                     .top_0()
-                    .left(px(14.))
-                    .right(px(14.))
-                    .h(px(4.))
+                    .left_0()
+                    .right_0()
+                    .h(if open { GAP } else { px(4.) })
                     .cursor_row_resize(),
                 _ => g
-                    .top(px(14.))
-                    .bottom(px(14.))
-                    .w(px(4.))
+                    .top_0()
+                    .bottom_0()
+                    .w(GAP)
                     .cursor_col_resize()
                     .map(|g| match p {
-                        DockPlacement::Left => g.right(px(2.)),
-                        _ => g.left(px(2.)),
+                        DockPlacement::Left => g.right_0(),
+                        _ => g.left_0(),
                     }),
             })
-            .on_mouse_down(MouseButton::Left, move |e, _, cx| {
+            .child(line)
+            .on_mouse_down(MouseButton::Left, move |e, window, cx| {
                 cx.stop_propagation();
-                let Some(b) = area.upgrade().map(|a| a.read(cx).bounds()) else {
+                let Some(a) = area.upgrade() else {
                     return;
                 };
+                if e.click_count == 2 {
+                    let home = px(super::home_size(p));
+                    a.update(cx, |a, cx| a.set_dock_size(p, home, window, cx));
+                    return;
+                }
                 // The base sizes a zone from where the pointer is, so the grab offset is kept.
-                let at = e.position;
+                let (b, at) = (a.read(cx).bounds(), e.position);
                 let off = match p {
                     DockPlacement::Left => point(b.left() + size - at.x, px(0.)),
                     DockPlacement::Right => point(b.right() - size - at.x, px(0.)),
                     _ => point(px(0.), b.bottom() - size - at.y),
                 };
-                resizing.set(Some((p, off)));
+                resizing.set(Some(Hold {
+                    at: p,
+                    off,
+                    from: size,
+                    closing: false,
+                }));
+                window.refresh();
             });
         let (dock, resizing, area) = (dock.clone(), self.resizing.clone(), self.area.clone());
         // The pointer leaves the grip at once, so the window's mouse stream drives the resize.
         let tracker = canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                let (moved, held) = (dock.clone(), resizing.clone());
+                let (moved, held, bounds) = (dock.clone(), resizing.clone(), area.clone());
                 window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
-                    if let Some((at, off)) = held.get()
-                        && phase.bubble()
-                        && at == p
-                    {
-                        moved.resize_to(e.position + off, window, cx);
+                    let Some(h) = held.get().filter(|h| h.at == p && phase.bubble()) else {
+                        return;
+                    };
+                    let at = e.position + h.off;
+                    let b = bounds.upgrade().map(|a| a.read(cx).bounds());
+                    let width = match (p, b) {
+                        (DockPlacement::Left, Some(b)) => at.x - b.left(),
+                        (DockPlacement::Right, Some(b)) => b.right() - at.x,
+                        _ => CLOSE_BELOW,
+                    };
+                    let closing = width < CLOSE_BELOW;
+                    if closing != h.closing {
+                        held.set(Some(Hold { closing, ..h }));
+                        window.refresh();
                     }
+                    moved.resize_to(at, window, cx);
                 });
                 window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
-                    if phase.bubble() && resizing.get().is_some_and(|(at, _)| at == p) {
-                        resizing.set(None);
-                        dock.end_resize(window, cx);
-                        // A dock's size is not in the tree, so nothing else says to save it.
-                        area.update(cx, |_, cx| cx.emit(DockEvent::LayoutChanged))
-                            .ok();
-                    }
+                    let Some(h) = resizing.get().filter(|h| h.at == p && phase.bubble()) else {
+                        return;
+                    };
+                    resizing.set(None);
+                    dock.end_resize(window, cx);
+                    // A dock's size is not in the tree, so nothing else says to save it.
+                    area.update(cx, |a, cx| {
+                        if h.closing {
+                            a.set_dock_size(p, h.from, window, cx);
+                            a.toggle_dock(p, window, cx);
+                        }
+                        cx.emit(DockEvent::LayoutChanged)
+                    })
+                    .ok();
+                    window.refresh();
                 });
             },
         )
@@ -147,6 +214,18 @@ impl DockAreaRenderer for Skin {
             .child(handle)
             .child(tracker)
             .into_any_element()
+    }
+
+    fn render_split_handle(
+        &self,
+        handle: &ResizeHandleContext,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
+        let t = theme(cx);
+        let lit = handle.state() != ResizeHandleState::Idle;
+        let color = if lit { t.selected_ring } else { t.line };
+        Some(div().flex_none().size_full().bg(color).into_any_element())
     }
 
     fn build_placeholder(

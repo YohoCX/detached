@@ -22,7 +22,7 @@ use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
 use crate::dock;
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::ui_state;
 use crate::util::{folder_name, in_folder};
@@ -682,8 +682,7 @@ fn folder_menu(this: WeakEntity<Sidebar>, path: &str, open: bool, cx: &mut App) 
     let (chat, key) = (path.to_string(), path.to_string());
     Menu::default()
         .item("Chat here", move |_, cx| {
-            let repo = chat.clone();
-            Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo }, cx))
+            crate::chat::show(chat.clone(), cx)
         })
         .separator()
         .item_if(idle, "Fetch All in Folder", all(Kind::Fetch))

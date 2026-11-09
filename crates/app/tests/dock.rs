@@ -225,14 +225,14 @@ fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppC
         })
     };
     wait_until(cx, working);
-    let session = cx.update(|_, cx| chat::session(&solo, cx).entity_id());
+    let session = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
     assert!(x(cx, "doc.chat") < px(1000.), "in the center");
 
     drag_tab(cx, "doc.chat", "tool.Changes");
     assert!(x(cx, "doc.chat") > px(1000.), "in the right zone");
     assert!(working(cx), "the same feed");
     assert!(cx.find("chat.stop").is_some(), "the turn goes on");
-    let now = cx.update(|_, cx| chat::session(&solo, cx).entity_id());
+    let now = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
     assert_eq!(now, session, "the same session");
     cx.click("chat.stop");
     wait_until(cx, |cx| cx.find("chat.stop").is_none());

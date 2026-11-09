@@ -200,6 +200,40 @@ fn cmd_b_cmd_j_and_cmd_alt_b_open_and_close_the_zones(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_shut(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::base::dock::DockPlacement::Left;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{point, px};
+    let cx = &mut open_app(cx);
+    let width = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            detached_app::dock::zones(cx)
+                .unwrap()
+                .read(cx)
+                .dock_size(Left)
+        })
+    };
+    let drag = |cx: &mut VisualTestContext, to: Option<f32>, dx: f32| {
+        let from = cx.find("grip.repos").unwrap().bounds().center();
+        let x = to.map_or(from.x + px(dx), px);
+        cx.update(|w, cx| w.drag(from, point(x, from.y), cx));
+        settle(cx);
+    };
+    assert_eq!(width(cx), Some(px(280.)));
+    drag(cx, None, 100.);
+    assert_eq!(width(cx), Some(px(380.)));
+    cx.update(|w, cx| w.double_click("grip.repos", cx));
+    settle(cx);
+    assert_eq!(width(cx), Some(px(280.)), "back to its default");
+    drag(cx, Some(20.), 0.);
+    assert_eq!(on(cx, "zone.left"), Some(false), "closed");
+    cx.click("zone.left");
+    assert_eq!(width(cx), Some(px(280.)), "reopens at the width it had");
+}
+
+#[gpui_kit::test]
 fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     let label = |cx: &mut VisualTestContext, id: &'static str| {

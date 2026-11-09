@@ -305,15 +305,20 @@ fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<Doc
         DockPlacement::Bottom,
     ] {
         let kinds = Kind::ALL.into_iter().filter(|k| k.home().0 == p);
-        let size = Kind::ALL
-            .iter()
-            .find(|k| k.home().0 == p)
-            .map_or(280., |k| k.home().1);
+        let size = home_size(p);
         let layout = kinds.fold(DockLayout::tabs(), |l, k| l.panel(Tab::new(k, cx)));
         area.set_dock(p, layout, window, cx);
         area.set_dock_size(p, px(size), window, cx);
     }
     area.toggle_dock(DockPlacement::Bottom, window, cx);
+}
+
+/// A zone's size until the user drags it.
+pub fn home_size(p: DockPlacement) -> f32 {
+    Kind::ALL
+        .iter()
+        .find(|k| k.home().0 == p)
+        .map_or(280., |k| k.home().1)
 }
 
 fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
@@ -433,11 +438,21 @@ pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
 /// Closes the tab of a shell that ended.
 pub fn close_terminal(session: &Entity<Session>, window: &mut Window, cx: &mut App) {
     let id = session.entity_id().as_u64();
+    close_docs(
+        move |d| matches!(d, Doc::Terminal { id: i, .. } if *i == id),
+        window,
+        cx,
+    );
+}
+
+/// Closes every document tab whose doc `gone` picks.
+pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App) {
     with(cx, |a, cx| {
-        let tab = docs(a)
+        let tabs: Vec<_> = docs(a)
             .into_iter()
-            .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { id: i, .. } if i == id));
-        if let Some((_, _, tab)) = tab {
+            .filter(|(_, _, t)| gone(&t.read(cx).doc))
+            .collect();
+        for (_, _, tab) in tabs {
             a.remove_panel(tab, window, cx);
         }
     });

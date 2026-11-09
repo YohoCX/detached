@@ -24,6 +24,8 @@ use crate::ui_state;
 const COMMANDS: &str = "chat.commands";
 /// The account's provider and limits as last read, shown at once on the next open.
 const INFO: &str = "chat.info";
+/// The model the last session ran on, shown before the next one says.
+const MODEL: &str = "chat.model";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Info {
@@ -122,6 +124,8 @@ pub struct Session {
     pub items: Vec<Item>,
     pub busy: bool,
     pub model: Option<String>,
+    /// The model the last session anywhere ran on.
+    pub ran: Option<String>,
     pub models: Vec<Model>,
     pub effort: Option<String>,
     /// The mode the user chose, and the one the session reports.
@@ -165,6 +169,7 @@ impl Session {
             items: vec![],
             busy: false,
             model: None,
+            ran: None,
             models: vec![],
             effort: None,
             asked: AUTO.into(),
@@ -610,6 +615,7 @@ impl Session {
             ui_state::get(COMMANDS, cx).unwrap_or_default();
         self.commands = all.remove(&self.repo).unwrap_or_default();
         self.info = self.info.take().or_else(|| ui_state::get(INFO, cx));
+        self.ran = ui_state::get(MODEL, cx);
     }
 
     /// Reads the account's provider and limits again, unless the sidecar is not installed.
@@ -633,6 +639,7 @@ impl Session {
     /// Shows a past conversation; the next message resumes it.
     pub fn open_past(&mut self, id: String, cx: &mut Context<Self>) {
         let cwd = self.repo.clone();
+        self.session_id = Some(id.clone());
         self.command(Command::Load { cwd, id }, cx);
     }
 
@@ -662,6 +669,33 @@ impl Session {
 
     pub fn shows(&self, id: &str) -> bool {
         self.session_id.as_deref() == Some(id)
+    }
+
+    /// The past conversation this chat shows or continues.
+    pub fn conversation(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Nothing said and nothing loaded yet.
+    pub fn is_new(&self) -> bool {
+        self.items.is_empty() && !self.busy && self.session_id.is_none()
+    }
+
+    /// The first thing the user said, to tell chats apart.
+    pub fn topic(&self) -> Option<&str> {
+        self.items.iter().find_map(|i| match i {
+            Item::User(t) => Some(t.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Stops the sidecar for good; the chat is going away.
+    pub fn end(&mut self, cx: &mut Context<Self>) {
+        self.agent = None;
+        self._tasks.clear();
+        self._work.clear();
+        self.busy = false;
+        cx.notify();
     }
 
     /// Ends the sidecar and forgets the conversation.
@@ -765,6 +799,7 @@ impl Session {
                 effort,
             } => {
                 self.session_id = Some(session_id);
+                ui_state::set(MODEL, &model, cx);
                 self.model = Some(model);
                 self.effort = effort.or(self.effort.take());
                 self.set_reported_mode(mode);

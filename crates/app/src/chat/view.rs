@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use detached_core::agent::Limit;
+use detached_core::agent::{Limit, Model};
 use detached_core::api;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{
@@ -253,40 +253,28 @@ impl ChatView {
             .child(div().min_w_0().truncate().text_color(t.muted).child(name))
             .child(div().flex_1())
             .child(
-                ui::titled(
-                    ui::icon_button("chat.new", Icon::Plus, cx),
-                    "New conversation",
-                )
-                .test_support()
-                .on_click(move |_, _, cx| session.update(cx, |s, cx| s.reset(cx))),
+                ui::titled(ui::icon_button("chat.new", Icon::Plus, cx), "New chat")
+                    .test_support()
+                    .on_click(move |_, _, cx| {
+                        let repo = session.read(cx).repo.clone();
+                        super::new_chat(repo, Some(&session), cx)
+                    }),
             )
     }
 
-    /// Under the box: who answers and on what plan, the session's settings, what is left.
+    /// Under the box: who answers, the session's mode, model and effort; right, what is left.
     fn bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let s = self.session.read(cx);
-        let asked = MODES.iter().position(|(m, ..)| *m == s.asked);
-        let options: Vec<_> = MODES
-            .iter()
-            .enumerate()
-            .map(|(i, (_, label, tip))| (i, *label, *tip))
-            .collect();
-        let session = self.session.clone();
-        let modes = ui::segmented_tips(
-            "chat.mode",
-            &options,
-            asked.unwrap_or(0),
-            move |i, _, cx| session.update(cx, |s, cx| s.set_mode(MODES[i].0, cx)),
-            cx,
-        );
         let menu = |id: &'static str,
                     title: &str,
                     label: String,
                     entries: Vec<(String, Option<String>)>| {
             let session = self.session.clone();
+            let chevron =
+                (!entries.is_empty() && id != "chat.usage").then(|| Icon::Down.size(px(10.)));
             ui::titled(
-                ui::icon_button(id, div().child(label), cx),
+                ui::icon_button(id, div().child(label), cx).children(chevron),
                 title.to_string(),
             )
             .test_support()
@@ -297,6 +285,7 @@ impl ChatView {
                         menu.item_if(pick.is_some(), label.clone(), move |_, cx| {
                             let Some(pick) = pick.clone() else { return };
                             session.update(cx, |s, cx| match id {
+                                "chat.mode" => s.set_mode(&pick, cx),
                                 "chat.model" => s.set_model(pick, cx),
                                 _ => s.set_effort(pick, cx),
                             })
@@ -306,6 +295,20 @@ impl ChatView {
                 })
             })
         };
+        let mode = MODES
+            .iter()
+            .find(|(m, ..)| *m == s.asked)
+            .unwrap_or(&MODES[0]);
+        let modes = MODES
+            .iter()
+            .map(|(m, label, _)| (label.to_string(), Some(m.to_string())))
+            .collect();
+        let modes = menu(
+            "chat.mode",
+            mode.2.unwrap_or(mode.1),
+            mode.1.to_string(),
+            modes,
+        );
         let models = s
             .models
             .iter()
@@ -317,7 +320,10 @@ impl ChatView {
                 (label, Some(m.value.clone()))
             })
             .collect();
-        let model = s.model.clone().unwrap_or("Default model".into());
+        let model = match s.model.as_ref().or(s.ran.as_ref()) {
+            Some(m) => model_name(m, &s.models),
+            None => "Default model".into(),
+        };
         let picker = menu("chat.model", "Model", model, models);
         let efforts: Vec<_> = s
             .efforts()
@@ -344,14 +350,23 @@ impl ChatView {
             .aria_label(SharedString::from(label))
             .text_color(t.muted)
         });
-        let provider = s.info.as_ref().map(|i| {
-            div()
-                .id("chat.provider")
-                .test_support()
-                .aria_label(SharedString::from(i.provider.clone()))
-                .text_color(t.muted)
-                .child(i.provider.clone())
-        });
+        let plan = s
+            .info
+            .as_ref()
+            .map(|i| SharedString::from(i.provider.clone()));
+        let provider = div()
+            .id("chat.provider")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .pr(px(4.))
+            .child(div().text_color(t.accent).child(Icon::Chat.size(px(12.))))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("Claude"))
+            .when_some(plan, |d, plan| {
+                d.aria_label(plan.clone())
+                    .tooltip(move |window, cx| Tooltip::new(plan.clone()).build(window, cx))
+            });
         let limits = s
             .info
             .iter()
@@ -367,16 +382,7 @@ impl ChatView {
             .items_center()
             .gap(px(6.))
             .text_size(text::SMALL)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .pr(px(4.))
-                    .child(div().text_color(t.accent).child(Icon::Chat.size(px(12.))))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Claude"))
-                    .children(provider.map(|p| div().flex().gap(px(6.)).child("·").child(p))),
-            )
+            .child(provider)
             .child(modes)
             .child(picker)
             .children(effort)
@@ -1194,6 +1200,28 @@ impl ChatView {
     }
 }
 
+/// A model by name: the label the session listed for it, else "Opus 4.5" from
+/// "claude-opus-4-5-20251101".
+fn model_name(id: &str, models: &[Model]) -> String {
+    if let Some(m) = models.iter().find(|m| m.value == id) {
+        return m.label.clone();
+    }
+    let (id, wide) = match id.strip_suffix("[1m]") {
+        Some(id) => (id, " (1M)"),
+        None => (id, ""),
+    };
+    let mut parts = id.trim_start_matches("claude-").split('-');
+    let Some(name) = parts.next().filter(|n| !n.is_empty()) else {
+        return id.to_string();
+    };
+    let version: Vec<_> = parts.take_while(|p| p.len() <= 2).collect();
+    let mut name: String = name[..1].to_uppercase() + &name[1..];
+    if !version.is_empty() {
+        name = format!("{name} {}", version.join("."));
+    }
+    name + wide
+}
+
 fn tokens(n: u64) -> String {
     match n {
         0..1000 => n.to_string(),
@@ -1339,4 +1367,20 @@ fn limit(l: &Limit, at: u64, cx: &App) -> impl IntoElement + use<> {
             ),
         )
         .child(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_name;
+
+    #[test]
+    fn a_model_id_reads_as_its_family_and_version() {
+        assert_eq!(model_name("claude-opus-4-5-20251101", &[]), "Opus 4.5");
+        assert_eq!(
+            model_name("claude-sonnet-4-5-20250929[1m]", &[]),
+            "Sonnet 4.5 (1M)"
+        );
+        assert_eq!(model_name("claude-fable-5-1", &[]), "Fable 5.1");
+        assert_eq!(model_name("good", &[]), "Good");
+    }
 }

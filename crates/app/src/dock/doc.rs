@@ -76,7 +76,8 @@ impl DocTab {
             Doc::Diff(d) => format!("doc.diff.{}", d.path).into(),
             Doc::Mr { number, .. } => format!("doc.mr.{number}").into(),
             Doc::Job { id, .. } => format!("doc.job.{id}").into(),
-            Doc::Chat { .. } => "doc.chat".into(),
+            Doc::Chat { n: 0, .. } => "doc.chat".into(),
+            Doc::Chat { n, .. } => format!("doc.chat.{n}").into(),
             Doc::Terminal { id, .. } => format!("doc.terminal.{id}").into(),
         }
     }
@@ -87,7 +88,14 @@ impl DocTab {
             Doc::Diff(d) => format!("{} (diff)", base_name(&d.path)).into(),
             Doc::Mr { number, .. } => format!("!{number}").into(),
             Doc::Job { name, .. } => name.clone().into(),
-            Doc::Chat { repo } => format!("Claude · {}", chat::label(repo, cx)).into(),
+            Doc::Chat { repo, n } => {
+                let place = chat::label(repo, cx);
+                let s = chat::find(repo, *n, cx);
+                match s.as_ref().and_then(|s| s.read(cx).topic()) {
+                    Some(t) => format!("{place} · {}", short(t)).into(),
+                    None => format!("Claude · {place}").into(),
+                }
+            }
             Doc::Terminal { .. } => match &self.view {
                 Some(View::Terminal(s)) => s.read(cx).title().to_string().into(),
                 _ => "Terminal".into(),
@@ -105,6 +113,15 @@ impl DocTab {
             }
             Some(View::Terminal(_)) | None => {}
         }
+    }
+}
+
+/// A chat's first words, cut to fit a tab.
+fn short(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default();
+    match line.char_indices().nth(24) {
+        Some((i, _)) => format!("{}…", line[..i].trim_end()),
+        None => line.to_string(),
     }
 }
 
@@ -158,7 +175,7 @@ fn build(doc: &mut Doc, window: &mut Window, cx: &mut App) -> View {
             View::Viewer(v)
         }
         Doc::Mr { repo, number } => View::Page(forge::mr_page(repo.clone(), *number, window, cx)),
-        Doc::Chat { repo } => View::Page(chat::page(repo, window, cx)),
+        Doc::Chat { repo, n } => View::Page(chat::page(repo, *n, window, cx)),
         Doc::Job { .. } => View::Page(forge::job_log(doc, cx)),
         Doc::Terminal { .. } => unreachable!(),
     }
