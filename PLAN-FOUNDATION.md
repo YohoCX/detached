@@ -8,7 +8,8 @@ decides what is stale, fed by a file watcher.
 (`.revmux/tasks/agent-host-architecture/`, kept locally); the last found nothing major. §12, the
 execution and acceptance, is written and not yet reviewed. Step 0b is on main (7e5a833); step 0
 is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock tests are on main
-(faf27c8); the owner's own baseline is left. Next: step 2, the kernel crate.**
+(faf27c8); the owner's own baseline is left. Step 2, the kernel crate, is done on branch
+`foundation/2-kernel`, not merged: its revmux round, CI on three OSes and the owner's check are left.**
 
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the
@@ -572,6 +573,16 @@ Done when:
 - `crates/app/src/blocking.rs` and `ui_state.rs` are gone, and `Store` has none of the five fields;
 - nothing in `crates/kernel` names `Store`, a feature or `ui::theme`;
 - no forwarding module is left but `Store::core()`.
+
+Done on branch `foundation/2-kernel`, 2026-11-10, not merged; `make check` and `make smoke` green:
+- `Store::core()` went instead of forwarding: every caller reads `kernel::core(cx)`. The fixtures
+  call `kernel::init(core, cx)` before `Store::init(cx)`.
+- The kernel cannot name `Store`, so an ended op emits `OpEnded { repo }` and `Store` refreshes
+  that repo's status on it, as `run_op` did itself.
+- `Store`'s notice test moved to the kernel with `notify`; the op test stays in `store.rs` and
+  reads the op from `Activity`.
+- PLAN-NATIVE's Store paragraph and contract lose ops, notices, the message and `run_op` now, not
+  in step 6: the code changed here.
 
 The owner checks: Fetch All with its progress and a cancel; an error raises a notice and lands
 in Events; the unread count rises and clears; the status message goes after 10 s; a layout and

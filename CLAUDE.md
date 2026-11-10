@@ -4,6 +4,8 @@ Multi-repo git client, native on GPUI. It writes to a repo only through switch, 
 chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, the agent's protocol and trust),
   blocking Rust, no UI types.
+- `crates/kernel`: the app's live state and its exchange as GPUI entities (`blocking`, `ui_state`,
+  `Activity`, `Doc`), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
 - `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
 - `sidecars/claude`: the chat's process on the Agent SDK, in TypeScript, kept out of the release packages.
@@ -44,8 +46,10 @@ Keep this list in sync with the Makefile.
 - Errors: `core::error::Result`; UI code shows them through notices or the status message, never
   `unwrap`/`expect` outside tests and true invariants.
 - Core stays blocking and UI-free: no gpui, no async runtime in `crates/core`.
-- Never call core on the UI thread or on GPUI's executors: go through `blocking::run`/`stream`.
+- Never call core on the UI thread or on GPUI's executors: go through `kernel::blocking::run`/`stream`.
 - Long ops take an op id and honor cancel; streams are batched per frame on the UI side.
+- The kernel draws nothing and imports no kit component: `crates/kernel/clippy.toml` bans GPUI's
+  elements, `Render` and `Window`, and `forbid` at its root keeps an `#[allow]` from lifting that.
 - Platform code goes in `core::os` or behind `cfg` in the one place that needs it.
 - The `e2e` feature of core is test-only: never a normal dependency of `crates/app`.
 
@@ -56,7 +60,7 @@ Keep this list in sync with the Makefile.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
 - Keys: every action has an id in `actions.rs`; default chords in `keymap.rs` match
   docs/KEYMAP.md; text fields and the editor keep their keys through binding contexts.
-- UI state that persists goes through `ui_state` with the owner's key prefix (`sidebar.`, `size.`,
+- UI state that persists goes through `kernel::ui_state` with the owner's key prefix (`sidebar.`, `size.`,
   `tree.`, `viewer.`, ...).
 - gpui-kit and gpui-pre are pinned exactly (`=`). An upgrade is its own commit: bump, fix breakage,
   `make check`, a short note in the message of what broke. Do not patch the kit; work around in our
@@ -66,6 +70,7 @@ Keep this list in sync with the Makefile.
 
 - Core: unit tests next to the code, temp repos through `testutil::Sandbox`, no network except the
   local fakes.
+- Kernel: unit tests next to the code, in GPUI's test context without a window, on GPUI's clock.
 - Native UI: `crates/app/tests/<vertical>.rs` with the kit's headless harness, real git, the forge
   fake. A new behavior gets a test unless it would be expensive; say so in the commit.
 - Tests and agents never touch the real config directory: `Sandbox` has a temp one and `make smoke`

@@ -70,17 +70,21 @@ crates/core/               package detached-core: the backend from src-tauri/src
   src/api.rs               one function per command, taking op/query ids where today's commands do
   src/selftest.rs          --self-test <report>, unchanged (unix)
 crates/forge-fake/         package detached-forge-fake: e2e/forge.ts in Rust
+crates/kernel/             package detached-kernel: the app's live state on gpui-pre alone, drawing
+                           nothing (PLAN-FOUNDATION)
+  src/blocking.rs          runs core on worker threads, back on the UI thread with the result; QueryId
+  src/ui_state.rs          ui.json
+  src/activity.rs          ops, notices, the status message, the log the Events app shows
+  src/doc.rs               Doc, Location, DiffDoc, DocRef
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
   src/store.rs             app-wide state entity
-  src/blocking.rs          runs core on worker threads, back on the UI thread with the result
   src/cache.rs             last-value cache with the 30 s focus-refresh skip
   src/util.rs              helpers several verticals use: path names, change letters, times, fuzzy
   src/keymap.rs            defaults, keymap.json, contexts, Double Shift
   src/actions.rs           action ids, registration, run
   src/nav.rs               back/forward and recent files
-  src/ui_state.rs          ui.json
   src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip
   src/shell.rs             title bar slots, each app's view, the status bar
   src/dock/                the zones on the kit's dock: app and document tabs, the saved layout
@@ -134,18 +138,18 @@ set to a temp directory. While both clients existed, `make app` pointed it at a 
 `dev.wdevs.detached.native`; since V6 the native client, `make app` included, uses the real one.
 
 **Threads.** Core calls block, some for minutes (a fetch waits up to 120 s of silence, holding the
-repo lock). They never run on GPUI's executors: `blocking::run(cx, f)` sends `f` to a pool of std
+repo lock). They never run on GPUI's executors: `kernel::blocking::run(cx, f)` sends `f` to a pool of std
 threads (16, enough for fetch all's parallelism) and resumes on the UI thread with the result.
 Streams (log rows, find matches, progress lines) come back over a channel drained by a foreground
-task that batches per frame. Each op or query has an id from the store; dropping the view or
-starting a new query cancels the old id.
+task that batches per frame. Each op or query has an id from the kernel (`Activity::run_op`'s op id,
+`blocking::QueryId`); dropping the view or starting a new query cancels the old id.
 
 **Store.** One GPUI entity holds what `src/lib/app.svelte.ts` holds today: repos, workspaces,
-current repo, statuses, outcomes, ops, notices, the status message, the document of the tab last
+current repo, statuses, outcomes, the document of the tab last
 on screen (`shown: Option<Doc>`), the per-repo
 session maps other verticals read (tree ref `refs`, Compare base `compare`) and branch names per
 repo for the ref inputs (`branch_names`, loaded on demand). Views observe it and read what they
-need. Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
+need. Ops, notices and the status message are the kernel's `Activity`. Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
 
 **Keymap.** `keymap.rs` keeps the action ids of docs/KEYMAP.md, parses the same chord strings and
 the `keymap.json` overrides into `KeyBinding::load` (an override that does not parse unbinds the
@@ -253,20 +257,21 @@ variant, a function) adds it with a stub to the provider's `api.rs` or the store
 commit on main, with the matching line in this section, without changing what is there; the
 provider then fills it in.
 
-- **Store:** fields and events above; `store.current()`, `store.status(repo)`, `store.run_op(...)`,
+- **Store:** fields and events above; `store.current()`, `store.status(repo)`, `Activity::run_op(...)`,
   `store.tree_ref(repo)`, `store.compare(repo)`, `store.shown()`, `store.show(Doc)`, which opens
   the doc in a tab or brings its tab forward.
 - **Dock:** `dock::open(Kind, window, cx)`, which shows an app in its zone (never toggles; the
   `panel.*` actions toggle with `dock::toggle`), for Compare with Base (V1 opens Changes), file
   history (V4 opens Log) and Run Pipeline and the badge (V5 open Pipelines); `dock::is_shown(Kind)`.
-- **Threads:** `blocking::run`, `blocking::stream`, the op and query id rules.
+- **Threads:** `kernel::blocking::run`, `kernel::blocking::stream`, the op and query id rules.
 - **Core:** `api::file_patch` returns `FilePatch::Patch` (the whole file as one hunk),
   `Unchanged(text)` for equal sides, or `Sides(FileDiff)` when the sides are not two texts.
 - **Actions:** `actions::register(cx, id, title, group, handler) -> Registration`. The latest
   registration of an id wins; dropping it restores the previous one (how the MR page's diff takes
   F7, Shift+F7 and Cmd+L from the main viewer while mounted); `actions::raise` puts a tab's back on
   top when it comes on screen. `actions::run(window, cx, id) -> bool` says
-  whether a handler ran. A vertical adds its ids to the list in `actions.rs` and default chords to
+  whether a handler ran; `actions::dispatch` runs one or says through `Activity` that it is not
+  available. A vertical adds its ids to the list in `actions.rs` and default chords to
   `keymap.rs` (append-only). Each action's handler is registered by the vertical that owns its
   behavior; step 0 adds an owner column to docs/KEYMAP.md's table, covering every action of today's
   `registerActions` too: `panel.*` and `nav.*` → F; `vcs.update`, `vcs.fetch`, `vcs.fetchAll`,
@@ -291,7 +296,8 @@ provider then fills it in.
   - `Location { repo, rev: Option<String>, path, line: Option<u32>, doc: Option<DocRef> }` with
     `DocRef::{Mr { repo, number }, Job { repo, project, id, name }}`, so MR pages and job logs are
     in back/forward as today;
-    `DiffDoc { repo, path, orig_path, left: Side, right: Side }` (`Side` from core);
+    `DiffDoc { repo, path, orig_path, left: Side, right: Side }` (`Side` from core); the three are
+    re-exported from `kernel::doc`, unchanged;
   - `files::open(cx, Location)`; `files::show_diff(cx, DiffDoc, focus: bool)`, where `focus` moves
     focus into the diff once it loads (double-click or Enter) and `false` leaves it in the caller's
     list (a click or arrow keys stepping through files);
@@ -310,7 +316,7 @@ provider then fills it in.
 - **Navigation:** `nav::open(cx, Location)` records and shows any location (file, MR, job),
   back/forward, recent files (files only) with today's caps (50, 100).
 - **UI:** `ui` primitives and theme tokens; a vertical needing a new primitive adds it to `ui/` in
-  its own commit. `ui_state::get/set` with the vertical's key prefix.
+  its own commit. `kernel::ui_state::get/set` with the vertical's key prefix.
 - **Fixtures:** `Sandbox` repos, `settle`/`wait_until`, the forge fake, `open_app(cx)` returning a
   test window with the store booted; `open_app_with(cx, layout)` for e2e's sandbox (`ws/`, `solo`)
   and `open_forge(cx)` for its `forge/` repos on a seeded fake, with the `Fixture` paths
