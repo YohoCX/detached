@@ -247,7 +247,8 @@ mod tests {
         let pgid = sb.path("pgid");
         let ssh = sb.path("silent-ssh");
         let script = format!(
-            "#!/bin/sh\nps -o pgid= -p $$ > '{}'\nexec sleep 60\n",
+            // Renamed into place: the test acts as soon as the file exists.
+            "#!/bin/sh\nps -o pgid= -p $$ > '{0}.tmp' && mv '{0}.tmp' '{0}'\nexec sleep 60\n",
             pgid.display()
         );
         std::fs::write(&ssh, script).unwrap();
