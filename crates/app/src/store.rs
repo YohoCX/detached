@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn refreshes_coalesce_into_one_more_pass(cx: &mut TestAppContext) {
+    fn calls_before_a_pass_starts_fold_into_it(cx: &mut TestAppContext) {
         let (_dir, store) = boot(cx);
         cx.update(|cx| {
             store.update(cx, |s, cx| {

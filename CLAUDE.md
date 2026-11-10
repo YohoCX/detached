@@ -59,7 +59,8 @@ Keep this list in sync with the Makefile.
 ## Native UI
 
 - Views read the `Store`, the kernel's entities (`Activity`, `Settings`) and their own state; they do not cache
-  what those already hold.
+  what those already hold. The exception: the Settings pages reload their own copy of the settings in
+  the job that writes them, so a picker never lags a change made on the page.
 - Colors, radii, spacing and fonts come from `ui::theme` tokens, never literals in views.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
 - Keys: every action has an id in `actions.rs`; default chords in `keymap.rs` match

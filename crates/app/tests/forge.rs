@@ -256,6 +256,8 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
     assert!(cx.find("pipeline.badge").is_none());
     cx.click("pipelines.settings");
     wait_until(cx, |cx| cx.find("settings").is_some_and(|s| s.visible()));
+    let page = cx.find("settings.nav.repository").unwrap();
+    assert_eq!(page.selected(), Some(true), "the repo's page");
 }
 
 #[gpui_kit::test]

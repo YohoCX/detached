@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| `refresh_all`'s fix for a call made during its listing has no test that fails without it | `crates/app` `store::refresh_all` | The pass clears `again` before it lists the repos, so a call made while `list_repos` runs gets a pass of its own; a test needs a listing it can hold open. Step 7's resources replace this code and bring the test. |
 | A chat test sometimes misses the turn's last line | `tests/chat.rs` | `a_turn_s_tools_fold_into_one_line_and_a_command_s_output_opens_on_a_click` reads the "Done in 12.4 s" item without waiting for it. Under a full `make check` on 2026-11-10 it failed once and passed alone and in three runs of its file. |
 | Tests that wait for a shell's output time out on a loaded CI runner | `tests/dock.rs`, `tests/terminal.rs` | `wait_until` gives a shell 10 s to start and print. On 2026-11-10 two dock tests on Windows and the wide-character test on macOS timed out once each and passed on a rerun. |
 | A shell released over the bottom zone opens in the center | V7 `dock::skin` | The center's drop target lies under the whole center column, the bottom zone's included, so a shell's tab dragged and released over the Terminal app itself leaves it for a tab in the center. The dock tests drop on the sidebar for "no target". |
