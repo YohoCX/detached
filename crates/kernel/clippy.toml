@@ -4,6 +4,7 @@ disallowed-methods = [
     { path = "gpui::img", reason = "the kernel draws nothing" },
     { path = "gpui::canvas", reason = "the kernel draws nothing" },
     { path = "gpui::App::open_window", reason = "the kernel draws nothing" },
+    { path = "gpui::AsyncApp::open_window", reason = "the kernel draws nothing" },
 ]
 disallowed-types = [
     { path = "gpui::Render", reason = "the kernel draws nothing" },
@@ -11,4 +12,8 @@ disallowed-types = [
     { path = "gpui::Element", reason = "the kernel draws nothing" },
     { path = "gpui::IntoElement", reason = "the kernel draws nothing" },
     { path = "gpui::Window", reason = "the kernel draws nothing" },
+    { path = "gpui::AnyWindowHandle", reason = "the kernel draws nothing" },
+    { path = "gpui::WindowHandle", reason = "the kernel draws nothing" },
+    { path = "gpui::Empty", reason = "the kernel draws nothing" },
+    { path = "gpui::EmptyView", reason = "the kernel draws nothing" },
 ]
