@@ -28,6 +28,7 @@ use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
 use kernel::activity::Activity;
+use kernel::settings::Settings;
 use kernel::ui_state;
 
 const COLLAPSED: &str = "sidebar.collapsed";
@@ -263,7 +264,7 @@ pub fn sidebar(window: &mut Window, cx: &mut App) -> AnyView {
 struct Sidebar {
     collapsed: BTreeSet<String>,
     filter: Entity<InputState>,
-    _subs: [Subscription; 2],
+    _subs: [Subscription; 3],
 }
 
 impl Sidebar {
@@ -273,6 +274,7 @@ impl Sidebar {
             collapsed: ui_state::get(COLLAPSED, cx).unwrap_or_default(),
             _subs: [
                 cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
                 cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
             filter,
@@ -530,9 +532,10 @@ impl Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let s = Store::global(cx).read(cx);
+        let ws = &Settings::get(cx).workspaces;
         let filter = self.filter.read(cx).value();
-        let rows = Rc::new(rows(&s.repos, &s.workspaces, &self.collapsed, &filter));
-        let none_on = !s.workspaces.is_empty() && !s.workspaces.iter().any(|w| w.active);
+        let rows = Rc::new(rows(&s.repos, ws, &self.collapsed, &filter));
+        let none_on = !ws.is_empty() && !ws.iter().any(|w| w.active);
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
             Store::global(cx).update(cx, |s, cx| s.refresh_all(cx))
         };

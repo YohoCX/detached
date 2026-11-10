@@ -145,7 +145,7 @@ fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
         layout(sb);
         api::remove_workspace(&sb.state, "Default".into()).unwrap();
     });
-    assert!(cx.store(|s, _| s.workspaces.is_empty()));
+    assert!(cx.settings(|s| s.workspaces.is_empty()));
     assert!(rows(cx).is_empty());
     cx.click("sidebar.addFolder");
     let picked = vec![cx.sb.ws(), cx.sb.solo()];
@@ -155,7 +155,7 @@ fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
     });
     wait_until(cx, |cx| paths(cx).len() == 6);
     let (ws, solo) = (path(cx.sb.ws()), path(cx.sb.solo()));
-    let w = cx.store(|s, _| s.workspaces.clone());
+    let w = cx.settings(|s| s.workspaces.clone());
     assert_eq!(w.len(), 1);
     assert_eq!((w[0].name.as_str(), w[0].active), ("Default", true));
     assert_eq!(w[0].folders, [ws, solo]);
@@ -290,14 +290,14 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
     // The rows change with the listing, before the workspaces load.
     click_in(cx, &id, "remove");
     wait_until(cx, |cx| {
-        cx.store(|s, _| s.workspaces[0].excluded_repos == [lib.as_str()])
+        cx.settings(|s| s.workspaces[0].excluded_repos == [lib.as_str()])
     });
     assert!(!paths(cx).contains(&lib));
 
     let id = row(cx, &solo).id;
     click_in(cx, &id, "remove");
     wait_until(cx, |cx| {
-        cx.store(|s, _| s.workspaces[0].folders == [ws.as_str()])
+        cx.settings(|s| s.workspaces[0].folders == [ws.as_str()])
     });
     assert!(!paths(cx).contains(&solo));
 

@@ -23,6 +23,7 @@ use crate::util::{age, now};
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
+use kernel::settings::Settings;
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
@@ -98,6 +99,7 @@ impl ChatList {
             runs: 0,
             _subscriptions: vec![
                 cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
                 cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
             query,
@@ -235,7 +237,7 @@ impl ChatList {
     /// Past conversations in the workspace's folders, archived or not, newest place first.
     fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<&Past>)> {
         let q = self.query(cx);
-        let s = Store::global(cx).read(cx);
+        let s = Settings::get(cx);
         let ours = |cwd: &str| {
             s.workspaces
                 .iter()

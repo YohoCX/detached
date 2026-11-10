@@ -13,21 +13,21 @@ use gpui_kit::{
 };
 
 use super::{settings_call, widget};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
+use kernel::settings::Settings;
 
 /// The widget, shown while there are workspaces.
 pub fn workspaces(cx: &mut App) -> AnyView {
     cx.new(|cx| Workspaces {
         open: None,
-        _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+        _settings: cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
     })
     .into()
 }
 
 struct Workspaces {
     open: Option<Open>,
-    _store: Subscription,
+    _settings: Subscription,
 }
 
 struct Open {
@@ -200,7 +200,7 @@ impl Workspaces {
     }
 
     fn popup(&self, open: &Open, cx: &mut Context<Self>) -> AnyElement {
-        let workspaces = Store::global(cx).read(cx).workspaces.clone();
+        let workspaces = Settings::get(cx).workspaces.clone();
         div()
             .id("workspaces.popup")
             .test_support()
@@ -244,7 +244,7 @@ fn hover_button(
 
 impl Render for Workspaces {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = Store::global(cx).read(cx);
+        let s = Settings::get(cx);
         if s.workspaces.is_empty() {
             return div().into_any_element();
         }

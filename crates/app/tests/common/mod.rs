@@ -387,9 +387,10 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     let window = cx.update(shell::open).expect("the window opens");
     let mut cx = VisualTestContext::from_window(window, cx);
     wait_until(&mut cx, |cx| {
+        let settings = cx.settings(|s| s.workspaces == workspaces);
         cx.store(|s, _| {
             let loaded = s.repos.iter().all(|r| s.statuses.contains_key(&r.path));
-            s.workspaces == workspaces && s.repos == repos && loaded
+            settings && s.repos == repos && loaded
         })
     });
     TestApp { cx, sb }
@@ -480,6 +481,7 @@ pub trait Drive {
     fn find(&mut self, id: impl Into<ElementId>) -> Option<ElementSnapshot>;
     fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R;
     fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R;
+    fn settings<R>(&mut self, f: impl FnOnce(&Settings) -> R) -> R;
 }
 
 impl Drive for VisualTestContext {
@@ -511,5 +513,10 @@ impl Drive for VisualTestContext {
 
     fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R {
         self.update(|_, cx| Activity::global(cx).update(cx, f))
+    }
+
+    /// Reads the kernel's settings snapshot.
+    fn settings<R>(&mut self, f: impl FnOnce(&Settings) -> R) -> R {
+        self.update(|_, cx| f(kernel::settings::Settings::get(cx)))
     }
 }

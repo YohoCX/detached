@@ -25,6 +25,7 @@ use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
+use kernel::settings::Settings;
 use kernel::ui_state;
 
 /// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
@@ -130,6 +131,7 @@ impl Tree {
                     this.load(window, cx);
                 }
             }),
+            cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&field, |_, _, Commit(value), cx| set_ref(value, cx)),
             cx.subscribe(&field, |_, _, _: &Focused, cx| {
                 Store::global(cx).update(cx, |s, cx| {
@@ -203,8 +205,8 @@ impl Tree {
             return vec![];
         };
         let nest = ui_state::get("tree.nesting", cx).unwrap_or(true);
-        let s = Store::global(cx).read(cx);
-        let rules = if nest { rules(&s.file_nesting) } else { vec![] };
+        let nesting = &Settings::get(cx).file_nesting;
+        let rules = if nest { rules(nesting) } else { vec![] };
         let none = HashSet::new();
         let expanded = cx.try_global::<Expanded>().and_then(|e| e.0.get(repo));
         flatten(root, expanded.unwrap_or(&none), &rules)

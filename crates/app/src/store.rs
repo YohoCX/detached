@@ -1,9 +1,8 @@
 //! App-wide state. Views observe the store and read what they need; they do not copy it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use detached_core::api;
-use detached_core::settings::Workspace;
 use detached_core::types::{RepoInfo, RepoStatus};
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
@@ -28,8 +27,6 @@ pub enum Event {
 
 pub struct Store {
     pub repos: Vec<RepoInfo>,
-    pub workspaces: Vec<Workspace>,
-    pub file_nesting: BTreeMap<String, Vec<String>>,
     current: Option<String>,
     /// A repo's status, or the error text when it failed.
     pub statuses: HashMap<String, Result<RepoStatus, String>>,
@@ -58,8 +55,6 @@ impl Store {
         let store = cx.new(|cx| {
             let mut s = Store {
                 repos: vec![],
-                workspaces: vec![],
-                file_nesting: BTreeMap::new(),
                 current: None,
                 statuses: HashMap::new(),
                 outcomes: HashMap::new(),
@@ -178,11 +173,12 @@ impl Store {
         cx.spawn(async move |this, cx| {
             loop {
                 let core = core.clone();
+                // Before the listing, so a call made while it runs gets a pass of its own.
+                this.update(cx, |s, _| s.again = false).ok();
                 let list = cx
                     .update(|cx| blocking::run(cx, move || api::list_repos(&core)))
                     .await;
                 let Ok(paths) = this.update(cx, |s, cx| {
-                    s.again = false;
                     s.set_repos(list);
                     cx.notify();
                     s.repos.iter().map(|r| r.path.clone()).collect::<Vec<_>>()
@@ -209,25 +205,13 @@ impl Store {
         .detach();
     }
 
-    /// Applies `list` when given, reloads workspaces and file nesting from settings, then `refresh_all`.
+    /// Applies `list` when given, then `refresh_all`.
     pub fn load_repos(&mut self, list: Option<Vec<RepoInfo>>, cx: &mut Context<Self>) {
         if let Some(list) = list {
             self.set_repos(list);
             cx.notify();
         }
-        let core = kernel::core(cx).clone();
-        let settings = blocking::run(cx, move || api::get_settings(&core));
-        cx.spawn(async move |this, cx| {
-            let settings = settings.await;
-            this.update(cx, |s, cx| {
-                s.workspaces = settings.workspaces;
-                s.file_nesting = settings.file_nesting;
-                s.refresh_all(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        self.refresh_all(cx);
     }
 
     pub fn load_branch_names(&mut self, repo: String, cx: &mut Context<Self>) {
@@ -264,6 +248,7 @@ mod tests {
     use detached_core::git::testutil::Sandbox;
     use gpui_kit::TestAppContext;
     use kernel::doc::Location;
+    use kernel::settings::Settings;
     use tempfile::TempDir;
 
     use super::*;
@@ -273,11 +258,11 @@ mod tests {
     fn wait_until(
         cx: &mut TestAppContext,
         store: &Entity<Store>,
-        done: impl Fn(&Store, &Activity) -> bool,
+        done: impl Fn(&Store, &Activity, &App) -> bool,
     ) {
         cx.executor().allow_parking();
         let start = Instant::now();
-        while !cx.read(|cx| done(store.read(cx), Activity::global(cx).read(cx))) {
+        while !cx.read(|cx| done(store.read(cx), Activity::global(cx).read(cx), cx)) {
             assert!(start.elapsed() < Duration::from_secs(10), "timed out");
             let tick = cx.executor().timer(Duration::from_millis(10));
             cx.foreground_executor().block_test(tick);
@@ -298,8 +283,9 @@ mod tests {
             kernel::init(Arc::new(state), cx);
             Store::init(cx)
         });
-        wait_until(cx, &store, |s, _| {
-            s.current().is_some_and(|r| s.status(r).is_some())
+        wait_until(cx, &store, |s, _, cx| {
+            let loaded = !Settings::get(cx).workspaces.is_empty();
+            loaded && s.current().is_some_and(|r| s.status(r).is_some())
         });
         (dir, store)
     }
@@ -316,7 +302,7 @@ mod tests {
                 s.status(&s.repos[0].path).unwrap().branch.as_deref(),
                 Some("main")
             );
-            assert_eq!(s.workspaces.len(), 1);
+            assert_eq!(Settings::get(cx).workspaces.len(), 1);
         });
     }
 
@@ -355,7 +341,7 @@ mod tests {
                 assert!(s.refreshing && s.again);
             })
         });
-        wait_until(cx, &store, |s, _| !s.refreshing);
+        wait_until(cx, &store, |s, _, _| !s.refreshing);
         cx.read(|cx| assert!(!store.read(cx).again));
     }
 
@@ -381,7 +367,7 @@ mod tests {
                 )
             })
         });
-        wait_until(cx, &store, |_, a| {
+        wait_until(cx, &store, |_, a, _| {
             a.ops.first().is_some_and(|o| o.line == "two")
         });
         let id = cx.read(|cx| {
@@ -394,7 +380,7 @@ mod tests {
         });
         go.send(()).unwrap();
         assert_eq!(cx.foreground_executor().block_test(task), id);
-        wait_until(cx, &store, |s, a| {
+        wait_until(cx, &store, |s, a, _| {
             a.ops.is_empty() && s.status(&repo).is_some()
         });
     }

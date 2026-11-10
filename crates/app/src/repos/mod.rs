@@ -38,6 +38,7 @@ use crate::ui::{self, radius, theme};
 use branches::Intent;
 use kernel::activity::Activity;
 use kernel::blocking;
+use kernel::settings::Settings;
 use sync::{Bulk, Kind};
 
 /// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches, the
@@ -170,8 +171,7 @@ pub(crate) fn settings_call(
 /// Picks folders and adds them in order to `workspace`, by default the first active one; the first
 /// folder ever creates the workspace.
 pub(crate) fn add_folders(workspace: Option<String>, cx: &mut App) {
-    let s = Store::global(cx).read(cx);
-    let first_on = s
+    let first_on = Settings::get(cx)
         .workspaces
         .iter()
         .find(|w| w.active)
