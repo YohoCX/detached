@@ -267,3 +267,48 @@ fn a_shell_dragged_out_of_the_terminal_is_a_tab_of_its_own_and_ends_with_it(
     let gone = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.is_empty());
     assert!(gone, "closing the tab ends the shell");
 }
+
+/// A shell in the Terminal app with `ANSWER` run in it.
+fn shell_answered(cx: &mut TestAppContext) -> TestApp {
+    plain_shell();
+    let mut app = open_app_with(cx, layout);
+    let cx = &mut app.cx;
+    cx.press("alt-f12");
+    cx.input(ANSWER);
+    cx.press("enter");
+    wait_until(cx, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("terminal.row", i)))
+                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
+        })
+    });
+    app
+}
+
+#[gpui_kit::test]
+fn a_shell_dropped_on_a_zones_tab_strip_lands_in_that_zone(cx: &mut TestAppContext) {
+    let cx = &mut shell_answered(cx);
+    drag_tab(cx, ("terminal.tab", 0usize), "tool.Changes");
+    let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
+    assert_eq!(docked.len(), 1, "out of the Terminal app");
+    let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
+    let tab = cx.find(gpui_kit::SharedString::from(id)).unwrap().bounds();
+    assert!(tab.origin.x > px(1000.), "in the right zone");
+}
+
+#[gpui_kit::test]
+fn a_shell_released_over_no_target_stays_in_the_terminal_app(cx: &mut TestAppContext) {
+    let cx = &mut shell_answered(cx);
+    let tab = cx.find(("terminal.tab", 0usize)).unwrap().bounds();
+    let from = point(tab.left() + px(4.), tab.center().y);
+    // The sidebar: the center's drop target also lies under the bottom zone.
+    cx.update(|w, cx| w.drag(from, point(px(100.), px(400.)), cx));
+    settle(cx);
+    let (left, docked) = cx.update(|_, cx| {
+        let t = Terminals::global(cx).read(cx);
+        (t.sessions.len(), t.docked.len())
+    });
+    assert_eq!((left, docked), (1, 0));
+}
