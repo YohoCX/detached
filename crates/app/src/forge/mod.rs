@@ -36,14 +36,6 @@ use crate::ui::{self, theme};
 use crate::util::{first_line, now};
 use kernel::doc::Doc;
 
-/// The top bar's center.
-pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
-    vec![
-        cx.new(|cx| MrChip::new(window, cx)).into(),
-        cx.new(|cx| PipelineBadge::new(window, cx)).into(),
-    ]
-}
-
 /// The tool panel's Merge Requests.
 pub fn mrs(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| MrList::new(window, cx)).into()

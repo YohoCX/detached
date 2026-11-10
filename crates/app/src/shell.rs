@@ -5,7 +5,7 @@ use gpui_kit::base::dock::{DockArea, DockPlacement};
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, FontWeight,
+    AnyView, AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
     WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px, relative, size,
@@ -16,7 +16,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Event, Store};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
-use crate::{actions, forge, history, keymap, search};
+use crate::{actions, keymap};
 use kernel::doc::Doc;
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -31,25 +31,28 @@ pub enum TopBar {
     Right,
 }
 
-// The slots, one view constructor per vertical.
+type View = fn(&mut Window, &mut App) -> AnyView;
 
-fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
-    match slot {
-        TopBar::Left => vec![
-            crate::repos::workspaces(cx),
-            crate::repos::switcher(cx),
-            crate::repos::branches(window, cx),
-            crate::repos::settings(window, cx),
-        ],
-        TopBar::Center => forge::top_bar(window, cx),
-        TopBar::Right => vec![search::pill(cx), crate::repos::sync_buttons(cx)],
-    }
+/// The views each window builds, as the features registered them.
+#[derive(Clone, Default)]
+struct Slots {
+    top_bar: Vec<(TopBar, i32, View)>,
+    overlays: Vec<View>,
 }
 
-/// Modals over the window and under the notices, inside the shell's key context so the app's
-/// chords still reach it.
-fn overlays(window: &mut Window, cx: &mut App) -> Vec<AnyView> {
-    vec![search::palette(window, cx), search::find(window, cx)]
+impl Global for Slots {}
+
+/// Adds a view to the title bar's `slot`, placed by `order` in it.
+pub fn top_bar(cx: &mut App, slot: TopBar, order: i32, view: View) {
+    cx.default_global::<Slots>()
+        .top_bar
+        .push((slot, order, view));
+}
+
+/// Adds a modal over the window and under the notices, inside the shell's key context so the
+/// app's chords still reach it.
+pub fn overlay(cx: &mut App, view: View) {
+    cx.default_global::<Slots>().overlays.push(view);
 }
 
 pub fn window_options(cx: &App) -> WindowOptions {
@@ -96,7 +99,6 @@ impl Shell {
         let config_dir = kernel::core(cx).config_dir.clone();
         ui::theme::init(&config_dir, cx);
         ui::theme::sync(window, cx);
-        history::init(cx);
         let store = Store::global(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -119,12 +121,22 @@ impl Shell {
                 }
             }),
         ];
+        let Slots {
+            mut top_bar,
+            overlays,
+        } = cx.try_global::<Slots>().cloned().unwrap_or_default();
+        top_bar.sort_by_key(|(_, order, _)| *order);
+        let mut bar = |slot| {
+            let views = top_bar.iter().filter(|(s, ..)| *s == slot);
+            views.map(|(.., view)| view(window, cx)).collect()
+        };
+        let (left, center, right) = (bar(TopBar::Left), bar(TopBar::Center), bar(TopBar::Right));
         Shell {
-            left: top_bar(TopBar::Left, window, cx),
-            center: top_bar(TopBar::Center, window, cx),
-            right: top_bar(TopBar::Right, window, cx),
+            left,
+            center,
+            right,
             dock,
-            overlays: overlays(window, cx),
+            overlays: overlays.iter().map(|view| view(window, cx)).collect(),
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
             focus,

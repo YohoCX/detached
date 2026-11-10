@@ -23,6 +23,7 @@ use gpui_kit::base::dock::DockPlacement::{Bottom, Left, Right};
 use gpui_kit::{App, AppContext};
 
 use dock::{AppSpec, register_app, register_doc};
+use shell::{TopBar, overlay, top_bar};
 
 /// Registers what each feature adds to the window; before it opens.
 pub fn register(cx: &mut App) {
@@ -124,6 +125,21 @@ pub fn register(cx: &mut App) {
     register_doc(cx, "job", forge::JobDocs);
     register_doc(cx, "chat", chat::ChatDocs);
     register_doc(cx, "terminal", terminal::TerminalDocs);
+    top_bar(cx, TopBar::Left, 0, |_, cx| repos::workspaces(cx));
+    top_bar(cx, TopBar::Left, 1, |_, cx| repos::switcher(cx));
+    top_bar(cx, TopBar::Left, 2, repos::branches);
+    top_bar(cx, TopBar::Center, 0, |w, cx| {
+        cx.new(|cx| forge::MrChip::new(w, cx)).into()
+    });
+    top_bar(cx, TopBar::Center, 1, |w, cx| {
+        cx.new(|cx| forge::PipelineBadge::new(w, cx)).into()
+    });
+    top_bar(cx, TopBar::Right, 0, |_, cx| search::pill(cx));
+    top_bar(cx, TopBar::Right, 1, |_, cx| repos::sync_buttons(cx));
+    overlay(cx, repos::settings);
+    overlay(cx, search::palette);
+    overlay(cx, search::find);
+    history::register(cx);
 }
 
 #[cfg(test)]

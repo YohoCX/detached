@@ -73,7 +73,7 @@ struct Registered {
 impl Global for Registered {}
 
 /// Registers `vcs.fileHistory`, which works with the Log closed.
-pub fn init(cx: &mut App) {
+pub fn register(cx: &mut App) {
     let _file_history = actions::register(
         cx,
         "vcs.fileHistory",

@@ -5,7 +5,7 @@ mod graph;
 mod log;
 
 pub use api::*;
-pub use log::{Log, init};
+pub use log::{Log, register};
 
 use std::collections::HashSet;
 
