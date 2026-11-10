@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::repos::{self, Section};
-use detached_app::store::{Level, Message, Notice};
 use detached_app::ui::menu;
 use detached_app::{actions, shell};
 use detached_core::api;
@@ -18,6 +17,7 @@ use gpui_kit::{
     ElementId, KeyDownEvent, KeyUpEvent, Keystroke, Pixels, Role, TestAppContext,
     VisualTestContext, point, px,
 };
+use kernel::activity::{Activity, Level, Message, Notice};
 use kernel::doc::Doc;
 use kernel::ui_state;
 
@@ -313,7 +313,7 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
 }
 
 fn said(cx: &mut VisualTestContext) -> Option<Message> {
-    cx.store(|s, _| s.message.clone())
+    cx.activity(|s, _| s.message.clone())
 }
 
 fn says(cx: &mut VisualTestContext, text: &str, error: bool) {
@@ -363,7 +363,7 @@ fn fetch_all_and_pull_all_report_per_repo_and_the_diverged_repo_is_left_as_it_wa
     assert_eq!(outcome(cx, &web).as_deref(), Some(diverged));
     assert_eq!(outcome(cx, &app).as_deref(), Some("Up to date"));
     assert_eq!(outcome(cx, &lib).as_deref(), Some("No upstream"));
-    let notices = cx.store(|s, _| s.notices.clone());
+    let notices = cx.activity(|s, _| s.notices.clone());
     let warned = notices.iter().filter(|n| n.level == Level::Warn);
     let titles: Vec<_> = warned.map(|n| n.title.as_str()).collect();
     assert_eq!(titles, ["Pull all: 1 not updated"]);
@@ -414,14 +414,14 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
     assert_eq!(label(cx, "sync.pull"), "Pull All");
     cx.click("sync.pull");
     cx.click("sync.fetch");
-    let ops = cx.store(|s, _| s.ops.iter().map(|o| o.id).collect::<Vec<_>>());
+    let ops = cx.activity(|s, _| s.ops.iter().map(|o| o.id).collect::<Vec<_>>());
     assert_eq!(ops.len(), 1, "both buttons are disabled");
     assert_eq!(label(cx, "sync.fetch"), "1/2");
 
-    cx.store(|s, cx| s.cancel_op(ops[0], cx));
+    cx.activity(|_, cx| Activity::cancel_op(ops[0], cx));
     says(cx, "Fetched 1 of 2 repositories", true);
     assert_eq!(label(cx, "sync.fetch"), "Fetch All");
-    let n = cx.store(|s, _| s.notices.last().cloned()).unwrap();
+    let n = cx.activity(|s, _| s.notices.last().cloned()).unwrap();
     let text = (n.title.as_str(), n.body.as_deref());
     assert_eq!(text, ("Fetch all: 1 not updated", Some("hang: cancelled")));
 }
@@ -745,7 +745,7 @@ fn has_branch(cx: &TestApp, repo: &str, branch: &str) -> bool {
 }
 
 fn last_error(cx: &mut VisualTestContext) -> Option<Notice> {
-    cx.store(|s, _| s.notices.iter().rfind(|n| n.level == Level::Error).cloned())
+    cx.activity(|s, _| s.notices.iter().rfind(|n| n.level == Level::Error).cloned())
 }
 
 #[gpui_kit::test]

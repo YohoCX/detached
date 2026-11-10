@@ -23,8 +23,8 @@ use minisign_verify::{PublicKey, Signature};
 use semver::Version;
 use serde::Deserialize;
 
-use crate::store::Store;
 use crate::ui::{self, theme};
+use kernel::activity::Activity;
 use kernel::blocking;
 
 /// The release key's public half: the second line of its `minisign.pub`.
@@ -312,7 +312,7 @@ fn install(cx: &mut App) {
             Err(e) => {
                 cx.global_mut::<Update>().installing = None;
                 let text = format!("Update failed: {e}");
-                Store::global(cx).update(cx, |s, cx| s.say(text, true, cx));
+                Activity::global(cx).update(cx, |a, cx| a.say(text, true, cx));
             }
         })
     })

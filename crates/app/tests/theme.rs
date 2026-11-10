@@ -37,7 +37,7 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
 
     std::fs::write(&file, "{ not json").unwrap();
     wait_until(cx, |cx| {
-        cx.store(|s, _| {
+        cx.activity(|s, _| {
             s.message
                 .as_ref()
                 .is_some_and(|m| m.text.contains("Theme Mine not loaded"))

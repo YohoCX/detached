@@ -8,7 +8,8 @@ pub use detached_core::types::CheckoutTarget;
 
 use super::State;
 use super::settings::Open;
-use crate::store::{Level, Notice, Store};
+use crate::store::Store;
+use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,8 +35,9 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
             (name.clone(), false)
         }
     };
-    store.update(cx, |s, cx| {
-        s.say(format!("Checking out {name}…"), false, cx)
+    let activity = Activity::global(cx);
+    activity.update(cx, |a, cx| {
+        a.say(format!("Checking out {name}…"), false, cx)
     });
     let (repo, r) = (repo.to_string(), repo.to_string());
     let done = blocking::run(cx, move || api::checkout(&core, &r, &target));
@@ -60,13 +62,13 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
                     });
                 }
                 let n = checkout_notice(&repo, &name, r);
-                store.update(cx, |s, cx| {
-                    s.say(n.title.clone(), n.level == Level::Error, cx)
+                activity.update(cx, |a, cx| {
+                    a.say(n.title.clone(), n.level == Level::Error, cx)
                 });
                 n
             }
         };
-        store.update(cx, |s, cx| s.notify(n, cx));
+        activity.update(cx, |a, cx| a.notify(n, cx));
         refreshed.await;
     })
 }

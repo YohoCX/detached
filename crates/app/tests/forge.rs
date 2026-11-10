@@ -39,7 +39,7 @@ fn shown_mr(cx: &mut VisualTestContext) -> Option<u64> {
 }
 
 fn said(cx: &mut VisualTestContext) -> Option<String> {
-    cx.store(|s, _| s.message.clone().map(|m| m.text))
+    cx.activity(|s, _| s.message.clone().map(|m| m.text))
 }
 
 /// `id` below `scope` in a fresh frame.
@@ -277,7 +277,7 @@ fn a_repo_off_any_forge_says_so_as_mrs_do_and_its_actions_only_hint(cx: &mut Tes
 
     assert!(cx.update(|w, cx| actions::run(w, cx, "mr.create")));
     wait_until(cx, |cx| said(cx).as_deref() == Some(off));
-    assert!(!cx.store(|s, _| s.message.as_ref().unwrap().error));
+    assert!(!cx.activity(|s, _| s.message.as_ref().unwrap().error));
     open_tab(cx, "tool.MRs");
     wait_until(cx, |cx| label(cx, "mrs.setup").as_deref() == Some(off));
 }

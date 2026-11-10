@@ -2,6 +2,7 @@
 //! clippy.toml bans GPUI's elements and windows, and `forbid` keeps an `#[allow]` from lifting that.
 #![forbid(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod activity;
 pub mod blocking;
 pub mod doc;
 pub mod ui_state;
@@ -17,6 +18,7 @@ impl Global for Core {}
 
 pub fn init(core: Arc<AppState>, cx: &mut App) {
     cx.set_global(Core(core));
+    activity::init(cx);
 }
 
 /// Core's state, for the calls that go through `blocking`.

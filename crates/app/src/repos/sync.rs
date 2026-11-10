@@ -17,8 +17,9 @@ use gpui_kit::{
 
 use super::State;
 use crate::keymap;
-use crate::store::{Level, Notice, Outcome, Store};
+use crate::store::{Outcome, Store};
 use crate::ui::{self, Icon, radius, theme};
+use kernel::activity::{Activity, Level, Notice};
 
 const FADE: Duration = Duration::from_secs(6);
 
@@ -98,8 +99,8 @@ fn run(kind: Kind, repo: String, cx: &mut App) -> Task<error::Result<Option<Pull
         Kind::Pull => "Pull",
     };
     let r = repo.clone();
-    Store::global(cx).update(cx, |s, cx| {
-        s.run_op(
+    Activity::global(cx).update(cx, |a, cx| {
+        a.run_op(
             &repo,
             label,
             move |core, id, progress| match kind {
@@ -147,10 +148,8 @@ pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
         let o = outcome(done.await);
         cx.update(|cx| {
             show_outcome(&repo, &o, cx);
-            Store::global(cx).update(cx, |s, cx| {
-                let text = format!("{}: {}", s.name_of(&repo), o.text);
-                s.say(text, !o.ok, cx);
-            });
+            let text = format!("{}: {}", Store::global(cx).read(cx).name_of(&repo), o.text);
+            Activity::global(cx).update(cx, |a, cx| a.say(text, !o.ok, cx));
         });
     })
     .detach();
@@ -199,26 +198,29 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
                 s.sync = None;
                 cx.notify();
             });
-            store.update(cx, |s, cx| {
-                let failed: Vec<_> = results.iter().filter(|(_, o)| !o.ok).collect();
-                let (verb, noun) = match kind {
-                    Kind::Fetch => ("Fetched", "Fetch"),
-                    Kind::Pull => ("Pulled", "Pull"),
-                };
-                let n = results.len();
-                let said = format!("{verb} {} of {n} repositories", n - failed.len());
-                s.say(said, !failed.is_empty(), cx);
-                if !failed.is_empty() {
-                    let lines = failed
-                        .iter()
-                        .map(|(r, o)| format!("{}: {}", s.name_of(r), o.text));
-                    let notice = Notice {
-                        level: Level::Warn,
-                        title: format!("{noun} all: {} not updated", failed.len()),
-                        body: Some(lines.collect::<Vec<_>>().join("\n")),
-                        ..Notice::default()
-                    };
-                    s.notify(notice, cx);
+            let s = store.read(cx);
+            let failed: Vec<_> = results.iter().filter(|(_, o)| !o.ok).collect();
+            let (verb, noun) = match kind {
+                Kind::Fetch => ("Fetched", "Fetch"),
+                Kind::Pull => ("Pulled", "Pull"),
+            };
+            let n = results.len();
+            let said = format!("{verb} {} of {n} repositories", n - failed.len());
+            let notice = (!failed.is_empty()).then(|| {
+                let lines = failed
+                    .iter()
+                    .map(|(r, o)| format!("{}: {}", s.name_of(r), o.text));
+                Notice {
+                    level: Level::Warn,
+                    title: format!("{noun} all: {} not updated", failed.len()),
+                    body: Some(lines.collect::<Vec<_>>().join("\n")),
+                    ..Notice::default()
+                }
+            });
+            Activity::global(cx).update(cx, |a, cx| {
+                a.say(said, notice.is_some(), cx);
+                if let Some(n) = notice {
+                    a.notify(n, cx);
                 }
             });
         });
@@ -227,10 +229,9 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
 }
 
 pub fn prune(repo: String, cx: &mut App) {
-    let store = Store::global(cx);
     let r = repo.clone();
-    let done = store.update(cx, |s, cx| {
-        s.run_op(
+    let done = Activity::global(cx).update(cx, |a, cx| {
+        a.run_op(
             &repo,
             "Prune",
             move |core, id, p| api::prune(core, &r, id, p),
@@ -239,12 +240,15 @@ pub fn prune(repo: String, cx: &mut App) {
     });
     cx.spawn(async move |cx| {
         let pruned = done.await;
-        store.update(cx, |s, cx| match pruned {
-            Ok(()) => {
-                let text = format!("{}: pruned stale remote branches", s.name_of(&repo));
-                s.say(text, false, cx)
-            }
-            Err(e) => s.say(e.to_string(), true, cx),
+        cx.update(|cx| {
+            let (text, error) = match pruned {
+                Ok(()) => {
+                    let name = Store::global(cx).read(cx).name_of(&repo).to_string();
+                    (format!("{name}: pruned stale remote branches"), false)
+                }
+                Err(e) => (e.to_string(), true),
+            };
+            Activity::global(cx).update(cx, |a, cx| a.say(text, error, cx));
         });
     })
     .detach();

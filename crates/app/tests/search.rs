@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
-use detached_app::store::{Level, Notice};
 use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
+use kernel::activity::{Level, Notice};
 use kernel::doc::{Doc, Location};
 
 /// The sandbox layout with `app` current; returns its path.
@@ -819,7 +819,7 @@ fn notices_stay_usable_over_find_in_files(cx: &mut TestAppContext) {
     let (mut app, _) = open_solo(cx);
     let cx = &mut app;
     cx.press("secondary-shift-f");
-    let id = cx.store(|s, cx| {
+    let id = cx.activity(|s, cx| {
         let n = Notice {
             level: Level::Warn,
             title: "Fetch all: 1 not updated".into(),
@@ -833,6 +833,6 @@ fn notices_stay_usable_over_find_in_files(cx: &mut TestAppContext) {
         w.within(notice).click("close", cx)
     });
     settle(cx);
-    assert!(cx.store(|s, _| s.notices.is_empty()));
+    assert!(cx.activity(|s, _| s.notices.is_empty()));
     assert!(find_open(cx));
 }

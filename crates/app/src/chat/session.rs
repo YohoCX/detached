@@ -16,7 +16,8 @@ use gpui_kit::{App, AppContext, Context, Entity, Task};
 use serde::{Deserialize, Serialize};
 
 use crate::files::{Links, Markdown};
-use crate::store::{Level, Store};
+use crate::store::Store;
+use kernel::activity::{Activity, Level};
 use kernel::blocking;
 use kernel::ui_state;
 
@@ -922,7 +923,7 @@ impl Session {
             }
             Event::Error { message } => {
                 let logged = format!("Claude in {}: {message}", super::label(&self.repo, cx));
-                Store::global(cx).update(cx, |s, cx| s.record(Level::Warn, logged, cx));
+                Activity::global(cx).update(cx, |a, cx| a.record(Level::Warn, logged, cx));
                 self.items.push(Item::Note(message))
             }
             Event::Exited { code, stderr } => {

@@ -22,9 +22,10 @@ use gpui_kit::{
 };
 
 use super::{CheckoutTarget, State, checkout, say, sync, widget};
-use crate::store::{Level, Notice, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
+use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
 
 /// What the popup was opened for; a new intent mounts a new popup.
@@ -570,7 +571,7 @@ impl Popup {
                             body: Some(e.to_string()),
                             ..Notice::default()
                         };
-                        store.update(cx, |s, cx| s.notify(n, cx));
+                        Activity::global(cx).update(cx, |a, cx| a.notify(n, cx));
                         None
                     }
                 };
@@ -651,10 +652,10 @@ impl Popup {
         };
         open(None, cx);
         let (remote, name, full) = (b.remote.clone(), b.name.clone(), full.to_string());
-        let store = Store::global(cx);
-        let done = store.update(cx, |s, cx| {
+        let activity = Activity::global(cx);
+        let done = activity.update(cx, |a, cx| {
             let r = repo.clone();
-            s.run_op(
+            a.run_op(
                 &repo,
                 &format!("Delete {full}"),
                 move |core, id, p| api::delete_remote_branch(core, &r, &remote, &name, id, p),
@@ -663,8 +664,8 @@ impl Popup {
         });
         cx.spawn(async move |cx| {
             let done = done.await;
-            store.update(cx, |s, cx| match done {
-                Ok(()) => s.say(format!("Deleted {full} on the remote"), false, cx),
+            activity.update(cx, |a, cx| match done {
+                Ok(()) => a.say(format!("Deleted {full} on the remote"), false, cx),
                 Err(e) => {
                     let n = Notice {
                         level: Level::Error,
@@ -672,7 +673,7 @@ impl Popup {
                         body: Some(e.to_string()),
                         ..Notice::default()
                     };
-                    s.notify(n, cx);
+                    a.notify(n, cx);
                 }
             })
         })

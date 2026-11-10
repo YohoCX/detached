@@ -9,7 +9,6 @@ use std::time::Duration;
 use common::*;
 use detached_app::actions;
 use detached_app::history::CommitDetails;
-use detached_app::store::Level;
 use detached_app::ui::menu;
 use detached_app::util::when;
 use detached_core::types::Side;
@@ -18,6 +17,7 @@ use gpui_kit::{
     AppContext, ElementId, Modifiers, ScrollDelta, TestAppContext, VisualTestContext,
     WindowOptions, point, px,
 };
+use kernel::activity::Level;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::ui_state;
 
@@ -528,7 +528,7 @@ fn file_history_of_a_diff_moves_to_its_repo_and_keeps_refs_text_and_author(
 fn file_history_without_a_shown_file_says_so(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fileHistory")));
-    let said = cx.store(|s, _| s.message.clone().map(|m| (m.text, m.error)));
+    let said = cx.activity(|s, _| s.message.clone().map(|m| (m.text, m.error)));
     assert_eq!(
         said,
         Some(("Open a file to show its history".into(), false))
@@ -1131,7 +1131,7 @@ fn right_click(cx: &mut VisualTestContext, i: usize, item: &str) {
 }
 
 fn said(cx: &mut VisualTestContext) -> Option<(String, bool)> {
-    cx.store(|s, _| s.message.clone().map(|m| (m.text, m.error)))
+    cx.activity(|s, _| s.message.clone().map(|m| (m.text, m.error)))
 }
 
 fn selection(cx: &mut VisualTestContext, n: usize) -> Vec<bool> {
@@ -1244,8 +1244,8 @@ fn a_taken_branch_name_raises_the_error_notice(cx: &mut TestAppContext) {
     right_click(cx, 1, "New Branch…");
     cx.input("main");
     cx.press("enter");
-    wait_until(cx, |cx| cx.store(|s, _| !s.notices.is_empty()));
-    let n = cx.store(|s, _| s.notices[0].clone());
+    wait_until(cx, |cx| cx.activity(|s, _| !s.notices.is_empty()));
+    let n = cx.activity(|s, _| s.notices[0].clone());
     assert_eq!(
         (n.level, n.title.as_str()),
         (Level::Error, "New branch main failed")

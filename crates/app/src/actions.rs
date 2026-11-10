@@ -5,7 +5,7 @@ use std::rc::{Rc, Weak};
 
 use gpui_kit::{App, Global, Window};
 
-use crate::store::Store;
+use kernel::activity::Activity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -161,7 +161,7 @@ pub fn dispatch(window: &mut Window, cx: &mut App, id: &str) {
     if !run(window, cx, id) {
         let title = find(id).map_or(id, |a| a.title);
         let text = format!("{title} is not available yet");
-        Store::global(cx).update(cx, |s, cx| s.say(text, false, cx));
+        Activity::global(cx).update(cx, |a, cx| a.say(text, false, cx));
     }
 }
 

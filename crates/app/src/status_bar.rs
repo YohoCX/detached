@@ -10,13 +10,15 @@ use gpui_kit::{
 };
 
 use crate::dock::{self, Kind};
-use crate::store::{Level, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::update::{self, Update};
 use crate::{actions, keymap};
+use kernel::activity::{Activity, Level};
 
 pub struct StatusBar {
     _store: Subscription,
+    _activity: Subscription,
 }
 
 impl StatusBar {
@@ -24,6 +26,7 @@ impl StatusBar {
         cx.observe_global::<Update>(|_, cx| cx.notify()).detach();
         StatusBar {
             _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            _activity: cx.observe(&Activity::global(cx), |_, _, cx| cx.notify()),
         }
     }
 }
@@ -33,7 +36,9 @@ impl Render for StatusBar {
         let t = theme(cx);
         let store = Store::global(cx);
         let s = store.read(cx);
-        let left = match &s.message {
+        let activity = Activity::global(cx);
+        let a = activity.read(cx);
+        let left = match &a.message {
             Some(m) => {
                 let full = m.text.clone();
                 div()
@@ -47,7 +52,9 @@ impl Render for StatusBar {
                     .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation()
                     })
-                    .on_click(|_, _, cx| Store::global(cx).update(cx, |s, cx| s.clear_message(cx)))
+                    .on_click(|_, _, cx| {
+                        Activity::global(cx).update(cx, |a, cx| a.clear_message(cx))
+                    })
                     .child(m.text.clone())
                     .into_any_element()
             }
@@ -102,7 +109,7 @@ impl Render for StatusBar {
                     .into_any_element()
             }),
         };
-        let ops = s.ops.iter().map(|op| {
+        let ops = a.ops.iter().map(|op| {
             let (id, line) = (op.id, op.line.clone());
             div()
                 .id(("op", id as usize))
@@ -132,12 +139,12 @@ impl Render for StatusBar {
                         .min_w(px(16.))
                         .px(px(3.))
                         .tooltip(|window, cx| Tooltip::new("Cancel").build(window, cx))
-                        .on_click(move |_, _, cx| Store::global(cx).read(cx).cancel_op(id, cx)),
+                        .on_click(move |_, _, cx| Activity::cancel_op(id, cx)),
                 )
         });
-        let events = (!s.log.is_empty()).then(|| {
-            let unread = s.unread;
-            let errors = s
+        let events = (!a.log.is_empty()).then(|| {
+            let unread = a.unread;
+            let errors = a
                 .log
                 .iter()
                 .rev()

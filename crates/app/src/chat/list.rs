@@ -20,6 +20,7 @@ use super::{Item, Session, label, open, state_icon};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, now};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
 
@@ -222,7 +223,7 @@ impl ChatList {
                     }
                     Event::Error { message } => {
                         cx.update(|cx| {
-                            Store::global(cx).update(cx, |s, cx| s.say(message, true, cx))
+                            Activity::global(cx).update(cx, |a, cx| a.say(message, true, cx))
                         });
                     }
                     _ => {}
@@ -681,11 +682,10 @@ impl Render for ChatList {
                         )
                         .test_support()
                         .on_click(|_, _, cx| {
-                            let store = Store::global(cx);
-                            match store.read(cx).current().map(String::from) {
+                            match Store::global(cx).read(cx).current().map(String::from) {
                                 Some(repo) => super::new_chat(repo, None, cx),
-                                None => store.update(cx, |s, cx| {
-                                    s.say("Select a repository to chat about", false, cx)
+                                None => Activity::global(cx).update(cx, |a, cx| {
+                                    a.say("Select a repository to chat about", false, cx)
                                 }),
                             }
                         }),

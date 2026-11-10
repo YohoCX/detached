@@ -9,25 +9,25 @@ use gpui_kit::{
 
 use detached_core::api;
 
-use crate::store::{Level, Notice, Store};
 use crate::ui::{self, Icon, text, theme};
+use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
 
 pub struct Notices {
-    _store: Subscription,
+    _activity: Subscription,
 }
 
 impl Notices {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Notices {
-            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            _activity: cx.observe(&Activity::global(cx), |_, _, cx| cx.notify()),
         }
     }
 }
 
 impl Render for Notices {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let notices = Store::global(cx).read(cx).notices.clone();
+        let notices = Activity::global(cx).read(cx).notices.clone();
         div()
             .absolute()
             .right(px(16.))
@@ -70,7 +70,9 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
                 .h(px(18.))
                 .min_w(px(18.))
                 .tooltip(|window, cx| Tooltip::new("Close").build(window, cx))
-                .on_click(move |_, _, cx| Store::global(cx).update(cx, |s, cx| s.dismiss(id, cx))),
+                .on_click(move |_, _, cx| {
+                    Activity::global(cx).update(cx, |a, cx| a.dismiss(id, cx))
+                }),
         );
     let body = n.body.map(|b| {
         div()
@@ -130,7 +132,7 @@ fn open_in_zed(repo: String, file: String, cx: &mut App) {
     let opened = blocking::run(cx, move || api::open_in_zed(&core, &repo, &file, None));
     cx.spawn(async move |cx| {
         if let Err(e) = opened.await {
-            cx.update(|cx| Store::global(cx).update(cx, |s, cx| s.say(e.to_string(), true, cx)));
+            cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)));
         }
     })
     .detach();

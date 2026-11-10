@@ -7,16 +7,17 @@ use gpui_kit::{
     div, prelude::FluentBuilder, px,
 };
 
-use crate::store::{Level, Store};
 use crate::ui::{self, Icon, text, theme};
+use kernel::activity::{Activity, Level};
 
 pub fn view(cx: &mut App) -> AnyView {
     cx.new(|cx| Events {
         filter: None,
-        _store: cx.observe(&Store::global(cx), |_, store, cx| {
+        _activity: cx.observe(&Activity::global(cx), |_, activity, cx| {
             // What comes in while the list is on screen is read.
-            if store.read(cx).unread > 0 && crate::dock::is_shown(crate::dock::Kind::Events, cx) {
-                store.update(cx, |s, cx| s.read_log(cx));
+            if activity.read(cx).unread > 0 && crate::dock::is_shown(crate::dock::Kind::Events, cx)
+            {
+                activity.update(cx, |a, cx| a.read_log(cx));
             }
             cx.notify()
         }),
@@ -26,19 +27,19 @@ pub fn view(cx: &mut App) -> AnyView {
 
 /// The Events app came on screen: what it shows is read.
 pub fn shown(cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| s.read_log(cx));
+    Activity::global(cx).update(cx, |a, cx| a.read_log(cx));
 }
 
 struct Events {
     /// The level shown; None shows all.
     filter: Option<Level>,
-    _store: Subscription,
+    _activity: Subscription,
 }
 
 impl Render for Events {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let s = Store::global(cx).read(cx);
+        let s = Activity::global(cx).read(cx);
         let now = crate::util::now();
         let filter = self.filter;
         let shown = s
@@ -126,7 +127,7 @@ impl Render for Events {
             .child(
                 ui::titled(ui::icon_button("events.clear", Icon::Trash, cx), "Clear")
                     .test_support()
-                    .on_click(|_, _, cx| Store::global(cx).update(cx, |s, cx| s.clear_log(cx))),
+                    .on_click(|_, _, cx| Activity::global(cx).update(cx, |a, cx| a.clear_log(cx))),
             );
         div()
             .id("events")

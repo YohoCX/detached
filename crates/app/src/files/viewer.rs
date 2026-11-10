@@ -16,6 +16,7 @@ use crate::keymap;
 use crate::store::Store;
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
 
@@ -232,13 +233,12 @@ pub(super) fn conflict_bar(
 
 /// Errors go to the status message.
 pub(super) fn open_in_zed(repo: &str, path: &str, line: Option<u32>, cx: &mut App) {
-    let store = Store::global(cx);
     let core = kernel::core(cx).clone();
     let (repo, path) = (repo.to_string(), path.to_string());
     let open = blocking::run(cx, move || api::open_in_zed(&core, &repo, &path, line));
     cx.spawn(async move |cx| {
         if let Err(e) = open.await {
-            cx.update(|cx| store.update(cx, |s, cx| s.say(e.to_string(), true, cx)));
+            cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)));
         }
     })
     .detach();

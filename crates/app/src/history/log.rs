@@ -26,9 +26,10 @@ use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::dock::{self, Kind};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Event, Level, Notice, Store};
+use crate::store::{Event, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, now, when};
+use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking::{self, QueryId};
 use kernel::doc::Doc;
 
@@ -90,8 +91,8 @@ fn file_history(window: &mut Window, cx: &mut App) {
         Some(Doc::File(l)) => (l.repo.clone(), l.path.clone()),
         Some(Doc::Diff(d)) => (d.repo.clone(), d.path.clone()),
         _ => {
-            return store.update(cx, |s, cx| {
-                s.say("Open a file to show its history", false, cx)
+            return Activity::global(cx).update(cx, |a, cx| {
+                a.say("Open a file to show its history", false, cx)
             });
         }
     };
@@ -136,7 +137,7 @@ fn head(s: &Store, repo: &str) -> Head {
 }
 
 fn say(cx: &mut App, text: impl Into<String>, error: bool) {
-    Store::global(cx).update(cx, |s, cx| s.say(text, error, cx));
+    Activity::global(cx).update(cx, |a, cx| a.say(text, error, cx));
 }
 
 struct NewBranch {
@@ -526,7 +527,7 @@ impl Log {
                         body: Some(e.to_string()),
                         ..Default::default()
                     };
-                    Store::global(cx).update(cx, |s, cx| s.notify(failed, cx));
+                    Activity::global(cx).update(cx, |a, cx| a.notify(failed, cx));
                 }
             })
         })

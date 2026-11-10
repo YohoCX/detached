@@ -239,7 +239,7 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
     let label = |cx: &mut VisualTestContext, id: &'static str| {
         cx.find(id).and_then(|e| e.label().map(String::from))
     };
-    cx.store(|s, cx| s.say("Boom", true, cx));
+    cx.activity(|s, cx| s.say("Boom", true, cx));
     assert_eq!(label(cx, "status.events").as_deref(), Some("Events: 1 new"));
     cx.executor().advance_clock(Duration::from_secs(11));
     settle(cx);
@@ -273,7 +273,7 @@ fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_br
             .and_then(|e| e.label().map(String::from))
     };
     assert_eq!(repo(cx), Some(format!("{name} main ↓1")));
-    cx.store(|s, cx| s.say("Fetched", false, cx));
+    cx.activity(|s, cx| s.say("Fetched", false, cx));
     assert_eq!(repo(cx), None, "the message takes its place");
     cx.click("status.message");
     cx.click("status.repo");
@@ -282,12 +282,12 @@ fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_br
 
 #[gpui_kit::test]
 fn events_filter_errors_and_warnings_and_hide_their_bar_when_empty(cx: &mut TestAppContext) {
-    use detached_app::store::Level;
     use gpui_kit::test::TestWindowExt;
+    use kernel::activity::Level;
     let cx = &mut open_app(cx);
     open_tab(cx, "bottom.Events");
     assert!(cx.find("events.filter").is_none(), "no bar over nothing");
-    cx.store(|s, cx| {
+    cx.activity(|s, cx| {
         s.record(Level::Error, "bad", cx);
         s.record(Level::Warn, "odd", cx);
     });

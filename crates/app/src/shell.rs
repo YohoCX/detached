@@ -308,7 +308,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::store::{Level, Notice};
+    use kernel::activity::{Activity, Level, Notice};
     use kernel::ui_state;
 
     /// The shell over a config with no folders.
@@ -345,11 +345,11 @@ mod tests {
         })
     }
 
-    fn store<R>(
+    fn activity<R>(
         cx: &mut TestAppContext,
-        f: impl FnOnce(&mut Store, &mut Context<Store>) -> R,
+        f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R,
     ) -> R {
-        cx.update(|cx| Store::global(cx).update(cx, f))
+        cx.update(|cx| Activity::global(cx).update(cx, f))
     }
 
     #[gpui_kit::test]
@@ -419,11 +419,11 @@ mod tests {
     #[gpui_kit::test]
     fn the_message_clears_on_click_and_a_notice_on_close(cx: &mut TestAppContext) {
         let (_dir, w) = open_shell(cx);
-        store(cx, |s, cx| s.say("Fetched 3 of 3 repositories", false, cx));
+        activity(cx, |s, cx| s.say("Fetched 3 of 3 repositories", false, cx));
         act(cx, w, |window, cx| window.click("status.message", cx));
-        assert_eq!(store(cx, |s, _| s.message.clone()), None);
+        assert_eq!(activity(cx, |s, _| s.message.clone()), None);
 
-        let id = store(cx, |s, cx| {
+        let id = activity(cx, |s, cx| {
             s.notify(
                 Notice {
                     level: Level::Warn,
@@ -440,13 +440,13 @@ mod tests {
             assert!(window.find(notice.clone()).visible());
             window.within(notice).click("close", cx)
         });
-        assert!(store(cx, |s, _| s.notices.is_empty()));
+        assert!(activity(cx, |s, _| s.notices.is_empty()));
     }
 
     #[gpui_kit::test]
     fn a_running_op_shows_in_the_status_bar_until_cancelled(cx: &mut TestAppContext) {
         let (_dir, w) = open_shell(cx);
-        let task = store(cx, |s, cx| {
+        let task = activity(cx, |s, cx| {
             s.run_op(
                 "/r",
                 "Fetch",
@@ -461,9 +461,9 @@ mod tests {
                 cx,
             )
         });
-        let id = store(cx, |s, _| s.ops[0].id) as usize;
+        let id = activity(cx, |s, _| s.ops[0].id) as usize;
         let start = Instant::now();
-        while store(cx, |s, _| s.ops[0].line.is_empty()) {
+        while activity(cx, |s, _| s.ops[0].line.is_empty()) {
             assert!(start.elapsed() < Duration::from_secs(10), "no progress");
             let tick = cx.executor().timer(Duration::from_millis(10));
             cx.foreground_executor().block_test(tick);
@@ -474,6 +474,6 @@ mod tests {
         });
         cx.foreground_executor().block_test(task);
         cx.run_until_parked();
-        assert!(store(cx, |s, _| s.ops.is_empty()));
+        assert!(activity(cx, |s, _| s.ops.is_empty()));
     }
 }

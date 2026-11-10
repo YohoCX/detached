@@ -304,7 +304,7 @@ fn no_repo_selected_says_so(cx: &mut TestAppContext) {
     app.store(|s, cx| s.set_current(None, cx));
     app.click("top.chat");
     assert!(app.store(|s, _| s.shown().is_none()));
-    assert!(app.store(|s, _| s.message.is_some()));
+    assert!(app.activity(|s, _| s.message.is_some()));
 }
 
 fn index_of(cx: &mut VisualTestContext, wanted: &str) -> usize {

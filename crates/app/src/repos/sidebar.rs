@@ -27,6 +27,7 @@ use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
+use kernel::activity::Activity;
 use kernel::ui_state;
 
 const COLLAPSED: &str = "sidebar.collapsed";
@@ -768,7 +769,7 @@ fn copy_path(path: &str) -> impl Fn(&mut Window, &mut App) + 'static {
     move |_, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
         let said = format!("Copied {path}");
-        Store::global(cx).update(cx, |s, cx| s.say(said, false, cx));
+        Activity::global(cx).update(cx, |a, cx| a.say(said, false, cx));
     }
 }
 

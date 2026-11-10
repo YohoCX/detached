@@ -33,6 +33,7 @@ use crate::actions::{self, Registration};
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
 use branches::Intent;
+use kernel::activity::Activity;
 use kernel::blocking;
 use sync::{Bulk, Kind};
 
@@ -137,10 +138,10 @@ pub(crate) fn settings_call(
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         let r = done.await;
-        store.update(cx, |s, cx| match r {
-            Ok(list) => s.load_repos(Some(list), cx),
-            Err(e) => s.say(e.to_string(), true, cx),
-        });
+        cx.update(|cx| match r {
+            Ok(list) => store.update(cx, |s, cx| s.load_repos(Some(list), cx)),
+            Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
+        })
     })
 }
 
@@ -189,7 +190,7 @@ pub(crate) fn run_core(cx: &mut App, f: impl FnOnce(&AppState) -> Result<()> + S
 }
 
 fn say(text: String, error: bool, cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| s.say(text, error, cx));
+    Activity::global(cx).update(cx, |a, cx| a.say(text, error, cx));
 }
 
 /// A top bar widget that reads `label`; `title` is its tooltip.

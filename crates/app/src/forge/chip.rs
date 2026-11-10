@@ -17,6 +17,7 @@ use crate::cache::{self, Cache};
 use crate::dock::{self, Kind};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
+use kernel::activity::Activity;
 use kernel::blocking;
 
 struct Form {
@@ -117,7 +118,7 @@ impl MrChip {
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(repo), Some(_)) = (self.repo.clone(), &self.key) else {
             let text = "Create Merge Request needs a branch with an upstream";
-            return Store::global(cx).update(cx, |s, cx| s.say(text, false, cx));
+            return Activity::global(cx).update(cx, |a, cx| a.say(text, false, cx));
         };
         if let Some(Some(m)) = self.mr(cx) {
             return show_mr(cx, repo, m.number);
@@ -139,8 +140,8 @@ impl MrChip {
                     cx.notify();
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(hint)) => Store::global(cx).update(cx, |s, cx| s.say(hint, false, cx)),
-                Err(e) => Store::global(cx).update(cx, |s, cx| s.say(e.to_string(), true, cx)),
+                Ok(Err(hint)) => Activity::global(cx).update(cx, |a, cx| a.say(hint, false, cx)),
+                Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
             })
             .ok();
         })

@@ -18,6 +18,7 @@ pub use session::{Item, Session, State};
 use crate::actions;
 use crate::store::Store;
 use crate::ui::{self, Icon, theme};
+use kernel::activity::Activity;
 use kernel::doc::Doc;
 
 /// Sessions outlive their page, which goes when another document is shown.
@@ -80,8 +81,8 @@ pub fn register(cx: &mut App) -> actions::Registration {
         actions::Group::View,
         |_, cx| match Store::global(cx).read(cx).current().map(String::from) {
             Some(repo) => show(repo, cx),
-            None => Store::global(cx).update(cx, |s, cx| {
-                s.say("Select a repository to chat about", false, cx)
+            None => Activity::global(cx).update(cx, |a, cx| {
+                a.say("Select a repository to chat about", false, cx)
             }),
         },
     )

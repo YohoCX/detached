@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::store::Store;
 use crate::util::Status;
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::ui_state;
 
@@ -394,9 +395,7 @@ fn apply(name: String, found: Found, cx: &mut App) {
         Err(e) => {
             let text = format!("Theme {name} not loaded, keeping the last one: {e}");
             cx.global_mut::<Active>().error = Some(text.clone());
-            if let Some(store) = Store::try_global(cx) {
-                store.update(cx, |s, cx| s.say(text, true, cx));
-            }
+            Activity::global(cx).update(cx, |a, cx| a.say(text, true, cx));
         }
     }
 }

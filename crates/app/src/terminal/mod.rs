@@ -23,6 +23,7 @@ use crate::dock::{self, Kind};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
+use kernel::activity::Activity;
 
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
@@ -110,7 +111,7 @@ impl Terminals {
             Ok(started) => cx.new(|cx| Session::new(started, cx)),
             Err(e) => {
                 let e = format!("Cannot start the shell: {e}");
-                Store::global(cx).update(cx, |s, cx| s.say(e, true, cx));
+                Activity::global(cx).update(cx, |a, cx| a.say(e, true, cx));
                 return None;
             }
         };

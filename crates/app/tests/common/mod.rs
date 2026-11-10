@@ -17,6 +17,7 @@ use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext, px};
+use kernel::activity::Activity;
 use kernel::ui_state;
 
 pub use gpui_kit::base::dock::DockPlacement;
@@ -469,6 +470,7 @@ pub trait Drive {
     /// The element in a fresh frame; None when it is not drawn.
     fn find(&mut self, id: impl Into<ElementId>) -> Option<ElementSnapshot>;
     fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R;
+    fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R;
 }
 
 impl Drive for VisualTestContext {
@@ -496,5 +498,9 @@ impl Drive for VisualTestContext {
 
     fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R {
         self.update(|_, cx| Store::global(cx).update(cx, f))
+    }
+
+    fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R {
+        self.update(|_, cx| Activity::global(cx).update(cx, f))
     }
 }

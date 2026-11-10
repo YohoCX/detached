@@ -26,9 +26,9 @@ use super::thread::Thread;
 use super::{Pipelines, core, labelled, name, note, now, text_of};
 use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Markdown};
 use crate::history::CommitDetails;
-use crate::store::Store;
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, ago_text, base_name, dir_name, status_of, when};
+use kernel::activity::Activity;
 use kernel::blocking;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -262,11 +262,9 @@ impl MrPage {
             let hunks = self.hunks.clone();
             self._hunks = cx.spawn(async move |_, cx| match ranges.await {
                 Ok(h) => *hunks.borrow_mut() = h,
-                Err(e) => {
-                    let say =
-                        |s: &mut Store, cx: &mut Context<Store>| s.say(e.to_string(), true, cx);
-                    cx.update(|cx| Store::global(cx).update(cx, say));
-                }
+                Err(e) => cx.update(|cx| {
+                    Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx))
+                }),
             });
         }
         (self.file, self.draft) = (Some(f), None);
@@ -993,11 +991,11 @@ async fn resolve(
             api::fetch_mr(core, &r, &remote, &head_ref, &target, id, progress)
         };
         let label = format!("Fetch !{n}");
-        let op = |s: &mut Store, cx: &mut Context<Store>| s.run_op(&repo, &label, fetch, cx);
+        let op = |a: &mut Activity, cx: &mut Context<Activity>| a.run_op(&repo, &label, fetch, cx);
         let (tx, rx) = oneshot::channel();
         // Detached, so the op still leaves the status bar when the page goes first.
         cx.update(|cx| {
-            let fetch = Store::global(cx).update(cx, op);
+            let fetch = Activity::global(cx).update(cx, op);
             cx.spawn(async move |_| tx.send(fetch.await).ok()).detach();
         });
         head = rx.await.map_err(|_| Error::Cancelled)??;

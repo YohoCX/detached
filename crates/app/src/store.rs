@@ -1,73 +1,26 @@
 //! App-wide state. Views observe the store and read what they need; they do not copy it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
 
 use detached_core::api;
 use detached_core::settings::Workspace;
-use detached_core::state::AppState;
 use detached_core::types::{RepoInfo, RepoStatus};
 use futures::StreamExt;
-use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
+use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, Kind};
 use crate::nav;
 use gpui_kit::base::dock::DockPlacement;
+use kernel::activity::{Activity, OpEnded};
 use kernel::blocking;
 use kernel::doc::Doc;
-
-/// A running network op, shown in the status bar with its latest progress line.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Op {
-    pub id: u64,
-    pub repo: String,
-    pub label: String,
-    pub line: String,
-}
 
 /// A repo's last sync result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Outcome {
     pub ok: bool,
     pub text: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Level {
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-/// `repo` and `files` list files with an Open in Zed button (checkout conflicts).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Notice {
-    pub id: u64,
-    pub level: Level,
-    pub title: String,
-    pub body: Option<String>,
-    pub repo: Option<String>,
-    pub files: Vec<String>,
-}
-
-/// An error or a warning, kept for the Events app.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Logged {
-    /// Unix seconds.
-    pub at: i64,
-    pub level: Level,
-    pub text: String,
-}
-
-/// What the Events app keeps at most.
-const LOG: usize = 500;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Message {
-    pub text: String,
-    pub error: bool,
 }
 
 pub enum Event {
@@ -85,13 +38,6 @@ pub struct Store {
     /// A repo's status, or the error text when it failed.
     pub statuses: HashMap<String, Result<RepoStatus, String>>,
     pub outcomes: HashMap<String, Outcome>,
-    pub ops: Vec<Op>,
-    pub notices: Vec<Notice>,
-    pub message: Option<Message>,
-    /// Errors and warnings, oldest first.
-    pub log: Vec<Logged>,
-    /// Log entries since the Events app was last on screen.
-    pub unread: usize,
     shown: Option<Doc>,
     /// The ref each repo's tree browses; absent is the working tree.
     pub refs: HashMap<String, String>,
@@ -101,8 +47,8 @@ pub struct Store {
     pub branch_names: HashMap<String, Vec<String>>,
     refreshing: bool,
     again: bool,
-    last_notice: u64,
     _actions: Vec<Registration>,
+    _activity: Subscription,
 }
 
 struct GlobalStore(Entity<Store>);
@@ -122,19 +68,17 @@ impl Store {
                 current: None,
                 statuses: HashMap::new(),
                 outcomes: HashMap::new(),
-                ops: vec![],
-                notices: vec![],
-                message: None,
-                log: vec![],
-                unread: 0,
                 shown: None,
                 refs: HashMap::new(),
                 compare: HashMap::new(),
                 branch_names: HashMap::new(),
                 refreshing: false,
                 again: false,
-                last_notice: 0,
                 _actions: register_actions(cx),
+                _activity: cx.subscribe(
+                    &Activity::global(cx),
+                    |s: &mut Store, _, e: &OpEnded, cx| s.refresh(e.repo.clone(), cx).detach(),
+                ),
             };
             s.load_repos(None, cx);
             s
@@ -199,91 +143,6 @@ impl Store {
             self.shown = doc;
             cx.notify();
         }
-    }
-
-    /// The single status message slot, for 10 s or until replaced or clicked away; an error stays
-    /// in the log.
-    pub fn say(&mut self, text: impl Into<String>, error: bool, cx: &mut Context<Self>) {
-        let text = text.into();
-        if error {
-            self.record(Level::Error, text.clone(), cx);
-        }
-        let said = Message { text, error };
-        self.message = Some(said.clone());
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(10))
-                .await;
-            this.update(cx, |s, cx| {
-                if s.message.as_ref() == Some(&said) {
-                    s.clear_message(cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// Keeps an error or warning for the Events app.
-    pub fn record(&mut self, level: Level, text: impl Into<String>, cx: &mut Context<Self>) {
-        self.log.push(Logged {
-            at: crate::util::now(),
-            level,
-            text: text.into(),
-        });
-        if self.log.len() > LOG {
-            self.log.remove(0);
-        }
-        self.unread += 1;
-        cx.notify();
-    }
-
-    pub fn read_log(&mut self, cx: &mut Context<Self>) {
-        if self.unread > 0 {
-            self.unread = 0;
-            cx.notify();
-        }
-    }
-
-    pub fn clear_log(&mut self, cx: &mut Context<Self>) {
-        self.log.clear();
-        self.unread = 0;
-        cx.notify();
-    }
-
-    pub fn clear_message(&mut self, cx: &mut Context<Self>) {
-        self.message = None;
-        cx.notify();
-    }
-
-    /// Adds `n` with a fresh id; info notices go away after 6 s.
-    pub fn notify(&mut self, mut n: Notice, cx: &mut Context<Self>) -> u64 {
-        self.last_notice += 1;
-        let id = self.last_notice;
-        n.id = id;
-        if n.level != Level::Info {
-            let text = match &n.body {
-                Some(body) => format!("{}\n{body}", n.title),
-                None => n.title.clone(),
-            };
-            self.record(n.level, text, cx);
-        }
-        if n.level == Level::Info {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(Duration::from_secs(6)).await;
-                this.update(cx, |s, cx| s.dismiss(id, cx)).ok();
-            })
-            .detach();
-        }
-        self.notices.push(n);
-        cx.notify();
-        id
-    }
-
-    pub fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {
-        self.notices.retain(|n| n.id != id);
-        cx.notify();
     }
 
     pub fn refresh(&mut self, repo: String, cx: &mut Context<Self>) -> Task<()> {
@@ -377,57 +236,6 @@ impl Store {
         .detach();
     }
 
-    /// Runs a cancellable op (`f` gets the op id and a progress sink) with its latest progress line in
-    /// the status bar, then refreshes the repo's status.
-    pub fn run_op<R: Send + 'static>(
-        &mut self,
-        repo: &str,
-        label: &str,
-        f: impl FnOnce(&AppState, u64, &(dyn Fn(&str) + Sync)) -> R + Send + 'static,
-        cx: &mut Context<Self>,
-    ) -> Task<R> {
-        let id = kernel::core(cx).ops.id();
-        self.ops.push(Op {
-            id,
-            repo: repo.into(),
-            label: label.into(),
-            line: String::new(),
-        });
-        cx.notify();
-        let core = kernel::core(cx).clone();
-        let weak = cx.weak_entity();
-        let done = blocking::stream(
-            cx,
-            move |send| f(&core, id, &|line: &str| send(line.to_string())),
-            move |mut lines: Vec<String>, cx| {
-                weak.update(cx, |s, cx| {
-                    if let (Some(op), Some(line)) =
-                        (s.ops.iter_mut().find(|o| o.id == id), lines.pop())
-                    {
-                        op.line = line;
-                        cx.notify();
-                    }
-                })
-                .ok();
-            },
-        );
-        let repo = repo.to_string();
-        cx.spawn(async move |this, cx| {
-            let r = done.await;
-            this.update(cx, |s, cx| {
-                s.ops.retain(|o| o.id != id);
-                s.refresh(repo, cx).detach();
-                cx.notify();
-            })
-            .ok();
-            r
-        })
-    }
-
-    pub fn cancel_op(&self, id: u64, cx: &App) {
-        kernel::core(cx).ops.cancel(id);
-    }
-
     pub fn load_branch_names(&mut self, repo: String, cx: &mut Context<Self>) {
         let core = kernel::core(cx).clone();
         let r = repo.clone();
@@ -444,7 +252,7 @@ impl Store {
                     s.branch_names.insert(repo, local.chain(remote).collect());
                     cx.notify();
                 }
-                Err(e) => s.say(e.to_string(), true, cx),
+                Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
             })
             .ok();
         })
@@ -496,7 +304,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use detached_core::git::testutil::Sandbox;
     use gpui_kit::TestAppContext;
@@ -506,10 +314,14 @@ mod tests {
     use super::*;
 
     /// Runs the executor, letting real time pass for the core threads, until `done` holds.
-    fn wait_until(cx: &mut TestAppContext, store: &Entity<Store>, done: impl Fn(&Store) -> bool) {
+    fn wait_until(
+        cx: &mut TestAppContext,
+        store: &Entity<Store>,
+        done: impl Fn(&Store, &Activity) -> bool,
+    ) {
         cx.executor().allow_parking();
         let start = Instant::now();
-        while !cx.read(|cx| done(store.read(cx))) {
+        while !cx.read(|cx| done(store.read(cx), Activity::global(cx).read(cx))) {
             assert!(start.elapsed() < Duration::from_secs(10), "timed out");
             let tick = cx.executor().timer(Duration::from_millis(10));
             cx.foreground_executor().block_test(tick);
@@ -534,7 +346,7 @@ mod tests {
             kernel::init(Arc::new(state), cx);
             Store::init(cx)
         });
-        wait_until(cx, &store, |s| {
+        wait_until(cx, &store, |s, _| {
             s.current().is_some_and(|r| s.status(r).is_some())
         });
         (dir, store)
@@ -591,7 +403,7 @@ mod tests {
                 assert!(s.refreshing && s.again);
             })
         });
-        wait_until(cx, &store, |s| !s.refreshing);
+        wait_until(cx, &store, |s, _| !s.refreshing);
         cx.read(|cx| assert!(!store.read(cx).again));
     }
 
@@ -602,9 +414,9 @@ mod tests {
         let (go, wait) = std::sync::mpsc::channel::<()>();
         let r = repo.clone();
         let task = cx.update(|cx| {
-            store.update(cx, |s, cx| {
-                s.statuses.remove(&r);
-                s.run_op(
+            store.update(cx, |s, _| s.statuses.remove(&r));
+            Activity::global(cx).update(cx, |a, cx| {
+                a.run_op(
                     &r,
                     "Fetch",
                     move |_, id, progress| {
@@ -617,11 +429,11 @@ mod tests {
                 )
             })
         });
-        wait_until(cx, &store, |s| {
-            s.ops.first().is_some_and(|o| o.line == "two")
+        wait_until(cx, &store, |_, a| {
+            a.ops.first().is_some_and(|o| o.line == "two")
         });
         let id = cx.read(|cx| {
-            let op = &store.read(cx).ops[0];
+            let op = &Activity::global(cx).read(cx).ops[0];
             assert_eq!(
                 (op.label.as_str(), op.repo.as_str()),
                 ("Fetch", repo.as_str())
@@ -630,34 +442,8 @@ mod tests {
         });
         go.send(()).unwrap();
         assert_eq!(cx.foreground_executor().block_test(task), id);
-        wait_until(cx, &store, |s| {
-            s.ops.is_empty() && s.status(&repo).is_some()
-        });
-    }
-
-    #[gpui_kit::test]
-    fn info_notices_go_after_6_s_and_others_stay(cx: &mut TestAppContext) {
-        let (_dir, store) = boot(cx);
-        let notice = |level| Notice {
-            level,
-            title: "t".into(),
-            ..Notice::default()
-        };
-        let (info, warn) = cx.update(|cx| {
-            store.update(cx, |s, cx| {
-                (
-                    s.notify(notice(Level::Info), cx),
-                    s.notify(notice(Level::Warn), cx),
-                )
-            })
-        });
-        assert_ne!(info, warn);
-        cx.executor().advance_clock(Duration::from_secs(5));
-        cx.read(|cx| assert_eq!(store.read(cx).notices.len(), 2));
-        cx.executor().advance_clock(Duration::from_secs(1));
-        cx.read(|cx| {
-            let ids: Vec<_> = store.read(cx).notices.iter().map(|n| n.id).collect();
-            assert_eq!(ids, [warn]);
+        wait_until(cx, &store, |s, a| {
+            a.ops.is_empty() && s.status(&repo).is_some()
         });
     }
 
