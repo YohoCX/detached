@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Tests that wait for a shell's output time out on a loaded CI runner | `tests/dock.rs`, `tests/terminal.rs` | `wait_until` gives a shell 10 s to start and print. On 2026-11-10 two dock tests on Windows and the wide-character test on macOS timed out once each and passed on a rerun. |
 | A shell released over the bottom zone opens in the center | V7 `dock::skin` | The center's drop target lies under the whole center column, the bottom zone's included, so a shell's tab dragged and released over the Terminal app itself leaves it for a tab in the center. The dock tests drop on the sidebar for "no target". |
 | libghostty-vt's C API is declared by hand | V7 `terminal::ghostty` | About 35 functions, their structs and the option and data keys are copied from the 1.0 headers, without bindgen or a layout test, so a mismatch shows up as wrong behavior, not a build error. The ABI is stable across 1.x; a 2.0 needs them checked against its headers again. |
 | Linux and Windows builds need Zig 0.17 | `crates/app/build.rs`, CI | Ghostty ships libghostty-vt prebuilt for Apple only, so elsewhere the build compiles it from source with `zig` from `PATH`: a few minutes after each clean target directory unless `GHOSTTY_VT_DIR` keeps it. CI installs Zig with `mlugg/setup-zig`; the release job builds the library uncached. |
