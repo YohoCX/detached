@@ -246,7 +246,9 @@ file. V7 (terminal) starts after parity.
 ### Contracts
 
 Fixed by F before the verticals start. Changing an existing signature or meaning takes a plan
-edit agreed with the owner. Adding is lighter: a vertical that finds a missing piece (a field, a
+edit agreed with the owner. [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md) is such an edit, agreed on
+2026-11-10: its steps change the contracts below, each in the step that makes the change true.
+Adding is lighter: a vertical that finds a missing piece (a field, a
 variant, a function) adds it with a stub to the provider's `api.rs` or the store in its own small
 commit on main, with the matching line in this section, without changing what is there; the
 provider then fills it in.

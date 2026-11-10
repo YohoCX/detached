@@ -1,7 +1,8 @@
 # Detached — extensibility plan
 
 An AI chat in the client, a look and layout the user can change, and plugins for the rest. Built in
-the order that gets a usable feature first; each step can change the ones after it.
+the order that gets a usable feature first, except [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md), which
+goes first on purpose; each step can change the ones after it.
 
 Decided with the owner on 2026-11-07, after a revmux plan review
 (`.revmux/tasks/extensibility-ideas/`, kept locally):
@@ -9,6 +10,8 @@ Decided with the owner on 2026-11-07, after a revmux plan review
   carry.
 - No `crates/sdk`: built-ins stay on `Store` and the `api.rs` contracts. A registry lives in
   `crates/app`. The only versioned public API, when one is needed, is the plugin manifest and protocol.
+- [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md), agreed on 2026-11-10, changes the decisions above as its
+  steps land: a kernel crate, registries, settings, updates, invalidation, the watcher.
 - Detached moves off read-only one capability at a time, past the `switch`, `stash` and `pull` it already
   runs. Each new write gets its own decision and test.
 
