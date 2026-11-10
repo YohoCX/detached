@@ -24,7 +24,7 @@ use gpui_kit::{
 use super::graph::{self, LANE, ROW};
 use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::repos::{self, CheckoutTarget};
 use crate::store::{Event, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
@@ -100,7 +100,7 @@ fn file_history(window: &mut Window, cx: &mut App) {
     f.repo = Some(repo.clone());
     f.fields[PATH] = path;
     store.update(cx, |s, cx| s.set_current(Some(repo), cx));
-    dock::open(Kind::Log, window, cx);
+    dock::open("log", window, cx);
 }
 
 #[derive(Clone)]

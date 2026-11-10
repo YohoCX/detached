@@ -2,12 +2,17 @@ mod common;
 
 use common::*;
 use detached_app::chat;
+use detached_app::dock::{self, AppSpec};
 use detached_app::files::{self, DiffDoc, Side};
 use detached_app::shell;
 use detached_app::terminal::Terminals;
 use detached_core::agent;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, AppContext, Pixels, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{
+    AnyWindowHandle, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Pixels,
+    Render, TestAppContext, VisualTestContext, Window, div, point, px,
+};
 use kernel::ui_state;
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
@@ -124,6 +129,65 @@ fn a_saved_app_this_build_lacks_shows_a_placeholder_and_is_saved_back(cx: &mut T
         ui_state::get::<serde_json::Value>("dock.layout", cx)
     });
     assert!(saved.unwrap().to_string().contains("\"plugin.gone\""));
+}
+
+#[gpui_kit::test]
+fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let old: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dock-0.5.0.json")).unwrap();
+    cx.update(|_, cx| ui_state::set("dock.layout", old.clone(), cx));
+
+    let again = reopen(cx);
+    let apps = app(cx, |cx| dock::apps(cx));
+    in_window(cx, again, |w, _| {
+        assert!(w.try_find("dock.missing").is_none());
+        for a in apps {
+            assert!(w.try_find(a.id).is_some(), "{}", a.id);
+        }
+        assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
+        assert_eq!(w.find("tool.Project").checked(), Some(true));
+        assert!(w.try_find("doc.diff.README.md").is_some());
+        assert_eq!(w.find("doc.chat").checked(), Some(true));
+    });
+    let saved = app(cx, |cx| {
+        ui_state::get::<serde_json::Value>("dock.layout", cx)
+    });
+    assert_eq!(saved, Some(old), "saved back as it was");
+}
+
+struct Stub;
+
+impl Render for Stub {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().id("stub.view").test_support().child("Stub")
+    }
+}
+
+#[gpui_kit::test]
+fn an_app_registered_by_a_test_alone_gets_a_tab_in_its_zone(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let stub = AppSpec {
+        name: "stub",
+        id: "tab.stub",
+        title: "Stub",
+        action: None,
+        home: (DockPlacement::Bottom, 280.),
+        view: |_, cx| cx.new(|_| Stub).into(),
+        shown: None,
+    };
+    app(cx, |cx| dock::register_app(cx, stub));
+
+    let again = reopen(cx);
+    in_window(cx, again, |w, cx| {
+        assert!(
+            w.find("tab.stub").bounds().origin.y > px(600.),
+            "at the bottom"
+        );
+        w.click("tab.stub", cx)
+    });
+    settle(cx);
+    in_window(cx, again, |w, _| assert!(w.find("stub.view").visible()));
 }
 
 fn diff(cx: &TestApp, path: &str) -> DiffDoc {

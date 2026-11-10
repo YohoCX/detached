@@ -1,0 +1,171 @@
+{
+  "version": 2,
+  "center": {
+    "panel_name": "StackPanel",
+    "children": [
+      {
+        "panel_name": "TabPanel",
+        "children": [
+          {
+            "panel_name": "doc",
+            "children": [],
+            "info": {
+              "panel": {
+                "doc": {
+                  "Diff": {
+                    "repo": "/Volumes/DetachedTests/.tmpi8MYYb/ws/app",
+                    "path": "README.md",
+                    "orig_path": null,
+                    "left": {
+                      "kind": "head"
+                    },
+                    "right": {
+                      "kind": "worktree"
+                    }
+                  }
+                },
+                "keep": true
+              }
+            }
+          },
+          {
+            "panel_name": "doc",
+            "children": [],
+            "info": {
+              "panel": {
+                "doc": {
+                  "Chat": {
+                    "repo": "/Volumes/DetachedTests/.tmpi8MYYb/solo",
+                    "n": 0
+                  }
+                },
+                "keep": true
+              }
+            }
+          }
+        ],
+        "info": {
+          "tabs": {
+            "active_index": 1
+          }
+        }
+      }
+    ],
+    "info": {
+      "stack": {
+        "sizes": [
+          800.0
+        ],
+        "axis": 0
+      }
+    }
+  },
+  "left_dock": {
+    "panel": {
+      "panel_name": "TabPanel",
+      "children": [
+        {
+          "panel_name": "repos",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "chats",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        }
+      ],
+      "info": {
+        "tabs": {
+          "active_index": 0
+        }
+      }
+    },
+    "placement": "left",
+    "size": 280.0,
+    "open": true
+  },
+  "right_dock": {
+    "panel": {
+      "panel_name": "TabPanel",
+      "children": [
+        {
+          "panel_name": "terminal",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "changes",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "project",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "mrs",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        }
+      ],
+      "info": {
+        "tabs": {
+          "active_index": 2
+        }
+      }
+    },
+    "placement": "right",
+    "size": 300.0,
+    "open": true
+  },
+  "bottom_dock": {
+    "panel": {
+      "panel_name": "TabPanel",
+      "children": [
+        {
+          "panel_name": "log",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "pipelines",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        },
+        {
+          "panel_name": "events",
+          "children": [],
+          "info": {
+            "panel": null
+          }
+        }
+      ],
+      "info": {
+        "tabs": {
+          "active_index": 0
+        }
+      }
+    },
+    "placement": "bottom",
+    "size": 280.0,
+    "open": false
+  }
+}

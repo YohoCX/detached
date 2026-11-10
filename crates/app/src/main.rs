@@ -30,6 +30,7 @@ fn main() {
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
         Store::init(cx);
+        detached_app::register(cx);
         #[cfg(target_os = "macos")]
         mac::init(keys, cx);
         #[cfg(not(target_os = "macos"))]

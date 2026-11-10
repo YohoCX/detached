@@ -26,116 +26,50 @@ use kernel::ui_state;
 const KEY: &str = "dock.layout";
 const VERSION: usize = 2;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Kind {
-    Repos,
-    Chats,
-    Changes,
-    Project,
-    Mrs,
-    Log,
-    Pipelines,
-    Terminal,
-    Events,
+/// An app in the dock, as its feature registers it.
+#[derive(Clone, Copy)]
+pub struct AppSpec {
+    /// What a saved layout knows it by.
+    pub name: &'static str,
+    /// The tab's element id.
+    pub id: &'static str,
+    pub title: &'static str,
+    /// The action that toggles it, for its chord.
+    pub action: Option<&'static str>,
+    /// The zone and size it opens in when a layout does not place it.
+    pub home: (DockPlacement, f32),
+    pub view: fn(&mut Window, &mut App) -> AnyView,
+    /// What it does each time its tab comes on screen.
+    pub shown: Option<fn(&mut Window, &mut App)>,
 }
 
-impl Kind {
-    pub const ALL: [Kind; 9] = [
-        Kind::Repos,
-        Kind::Chats,
-        Kind::Changes,
-        Kind::Project,
-        Kind::Mrs,
-        Kind::Log,
-        Kind::Pipelines,
-        Kind::Terminal,
-        Kind::Events,
-    ];
+#[derive(Default)]
+struct Apps(Vec<AppSpec>);
 
-    /// The name a saved layout knows it by.
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Repos => "repos",
-            Kind::Chats => "chats",
-            Kind::Changes => "changes",
-            Kind::Project => "project",
-            Kind::Mrs => "mrs",
-            Kind::Log => "log",
-            Kind::Pipelines => "pipelines",
-            Kind::Terminal => "terminal",
-            Kind::Events => "events",
-        }
-    }
+impl Global for Apps {}
 
-    pub fn title(self) -> &'static str {
-        match self {
-            Kind::Repos => "Repositories",
-            Kind::Chats => "Chats",
-            Kind::Changes => "Changes",
-            Kind::Project => "Project",
-            Kind::Mrs => "Merge Requests",
-            Kind::Log => "Log",
-            Kind::Pipelines => "Pipelines",
-            Kind::Terminal => "Terminal",
-            Kind::Events => "Events",
-        }
-    }
+/// Adds an app; its feature calls this before the window opens.
+pub fn register_app(cx: &mut App, app: AppSpec) {
+    cx.default_global::<Apps>().0.push(app);
+}
 
-    /// The tab's element id, kept from the panes it replaced.
-    pub fn id(self) -> &'static str {
-        match self {
-            Kind::Repos => "tab.repos",
-            Kind::Chats => "tab.chats",
-            Kind::Changes => "tool.Changes",
-            Kind::Project => "tool.Project",
-            Kind::Mrs => "tool.MRs",
-            Kind::Log => "bottom.Log",
-            Kind::Pipelines => "bottom.Pipelines",
-            Kind::Terminal => "bottom.Terminal",
-            Kind::Events => "bottom.Events",
-        }
-    }
-
-    /// The action that toggles it, for its chord.
-    pub fn action(self) -> Option<&'static str> {
-        match self {
-            Kind::Project => Some("panel.project"),
-            Kind::Mrs => Some("panel.mergeRequests"),
-            Kind::Log => Some("panel.log"),
-            Kind::Pipelines => Some("panel.pipelines"),
-            Kind::Terminal => Some("panel.terminal"),
-            Kind::Repos | Kind::Chats | Kind::Changes | Kind::Events => None,
-        }
-    }
-
-    /// Where it opens when a layout does not place it.
-    fn home(self) -> (DockPlacement, f32) {
-        match self {
-            Kind::Repos | Kind::Chats => (DockPlacement::Left, 280.),
-            Kind::Changes | Kind::Project | Kind::Mrs => (DockPlacement::Right, 300.),
-            Kind::Log | Kind::Pipelines | Kind::Terminal | Kind::Events => {
-                (DockPlacement::Bottom, 280.)
-            }
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Kind> {
-        Kind::ALL.into_iter().find(|k| k.id() == id)
-    }
+/// Every app, in the order registered.
+pub fn apps(cx: &App) -> Vec<AppSpec> {
+    cx.try_global::<Apps>().map_or(vec![], |a| a.0.clone())
 }
 
 /// One app in a zone; the dock moves this entity, so its view and state go with it.
 pub struct Tab {
-    pub kind: Kind,
+    pub app: AppSpec,
     /// Built when first on screen: a hidden view would load and fetch for nobody.
     view: Option<AnyView>,
     focus: FocusHandle,
 }
 
 impl Tab {
-    pub fn new(kind: Kind, cx: &mut App) -> Entity<Tab> {
+    pub fn new(app: AppSpec, cx: &mut App) -> Entity<Tab> {
         cx.new(|cx| Tab {
-            kind,
+            app,
             view: None,
             focus: cx.focus_handle(),
         })
@@ -153,7 +87,7 @@ impl Focusable for Tab {
 impl Render for Tab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.view.is_none() {
-            self.view = Some(crate::shell::app(self.kind, window, cx));
+            self.view = Some((self.app.view)(window, cx));
         }
         div()
             .flex()
@@ -166,7 +100,7 @@ impl Render for Tab {
 
 impl Panel for Tab {
     fn panel_name(&self) -> &'static str {
-        self.kind.name()
+        self.app.name
     }
 
     fn closable(&self, _: &App) -> bool {
@@ -178,8 +112,8 @@ impl Panel for Tab {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if active {
-            crate::shell::shown(self.kind, window, cx);
+        if let (true, Some(shown)) = (active, self.app.shown) {
+            shown(window, cx);
         }
     }
 }
@@ -251,10 +185,8 @@ pub fn zones(cx: &App) -> Option<Entity<DockArea>> {
 
 /// The dock with the saved layout, or the default one when there is none or it does not load.
 pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
-    for kind in Kind::ALL {
-        register_panel(cx, kind.name(), move |_, _, cx| {
-            Arc::new(Tab::new(kind, cx))
-        });
+    for app in apps(cx) {
+        register_panel(cx, app.name, move |_, _, cx| Arc::new(Tab::new(app, cx)));
     }
     register_panel(cx, doc::NAME, |b, _, cx| {
         doc::load(b.state(), cx).unwrap_or_else(|| missing(b.state(), cx))
@@ -271,10 +203,10 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
         }
         // An app newer than the saved layout goes where it would by default, behind the tab shown.
         let shown = active(&area);
-        for kind in Kind::ALL {
-            if find(&area, kind, cx).is_none() {
-                let (p, size) = kind.home();
-                area.add_panel(Tab::new(kind, cx), p, Some(px(size)), window, cx);
+        for app in apps(cx) {
+            if find(&area, app.name, cx).is_none() {
+                let (p, size) = app.home;
+                area.add_panel(Tab::new(app, cx), p, Some(px(size)), window, cx);
             }
         }
         for id in shown {
@@ -304,9 +236,9 @@ fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<Doc
         DockPlacement::Right,
         DockPlacement::Bottom,
     ] {
-        let kinds = Kind::ALL.into_iter().filter(|k| k.home().0 == p);
-        let size = home_size(p);
-        let layout = kinds.fold(DockLayout::tabs(), |l, k| l.panel(Tab::new(k, cx)));
+        let apps = apps(cx).into_iter().filter(|a| a.home.0 == p);
+        let size = home_size(p, cx);
+        let layout = apps.fold(DockLayout::tabs(), |l, a| l.panel(Tab::new(a, cx)));
         area.set_dock(p, layout, window, cx);
         area.set_dock_size(p, px(size), window, cx);
     }
@@ -314,11 +246,11 @@ fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<Doc
 }
 
 /// A zone's size until the user drags it.
-pub fn home_size(p: DockPlacement) -> f32 {
-    Kind::ALL
+pub fn home_size(p: DockPlacement, cx: &App) -> f32 {
+    apps(cx)
         .iter()
-        .find(|k| k.home().0 == p)
-        .map_or(280., |k| k.home().1)
+        .find(|a| a.home.0 == p)
+        .map_or(280., |a| a.home.1)
 }
 
 fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
@@ -327,38 +259,38 @@ fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
     }
 }
 
-/// Shows `kind`, opening its zone.
-pub fn open(kind: Kind, window: &mut Window, cx: &mut App) {
+/// Shows the app named `name`, opening its zone.
+pub fn open(name: &str, window: &mut Window, cx: &mut App) {
     with(cx, |a, cx| {
-        if let Some((_, id)) = find(a, kind, cx) {
+        if let Some((_, id)) = find(a, name, cx) {
             reveal(a, id, window, cx);
         }
     });
 }
 
-/// Shows `kind`, or closes its zone when `kind` is on screen there.
-pub fn toggle(kind: Kind, window: &mut Window, cx: &mut App) {
-    match is_shown(kind, cx) {
-        true => close(kind, window, cx),
-        false => open(kind, window, cx),
+/// Shows the app, or closes its zone when it is on screen there.
+pub fn toggle(name: &str, window: &mut Window, cx: &mut App) {
+    match is_shown(name, cx) {
+        true => close(name, window, cx),
+        false => open(name, window, cx),
     }
 }
 
-/// Closes the zone `kind` is on screen in.
-pub fn close(kind: Kind, window: &mut Window, cx: &mut App) {
-    if !is_shown(kind, cx) {
+/// Closes the zone the app is on screen in.
+pub fn close(name: &str, window: &mut Window, cx: &mut App) {
+    if !is_shown(name, cx) {
         return;
     }
     with(cx, |a, cx| {
-        if let Some((p, _)) = find(a, kind, cx) {
+        if let Some((p, _)) = find(a, name, cx) {
             set_open(a, p, false, window, cx);
         }
     });
 }
 
-/// Whether `kind` is the tab on screen in an open zone.
-pub fn is_shown(kind: Kind, cx: &App) -> bool {
-    zones(cx).is_some_and(|a| shown(a.read(cx), cx).contains(&kind))
+/// Whether the app is the tab on screen in an open zone.
+pub fn is_shown(name: &str, cx: &App) -> bool {
+    zones(cx).is_some_and(|a| shown(a.read(cx), cx).contains(&name))
 }
 
 pub fn is_open(p: DockPlacement, cx: &App) -> bool {
@@ -473,23 +405,23 @@ pub fn docs(area: &DockArea) -> Vec<(DockPlacement, PanelId, Entity<DocTab>)> {
         .collect()
 }
 
-fn find(area: &DockArea, kind: Kind, cx: &App) -> Option<(DockPlacement, PanelId)> {
+fn find(area: &DockArea, name: &str, cx: &App) -> Option<(DockPlacement, PanelId)> {
     placements().into_iter().find_map(|p| {
         let tree = area.layout(p)?;
         tree.panels()
-            .find(|id| kind_of(area, *id, cx) == Some(kind))
+            .find(|id| name_of(area, *id, cx) == Some(name))
             .map(|id| (p, id))
     })
 }
 
 /// The app on screen in each open zone.
-fn shown(area: &DockArea, cx: &App) -> Vec<Kind> {
+fn shown(area: &DockArea, cx: &App) -> Vec<&'static str> {
     let open = |p: &DockPlacement| *p == DockPlacement::Center || area.is_dock_open(*p);
     let ids = placements()
         .into_iter()
         .filter(open)
         .flat_map(|p| tabs_shown(area, p));
-    ids.filter_map(|id| kind_of(area, id, cx)).collect()
+    ids.filter_map(|id| name_of(area, id, cx)).collect()
 }
 
 /// The tab shown in each group, open zone or not.
@@ -524,9 +456,9 @@ fn set_open(
     }
 }
 
-fn kind_of(area: &DockArea, id: PanelId, cx: &App) -> Option<Kind> {
+fn name_of(area: &DockArea, id: PanelId, cx: &App) -> Option<&'static str> {
     let view = area.panel(id)?.view();
-    view.downcast::<Tab>().ok().map(|t| t.read(cx).kind)
+    view.downcast::<Tab>().ok().map(|t| t.read(cx).app.name)
 }
 
 fn placements() -> [DockPlacement; 4] {

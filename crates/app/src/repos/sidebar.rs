@@ -808,7 +808,7 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
             s.compare.entry(r.clone()).or_default();
             s.set_current(Some(r), cx);
         });
-        dock::open(dock::Kind::Changes, window, cx);
+        dock::open("changes", window, cx);
     };
     let zed = {
         let r = repo.to_string();

@@ -10,7 +10,7 @@ use gpui_kit::{
 use super::{active, color, core, glyph, name, pipelines::Session, poll};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
 
@@ -33,7 +33,7 @@ impl PipelineBadge {
             Group::Vcs,
             |window, cx| {
                 cx.default_global::<Session>().run = true;
-                dock::open(Kind::Pipelines, window, cx);
+                dock::open("pipelines", window, cx);
             },
         );
         let subscriptions = vec![
@@ -107,7 +107,7 @@ impl Render for PipelineBadge {
             .whitespace_nowrap()
             .hover(|s| s.bg(t.hover))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(|_, window, cx| dock::open(Kind::Pipelines, window, cx))
+            .on_click(|_, window, cx| dock::open("pipelines", window, cx))
             .child(div().text_color(color(&p.status, cx)).child(glyph))
             .child(status)
             .into_any_element()

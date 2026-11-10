@@ -15,8 +15,7 @@ pub fn view(cx: &mut App) -> AnyView {
         filter: None,
         _activity: cx.observe(&Activity::global(cx), |_, activity, cx| {
             // What comes in while the list is on screen is read.
-            if activity.read(cx).unread > 0 && crate::dock::is_shown(crate::dock::Kind::Events, cx)
-            {
+            if activity.read(cx).unread > 0 && crate::dock::is_shown("events", cx) {
                 activity.update(cx, |a, cx| a.read_log(cx));
             }
             cx.notify()

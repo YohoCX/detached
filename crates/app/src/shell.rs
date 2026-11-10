@@ -11,12 +11,12 @@ use gpui_kit::{
     WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px, relative, size,
 };
 
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::store::{Event, Store};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
-use crate::{actions, files, forge, history, keymap, search, terminal};
+use crate::{actions, forge, history, keymap, search};
 use kernel::doc::Doc;
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -43,30 +43,6 @@ fn top_bar(slot: TopBar, window: &mut Window, cx: &mut App) -> Vec<AnyView> {
         ],
         TopBar::Center => forge::top_bar(window, cx),
         TopBar::Right => vec![search::pill(cx), crate::repos::sync_buttons(cx)],
-    }
-}
-
-/// The view of one app in the dock.
-pub fn app(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
-    match kind {
-        Kind::Repos => crate::repos::sidebar(window, cx),
-        Kind::Chats => crate::chat::list(window, cx),
-        Kind::Changes => cx.new(|cx| files::Changes::new(window, cx)).into(),
-        Kind::Project => cx.new(|cx| files::Tree::new(window, cx)).into(),
-        Kind::Mrs => forge::mrs(window, cx),
-        Kind::Log => cx.new(|cx| history::Log::new(window, cx)).into(),
-        Kind::Pipelines => forge::pipelines(window, cx),
-        Kind::Terminal => terminal::panel(cx),
-        Kind::Events => crate::events::view(cx),
-    }
-}
-
-/// What an app does each time its tab comes on screen.
-pub fn shown(kind: Kind, window: &mut Window, cx: &mut App) {
-    match kind {
-        Kind::Terminal => terminal::shown(window, cx),
-        Kind::Events => crate::events::shown(cx),
-        _ => {}
     }
 }
 
@@ -323,6 +299,7 @@ mod tests {
             keymap::bind(&BTreeMap::new(), cx);
             kernel::init(Arc::new(state), cx);
             Store::init(cx);
+            crate::register(cx);
         });
         let window = cx.update(open).unwrap();
         (dir, window)

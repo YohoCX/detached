@@ -9,7 +9,7 @@ use futures::StreamExt;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use crate::actions::{self, Registration};
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::nav;
 use gpui_kit::base::dock::DockPlacement;
 use kernel::activity::{Activity, OpEnded};
@@ -264,22 +264,16 @@ impl Store {
 fn register_actions(cx: &mut App) -> Vec<Registration> {
     use actions::Group::{Navigate, View};
     use actions::register;
-    let toggle = |kind| move |window: &mut _, cx: &mut App| dock::toggle(kind, window, cx);
+    let toggle = |name| move |window: &mut _, cx: &mut App| dock::toggle(name, window, cx);
     vec![
-        register(
-            cx,
-            "panel.project",
-            "Project Tree",
-            View,
-            toggle(Kind::Project),
-        ),
-        register(cx, "panel.log", "Git Log", View, toggle(Kind::Log)),
+        register(cx, "panel.project", "Project Tree", View, toggle("project")),
+        register(cx, "panel.log", "Git Log", View, toggle("log")),
         register(
             cx,
             "panel.pipelines",
             "Pipelines",
             View,
-            toggle(Kind::Pipelines),
+            toggle("pipelines"),
         ),
         crate::terminal::register(cx),
         crate::chat::register(cx),

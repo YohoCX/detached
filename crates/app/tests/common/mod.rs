@@ -380,6 +380,7 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
         Store::init(cx);
+        detached_app::register(cx);
         keys
     });
     cx.foreground_executor().block_test(keys);
@@ -404,15 +405,23 @@ pub fn zone_size(cx: &mut VisualTestContext, zone: DockPlacement, size: f32) {
 
 /// Whether the app with tab id `id` (`tool.Changes`, `bottom.Log`, ...) is on screen.
 pub fn on_screen(cx: &mut VisualTestContext, id: &str) -> bool {
-    let kind = detached_app::dock::Kind::from_id(id).expect("an app's tab id");
-    cx.update(|_, cx| detached_app::dock::is_shown(kind, cx))
+    let name = app_name(cx, id);
+    cx.update(|_, cx| detached_app::dock::is_shown(name, cx))
 }
 
 /// Shows the app with tab id `id`, opening its zone.
 pub fn open_tab(cx: &mut VisualTestContext, id: &str) {
-    let kind = detached_app::dock::Kind::from_id(id).expect("an app's tab id");
-    cx.update(|w, cx| detached_app::dock::open(kind, w, cx));
+    let name = app_name(cx, id);
+    cx.update(|w, cx| detached_app::dock::open(name, w, cx));
     settle(cx);
+}
+
+fn app_name(cx: &mut VisualTestContext, id: &str) -> &'static str {
+    let apps = cx.update(|_, cx| detached_app::dock::apps(cx));
+    apps.into_iter()
+        .find(|a| a.id == id)
+        .expect("an app's tab id")
+        .name
 }
 
 /// Runs what is ready on the executor; core's threads go on meanwhile.

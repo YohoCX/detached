@@ -9,7 +9,7 @@ use gpui_kit::{
     relative,
 };
 
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::update::{self, Update};
@@ -168,7 +168,7 @@ impl Render for StatusBar {
                     _ => t.warning,
                 })
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                .on_click(|_, window, cx| dock::open(Kind::Events, window, cx))
+                .on_click(|_, window, cx| dock::open("events", window, cx))
                 .child(Icon::Question.size(px(12.)))
                 .when(unread > 0, |d| d.child(unread.to_string()))
         });

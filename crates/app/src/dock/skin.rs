@@ -135,7 +135,7 @@ impl DockAreaRenderer for Skin {
                     return;
                 };
                 if e.click_count == 2 {
-                    let home = px(super::home_size(p));
+                    let home = px(super::home_size(p, cx));
                     a.update(cx, |a, cx| a.set_dock_size(p, home, window, cx));
                     return;
                 }
@@ -266,11 +266,11 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
     let label = |(ix, p): (usize, &Arc<dyn PanelView>)| {
         let view = p.view();
         if let Ok(t) = view.clone().downcast::<Tab>() {
-            let k = t.read(cx).kind;
+            let a = t.read(cx).app;
             return Label {
-                id: k.id().into(),
-                title: k.title().into(),
-                tip: k.action().map(|a| keymap::tip(k.title(), a, cx).into()),
+                id: a.id.into(),
+                title: a.title.into(),
+                tip: a.action.map(|x| keymap::tip(a.title, x, cx).into()),
                 doc: None,
             };
         }

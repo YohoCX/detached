@@ -14,7 +14,7 @@ use super::core;
 use super::mr::{bare_title, number, setup_problem, show_mr};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::activity::Activity;
@@ -60,7 +60,7 @@ impl MrChip {
                 "panel.mergeRequests",
                 "Merge Requests",
                 Group::View,
-                |window, cx| dock::toggle(Kind::Mrs, window, cx),
+                |window, cx| dock::toggle("mrs", window, cx),
             ),
         ];
         let subscriptions = vec![

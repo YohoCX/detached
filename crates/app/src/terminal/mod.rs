@@ -19,7 +19,7 @@ use gpui_kit::{
 pub use ghostty::Rgb;
 pub use session::Session;
 
-use crate::dock::{self, Kind};
+use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
@@ -159,7 +159,7 @@ impl Terminals {
                 let focus = s.read(cx).focus.clone();
                 window.focus(&focus, cx);
             }
-            None => dock::close(Kind::Terminal, window, cx),
+            None => dock::close("terminal", window, cx),
         }
         cx.notify();
     }
@@ -201,7 +201,7 @@ pub fn register(cx: &mut App) -> actions::Registration {
         "panel.terminal",
         "Terminal",
         actions::Group::View,
-        |window, cx| dock::toggle(Kind::Terminal, window, cx),
+        |window, cx| dock::toggle("terminal", window, cx),
     )
 }
 
