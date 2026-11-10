@@ -43,18 +43,21 @@ fn submit(job: Job) {
     let _ = pool.send(job);
 }
 
-/// Runs `f` on the pool; the task resolves on the UI thread with its result. A panic in `f` resumes there.
+/// Runs `f` on the pool; the task resolves on the UI thread with its result, after asking the
+/// settings snapshot to reload if `f` changed settings. A panic in `f` resumes there.
 pub fn run<R: Send + 'static>(cx: &App, f: impl FnOnce() -> R + Send + 'static) -> Task<R> {
     let (tx, rx) = oneshot::channel();
     submit(Box::new(move || {
         let _ = tx.send(panic::catch_unwind(AssertUnwindSafe(f)));
     }));
-    cx.foreground_executor().spawn(async move {
-        match rx.await {
+    cx.spawn(async move |cx| {
+        let r = match rx.await {
             Ok(Ok(r)) => r,
             Ok(Err(p)) => panic::resume_unwind(p),
             Err(_) => unreachable!("a job always answers"),
-        }
+        };
+        cx.update(crate::settings::refresh);
+        r
     })
 }
 

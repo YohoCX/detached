@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod blocking;
 pub mod doc;
+pub mod settings;
 pub mod ui_state;
 
 use std::sync::Arc;
@@ -19,6 +20,7 @@ impl Global for Core {}
 pub fn init(core: Arc<AppState>, cx: &mut App) {
     cx.set_global(Core(core));
     activity::init(cx);
+    settings::init(cx);
 }
 
 /// Core's state, for the calls that go through `blocking`.
@@ -26,11 +28,26 @@ pub fn core(cx: &App) -> &Arc<AppState> {
     &cx.global::<Core>().0
 }
 
-/// The kernel over a sandbox's core; the sandbox's directory lives as long as the result.
+/// The kernel over a sandbox's core, its settings loaded so no job outlives the test; the
+/// sandbox's directory lives as long as the result.
 #[cfg(test)]
 fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
     let detached_core::git::testutil::Sandbox { dir, state } =
         detached_core::git::testutil::Sandbox::new();
     cx.update(|cx| init(Arc::new(state), cx));
+    wait_until(cx, settings::loaded);
     dir
+}
+
+/// Runs the executor, letting real time pass for the core threads, until `done` holds.
+#[cfg(test)]
+fn wait_until(cx: &mut gpui::TestAppContext, done: impl Fn(&App) -> bool) {
+    use std::time::{Duration, Instant};
+    cx.executor().allow_parking();
+    let start = Instant::now();
+    while !cx.read(&done) {
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+        let tick = cx.executor().timer(Duration::from_millis(10));
+        cx.foreground_executor().block_test(tick);
+    }
 }
