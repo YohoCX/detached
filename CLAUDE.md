@@ -5,7 +5,7 @@ chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, the agent's protocol and trust),
   blocking Rust, no UI types.
 - `crates/kernel`: the app's live state and its exchange as GPUI entities (`blocking`, `ui_state`,
-  `Activity`, `Doc`), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
+  `Activity`, `Doc`, the `Settings` snapshot), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
 - `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
 - `sidecars/claude`: the chat's process on the Agent SDK, in TypeScript, kept out of the release packages.
@@ -50,12 +50,15 @@ Keep this list in sync with the Makefile.
 - Long ops take an op id and honor cancel; streams are batched per frame on the UI side.
 - The kernel draws nothing and imports no kit component: `crates/kernel/clippy.toml` bans GPUI's
   elements, `Render` and `Window`, and `forbid` at its root keeps an `#[allow]` from lifting that.
+- Core owns `settings.json`: `AppState::update` is its only writer, and the kernel's `Settings` is a
+  read-only snapshot that a `blocking::run` reloads when core's revision moved. A module keeps its
+  own top-level key, a block (`block`, `set_block`); keys a build does not know survive its saves.
 - Platform code goes in `core::os` or behind `cfg` in the one place that needs it.
 - The `e2e` feature of core is test-only: never a normal dependency of `crates/app`.
 
 ## Native UI
 
-- Views read the `Store`, the kernel's entities (`Activity`) and their own state; they do not cache
+- Views read the `Store`, the kernel's entities (`Activity`, `Settings`) and their own state; they do not cache
   what those already hold.
 - Colors, radii, spacing and fonts come from `ui::theme` tokens, never literals in views.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
@@ -84,7 +87,7 @@ Keep this list in sync with the Makefile.
 
 - One vertical per worktree and branch (`native/v1-repos`, ...); `make warm` first. Touch only
   your directory, your test file, and the append-only registration points (`actions.rs`,
-  `keymap.rs`, your feature's `register(cx)` with its apps, document kinds and shell slots, its
+  `keymap.rs`, your feature's `register(cx)` with its apps, document kinds, shell slots and Settings pages, its
   line in `lib.rs`'s `register`, `ui/` additions). A vertical's `api.rs` is a contract: its owner fills in the
   bodies; others only add to it, as below. Need a change elsewhere? Ask the foundation owner, or make it a
   separate commit with a reason.

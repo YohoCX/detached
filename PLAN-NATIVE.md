@@ -76,6 +76,7 @@ crates/kernel/             package detached-kernel: the app's live state on gpui
   src/ui_state.rs          ui.json
   src/activity.rs          ops, notices, the status message, the log the Events app shows
   src/doc.rs               Doc, Location, DiffDoc, DocRef
+  src/settings.rs          the read-only snapshot of core's settings
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
@@ -85,11 +86,14 @@ crates/app/                package detached-app, binary detached
   src/keymap.rs            defaults, keymap.json, contexts, Double Shift
   src/actions.rs           action ids, registration, run
   src/nav.rs               back/forward and recent files
-  src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip
+  src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip,
+                           the parts of a Settings page, the Appearance page
+  src/settings/            the Settings layer and its pages' registry; api.rs is the contract
   src/shell.rs             title bar slots, each app's view, the status bar
   src/dock/                the zones on the kit's dock: app and document tabs, the saved layout
   src/status_bar.rs, notices.rs
-  src/repos/               V1: sidebar, workspaces, repo switcher, branches, sync, settings, accounts;
+  src/repos/               V1: sidebar, workspaces, repo switcher, branches, sync, and the Accounts,
+                           Repository and Git pages of Settings;
                            api.rs is the contract
   src/files/               V2: viewer, diff, tree, changes, markdown, mermaid; api.rs is the contract
   src/search/              V3: palette, find in files
@@ -108,6 +112,8 @@ root.
 - Config directory `dev.wdevs.detached` with the same path per OS as Tauri computes it
   (docs/native/core.md §2), `settings.json`, `accounts.json`, `keymap.json` with the same action ids
   and chord syntax, tokens under service `workbench`.
+- `settings.json` keeps its top-level keys; a module adds one of its own, and a save keeps the keys
+  a build does not know. A build from before PLAN-FOUNDATION's step 4 drops them on its next save.
 - macOS: bundle id `dev.wdevs.detached`, `Detached.app`, executable `detached`, signed with the
   "Detached Dev" identity, so Keychain entries stay readable without prompts. `install.sh` keeps its
   URL and behavior.
@@ -214,8 +220,8 @@ painting its lanes with `PathBuilder` on a canvas. Batches of 500 rows stream in
   | frame: forge repos listed with the seeded upstreams | V1 |
   | sidebar, sync, branches; workspaces: several on, rename, turn off, delete | V1 |
   | workspaces: nesting and its switch; changes; markdown | V2 |
-  | find; palette (its Cmd+, opens V1's Settings) | V3 |
-  | mr; pipelines (their Open Settings opens V1's Settings) | V5 |
+  | find; palette (its Cmd+, opens Settings) | V3 |
+  | mr; pipelines (their Open Settings opens Settings) | V5 |
 
   The log has no spec today; V4 writes tests for history.md §1 and §6.5.
 - Waiting: core runs on real threads, which GPUI's deterministic test executor does not see. The
@@ -241,9 +247,9 @@ file. V7 (terminal) starts after parity.
 | F foundation | workspace, `crates/core`, `crates/forge-fake` control and project routes, `main`, `store`, `blocking`, `cache`, `util`, `keymap`, `actions`, `nav`, `ui_state`, `ui/` (including the context-menu helper), `shell`, `status_bar`, `notices`, the first version of `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` (contracts and stubs), test fixtures, Makefile, CI | — |
 | V1 repos | `src/repos/` | store, shell slots, forge-fake `/user` and `/version` for account verify |
 | V2 files | `src/files/` | store (`refs`, `compare`), nav, `core::api::file_patch` |
-| V3 search | `src/search/` | actions, nav, store (`refs`), `files::open`, `repos::checkout`, `repos::open_settings` |
+| V3 search | `src/search/` | actions, nav, store (`refs`), `files::open`, `repos::checkout`, `settings::open` |
 | V4 history | `src/history/` | shell's bottom slot, `files::show_diff`, `repos::checkout`, `store.shown()` |
-| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `repos::open_settings`, `cache`, `store.show`, `nav::open` with `DocRef`, `history::CommitDetails` |
+| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `cache`, `store.show`, `nav::open` with `DocRef`, `history::CommitDetails` |
 | V6 ship | `src/update.rs`, packaging, `.github/workflows/`, `scripts/`, `install.sh`, the Tauri client's removal | everything, for the release |
 | V7 terminal | `src/terminal/` | shell's bottom slot |
 
@@ -293,15 +299,18 @@ provider then fills it in.
   with `shell::top_bar(cx, slot, order, view)`: `TopBar::Left` (V1: workspaces, repo switcher,
   branch widget), `TopBar::Center` (V5: MR chip, pipeline badge), `TopBar::Right` (V3: search pill;
   V1: Fetch All, Pull All); and `shell::overlay(cx, view)`, modals drawn over the window and under
-  the notices, inside the shell's key context so chords still reach the app while one is open (V1:
-  Settings, which draws its own layer over the top bar's popups; V3: palette, find). `dock/` and
+  the notices, inside the shell's key context so chords still reach the app while one is open
+  (Settings, which draws its own layer over the top bar's popups; V3: palette, find). `dock/` and
   `shell.rs` name no feature.
 - **Cross-vertical calls** live in an `api.rs` in the providing vertical's directory. F writes the
   first version with the types and stub bodies; the provider implements the bodies without changing
   signatures; callers build against the stubs from day one.
 - **Repos API** (`src/repos/api.rs`): `repos::checkout(cx, repo, CheckoutTarget)` (core's type;
-  smart checkout with its dialogs), `repos::open_settings(cx, Section)` with
-  `Section::{Accounts, Repos, Git}`.
+  smart checkout with its dialogs).
+- **Settings API** (`src/settings/api.rs`): `settings::open(cx, id)` opens Settings at a page, or
+  shows it when open (`accounts`, `repository`, `git`, `appearance`, `keymap`);
+  `settings::register_page(cx, id, title, group, view)` adds one, listed by
+  `Group::{App, Modules, Repo}` in the order registered.
 - **Files API** (`src/files/api.rs`):
   - `Location { repo, rev: Option<String>, path, line: Option<u32>, doc: Option<DocRef> }` with
     `DocRef::{Mr { repo, number }, Job { repo, project, id, name }}`, so MR pages and job logs are

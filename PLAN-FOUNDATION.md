@@ -11,7 +11,8 @@ is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock test
 (faf27c8); the owner's own baseline is left. Step 2, the kernel crate, is done on branch
 `foundation/2-kernel`, not merged: its revmux round, CI on three OSes and the owner's check are left.
 Step 3, the registries, is done on branch `foundation/3-registries`, on top of step 2's, not merged,
-with the same left.**
+with the same left. Step 4, Settings, is done on branch `foundation/4-settings`, on top of step 3's,
+not merged, with the same left.**
 
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the
@@ -666,6 +667,32 @@ Done when:
 - a `settings.json` written by 0.5.0 loads, and after any change in Settings differs from it only
   in the changed key;
 - `Store` has neither copy.
+
+Done on branch `foundation/4-settings`, 2026-11-11, on top of `foundation/3-registries`, not
+merged; `make check` and `make smoke` green:
+- `AppState.settings` is private to core as well as `Settings::save`, so nothing outside core
+  writes memory either; a `compile_fail` doctest on `Settings` pins the save.
+- A page is added with `settings::register_page(cx, id, title, group, view)`, not
+  `settings::register`: since step 3 that name is each feature's own `register(cx)`. The settings
+  feature's `register` adds the layer and the pages of `ui` (Appearance) and `keymap` (Keymap),
+  which have none. There is no Updates page: today's Settings has no updater section; it comes in step 5.
+- Ids and groups: `accounts`, `git`, `appearance`, `keymap` in the app's group, `repository` in the
+  current repo's; Modules is empty. The nav lists them in that order under a heading per group, so
+  Git moved above Repository.
+- Every page is made when Settings opens and kept while it is open, as the one dialog was. The
+  three pages of `repos` share one state, so an account added shows in the repo's pickers at once.
+- `set_block` refuses a key the build knows and the legacy ones.
+- The 0.5.0 `settings.json` (`crates/core/tests/fixtures/settings-0.5.0.json`, every key filled)
+  was saved by a throwaway test on this branch's base. It loads and saves byte for byte, and each
+  writer changes only its own keys, with and without a block it does not know.
+- The kernel's test boot waits for the snapshot's first load: a reload still running when a test
+  ended aborted the kernel's test binary once.
+- `Store::load_repos` no longer waits for a settings load before `refresh_all`, which made
+  `refresh_all`'s lost call (docs/TECHDEBT.md) fail `the_empty_state_adds_folders_and_creates_default`
+  under load; it is fixed here, `again` cleared before the listing starts, not in step 7. Step 7's
+  test for it is still to write.
+- The repos pages keep reading `settings.json` values from their own load (their `Data`), which
+  reloads with each call that changes one; only the store's two copies were in this step.
 
 The owner checks: every page; an account added and removed, with the repo's account pickers
 right at once; `fileNesting` edited by hand and kept; an unknown key added by hand, kept after a
