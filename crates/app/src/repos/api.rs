@@ -7,7 +7,6 @@ use gpui_kit::{App, Task};
 pub use detached_core::types::CheckoutTarget;
 
 use super::State;
-use super::settings::Open;
 use crate::store::Store;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
@@ -75,7 +74,14 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
 
 /// Opens Settings at `section`, or shows that section if it is open.
 pub fn open_settings(cx: &mut App, section: Section) {
-    State::global(cx).update(cx, |_, cx| cx.emit(Open(section)));
+    let id = match section {
+        Section::Accounts => "accounts",
+        Section::Repos => "repository",
+        Section::Git => "git",
+        Section::Appearance => "appearance",
+        Section::Keymap => "keymap",
+    };
+    crate::settings::open(cx, id);
 }
 
 /// `name` first, then the branch left, then the rest; at most 6.

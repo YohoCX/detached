@@ -11,6 +11,7 @@ pub mod nav;
 pub mod notices;
 pub mod repos;
 pub mod search;
+pub mod settings;
 pub mod shell;
 pub mod status_bar;
 pub mod store;
@@ -28,6 +29,7 @@ pub fn register(cx: &mut App) {
         dock::register(cx),
         nav::register(cx),
         repos::register(cx),
+        settings::register(cx),
         chat::register(cx),
         files::register(cx),
         history::register(cx),

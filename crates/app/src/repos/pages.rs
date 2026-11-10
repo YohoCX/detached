@@ -1,5 +1,5 @@
-//! The Settings dialog, one page at a time: accounts, the current repo's accounts and merge request
-//! remote with the removed repositories, the git binary, the theme, the keymap.
+//! The Settings pages of accounts, the current repo and git. They share one state while Settings
+//! is open, so a change on one shows on the others.
 
 use std::collections::HashMap;
 use std::iter::once;
@@ -11,67 +11,97 @@ use detached_core::state::AppState;
 use detached_core::types::{
     Account, AccountInput, EnvInfo, ForgeHosts, HostAccount, Provider, VerifyResult,
 };
-use gpui_kit::base::{ObservedElement, POPUP_PRIORITY, TestSupportExt};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{Enter, InputState};
-use gpui_kit::component::select::{Select, SelectEvent, SelectItem, SelectState};
+use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{
-    AnyView, App, AppContext, ClickEvent, Context, DismissEvent, Div, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, Role, ScrollHandle, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred, div, point,
+    AnyView, App, AppContext, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
     prelude::FluentBuilder, px,
 };
 
-use super::{Section, State, say, settings_call};
+use super::{say, settings_call};
+use crate::settings::{Group, register_page};
 use crate::store::Store;
-use crate::ui::{self, Icon, radius, text, theme, theme::mono};
+use crate::ui::page::{Opt, Pick, button, heading, labeled, muted, row, section, select};
+use crate::ui::{self, radius, text, theme, theme::mono};
 use crate::{actions, keymap};
 use kernel::blocking;
 
-/// Asks for the dialog at a section, opening it if needed.
-pub struct Open(pub Section);
+#[derive(Clone, Copy)]
+enum Kind {
+    Accounts,
+    Repository,
+    Git,
+    Appearance,
+    Keymap,
+}
 
-impl EventEmitter<Open> for State {}
+pub(super) fn register(cx: &mut App) {
+    register_page(cx, "accounts", "Accounts", Group::App, |w, cx| {
+        page(Kind::Accounts, w, cx)
+    });
+    register_page(cx, "repository", "Repository", Group::Repo, |w, cx| {
+        page(Kind::Repository, w, cx)
+    });
+    register_page(cx, "git", "Git", Group::App, |w, cx| page(Kind::Git, w, cx));
+    register_page(cx, "appearance", "Appearance", Group::App, |w, cx| {
+        page(Kind::Appearance, w, cx)
+    });
+    register_page(cx, "keymap", "Keymap", Group::App, |w, cx| {
+        page(Kind::Keymap, w, cx)
+    });
+}
 
-/// Holds the dialog while it is open; it takes no room in its slot.
-pub fn settings(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| {
-        let state = State::global(cx);
-        let _open = cx.subscribe_in(
-            &state,
-            window,
-            |host: &mut Host, _, e: &Open, window, cx| {
-                if let Some((dialog, _)) = &host.dialog {
-                    return dialog.update(cx, |d, cx| d.show(e.0, cx));
-                }
-                let dialog = cx.new(|cx| Dialog::new(e.0, window, cx));
-                let closed = cx.subscribe(&dialog, |host: &mut Host, _, _: &DismissEvent, cx| {
-                    host.dialog = None;
-                    cx.notify();
-                });
-                host.dialog = Some((dialog, closed));
-                cx.notify();
-            },
-        );
-        Host {
-            dialog: None,
-            _open,
+/// The state of the pages of the Settings open now.
+struct Open(WeakEntity<Model>);
+
+impl Global for Open {}
+
+fn page(kind: Kind, window: &mut Window, cx: &mut App) -> AnyView {
+    let model = match cx.try_global::<Open>().and_then(|o| o.0.upgrade()) {
+        Some(m) => m,
+        None => {
+            let m = cx.new(|cx| Model::new(window, cx));
+            cx.set_global(Open(m.downgrade()));
+            m
         }
+    };
+    cx.new(|cx| Page {
+        kind,
+        _model: cx.observe(&model, |_, _, cx| cx.notify()),
+        model,
     })
     .into()
 }
 
-struct Host {
-    dialog: Option<(Entity<Dialog>, Subscription)>,
-    _open: Subscription,
+struct Page {
+    kind: Kind,
+    model: Entity<Model>,
+    _model: Subscription,
 }
 
-impl Render for Host {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .absolute()
-            .children(self.dialog.as_ref().map(|d| d.0.clone()))
+impl Render for Page {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let kind = self.kind;
+        self.model.update(cx, |m, cx| {
+            let page = div().track_focus(&m.focus).flex().flex_col().gap(px(22.));
+            match kind {
+                Kind::Accounts => page.child(m.accounts_view(cx)),
+                Kind::Repository => {
+                    let repo = m.repo.clone();
+                    let mrs = repo.clone().filter(|_| m.data.forge.is_some());
+                    page.children(repo.map(|r| m.repo_view(&r, cx)))
+                        .children(mrs.map(|r| m.mrs_view(&r, cx)))
+                        .child(m.removed_view(cx))
+                }
+                Kind::Git => page.child(m.git_view(cx)),
+                Kind::Appearance => page.child(m.appearance_view(cx)),
+                Kind::Keymap => page.child(m.keymap_view(cx)),
+            }
+        })
     }
 }
 
@@ -105,43 +135,6 @@ fn name(a: &Account) -> String {
         true => a.username.clone(),
         false => a.label.clone(),
     }
-}
-
-/// A select option: its value and its text.
-#[derive(Clone)]
-struct Opt<V>(V, SharedString);
-
-impl<V: Clone + PartialEq + 'static> SelectItem for Opt<V> {
-    type Value = V;
-
-    fn title(&self) -> SharedString {
-        self.1.clone()
-    }
-
-    fn value(&self) -> &V {
-        &self.0
-    }
-
-    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let id = SharedString::from(format!("option:{}", self.1));
-        div().id(id).test_support().child(self.1.clone())
-    }
-}
-
-type Pick<V = String> = Entity<SelectState<Vec<Opt<V>>>>;
-
-fn select<V: Clone + PartialEq + 'static>(
-    pick: &Pick<V>,
-    id: impl Into<ElementId>,
-    cx: &App,
-) -> Select<Vec<Opt<V>>> {
-    // As high as `ui::input`.
-    Select::new(pick)
-        .id(id)
-        .h(px(32.))
-        .px(px(9.))
-        .bg(theme(cx).input)
-        .rounded(radius::ITEM)
 }
 
 /// What a reload reads.
@@ -184,7 +177,7 @@ impl Picks {
     }
 }
 
-fn picks(d: &Data, repo: &str, window: &mut Window, cx: &mut Context<Dialog>) -> Picks {
+fn picks(d: &Data, repo: &str, window: &mut Window, cx: &mut Context<Model>) -> Picks {
     let mut subs = vec![];
     let opt = |v: &str, title: String| Opt(v.to_string(), title.into());
     let hosts = d.hosts.iter().map(|h| {
@@ -254,7 +247,7 @@ fn pick(
     set: impl Fn(&AppState, Option<String>) -> Result<Settings> + Clone + Send + 'static,
     subs: &mut Vec<Subscription>,
     window: &mut Window,
-    cx: &mut Context<Dialog>,
+    cx: &mut Context<Model>,
 ) -> Pick {
     let ix = opts.iter().position(|o| o.0 == value).map(IndexPath::new);
     let pick = cx.new(|cx| SelectState::new(opts, ix, window, cx));
@@ -302,7 +295,7 @@ fn field(
 
 impl Form {
     /// Edits `a`, or a new GitHub account.
-    fn new(a: Option<&Account>, window: &mut Window, cx: &mut Context<Dialog>) -> Form {
+    fn new(a: Option<&Account>, window: &mut Window, cx: &mut Context<Model>) -> Form {
         let p = a.map_or(Provider::Github, |a| a.provider.clone());
         let text = |f: fn(&Account) -> &String| a.map(f).cloned().unwrap_or_default();
         let base = a.map_or(provider(&p).1.into(), |a| a.base_url.clone());
@@ -316,7 +309,7 @@ impl Form {
         let _provider = cx.subscribe_in(
             &select,
             window,
-            |this: &mut Dialog, _, e: &SelectEvent<Vec<Opt<Provider>>>, window, cx| {
+            |this: &mut Model, _, e: &SelectEvent<Vec<Opt<Provider>>>, window, cx| {
                 let (SelectEvent::Confirm(Some(p)), Some(f)) = (e, &this.form) else {
                     return;
                 };
@@ -339,13 +332,12 @@ impl Form {
     }
 }
 
-struct Dialog {
+struct Model {
     repo: Option<String>,
+    /// The shown page's, where focus goes back to.
     focus: FocusHandle,
-    /// The Accounts section's: focus coming into it reloads, for the selects below.
+    /// The Accounts page's: focus coming into it reloads.
     accounts: FocusHandle,
-    scroll: ScrollHandle,
-    page: Section,
     data: Data,
     picks: Picks,
     git: Entity<InputState>,
@@ -360,12 +352,9 @@ struct Dialog {
     _theme: Subscription,
 }
 
-impl EventEmitter<DismissEvent> for Dialog {}
-
-impl Dialog {
-    fn new(section: Section, window: &mut Window, cx: &mut Context<Self>) -> Self {
+impl Model {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (focus, accounts) = (cx.focus_handle(), cx.focus_handle());
-        window.focus(&focus, cx);
         let git = "git binary (empty: from your shell PATH)";
         let (names, current) = theme::names(cx);
         let ix = names.iter().position(|n| *n == current).map(IndexPath::new);
@@ -382,13 +371,11 @@ impl Dialog {
                 }
             },
         );
-        let mut this = Dialog {
+        let mut this = Model {
             repo: Store::global(cx).read(cx).current().map(String::from),
             _focus_in: cx.on_focus_in(&accounts, window, Self::reload),
             focus,
             accounts,
-            scroll: ScrollHandle::new(),
-            page: section,
             data: Data::default(),
             picks: Picks::default(),
             git: field(String::new(), git, window, cx),
@@ -399,7 +386,7 @@ impl Dialog {
             theme: theme_pick,
             _theme,
         };
-        // The Accounts section also shows its list's error inline on open.
+        // The Accounts page also shows its list's error inline on open.
         let open = |core: &AppState| {
             let error = api::list_accounts(core).err().map(|e| e.to_string());
             Ok((api::env_info(core), error))
@@ -412,14 +399,8 @@ impl Dialog {
         this
     }
 
-    fn show(&mut self, section: Section, cx: &mut Context<Self>) {
-        self.page = section;
-        self.scroll.set_offset(point(px(0.), px(0.)));
-        cx.notify();
-    }
-
     /// Runs `f`, then reloads and hands `then` what `f` returned. Its error goes to the Accounts
-    /// section when `inline`, else to the status bar.
+    /// page when `inline`, else to the status bar.
     fn call<T: Send + 'static>(
         &mut self,
         inline: bool,
@@ -467,7 +448,7 @@ impl Dialog {
     fn apply(&mut self, data: Data, window: &mut Window, cx: &mut Context<Self>) {
         let git = data.settings.git_path.clone().unwrap_or_default();
         self.git.update(cx, |s, cx| s.set_value(git, window, cx));
-        // A select made anew takes over the focus of the one it replaces, else it leaves the dialog.
+        // A select made anew takes over the focus of the one it replaces, else focus leaves it.
         let was = self
             .picks
             .all()
@@ -903,40 +884,9 @@ impl Dialog {
             .child(labeled("settings.keymapNote", note).text_color(t.muted))
             .children(groups)
     }
-
-    fn nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let pages = [
-            (Section::Accounts, "settings.nav.accounts", "Accounts"),
-            (Section::Repos, "settings.nav.repository", "Repository"),
-            (Section::Git, "settings.nav.git", "Git"),
-            (Section::Appearance, "settings.nav.appearance", "Appearance"),
-            (Section::Keymap, "settings.nav.keymap", "Keymap"),
-        ];
-        div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .gap(px(2.))
-            .w(px(150.))
-            .p(px(8.))
-            .border_r_1()
-            .border_color(theme(cx).line)
-            .children(pages.map(|(section, id, label)| {
-                let on = self.page == section;
-                ui::row(id, on, cx)
-                    .test_support()
-                    .h(px(28.))
-                    .role(Role::Tab)
-                    .aria_label(label)
-                    .aria_selected(on)
-                    .when(on, |r| r.font_weight(FontWeight::BOLD))
-                    .on_click(cx.listener(move |this, _, _, cx| this.show(section, cx)))
-                    .child(label)
-            }))
-    }
 }
 
-fn form_view(f: &Form, cx: &mut Context<Dialog>) -> impl IntoElement + use<> {
+fn form_view(f: &Form, cx: &mut Context<Model>) -> impl IntoElement + use<> {
     let t = theme(cx);
     let p = f.provider.read(cx).selected_value().cloned();
     let fixed = p.is_some_and(|p| !provider(&p).1.is_empty());
@@ -998,61 +948,6 @@ fn form_view(f: &Form, cx: &mut Context<Dialog>) -> impl IntoElement + use<> {
         )
 }
 
-/// A `ui::button` that runs `click`, or is dimmed and does nothing.
-fn button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    enabled: bool,
-    cx: &Context<Dialog>,
-    click: impl Fn(&mut Dialog, &mut Window, &mut Context<Dialog>) + 'static,
-) -> ObservedElement<Stateful<Div>> {
-    ui::button(id, label, cx)
-        .test_support()
-        .role(Role::Button)
-        .aria_label(label)
-        .map(|b| match enabled {
-            true => b.on_click(
-                cx.listener(move |this, _: &ClickEvent, window, cx| click(this, window, cx)),
-            ),
-            false => b.opacity(0.5),
-        })
-}
-
-/// Text that tests read by `id`.
-fn labeled(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
-    let text = text.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(text.clone())
-        .child(text)
-}
-
-fn muted(text: &'static str, cx: &App) -> Div {
-    div().text_color(theme(cx).muted).child(text)
-}
-
-fn heading(title: &str, cx: &App) -> Div {
-    div()
-        .text_size(text::LABEL)
-        .font_weight(FontWeight::BOLD)
-        .text_color(theme(cx).muted)
-        .child(title.to_uppercase())
-}
-
-fn section(id: &'static str, title: String, cx: &App) -> ObservedElement<Stateful<Div>> {
-    div()
-        .id(id)
-        .test_support()
-        .flex()
-        .flex_col()
-        .child(heading(&title, cx).mb(px(10.)))
-}
-
-fn row() -> Div {
-    div().flex().items_center().gap(px(10.)).mb(px(6.))
-}
-
 fn host(h: &HostAccount, select: impl IntoElement, cx: &App) -> Div {
     row()
         .child(
@@ -1068,105 +963,4 @@ fn host(h: &HostAccount, select: impl IntoElement, cx: &App) -> Div {
                 .child(h.remotes.join(", ")),
         )
         .child(div().w(px(240.)).child(select))
-}
-
-fn close(cx: &Context<Dialog>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<> {
-    let this = cx.weak_entity();
-    move |_, _, cx| {
-        this.update(cx, |_, cx| cx.emit(DismissEvent)).ok();
-    }
-}
-
-impl Render for Dialog {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
-        let vp = window.viewport_size();
-        let w = px(840.).min(vp.width * 0.92);
-        let head = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .pt(px(12.))
-            .pb(px(12.))
-            .pl(px(20.))
-            .pr(px(14.))
-            .border_b_1()
-            .border_color(t.line)
-            .child(
-                div()
-                    .text_size(text::HEADING)
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .child("Settings"),
-            )
-            .child(
-                ui::titled(ui::icon_button("settings.close", Icon::Close, cx), "Close")
-                    .test_support()
-                    .on_click(close(cx)),
-            );
-        let page = div()
-            .id("settings.body")
-            .track_scroll(&self.scroll)
-            .overflow_y_scroll()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(22.))
-            .px(px(20.))
-            .py(px(18.));
-        let page = match self.page {
-            Section::Accounts => page.child(self.accounts_view(cx)),
-            Section::Repos => {
-                let repo = self.repo.clone();
-                let mrs = repo.clone().filter(|_| self.data.forge.is_some());
-                page.children(repo.map(|r| self.repo_view(&r, cx)))
-                    .children(mrs.map(|r| self.mrs_view(&r, cx)))
-                    .child(self.removed_view(cx))
-            }
-            Section::Git => page.child(self.git_view(cx)),
-            Section::Appearance => page.child(self.appearance_view(cx)),
-            Section::Keymap => page.child(self.keymap_view(cx)),
-        };
-        let body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .child(self.nav(cx))
-            .child(page);
-        let scrim = div()
-            .id("settings.scrim")
-            .test_support()
-            .absolute()
-            .size_full()
-            .occlude()
-            .bg(t.scrim)
-            .on_click(close(cx));
-        let dialog = ui::glass(div(), cx)
-            .id("settings")
-            .test_support()
-            .track_focus(&self.focus)
-            .role(Role::Dialog)
-            .aria_label("Settings")
-            .absolute()
-            .top(vp.height * 0.08)
-            .left((vp.width - w) / 2.)
-            .w(w)
-            .h(vp.height * 0.84)
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .rounded(radius::DIALOG)
-            .occlude()
-            .on_key_down(cx.listener(|_, e: &KeyDownEvent, _, cx| {
-                if e.keystroke.key == "escape" {
-                    cx.emit(DismissEvent);
-                }
-            }))
-            .child(head)
-            .child(body);
-        let all = div().w(vp.width).h(vp.height).child(scrim).child(dialog);
-        // After the top bar's popups at their priority; its own selects nest, so they draw over it.
-        deferred(anchored().position(point(px(0.), px(0.))).child(all))
-            .with_priority(POPUP_PRIORITY)
-    }
 }

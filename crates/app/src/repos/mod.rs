@@ -2,7 +2,7 @@
 
 mod api;
 mod branches;
-mod settings;
+mod pages;
 mod sidebar;
 mod switcher;
 mod sync;
@@ -24,7 +24,6 @@ use gpui_kit::{
 
 pub use api::*;
 use branches::branches;
-use settings::settings;
 use sidebar::sidebar;
 use switcher::switcher;
 use sync::sync_buttons;
@@ -89,7 +88,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     shell::top_bar(cx, TopBar::Left, 1, |_, cx| switcher(cx));
     shell::top_bar(cx, TopBar::Left, 2, branches);
     shell::top_bar(cx, TopBar::Right, 1, |_, cx| sync_buttons(cx));
-    shell::overlay(cx, settings);
+    pages::register(cx);
     vec![]
 }
 

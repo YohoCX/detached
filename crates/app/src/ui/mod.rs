@@ -5,6 +5,7 @@ pub mod disabled;
 pub mod grip;
 pub mod icon;
 pub mod menu;
+pub mod page;
 pub mod popup;
 pub mod suggest;
 pub mod theme;
