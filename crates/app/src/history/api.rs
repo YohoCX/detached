@@ -16,11 +16,10 @@ use gpui_kit::{
 };
 
 use super::message;
-use crate::blocking;
 use crate::files::{self, DiffDoc};
-use crate::store::Store;
 use crate::ui::{self, text, theme};
 use crate::util::{self, Status, base_name, dir_name, status_of, when};
+use kernel::blocking;
 
 /// The left side of a root commit.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -125,7 +124,7 @@ impl CommitDetails {
     }
 
     fn with(repo: String, shas: Vec<String>, worktree: bool, cx: &mut Context<Self>) -> Self {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let (r, s) = (repo.clone(), shas.clone());
         let job = blocking::run(cx, move || {
             load(&core, &r, &s, worktree).map_err(|e| e.to_string())
@@ -154,7 +153,7 @@ impl CommitDetails {
     fn find_branches(&mut self, sha: String, cx: &mut Context<Self>) {
         self.branches = Some(Err("Searching…".into()));
         cx.notify();
-        let (core, repo) = (Store::global(cx).read(cx).core().clone(), self.repo.clone());
+        let (core, repo) = (kernel::core(cx).clone(), self.repo.clone());
         let job = blocking::run(cx, move || api::branches_containing(&core, &repo, &sha));
         cx.spawn(async move |this, cx| {
             let found = match job.await {

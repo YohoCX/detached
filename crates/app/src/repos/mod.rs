@@ -30,10 +30,10 @@ pub use sync::sync_buttons;
 pub use workspaces::workspaces;
 
 use crate::actions::{self, Registration};
-use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
 use branches::Intent;
+use kernel::blocking;
 use sync::{Bulk, Kind};
 
 /// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches, the
@@ -133,7 +133,7 @@ pub(crate) fn settings_call(
     f: impl FnOnce(&AppState) -> Result<Vec<RepoInfo>> + Send + 'static,
 ) -> Task<()> {
     let store = Store::global(cx);
-    let core = store.read(cx).core().clone();
+    let core = kernel::core(cx).clone();
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         let r = done.await;
@@ -178,7 +178,7 @@ pub(crate) fn add_folders(workspace: Option<String>, cx: &mut App) {
 
 /// Runs `f` on core's threads; its error is said in red.
 pub(crate) fn run_core(cx: &mut App, f: impl FnOnce(&AppState) -> Result<()> + Send + 'static) {
-    let core = Store::global(cx).read(cx).core().clone();
+    let core = kernel::core(cx).clone();
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         if let Err(e) = done.await {

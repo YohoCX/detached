@@ -241,7 +241,7 @@ fn github_runs_jobs_rerun_and_dispatch(cx: &mut TestAppContext) {
 fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     let accounts = api::list_accounts(&core).unwrap();
     let gitlab = accounts.iter().find(|a| a.label == "Fake GitLab").unwrap();
     api::remove_account(&core, &gitlab.id).unwrap();
@@ -502,7 +502,8 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
     assert_eq!(shown_mr(cx), Some(1));
     assert_eq!(cx.find(row).unwrap().selected(), Some(true));
 
-    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let (core, repo) =
+        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Approve).unwrap();
     cx.click("mrs.refresh");
     wait_until(cx, |cx| label(cx, row).unwrap().contains(" tester ✓1 "));
@@ -581,7 +582,7 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
 fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     let second = AccountInput {
         id: None,
         provider: Provider::GitlabSelfHosted,
@@ -839,7 +840,8 @@ fn replies_and_resolves_a_gitlab_thread(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let (core, repo) =
+        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
     let comment = MrAction::LineComment {
         body: "Why?".into(),
         path: "README.md".into(),
@@ -945,7 +947,8 @@ fn a_failed_action_shows_until_dismissed(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
     open_mr(cx, "gitlab");
-    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let (core, repo) =
+        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
     cx.click("merge.submit");
     wait_until(cx, |cx| cx.find("mr.failure").is_some());
@@ -989,7 +992,8 @@ fn the_changes_tab_lists_files_by_path_with_thread_badges(cx: &mut TestAppContex
     let (mut app, _forge, seed) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let (core, repo) =
+        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
     let head = &seed.projects[0].mrs[0].head_sha;
     let comment = |old_line, new_line| MrAction::LineComment {
         body: "Hm".into(),
@@ -1180,7 +1184,8 @@ fn a_closed_mr_takes_no_line_comments(cx: &mut TestAppContext) {
     open_mr(cx, "gitlab");
     open_file(cx, 1);
     assert!(plus_at(cx, "new", 3));
-    let (core, repo) = cx.store(|s, _| (s.core().clone(), s.current().unwrap().to_string()));
+    let (core, repo) =
+        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
     cx.click("mr.refresh");
     wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));

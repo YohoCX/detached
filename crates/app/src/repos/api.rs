@@ -8,8 +8,8 @@ pub use detached_core::types::CheckoutTarget;
 
 use super::State;
 use super::settings::Open;
-use crate::blocking;
 use crate::store::{Level, Notice, Store};
+use kernel::blocking;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -25,7 +25,7 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
     let store = Store::global(cx);
     let s = store.read(cx);
     let (core, from) = (
-        s.core().clone(),
+        kernel::core(cx).clone(),
         s.status(repo).and_then(|st| st.branch.clone()),
     );
     let (name, rev) = match &target {

@@ -1489,6 +1489,7 @@ dependencies = [
  "base64 0.23.1",
  "detached-core",
  "detached-forge-fake",
+ "detached-kernel",
  "embed-resource",
  "futures",
  "gpui-kit",
@@ -1550,7 +1551,10 @@ dependencies = [
 name = "detached-kernel"
 version = "0.5.0"
 dependencies = [
+ "detached-core",
+ "futures",
  "gpui-pre",
+ "tempfile",
 ]
 
 [[package]]

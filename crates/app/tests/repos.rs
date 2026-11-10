@@ -416,7 +416,7 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
     assert_eq!(ops.len(), 1, "both buttons are disabled");
     assert_eq!(label(cx, "sync.fetch"), "1/2");
 
-    cx.store(|s, _| s.cancel_op(ops[0]));
+    cx.store(|s, cx| s.cancel_op(ops[0], cx));
     says(cx, "Fetched 1 of 2 repositories", true);
     assert_eq!(label(cx, "sync.fetch"), "Fetch All");
     let n = cx.store(|s, _| s.notices.last().cloned()).unwrap();
@@ -1186,7 +1186,7 @@ fn save_mine(cx: &mut VisualTestContext) {
         label: "Mine".into(),
         token: None,
     };
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     api::save_account(&core, input).unwrap();
 }
 
@@ -1282,12 +1282,12 @@ fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_acc
     wait_until(cx, |cx| value(cx, account.clone()).is_some());
     assert_eq!(value(cx, account.clone()).as_deref(), Some("Fake GitLab"));
     let chosen = |cx: &mut VisualTestContext| {
-        let (core, repo) = (cx.store(|s, _| s.core().clone()), gitlab.clone());
+        let (core, repo) = (cx.store(|_, cx| kernel::core(cx).clone()), gitlab.clone());
         api::get_settings(&core).repo_accounts.get(&repo).cloned()
     };
     assert_eq!(chosen(cx), None, "found, not chosen");
     click_option(cx, account.clone(), "Fake GitLab");
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     let id = api::list_accounts(&core).unwrap()[0].id.clone();
     wait_until(cx, |cx| chosen(cx).as_ref() == Some(&id));
     click_option(cx, account.clone(), "Automatic");

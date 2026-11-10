@@ -1,3 +1,32 @@
 //! The app's live state and its exchange, as GPUI entities on the main thread. It draws nothing:
 //! clippy.toml bans GPUI's elements and windows, and `forbid` keeps an `#[allow]` from lifting that.
 #![forbid(clippy::disallowed_methods, clippy::disallowed_types)]
+
+pub mod blocking;
+
+use std::sync::Arc;
+
+use detached_core::state::AppState;
+use gpui::{App, Global};
+
+struct Core(Arc<AppState>);
+
+impl Global for Core {}
+
+pub fn init(core: Arc<AppState>, cx: &mut App) {
+    cx.set_global(Core(core));
+}
+
+/// Core's state, for the calls that go through `blocking`.
+pub fn core(cx: &App) -> &Arc<AppState> {
+    &cx.global::<Core>().0
+}
+
+/// The kernel over a sandbox's core; the sandbox's directory lives as long as the result.
+#[cfg(test)]
+fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
+    let detached_core::git::testutil::Sandbox { dir, state } =
+        detached_core::git::testutil::Sandbox::new();
+    cx.update(|cx| init(Arc::new(state), cx));
+    dir
+}

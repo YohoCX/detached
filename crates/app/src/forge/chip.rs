@@ -13,11 +13,11 @@ use gpui_kit::{
 use super::core;
 use super::mr::{bare_title, number, setup_problem, show_mr};
 use crate::actions::{self, Group, Registration};
-use crate::blocking;
 use crate::cache::{self, Cache};
 use crate::dock::{self, Kind};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
+use kernel::blocking;
 
 struct Form {
     new: NewMr,

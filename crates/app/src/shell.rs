@@ -116,7 +116,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config_dir = Store::global(cx).read(cx).core().config_dir.clone();
+        let config_dir = kernel::core(cx).config_dir.clone();
         ui::theme::init(&config_dir, cx);
         ui::theme::sync(window, cx);
         history::init(cx);
@@ -320,7 +320,8 @@ mod tests {
             actions::init(cx);
             ui_state::init(dir.path(), cx);
             keymap::bind(&BTreeMap::new(), cx);
-            Store::init(Arc::new(state), cx);
+            kernel::init(Arc::new(state), cx);
+            Store::init(cx);
         });
         let window = cx.update(open).unwrap();
         (dir, window)

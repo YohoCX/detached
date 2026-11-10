@@ -132,7 +132,7 @@ impl Render for StatusBar {
                         .min_w(px(16.))
                         .px(px(3.))
                         .tooltip(|window, cx| Tooltip::new("Cancel").build(window, cx))
-                        .on_click(move |_, _, cx| Store::global(cx).read(cx).cancel_op(id)),
+                        .on_click(move |_, _, cx| Store::global(cx).read(cx).cancel_op(id, cx)),
                 )
         });
         let events = (!s.log.is_empty()).then(|| {

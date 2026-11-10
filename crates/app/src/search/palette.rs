@@ -19,7 +19,8 @@ use crate::repos::{self, CheckoutTarget};
 use crate::store::{Location, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
-use crate::{blocking, files, keymap, nav};
+use crate::{files, keymap, nav};
+use kernel::blocking;
 
 #[derive(Clone)]
 enum Item {
@@ -207,7 +208,7 @@ impl Palette {
             return;
         };
         let (seq, at) = (self.seq, rev.clone());
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let found = blocking::run(cx, move || {
             api::quick_open(&core, &repos, at.as_deref(), &query, limit)
         });
@@ -243,7 +244,7 @@ impl Palette {
         let Some(repo) = store.current().filter(|_| wanted).map(String::from) else {
             return;
         };
-        let core = store.core().clone();
+        let core = kernel::core(cx).clone();
         let found = blocking::run(cx, move || api::list_branches(&core, &repo));
         self.load = Some(cx.spawn(async move |this, cx| {
             let Ok(b) = found.await else { return };

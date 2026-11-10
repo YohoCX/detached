@@ -31,7 +31,7 @@ pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
 use crate::repos::{self, Section};
-use crate::store::{Doc, Store};
+use crate::store::Doc;
 use crate::ui::{self, theme};
 use crate::util::now;
 
@@ -111,7 +111,7 @@ pub fn took(secs: Option<u64>) -> String {
 }
 
 fn core(cx: &App) -> Arc<AppState> {
-    Store::global(cx).read(cx).core().clone()
+    kernel::core(cx).clone()
 }
 
 /// An element tests find by `id` and read by `label`.

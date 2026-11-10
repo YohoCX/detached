@@ -18,7 +18,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 
 use super::ghostty::{Mode, Term};
 use super::keys;
-use crate::blocking;
+use kernel::blocking;
 
 const SCROLLBACK: usize = 1000;
 const MEMORY_EVERY: Duration = Duration::from_secs(2);

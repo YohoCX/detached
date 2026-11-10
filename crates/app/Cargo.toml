@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 detached-core.workspace = true
+kernel = { package = "detached-kernel", path = "../kernel" }
 serde.workspace = true
 serde_json.workspace = true
 # The grammars of the languages the viewer maps file names to.

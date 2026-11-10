@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use detached_core::error::Result;
 use gpui_kit::{App, BorrowAppContext, Global, Task};
 
-use crate::blocking;
+use kernel::blocking;
 
 /// A focus refresh this soon after the last one ended is skipped.
 const FRESH: Duration = Duration::from_secs(30);

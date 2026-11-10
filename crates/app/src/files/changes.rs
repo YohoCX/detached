@@ -17,11 +17,11 @@ use gpui_kit::{
 };
 
 use super::api::{DiffDoc, Location, Side, open, show_diff};
-use crate::blocking;
 use crate::store::{Doc, Event, Store};
 use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
+use kernel::blocking;
 
 /// Around the tool; Show Diff takes the selected change while focus is inside.
 const CONTEXT: &str = "Changes";
@@ -120,7 +120,7 @@ impl Changes {
             return;
         };
         self.show_placeholder(window, cx);
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let r = repo.clone();
         let job = blocking::run(cx, move || compare(&core, &r, &base));
         self._load = cx.spawn_in(window, async move |this, cx| {

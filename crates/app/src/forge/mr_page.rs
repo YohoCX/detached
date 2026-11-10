@@ -24,12 +24,12 @@ use super::merge::MergeWidget;
 use super::mr::{bare_title, is_gitlab, links, tone};
 use super::thread::Thread;
 use super::{Pipelines, core, labelled, name, note, now, text_of};
-use crate::blocking;
 use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Markdown};
 use crate::history::CommitDetails;
 use crate::store::Store;
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, ago_text, base_name, dir_name, status_of, when};
+use kernel::blocking;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {

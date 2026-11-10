@@ -7,8 +7,12 @@ license.workspace = true
 publish = false
 
 [dependencies]
+detached-core.workspace = true
+futures = "0.3"
 # GPUI alone: the kit's crates stay out, and clippy.toml keeps the drawing parts out.
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
 
 [dev-dependencies]
+detached-core = { workspace = true, features = ["testutil"] }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, features = ["test-support"] }
+tempfile.workspace = true

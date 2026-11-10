@@ -15,10 +15,10 @@ use futures::channel::mpsc;
 use gpui_kit::{App, AppContext, Context, Entity, Task};
 use serde::{Deserialize, Serialize};
 
-use crate::blocking;
 use crate::files::{Links, Markdown};
 use crate::store::{Level, Store};
 use crate::ui_state;
+use kernel::blocking;
 
 /// The last commands each repo's session listed, for `/` before a session runs.
 const COMMANDS: &str = "chat.commands";
@@ -251,7 +251,7 @@ impl Session {
     fn check(&mut self, cx: &mut Context<Self>) -> Task<Option<Check>> {
         self.checks += 1;
         let n = self.checks;
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let repo = self.repo.clone();
         blocking::run(cx, move || {
             let p = trust::project(&core.env(), std::path::Path::new(&repo)).ok()?;
@@ -310,7 +310,7 @@ impl Session {
     pub fn trust(&mut self, cx: &mut Context<Self>) {
         let Some(p) = self.review.take() else { return };
         self.accepted = Some(p.fingerprint.clone());
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let repo = self.repo.clone();
         let saved = blocking::run(cx, move || {
             trust::trust(&core.config_dir, &repo, &p).map_err(|e| e.to_string())
@@ -359,7 +359,7 @@ impl Session {
     }
 
     fn snapshot(&self, cx: &mut Context<Self>) -> Task<Vec<(String, Result<String, String>)>> {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let repos = self.repos(cx);
         blocking::run(cx, move || {
             let snap = |r: &String| api::snapshot(&core, r).map_err(|e| e.to_string());
@@ -385,7 +385,7 @@ impl Session {
         let Some(starts) = self.turn_start.take() else {
             return;
         };
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let check = self.check(cx);
         let found = blocking::run(cx, move || {
             let changes = |repo: &str, start: String| {
@@ -502,7 +502,7 @@ impl Session {
         };
         let was = std::mem::replace(back, Back::Working);
         let repo = repo.clone();
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let done = blocking::run(cx, move || step(&core, &repo).map_err(|e| e.to_string()));
         self.work(cx, async move |this, cx| {
             let done = done.await;
@@ -633,7 +633,7 @@ impl Session {
 
     /// Reads the account's provider and limits again, unless the sidecar is not installed.
     pub fn ask_info(&mut self, cx: &mut Context<Self>) {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         if agent::sidecar(&core.config_dir).is_file() {
             let cwd = self.repo.clone();
             self.command(Command::Info { cwd }, cx);
@@ -642,7 +642,7 @@ impl Session {
 
     /// Asks the sidecar for this folder's past conversations, unless it is not installed.
     pub fn load_past(&mut self, cx: &mut Context<Self>) {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         if agent::sidecar(&core.config_dir).is_file() {
             let cwd = self.repo.clone();
             self.command(Command::Sessions { cwd }, cx);
@@ -745,7 +745,7 @@ impl Session {
         if self.starting {
             return;
         }
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let program = agent::sidecar(&core.config_dir);
         if !program.is_file() {
             self.fail(

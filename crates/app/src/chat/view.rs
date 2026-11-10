@@ -19,10 +19,10 @@ use detached_core::git::snapshot::Skip;
 use detached_core::types::Side;
 
 use super::session::{Answer, Back, Item, Session};
-use crate::blocking;
 use crate::store::{DiffDoc, Doc, Location, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
+use kernel::blocking;
 
 const MODES: &[(&str, &str, Option<&str>)] = &[
     (
@@ -172,7 +172,7 @@ impl ChatView {
             items.truncate(SUGGESTIONS as usize);
             self.show(at, word, items, cx);
         } else if let Some(q) = word.strip_prefix('@') {
-            let core = Store::global(cx).read(cx).core().clone();
+            let core = kernel::core(cx).clone();
             let (repo, q) = (self.session.read(cx).repo.clone(), q.to_string());
             let found = blocking::run(cx, move || {
                 api::quick_open(&core, &[repo], None, &q, SUGGESTIONS).unwrap_or_default()

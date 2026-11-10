@@ -22,10 +22,10 @@ use gpui_kit::{
 };
 
 use super::{CheckoutTarget, State, checkout, say, sync, widget};
-use crate::blocking;
 use crate::store::{Level, Notice, Store};
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
+use kernel::blocking;
 
 /// What the popup was opened for; a new intent mounts a new popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,7 +311,7 @@ impl Popup {
         let Some(repo) = self.repo.clone() else {
             return;
         };
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let done = blocking::run(cx, move || api::list_branches(&core, &repo));
         cx.spawn_in(window, async move |this, cx| {
             let loaded = done.await;
@@ -555,7 +555,7 @@ impl Popup {
         };
         self.busy = true;
         cx.notify();
-        let (core, r) = (Store::global(cx).read(cx).core().clone(), repo.clone());
+        let (core, r) = (kernel::core(cx).clone(), repo.clone());
         let done = blocking::run(cx, move || f(&core, &r));
         cx.spawn_in(window, async move |this, cx| {
             let done = done.await;

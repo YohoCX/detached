@@ -27,7 +27,8 @@ fn main() {
         actions::init(cx);
         ui_state::init(&core.config_dir, cx);
         let keys = keymap::load(core.clone(), cx);
-        Store::init(core, cx);
+        kernel::init(core, cx);
+        Store::init(cx);
         #[cfg(target_os = "macos")]
         mac::init(keys, cx);
         #[cfg(not(target_os = "macos"))]

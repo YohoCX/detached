@@ -9,9 +9,9 @@ use gpui_kit::{
 
 use detached_core::api;
 
-use crate::blocking;
 use crate::store::{Level, Notice, Store};
 use crate::ui::{self, Icon, text, theme};
+use kernel::blocking;
 
 pub struct Notices {
     _store: Subscription,
@@ -126,7 +126,7 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
 }
 
 fn open_in_zed(repo: String, file: String, cx: &mut App) {
-    let core = Store::global(cx).read(cx).core().clone();
+    let core = kernel::core(cx).clone();
     let opened = blocking::run(cx, move || api::open_in_zed(&core, &repo, &file, None));
     cx.spawn(async move |cx| {
         if let Err(e) = opened.await {

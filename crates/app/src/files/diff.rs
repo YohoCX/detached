@@ -24,7 +24,8 @@ use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::store::{Event, Store};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::{blocking, keymap, ui_state};
+use crate::{keymap, ui_state};
+use kernel::blocking;
 
 /// A run of changed lines as Monaco reports it: a side without lines has end 0 and the line
 /// before the change as start.
@@ -160,7 +161,7 @@ impl DiffView {
 
     /// Replacing the task drops a load still running, so stale results never land.
     fn load(&mut self, cx: &mut Context<Self>) {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let d = self.doc.clone();
         let job = blocking::run(cx, move || {
             let (orig, left, right) = (d.orig_path.as_deref(), &d.left, &d.right);

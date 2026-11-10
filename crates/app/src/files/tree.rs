@@ -23,8 +23,9 @@ use super::changes::branch_names;
 use crate::store::{Event, Store};
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
+use crate::ui_state;
 use crate::util::{Status, base_name, dir_name, status_of};
-use crate::{blocking, ui_state};
+use kernel::blocking;
 
 /// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
 const NESTING: [(&str, &[&str]); 13] = [
@@ -176,7 +177,7 @@ impl Tree {
             self._load = Task::ready(());
             return;
         };
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let r = repo.clone();
         let job = blocking::run(cx, move || {
             api::list_files(&core, &r, rev.as_deref()).map(build_tree)

@@ -11,10 +11,10 @@ use gpui_kit::component::Theme as Kit;
 use gpui_kit::{App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, px, rgba};
 use serde_json::{Map, Value};
 
-use crate::blocking;
 use crate::store::Store;
 use crate::ui_state;
 use crate::util::Status;
+use kernel::blocking;
 
 pub const DEFAULT: &str = "Fleet";
 const BUNDLED: [&str; 2] = [

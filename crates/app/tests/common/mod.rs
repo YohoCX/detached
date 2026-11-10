@@ -376,7 +376,8 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
         actions::init(cx);
         ui_state::init(&dir, cx);
         let keys = keymap::load(core.clone(), cx);
-        Store::init(core, cx);
+        kernel::init(core, cx);
+        Store::init(cx);
         keys
     });
     cx.foreground_executor().block_test(keys);

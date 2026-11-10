@@ -26,7 +26,8 @@ use gpui_kit::{
 use super::{Section, State, say, settings_call};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
-use crate::{actions, blocking, keymap};
+use crate::{actions, keymap};
+use kernel::blocking;
 
 /// Asks for the dialog at a section, opening it if needed.
 pub struct Open(pub Section);
@@ -430,7 +431,7 @@ impl Dialog {
         if inline {
             self.error = None;
         }
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let (repo, mut data) = (self.repo.clone(), self.data.clone());
         let done = blocking::run(cx, move || {
             f(&core).map(|t| {
@@ -488,7 +489,7 @@ impl Dialog {
 
     fn check(&mut self, id: String, cx: &mut Context<Self>) {
         self.checks.insert(id.clone(), None);
-        let (core, i) = (Store::global(cx).read(cx).core().clone(), id.clone());
+        let (core, i) = (kernel::core(cx).clone(), id.clone());
         let done = blocking::run(cx, move || api::verify_account(&core, &i));
         cx.spawn(async move |this, cx| {
             let r = done.await.unwrap_or_else(|e| VerifyResult::Failed {
@@ -778,7 +779,7 @@ impl Dialog {
     }
 
     fn appearance_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let dir = Store::global(cx).read(cx).core().config_dir.join("themes");
+        let dir = kernel::core(cx).config_dir.join("themes");
         let error = theme::error(cx).map(|e| {
             labeled("settings.themeError", e)
                 .text_color(theme(cx).warning)
@@ -857,11 +858,7 @@ impl Dialog {
     fn keymap_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use actions::Group::*;
         let t = theme(cx);
-        let file = Store::global(cx)
-            .read(cx)
-            .core()
-            .config_dir
-            .join("keymap.json");
+        let file = kernel::core(cx).config_dir.join("keymap.json");
         let note = format!(
             "To change a chord, map the action's id to one in {}, such as \"file.goto\": \"Cmd+P\"; an empty one unbinds it. Read at launch.",
             file.display()

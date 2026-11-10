@@ -11,7 +11,7 @@ use detached_core::{api, state::AppState};
 use gpui_kit::{App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, Task};
 
 use crate::actions::{self, Run};
-use crate::blocking;
+use kernel::blocking;
 
 const MAC: bool = cfg!(target_os = "macos");
 

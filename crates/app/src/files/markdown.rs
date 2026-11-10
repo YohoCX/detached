@@ -26,10 +26,9 @@ use url::Url;
 
 use super::api::{Links, Location, open};
 use super::code::fence_language;
-use crate::blocking;
-use crate::store::Store;
 use crate::ui::theme::{self, doc, radius, text, theme};
 use crate::ui::{self, Icon};
+use kernel::blocking;
 
 type Diagram = Result<Arc<Image>, SharedString>;
 
@@ -141,7 +140,7 @@ impl Markdown {
         let job = if from.to_ascii_lowercase().starts_with("https:") {
             web_image(cx, from)
         } else {
-            let core = Store::global(cx).read(cx).core().clone();
+            let core = kernel::core(cx).clone();
             let links = self.links.clone();
             blocking::run(cx, move || fetch(&core, &links, &from))
         };

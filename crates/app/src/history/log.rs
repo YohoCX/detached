@@ -24,12 +24,12 @@ use gpui_kit::{
 use super::graph::{self, LANE, ROW};
 use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
-use crate::blocking;
 use crate::dock::{self, Kind};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Doc, Event, Level, Notice, QueryId, Store};
+use crate::store::{Doc, Event, Level, Notice, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, now, when};
+use kernel::blocking::{self, QueryId};
 
 /// The filters of the session, kept while the panel is closed.
 #[derive(Clone, PartialEq)]
@@ -320,7 +320,7 @@ impl Log {
         };
         let s = Store::global(cx).read(cx);
         self.head = head(s, &repo);
-        let (id, core) = (s.query_id(), s.core().clone());
+        let (id, core) = (QueryId::new(cx), kernel::core(cx).clone());
         let qid = id.id;
         let this = cx.weak_entity();
         let mut fresh = true;
@@ -479,7 +479,7 @@ impl Log {
     }
 
     fn browse(&mut self, repo: &str, sha: &str, _: &mut Window, cx: &mut Context<Self>) {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let (repo, sha) = (repo.to_string(), sha.to_string());
         let url = blocking::run(cx, move || api::commit_url(&core, &repo, &sha));
         cx.spawn(async move |_, cx| {
@@ -504,7 +504,7 @@ impl Log {
             return;
         };
         cx.notify();
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let (r, n) = (repo.clone(), name.clone());
         let made = blocking::run(cx, move || api::create_branch(&core, &r, &n, &sha, false));
         cx.spawn(async move |this, cx| {

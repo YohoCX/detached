@@ -17,7 +17,8 @@ use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::store::{Event, Location, Store};
-use crate::{blocking, ui, ui_state};
+use crate::{ui, ui_state};
+use kernel::blocking;
 
 enum Body {
     Loading,
@@ -99,7 +100,7 @@ impl FileView {
 
     /// Replacing the task drops a read still running, so stale results never land.
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let l = self.loc.clone();
         let read = blocking::run(cx, move || {
             api::read_file(&core, &l.repo, l.rev.as_deref(), &l.path).map_err(|e| e.to_string())

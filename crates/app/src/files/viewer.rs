@@ -12,10 +12,11 @@ use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
 use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
+use crate::keymap;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
-use crate::{blocking, keymap};
+use kernel::blocking;
 
 /// Set by `show_diff`, read by the next show.
 pub(super) struct FocusDiff(pub(super) bool);
@@ -231,7 +232,7 @@ pub(super) fn conflict_bar(
 /// Errors go to the status message.
 pub(super) fn open_in_zed(repo: &str, path: &str, line: Option<u32>, cx: &mut App) {
     let store = Store::global(cx);
-    let core = store.read(cx).core().clone();
+    let core = kernel::core(cx).clone();
     let (repo, path) = (repo.to_string(), path.to_string());
     let open = blocking::run(cx, move || api::open_in_zed(&core, &repo, &path, line));
     cx.spawn(async move |cx| {

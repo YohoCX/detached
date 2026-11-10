@@ -17,10 +17,10 @@ use gpui_kit::{
 };
 
 use super::{Item, Session, label, open, state_icon};
-use crate::blocking;
 use crate::store::{Doc, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, now};
+use kernel::blocking;
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
@@ -182,7 +182,7 @@ impl ChatList {
     /// back.
     fn run(&mut self, first: Vec<Command>, cx: &mut Context<Self>) {
         cx.notify();
-        let core = Store::global(cx).read(cx).core().clone();
+        let core = kernel::core(cx).clone();
         let program = agent::sidecar(&core.config_dir);
         if !program.is_file() {
             return;

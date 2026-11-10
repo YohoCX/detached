@@ -23,9 +23,9 @@ use minisign_verify::{PublicKey, Signature};
 use semver::Version;
 use serde::Deserialize;
 
-use crate::blocking;
 use crate::store::Store;
 use crate::ui::{self, theme};
+use kernel::blocking;
 
 /// The release key's public half: the second line of its `minisign.pub`.
 pub const PUBLIC_KEY: &str = "RWQA2ncifHAARGR4m3nVLn/10nR/FZjkpUc8ObrB5Ca4FS9UyD/QIzeZ";

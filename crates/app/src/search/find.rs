@@ -20,10 +20,11 @@ use gpui_kit::{
 
 use super::Search;
 use crate::actions::{self, Group, Registration};
-use crate::store::{Location, QueryId, Store};
+use crate::files;
+use crate::store::{Location, Store};
 use crate::ui::{self, radius, text, theme};
 use crate::util::{base_name, dir_name};
-use crate::{blocking, files};
+use kernel::blocking::{self, QueryId};
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 const TRUNCATED: &str = "Results truncated at 10,000 matches. Narrow the search.";
@@ -208,8 +209,7 @@ impl Find {
         if q.text.is_empty() || repos.is_empty() {
             return;
         }
-        let store = Store::global(cx).read(cx);
-        let (query, core) = (store.query_id(), store.core().clone());
+        let (query, core) = (QueryId::new(cx), kernel::core(cx).clone());
         let (id, at) = (query.id, rev.clone());
         let this = cx.weak_entity();
         self.run = Some(blocking::stream(

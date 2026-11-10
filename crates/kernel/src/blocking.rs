@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use detached_core::state::AppState;
 use futures::StreamExt;
 use futures::channel::{mpsc as chan, oneshot};
-use gpui_kit::{App, Task};
+use gpui::{App, Task};
 
 type Job = Box<dyn FnOnce() + Send>;
 
@@ -81,13 +82,35 @@ pub fn stream<T: Send + 'static, R: Send + 'static>(
     })
 }
 
+/// A query id from core; dropping it cancels the query.
+pub struct QueryId {
+    pub id: u64,
+    core: Arc<AppState>,
+}
+
+impl QueryId {
+    pub fn new(cx: &App) -> QueryId {
+        let core = crate::core(cx).clone();
+        QueryId {
+            id: core.ops.id(),
+            core,
+        }
+    }
+}
+
+impl Drop for QueryId {
+    fn drop(&mut self) {
+        self.core.ops.cancel(self.id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::time::Instant;
 
-    use gpui_kit::TestAppContext;
+    use gpui::TestAppContext;
 
     use super::*;
 
@@ -97,14 +120,14 @@ mod tests {
         cx.foreground_executor().block_test(task)
     }
 
-    #[gpui_kit::test]
+    #[gpui::test]
     fn runs_off_the_ui_thread_and_resumes_on_it(cx: &mut TestAppContext) {
         let ui = thread::current().id();
         let task = cx.update(|cx| run(cx, move || thread::current().id()));
         assert_ne!(finish(cx, task), ui);
     }
 
-    #[gpui_kit::test]
+    #[gpui::test]
     fn runs_sixteen_jobs_at_once(cx: &mut TestAppContext) {
         let barrier = Arc::new(std::sync::Barrier::new(THREADS));
         let tasks: Vec<_> = (0..THREADS)
@@ -117,7 +140,7 @@ mod tests {
         assert_eq!(leaders.count(), 1);
     }
 
-    #[gpui_kit::test]
+    #[gpui::test]
     fn streams_every_item_in_order_and_then_the_result(cx: &mut TestAppContext) {
         let got = Rc::new(RefCell::new(vec![]));
         let sink = got.clone();
@@ -140,10 +163,22 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(10));
     }
 
-    #[gpui_kit::test]
+    #[gpui::test]
     #[should_panic(expected = "core bug")]
     fn a_panic_in_the_job_resumes_on_the_ui_thread(cx: &mut TestAppContext) {
         let task = cx.update(|cx| run(cx, || -> () { panic!("core bug") }));
         finish(cx, task);
+    }
+
+    #[gpui::test]
+    fn a_dropped_query_id_cancels_its_query(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let (query, other) = cx.update(|cx| (QueryId::new(cx), QueryId::new(cx)));
+        let core = cx.update(|cx| crate::core(cx).clone());
+        let cancelled = |id| core.ops.start(id).load(std::sync::atomic::Ordering::SeqCst);
+        let id = query.id;
+        drop(query);
+        assert!(cancelled(id));
+        assert!(!cancelled(other.id));
     }
 }

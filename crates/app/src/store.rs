@@ -1,7 +1,6 @@
 //! App-wide state. Views observe the store and read what they need; they do not copy it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 use std::time::Duration;
 
 use detached_core::api;
@@ -14,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, Kind};
-use crate::{blocking, nav};
+use crate::nav;
 use gpui_kit::base::dock::DockPlacement;
+use kernel::blocking;
 
 /// A file at `rev` (None is the working tree), or with `doc` set an MR page or job log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -158,20 +158,7 @@ pub enum Event {
     Shown,
 }
 
-/// A query id from core; dropping it cancels the query.
-pub struct QueryId {
-    pub id: u64,
-    core: Arc<AppState>,
-}
-
-impl Drop for QueryId {
-    fn drop(&mut self) {
-        self.core.ops.cancel(self.id);
-    }
-}
-
 pub struct Store {
-    core: Arc<AppState>,
     pub repos: Vec<RepoInfo>,
     pub workspaces: Vec<Workspace>,
     pub file_nesting: BTreeMap<String, Vec<String>>,
@@ -207,10 +194,9 @@ impl EventEmitter<Event> for Store {}
 
 impl Store {
     /// Makes the store global, registers the panel and nav actions and loads the repos.
-    pub fn init(core: Arc<AppState>, cx: &mut App) -> Entity<Store> {
+    pub fn init(cx: &mut App) -> Entity<Store> {
         let store = cx.new(|cx| {
             let mut s = Store {
-                core,
                 repos: vec![],
                 workspaces: vec![],
                 file_nesting: BTreeMap::new(),
@@ -245,17 +231,6 @@ impl Store {
 
     pub fn global(cx: &App) -> Entity<Store> {
         cx.global::<GlobalStore>().0.clone()
-    }
-
-    pub fn core(&self) -> &Arc<AppState> {
-        &self.core
-    }
-
-    pub fn query_id(&self) -> QueryId {
-        QueryId {
-            id: self.core.ops.id(),
-            core: self.core.clone(),
-        }
     }
 
     pub fn current(&self) -> Option<&str> {
@@ -393,7 +368,7 @@ impl Store {
     }
 
     pub fn refresh(&mut self, repo: String, cx: &mut Context<Self>) -> Task<()> {
-        let core = self.core.clone();
+        let core = kernel::core(cx).clone();
         let r = repo.clone();
         let status = blocking::run(cx, move || {
             api::repo_status(&core, &r).map_err(|e| e.to_string())
@@ -427,7 +402,7 @@ impl Store {
             return;
         }
         self.refreshing = true;
-        let core = self.core.clone();
+        let core = kernel::core(cx).clone();
         cx.spawn(async move |this, cx| {
             loop {
                 let core = core.clone();
@@ -468,7 +443,7 @@ impl Store {
             self.set_repos(list);
             cx.notify();
         }
-        let core = self.core.clone();
+        let core = kernel::core(cx).clone();
         let settings = blocking::run(cx, move || api::get_settings(&core));
         cx.spawn(async move |this, cx| {
             let settings = settings.await;
@@ -492,7 +467,7 @@ impl Store {
         f: impl FnOnce(&AppState, u64, &(dyn Fn(&str) + Sync)) -> R + Send + 'static,
         cx: &mut Context<Self>,
     ) -> Task<R> {
-        let id = self.core.ops.id();
+        let id = kernel::core(cx).ops.id();
         self.ops.push(Op {
             id,
             repo: repo.into(),
@@ -500,7 +475,7 @@ impl Store {
             line: String::new(),
         });
         cx.notify();
-        let core = self.core.clone();
+        let core = kernel::core(cx).clone();
         let weak = cx.weak_entity();
         let done = blocking::stream(
             cx,
@@ -530,12 +505,12 @@ impl Store {
         })
     }
 
-    pub fn cancel_op(&self, id: u64) {
-        self.core.ops.cancel(id);
+    pub fn cancel_op(&self, id: u64, cx: &App) {
+        kernel::core(cx).ops.cancel(id);
     }
 
     pub fn load_branch_names(&mut self, repo: String, cx: &mut Context<Self>) {
-        let core = self.core.clone();
+        let core = kernel::core(cx).clone();
         let r = repo.clone();
         let branches = blocking::run(cx, move || api::list_branches(&core, &r));
         cx.spawn(async move |this, cx| {
@@ -601,6 +576,7 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use detached_core::git::testutil::Sandbox;
@@ -634,7 +610,10 @@ mod tests {
             excluded_repos: vec![],
             active: true,
         }];
-        let store = cx.update(|cx| Store::init(Arc::new(state), cx));
+        let store = cx.update(|cx| {
+            kernel::init(Arc::new(state), cx);
+            Store::init(cx)
+        });
         wait_until(cx, &store, |s| {
             s.current().is_some_and(|r| s.status(r).is_some())
         });

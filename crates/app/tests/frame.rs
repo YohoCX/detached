@@ -97,7 +97,7 @@ fn the_apps_accounts_reach_the_fake_forge(cx: &mut TestAppContext) {
         projects: vec![],
     };
     let forge = forge(&cx.sb, seed);
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     let accounts = api::list_accounts(&core).unwrap();
     assert_eq!(accounts.len(), 2);
     let ok = VerifyResult::Ok { user };
@@ -166,7 +166,7 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
     assert_eq!(names(cx), ["github", "gitlab"]);
-    let core = cx.store(|s, _| s.core().clone());
+    let core = cx.store(|_, cx| kernel::core(cx).clone());
     let mounts = [
         ("gitlab", forge.gitlab(), "group/app/-"),
         ("github", forge.ghe(), "owner/app"),

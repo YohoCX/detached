@@ -24,7 +24,8 @@ use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
 use crate::store::{DocRef, Location, Store};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
-use crate::{blocking, nav, util};
+use crate::{nav, util};
+use kernel::blocking;
 
 /// For the session: the branch scope, and a Run Pipeline… request for the panel.
 #[derive(Default)]
