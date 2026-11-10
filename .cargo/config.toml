@@ -1,0 +1,4 @@
+[env]
+# A UI test binary is no faster past five tests at a time, and more let gates in two worktrees
+# time out each other's tests.
+RUST_TEST_THREADS = "5"

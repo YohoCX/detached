@@ -191,6 +191,7 @@ mod tests {
         sb.git(&work, &["switch", "-q", "main"]);
         assert!(lfs_in_play(&env, &work, "lfs").unwrap());
         assert!(!lfs_in_play(&env, &work, "main").unwrap());
+        std::fs::create_dir_all(work.join(".git/info")).unwrap();
         std::fs::write(work.join(".git/info/attributes"), "*.psd filter=lfs\n").unwrap();
         assert!(lfs_in_play(&env, &work, "main").unwrap());
     }

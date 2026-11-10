@@ -1,0 +1,9 @@
+#!/bin/sh
+# A 1 GB RAM disk for the tests' sandboxes, until reboot or `diskutil eject DetachedTests`. It holds
+# memory up to its size while mounted.
+set -e
+if [ "$(uname)" != Darwin ]; then echo "ramdisk: macOS only, nothing done"; exit; fi
+if [ -d /Volumes/DetachedTests ]; then echo "ramdisk: already mounted"; exit; fi
+dev=$(diskutil image attach --noMount ram://2097152 | awk '{print $1; exit}')
+diskutil erasevolume APFS DetachedTests "$dev" >/dev/null
+echo "ramdisk: /Volumes/DetachedTests"

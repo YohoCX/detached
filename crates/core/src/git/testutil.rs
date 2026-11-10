@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use tempfile::TempDir;
 
@@ -7,6 +7,9 @@ use crate::accounts::store::MemoryStore;
 use crate::env::{self, Env};
 use crate::git::runner::{Kind, Opts, run};
 use crate::state::AppState;
+
+static GIT: LazyLock<PathBuf> =
+    LazyLock::new(|| env::find_git(&std::env::var("PATH").unwrap()).unwrap());
 
 /// Temp dir plus an `AppState` whose git runs with HOME and global config in the dir, no system config.
 pub struct Sandbox {
@@ -21,13 +24,14 @@ impl Sandbox {
         let home = dir.path().join("home");
         std::fs::create_dir(&home).unwrap();
         let global = home.join(".gitconfig");
+        // No template: without the sample hooks a repo is a third of the files to write and delete.
         std::fs::write(
             &global,
-            "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n",
+            "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n\ttemplateDir =\n",
         )
         .unwrap();
         let path = std::env::var("PATH").unwrap();
-        let git = env::find_git(&path).unwrap();
+        let git = GIT.clone();
         let s = |p: &Path| p.display().to_string();
         let vars = vec![
             ("HOME".into(), s(&home)),
@@ -78,6 +82,7 @@ impl Sandbox {
     pub fn hook(&self, repo: &Path, name: &str, body: &str) {
         use std::os::unix::fs::PermissionsExt;
         let p = repo.join(".git/hooks").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     }

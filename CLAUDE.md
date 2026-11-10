@@ -14,7 +14,9 @@ chat's turn snapshots (private refs) and restores:
 make check    # the merge gate: fmt, clippy -D warnings and cargo test over the whole workspace
               # (core, unit tests, UI tests)
 make app      # the client at release speed, on the real config directory (the owner's only)
-make ui-test  # the UI tests only
+make ui-test  # the UI tests only; t=repos runs tests/repos.rs alone
+make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
+make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory
 make sidecar  # build the Claude sidecar (needs bun) and install it in the config directory
 make build    # the packages for this OS under target/package (scripts/package.sh)
@@ -74,9 +76,9 @@ Keep this list in sync with the Makefile.
 
 ## Parallel work (PLAN-NATIVE verticals)
 
-- One vertical per worktree and branch (`native/v1-repos`, ...). Touch only your directory, your
-  test file, and the append-only registration points (`actions.rs`, `keymap.rs`, `shell` slot
-  constructors, `ui/` additions). A vertical's `api.rs` is a contract: its owner fills in the
+- One vertical per worktree and branch (`native/v1-repos`, ...); `make warm` first. Touch only
+  your directory, your test file, and the append-only registration points (`actions.rs`,
+  `keymap.rs`, `shell` slot constructors, `ui/` additions). A vertical's `api.rs` is a contract: its owner fills in the
   bodies; others only add to it, as below. Need a change elsewhere? Ask the foundation owner, or make it a
   separate commit with a reason.
 - PLAN-NATIVE "Contracts": changing an existing signature takes a plan edit agreed with the owner;
