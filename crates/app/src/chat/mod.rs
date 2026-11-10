@@ -7,6 +7,7 @@ mod view;
 use std::collections::BTreeMap;
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Entity, Global, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, SystemNotification, Window,
@@ -15,8 +16,8 @@ use gpui_kit::{
 
 pub use session::{Item, Session, State};
 
-use crate::actions;
-use crate::dock::DocKind;
+use crate::actions::{self, Registration};
+use crate::dock::{self, AppSpec, DocKind};
 use crate::store::Store;
 use crate::ui::{self, Icon, theme};
 use crate::util::first_line;
@@ -58,7 +59,18 @@ pub fn label(path: &str, cx: &App) -> String {
     }
 }
 
-pub fn register(cx: &mut App) -> actions::Registration {
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let chats = AppSpec {
+        name: "chats",
+        id: "tab.chats",
+        title: "Chats",
+        action: None,
+        home: (DockPlacement::Left, 280.),
+        view: |w, cx| cx.new(|cx| list::ChatList::new(w, cx)).into(),
+        shown: None,
+    };
+    dock::register_app(cx, chats);
+    dock::register_doc(cx, "chat", ChatDocs);
     cx.on_system_notification_response(|r, cx| {
         let chat = r.tag.strip_prefix("chat:").and_then(|t| t.split_once(':'));
         if let Some((n, repo)) = chat
@@ -70,7 +82,7 @@ pub fn register(cx: &mut App) -> actions::Registration {
             cx.activate(true);
         }
     });
-    actions::register(
+    vec![actions::register(
         cx,
         "agent.chat",
         "Claude",
@@ -81,7 +93,7 @@ pub fn register(cx: &mut App) -> actions::Registration {
                 a.say("Select a repository to chat about", false, cx)
             }),
         },
-    )
+    )]
 }
 
 /// Shows `repo`'s first open chat, or a new one.
@@ -164,11 +176,6 @@ pub fn forget(id: &str, cx: &mut App) {
     }
 }
 
-/// The Chats app.
-pub fn list(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| list::ChatList::new(window, cx)).into()
-}
-
 /// How a chat stands: working, waiting for you, done, stopped, or not started.
 fn state_icon(state: State, cx: &App) -> AnyElement {
     let t = theme(cx);
@@ -186,7 +193,7 @@ fn state_icon(state: State, cx: &App) -> AnyElement {
 }
 
 /// A chat's tab.
-pub struct ChatDocs;
+struct ChatDocs;
 
 impl DocKind for ChatDocs {
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {

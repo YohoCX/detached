@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyView, App, AppContext, Context, EmptyView, Entity, EntityId, Global, InteractiveElement,
     IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
@@ -19,7 +20,8 @@ use gpui_kit::{
 pub use ghostty::Rgb;
 pub use session::Session;
 
-use crate::dock::{self, DocKind, DragDoc};
+use crate::actions::Registration;
+use crate::dock::{self, AppSpec, DocKind, DragDoc};
 use crate::keymap;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
@@ -171,8 +173,23 @@ impl Terminals {
     }
 }
 
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let terminal = AppSpec {
+        name: "terminal",
+        id: "bottom.Terminal",
+        title: "Terminal",
+        action: Some("panel.terminal"),
+        home: (DockPlacement::Bottom, 280.),
+        view: |_, cx| panel(cx),
+        shown: Some(shown),
+    };
+    dock::register_app(cx, terminal);
+    dock::register_doc(cx, "terminal", TerminalDocs);
+    vec![]
+}
+
 /// The tabs over the active terminal; the first shell starts when it is shown.
-pub fn panel(cx: &mut App) -> AnyView {
+fn panel(cx: &mut App) -> AnyView {
     let terminals = Terminals::global(cx);
     cx.new(|cx| Panel {
         terminals: terminals.clone(),
@@ -182,7 +199,7 @@ pub fn panel(cx: &mut App) -> AnyView {
 }
 
 /// Focuses the active terminal, starting one when there is none.
-pub fn shown(window: &mut Window, cx: &mut App) {
+fn shown(window: &mut Window, cx: &mut App) {
     Terminals::global(cx).update(cx, |t, cx| match t.active() {
         Some(s) => {
             let focus = s.read(cx).focus.clone();
@@ -193,7 +210,7 @@ pub fn shown(window: &mut Window, cx: &mut App) {
 }
 
 /// A shell in a tab of its own.
-pub struct TerminalDocs;
+struct TerminalDocs;
 
 impl DocKind for TerminalDocs {
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {

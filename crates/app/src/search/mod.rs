@@ -9,8 +9,10 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
+use crate::actions::{self, Registration};
+use crate::keymap;
+use crate::shell::{self, TopBar};
 use crate::ui::{self, Icon, radius, theme};
-use crate::{actions, keymap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -59,23 +61,26 @@ fn close(cx: &mut App) {
     cx.global_mut::<Search>().mode = None;
 }
 
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    shell::top_bar(cx, TopBar::Right, 0, |_, cx| cx.new(|_| Pill).into());
+    shell::overlay(cx, palette);
+    shell::overlay(cx, find);
+    vec![]
+}
+
 /// The palette, drawn over the window while open; it registers the palette actions.
-pub fn palette(window: &mut Window, cx: &mut App) -> AnyView {
+fn palette(window: &mut Window, cx: &mut App) -> AnyView {
     cx.set_global(Search::default());
     cx.new(|cx| palette::Palette::new(window, cx)).into()
 }
 
 /// Find in Files, drawn over the window while open; it registers find.inFiles.
-pub fn find(window: &mut Window, cx: &mut App) -> AnyView {
+fn find(window: &mut Window, cx: &mut App) -> AnyView {
     cx.default_global::<Search>();
     cx.new(|cx| find::Find::new(window, cx)).into()
 }
 
 /// The top bar's "Search everywhere" pill.
-pub fn pill(cx: &mut App) -> AnyView {
-    cx.new(|_| Pill).into()
-}
-
 struct Pill;
 
 impl Render for Pill {

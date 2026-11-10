@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Div, Hsla, InteractiveElement, IntoElement,
@@ -30,19 +31,48 @@ pub use mr_list::MrList;
 pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
-use crate::dock::DocKind;
+use crate::actions::Registration;
+use crate::dock::{self, AppSpec, DocKind};
 use crate::repos::{self, Section};
+use crate::shell::{self, TopBar};
 use crate::ui::{self, theme};
 use crate::util::{first_line, now};
 use kernel::doc::Doc;
 
-/// The tool panel's Merge Requests.
-pub fn mrs(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| MrList::new(window, cx)).into()
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let mrs = AppSpec {
+        name: "mrs",
+        id: "tool.MRs",
+        title: "Merge Requests",
+        action: Some("panel.mergeRequests"),
+        home: (DockPlacement::Right, 300.),
+        view: |w, cx| cx.new(|cx| MrList::new(w, cx)).into(),
+        shown: None,
+    };
+    let pipelines = AppSpec {
+        name: "pipelines",
+        id: "bottom.Pipelines",
+        title: "Pipelines",
+        action: Some("panel.pipelines"),
+        home: (DockPlacement::Bottom, 280.),
+        view: |w, cx| cx.new(|cx| Pipelines::new(None, None, w, cx)).into(),
+        shown: None,
+    };
+    dock::register_app(cx, mrs);
+    dock::register_app(cx, pipelines);
+    dock::register_doc(cx, "mr", MrDocs);
+    dock::register_doc(cx, "job", JobDocs);
+    shell::top_bar(cx, TopBar::Center, 0, |w, cx| {
+        cx.new(|cx| MrChip::new(w, cx)).into()
+    });
+    shell::top_bar(cx, TopBar::Center, 1, |w, cx| {
+        cx.new(|cx| PipelineBadge::new(w, cx)).into()
+    });
+    vec![]
 }
 
 /// An MR's page.
-pub struct MrDocs;
+struct MrDocs;
 
 impl DocKind for MrDocs {
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
@@ -81,7 +111,7 @@ impl DocKind for MrDocs {
 }
 
 /// A job's log.
-pub struct JobDocs;
+struct JobDocs;
 
 impl DocKind for JobDocs {
     fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
@@ -109,11 +139,6 @@ impl DocKind for JobDocs {
             _ => a == b,
         }
     }
-}
-
-/// The bottom panel's Pipelines tab.
-pub fn pipelines(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| Pipelines::new(None, None, window, cx)).into()
 }
 
 pub fn active(s: &PipelineStatus) -> bool {

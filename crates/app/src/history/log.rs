@@ -65,23 +65,10 @@ const FIELDS: [(&str, &str, f32); 3] = [
 
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-/// Keeps `vcs.fileHistory` registered for the life of the app.
-struct Registered {
-    _file_history: Registration,
-}
-
-impl Global for Registered {}
-
 /// Registers `vcs.fileHistory`, which works with the Log closed.
-pub fn register(cx: &mut App) {
-    let _file_history = actions::register(
-        cx,
-        "vcs.fileHistory",
-        "Show History for File",
-        Group::Vcs,
-        file_history,
-    );
-    cx.set_global(Registered { _file_history });
+pub(super) fn register(cx: &mut App) -> Registration {
+    let title = "Show History for File";
+    actions::register(cx, "vcs.fileHistory", title, Group::Vcs, file_history)
 }
 
 /// The Log on the shown file's repo and path; refs, text and author stay.

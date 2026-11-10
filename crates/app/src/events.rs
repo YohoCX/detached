@@ -1,21 +1,38 @@
 //! The Events app: every error and warning the app has shown, newest first.
 
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyView, App, AppContext, ClipboardItem, Context, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
     div, prelude::FluentBuilder, px,
 };
 
+use crate::actions::Registration;
+use crate::dock::{self, AppSpec};
 use crate::ui::{self, Icon, text, theme};
 use kernel::activity::{Activity, Level};
 
-pub fn view(cx: &mut App) -> AnyView {
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let events = AppSpec {
+        name: "events",
+        id: "bottom.Events",
+        title: "Events",
+        action: None,
+        home: (DockPlacement::Bottom, 280.),
+        view: |_, cx| view(cx),
+        shown: Some(|_, cx| shown(cx)),
+    };
+    dock::register_app(cx, events);
+    vec![]
+}
+
+fn view(cx: &mut App) -> AnyView {
     cx.new(|cx| Events {
         filter: None,
         _activity: cx.observe(&Activity::global(cx), |_, activity, cx| {
             // What comes in while the list is on screen is read.
-            if activity.read(cx).unread > 0 && crate::dock::is_shown("events", cx) {
+            if activity.read(cx).unread > 0 && dock::is_shown("events", cx) {
                 activity.update(cx, |a, cx| a.read_log(cx));
             }
             cx.notify()
@@ -25,7 +42,7 @@ pub fn view(cx: &mut App) -> AnyView {
 }
 
 /// The Events app came on screen: what it shows is read.
-pub fn shown(cx: &mut App) {
+fn shown(cx: &mut App) {
     Activity::global(cx).update(cx, |a, cx| a.read_log(cx));
 }
 

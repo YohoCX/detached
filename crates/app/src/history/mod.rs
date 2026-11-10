@@ -5,16 +5,34 @@ mod graph;
 mod log;
 
 pub use api::*;
-pub use log::{Log, register};
+use log::Log;
 
 use std::collections::HashSet;
 
 use detached_core::types::LogRow;
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, div, px,
+    App, AppContext, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, div, px,
 };
+
+use crate::actions::Registration;
+use crate::dock::{self, AppSpec};
+
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let log = AppSpec {
+        name: "log",
+        id: "bottom.Log",
+        title: "Log",
+        action: Some("panel.log"),
+        home: (DockPlacement::Bottom, 280.),
+        view: |w, cx| cx.new(|cx| Log::new(w, cx)).into(),
+        shown: None,
+    };
+    dock::register_app(cx, log);
+    vec![log::register(cx)]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Chip {
