@@ -14,7 +14,6 @@ use super::core;
 use super::mr::{bare_title, number, setup_problem, show_mr};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
-use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::activity::Activity;
@@ -31,38 +30,29 @@ struct Form {
     _changes: [Subscription; 2],
 }
 
-/// The current branch's MR, or a button that creates one. It also runs `mr.create` and
-/// `panel.mergeRequests`, being always mounted.
+/// The current branch's MR, or a button that creates one. It also runs `mr.create`, being always
+/// mounted.
 pub struct MrChip {
     repo: Option<String>,
     /// None without a branch with an upstream.
     key: Option<String>,
     form: Option<Form>,
-    _actions: [Registration; 2],
+    _create: Registration,
     _subscriptions: Vec<Subscription>,
 }
 
 impl MrChip {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let this = cx.weak_entity();
-        let actions = [
-            actions::register(
-                cx,
-                "mr.create",
-                "Create Merge Request…",
-                Group::Vcs,
-                move |window, cx| {
-                    this.update(cx, |this, cx| this.open_form(window, cx)).ok();
-                },
-            ),
-            actions::register(
-                cx,
-                "panel.mergeRequests",
-                "Merge Requests",
-                Group::View,
-                |window, cx| dock::toggle("mrs", window, cx),
-            ),
-        ];
+        let create = actions::register(
+            cx,
+            "mr.create",
+            "Create Merge Request…",
+            Group::Vcs,
+            move |window, cx| {
+                this.update(cx, |this, cx| this.open_form(window, cx)).ok();
+            },
+        );
         let subscriptions = vec![
             cx.observe(&Store::global(cx), |this, _, cx| this.sync(cx)),
             cx.observe_global::<Cache<Option<MergeRequest>>>(|_, cx| cx.notify()),
@@ -76,7 +66,7 @@ impl MrChip {
             repo: None,
             key: None,
             form: None,
-            _actions: actions,
+            _create: create,
             _subscriptions: subscriptions,
         };
         this.sync(cx);

@@ -20,9 +20,9 @@ pub use ghostty::Rgb;
 pub use session::Session;
 
 use crate::dock::{self, DocKind, DragDoc};
+use crate::keymap;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::{actions, keymap};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 
@@ -254,16 +254,6 @@ impl DocKind for TerminalDocs {
             });
         }
     }
-}
-
-pub fn register(cx: &mut App) -> actions::Registration {
-    actions::register(
-        cx,
-        "panel.terminal",
-        "Terminal",
-        actions::Group::View,
-        |window, cx| dock::toggle("terminal", window, cx),
-    )
 }
 
 struct Panel {

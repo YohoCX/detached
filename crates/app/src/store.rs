@@ -8,10 +8,6 @@ use detached_core::types::{RepoInfo, RepoStatus};
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
-use crate::actions::{self, Registration};
-use crate::dock;
-use crate::nav;
-use gpui_kit::base::dock::DockPlacement;
 use kernel::activity::{Activity, OpEnded};
 use kernel::blocking;
 use kernel::doc::Doc;
@@ -47,7 +43,6 @@ pub struct Store {
     pub branch_names: HashMap<String, Vec<String>>,
     refreshing: bool,
     again: bool,
-    _actions: Vec<Registration>,
     _activity: Subscription,
 }
 
@@ -58,7 +53,7 @@ impl Global for GlobalStore {}
 impl EventEmitter<Event> for Store {}
 
 impl Store {
-    /// Makes the store global, registers the panel and nav actions and loads the repos.
+    /// Makes the store global and loads the repos.
     pub fn init(cx: &mut App) -> Entity<Store> {
         let store = cx.new(|cx| {
             let mut s = Store {
@@ -74,7 +69,6 @@ impl Store {
                 branch_names: HashMap::new(),
                 refreshing: false,
                 again: false,
-                _actions: register_actions(cx),
                 _activity: cx.subscribe(
                     &Activity::global(cx),
                     |s: &mut Store, _, e: &OpEnded, cx| s.refresh(e.repo.clone(), cx).detach(),
@@ -260,39 +254,6 @@ impl Store {
     }
 }
 
-/// The actions whose behavior is the store's and the shell's.
-fn register_actions(cx: &mut App) -> Vec<Registration> {
-    use actions::Group::{Navigate, View};
-    use actions::register;
-    let toggle = |name| move |window: &mut _, cx: &mut App| dock::toggle(name, window, cx);
-    vec![
-        register(cx, "panel.project", "Project Tree", View, toggle("project")),
-        register(cx, "panel.log", "Git Log", View, toggle("log")),
-        register(
-            cx,
-            "panel.pipelines",
-            "Pipelines",
-            View,
-            toggle("pipelines"),
-        ),
-        crate::terminal::register(cx),
-        crate::chat::register(cx),
-        register(cx, "zone.left", "Left Zone", View, |w, cx| {
-            dock::toggle_zone(DockPlacement::Left, w, cx)
-        }),
-        register(cx, "zone.bottom", "Bottom Zone", View, |w, cx| {
-            dock::toggle_zone(DockPlacement::Bottom, w, cx)
-        }),
-        register(cx, "zone.right", "Right Zone", View, |w, cx| {
-            dock::toggle_zone(DockPlacement::Right, w, cx)
-        }),
-        register(cx, "nav.back", "Back", Navigate, |_, cx| nav::back(cx)),
-        register(cx, "nav.forward", "Forward", Navigate, |_, cx| {
-            nav::forward(cx)
-        }),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -306,6 +267,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::nav;
 
     /// Runs the executor, letting real time pass for the core threads, until `done` holds.
     fn wait_until(

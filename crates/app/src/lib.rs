@@ -20,7 +20,7 @@ pub mod update;
 pub mod util;
 
 use gpui_kit::base::dock::DockPlacement::{Bottom, Left, Right};
-use gpui_kit::{App, AppContext};
+use gpui_kit::{App, AppContext, Global};
 
 use dock::{AppSpec, register_app, register_doc};
 use shell::{TopBar, overlay, top_bar};
@@ -140,7 +140,22 @@ pub fn register(cx: &mut App) {
     overlay(cx, search::palette);
     overlay(cx, search::find);
     history::register(cx);
+    let kept = [
+        dock::register(cx),
+        nav::register(cx),
+        vec![chat::register(cx)],
+    ];
+    cx.set_global(Kept {
+        _actions: kept.into_iter().flatten().collect(),
+    });
 }
+
+/// The registrations of actions that live as long as the app.
+struct Kept {
+    _actions: Vec<actions::Registration>,
+}
+
+impl Global for Kept {}
 
 #[cfg(test)]
 mod tests {

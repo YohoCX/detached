@@ -1,5 +1,6 @@
 use gpui_kit::{App, Global};
 
+use crate::actions::{self, Group::Navigate, Registration};
 use crate::store::Store;
 
 use kernel::doc::{Doc, Location};
@@ -89,6 +90,13 @@ pub fn visit(cx: &mut App, loc: &Location) {
 pub fn open(cx: &mut App, loc: Location) {
     visit(cx, &loc);
     show(loc, cx);
+}
+
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    vec![
+        actions::register(cx, "nav.back", "Back", Navigate, |_, cx| back(cx)),
+        actions::register(cx, "nav.forward", "Forward", Navigate, |_, cx| forward(cx)),
+    ]
 }
 
 pub fn back(cx: &mut App) {

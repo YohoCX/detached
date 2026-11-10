@@ -18,6 +18,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
+use crate::actions::{self, Group, Registration};
 use crate::ui::theme;
 use kernel::doc::Doc;
 use kernel::ui_state;
@@ -43,18 +44,41 @@ pub struct AppSpec {
 }
 
 #[derive(Default)]
-struct Apps(Vec<AppSpec>);
+struct Apps {
+    apps: Vec<AppSpec>,
+    toggles: Vec<Registration>,
+}
 
 impl Global for Apps {}
 
-/// Adds an app; its feature calls this before the window opens.
+/// Adds an app and registers its action; its feature calls this before the window opens.
 pub fn register_app(cx: &mut App, app: AppSpec) {
-    cx.default_global::<Apps>().0.push(app);
+    if let Some(id) = app.action {
+        let title = actions::find(id).map_or(app.title, |a| a.title);
+        let toggle = move |window: &mut Window, cx: &mut App| toggle(app.name, window, cx);
+        let reg = actions::register(cx, id, title, Group::View, toggle);
+        cx.default_global::<Apps>().toggles.push(reg);
+    }
+    cx.default_global::<Apps>().apps.push(app);
 }
 
 /// Every app, in the order registered.
 pub fn apps(cx: &App) -> Vec<AppSpec> {
-    cx.try_global::<Apps>().map_or(vec![], |a| a.0.clone())
+    cx.try_global::<Apps>().map_or(vec![], |a| a.apps.clone())
+}
+
+/// The zones' actions.
+pub fn register(cx: &mut App) -> Vec<Registration> {
+    let zone = |cx: &mut App, id, title, p| {
+        actions::register(cx, id, title, Group::View, move |w, cx| {
+            toggle_zone(p, w, cx)
+        })
+    };
+    vec![
+        zone(cx, "zone.left", "Left Zone", DockPlacement::Left),
+        zone(cx, "zone.bottom", "Bottom Zone", DockPlacement::Bottom),
+        zone(cx, "zone.right", "Right Zone", DockPlacement::Right),
+    ]
 }
 
 /// One app in a zone; the dock moves this entity, so its view and state go with it.
