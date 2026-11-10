@@ -1547,6 +1547,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "detached-kernel"
+version = "0.5.0"
+dependencies = [
+ "gpui-pre",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

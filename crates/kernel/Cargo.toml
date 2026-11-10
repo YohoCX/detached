@@ -1,0 +1,14 @@
+[package]
+name = "detached-kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# GPUI alone: the kit's crates stay out, and clippy.toml keeps the drawing parts out.
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, features = ["test-support"] }
