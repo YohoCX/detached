@@ -17,9 +17,8 @@ use gpui_kit::component::input::{Enter, InputState};
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
-    InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, StatefulInteractiveElement,
+    Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 
 use super::{say, settings_call};
@@ -27,7 +26,6 @@ use crate::settings::{Group, register_page};
 use crate::store::Store;
 use crate::ui::page::{Opt, Pick, button, heading, labeled, muted, row, section, select};
 use crate::ui::{self, radius, text, theme, theme::mono};
-use crate::{actions, keymap};
 use kernel::blocking;
 
 #[derive(Clone, Copy)]
@@ -35,8 +33,6 @@ enum Kind {
     Accounts,
     Repository,
     Git,
-    Appearance,
-    Keymap,
 }
 
 pub(super) fn register(cx: &mut App) {
@@ -47,12 +43,6 @@ pub(super) fn register(cx: &mut App) {
         page(Kind::Repository, w, cx)
     });
     register_page(cx, "git", "Git", Group::App, |w, cx| page(Kind::Git, w, cx));
-    register_page(cx, "appearance", "Appearance", Group::App, |w, cx| {
-        page(Kind::Appearance, w, cx)
-    });
-    register_page(cx, "keymap", "Keymap", Group::App, |w, cx| {
-        page(Kind::Keymap, w, cx)
-    });
 }
 
 /// The state of the pages of the Settings open now.
@@ -98,8 +88,6 @@ impl Render for Page {
                         .child(m.removed_view(cx))
                 }
                 Kind::Git => page.child(m.git_view(cx)),
-                Kind::Appearance => page.child(m.appearance_view(cx)),
-                Kind::Keymap => page.child(m.keymap_view(cx)),
             }
         })
     }
@@ -347,30 +335,13 @@ struct Model {
     /// The Accounts section's.
     error: Option<String>,
     form: Option<Form>,
-    theme: Pick,
     _focus_in: Subscription,
-    _theme: Subscription,
 }
 
 impl Model {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (focus, accounts) = (cx.focus_handle(), cx.focus_handle());
         let git = "git binary (empty: from your shell PATH)";
-        let (names, current) = theme::names(cx);
-        let ix = names.iter().position(|n| *n == current).map(IndexPath::new);
-        let opts = names
-            .into_iter()
-            .map(|n| Opt(n.clone(), n.into()))
-            .collect();
-        let theme_pick = cx.new(|cx| SelectState::new(opts, ix, window, cx));
-        let _theme = cx.subscribe(
-            &theme_pick,
-            |_, _, e: &SelectEvent<Vec<Opt<String>>>, cx| {
-                if let SelectEvent::Confirm(Some(name)) = e {
-                    theme::choose(name, cx);
-                }
-            },
-        );
         let mut this = Model {
             repo: Store::global(cx).read(cx).current().map(String::from),
             _focus_in: cx.on_focus_in(&accounts, window, Self::reload),
@@ -383,8 +354,6 @@ impl Model {
             removing: None,
             error: None,
             form: None,
-            theme: theme_pick,
-            _theme,
         };
         // The Accounts page also shows its list's error inline on open.
         let open = |core: &AppState| {
@@ -759,44 +728,6 @@ impl Model {
             .when(none, |s| s.child(muted("None.", cx)))
     }
 
-    fn appearance_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let dir = kernel::core(cx).config_dir.join("themes");
-        let error = theme::error(cx).map(|e| {
-            labeled("settings.themeError", e)
-                .text_color(theme(cx).warning)
-                .text_size(text::SMALL)
-        });
-        section("settings.appearance", "Appearance".into(), cx)
-            .child(
-                row()
-                    .child(div().w(px(240.)).child(select(&self.theme, "settings.theme", cx)))
-                    .child(button(
-                        "settings.themes",
-                        "Open themes folder",
-                        true,
-                        cx,
-                        move |_, _, cx| {
-                            let dir = dir.clone();
-                            let opened = blocking::run(cx, move || {
-                                theme::seed(&dir)?;
-                                api::open_folder(&dir.to_string_lossy())
-                            });
-                            cx.spawn(async move |_, cx| {
-                                if let Err(e) = opened.await {
-                                    cx.update(|cx| say(e.to_string(), true, cx));
-                                }
-                            })
-                            .detach();
-                        },
-                    )),
-            )
-            .child(muted(
-                "Each file there is a theme, and an edit shows at once. A file needs only the colors it changes over the theme it extends.",
-                cx,
-            ))
-            .children(error)
-    }
-
     fn git_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let env = self.data.env.as_ref().map(|e| {
@@ -834,55 +765,6 @@ impl Model {
                         },
                     )),
             )
-    }
-
-    fn keymap_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use actions::Group::*;
-        let t = theme(cx);
-        let file = kernel::core(cx).config_dir.join("keymap.json");
-        let note = format!(
-            "To change a chord, map the action's id to one in {}, such as \"file.goto\": \"Cmd+P\"; an empty one unbinds it. Read at launch.",
-            file.display()
-        );
-        let groups = [Search, Navigate, Vcs, Diff, View].map(|g| {
-            let rows = actions::ACTIONS.iter().filter(|a| a.group == g).map(|a| {
-                let chord = keymap::chord_for(a.id, cx);
-                row()
-                    .id(SharedString::from(format!("keymap.{}", a.id)))
-                    .test_support()
-                    .aria_label(a.title)
-                    .aria_description(SharedString::from(chord.clone()))
-                    .mb(px(2.))
-                    .child(div().flex_1().min_w_0().truncate().child(a.title))
-                    .child(
-                        div()
-                            .text_color(t.muted)
-                            .font_family(mono(cx))
-                            .text_size(text::SMALL)
-                            .child(a.id),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .w(px(90.))
-                            .when(!chord.is_empty(), |d| d.child(ui::kbd(chord, cx))),
-                    )
-            });
-            div()
-                .flex()
-                .flex_col()
-                .child(heading(&format!("{g:?}"), cx).mb(px(8.)))
-                .children(rows)
-        });
-        div()
-            .id("settings.keymap")
-            .test_support()
-            .flex()
-            .flex_col()
-            .gap(px(22.))
-            .child(labeled("settings.keymapNote", note).text_color(t.muted))
-            .children(groups)
     }
 }
 

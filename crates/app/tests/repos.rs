@@ -6,9 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
-use detached_app::repos::{self, Section};
 use detached_app::ui::menu;
-use detached_app::{actions, shell};
+use detached_app::{actions, settings, shell};
 use detached_core::api;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
@@ -1071,7 +1070,7 @@ fn settings_opens_from_its_chord_and_the_strip_and_closes_on_escape_close_and_th
     settle(cx);
     assert!(cx.find("settings").is_none());
 
-    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    cx.update(|_, cx| settings::open(cx, "git"));
     wait_until(cx, |cx| cx.find("settings.env").is_some());
     let env = label(cx, "settings.env");
     assert!(
@@ -1216,7 +1215,7 @@ fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_bro
     wait_until(cx, |cx| !paths(cx).contains(&lib));
     select(cx, "app");
     save_mine(cx);
-    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    cx.update(|_, cx| settings::open(cx, "git"));
     wait_until(cx, |cx| cx.find("settings.env").is_some());
     let git = path(cx.sb.root().join("no-git"));
     type_into(cx, "settings.gitPath", &git);
@@ -1224,7 +1223,7 @@ fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_bro
     wait_until(cx, |cx| label(cx, "settings.env") == format!(" · {git}"));
 
     cx.click("settings.close");
-    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    cx.update(|_, cx| settings::open(cx, "git"));
     let field = |cx: &mut VisualTestContext| {
         let f = cx.find("settings.gitPath");
         f.and_then(|f| f.value().map(String::from))
@@ -1275,7 +1274,7 @@ fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_acc
     let gitlab = path(cx.sb.forge_dir().join("gitlab"));
     let current = gitlab.clone();
     cx.store(|s, cx| s.set_current(Some(current), cx));
-    cx.update(|_, cx| repos::open_settings(cx, Section::Repos));
+    cx.update(|_, cx| settings::open(cx, "repository"));
     let value = |cx: &mut VisualTestContext, id: ElementId| {
         let e = cx.find(id);
         e.and_then(|e| e.value().map(String::from))
@@ -1327,7 +1326,7 @@ fn the_settings_nav_shows_one_page_and_keymap_lists_each_action_with_its_chord(
     assert_eq!(cx.find("keymap.vcs.fetch").unwrap().description(), Some(""));
     let file = path(cx.sb.state.config_dir.join("keymap.json"));
     assert!(label(cx, "settings.keymapNote").contains(&file));
-    cx.update(|_, cx| repos::open_settings(cx, Section::Git));
+    cx.update(|_, cx| settings::open(cx, "git"));
     assert_eq!(on(cx, "settings.nav.git"), Some(true));
 }
 

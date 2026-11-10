@@ -8,9 +8,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use detached_core::{api, state::AppState};
-use gpui_kit::{App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, Task};
+use gpui_kit::base::TestSupportExt;
+use gpui_kit::{
+    AnyView, App, AppContext, Context, Global, InteractiveElement, IntoElement, KeyBinding,
+    KeyBindingContextPredicate, Keystroke, Modifiers, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px,
+};
 
 use crate::actions::{self, Run};
+use crate::ui::page::{heading, labeled, row};
+use crate::ui::{self, text, theme, theme::mono};
 use kernel::blocking;
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -278,6 +285,64 @@ pub fn bind(overrides: &BTreeMap<String, String>, cx: &mut App) {
         .detach();
     }
     cx.set_global(Bound(bound));
+}
+
+/// The Keymap page of Settings: every action by group, with its id and chord.
+pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|_| Page).into()
+}
+
+struct Page;
+
+impl Render for Page {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use actions::Group::*;
+        let t = theme(cx);
+        let file = kernel::core(cx).config_dir.join("keymap.json");
+        let note = format!(
+            "To change a chord, map the action's id to one in {}, such as \"file.goto\": \"Cmd+P\"; an empty one unbinds it. Read at launch.",
+            file.display()
+        );
+        let groups = [Search, Navigate, Vcs, Diff, View].map(|g| {
+            let rows = actions::ACTIONS.iter().filter(|a| a.group == g).map(|a| {
+                let chord = chord_for(a.id, cx);
+                row()
+                    .id(SharedString::from(format!("keymap.{}", a.id)))
+                    .test_support()
+                    .aria_label(a.title)
+                    .aria_description(SharedString::from(chord.clone()))
+                    .mb(px(2.))
+                    .child(div().flex_1().min_w_0().truncate().child(a.title))
+                    .child(
+                        div()
+                            .text_color(t.muted)
+                            .font_family(mono(cx))
+                            .text_size(text::SMALL)
+                            .child(a.id),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .w(px(90.))
+                            .when(!chord.is_empty(), |d| d.child(ui::kbd(chord, cx))),
+                    )
+            });
+            div()
+                .flex()
+                .flex_col()
+                .child(heading(&format!("{g:?}"), cx).mb(px(8.)))
+                .children(rows)
+        });
+        div()
+            .id("settings.keymap")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap(px(22.))
+            .child(labeled("settings.keymapNote", note).text_color(t.muted))
+            .children(groups)
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! Shared widgets and the theme. Buttons stop mouse down, so a click in the top bar does not move
 //! the window.
 
+pub mod appearance;
 pub mod disabled;
 pub mod grip;
 pub mod icon;

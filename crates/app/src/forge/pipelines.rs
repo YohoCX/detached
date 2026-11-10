@@ -21,7 +21,7 @@ use gpui_kit::{
 use super::mr::setup_problem;
 use super::{active, color, core, glyph, name, note, now, poll, setup_note, took};
 use crate::cache::{self, Cache};
-use crate::repos::{self, Section};
+use crate::settings;
 use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::{nav, util};
@@ -827,7 +827,7 @@ impl Render for Pipelines {
                             ui::button("pipelines.settings", "Open Settings", cx)
                                 .test_support()
                                 .text_color(t.fg)
-                                .on_click(|_, _, cx| repos::open_settings(cx, Section::Repos)),
+                                .on_click(|_, _, cx| settings::open(cx, "repository")),
                         )
                     })
                     .into_any_element()

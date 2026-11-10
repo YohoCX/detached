@@ -13,8 +13,8 @@ use gpui_kit::{
 };
 
 use crate::actions::Registration;
-use crate::shell;
 use crate::ui::{self, Icon, page, radius, text, theme};
+use crate::{keymap, shell};
 
 #[derive(Clone)]
 struct Page {
@@ -45,6 +45,14 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     let opener = cx.new(|_| Opener);
     cx.set_global(GlobalOpener(opener));
     shell::overlay(cx, layer);
+    register_page(
+        cx,
+        "appearance",
+        "Appearance",
+        Group::App,
+        ui::appearance::page,
+    );
+    register_page(cx, "keymap", "Keymap", Group::App, keymap::page);
     vec![]
 }
 

@@ -31,6 +31,7 @@ use workspaces::workspaces;
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec};
+use crate::settings;
 use crate::shell::{self, TopBar};
 use crate::store::Store;
 use crate::ui::{self, radius, theme};
@@ -144,7 +145,7 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
             current(sync::prune),
         ),
         register(cx, "app.settings", "Settings…", View, |_, cx| {
-            open_settings(cx, Section::Accounts)
+            settings::open(cx, "accounts")
         }),
     ]
 }

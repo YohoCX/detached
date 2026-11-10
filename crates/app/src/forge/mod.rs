@@ -33,7 +33,7 @@ pub use pipelines::Pipelines;
 
 use crate::actions::Registration;
 use crate::dock::{self, AppSpec, DocKind};
-use crate::repos::{self, Section};
+use crate::settings;
 use crate::shell::{self, TopBar};
 use crate::ui::{self, theme};
 use crate::util::{first_line, now};
@@ -225,7 +225,7 @@ fn setup_note(id: &'static str, button: &'static str, text: String, cx: &App) ->
         .child(
             ui::button(button, "Open Settings", cx)
                 .test_support()
-                .on_click(|_, _, cx| repos::open_settings(cx, Section::Repos)),
+                .on_click(|_, _, cx| settings::open(cx, "repository")),
         )
         .into_any_element()
 }

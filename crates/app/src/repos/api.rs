@@ -1,4 +1,4 @@
-//! What other verticals call to check out and to open Settings.
+//! What other verticals call to check out.
 
 use detached_core::api;
 use detached_core::types::CheckoutResult;
@@ -10,15 +10,6 @@ use super::State;
 use crate::store::Store;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Section {
-    Accounts,
-    Repos,
-    Git,
-    Appearance,
-    Keymap,
-}
 
 /// Smart checkout with its dialogs and notices; the task ends after the repo's status refresh.
 pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
@@ -70,18 +61,6 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
         activity.update(cx, |a, cx| a.notify(n, cx));
         refreshed.await;
     })
-}
-
-/// Opens Settings at `section`, or shows that section if it is open.
-pub fn open_settings(cx: &mut App, section: Section) {
-    let id = match section {
-        Section::Accounts => "accounts",
-        Section::Repos => "repository",
-        Section::Git => "git",
-        Section::Appearance => "appearance",
-        Section::Keymap => "keymap",
-    };
-    crate::settings::open(cx, id);
 }
 
 /// `name` first, then the branch left, then the rest; at most 6.
