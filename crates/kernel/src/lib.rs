@@ -3,6 +3,7 @@
 #![forbid(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod blocking;
+pub mod doc;
 pub mod ui_state;
 
 use std::sync::Arc;

@@ -11,8 +11,9 @@ pub use super::diff::DiffView;
 pub use super::markdown::Markdown;
 use super::viewer::FocusDiff;
 use crate::nav;
-pub use crate::store::{DiffDoc, DocRef, Location};
-use crate::store::{Doc, Store};
+use crate::store::Store;
+use kernel::doc::Doc;
+pub use kernel::doc::{DiffDoc, DocRef, Location};
 
 /// Records `loc` in back/forward and shows it.
 pub fn open(cx: &mut App, loc: Location) {

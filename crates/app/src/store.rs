@@ -6,97 +6,16 @@ use std::time::Duration;
 use detached_core::api;
 use detached_core::settings::Workspace;
 use detached_core::state::AppState;
-use detached_core::types::{Project, RepoInfo, RepoStatus, Side};
+use detached_core::types::{RepoInfo, RepoStatus};
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
-use serde::{Deserialize, Serialize};
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, Kind};
 use crate::nav;
 use gpui_kit::base::dock::DockPlacement;
 use kernel::blocking;
-
-/// A file at `rev` (None is the working tree), or with `doc` set an MR page or job log.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Location {
-    pub repo: String,
-    pub rev: Option<String>,
-    pub path: String,
-    pub line: Option<u32>,
-    pub doc: Option<DocRef>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum DocRef {
-    Mr {
-        repo: String,
-        number: u64,
-    },
-    Job {
-        repo: String,
-        project: Project,
-        id: u64,
-        name: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DiffDoc {
-    pub repo: String,
-    pub path: String,
-    pub orig_path: Option<String>,
-    pub left: Side,
-    pub right: Side,
-}
-
-/// A document in a tab.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Doc {
-    File(Location),
-    Diff(DiffDoc),
-    Mr {
-        repo: String,
-        number: u64,
-    },
-    Job {
-        repo: String,
-        project: Project,
-        id: u64,
-        name: String,
-    },
-    /// The `n`th chat open on `repo`.
-    Chat {
-        repo: String,
-        #[serde(default)]
-        n: u32,
-    },
-    /// A shell moved out of the Terminal app; after a restart, a new one in `cwd`.
-    Terminal {
-        id: u64,
-        cwd: String,
-    },
-}
-
-impl From<Location> for Doc {
-    fn from(mut loc: Location) -> Doc {
-        match loc.doc.take() {
-            Some(DocRef::Mr { repo, number }) => Doc::Mr { repo, number },
-            Some(DocRef::Job {
-                repo,
-                project,
-                id,
-                name,
-            }) => Doc::Job {
-                repo,
-                project,
-                id,
-                name,
-            },
-            None => Doc::File(loc),
-        }
-    }
-}
+use kernel::doc::Doc;
 
 /// A running network op, shown in the status bar with its latest progress line.
 #[derive(Clone, Debug, PartialEq)]
@@ -581,6 +500,7 @@ mod tests {
 
     use detached_core::git::testutil::Sandbox;
     use gpui_kit::TestAppContext;
+    use kernel::doc::Location;
     use tempfile::TempDir;
 
     use super::*;
@@ -768,27 +688,5 @@ mod tests {
         cx.update(nav::forward);
         assert_eq!(*shown.borrow(), ["x", "y", "x", "y"]);
         cx.read(|cx| assert_eq!(cx.global::<nav::Nav>().recent[0].path, "y"));
-    }
-
-    #[test]
-    fn a_location_with_a_doc_shows_the_doc() {
-        let mr = DocRef::Mr {
-            repo: "/r".into(),
-            number: 7,
-        };
-        let loc = Location {
-            repo: "/r".into(),
-            rev: None,
-            path: String::new(),
-            line: None,
-            doc: Some(mr),
-        };
-        assert_eq!(
-            Doc::from(loc),
-            Doc::Mr {
-                repo: "/r".into(),
-                number: 7
-            }
-        );
     }
 }

@@ -21,10 +21,11 @@ use gpui_kit::{
 use super::Search;
 use crate::actions::{self, Group, Registration};
 use crate::files;
-use crate::store::{Location, Store};
+use crate::store::Store;
 use crate::ui::{self, radius, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::blocking::{self, QueryId};
+use kernel::doc::Location;
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 const TRUNCATED: &str = "Results truncated at 10,000 matches. Narrow the search.";

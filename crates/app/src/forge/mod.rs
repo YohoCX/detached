@@ -31,9 +31,9 @@ pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
 use crate::repos::{self, Section};
-use crate::store::Doc;
 use crate::ui::{self, theme};
 use crate::util::now;
+use kernel::doc::Doc;
 
 /// The top bar's center.
 pub fn top_bar(window: &mut Window, cx: &mut App) -> Vec<AnyView> {

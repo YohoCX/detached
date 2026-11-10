@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 use common::*;
 use detached_app::actions::{self, Group};
 use detached_app::keymap;
-use detached_app::store::{Doc, Level, Location, Notice};
+use detached_app::store::{Level, Notice};
 use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
+use kernel::doc::{Doc, Location};
 
 /// The sandbox layout with `app` current; returns its path.
 fn open(cx: &mut TestAppContext) -> (TestApp, String) {

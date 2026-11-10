@@ -17,11 +17,12 @@ use gpui_kit::{
 };
 
 use super::api::{DiffDoc, Location, Side, open, show_diff};
-use crate::store::{Doc, Event, Store};
+use crate::store::{Event, Store};
 use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
+use kernel::doc::Doc;
 
 /// Around the tool; Show Diff takes the selected change while focus is inside.
 const CONTEXT: &str = "Changes";

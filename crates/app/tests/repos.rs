@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::repos::{self, Section};
-use detached_app::store::{Doc, Level, Message, Notice};
+use detached_app::store::{Level, Message, Notice};
 use detached_app::ui::menu;
 use detached_app::{actions, shell};
 use detached_core::api;
@@ -18,6 +18,7 @@ use gpui_kit::{
     ElementId, KeyDownEvent, KeyUpEvent, Keystroke, Pixels, Role, TestAppContext,
     VisualTestContext, point, px,
 };
+use kernel::doc::Doc;
 use kernel::ui_state;
 
 /// A sidebar row as drawn: a repo's path (None for a header or folder), its label, its branch and

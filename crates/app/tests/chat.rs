@@ -1,11 +1,11 @@
 mod common;
 
 use common::*;
-use detached_app::store::Doc;
 use detached_app::ui::menu;
 use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext};
+use kernel::doc::Doc;
 
 fn open_bare(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);

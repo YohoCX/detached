@@ -9,7 +9,6 @@ use detached_app::actions::{self, Group, Registration};
 use detached_app::files::{
     self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Location, Markdown, Side,
 };
-use detached_app::store::Doc;
 use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::test_support::{TextSnapshot, texts};
@@ -19,6 +18,7 @@ use gpui_kit::{
     AppContext, Context, ElementId, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     TestAppContext, VisualContext, VisualTestContext, Window, div, point, px,
 };
+use kernel::doc::Doc;
 use kernel::ui_state;
 
 fn diff(app: &TestApp, path: &str, orig_path: Option<&str>) -> DiffDoc {

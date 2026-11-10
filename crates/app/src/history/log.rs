@@ -26,10 +26,11 @@ use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::dock::{self, Kind};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Doc, Event, Level, Notice, Store};
+use crate::store::{Event, Level, Notice, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, now, when};
 use kernel::blocking::{self, QueryId};
+use kernel::doc::Doc;
 
 /// The filters of the session, kept while the panel is closed.
 #[derive(Clone, PartialEq)]

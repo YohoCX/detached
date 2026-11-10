@@ -14,9 +14,10 @@ use gpui_kit::{
 use crate::dock::{self, Kind};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
-use crate::store::{Doc, Event, Store};
+use crate::store::{Event, Store};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, files, forge, history, keymap, search, terminal};
+use kernel::doc::Doc;
 
 const MAC: bool = cfg!(target_os = "macos");
 

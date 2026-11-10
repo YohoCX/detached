@@ -5,7 +5,6 @@ use std::time::Duration;
 use common::*;
 use detached_app::actions;
 use detached_app::files::{self, DiffDoc, Side};
-use detached_app::store::Doc;
 use detached_core::api;
 use detached_core::types::{AccountInput, MrAction, Provider};
 use detached_forge_fake::{Forge, Kind, Pipeline, Request, Status};
@@ -14,6 +13,7 @@ use gpui_kit::{
     ElementId, ScrollDelta, TestAppContext, VisualContext, VisualTestContext, WindowVisibility,
     point, px,
 };
+use kernel::doc::Doc;
 use serde_json::{Value, json};
 
 /// Makes the forge repo `name` (`gitlab`, `github`) current.

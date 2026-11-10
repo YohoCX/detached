@@ -16,11 +16,12 @@ use gpui_kit::{
 use super::{Mode, Search, close, open};
 use crate::actions::{self, Action, Group, Registration};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Location, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
 use crate::{files, keymap, nav};
 use kernel::blocking;
+use kernel::doc::Location;
 
 #[derive(Clone)]
 enum Item {

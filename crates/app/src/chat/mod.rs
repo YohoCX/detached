@@ -16,8 +16,9 @@ use gpui_kit::{
 pub use session::{Item, Session, State};
 
 use crate::actions;
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, theme};
+use kernel::doc::Doc;
 
 /// Sessions outlive their page, which goes when another document is shown.
 #[derive(Default)]

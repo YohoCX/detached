@@ -15,9 +15,10 @@ use gpui_kit::{
 use super::mr::{bare_title, number, setup_problem, show_mr, tone};
 use super::{core, name, note, now, poll, setup_note};
 use crate::cache::{self, Cache};
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{ago, fuzzy};
+use kernel::doc::Doc;
 
 const FILTERS: [(MrFilter, &str); 5] = [
     (MrFilter::Open, "Open"),

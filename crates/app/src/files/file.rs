@@ -16,9 +16,10 @@ use super::goto::{Goto, GotoLine};
 use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
-use crate::store::{Event, Location, Store};
+use crate::store::{Event, Store};
 use crate::ui;
 use kernel::blocking;
+use kernel::doc::Location;
 use kernel::ui_state;
 
 enum Body {

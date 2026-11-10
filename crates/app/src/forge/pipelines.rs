@@ -22,10 +22,11 @@ use super::mr::setup_problem;
 use super::{active, color, core, glyph, name, note, now, poll, setup_note, took};
 use crate::cache::{self, Cache};
 use crate::repos::{self, Section};
-use crate::store::{DocRef, Location, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::{nav, util};
 use kernel::blocking;
+use kernel::doc::{DocRef, Location};
 
 /// For the session: the branch scope, and a Run Pipeline… request for the panel.
 #[derive(Default)]

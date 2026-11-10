@@ -19,10 +19,11 @@ use detached_core::git::snapshot::Skip;
 use detached_core::types::Side;
 
 use super::session::{Answer, Back, Item, Session};
-use crate::store::{DiffDoc, Doc, Location, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
 use kernel::blocking;
+use kernel::doc::{DiffDoc, Doc, Location};
 
 const MODES: &[(&str, &str, Option<&str>)] = &[
     (

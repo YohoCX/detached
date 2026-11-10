@@ -13,10 +13,11 @@ use gpui_kit::{
 use super::ansi::{Color, LogParser, Span, visible};
 use super::pipelines::{Seen, job_key, status};
 use super::{core, glyph, note, text_of};
-use crate::store::{Doc, Event, Store};
+use crate::store::{Event, Store};
 use crate::ui::theme::{Theme, mono};
 use crate::ui::{self, Icon, text, theme};
 use kernel::blocking;
+use kernel::doc::Doc;
 
 const MB: usize = 1 << 20;
 

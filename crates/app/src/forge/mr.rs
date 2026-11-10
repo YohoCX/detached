@@ -5,8 +5,8 @@ use gpui_kit::{App, Hsla};
 
 use crate::files::Links;
 use crate::nav;
-use crate::store::{DocRef, Location};
 use crate::ui::theme;
+use kernel::doc::{DocRef, Location};
 
 /// Why MRs cannot load for a repo; None when they can.
 pub fn setup_problem(h: &ForgeHosts) -> Option<String> {

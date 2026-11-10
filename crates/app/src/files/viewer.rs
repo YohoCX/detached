@@ -13,10 +13,11 @@ use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
 use crate::keymap;
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::blocking;
+use kernel::doc::Doc;
 
 /// Set by `show_diff`, read by the next show.
 pub(super) struct FocusDiff(pub(super) bool);

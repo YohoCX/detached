@@ -18,9 +18,9 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
-use crate::store::Doc;
 use crate::terminal::{Session, Terminals};
 use crate::ui::theme;
+use kernel::doc::Doc;
 use kernel::ui_state;
 
 const KEY: &str = "dock.layout";

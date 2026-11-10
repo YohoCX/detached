@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::chat;
 use crate::files::Viewer;
 use crate::forge::{self, MrPage};
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::terminal::{Session, Terminals};
 use crate::util::base_name;
+use kernel::doc::Doc;
 
 pub const NAME: &str = "doc";
 

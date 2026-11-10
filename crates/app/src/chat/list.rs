@@ -17,10 +17,11 @@ use gpui_kit::{
 };
 
 use super::{Item, Session, label, open, state_icon};
-use crate::store::{Doc, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, now};
 use kernel::blocking;
+use kernel::doc::Doc;
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
