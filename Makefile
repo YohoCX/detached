@@ -1,14 +1,15 @@
 .PHONY: check app ui-test warm ramdisk smoke sidecar e2e-app fmt build sign-setup release
 
-# The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster.
-TESTS := $(if $(wildcard /Volumes/DetachedTests),TMPDIR=/Volumes/DetachedTests) cargo test
+# The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
+# runs first without it, so the linker's temp files stay off it.
+TESTS = cargo test --no-run $(1) && $(if $(wildcard /Volumes/DetachedTests),TMPDIR=/Volumes/DetachedTests) cargo test $(1)
 
 check:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
 # Core alone with e2e and testutil on, so no other crate is built with them.
 	cargo clippy -p detached-core --all-targets --all-features -- -D warnings
-	$(TESTS) --workspace
+	$(call TESTS,--workspace)
 
 # Release speed, on the real config directory.
 app:
@@ -16,7 +17,7 @@ app:
 
 # One test file with t=<name>, as in `make ui-test t=repos`.
 ui-test:
-	$(TESTS) -p detached-app $(if $(t),--test $(t))
+	$(call TESTS,-p detached-app $(if $(t),--test $(t)))
 
 # In a new worktree: its build starts from the worktree that built last.
 warm:
