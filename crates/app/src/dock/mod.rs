@@ -345,7 +345,10 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
     let tabs = docs(area);
     let found = tabs
         .iter()
-        .find(|(_, _, t)| kind.same(&t.read(cx).doc, &doc))
+        .find(|(_, _, t)| {
+            let t = &t.read(cx).doc;
+            t.kind() == doc.kind() && kind.same(t, &doc)
+        })
         .or_else(|| {
             let free = |(p, _, t): &&(_, _, Entity<DocTab>)| {
                 *p == DockPlacement::Center && !t.read(cx).keep

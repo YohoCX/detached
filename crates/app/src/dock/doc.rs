@@ -16,7 +16,8 @@ use kernel::doc::Doc;
 
 pub const NAME: &str = "doc";
 
-/// What a document's tab does that differs by kind. It is only given docs of its own kind.
+/// What a document's tab does that differs by kind. It is given docs of its own kind, but for
+/// `replace`'s `new`, which may be any kind that shares the preview tab.
 pub trait DocKind {
     /// Built when the tab is first on screen; it may update `doc`, as a restored shell its id.
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView;
