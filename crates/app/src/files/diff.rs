@@ -22,10 +22,11 @@ use super::code::{Code, language_for};
 use super::goto::{Goto, GotoLine};
 use super::viewer;
 use crate::actions::{self, Group, Registration};
+use crate::keymap;
 use crate::store::{Event, Store};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::{keymap, ui_state};
 use kernel::blocking;
+use kernel::ui_state;
 
 /// A run of changed lines as Monaco reports it: a side without lines has end 0 and the line
 /// before the change as start.

@@ -26,8 +26,8 @@ use super::{State, add_folders, run_core, settings_call};
 use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
-use crate::ui_state;
 use crate::util::{folder_name, in_folder};
+use kernel::ui_state;
 
 const COLLAPSED: &str = "sidebar.collapsed";
 

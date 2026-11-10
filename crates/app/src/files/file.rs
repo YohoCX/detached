@@ -17,8 +17,9 @@ use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::store::{Event, Location, Store};
-use crate::{ui, ui_state};
+use crate::ui;
 use kernel::blocking;
+use kernel::ui_state;
 
 enum Body {
     Loading,

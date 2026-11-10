@@ -9,7 +9,7 @@ use common::*;
 use detached_app::repos::{self, Section};
 use detached_app::store::{Doc, Level, Message, Notice};
 use detached_app::ui::menu;
-use detached_app::{actions, shell, ui_state};
+use detached_app::{actions, shell};
 use detached_core::api;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
@@ -18,6 +18,7 @@ use gpui_kit::{
     ElementId, KeyDownEvent, KeyUpEvent, Keystroke, Pixels, Role, TestAppContext,
     VisualTestContext, point, px,
 };
+use kernel::ui_state;
 
 /// A sidebar row as drawn: a repo's path (None for a header or folder), its label, its branch and
 /// where its name starts.

@@ -308,7 +308,7 @@ mod tests {
 
     use super::*;
     use crate::store::{Level, Notice};
-    use crate::ui_state;
+    use kernel::ui_state;
 
     /// The shell over a config with no folders.
     fn open_shell(cx: &mut TestAppContext) -> (TempDir, AnyWindowHandle) {

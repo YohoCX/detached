@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use detached_app::store::Store;
-use detached_app::{actions, keymap, shell, ui_state, update};
+use detached_app::{actions, keymap, shell, update};
 use detached_core::state::AppState;
 use gpui_kit::App;
+use kernel::ui_state;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

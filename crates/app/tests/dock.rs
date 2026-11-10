@@ -3,11 +3,12 @@ mod common;
 use common::*;
 use detached_app::chat;
 use detached_app::files::{self, DiffDoc, Side};
+use detached_app::shell;
 use detached_app::terminal::Terminals;
-use detached_app::{shell, ui_state};
 use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, AppContext, Pixels, TestAppContext, VisualTestContext, point, px};
+use kernel::ui_state;
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
 fn plain_shell() {

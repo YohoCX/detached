@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use detached_app::store::Store;
-use detached_app::{actions, keymap, shell, ui_state};
+use detached_app::{actions, keymap, shell};
 use detached_core::api;
 use detached_core::settings::Settings;
 use detached_core::state::AppState;
@@ -17,6 +17,7 @@ use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed, Status};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext, px};
+use kernel::ui_state;
 
 pub use gpui_kit::base::dock::DockPlacement;
 

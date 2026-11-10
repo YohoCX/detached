@@ -23,9 +23,9 @@ use super::changes::branch_names;
 use crate::store::{Event, Store};
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
-use crate::ui_state;
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
+use kernel::ui_state;
 
 /// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
 const NESTING: [(&str, &[&str]); 13] = [

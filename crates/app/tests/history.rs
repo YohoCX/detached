@@ -7,17 +7,18 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use common::*;
+use detached_app::actions;
 use detached_app::history::CommitDetails;
 use detached_app::store::{DiffDoc, Doc, Level, Location};
 use detached_app::ui::menu;
 use detached_app::util::when;
-use detached_app::{actions, ui_state};
 use detached_core::types::Side;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AppContext, ElementId, Modifiers, ScrollDelta, TestAppContext, VisualTestContext,
     WindowOptions, point, px,
 };
+use kernel::ui_state;
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))

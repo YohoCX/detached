@@ -21,7 +21,7 @@ use gpui_kit::{
 use crate::store::Doc;
 use crate::terminal::{Session, Terminals};
 use crate::ui::theme;
-use crate::ui_state;
+use kernel::ui_state;
 
 const KEY: &str = "dock.layout";
 const VERSION: usize = 2;

@@ -9,7 +9,7 @@ use gpui_kit::{
 use gpui_kit::base::TestSupportExt;
 
 use crate::ui::theme::{radius, theme};
-use crate::ui_state;
+use kernel::ui_state;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edge {

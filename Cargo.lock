@@ -1554,6 +1554,8 @@ dependencies = [
  "detached-core",
  "futures",
  "gpui-pre",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

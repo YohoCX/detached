@@ -1,7 +1,7 @@
 use gpui_kit::{App, Global};
 
 use crate::store::{Doc, Location, Store};
-use crate::ui_state;
+use kernel::ui_state;
 
 const RECENT: &str = "nav.recent";
 

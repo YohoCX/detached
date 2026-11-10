@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::files::{Links, Markdown};
 use crate::store::{Level, Store};
-use crate::ui_state;
 use kernel::blocking;
+use kernel::ui_state;
 
 /// The last commands each repo's session listed, for `/` before a session runs.
 const COMMANDS: &str = "chat.commands";

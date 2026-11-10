@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{App, Global};
+use gpui::{App, Global};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -55,11 +55,11 @@ fn write(file: &Path, values: &Map<String, Value>) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::TestAppContext;
+    use gpui::TestAppContext;
 
     use super::*;
 
-    #[gpui_kit::test]
+    #[gpui::test]
     fn keeps_values_across_launches(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
@@ -81,7 +81,7 @@ mod tests {
         });
     }
 
-    #[gpui_kit::test]
+    #[gpui::test]
     fn a_broken_file_starts_from_defaults(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ui.json"), "{not json").unwrap();
