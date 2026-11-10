@@ -18,7 +18,6 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
-use crate::terminal::{Session, Terminals};
 use crate::ui::theme;
 use kernel::doc::Doc;
 use kernel::ui_state;
@@ -342,28 +341,34 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
     }
 }
 
-/// Moves a shell out of the Terminal app into a tab of its own, in the zone of `node`, else the
-/// center.
-pub fn dock_terminal(
-    session: Entity<Session>,
-    node: Option<NodeId>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    Terminals::global(cx).update(cx, |t, cx| t.undock(&session, cx));
-    let doc = Doc::Terminal {
-        id: session.entity_id().as_u64(),
-        cwd: session.read(cx).cwd.display().to_string(),
+/// A document dragged out of an app's own list; dropped on the dock, it gets a tab.
+#[derive(Clone)]
+pub struct DragDoc {
+    pub doc: Doc,
+    pub title: SharedString,
+}
+
+impl Render for DragDoc {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::ui::glass(div(), cx)
+            .px(px(10.))
+            .py(px(4.))
+            .child(self.title.clone())
+    }
+}
+
+/// Its kind adopts `doc`, which then gets a tab in the zone of tab strip `node`, else the center.
+pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut App) {
+    let Some(kind) = doc_kind(doc.kind(), cx) else {
+        return;
     };
+    kind.adopt(&doc, cx);
     with(cx, |a, cx| {
         let p = node.and_then(|n| {
             placements()
                 .into_iter()
                 .find(|p| a.layout(*p).is_some_and(|t| t.find_node(n).is_some()))
         });
-        let Some(kind) = doc_kind(doc.kind(), cx) else {
-            return;
-        };
         let tab = DocTab::new(doc, kind, true, cx);
         a.add_panel(tab, p.unwrap_or(DockPlacement::Center), None, window, cx);
     });
@@ -371,16 +376,6 @@ pub fn dock_terminal(
 
 pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
     with(cx, |a, cx| a.remove_panel(tab, window, cx));
-}
-
-/// Closes the tab of a shell that ended.
-pub fn close_terminal(session: &Entity<Session>, window: &mut Window, cx: &mut App) {
-    let id = session.entity_id().as_u64();
-    close_docs(
-        move |d| matches!(d, Doc::Terminal { id: i, .. } if *i == id),
-        window,
-        cx,
-    );
 }
 
 /// Closes every document tab whose doc `gone` picks.

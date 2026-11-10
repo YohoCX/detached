@@ -17,8 +17,7 @@ use gpui_kit::{
     WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
 };
 
-use super::{DocTab, Tab, missing};
-use crate::terminal::Dragged;
+use super::{DocTab, DragDoc, Tab, missing};
 use crate::ui::{self, GAP, Icon, radius, theme};
 use crate::{actions, keymap};
 
@@ -65,8 +64,8 @@ impl DockAreaRenderer for Skin {
             .absolute()
             .size_full()
             .rounded(radius::PANEL)
-            .drag_over::<Dragged>(move |d, _, _, _| d.bg(t.selected))
-            .on_drop(|d: &Dragged, window, cx| super::dock_terminal(d.0.clone(), None, window, cx));
+            .drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.selected))
+            .on_drop(|d: &DragDoc, window, cx| super::drop_doc(d.doc.clone(), None, window, cx));
         div().id("dock.center").relative().child(hints)
     }
 
@@ -397,9 +396,9 @@ impl TabGroupRenderer for Group {
             .flex()
             .flex_none()
             .items_center()
-            .drag_over::<Dragged>(move |d, _, _, _| d.bg(t.hover))
-            .on_drop(move |d: &Dragged, window, cx| {
-                super::dock_terminal(d.0.clone(), Some(node), window, cx)
+            .drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.hover))
+            .on_drop(move |d: &DragDoc, window, cx| {
+                super::drop_doc(d.doc.clone(), Some(node), window, cx)
             })
             .gap(px(4.))
             .map(|d| match collapsed {

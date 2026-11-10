@@ -43,6 +43,8 @@ pub trait DocKind {
     fn replace(&self, _: &AnyView, old: &Doc, new: &Doc, _: &mut Window, _: &mut App) -> bool {
         old == new
     }
+    /// Takes `doc` from the app it was dragged out of, as it is dropped on the dock.
+    fn adopt(&self, _: &Doc, _: &mut App) {}
 }
 
 #[derive(Default)]

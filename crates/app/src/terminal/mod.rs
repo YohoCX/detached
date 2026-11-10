@@ -19,7 +19,7 @@ use gpui_kit::{
 pub use ghostty::Rgb;
 pub use session::Session;
 
-use crate::dock::{self, DocKind};
+use crate::dock::{self, DocKind, DragDoc};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
@@ -42,16 +42,6 @@ pub struct Terminals {
     /// Shells moved out to tabs of their own.
     pub docked: Vec<Entity<Session>>,
     subscriptions: HashMap<EntityId, Subscription>,
-}
-
-/// A shell's tab being dragged out of the Terminal app.
-pub struct Dragged(pub Entity<Session>);
-
-impl Render for Dragged {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self.0.read(cx).title().to_string();
-        ui::glass(div(), cx).px(px(10.)).py(px(4.)).child(title)
-    }
 }
 
 struct Global_(Entity<Terminals>);
@@ -125,9 +115,13 @@ impl Terminals {
         Some(session)
     }
 
-    /// Moves a shell out of the Terminal app, for a tab of its own.
-    pub fn undock(&mut self, session: &Entity<Session>, cx: &mut Context<Self>) {
-        if let Some(i) = self.sessions.iter().position(|s| s == session) {
+    /// Moves shell `id` out of the Terminal app, for a tab of its own.
+    pub fn undock(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(i) = self
+            .sessions
+            .iter()
+            .position(|s| s.entity_id().as_u64() == id)
+        {
             self.docked.push(self.sessions.remove(i));
             if self.active >= i && self.active > 0 {
                 self.active -= 1;
@@ -145,7 +139,9 @@ impl Terminals {
         self.subscriptions.remove(&session.entity_id());
         if let Some(i) = self.docked.iter().position(|s| s == session) {
             self.docked.remove(i);
-            dock::close_terminal(session, window, cx);
+            let id = session.entity_id().as_u64();
+            let gone = move |d: &Doc| matches!(d, Doc::Terminal { id: i, .. } if *i == id);
+            dock::close_docs(gone, window, cx);
             return cx.notify();
         }
         let Some(i) = self.sessions.iter().position(|s| s == session) else {
@@ -244,6 +240,12 @@ impl DocKind for TerminalDocs {
         }
     }
 
+    fn adopt(&self, doc: &Doc, cx: &mut App) {
+        if let Doc::Terminal { id, .. } = doc {
+            Terminals::global(cx).update(cx, |t, cx| t.undock(*id, cx));
+        }
+    }
+
     /// Closing the tab ends its shell, once the dock is done removing it.
     fn removed(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
         if let Ok(s) = view.clone().downcast::<Session>() {
@@ -283,7 +285,13 @@ impl Render for Panel {
             let on = i == terminals.active;
             let (select, close) = (self.terminals.clone(), self.terminals.clone());
             let session = terminals.sessions[i].clone();
-            let dragged = session.clone();
+            let drag = DragDoc {
+                doc: Doc::Terminal {
+                    id: session.entity_id().as_u64(),
+                    cwd: s.cwd.display().to_string(),
+                },
+                title: s.title().to_string().into(),
+            };
             div()
                 .id(("terminal.tab", i))
                 .test_support()
@@ -302,9 +310,7 @@ impl Render for Panel {
                 .when(on, |d| d.bg(t.selected))
                 .hover(|d| d.bg(t.hover))
                 .on_click(move |_, window, cx| select.update(cx, |t, cx| t.select(i, window, cx)))
-                .on_drag(Dragged(dragged), |d: &Dragged, _, _, cx| {
-                    cx.new(|_| Dragged(d.0.clone()))
-                })
+                .on_drag(drag, |d: &DragDoc, _, _, cx| cx.new(|_| d.clone()))
                 .child(div().truncate().child(label))
                 .child(
                     ui::icon_button(("terminal.close", i), Icon::Close.size(px(10.)), cx)
