@@ -12,6 +12,7 @@ use crate::{forge, paths, search::quick};
 pub struct AppState {
     pub config_dir: PathBuf,
     pub(crate) settings: Mutex<Settings>,
+    pub(crate) revision: AtomicU64,
     pub env: RwLock<Env>,
     pub ops: Ops,
     pub locks: RepoLocks,
@@ -32,6 +33,7 @@ impl AppState {
         AppState {
             config_dir,
             settings: Mutex::new(settings),
+            revision: Default::default(),
             env: RwLock::new(env),
             ops: Default::default(),
             locks: Default::default(),

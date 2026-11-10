@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::env::Env;
 use crate::error::{Error, Result};
@@ -28,6 +31,9 @@ pub struct Settings {
     pub git_path: Option<String>,
     /// Main file suffix -> suffixes of the files nested under it, over the UI's defaults.
     pub file_nesting: BTreeMap<String, Vec<String>>,
+    /// Top-level keys this build does not know: modules' blocks, kept as they are.
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
 }
 
 /// Named folders; the repos of every active one are listed.
@@ -40,16 +46,10 @@ pub struct Workspace {
     pub active: bool,
 }
 
-/// Settings from before workspaces: their folders become the first workspace.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-struct Old {
-    folders: Vec<String>,
-    excluded_repos: Vec<String>,
-}
-
 const FILE: &str = "settings.json";
 const DEFAULT: &str = "Default";
+/// Keys from before workspaces: their folders become the first workspace.
+const LEGACY: [&str; 2] = ["folders", "excludedRepos"];
 
 impl Settings {
     /// A file that doesn't parse is moved to `settings.json.bad`, so the next save can't destroy it.
@@ -66,16 +66,25 @@ impl Settings {
                 return Settings::default();
             }
         };
-        let old: Old = serde_json::from_slice(&bytes).unwrap_or_default();
-        if s.workspaces.is_empty() && !old.folders.is_empty() {
+        let [folders, excluded_repos] = LEGACY.map(|k| {
+            let v = s.other.remove(k);
+            v.and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                .unwrap_or_default()
+        });
+        if s.workspaces.is_empty() && !folders.is_empty() {
             s.workspaces.push(Workspace {
                 name: DEFAULT.into(),
-                folders: old.folders,
-                excluded_repos: old.excluded_repos,
+                folders,
+                excluded_repos,
                 active: true,
             });
         }
         s
+    }
+
+    /// The block a module keeps under its own top-level key; None when absent or not a `T`.
+    pub fn block<T: DeserializeOwned>(&self, name: &str) -> Option<T> {
+        serde_json::from_value(self.other.get(name)?.clone()).ok()
     }
 
     fn save(&self, dir: &Path) -> Result<()> {
@@ -99,7 +108,25 @@ impl AppState {
         f(&mut next);
         next.save(&self.config_dir)?;
         *s = next.clone();
+        self.revision.fetch_add(1, Ordering::SeqCst);
         Ok(next)
+    }
+
+    /// Bumped by each saved change.
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    /// Writes a module's block; a key this build knows is not one.
+    pub fn set_block(&self, name: &str, value: impl Serialize) -> Result<Settings> {
+        let known = serde_json::to_value(Settings::default())?;
+        if known.get(name).is_some() || LEGACY.contains(&name) {
+            return Err(Error::Other(format!("{name} is not a block")));
+        }
+        let value = serde_json::to_value(value)?;
+        self.update(|s| {
+            s.other.insert(name.into(), value);
+        })
     }
 
     /// Repos of the active workspaces; one in several of them is listed once.
@@ -330,7 +357,7 @@ mod tests {
             ..Default::default()
         };
         let tokens = std::sync::Arc::new(crate::accounts::store::MemoryStore::default());
-        AppState::new(dir, Settings::default(), env, tokens)
+        AppState::new(dir.clone(), Settings::load(&dir), env, tokens)
     }
 
     #[test]
@@ -353,5 +380,114 @@ mod tests {
         let saved = state.set_mr_remote("/r".into(), Some("origin".into()));
         assert!(saved.is_err());
         assert_eq!(state.get_settings(), Settings::default());
+        assert_eq!(state.revision(), 0);
+    }
+
+    const V050: &str = include_str!("../tests/fixtures/settings-0.5.0.json");
+
+    #[test]
+    fn the_0_5_0_file_loads_and_saves_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(FILE), V050).unwrap();
+        let s = Settings::load(dir.path());
+        assert!(s.other.is_empty());
+        s.save(dir.path()).unwrap();
+        let saved = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert_eq!(saved, V050.replace("\r\n", "\n"));
+    }
+
+    #[test]
+    fn each_writer_changes_only_its_keys_and_keeps_a_block_it_does_not_know() {
+        type Write = fn(&AppState) -> Result<()>;
+        fn ws(r: Result<Vec<RepoInfo>>) -> Result<()> {
+            r.map(drop)
+        }
+        let writers: [(&[&str], Write); 14] = [
+            (&["workspaces"], |s| {
+                ws(s.add_folder("Office".into(), "/x".into()))
+            }),
+            (&["workspaces"], |s| {
+                ws(s.remove_folder("Office".into(), "/home/me/tools".into()))
+            }),
+            (&["workspaces"], |s| {
+                ws(s.exclude_repo("Office".into(), "/home/me/work/new".into()))
+            }),
+            (&["workspaces"], |s| {
+                ws(s.include_repo("Office".into(), "/home/me/work/old".into()))
+            }),
+            (&["workspaces"], |s| {
+                ws(s.set_workspace_active("Personal".into(), true))
+            }),
+            (
+                &["workspaces"],
+                |s| ws(s.save_workspace("New".into(), None)),
+            ),
+            (&["workspaces"], |s| {
+                ws(s.save_workspace("Home".into(), Some("Personal".into())))
+            }),
+            (&["workspaces"], |s| {
+                ws(s.remove_workspace("Personal".into()))
+            }),
+            (&["repoAccounts"], |s| {
+                s.set_repo_account("/home/me/work/web".into(), Some("a2".into()))
+                    .map(drop)
+            }),
+            (&["forgeAccounts"], |s| {
+                s.set_forge_account("/home/me/work/api".into(), "github.com".into(), None)
+                    .map(drop)
+            }),
+            (&["mrRemotes"], |s| {
+                s.set_mr_remote("/home/me/work/api".into(), None).map(drop)
+            }),
+            (&["gitPath"], |s| s.set_git_path(None).map(drop)),
+            (&["mine"], |s| s.set_block("mine", [1]).map(drop)),
+            (&["repoAccounts", "forgeAccounts"], |s| {
+                crate::accounts::remove(s, "a1")
+            }),
+        ];
+        let v050: Value = serde_json::from_str(V050).unwrap();
+        let mut with_block = v050.clone();
+        with_block["agent"] = serde_json::json!({ "model": "opus" });
+        for file in [v050, with_block] {
+            for (keys, write) in writers {
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::write(dir.path().join(FILE), file.to_string()).unwrap();
+                write(&memory_state(dir.path().into())).unwrap();
+                let saved = std::fs::read(dir.path().join(FILE)).unwrap();
+                let saved: Value = serde_json::from_slice(&saved).unwrap();
+                let (Value::Object(was), Value::Object(now)) = (&file, &saved) else {
+                    unreachable!()
+                };
+                for k in was.keys().chain(now.keys()) {
+                    let changed = was.get(k) != now.get(k);
+                    assert_eq!(changed, keys.contains(&k.as_str()), "{keys:?}: {k}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_keys_do_not_bring_a_workspace_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = r#"{"folders":["/b"],"excludedRepos":["/b/x"]}"#;
+        std::fs::write(dir.path().join(FILE), old).unwrap();
+        let state = memory_state(dir.path().into());
+        assert_eq!(state.get_settings().workspaces.len(), 1);
+        state.remove_workspace(DEFAULT.into()).unwrap();
+        assert_eq!(Settings::load(dir.path()), Settings::default());
+    }
+
+    #[test]
+    fn a_block_is_kept_under_its_name_and_a_known_key_is_not_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = memory_state(dir.path().into());
+        let block = serde_json::json!({ "model": "opus" });
+        state.set_block("agent", &block).unwrap();
+        let s = Settings::load(dir.path());
+        assert_eq!(s.block::<Value>("agent"), Some(block));
+        assert_eq!(s.block::<u32>("agent"), None);
+        assert!(state.set_block("gitPath", 1).is_err());
+        assert!(state.set_block("folders", 1).is_err());
+        assert_eq!(state.revision(), 1);
     }
 }

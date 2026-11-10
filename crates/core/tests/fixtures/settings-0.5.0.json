@@ -1,0 +1,45 @@
+{
+  "workspaces": [
+    {
+      "name": "Office",
+      "folders": [
+        "/home/me/work",
+        "/home/me/tools"
+      ],
+      "excludedRepos": [
+        "/home/me/work/old"
+      ],
+      "active": true
+    },
+    {
+      "name": "Personal",
+      "folders": [
+        "/home/me/code"
+      ],
+      "excludedRepos": [],
+      "active": false
+    }
+  ],
+  "repoAccounts": {
+    "/home/me/work/api": "a1"
+  },
+  "forgeAccounts": {
+    "/home/me/code/site": {
+      "github.com": "a2"
+    },
+    "/home/me/work/api": {
+      "github.com": "a2",
+      "gitlab.example.com": "a1"
+    }
+  },
+  "mrRemotes": {
+    "/home/me/work/api": "upstream"
+  },
+  "gitPath": "/opt/git/bin/git",
+  "fileNesting": {
+    ".go": [],
+    ".vue": [
+      ".spec.ts"
+    ]
+  }
+}
