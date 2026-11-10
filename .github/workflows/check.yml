@@ -46,6 +46,9 @@ jobs:
         if: runner.os == 'Windows'
         run: command -v make || choco install make --no-progress -y
 
+      # The repo's five tests at a time are for a 10-core Mac; a runner's shells need its own core count.
+      - run: echo "RUST_TEST_THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
       - run: make check
 
       # Linux draws through mesa's software Vulkan on a virtual display.
