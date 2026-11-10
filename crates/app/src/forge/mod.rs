@@ -30,9 +30,10 @@ pub use mr_list::MrList;
 pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
 
+use crate::dock::DocKind;
 use crate::repos::{self, Section};
 use crate::ui::{self, theme};
-use crate::util::now;
+use crate::util::{first_line, now};
 use kernel::doc::Doc;
 
 /// The top bar's center.
@@ -48,14 +49,74 @@ pub fn mrs(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| MrList::new(window, cx)).into()
 }
 
-/// The main area's page for a `Doc::Mr`.
-pub fn mr_page(repo: String, number: u64, window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| MrPage::new(repo, number, window, cx)).into()
+/// An MR's page.
+pub struct MrDocs;
+
+impl DocKind for MrDocs {
+    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+        let Doc::Mr { repo, number } = doc.clone() else {
+            unreachable!()
+        };
+        cx.new(|cx| MrPage::new(repo, number, window, cx)).into()
+    }
+
+    fn id(&self, doc: &Doc) -> SharedString {
+        let Doc::Mr { number, .. } = doc else {
+            unreachable!()
+        };
+        format!("doc.mr.{number}").into()
+    }
+
+    fn title(&self, doc: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString {
+        let Doc::Mr { number, .. } = doc else {
+            unreachable!()
+        };
+        let page = view.and_then(|v| v.clone().downcast::<MrPage>().ok());
+        match page
+            .as_ref()
+            .and_then(|p| p.read(cx).title().map(first_line))
+        {
+            Some(t) => format!("!{number} {t}").into(),
+            None => format!("!{number}").into(),
+        }
+    }
+
+    fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
+        if let Ok(mr) = view.clone().downcast::<MrPage>() {
+            mr.read(cx).raise(cx);
+        }
+    }
 }
 
-/// The main area's page for a `Doc::Job`.
-pub fn job_log(doc: &Doc, cx: &mut App) -> AnyView {
-    cx.new(|cx| JobLog::new(doc.clone(), cx)).into()
+/// A job's log.
+pub struct JobDocs;
+
+impl DocKind for JobDocs {
+    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+        cx.new(|cx| JobLog::new(doc.clone(), cx)).into()
+    }
+
+    fn id(&self, doc: &Doc) -> SharedString {
+        let Doc::Job { id, .. } = doc else {
+            unreachable!()
+        };
+        format!("doc.job.{id}").into()
+    }
+
+    fn title(&self, doc: &Doc, _: Option<&AnyView>, _: &App) -> SharedString {
+        let Doc::Job { name, .. } = doc else {
+            unreachable!()
+        };
+        name.clone().into()
+    }
+
+    /// A job with a new name.
+    fn same(&self, a: &Doc, b: &Doc) -> bool {
+        match (a, b) {
+            (Doc::Job { repo, id, .. }, Doc::Job { repo: r, id: i, .. }) => (repo, id) == (r, i),
+            _ => a == b,
+        }
+    }
 }
 
 /// The bottom panel's Pipelines tab.

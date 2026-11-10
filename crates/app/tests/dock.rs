@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use detached_app::chat;
-use detached_app::dock::{self, AppSpec};
+use detached_app::dock::{self, AppSpec, DocKind};
 use detached_app::files::{self, DiffDoc, Side};
 use detached_app::shell;
 use detached_app::terminal::Terminals;
@@ -10,9 +10,10 @@ use detached_core::agent;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AnyWindowHandle, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Render, TestAppContext, VisualTestContext, Window, div, point, px,
+    AnyView, AnyWindowHandle, App, AppContext, Context, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, TestAppContext, VisualTestContext, Window, div, point, px,
 };
+use kernel::doc::Doc;
 use kernel::ui_state;
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
@@ -188,6 +189,37 @@ fn an_app_registered_by_a_test_alone_gets_a_tab_in_its_zone(cx: &mut TestAppCont
     });
     settle(cx);
     in_window(cx, again, |w, _| assert!(w.find("stub.view").visible()));
+}
+
+struct StubDocs;
+
+impl DocKind for StubDocs {
+    fn view(&self, _: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+        cx.new(|_| Stub).into()
+    }
+
+    fn id(&self, _: &Doc) -> gpui_kit::SharedString {
+        "stub.doc".into()
+    }
+
+    fn title(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> gpui_kit::SharedString {
+        "Stub doc".into()
+    }
+}
+
+#[gpui_kit::test]
+fn a_doc_kind_registered_by_a_test_alone_gets_its_tab(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    app(cx, |cx| dock::register_doc(cx, "mr", StubDocs));
+    let mr = Doc::Mr {
+        repo: "/r".into(),
+        number: 7,
+    };
+    cx.store(|s, cx| s.show(mr, cx));
+    let tab = cx.find("stub.doc").unwrap();
+    assert_eq!(tab.checked(), Some(true));
+    assert_eq!(tab.label(), Some("Stub doc"));
+    assert!(cx.find("stub.view").unwrap().visible());
 }
 
 fn diff(cx: &TestApp, path: &str) -> DiffDoc {

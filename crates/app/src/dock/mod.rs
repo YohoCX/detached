@@ -3,7 +3,7 @@
 mod doc;
 mod skin;
 
-pub use doc::DocTab;
+pub use doc::{DocKind, DocTab, doc_kind, register_doc};
 
 use std::sync::Arc;
 
@@ -315,25 +315,28 @@ pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Co
 /// Brings forward the tab holding `doc`, else shows a file or diff in the center's preview tab,
 /// else opens a new tab in the center.
 pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Context<DockArea>) {
-    let file = doc::is_file(&doc);
+    let Some(kind) = doc_kind(doc.kind(), cx) else {
+        return;
+    };
+    let preview = kind.preview();
     let tabs = docs(area);
     let found = tabs
         .iter()
-        .find(|(_, _, t)| doc::same(&t.read(cx).doc, &doc))
+        .find(|(_, _, t)| kind.same(&t.read(cx).doc, &doc))
         .or_else(|| {
-            let preview = |(p, _, t): &&(_, _, Entity<DocTab>)| {
+            let free = |(p, _, t): &&(_, _, Entity<DocTab>)| {
                 *p == DockPlacement::Center && !t.read(cx).keep
             };
-            tabs.iter().find(preview).filter(|_| file)
+            tabs.iter().find(free).filter(|_| preview)
         })
         .map(|(_, id, t)| (*id, t.clone()));
     match found {
         Some((id, tab)) => {
-            tab.update(cx, |t, cx| t.set_doc(doc, window, cx));
+            tab.update(cx, |t, cx| t.set_doc(doc, kind, window, cx));
             reveal(area, id, window, cx);
         }
         None => {
-            let tab = DocTab::new(doc, !file, cx);
+            let tab = DocTab::new(doc, kind, !preview, cx);
             area.add_panel(tab, DockPlacement::Center, None, window, cx);
         }
     }
@@ -358,7 +361,10 @@ pub fn dock_terminal(
                 .into_iter()
                 .find(|p| a.layout(*p).is_some_and(|t| t.find_node(n).is_some()))
         });
-        let tab = DocTab::new(doc, true, cx);
+        let Some(kind) = doc_kind(doc.kind(), cx) else {
+            return;
+        };
+        let tab = DocTab::new(doc, kind, true, cx);
         a.add_panel(tab, p.unwrap_or(DockPlacement::Center), None, window, cx);
     });
 }

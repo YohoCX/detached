@@ -16,8 +16,10 @@ use gpui_kit::{
 pub use session::{Item, Session, State};
 
 use crate::actions;
+use crate::dock::DocKind;
 use crate::store::Store;
 use crate::ui::{self, Icon, theme};
+use crate::util::first_line;
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 
@@ -54,12 +56,6 @@ pub fn label(path: &str, cx: &App) -> String {
         Some(r) => r.name.clone(),
         None => format!("{}/", crate::util::base_name(path)),
     }
-}
-
-/// The main area's page for chat `n` on `repo`.
-pub fn page(repo: &str, n: u32, window: &mut Window, cx: &mut App) -> AnyView {
-    let session = session(repo, n, cx);
-    cx.new(|cx| view::ChatView::new(session, window, cx)).into()
 }
 
 pub fn register(cx: &mut App) -> actions::Registration {
@@ -168,13 +164,6 @@ pub fn forget(id: &str, cx: &mut App) {
     }
 }
 
-/// Puts the cursor in a chat page's box; other pages are left alone.
-pub fn focus(page: &AnyView, window: &mut Window, cx: &mut App) {
-    if let Ok(v) = page.clone().downcast::<view::ChatView>() {
-        v.update(cx, |v, cx| v.focus(window, cx));
-    }
-}
-
 /// The Chats app.
 pub fn list(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| list::ChatList::new(window, cx)).into()
@@ -196,17 +185,67 @@ fn state_icon(state: State, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// The mark on chat `n`'s tab while it works or waits for you; `id` is the tab's.
-pub fn badge(repo: &str, n: u32, id: &str, cx: &App) -> Option<AnyElement> {
-    let state = find(repo, n, cx)?.read(cx).state();
-    matches!(state, State::Working | State::Waiting).then(|| {
-        div()
-            .id(SharedString::from(format!("{id}.state")))
-            .test_support()
-            .aria_label(SharedString::from(format!("{state:?}")))
-            .child(state_icon(state, cx))
-            .into_any_element()
-    })
+/// A chat's tab.
+pub struct ChatDocs;
+
+impl DocKind for ChatDocs {
+    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+        let Doc::Chat { repo, n } = doc else {
+            unreachable!()
+        };
+        let session = session(repo, *n, cx);
+        cx.new(|cx| view::ChatView::new(session, window, cx)).into()
+    }
+
+    fn id(&self, doc: &Doc) -> SharedString {
+        match doc {
+            Doc::Chat { n: 0, .. } => "doc.chat".into(),
+            Doc::Chat { n, .. } => format!("doc.chat.{n}").into(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn title(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> SharedString {
+        let Doc::Chat { repo, n } = doc else {
+            unreachable!()
+        };
+        let place = label(repo, cx);
+        match find(repo, *n, cx).as_ref().and_then(|s| s.read(cx).topic()) {
+            Some(t) => format!("{place} · {}", first_line(t)).into(),
+            None => format!("Claude · {place}").into(),
+        }
+    }
+
+    /// While it works or waits for you.
+    fn badge(&self, doc: &Doc, cx: &App) -> Option<AnyElement> {
+        let Doc::Chat { repo, n } = doc else {
+            unreachable!()
+        };
+        let state = find(repo, *n, cx)?.read(cx).state();
+        matches!(state, State::Working | State::Waiting).then(|| {
+            div()
+                .id(SharedString::from(format!("{}.state", self.id(doc))))
+                .test_support()
+                .aria_label(SharedString::from(format!("{state:?}")))
+                .child(state_icon(state, cx))
+                .into_any_element()
+        })
+    }
+
+    /// Shown again, it keeps its view and takes the cursor.
+    fn replace(
+        &self,
+        view: &AnyView,
+        old: &Doc,
+        new: &Doc,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if let (true, Ok(v)) = (old == new, view.clone().downcast::<view::ChatView>()) {
+            v.update(cx, |v, cx| v.focus(window, cx));
+        }
+        old == new
+    }
 }
 
 /// Tells the system that a chat that was working now waits for the user or is done, when no

@@ -1,37 +1,71 @@
-//! A document in a tab: a file or diff in a viewer, an MR page, a job log or a chat.
+//! A document in a tab; the object its feature registers for its kind does what differs by kind.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
+    Global, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::chat;
-use crate::files::Viewer;
-use crate::forge::{self, MrPage};
 use crate::store::Store;
-use crate::terminal::{Session, Terminals};
-use crate::util::base_name;
 use kernel::doc::Doc;
 
 pub const NAME: &str = "doc";
 
-enum View {
-    Viewer(Entity<Viewer>),
-    Page(AnyView),
-    Terminal(Entity<Session>),
+/// What a document's tab does that differs by kind. It is only given docs of its own kind.
+pub trait DocKind {
+    /// Built when the tab is first on screen; it may update `doc`, as a restored shell its id.
+    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView;
+    /// The tab's element id, stable for tests.
+    fn id(&self, doc: &Doc) -> SharedString;
+    fn title(&self, doc: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString;
+    /// A mark before the title.
+    fn badge(&self, _: &Doc, _: &App) -> Option<AnyElement> {
+        None
+    }
+    /// The tab came forward.
+    fn activated(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
+    /// The tab was closed.
+    fn removed(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
+    /// Whether `a` and `b` belong in the same tab.
+    fn same(&self, a: &Doc, b: &Doc) -> bool {
+        a == b
+    }
+    /// Whether it shares the center's preview tab.
+    fn preview(&self) -> bool {
+        false
+    }
+    /// Shows `new` in `view`, which shows `old`; false when `new` needs a view of its own.
+    fn replace(&self, _: &AnyView, old: &Doc, new: &Doc, _: &mut Window, _: &mut App) -> bool {
+        old == new
+    }
+}
+
+#[derive(Default)]
+struct Kinds(HashMap<&'static str, Rc<dyn DocKind>>);
+
+impl Global for Kinds {}
+
+/// Gives the documents of `kind` (`Doc::kind`) their behavior; a later call replaces it.
+pub fn register_doc(cx: &mut App, kind: &'static str, object: impl DocKind + 'static) {
+    cx.default_global::<Kinds>().0.insert(kind, Rc::new(object));
+}
+
+pub fn doc_kind(kind: &str, cx: &App) -> Option<Rc<dyn DocKind>> {
+    cx.try_global::<Kinds>()?.0.get(kind).cloned()
 }
 
 pub struct DocTab {
     pub doc: Doc,
     /// A preview tab takes the next file or diff shown; a double click on it keeps it.
     pub keep: bool,
+    kind: Rc<dyn DocKind>,
     /// Built when first on screen, so a restored tab loads nothing until it is looked at.
-    view: Option<View>,
+    view: Option<AnyView>,
     focus: FocusHandle,
 }
 
@@ -42,26 +76,30 @@ struct Saved {
 }
 
 impl DocTab {
-    pub fn new(doc: Doc, keep: bool, cx: &mut App) -> Entity<DocTab> {
+    pub fn new(doc: Doc, kind: Rc<dyn DocKind>, keep: bool, cx: &mut App) -> Entity<DocTab> {
         cx.new(|cx| DocTab {
             doc,
             keep,
+            kind,
             view: None,
             focus: cx.focus_handle(),
         })
     }
 
-    pub fn set_doc(&mut self, doc: Doc, window: &mut Window, cx: &mut Context<Self>) {
-        match &self.view {
-            Some(View::Viewer(v)) if is_file(&doc) => {
-                v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx))
-            }
-            // The same page shown again keeps its view and scroll; a chat takes the cursor.
-            Some(View::Page(p)) if doc == self.doc => chat::focus(p, window, cx),
-            _ if doc == self.doc => {}
-            _ => self.view = None,
+    pub fn set_doc(
+        &mut self,
+        doc: Doc,
+        kind: Rc<dyn DocKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(v) = &self.view
+            && !self.kind.replace(v, &self.doc, &doc, window, cx)
+        {
+            self.view = None;
         }
         self.doc = doc;
+        self.kind = kind;
         cx.notify();
     }
 
@@ -70,90 +108,16 @@ impl DocTab {
         cx.notify();
     }
 
-    /// The tab's element id, stable for tests.
     pub fn id(&self) -> SharedString {
-        match &self.doc {
-            Doc::File(l) => format!("doc.file.{}", l.path).into(),
-            Doc::Diff(d) => format!("doc.diff.{}", d.path).into(),
-            Doc::Mr { number, .. } => format!("doc.mr.{number}").into(),
-            Doc::Job { id, .. } => format!("doc.job.{id}").into(),
-            Doc::Chat { n: 0, .. } => "doc.chat".into(),
-            Doc::Chat { n, .. } => format!("doc.chat.{n}").into(),
-            Doc::Terminal { id, .. } => format!("doc.terminal.{id}").into(),
-        }
+        self.kind.id(&self.doc)
     }
 
     pub fn title(&self, cx: &App) -> SharedString {
-        match &self.doc {
-            Doc::File(l) => base_name(&l.path).to_string().into(),
-            Doc::Diff(d) => format!("{} (diff)", base_name(&d.path)).into(),
-            Doc::Mr { number, .. } => {
-                let page = match &self.view {
-                    Some(View::Page(p)) => p.clone().downcast::<MrPage>().ok(),
-                    _ => None,
-                };
-                match page.as_ref().and_then(|p| p.read(cx).title().map(short)) {
-                    Some(t) => format!("!{number} {t}").into(),
-                    None => format!("!{number}").into(),
-                }
-            }
-            Doc::Job { name, .. } => name.clone().into(),
-            Doc::Chat { repo, n } => {
-                let place = chat::label(repo, cx);
-                let s = chat::find(repo, *n, cx);
-                match s.as_ref().and_then(|s| s.read(cx).topic()) {
-                    Some(t) => format!("{place} · {}", short(t)).into(),
-                    None => format!("Claude · {place}").into(),
-                }
-            }
-            Doc::Terminal { .. } => match &self.view {
-                Some(View::Terminal(s)) => s.read(cx).title().to_string().into(),
-                _ => "Terminal".into(),
-            },
-        }
+        self.kind.title(&self.doc, self.view.as_ref(), cx)
     }
 
-    /// A mark before the title: a chat's working or waiting for you.
     pub fn badge(&self, cx: &App) -> Option<AnyElement> {
-        match &self.doc {
-            Doc::Chat { repo, n } => chat::badge(repo, *n, &self.id(), cx),
-            _ => None,
-        }
-    }
-
-    fn raise(&self, cx: &App) {
-        match &self.view {
-            Some(View::Viewer(v)) => v.read(cx).raise(cx),
-            Some(View::Page(p)) => {
-                if let Ok(mr) = p.clone().downcast::<MrPage>() {
-                    mr.read(cx).raise(cx);
-                }
-            }
-            Some(View::Terminal(_)) | None => {}
-        }
-    }
-}
-
-/// The first line, cut to fit a tab.
-fn short(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default();
-    match line.char_indices().nth(24) {
-        Some((i, _)) => format!("{}…", line[..i].trim_end()),
-        None => line.to_string(),
-    }
-}
-
-/// Files and diffs share the preview tab; the rest get their own.
-pub fn is_file(doc: &Doc) -> bool {
-    matches!(doc, Doc::File(_) | Doc::Diff(_))
-}
-
-/// Whether `a` and `b` belong in the same tab: a file at another line, a job with a new name.
-pub fn same(a: &Doc, b: &Doc) -> bool {
-    match (a, b) {
-        (Doc::File(a), Doc::File(b)) => (&a.repo, &a.rev, &a.path) == (&b.repo, &b.rev, &b.path),
-        (Doc::Job { repo, id, .. }, Doc::Job { repo: r, id: i, .. }) => (repo, id) == (r, i),
-        _ => a == b,
+        self.kind.badge(&self.doc, cx)
     }
 }
 
@@ -162,49 +126,8 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
         return None;
     };
     let s: Saved = serde_json::from_value(v.clone()).ok()?;
-    Some(Arc::new(DocTab::new(s.doc, s.keep, cx)))
-}
-
-fn build(doc: &mut Doc, window: &mut Window, cx: &mut App) -> View {
-    if let Doc::Terminal { id, cwd } = doc {
-        let terminals = Terminals::global(cx);
-        let live = terminals
-            .read(cx)
-            .docked
-            .iter()
-            .find(|s| s.entity_id().as_u64() == *id);
-        let session = match live.cloned() {
-            Some(s) => Some(s),
-            None => terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&*cwd), window, cx)),
-        };
-        return match session {
-            Some(s) => {
-                *id = s.entity_id().as_u64();
-                View::Terminal(s)
-            }
-            // The shell did not start; the status bar says why.
-            None => View::Page(cx.new(|_| Blank).into()),
-        };
-    }
-    match doc {
-        Doc::File(_) | Doc::Diff(_) => {
-            let v = cx.new(Viewer::new);
-            v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx));
-            View::Viewer(v)
-        }
-        Doc::Mr { repo, number } => View::Page(forge::mr_page(repo.clone(), *number, window, cx)),
-        Doc::Chat { repo, n } => View::Page(chat::page(repo, *n, window, cx)),
-        Doc::Job { .. } => View::Page(forge::job_log(doc, cx)),
-        Doc::Terminal { .. } => unreachable!(),
-    }
-}
-
-struct Blank;
-
-impl Render for Blank {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
+    let kind = doc_kind(s.doc.kind(), cx)?;
+    Some(Arc::new(DocTab::new(s.doc, kind, s.keep, cx)))
 }
 
 impl EventEmitter<PanelEvent> for DocTab {}
@@ -218,15 +141,15 @@ impl Focusable for DocTab {
 impl Render for DocTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.view.is_none() {
-            self.view = Some(build(&mut self.doc, window, cx));
+            let kind = self.kind.clone();
+            self.view = Some(kind.view(&mut self.doc, window, cx));
         }
-        let view = match &self.view {
-            Some(View::Viewer(v)) => v.clone().into_any_element(),
-            Some(View::Page(p)) => p.clone().into_any_element(),
-            Some(View::Terminal(s)) => s.clone().into_any_element(),
-            None => div().into_any_element(),
-        };
-        div().flex().flex_col().size_full().min_h_0().child(view)
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .children(self.view.clone())
     }
 }
 
@@ -240,23 +163,19 @@ impl Panel for DocTab {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let (true, Some(View::Terminal(s))) = (active, &self.view) {
-            window.focus(&s.read(cx).focus.clone(), cx);
+        if !active {
+            return;
         }
-        if active {
-            let doc = self.doc.clone();
-            Store::global(cx).update(cx, |s, cx| s.set_shown(Some(doc), cx));
-            self.raise(cx);
+        if let Some(v) = &self.view {
+            self.kind.activated(v, window, cx);
         }
+        let doc = self.doc.clone();
+        Store::global(cx).update(cx, |s, cx| s.set_shown(Some(doc), cx));
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Closing the tab ends its shell, once the dock is done removing it.
-        if let Some(View::Terminal(s)) = &self.view {
-            let s = s.clone();
-            window.defer(cx, move |window, cx| {
-                Terminals::global(cx).update(cx, |t, cx| t.close(&s, window, cx))
-            });
+        if let Some(v) = &self.view {
+            self.kind.removed(v, window, cx);
         }
         let doc = self.doc.clone();
         Store::global(cx).update(cx, |s, cx| {

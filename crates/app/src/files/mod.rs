@@ -13,4 +13,4 @@ mod viewer;
 pub use api::*;
 pub use changes::Changes;
 pub use tree::Tree;
-pub use viewer::Viewer;
+pub use viewer::{Viewer, ViewerDocs};

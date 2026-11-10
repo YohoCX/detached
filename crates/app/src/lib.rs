@@ -22,7 +22,7 @@ pub mod util;
 use gpui_kit::base::dock::DockPlacement::{Bottom, Left, Right};
 use gpui_kit::{App, AppContext};
 
-use dock::{AppSpec, register_app};
+use dock::{AppSpec, register_app, register_doc};
 
 /// Registers what each feature adds to the window; before it opens.
 pub fn register(cx: &mut App) {
@@ -117,5 +117,27 @@ pub fn register(cx: &mut App) {
     ];
     for a in apps {
         register_app(cx, a);
+    }
+    register_doc(cx, "file", files::ViewerDocs);
+    register_doc(cx, "diff", files::ViewerDocs);
+    register_doc(cx, "mr", forge::MrDocs);
+    register_doc(cx, "job", forge::JobDocs);
+    register_doc(cx, "chat", chat::ChatDocs);
+    register_doc(cx, "terminal", terminal::TerminalDocs);
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+    use kernel::doc::Doc;
+
+    #[gpui_kit::test]
+    fn every_doc_kind_has_an_object(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::register(cx);
+            for kind in Doc::KINDS {
+                assert!(crate::dock::doc_kind(kind, cx).is_some(), "{kind}");
+            }
+        });
     }
 }

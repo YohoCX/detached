@@ -11,19 +11,20 @@ use std::path::PathBuf;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, EntityId, Global, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, EmptyView, Entity, EntityId, Global, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 
 pub use ghostty::Rgb;
 pub use session::Session;
 
-use crate::dock;
+use crate::dock::{self, DocKind};
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::activity::Activity;
+use kernel::doc::Doc;
 
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
@@ -193,6 +194,64 @@ pub fn shown(window: &mut Window, cx: &mut App) {
         }
         None => t.open(window, cx),
     });
+}
+
+/// A shell in a tab of its own.
+pub struct TerminalDocs;
+
+impl DocKind for TerminalDocs {
+    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+        let Doc::Terminal { id, cwd } = doc else {
+            unreachable!()
+        };
+        let terminals = Terminals::global(cx);
+        let live = terminals
+            .read(cx)
+            .docked
+            .iter()
+            .find(|s| s.entity_id().as_u64() == *id);
+        let session = match live.cloned() {
+            Some(s) => Some(s),
+            None => terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&*cwd), window, cx)),
+        };
+        match session {
+            Some(s) => {
+                *id = s.entity_id().as_u64();
+                s.into()
+            }
+            // The shell did not start; the status bar says why.
+            None => cx.new(|_| EmptyView).into(),
+        }
+    }
+
+    fn id(&self, doc: &Doc) -> SharedString {
+        let Doc::Terminal { id, .. } = doc else {
+            unreachable!()
+        };
+        format!("doc.terminal.{id}").into()
+    }
+
+    fn title(&self, _: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString {
+        match view.and_then(|v| v.clone().downcast::<Session>().ok()) {
+            Some(s) => s.read(cx).title().to_string().into(),
+            None => "Terminal".into(),
+        }
+    }
+
+    fn activated(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
+        if let Ok(s) = view.clone().downcast::<Session>() {
+            window.focus(&s.read(cx).focus.clone(), cx);
+        }
+    }
+
+    /// Closing the tab ends its shell, once the dock is done removing it.
+    fn removed(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
+        if let Ok(s) = view.clone().downcast::<Session>() {
+            window.defer(cx, move |window, cx| {
+                Terminals::global(cx).update(cx, |t, cx| t.close(&s, window, cx))
+            });
+        }
+    }
 }
 
 pub fn register(cx: &mut App) -> actions::Registration {

@@ -64,6 +64,23 @@ pub enum Doc {
     },
 }
 
+impl Doc {
+    /// Every `kind`.
+    pub const KINDS: [&str; 6] = ["file", "diff", "mr", "job", "chat", "terminal"];
+
+    /// The name the dock finds this document's behavior by.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Doc::File(_) => "file",
+            Doc::Diff(_) => "diff",
+            Doc::Mr { .. } => "mr",
+            Doc::Job { .. } => "job",
+            Doc::Chat { .. } => "chat",
+            Doc::Terminal { .. } => "terminal",
+        }
+    }
+}
+
 impl From<Location> for Doc {
     fn from(mut loc: Location) -> Doc {
         match loc.doc.take() {

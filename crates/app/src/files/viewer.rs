@@ -3,15 +3,16 @@
 use detached_core::api;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px,
+    AnyView, App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
 use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
+use crate::dock::DocKind;
 use crate::keymap;
 use crate::store::Store;
 use crate::ui::{self, Icon, text, theme};
@@ -242,4 +243,69 @@ pub(super) fn open_in_zed(repo: &str, path: &str, line: Option<u32>, cx: &mut Ap
         }
     })
     .detach();
+}
+
+/// Files and diffs: they share the center's preview tab, whose viewer shows the next in place.
+pub struct ViewerDocs;
+
+impl DocKind for ViewerDocs {
+    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+        let v = cx.new(Viewer::new);
+        v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx));
+        v.into()
+    }
+
+    fn id(&self, doc: &Doc) -> SharedString {
+        match doc {
+            Doc::File(l) => format!("doc.file.{}", l.path).into(),
+            Doc::Diff(d) => format!("doc.diff.{}", d.path).into(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn title(&self, doc: &Doc, _: Option<&AnyView>, _: &App) -> SharedString {
+        match doc {
+            Doc::File(l) => base_name(&l.path).to_string().into(),
+            Doc::Diff(d) => format!("{} (diff)", base_name(&d.path)).into(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
+        if let Ok(v) = view.clone().downcast::<Viewer>() {
+            v.read(cx).raise(cx);
+        }
+    }
+
+    /// A file at another line.
+    fn same(&self, a: &Doc, b: &Doc) -> bool {
+        match (a, b) {
+            (Doc::File(a), Doc::File(b)) => {
+                (&a.repo, &a.rev, &a.path) == (&b.repo, &b.rev, &b.path)
+            }
+            _ => a == b,
+        }
+    }
+
+    fn preview(&self) -> bool {
+        true
+    }
+
+    fn replace(
+        &self,
+        view: &AnyView,
+        _: &Doc,
+        new: &Doc,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Ok(v) = view.clone().downcast::<Viewer>() else {
+            return false;
+        };
+        let file = matches!(new, Doc::File(_) | Doc::Diff(_));
+        if file {
+            v.update(cx, |v, cx| v.show(Some(new.clone()), window, cx));
+        }
+        file
+    }
 }
