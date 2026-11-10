@@ -9,6 +9,12 @@ use crate::git::discovery;
 use crate::state::AppState;
 use crate::types::{EnvInfo, RepoInfo};
 
+/// `settings.json`. `AppState::update` is its one writer; a save anywhere else does not compile:
+///
+/// ```compile_fail
+/// let dir = std::env::temp_dir();
+/// detached_core::settings::Settings::default().save(&dir).unwrap();
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -72,7 +78,7 @@ impl Settings {
         s
     }
 
-    pub fn save(&self, dir: &Path) -> Result<()> {
+    fn save(&self, dir: &Path) -> Result<()> {
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{FILE}.tmp"));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
@@ -87,7 +93,7 @@ impl AppState {
     }
 
     /// Memory keeps the old settings when the save fails.
-    fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    pub(crate) fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
         let mut s = self.settings.lock().unwrap();
         let mut next = s.clone();
         f(&mut next);

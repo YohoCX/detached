@@ -11,7 +11,7 @@ use crate::{forge, paths, search::quick};
 
 pub struct AppState {
     pub config_dir: PathBuf,
-    pub settings: Mutex<Settings>,
+    pub(crate) settings: Mutex<Settings>,
     pub env: RwLock<Env>,
     pub ops: Ops,
     pub locks: RepoLocks,

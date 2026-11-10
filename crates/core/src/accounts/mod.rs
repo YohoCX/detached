@@ -87,13 +87,15 @@ pub fn remove(state: &AppState, id: &str) -> Result<()> {
         accounts.retain(|a| a.id != id);
         store(&state.config_dir, &accounts)?;
     }
-    let mut s = state.settings.lock().unwrap();
-    s.repo_accounts.retain(|_, a| a != id);
-    s.forge_accounts.retain(|_, hosts| {
-        hosts.retain(|_, a| a != id);
-        !hosts.is_empty()
-    });
-    s.save(&state.config_dir)
+    state
+        .update(|s| {
+            s.repo_accounts.retain(|_, a| a != id);
+            s.forge_accounts.retain(|_, hosts| {
+                hosts.retain(|_, a| a != id);
+                !hosts.is_empty()
+            });
+        })
+        .map(drop)
 }
 
 pub fn verify(state: &AppState, id: &str) -> Result<VerifyResult> {

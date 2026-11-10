@@ -292,12 +292,8 @@ mod tests {
         sb.git(&repo, &["init", "-q"]);
         sb.commit(&repo, "f", "x\n", "initial");
         let Sandbox { dir, state } = sb;
-        state.settings.lock().unwrap().workspaces = vec![Workspace {
-            name: "Default".into(),
-            folders: vec![dir.path().join("repos").display().to_string()],
-            excluded_repos: vec![],
-            active: true,
-        }];
+        let folder = dir.path().join("repos").display().to_string();
+        state.add_folder("Default".into(), folder).unwrap();
         let store = cx.update(|cx| {
             kernel::init(Arc::new(state), cx);
             Store::init(cx)
