@@ -9,7 +9,9 @@ decides what is stale, fed by a file watcher.
 execution and acceptance, is written and not yet reviewed. Step 0b is on main (7e5a833); step 0
 is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock tests are on main
 (faf27c8); the owner's own baseline is left. Step 2, the kernel crate, is done on branch
-`foundation/2-kernel`, not merged: its revmux round, CI on three OSes and the owner's check are left.**
+`foundation/2-kernel`, not merged: its revmux round, CI on three OSes and the owner's check are left.
+Step 3, the registries, is done on branch `foundation/3-registries`, on top of step 2's, not merged,
+with the same left.**
 
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the
@@ -612,6 +614,26 @@ Done when:
 - `dock::Kind` and its five `match` tables are gone;
 - every element id the tests use (`tool.Changes`, `bottom.Log`, `doc.mr.12`, …) is unchanged;
 - step 0's two dock tests and the center one are green.
+
+Done on branch `foundation/3-registries`, 2026-11-10, on top of `foundation/2-kernel`, not
+merged; `make check` (128 s) and `make smoke` green:
+- `main` and the UI fixtures call `detached_app::register(cx)` in `lib.rs`, which lists the
+  features, each with one `register(cx)`; the fixtures need the same list, so it is not in `main`.
+  A zone lists its apps in that order.
+- An app is `dock::AppSpec`, added by `dock::register_app`, which also registers its `panel.*`
+  action; the terminal and the MR chip no longer register their own. `nav.*` went to
+  `nav::register`: nav is no feature, and in step 6 its registration stays in `app`.
+- `Doc::kind()` and `Doc::KINDS` in the kernel name each variant for `dock::register_doc`. What to
+  raise and what happens when a tab becomes active are one hook, `activated`. A kind with no
+  object: its saved tab shows the placeholder, and showing or dropping such a doc opens nothing.
+- The drag payload is `dock::DragDoc { doc, title }`: the preview keeps the shell's title.
+- The Settings layer moved from the title bar's left slot to the overlays; it is drawn deferred,
+  so nothing on screen moves.
+- The 0.5.0 layout (`crates/app/tests/fixtures/dock-0.5.0.json`) was saved by a throwaway test
+  on this branch's base, whose dock code is 0.5.0's but for import paths, in a temp sandbox: the
+  Terminal app moved to the right zone, Project shown there, a kept diff and a chat in the center.
+  It loads with no placeholder and saves back unchanged. "A saved panel that no build has shows the
+  placeholder" was already a test (`tests/dock.rs`).
 
 The owner checks: each app by its button and its chord; a tab dragged between zones; a shell
 dragged to the center and to a zone, and a drag let go over nothing; an MR tab's title and a

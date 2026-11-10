@@ -260,9 +260,10 @@ provider then fills it in.
 - **Store:** fields and events above; `store.current()`, `store.status(repo)`, `Activity::run_op(...)`,
   `store.tree_ref(repo)`, `store.compare(repo)`, `store.shown()`, `store.show(Doc)`, which opens
   the doc in a tab or brings its tab forward.
-- **Dock:** `dock::open(Kind, window, cx)`, which shows an app in its zone (never toggles; the
-  `panel.*` actions toggle with `dock::toggle`), for Compare with Base (V1 opens Changes), file
-  history (V4 opens Log) and Run Pipeline and the badge (V5 open Pipelines); `dock::is_shown(Kind)`.
+- **Dock:** `dock::open(name, window, cx)`, which shows the app of that name in its zone (never
+  toggles; an app's `panel.*` action toggles it with `dock::toggle`), for Compare with Base (V1
+  opens `changes`), file history (V4 opens `log`) and Run Pipeline and the badge (V5 open
+  `pipelines`); `dock::is_shown(name)`; `dock::close_docs(pick)` closes the document tabs it picks.
 - **Threads:** `kernel::blocking::run`, `kernel::blocking::stream`, the op and query id rules.
 - **Core:** `api::file_patch` returns `FilePatch::Patch` (the whole file as one hunk),
   `Unchanged(text)` for equal sides, or `Sides(FileDiff)` when the sides are not two texts.
@@ -279,13 +280,22 @@ provider then fills it in.
   → V1; the palette modes (`search.everywhere`, `file.goto`, `action.find`, `file.recent`,
   `vcs.popup`) and `find.inFiles` → V3; viewer and diff actions → V2; `vcs.fileHistory` → V4;
   `mr.*`, `pipeline.*`, `panel.mergeRequests` → V5.
-- **Shell slots:** `dock::Kind::{Repos, Changes, Project, Mrs, Log, Pipelines, Terminal}` with
-  `shell::app`, `Doc::{File, Diff, Mr, Job, Chat}`, and the title bar's `TopBar::Left` (V1: workspaces, repo switcher,
+- **Shell slots:** each feature's `register(cx)`, listed in `lib.rs`'s `register`, which `main`
+  and the fixtures call before the window opens. It adds its apps with
+  `dock::register_app(cx, AppSpec { name, id, title, action, home, view, shown })`: `name` is what a
+  saved layout knows it by, `id` the tab's element id, `action` the `panel.*` action the dock
+  registers to toggle it, `home` its zone and size when a layout does not place it, and a zone
+  lists its apps in the list's order. It gives each `Doc::kind()` it shows (`file`, `diff`, `mr`,
+  `job`, `chat`, `terminal`; `Doc` stays a closed enum) an object of `dock::DocKind` with
+  `dock::register_doc`: the tab's view, id, title and badge, what it does when it comes forward or
+  closes, which docs share a tab, the preview tab, and how it takes a dropped doc (`adopt`); a doc
+  dragged out of an app's own list is a `dock::DragDoc` carrying the `Doc`. It adds title-bar views
+  with `shell::top_bar(cx, slot, order, view)`: `TopBar::Left` (V1: workspaces, repo switcher,
   branch widget), `TopBar::Center` (V5: MR chip, pipeline badge), `TopBar::Right` (V3: search pill;
-  V1: Fetch All, Pull All), and `overlays`, modals drawn over the window and under the notices,
-  inside the shell's key context so chords still reach the app while one is open (V3: palette,
-  find; V1's Settings draws its own layer over the top bar's popups). A vertical provides each of
-  its views through one constructor; F renders stubs until then.
+  V1: Fetch All, Pull All); and `shell::overlay(cx, view)`, modals drawn over the window and under
+  the notices, inside the shell's key context so chords still reach the app while one is open (V1:
+  Settings, which draws its own layer over the top bar's popups; V3: palette, find). `dock/` and
+  `shell.rs` name no feature.
 - **Cross-vertical calls** live in an `api.rs` in the providing vertical's directory. F writes the
   first version with the types and stub bodies; the provider implements the bodies without changing
   signatures; callers build against the stubs from day one.

@@ -84,7 +84,8 @@ Keep this list in sync with the Makefile.
 
 - One vertical per worktree and branch (`native/v1-repos`, ...); `make warm` first. Touch only
   your directory, your test file, and the append-only registration points (`actions.rs`,
-  `keymap.rs`, `shell` slot constructors, `ui/` additions). A vertical's `api.rs` is a contract: its owner fills in the
+  `keymap.rs`, your feature's `register(cx)` with its apps, document kinds and shell slots, its
+  line in `lib.rs`'s `register`, `ui/` additions). A vertical's `api.rs` is a contract: its owner fills in the
   bodies; others only add to it, as below. Need a change elsewhere? Ask the foundation owner, or make it a
   separate commit with a reason.
 - PLAN-NATIVE "Contracts": changing an existing signature takes a plan edit agreed with the owner;
