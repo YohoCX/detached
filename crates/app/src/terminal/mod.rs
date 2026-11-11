@@ -23,10 +23,10 @@ pub use session::Session;
 use crate::actions::Registration;
 use crate::dock::{self, AppSpec, DocKind, DragDoc};
 use crate::keymap;
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
+use kernel::workspace::Workspace;
 
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
@@ -67,8 +67,7 @@ impl Terminals {
 
     /// A shell in the current repo, or home without one.
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let store = Store::global(cx).read(cx);
-        let cwd = store
+        let cwd = Workspace::get(cx)
             .current()
             .map(PathBuf::from)
             .or_else(std::env::home_dir);

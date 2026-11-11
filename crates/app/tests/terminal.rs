@@ -18,7 +18,7 @@ fn open(cx: &mut TestAppContext) -> TestApp {
     plain_shell();
     let mut app = open_app_with(cx, layout);
     let solo = app.sb.solo().display().to_string();
-    app.store(|s, cx| s.set_current(Some(solo), cx));
+    app.workspace(|w, cx| w.set_current(Some(solo), cx));
     app.press("alt-f12");
     app
 }
