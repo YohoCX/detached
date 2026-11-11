@@ -901,6 +901,33 @@ Done when:
 - on Linux the watch count for the owner's workspace is reported and under the cap;
 - where step 0 chose a fallback, that OS or that watch is off and its tests say so.
 
+Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and `make smoke` green:
+- `core::watch::Watcher::new(on_batch)` and `set(repos, current)`; a batch is the events within
+  100 ms of its first, named as the repos they mark and those whose refs moved. An event that says
+  the OS dropped some marks every repo. The watches are diffed on each `set`, so an unchanged list
+  touches nothing.
+- The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes the
+  directory and forgotten when a `.gitignore` changes, over the global excludes and `info/exclude`;
+  the deepest rule for a path decides. Linux's walk is core's `files::walker`, the tree's. A new
+  directory or a changed `.gitignore` runs the walk again on a thread of its own, which watches what
+  it finds and drops what went; at most one more waits.
+- `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does not,
+  so the tests that count a repo's notifications see no refresh they did not cause, and a test that
+  wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a time, again
+  when `Workspace` changed meanwhile. A batch calls `invalidate::status` per repo, and a repo whose
+  refs moved reloads its branch names if a view loaded them (they load on demand).
+- "Over the cap" exists on Linux alone, so its test runs there, with the cap at 50 under test: the
+  worktree gets no watch and a commit still marks the repo. Activation's rescan, which refreshes it,
+  is unchanged. Step 0's Windows rows run as one test on the three OSes. Nothing is `#[cfg]` off.
+- Measured on a temp config directory, 20 new repos and a logging git shim, the `--profile app`
+  binary, the window left as it opened: 120 git calls in the first minute, none in the next five
+  idle minutes; 2,000 files written under an ignored `target/` of the current repo, none; 20 writes
+  to tracked and new files there, one status (3 calls). The first minute's 120 are two statuses per
+  repo, the start's rescan and activation's, as many with this branch's first commit, which starts
+  no watcher; step 0 measured 60 while the lost call of `refresh_all` dropped the second. That
+  figure goes to the owner.
+- docs/TECHDEBT.md: a watch the OS refuses (inotify's limit) is skipped without a word.
+
 The owner checks: an agent's edits appear in Changes during its turn; a commit from the terminal
 updates the sidebar and the branch widget; a switch made outside; a folder renamed and a repo
 deleted while the app runs. The Log does not follow by itself: it is a view's own query.

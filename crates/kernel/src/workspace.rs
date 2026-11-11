@@ -173,6 +173,9 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use std::path::Path;
+
+    use detached_core::git::runner::{Kind, out};
     use detached_core::git::testutil::Sandbox;
     use gpui::TestAppContext;
     use tempfile::TempDir;
@@ -265,7 +268,7 @@ mod tests {
                 Event::Shown => seen.borrow_mut().push("shown".into()),
             })
         });
-        std::fs::write(std::path::Path::new(&a).join("f"), "y\n").unwrap();
+        std::fs::write(Path::new(&a).join("f"), "y\n").unwrap();
         let task = workspace.update(cx, |w, cx| w.refresh(a.clone(), cx));
         cx.foreground_executor().block_test(task);
         cx.run_until_parked();
@@ -453,6 +456,48 @@ mod tests {
         wait_until(cx, |cx| {
             Activity::global(cx).read(cx).ops.is_empty() && status(cx, &repo)
         });
+    }
+
+    fn watch(cx: &mut TestAppContext) {
+        cx.update(crate::invalidate::watch);
+        wait_until(cx, crate::invalidate::watching);
+    }
+
+    fn changes(cx: &App, repo: &str) -> usize {
+        Repo::get(cx, repo)
+            .and_then(|r| r.status())
+            .map_or(0, |s| s.changes.len())
+    }
+
+    #[gpui::test]
+    fn the_watcher_follows_the_current_repo_and_a_commit_anywhere(cx: &mut TestAppContext) {
+        let (_dir, a, b) = boot(cx);
+        watch(cx);
+        std::fs::write(Path::new(&a).join("new"), "x").unwrap();
+        wait_until(cx, |cx| changes(cx, &a) == 1);
+        let head = |cx: &App| Repo::get(cx, &b).unwrap().status().unwrap().head.clone();
+        let before = cx.read(head);
+        let env = cx.read(|cx| crate::core(cx).env());
+        let git = |args: &[&str]| out(&env, Path::new(&b), args, Kind::Write).unwrap();
+        git(&["commit", "-qm", "outside", "--allow-empty"]);
+        wait_until(cx, |cx| head(cx) != before);
+        let workspace = cx.read(Workspace::global);
+        workspace.update(cx, |w, cx| w.set_current(Some(b.clone()), cx));
+        wait_until(cx, crate::invalidate::watching);
+        std::fs::write(Path::new(&b).join("new"), "x").unwrap();
+        wait_until(cx, |cx| changes(cx, &b) == 1);
+    }
+
+    #[gpui::test]
+    fn a_branch_made_outside_shows_in_the_branch_list(cx: &mut TestAppContext) {
+        let (_dir, a, _) = boot(cx);
+        watch(cx);
+        cx.update(|cx| Repo::update(cx, &a, |r, cx| r.load_branch_names(cx)));
+        let names = |cx: &App| Repo::get(cx, &a).unwrap().branch_names.clone();
+        wait_until(cx, |cx| names(cx).is_some());
+        let env = cx.read(|cx| crate::core(cx).env());
+        out(&env, Path::new(&a), &["branch", "topic"], Kind::Write).unwrap();
+        wait_until(cx, |cx| names(cx).unwrap().contains(&"topic".into()));
     }
 
     #[gpui::test]

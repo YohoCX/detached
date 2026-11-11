@@ -1065,6 +1065,19 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
     });
 }
 
+#[gpui_kit::test]
+fn a_file_saved_in_the_current_repo_shows_in_changes_by_itself(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| _ = repo(sb, "solo"));
+    cx.update(|_, cx| invalidate::watch(cx));
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| invalidate::watching(cx)) && cx.find("changes.empty").is_some()
+    });
+    write(&cx.sb.path("repos/solo"), [("new.txt", "x\n")]);
+    wait_until(cx, |cx| {
+        changes(cx) == ["Unversioned Files: 1 file", "new.txt untracked"]
+    });
+}
+
 fn tree_rows(cx: &mut VisualTestContext) -> Vec<ElementSnapshot> {
     cx.update(|w, cx| {
         w.render_frame(cx);

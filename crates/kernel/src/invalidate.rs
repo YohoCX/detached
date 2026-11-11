@@ -1,17 +1,20 @@
-//! The one place that decides what is stale: a job's end or a write, the rescan, window activation
-//! and time.
+//! The one place that decides what is stale: a job's end or a write, the rescan, window activation,
+//! time and the watcher.
 
 use std::collections::HashMap;
 use std::mem;
+use std::sync::Arc;
 
 use detached_core::api;
 use detached_core::types::RepoInfo;
+use detached_core::watch::{Batch, Watcher};
 use futures::StreamExt;
-use futures::channel::oneshot;
-use gpui::{App, Global, Task};
+use futures::channel::{mpsc, oneshot};
+use gpui::{App, Global, Subscription, Task};
 
 use crate::activity::{Activity, OpEnded};
 use crate::blocking;
+use crate::repo::Repo;
 use crate::resource::{self, Input, On};
 use crate::workspace::Workspace;
 
@@ -160,6 +163,85 @@ pub fn set_visible(cx: &mut App, visible: bool) {
 
 pub(crate) fn visible(cx: &App) -> bool {
     cx.try_global::<Visible>().is_none_or(|v| v.0)
+}
+
+type Watched = (Vec<RepoInfo>, Option<String>);
+
+struct Watch {
+    watcher: Arc<Watcher>,
+    /// The repos and current repo the watcher was last set to.
+    applied: Option<Watched>,
+    busy: bool,
+    _workspace: Subscription,
+}
+
+impl Global for Watch {}
+
+/// Starts the watcher on the workspace's repos and the current repo's worktree. Without it,
+/// statuses refresh on activation alone.
+pub fn watch(cx: &mut App) {
+    let (tx, mut rx) = mpsc::unbounded();
+    let Ok(watcher) = Watcher::new(move |b| _ = tx.unbounded_send(b)) else {
+        return;
+    };
+    let workspace = cx.observe(&Workspace::global(cx), |_, cx| follow(cx));
+    cx.set_global(Watch {
+        watcher: Arc::new(watcher),
+        applied: None,
+        busy: false,
+        _workspace: workspace,
+    });
+    follow(cx);
+    cx.spawn(async move |cx| {
+        while let Some(b) = rx.next().await {
+            cx.update(|cx| changed(cx, b));
+        }
+    })
+    .detach();
+}
+
+/// Whether the watcher watches the workspace as it is now.
+pub fn watching(cx: &App) -> bool {
+    let w = Workspace::get(cx);
+    cx.try_global::<Watch>().is_some_and(|watch| {
+        let applied = watch.applied.as_ref();
+        !watch.busy && applied.is_some_and(|(r, c)| r == w.repos() && c.as_deref() == w.current())
+    })
+}
+
+/// Sets the watcher to the workspace, one set at a time, the last one to what it is by then.
+fn follow(cx: &mut App) {
+    let w = Workspace::get(cx);
+    let want = (w.repos().to_vec(), w.current().map(String::from));
+    let watch = cx.global_mut::<Watch>();
+    if watch.busy || watch.applied.as_ref() == Some(&want) {
+        return;
+    }
+    watch.busy = true;
+    let (watcher, (repos, current)) = (watch.watcher.clone(), want.clone());
+    let set = blocking::run(cx, move || watcher.set(&repos, current.as_deref()));
+    cx.spawn(async move |cx| {
+        set.await;
+        cx.update(|cx| {
+            let watch = cx.global_mut::<Watch>();
+            (watch.busy, watch.applied) = (false, Some(want));
+            follow(cx);
+        });
+    })
+    .detach();
+}
+
+fn changed(cx: &mut App, b: Batch) {
+    for repo in &b.repos {
+        status(cx, repo).detach();
+    }
+    for repo in &b.refs {
+        Repo::update(cx, repo, |r, cx| {
+            if r.branch_names.is_some() {
+                r.load_branch_names(cx);
+            }
+        });
+    }
 }
 
 #[cfg(test)]

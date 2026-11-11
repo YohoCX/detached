@@ -88,8 +88,8 @@ First slice:
   removed only if it is unchanged since then. A path on disk but absent from the fresh snapshot is ignored
   by now, has no undo copy, so restore skips it and says so. The UI says ignored files and submodules are
   not covered.
-- Changes and the repo status refresh at each turn boundary; there is no file watcher, and the
-  window stays focused while an agent edits.
+- Changes and the repo status refresh at each turn boundary, and in between as the watcher sees the
+  agent's edits (PLAN-FOUNDATION §7); the window stays focused while an agent edits.
 
 Rules from the first line of code:
 - The sidecar gets an explicit `env` with no project secrets, and without

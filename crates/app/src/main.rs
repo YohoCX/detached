@@ -28,6 +28,7 @@ fn main() {
         ui_state::init(&core.config_dir, cx);
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
+        kernel::invalidate::watch(cx);
         detached_app::register(cx);
         #[cfg(target_os = "macos")]
         mac::init(keys, cx);

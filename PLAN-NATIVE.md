@@ -70,6 +70,7 @@ crates/core/               package detached-core: the backend from src-tauri/src
   src/api.rs               one function per command, taking op/query ids where today's commands do
   src/selftest.rs          --self-test <report>, unchanged (unix)
   src/update.rs            latest.json, the download to a temp file, the signature, the install per OS
+  src/watch.rs             the watcher: repos' git directories and the current worktree, in batches
 crates/forge-fake/         package detached-forge-fake: e2e/forge.ts in Rust
 crates/kernel/             package detached-kernel: the app's live state on gpui-pre alone, drawing
                            nothing (PLAN-FOUNDATION)
@@ -83,7 +84,8 @@ crates/kernel/             package detached-kernel: the app's live state on gpui
   src/settings.rs          the read-only snapshot of core's settings
   src/update.rs            Update: the updater's state, its checks, the download and the restart
   src/resource.rs          Resource: a loaded value, its error and age, its policy; Interest
-  src/invalidate.rs        what is stale: a job's end or a write, window activation, time; the rescan
+  src/invalidate.rs        what is stale: a job's end or a write, window activation, time, the
+                           watcher; the rescan
   src/forge.rs             the forge's resources: MRs, the branch's MR, pipelines
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
@@ -166,7 +168,10 @@ Workspaces are the kernel's `Settings`; ops, notices and the status message its 
 `kernel::invalidate` decides what is stale: window activation rescans with every status and reloads
 a resource older than its policy allows; an op's end, a write (`invalidate::status`) and a Refresh
 button load a repo's status, one load at a time per repo; a settings change's list goes through
-`invalidate::listed`. A `Resource` (the forge's lists, the changes in Compare, the tree) loads
+`invalidate::listed`. `invalidate::watch`, which `main` starts, sets `core::watch` to the listed
+repos and the current one: a change in a repo's git files loads its status, and its branch names
+when loaded and its refs moved; a change in the current worktree outside what git ignores loads its
+status. A `Resource` (the forge's lists, the changes in Compare, the tree) loads
 while a view or a watch holds an `Interest` in it, and polls by its policy while the window shows.
 
 **Keymap.** `keymap.rs` keeps the action ids of docs/KEYMAP.md, parses the same chord strings and
