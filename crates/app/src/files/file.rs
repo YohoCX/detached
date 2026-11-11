@@ -200,7 +200,7 @@ impl FileView {
                         line: Some(line),
                         ..this.loc.clone()
                     };
-                    crate::nav::visit(cx, &at);
+                    kernel::nav::visit(cx, &at);
                 }
                 Goto::Back => this.code.update(cx, |c, cx| c.focus(window, cx)),
                 Goto::Closed => {}

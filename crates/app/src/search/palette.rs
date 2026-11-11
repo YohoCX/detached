@@ -18,9 +18,10 @@ use crate::actions::{self, Action, Group, Registration};
 use crate::repos::{self, CheckoutTarget};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
-use crate::{files, keymap, nav};
+use crate::{files, keymap};
 use kernel::blocking;
 use kernel::doc::Location;
+use kernel::nav;
 use kernel::repo::Repo;
 use kernel::workspace::{Event, Workspace};
 

@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod blocking;
 pub mod doc;
+pub mod nav;
 pub mod repo;
 pub mod settings;
 pub mod ui_state;

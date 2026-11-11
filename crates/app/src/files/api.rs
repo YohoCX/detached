@@ -10,9 +10,9 @@ pub use gpui_kit::component::diff::DiffSide;
 pub use super::diff::DiffView;
 pub use super::markdown::Markdown;
 use super::viewer::FocusDiff;
-use crate::nav;
 use kernel::doc::Doc;
 pub use kernel::doc::{DiffDoc, DocRef, Location};
+use kernel::nav;
 use kernel::workspace::Workspace;
 
 /// Records `loc` in back/forward and shows it.

@@ -23,9 +23,10 @@ use super::{active, color, core, glyph, name, note, now, poll, setup_note, took}
 use crate::cache::{self, Cache};
 use crate::settings;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
-use crate::{nav, util};
+use crate::util;
 use kernel::blocking;
 use kernel::doc::{DocRef, Location};
+use kernel::nav;
 use kernel::repo::Repo;
 use kernel::workspace::Workspace;
 

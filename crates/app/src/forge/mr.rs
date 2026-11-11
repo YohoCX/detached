@@ -4,9 +4,9 @@ use detached_core::types::{ForgeHosts, MergeRequest, PipelineStatus, Provider};
 use gpui_kit::{App, Hsla};
 
 use crate::files::Links;
-use crate::nav;
 use crate::ui::theme;
 use kernel::doc::{DocRef, Location};
+use kernel::nav;
 
 /// Why MRs cannot load for a repo; None when they can.
 pub fn setup_problem(h: &ForgeHosts) -> Option<String> {

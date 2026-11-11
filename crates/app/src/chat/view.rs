@@ -644,7 +644,7 @@ impl ChatView {
                     .when_some(file, |d, loc| {
                         d.cursor_pointer()
                             .hover(|s| s.text_color(t.fg))
-                            .on_click(move |_, _, cx| crate::nav::open(cx, loc.clone()))
+                            .on_click(move |_, _, cx| kernel::nav::open(cx, loc.clone()))
                     });
                 let out = (shown && !output.is_empty()).then(|| {
                     div()
