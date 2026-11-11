@@ -2,7 +2,6 @@
 
 use std::fmt::Display;
 use std::sync::Arc;
-use std::time::Duration;
 
 use detached_core::types::PullResult;
 use detached_core::{api, error};
@@ -17,11 +16,10 @@ use gpui_kit::{
 
 use super::State;
 use crate::keymap;
-use crate::store::{Outcome, Store};
+use crate::store::Store;
 use crate::ui::{self, Icon, radius, theme};
 use kernel::activity::{Activity, Level, Notice};
-
-const FADE: Duration = Duration::from_secs(6);
+use kernel::repo::{Outcome, Repo};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -112,33 +110,8 @@ fn run(kind: Kind, repo: String, cx: &mut App) -> Task<error::Result<Option<Pull
     })
 }
 
-/// A failure stays until the next sync; a success fades unless another outcome replaced it.
 fn show_outcome(repo: &str, o: &Outcome, cx: &mut App) {
-    let state = State::global(cx);
-    let shown = state.update(cx, |s, _| {
-        let n = s.shown.entry(repo.into()).or_default();
-        *n += 1;
-        *n
-    });
-    Store::global(cx).update(cx, |s, cx| {
-        s.outcomes.insert(repo.into(), o.clone());
-        cx.notify();
-    });
-    if o.ok {
-        let repo = repo.to_string();
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(FADE).await;
-            cx.update(|cx| {
-                if state.read(cx).shown.get(&repo) == Some(&shown) {
-                    Store::global(cx).update(cx, |s, cx| {
-                        s.outcomes.remove(&repo);
-                        cx.notify();
-                    });
-                }
-            });
-        })
-        .detach();
-    }
+    Repo::update(cx, repo, |r, cx| r.set_outcome(o.clone(), cx));
 }
 
 /// Fetches or pulls one repo and says how it went; Fetch All and Pull All stay enabled meanwhile.

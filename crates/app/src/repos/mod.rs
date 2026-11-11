@@ -41,12 +41,10 @@ use kernel::blocking;
 use kernel::settings::Settings;
 use sync::{Bulk, Kind};
 
-/// What this vertical keeps beside the store: the bulk sync, outcome fades, recent branches, the
-/// branches popup's intent.
+/// What this vertical keeps beside the kernel: the bulk sync, recent branches, the branches
+/// popup's intent.
 struct State {
     sync: Option<Bulk>,
-    /// Bumped each time a repo's outcome is shown, so a fade clears only the outcome it was set for.
-    shown: HashMap<String, u64>,
     /// Per repo, newest first; in memory only.
     recent: HashMap<String, Vec<String>>,
     branches: Option<Intent>,
@@ -65,7 +63,6 @@ impl State {
         }
         let state = cx.new(|cx| State {
             sync: None,
-            shown: HashMap::new(),
             recent: HashMap::new(),
             branches: None,
             _actions: register_actions(cx),

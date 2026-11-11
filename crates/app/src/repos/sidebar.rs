@@ -28,6 +28,7 @@ use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
 use kernel::activity::Activity;
+use kernel::repo::Repo;
 use kernel::settings::Settings;
 use kernel::ui_state;
 
@@ -807,10 +808,11 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
     let r = repo.to_string();
     let compare = move |window: &mut Window, cx: &mut App| {
         let r = r.clone();
-        Store::global(cx).update(cx, |s, cx| {
-            s.compare.entry(r.clone()).or_default();
-            s.set_current(Some(r), cx);
+        Repo::update(cx, &r, |r, cx| {
+            r.compare.get_or_insert_default();
+            cx.notify();
         });
+        Store::global(cx).update(cx, |s, cx| s.set_current(Some(r), cx));
         dock::open("changes", window, cx);
     };
     let zed = {

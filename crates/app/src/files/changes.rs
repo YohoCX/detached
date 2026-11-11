@@ -23,6 +23,7 @@ use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
 use kernel::doc::Doc;
+use kernel::repo::Repo;
 
 /// Around the tool; Show Diff takes the selected change while focus is inside.
 const CONTEXT: &str = "Changes";
@@ -74,9 +75,11 @@ impl Changes {
             }),
             // Only in Compare: the field also commits when Local hides it.
             cx.subscribe(&base, |_, _, Commit(base), cx| {
-                Store::global(cx).update(cx, |s, cx| {
-                    let current = s.current().map(String::from);
-                    if let Some(b) = current.and_then(|r| s.compare.get_mut(&r)) {
+                let Some(repo) = Store::global(cx).read(cx).current().map(String::from) else {
+                    return;
+                };
+                Repo::update(cx, &repo, |r, cx| {
+                    if let Some(b) = &mut r.compare {
                         *b = base.trim().to_string();
                         cx.notify();
                     }
@@ -254,15 +257,11 @@ impl Changes {
                     Some("Changes since this branch left a base branch, like a merge request"),
                 ),
             ];
-            let set = move |on, _: &mut Window, cx: &mut App| {
-                Store::global(cx).update(cx, |s, cx| {
-                    if on {
-                        s.compare.entry(repo.clone()).or_default();
-                    } else {
-                        s.compare.remove(&repo);
-                    }
+            let set = move |on: bool, _: &mut Window, cx: &mut App| {
+                Repo::update(cx, &repo, |r, cx| {
+                    r.compare = on.then(|| r.compare.take().unwrap_or_default());
                     cx.notify();
-                })
+                });
             };
             ui::segmented_tips("changes.mode", &options, self.key.is_some(), set, cx)
         });

@@ -25,6 +25,7 @@ use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
+use kernel::repo::Repo;
 use kernel::settings::Settings;
 use kernel::ui_state;
 
@@ -446,16 +447,14 @@ impl Render for Tree {
 
 /// Browses `value`, trimmed, in the current repo's tree; empty goes back to the working tree.
 fn set_ref(value: &str, cx: &mut App) {
-    Store::global(cx).update(cx, |s, cx| {
-        let Some(repo) = s.current().map(String::from) else {
-            return;
-        };
-        match value.trim() {
-            "" => s.refs.remove(&repo),
-            v => s.refs.insert(repo, v.into()),
-        };
+    let Some(repo) = Store::global(cx).read(cx).current().map(String::from) else {
+        return;
+    };
+    let v = value.trim();
+    Repo::update(cx, &repo, |r, cx| {
+        r.tree_ref = (!v.is_empty()).then(|| v.into());
         cx.notify();
-    })
+    });
 }
 
 /// The defaults, then the settings' rules; one for a default's suffix replaces its kids in place.

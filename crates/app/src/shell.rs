@@ -14,10 +14,11 @@ use gpui_kit::{
 use crate::dock;
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
-use crate::store::{Event, Store};
+use crate::store::Store;
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
+use kernel::workspace::{Event, Workspace};
 
 const MAC: bool = cfg!(target_os = "macos");
 
@@ -108,12 +109,16 @@ impl Shell {
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.observe(&dock, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&store, window, |this, store, e: &Event, window, cx| {
-                if let (Event::Shown, Some(doc)) = (e, store.read(cx).shown().cloned()) {
-                    this.dock
-                        .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
-                }
-            }),
+            cx.subscribe_in(
+                &Workspace::global(cx),
+                window,
+                |this, w, e: &Event, window, cx| {
+                    if let (Event::Shown, Some(doc)) = (e, w.read(cx).shown().cloned()) {
+                        this.dock
+                            .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
+                    }
+                },
+            ),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {

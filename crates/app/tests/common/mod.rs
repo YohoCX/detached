@@ -18,7 +18,9 @@ use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext, px};
 use kernel::activity::Activity;
+use kernel::repo::Repo;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 pub use gpui_kit::base::dock::DockPlacement;
 
@@ -480,6 +482,9 @@ pub trait Drive {
     /// The element in a fresh frame; None when it is not drawn.
     fn find(&mut self, id: impl Into<ElementId>) -> Option<ElementSnapshot>;
     fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R;
+    fn workspace<R>(&mut self, f: impl FnOnce(&mut Workspace, &mut Context<Workspace>) -> R) -> R;
+    /// Updates the listed repo at `path`.
+    fn repo<R>(&mut self, path: &str, f: impl FnOnce(&mut Repo, &mut Context<Repo>) -> R) -> R;
     fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R;
     fn settings<R>(&mut self, f: impl FnOnce(&Settings) -> R) -> R;
 }
@@ -509,6 +514,14 @@ impl Drive for VisualTestContext {
 
     fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R {
         self.update(|_, cx| Store::global(cx).update(cx, f))
+    }
+
+    fn workspace<R>(&mut self, f: impl FnOnce(&mut Workspace, &mut Context<Workspace>) -> R) -> R {
+        self.update(|_, cx| Workspace::global(cx).update(cx, f))
+    }
+
+    fn repo<R>(&mut self, path: &str, f: impl FnOnce(&mut Repo, &mut Context<Repo>) -> R) -> R {
+        self.update(|_, cx| Repo::update(cx, path, f).expect("a listed repo"))
     }
 
     fn activity<R>(&mut self, f: impl FnOnce(&mut Activity, &mut Context<Activity>) -> R) -> R {

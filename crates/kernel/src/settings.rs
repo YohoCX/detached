@@ -145,7 +145,9 @@ mod tests {
         let Sandbox { dir: _dir, state } = Sandbox::new();
         std::fs::write(&state.config_dir, "").unwrap();
         cx.update(|cx| crate::init(Arc::new(state), cx));
-        wait_until(cx, loaded);
+        wait_until(cx, |cx| {
+            loaded(cx) && !crate::workspace::Workspace::get(cx).refreshing
+        });
         let core = cx.update(|cx| crate::core(cx).clone());
         let task =
             cx.update(|cx| blocking::run(cx, move || api::set_mr_remote(&core, "/r".into(), None)));

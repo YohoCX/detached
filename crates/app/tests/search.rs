@@ -191,8 +191,10 @@ fn go_to_file_again_toggles_all_repositories(cx: &mut TestAppContext) {
 fn go_to_file_searches_the_tree_ref_and_lists_recent_files(cx: &mut TestAppContext) {
     let (mut app, repo) = open(cx);
     let cx = &mut app;
-    let r = repo.clone();
-    cx.store(|s, _| s.refs.insert(r, "other".into()));
+    cx.repo(&repo, |r, cx| {
+        r.tree_ref = Some("other".into());
+        cx.notify();
+    });
     cx.press("secondary-shift-o");
     search(cx, "readme", "README.md");
     assert_eq!(rows(cx)[0].1, "app @ other");
@@ -705,7 +707,10 @@ fn find_at_a_ref_matches_a_regex_on_the_same_lines_as_the_working_tree(cx: &mut 
     cx.press("escape");
 
     // Stands in for the tree ref input.
-    cx.store(|s, _| s.refs.insert(solo, "main".into()));
+    cx.repo(&solo, |r, cx| {
+        r.tree_ref = Some("main".into());
+        cx.notify();
+    });
     cx.press("secondary-shift-f");
     let scope = cx.find("find.scope").unwrap();
     assert_eq!(scope.label(), Some("solo @ main"));

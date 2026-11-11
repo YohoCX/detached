@@ -5,9 +5,11 @@
 pub mod activity;
 pub mod blocking;
 pub mod doc;
+pub mod repo;
 pub mod settings;
 pub mod ui_state;
 pub mod update;
+pub mod workspace;
 
 use std::sync::Arc;
 
@@ -23,6 +25,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     activity::init(cx);
     settings::init(cx);
     update::init(cx);
+    workspace::init(cx);
 }
 
 /// Core's state, for the calls that go through `blocking`.
@@ -30,14 +33,16 @@ pub fn core(cx: &App) -> &Arc<AppState> {
     &cx.global::<Core>().0
 }
 
-/// The kernel over a sandbox's core, its settings loaded so no job outlives the test; the
+/// The kernel over a sandbox's core, its settings and repos loaded so no job outlives the test; the
 /// sandbox's directory lives as long as the result.
 #[cfg(test)]
 fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
     let detached_core::git::testutil::Sandbox { dir, state } =
         detached_core::git::testutil::Sandbox::new();
     cx.update(|cx| init(Arc::new(state), cx));
-    wait_until(cx, settings::loaded);
+    wait_until(cx, |cx| {
+        settings::loaded(cx) && !workspace::Workspace::get(cx).refreshing
+    });
     dir
 }
 
