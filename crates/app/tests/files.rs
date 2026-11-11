@@ -1308,7 +1308,7 @@ fn rows_take_their_change_status_and_the_working_tree_reloads_with_the_status(
     let app = cx.sb.repo("app");
     write(&app, [("fresh.txt", "x\n")]);
     let repo = app.display().to_string();
-    cx.workspace(|w, cx| w.refresh(repo, cx).detach());
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
     wait_until(cx, |cx| {
         statuses(cx).contains(&"fresh.txt untracked".to_string())
     });

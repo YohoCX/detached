@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::files::{Links, Markdown};
 use kernel::activity::{Activity, Level};
 use kernel::blocking;
+use kernel::invalidate;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
@@ -523,8 +524,7 @@ impl Session {
                     *b = back;
                 }
                 if restored && let Some(Item::Changes { repo, .. }) = s.items.get(item) {
-                    let repo = repo.clone();
-                    Workspace::global(cx).update(cx, |w, cx| w.refresh(repo, cx).detach());
+                    invalidate::status(cx, repo).detach();
                 }
                 cx.notify();
             })
@@ -910,7 +910,7 @@ impl Session {
                 self.ask_gone(None);
                 self.end_turn(cx);
                 for repo in self.repos(cx) {
-                    Workspace::global(cx).update(cx, |w, cx| w.refresh(repo, cx).detach());
+                    invalidate::status(cx, &repo).detach();
                 }
             }
             Event::Sessions { sessions } => self.past = Some(sessions),

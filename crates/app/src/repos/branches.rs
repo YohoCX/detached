@@ -26,6 +26,7 @@ use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
+use kernel::invalidate;
 use kernel::repo::Repo;
 use kernel::workspace::Workspace;
 
@@ -573,9 +574,7 @@ impl Popup {
                         None
                     }
                 };
-                Workspace::global(cx)
-                    .update(cx, |w, cx| w.refresh(repo, cx))
-                    .detach();
+                invalidate::status(cx, &repo).detach();
                 this.update(cx, |this, cx| {
                     this.busy = false;
                     match next {

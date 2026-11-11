@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 use kernel::activity::Level;
 use kernel::doc::{DiffDoc, Doc, Location};
+use kernel::invalidate;
 use kernel::ui_state;
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
@@ -166,7 +167,7 @@ fn a_new_commit_reloads_the_log_on_the_status_refresh(cx: &mut TestAppContext) {
     cx.sb
         .commit_files(&solo, "fresh work", [("fresh.txt", "fresh\n")]);
     let path = solo.display().to_string();
-    cx.workspace(|w, cx| w.refresh(path, cx).detach());
+    cx.update(|_, cx| invalidate::status(cx, &path).detach());
     wait_for_status(cx, "4 commits");
     assert_eq!(subjects(cx)[0], "fresh work");
 }
@@ -251,7 +252,7 @@ fn a_branch_made_outside_shows_after_refresh_not_on_a_status_refresh(cx: &mut Te
         cx.sb.git(&solo, &[cmd, name, "HEAD~2"]);
     }
     let path = solo.display().to_string();
-    let refresh = cx.workspace(|w, cx| w.refresh(path, cx));
+    let refresh = cx.update(|_, cx| invalidate::status(cx, &path));
     cx.foreground_executor().block_test(refresh);
     settle(cx);
     assert_eq!(status(cx).as_deref(), Some("3 commits"), "no reload");

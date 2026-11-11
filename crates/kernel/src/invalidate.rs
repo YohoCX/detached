@@ -1,4 +1,5 @@
-//! The one place that decides what is stale: a job's end, window activation and time.
+//! The one place that decides what is stale: a job's end or a write, the rescan, window activation
+//! and time.
 
 use std::collections::HashMap;
 use std::mem;

@@ -62,6 +62,9 @@ Keep this list in sync with the Makefile.
   own state. A view may keep what exists only to draw (a laid-out text, a scroll position); it keeps
   no state the kernel holds. The exception: the Settings pages reload their own copy of the settings in
   the job that writes them, so a picker never lags a change made on the page.
+- What a view loads and others share or reload is a kernel `Resource` the view holds an `Interest`
+  in; its policy, not the view, decides when it reloads. A Refresh button calls `refresh()`; a write
+  outside a job declares the repo's status stale with `kernel::invalidate::status`.
 - Colors, radii, spacing and fonts come from `ui::theme` tokens, never literals in views.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
 - Keys: every action has an id in `actions.rs`; default chords in `keymap.rs` match

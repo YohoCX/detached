@@ -82,10 +82,12 @@ crates/kernel/             package detached-kernel: the app's live state on gpui
   src/nav.rs               back/forward and recent files
   src/settings.rs          the read-only snapshot of core's settings
   src/update.rs            Update: the updater's state, its checks, the download and the restart
+  src/resource.rs          Resource: a loaded value, its error and age, its policy; Interest
+  src/invalidate.rs        what is stale: a job's end or a write, window activation, time; the rescan
+  src/forge.rs             the forge's resources: MRs, the branch's MR, pipelines
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
-  src/cache.rs             last-value cache with the 30 s focus-refresh skip
   src/util.rs              helpers several verticals use: path names, change letters, times, fuzzy
   src/keymap.rs            defaults, keymap.json, contexts, Double Shift
   src/actions.rs           action ids, registration, run
@@ -161,7 +163,11 @@ base (`compare`) other verticals read, and its branch names for the ref inputs (
 loaded on demand). A repo's change notifies its own entity; `Workspace` emits `Changed(path)` for
 it, `Status(path)` after a status refresh and `Shown` after `show`. Views observe what they read.
 Workspaces are the kernel's `Settings`; ops, notices and the status message its `Activity`.
-Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
+`kernel::invalidate` decides what is stale: window activation rescans with every status and reloads
+a resource older than its policy allows; an op's end, a write (`invalidate::status`) and a Refresh
+button load a repo's status, one load at a time per repo; a settings change's list goes through
+`invalidate::listed`. A `Resource` (the forge's lists, the changes in Compare, the tree) loads
+while a view or a watch holds an `Interest` in it, and polls by its policy while the window shows.
 
 **Keymap.** `keymap.rs` keeps the action ids of docs/KEYMAP.md, parses the same chord strings and
 the `keymap.json` overrides into `KeyBinding::load` (an override that does not parse unbinds the
@@ -250,12 +256,12 @@ file. V7 (terminal) starts after parity.
 
 | Vertical | Owns | Needs from others |
 | --- | --- | --- |
-| F foundation | workspace, `crates/core`, `crates/kernel` (in place of `store`, `blocking`, `nav` and `ui_state`), `crates/forge-fake` control and project routes, `main`, `cache`, `util`, `keymap`, `actions`, `ui/` (including the context-menu helper), `shell`, `status_bar`, `notices`, the first version of `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` (contracts and stubs), test fixtures, Makefile, CI | — |
+| F foundation | workspace, `crates/core`, `crates/kernel` (in place of `store`, `blocking`, `nav` and `ui_state`), `crates/forge-fake` control and project routes, `main`, `util`, `keymap`, `actions`, `ui/` (including the context-menu helper), `shell`, `status_bar`, `notices`, the first version of `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` (contracts and stubs), test fixtures, Makefile, CI | — |
 | V1 repos | `src/repos/` | `Workspace`, `Repo`, shell slots, forge-fake `/user` and `/version` for account verify |
 | V2 files | `src/files/` | `Repo` (`tree_ref`, `compare`), nav, `core::api::file_patch` |
 | V3 search | `src/search/` | actions, nav, `Repo` (`tree_ref`), `files::open`, `repos::checkout`, `settings::open` |
 | V4 history | `src/history/` | shell's bottom slot, `files::show_diff`, `repos::checkout`, `Workspace::shown()` |
-| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `cache`, `Workspace::show`, `nav::open` with `DocRef`, `history::CommitDetails` |
+| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `kernel::forge`'s resources, `Workspace::show`, `nav::open` with `DocRef`, `history::CommitDetails` |
 | V6 ship | `core::update`, `kernel::update`, `settings/updates.rs`, packaging, `.github/workflows/`, `scripts/`, `install.sh`, the Tauri client's removal | everything, for the release |
 | V7 terminal | `src/terminal/` | shell's bottom slot |
 

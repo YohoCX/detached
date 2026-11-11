@@ -115,7 +115,7 @@ impl Workspace {
     }
 
     /// Loads `repo`'s status into its `Repo`, then emits `Status`.
-    pub fn refresh(&mut self, repo: String, cx: &mut Context<Self>) -> Task<()> {
+    pub(crate) fn refresh(&mut self, repo: String, cx: &mut Context<Self>) -> Task<()> {
         let core = crate::core(cx).clone();
         let r = repo.clone();
         let status = blocking::run(cx, move || {

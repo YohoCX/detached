@@ -21,6 +21,7 @@ use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::doc::Doc;
+use kernel::invalidate;
 use kernel::repo::Repo;
 use kernel::resource::{self, Interest, On, Policy, Resource};
 use kernel::workspace::{Event, Workspace};
@@ -255,11 +256,9 @@ impl Changes {
             ui::segmented_tips("changes.mode", &options, self.key.is_some(), set, cx)
         });
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            Workspace::global(cx).update(cx, |w, cx| {
-                if let Some(repo) = w.current().map(String::from) {
-                    w.refresh(repo, cx).detach();
-                }
-            })
+            if let Some(repo) = Workspace::get(cx).current().map(String::from) {
+                invalidate::status(cx, &repo).detach();
+            }
         };
         div()
             .flex()

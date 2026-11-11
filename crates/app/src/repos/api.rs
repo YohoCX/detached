@@ -9,12 +9,11 @@ pub use detached_core::types::CheckoutTarget;
 use super::State;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
+use kernel::invalidate;
 use kernel::repo::Repo;
-use kernel::workspace::Workspace;
 
 /// Smart checkout with its dialogs and notices; the task ends after the repo's status refresh.
 pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
-    let workspace = Workspace::global(cx);
     let from = Repo::get(cx, repo).and_then(|r| r.status()?.branch.clone());
     let core = kernel::core(cx).clone();
     let (name, rev) = match &target {
@@ -31,7 +30,7 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
     let done = blocking::run(cx, move || api::checkout(&core, &r, &target));
     cx.spawn(async move |cx| {
         let result = done.await;
-        let refreshed = workspace.update(cx, |w, cx| w.refresh(repo.clone(), cx));
+        let refreshed = cx.update(|cx| invalidate::status(cx, &repo));
         let n = match result {
             Err(e) => Notice {
                 level: Level::Error,

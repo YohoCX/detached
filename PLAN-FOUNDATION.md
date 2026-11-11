@@ -833,6 +833,46 @@ Done when:
 - the forge and history tests that drive `advance_clock` pass with their steps unchanged;
 - docs/TECHDEBT.md's `refresh_all` row is removed.
 
+Done on branch `foundation/7-resources`, 2026-11-11, on top of `foundation/6-workspace-repo`, not
+merged; `make check` and `make smoke` green:
+- `kernel::resource`: `Resource<T>` (value, error, `at`, a loading flag), `Policy { fresh_for, poll }`
+  and `Interest`, which holds it while it lives (`Interest::view` also redraws its view). Resources
+  live for the session under a key (`resource::get`), as `Cache` kept its values. Taking an interest
+  loads the resource, as a view's mount did; activation reloads a held one older than `fresh_for`;
+  a resource reloads on nothing while no interest holds it. A refresh drops a load still running,
+  so a stale result never lands; a poll skips a tick while one runs.
+- `kernel::invalidate` is the one place: `status(repo)` loads a repo's status once at a time and once
+  more after a load that calls came in during (§7's rule, now for every caller), its task ending
+  with the load that saw the call; an op's end calls it. `rescan` and `listed(list)` replace
+  `refresh_all` and `load_repos`, whose `Option` had no `None` caller left. `activated` and
+  `set_visible` come from the shell, since the kernel cannot name a window.
+- What a status load marks: a resource declares `On::Status(repo)` (the changes in Compare and the
+  working tree's listing) or `On::Head(repo)` (a repo's pipelines, which the Pipelines view reloaded
+  by itself when the head moved).
+- The forge's resources are in `kernel::forge` with `setup_problem` and `active`, so an interest
+  without a view can hold them. "The MR" is the chip's MR of the branch: the MR page has no cache,
+  poll or activation today and keeps loading itself, a view's own query.
+- The pipelines' poll condition is on their list (a pipeline pending or running). The view also
+  polled while an expanded job ran in a finished pipeline; a retried job sets its pipeline running
+  again on both forges, and the view refreshes after its own actions.
+- The changes in Compare and the tree are resources per repo and base, and per repo and ref, made
+  by `files` (the tree's value is its built `Dir`, built on the worker as before). A view keeps the
+  resource it showed before for the same repo on screen until the new one loads, as it kept its last
+  result.
+- The lost call of `refresh_all` was fixed in step 4, so a test of it passes on the base. What still
+  failed there: a listing that read the settings before a folder was added landed after the add's
+  own list and dropped the new repo until the next pass. `invalidate::listed` drops such a listing.
+  The test (`crates/kernel/tests/rescan.rs`) holds the listing open by filling core's pool, all
+  threads but one (`blocking::THREADS` is public for it), so it has a binary of its own; it failed
+  on the base three times out of three.
+- The refresh calls outside the kernel: the shell's activation is `invalidate::activated`; the
+  sidebar's button `invalidate::rescan`; Changes' button `invalidate::status`; a settings change
+  `invalidate::listed`. A checkout, a branch operation, a chat's restore and a turn's end are not
+  jobs, so no job ends for them: they declare the repo's status stale with `invalidate::status`,
+  and the invalidation runs the load. `Workspace::refresh` is the kernel's own.
+- The kernel's tests take the forge fake and core's `e2e` as dev-dependencies, for the MRs loaded
+  with no view.
+
 The owner checks: the MR list and an MR page; a running pipeline in the badge and in Pipelines,
 with a tab hidden behind another still fresh when it comes back; a job's live log; the window
 left and returned to; the network off, with the old data and the error together.
