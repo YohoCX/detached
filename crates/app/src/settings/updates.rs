@@ -43,7 +43,7 @@ fn status(u: &Update) -> String {
             None => format!("Downloading {v}: {:.1} MB", *received as f64 / 1e6),
         },
         (_, State::Verifying) => format!("Verifying {v}…"),
-        (_, State::Ready) => format!("Detached {v} is ready and installs on a restart."),
+        (_, State::Ready) => format!("Detached {v} is ready and installs on Restart now."),
         (_, State::Installing) => format!("Installing {v}…"),
         (_, State::Failed(e)) => e.clone(),
     }

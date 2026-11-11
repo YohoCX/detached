@@ -53,6 +53,8 @@ pub enum Progress {
     Verifying,
 }
 
+const PACKAGE: &str = ".detached-package";
+
 /// The release's package in a temp file in `dir` once its signature by `key` holds. The file goes
 /// with the result, and at once on an error or a cancel.
 pub fn download(
@@ -62,9 +64,13 @@ pub fn download(
     cancel: &Cancel,
     progress: &dyn Fn(Progress),
 ) -> Result<TempPath> {
-    let mut file = tempfile::Builder::new()
-        .prefix(".detached-package")
-        .tempfile_in(dir)?;
+    // A quit skips the TempPath's drop, so a quit's package is still here.
+    for e in fs::read_dir(dir)?.flatten() {
+        if e.file_name().to_string_lossy().starts_with(PACKAGE) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+    let mut file = tempfile::Builder::new().prefix(PACKAGE).tempfile_in(dir)?;
     let mut response = call(&release.url)?;
     let total = response.body().content_length();
     let mut body = response.body_mut().as_reader();
@@ -335,6 +341,27 @@ mod tests {
         assert_eq!(fs::read(&file).unwrap(), package);
         drop(file);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_download_removes_the_package_a_quit_left() {
+        let (key, sign) = keys();
+        let package = b"the new app".to_vec();
+        let server = Server::start(&sign, "9.9.9", &package, &sign(&package));
+        let release = check(&server.base, "0.3.0", &key).unwrap().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        fetch(&release, &key, dir.path()).0.unwrap().keep().unwrap();
+        fs::write(dir.path().join("other"), "").unwrap();
+        let file = fetch(&release, &key, dir.path()).0.unwrap();
+        let mut left: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        left.sort();
+        let mut want = vec![file.to_path_buf(), dir.path().join("other")];
+        want.sort();
+        assert_eq!(left, want);
     }
 
     #[test]

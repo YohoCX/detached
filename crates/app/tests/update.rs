@@ -131,7 +131,7 @@ fn the_page_shows_each_state_with_its_buttons(cx: &mut TestAppContext) {
         (State::Verifying, "Verifying 9.9.9…", &["check"]),
         (
             State::Ready,
-            "Detached 9.9.9 is ready and installs on a restart.",
+            "Detached 9.9.9 is ready and installs on Restart now.",
             &["check", "restart"],
         ),
         (State::Installing, "Installing 9.9.9…", &["check"]),
