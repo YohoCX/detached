@@ -18,7 +18,8 @@ pub struct Policy<T> {
     pub poll: Option<(Duration, When<T>)>,
 }
 
-pub type When<T> = fn(&T) -> bool;
+/// Sees None before a load succeeded.
+pub type When<T> = fn(Option<&T>) -> bool;
 
 /// What else marks a resource stale.
 #[derive(Clone, PartialEq)]
@@ -170,7 +171,7 @@ impl<T: Send + 'static> Resource<T> {
         let Some((every, when)) = self.policy.poll else {
             return;
         };
-        let on = move |r: &Self| r.held() && r.value.as_ref().is_some_and(when);
+        let on = move |r: &Self| r.held() && when(r.value.as_ref());
         if self.polling || !on(self) {
             return;
         }

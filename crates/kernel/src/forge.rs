@@ -27,14 +27,15 @@ pub const MRS: Policy<Listed> = Policy {
 pub const PIPELINES: Policy<Vec<Pipeline>> = Policy {
     fresh_for: Some(FRESH),
     poll: Some((Duration::from_secs(5), |l| {
-        l.iter().any(|p| active(&p.status))
+        l.is_some_and(|l| l.iter().any(|p| active(&p.status)))
     })),
 };
 
 pub const LATEST: Policy<Option<Pipeline>> = Policy {
     fresh_for: Some(FRESH),
     poll: Some((Duration::from_secs(5), |p| {
-        p.as_ref().is_some_and(|p| active(&p.status))
+        p.and_then(Option::as_ref)
+            .is_some_and(|p| active(&p.status))
     })),
 };
 
@@ -157,11 +158,12 @@ mod tests {
     use crate::workspace::Workspace;
     use crate::{invalidate, wait_until};
 
-    /// A resource under `policy` whose loads count up and return `value`'s current one.
+    /// A resource under `policy` whose loads count up and return `value`'s current one, failing on
+    /// None.
     fn counted<T: Clone + Send + 'static>(
         cx: &mut TestAppContext,
         policy: Policy<T>,
-        value: &Arc<Mutex<T>>,
+        value: &Arc<Mutex<Option<T>>>,
     ) -> (Interest<T>, Arc<Mutex<usize>>) {
         let n = Arc::new(Mutex::new(0));
         let (loads, value) = (n.clone(), value.clone());
@@ -171,7 +173,8 @@ mod tests {
                     let (n, value) = (loads.clone(), value.clone());
                     move || {
                         *n.lock().unwrap() += 1;
-                        Ok(value.lock().unwrap().clone())
+                        let value = value.lock().unwrap().clone();
+                        value.ok_or(detached_core::error::Error::Other("down".into()))
                     }
                 })
             })
@@ -210,18 +213,18 @@ mod tests {
     #[gpui::test]
     fn a_pipeline_polls_every_5_s_only_while_it_runs_held_and_shown(cx: &mut TestAppContext) {
         let _dir = crate::boot(cx);
-        let value = Arc::new(Mutex::new(pipeline("running")));
+        let value = Arc::new(Mutex::new(Some(pipeline("running"))));
         let (held, n) = counted(cx, PIPELINES, &value);
         assert_eq!(tick(cx, &held, &n, 4), 0);
         assert_eq!(tick(cx, &held, &n, 1), 1);
         cx.update(|cx| invalidate::set_visible(cx, false));
         assert_eq!(tick(cx, &held, &n, 5), 0, "the window is hidden");
         cx.update(|cx| invalidate::set_visible(cx, true));
-        *value.lock().unwrap() = pipeline("success");
+        *value.lock().unwrap() = Some(pipeline("success"));
         assert_eq!(tick(cx, &held, &n, 5), 1);
         assert_eq!(tick(cx, &held, &n, 5), 0, "it no longer runs");
         assert_eq!(tick(cx, &held, &n, 5), 0);
-        *value.lock().unwrap() = pipeline("pending");
+        *value.lock().unwrap() = Some(pipeline("pending"));
         cx.update(|cx| held.refresh(cx));
         settle(cx, &held);
         assert_eq!(tick(cx, &held, &n, 5), 1, "pending polls too");
@@ -231,11 +234,29 @@ mod tests {
     #[gpui::test]
     fn the_mr_list_polls_every_60_s(cx: &mut TestAppContext) {
         let _dir = crate::boot(cx);
-        let value = Arc::new(Mutex::new(Listed::Mrs(vec![])));
+        let value = Arc::new(Mutex::new(Some(Listed::Mrs(vec![]))));
         let (held, n) = counted(cx, MRS, &value);
         assert_eq!(tick(cx, &held, &n, 59), 0);
         assert_eq!(tick(cx, &held, &n, 1), 1);
         assert_eq!(tick(cx, &held, &n, 60), 1);
+    }
+
+    #[gpui::test]
+    fn the_mr_list_polls_after_a_failed_first_load(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let value = Arc::new(Mutex::new(None));
+        let (held, n) = counted(cx, MRS, &value);
+        assert!(cx.read(|cx| held.read(cx).error.is_some()));
+        *value.lock().unwrap() = Some(Listed::Mrs(vec![]));
+        assert_eq!(tick(cx, &held, &n, 60), 1);
+        assert!(cx.read(|cx| held.read(cx).value.is_some()));
+    }
+
+    #[gpui::test]
+    fn pipelines_that_failed_to_load_do_not_poll(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let (held, n) = counted(cx, PIPELINES, &Arc::new(Mutex::new(None)));
+        assert_eq!(tick(cx, &held, &n, 5), 0);
     }
 
     #[gpui::test]
