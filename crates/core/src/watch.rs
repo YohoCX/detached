@@ -224,8 +224,9 @@ impl State {
             kind,
             EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
         );
-        // inotify drops the watch of a directory that went, so one made again there is new.
-        if cfg!(target_os = "linux") && gone && !p.exists() {
+        // inotify drops the watch of a directory that went, so one made again there is new; it may
+        // exist again by now.
+        if cfg!(target_os = "linux") && gone {
             self.git.retain(|k, _| !k.starts_with(p));
             self.work.retain(|k, _| !k.starts_with(p));
         }
@@ -581,8 +582,8 @@ mod tests {
     }
 
     #[test]
-    fn a_tracked_lock_file_marks_and_a_directory_made_again_is_watched_again() {
-        let t = T::new(&["a"]);
+    fn a_tracked_lock_file_marks_and_directories_made_again_are_watched_again() {
+        let t = T::new(&["a", "b"]);
         t.write("a", "Cargo.lock");
         t.write("a", "d/f");
         t.git("a", &["add", "-A"]);
@@ -593,16 +594,19 @@ mod tests {
             set(&["a"], &t)
         );
         let d = t.dir("a").join("d");
-        assert_eq!(
-            t.after(|| fs::remove_dir_all(&d).unwrap()).repos,
-            set(&["a"], &t)
-        );
-        assert_eq!(
-            t.after(|| fs::create_dir(&d).unwrap()).repos,
-            set(&["a"], &t)
-        );
+        let b = t.after(|| {
+            fs::remove_dir_all(&d).unwrap();
+            fs::create_dir(&d).unwrap();
+        });
+        assert_eq!(b.repos, set(&["a"], &t));
         t.walked();
         assert_eq!(t.after(|| t.write("a", "d/g")).repos, set(&["a"], &t));
+        t.after(|| {
+            fs::remove_dir_all(t.dir("b").join(".git")).unwrap();
+            t.git("b", &["init", "-q"]);
+        });
+        t.watch(Some("a"));
+        assert!(t.after(|| t.commit("b")).repos.contains(&t.path("b")));
     }
 
     #[test]

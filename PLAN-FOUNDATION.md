@@ -916,8 +916,9 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
   the root would mark the repo. Linux's walk is core's `files::walker`, the tree's. A new
   directory or a changed `.gitignore` runs the walk again on a thread of its own, which watches
   what it finds and drops what went; at most one more waits. inotify drops the watch of a
-  directory deleted or moved away, so the watcher forgets it and its children, and one made again
-  at that path is new to the walk.
+  directory deleted or moved away, so the watcher forgets it and its children on the event, even
+  when it exists again by the time the batch is read: one made again is new to the walk, and a git
+  directory's watch comes back with the next `set`.
 - `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does
   not, so the tests that count a repo's notifications see no refresh they did not cause, and a
   test that wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a
