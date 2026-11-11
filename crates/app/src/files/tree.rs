@@ -177,11 +177,8 @@ impl Tree {
 
     /// The current listing once it loaded, else the one before.
     fn listed<'a>(&self, cx: &'a App) -> Option<&'a Resource<Dir>> {
-        let current = self.files.as_ref()?.read(cx);
-        match &self.prev {
-            Some(prev) if current.at.is_none() => Some(prev.read(cx)),
-            _ => Some(current),
-        }
+        let current = self.files.as_ref()?.loaded(cx);
+        current.or_else(|| Some(self.prev.as_ref()?.read(cx)))
     }
 
     fn rows(&self, cx: &App) -> Vec<Row> {

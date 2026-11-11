@@ -134,11 +134,8 @@ impl Changes {
 
     /// In Compare, the current compare once it loaded, else the one before.
     fn shown<'a>(&self, cx: &'a App) -> Option<&'a Resource<Compared>> {
-        let current = self.compare.as_ref()?.0.read(cx);
-        match &self.prev {
-            Some(prev) if current.at.is_none() => Some(prev.read(cx)),
-            _ => Some(current),
-        }
+        let current = self.compare.as_ref()?.0.loaded(cx);
+        current.or_else(|| Some(self.prev.as_ref()?.read(cx)))
     }
 
     fn done<'a>(&self, cx: &'a App) -> Option<&'a Compared> {

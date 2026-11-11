@@ -39,6 +39,8 @@ pub struct Resource<T> {
     pub error: Option<String>,
     /// When the last load ended.
     pub at: Option<Instant>,
+    /// Loads ended so far.
+    loads: u64,
     policy: Policy<T>,
     on: Option<On>,
     load: Load<T>,
@@ -50,6 +52,8 @@ pub struct Resource<T> {
 /// Keeps a resource loaded while it lives.
 pub struct Interest<T> {
     resource: Entity<Resource<T>>,
+    /// The resource's loads when this was taken.
+    since: u64,
     _held: Rc<()>,
     _redraw: Option<Subscription>,
 }
@@ -105,6 +109,7 @@ impl<T: Send + 'static> Resource<T> {
             value: None,
             error: None,
             at: None,
+            loads: 0,
             policy,
             on: None,
             load: Box::new(move |cx| {
@@ -140,6 +145,7 @@ impl<T: Send + 'static> Resource<T> {
             this.update(cx, |this, cx| {
                 this.loading = None;
                 this.at = Some(cx.background_executor().now());
+                this.loads += 1;
                 match r {
                     Ok(v) => (this.value, this.error) = (Some(v), None),
                     Err(e) => this.error = Some(e),
@@ -198,14 +204,15 @@ impl<T: Send + 'static> Resource<T> {
 impl<T: Send + 'static> Interest<T> {
     /// Loads `resource` now; activation and its poll reload it while this lives.
     pub fn new(resource: Entity<Resource<T>>, cx: &mut App) -> Self {
-        let held = resource.update(cx, |r, cx| {
-            let held = r.held.clone();
+        let (held, since) = resource.update(cx, |r, cx| {
+            let held = (r.held.clone(), r.loads);
             r.refresh(cx);
             r.poll(cx);
             held
         });
         Interest {
             resource,
+            since,
             _held: held,
             _redraw: None,
         }
@@ -226,6 +233,13 @@ impl<T: Send + 'static> Interest<T> {
 
     pub fn read<'a>(&self, cx: &'a App) -> &'a Resource<T> {
         self.resource.read(cx)
+    }
+
+    /// The resource once it loaded for this interest: nothing reloads one that no interest holds,
+    /// so an older value may be stale.
+    pub fn loaded<'a>(&self, cx: &'a App) -> Option<&'a Resource<T>> {
+        let r = self.read(cx);
+        (r.loads > self.since).then_some(r)
     }
 
     /// For a Refresh button: loads now, whatever its age.

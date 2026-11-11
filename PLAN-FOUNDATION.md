@@ -840,7 +840,8 @@ merged; `make check` and `make smoke` green:
   live for the session under a key (`resource::get`), as `Cache` kept its values. Taking an interest
   loads the resource, as a view's mount did; activation reloads a held one older than `fresh_for`;
   a resource reloads on nothing while no interest holds it. A refresh drops a load still running,
-  so a stale result never lands; a poll skips a tick while one runs.
+  so a stale result never lands; a poll skips a tick while one runs. A poll's condition sees a value
+  not loaded yet, so the MR list polls after a failed first load, as its view did.
 - `kernel::invalidate` is the one place: `status(repo)` loads a repo's status once at a time and once
   more after a load that calls came in during (§7's rule, now for every caller), its task ending
   with the load that saw the call; an op's end calls it. `rescan` and `listed(list)` replace
@@ -858,7 +859,8 @@ merged; `make check` and `make smoke` green:
 - The changes in Compare and the tree are resources per repo and base, and per repo and ref, made
   by `files` (the tree's value is its built `Dir`, built on the worker as before). A view keeps the
   resource it showed before for the same repo on screen until the new one loads, as it kept its last
-  result.
+  result. It shows no value loaded before it took its interest (`Interest::loaded`): nothing kept
+  that one fresh, so a repo returned to says "Comparing…" until it compares again, as before.
 - The lost call of `refresh_all` was fixed in step 4, so a test of it passes on the base. What still
   failed there: a listing that read the settings before a folder was added landed after the add's
   own list and dropped the new repo until the next pass. `invalidate::listed` drops such a listing.

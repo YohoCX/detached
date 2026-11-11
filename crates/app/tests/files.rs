@@ -914,6 +914,24 @@ fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn a_repo_returned_to_compares_again_before_it_lists_changes(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = cx.sb.repo("lib");
+    make_current(cx, &lib);
+    cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
+    wait_until(cx, |cx| cx.find("changes.ab").is_some());
+    let solo = cx.sb.solo();
+    make_current(cx, &solo);
+    write(&lib, [("README.md", "changed\n")]);
+    let path = lib.display().to_string();
+    cx.workspace(|w, cx| w.set_current(Some(path), cx));
+    let empty = label(cx, "changes.empty");
+    assert_eq!(empty.as_deref(), Some("Comparing…"), "{:?}", changes(cx));
+    wait_until(cx, |cx| changes(cx).len() == 4);
+    assert_eq!(changes(cx)[0], "Changes since origin/main: 3 files");
+}
+
+#[gpui_kit::test]
 fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selection(
     cx: &mut TestAppContext,
 ) {
