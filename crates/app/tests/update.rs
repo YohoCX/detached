@@ -222,8 +222,9 @@ fn restart_now_names_the_live_chats_and_shells_first(cx: &mut TestAppContext) {
     cx.press("alt-f12");
     wait_until(cx, |cx| cx.update(|_, cx| !terminal::live(cx).is_empty()));
     page(cx);
-    cx.click("settings.update.restart");
+    // PowerShell retitles its tab after it starts; the warning names the shells at the click.
     let shell = cx.update(|_, cx| terminal::live(cx)).join(", ");
+    cx.click("settings.update.restart");
     let warning = format!("Restarting ends api/ · fix the login, {shell}.");
     assert_eq!(label(cx, "settings.update.warning"), Some(warning));
     assert_eq!(state(cx), State::Ready);
