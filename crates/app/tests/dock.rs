@@ -215,7 +215,7 @@ fn a_doc_kind_registered_by_a_test_alone_gets_its_tab(cx: &mut TestAppContext) {
         repo: "/r".into(),
         number: 7,
     };
-    cx.store(|s, cx| s.show(mr, cx));
+    cx.workspace(|w, cx| w.show(mr, cx));
     let tab = cx.find("stub.doc").unwrap();
     assert_eq!(tab.checked(), Some(true));
     assert_eq!(tab.label(), Some("Stub doc"));
@@ -275,7 +275,7 @@ fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen
 fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo().display().to_string();
-    cx.store(|s, cx| s.set_current(Some(solo), cx));
+    cx.workspace(|w, cx| w.set_current(Some(solo), cx));
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);
     cx.click("top.chat");
@@ -301,7 +301,7 @@ fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppC
         std::fs::copy(env!("CARGO_BIN_EXE_fake_sidecar"), installed).unwrap();
     });
     let solo = cx.sb.solo().display().to_string();
-    cx.store(|s, cx| s.set_current(Some(solo.clone()), cx));
+    cx.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
     // A second document, since the last tab of the center can't be dragged out.
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);

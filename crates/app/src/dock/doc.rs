@@ -11,8 +11,8 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::store::Store;
 use kernel::doc::Doc;
+use kernel::workspace::Workspace;
 
 pub const NAME: &str = "doc";
 
@@ -173,7 +173,7 @@ impl Panel for DocTab {
             self.kind.activated(v, window, cx);
         }
         let doc = self.doc.clone();
-        Store::global(cx).update(cx, |s, cx| s.set_shown(Some(doc), cx));
+        Workspace::global(cx).update(cx, |w, cx| w.set_shown(Some(doc), cx));
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -181,9 +181,9 @@ impl Panel for DocTab {
             self.kind.removed(v, window, cx);
         }
         let doc = self.doc.clone();
-        Store::global(cx).update(cx, |s, cx| {
-            if s.shown() == Some(&doc) {
-                s.set_shown(None, cx);
+        Workspace::global(cx).update(cx, |w, cx| {
+            if w.shown() == Some(&doc) {
+                w.set_shown(None, cx);
             }
         });
     }
