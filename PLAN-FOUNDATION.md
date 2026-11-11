@@ -4,15 +4,14 @@ The layer the agent host will stand on: a kernel crate with the app's live state
 settings, registries instead of closed enums, the updater as a Settings page, and one place that
 decides what is stale, fed by a file watcher.
 
-**Status (2026-11-10): accepted by the owner on 2026-11-10 after step 0 (step 1); steps 0, 0b and 1 done. §1–§11 were reviewed in seven revmux rounds
+**Status (2026-11-11): accepted by the owner on 2026-11-10 after step 0 (step 1); steps 0, 0b, 1,
+2, 3 and 4 done. §1–§11 were reviewed in seven revmux rounds
 (`.revmux/tasks/agent-host-architecture/`, kept locally); the last found nothing major. §12, the
 execution and acceptance, is written and not yet reviewed. Step 0b is on main (7e5a833); step 0
 is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock tests are on main
-(faf27c8); the owner's own baseline is left. Step 2, the kernel crate, is done on branch
-`foundation/2-kernel`, not merged: its revmux round, CI on three OSes and the owner's check are left.
-Step 3, the registries, is done on branch `foundation/3-registries`, on top of step 2's, not merged,
-with the same left. Step 4, Settings, is done on branch `foundation/4-settings`, on top of step 3's,
-not merged, with the same left.**
+(faf27c8); the owner's own baseline is left. Steps 2 (the kernel crate), 3 (registries) and 4
+(Settings) each had a revmux round with its findings fixed, passed the owner's check on macOS on
+2026-11-11 and are on main. Step 5, Updates, is next.**
 
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the
