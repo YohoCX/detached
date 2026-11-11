@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use detached_app::store::Store;
 use detached_app::{actions, keymap, shell};
 use detached_core::api;
 use detached_core::settings::Settings;
@@ -333,7 +332,7 @@ fn make_forge(sb: &Sandbox) -> (Forge, Seed) {
 }
 
 /// The app in a headless window over its own sandbox, whose config has the active workspace
-/// "Default" over the folder `repos/`. Repos and accounts added through `sb` show once the store
+/// "Default" over the folder `repos/`. Repos and accounts added through `sb` show once the workspace
 /// refreshes; what is read only at boot, such as `keymap.json`, goes in through `open_app_with`.
 pub struct TestApp {
     pub cx: VisualTestContext,
@@ -358,7 +357,7 @@ pub fn open_app(cx: &mut TestAppContext) -> TestApp {
     open_app_with(cx, |_| {})
 }
 
-/// `open_app` once `seed` has filled the sandbox; the store has listed the repos and loaded their
+/// `open_app` once `seed` has filled the sandbox; the workspace has listed the repos and loaded their
 /// statuses. The app boots its own core from `sb`'s config dir with `sb`'s git environment and
 /// token store, so settings it changes are not seen by `sb.state`.
 #[track_caller]
@@ -381,7 +380,6 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
         ui_state::init(&dir, cx);
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
-        Store::init(cx);
         detached_app::register(cx);
         keys
     });
@@ -390,9 +388,13 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     let mut cx = VisualTestContext::from_window(window, cx);
     wait_until(&mut cx, |cx| {
         let settings = cx.settings(|s| s.workspaces == workspaces);
-        cx.store(|s, _| {
-            let loaded = s.repos.iter().all(|r| s.statuses.contains_key(&r.path));
-            settings && s.repos == repos && loaded
+        cx.update(|_, cx| {
+            let w = Workspace::get(cx);
+            let loaded = w
+                .repos()
+                .iter()
+                .all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status.is_some()));
+            settings && w.repos() == repos && loaded
         })
     });
     TestApp { cx, sb }
@@ -481,7 +483,6 @@ pub trait Drive {
     fn input(&mut self, text: &str);
     /// The element in a fresh frame; None when it is not drawn.
     fn find(&mut self, id: impl Into<ElementId>) -> Option<ElementSnapshot>;
-    fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R;
     fn workspace<R>(&mut self, f: impl FnOnce(&mut Workspace, &mut Context<Workspace>) -> R) -> R;
     /// Updates the listed repo at `path`.
     fn repo<R>(&mut self, path: &str, f: impl FnOnce(&mut Repo, &mut Context<Repo>) -> R) -> R;
@@ -510,10 +511,6 @@ impl Drive for VisualTestContext {
             w.render_frame(cx);
             w.try_find(id)
         })
-    }
-
-    fn store<R>(&mut self, f: impl FnOnce(&mut Store, &mut Context<Store>) -> R) -> R {
-        self.update(|_, cx| Store::global(cx).update(cx, f))
     }
 
     fn workspace<R>(&mut self, f: impl FnOnce(&mut Workspace, &mut Context<Workspace>) -> R) -> R {

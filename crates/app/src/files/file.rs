@@ -39,7 +39,7 @@ pub(super) struct FileView {
     goto: Option<(Entity<GotoLine>, Subscription)>,
     _load: Task<()>,
     _actions: Vec<Registration>,
-    _store: Subscription,
+    _status: Subscription,
 }
 
 impl FileView {
@@ -72,7 +72,7 @@ impl FileView {
             ),
         ];
         let workspace = Workspace::global(cx);
-        let store = cx.subscribe_in(&workspace, window, |this: &mut Self, _, e, window, cx| {
+        let status = cx.subscribe_in(&workspace, window, |this: &mut Self, _, e, window, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.loc.repo) {
                 this.load(window, cx);
             }
@@ -86,7 +86,7 @@ impl FileView {
             goto: None,
             _load: Task::ready(()),
             _actions: actions,
-            _store: store,
+            _status: status,
         };
         view.load(window, cx);
         view

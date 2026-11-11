@@ -79,7 +79,7 @@ pub struct DiffView {
     _numbers: Option<Subscription>,
     _load: Task<()>,
     _actions: Vec<Registration>,
-    _store: Subscription,
+    _status: Subscription,
 }
 
 impl DiffView {
@@ -112,7 +112,7 @@ impl DiffView {
             actions::register(cx, "diff.prev", "Previous Change", Group::Diff, step(false)),
             actions::register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, goto),
         ];
-        let store = cx.subscribe(&Workspace::global(cx), |this: &mut Self, _, e, cx| {
+        let status = cx.subscribe(&Workspace::global(cx), |this: &mut Self, _, e, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.doc.repo) {
                 this.load(cx);
             }
@@ -137,7 +137,7 @@ impl DiffView {
             _numbers: None,
             _load: Task::ready(()),
             _actions: actions,
-            _store: store,
+            _status: status,
         };
         view.load(cx);
         view

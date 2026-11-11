@@ -310,7 +310,6 @@ mod tests {
             ui_state::init(dir.path(), cx);
             keymap::bind(&BTreeMap::new(), cx);
             kernel::init(Arc::new(state), cx);
-            crate::store::Store::init(cx);
             crate::register(cx);
         });
         let window = cx.update(open).unwrap();

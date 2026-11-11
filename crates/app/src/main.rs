@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use detached_app::store::Store;
 use detached_app::{actions, keymap, shell};
 use detached_core::state::AppState;
 use gpui_kit::App;
@@ -29,7 +28,6 @@ fn main() {
         ui_state::init(&core.config_dir, cx);
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
-        Store::init(cx);
         detached_app::register(cx);
         #[cfg(target_os = "macos")]
         mac::init(keys, cx);
