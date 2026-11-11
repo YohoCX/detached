@@ -51,7 +51,7 @@ them; those are listed under Design.
 | Lists, tree | GPUI `uniform_list`/`list`, the kit's `Tree`; the commit graph on `canvas` |
 | Async | core stays blocking; a small pool of std threads runs it (see Threads) |
 | Packaging | `cargo-packager` 0.11.8 (`.app`, NSIS, deb, AppImage), configured in `crates/app/Cargo.toml` and run by `scripts/package.sh`, which signs the `.app` itself; its updater and signer are not used. A `v*` tag has `release.yml` build them on the three OSes, sign each with minisign, write `latest.json` (`scripts/latest-json.sh`) and sign it too, and publish them with `install.sh`. Looked at in V6: `gpui-updater-release` (Sparkle, macOS-centric) and `cargo-bundle` (no NSIS or AppImage) |
-| Auto-update | ours, `src/update.rs`: `latest.json` in the latest GitHub release (`{version, platforms: {"<os>-<arch>": {url, signature}}}`), the file and each package checked with `minisign-verify` against the key compiled in, so its version and URLs are the release job's; checked at launch and daily when run from a package |
+| Auto-update | ours: `core::update` checks, downloads to a temp file with its progress, verifies and installs; the kernel's `Update` holds its state, the percent and the cancel; the Updates page in Settings shows it and installs on "Restart now", which names the live chats and shells first. `latest.json` in the latest GitHub release (`{version, platforms: {"<os>-<arch>": {url, signature}}}`), the file and each package checked with `minisign-verify` against the key compiled in, so its version and URLs are the release job's; checked at launch and daily when run from a package, an offer or not |
 | Terminal | step 3: libghostty-vt 1.0 (MIT, C ABI, linked statically) for the emulation, `portable-pty` for the PTY (ConPTY on Windows) |
 | Tests | `cargo test` for core and for ported logic; the kit's headless UI tests (`#[gpui_kit::test]`) against temp repos and a fake forge, on macOS, Windows and Linux runners |
 
@@ -69,6 +69,7 @@ crates/core/               package detached-core: the backend from src-tauri/src
   src/paths.rs             config_dir(), DETACHED_CONFIG_DIR, the workbench rename
   src/api.rs               one function per command, taking op/query ids where today's commands do
   src/selftest.rs          --self-test <report>, unchanged (unix)
+  src/update.rs            latest.json, the download to a temp file, the signature, the install per OS
 crates/forge-fake/         package detached-forge-fake: e2e/forge.ts in Rust
 crates/kernel/             package detached-kernel: the app's live state on gpui-pre alone, drawing
                            nothing (PLAN-FOUNDATION)
@@ -77,6 +78,7 @@ crates/kernel/             package detached-kernel: the app's live state on gpui
   src/activity.rs          ops, notices, the status message, the log the Events app shows
   src/doc.rs               Doc, Location, DiffDoc, DocRef
   src/settings.rs          the read-only snapshot of core's settings
+  src/update.rs            Update: the updater's state, its checks, the download and the restart
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
@@ -88,7 +90,8 @@ crates/app/                package detached-app, binary detached
   src/nav.rs               back/forward and recent files
   src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip,
                            the parts of a Settings page, the Appearance page
-  src/settings/            the Settings layer and its pages' registry; api.rs is the contract
+  src/settings/            the Settings layer and its pages' registry, the Updates page; api.rs is
+                           the contract
   src/shell.rs             title bar slots, each app's view, the status bar
   src/dock/                the zones on the kit's dock: app and document tabs, the saved layout
   src/status_bar.rs, notices.rs
@@ -99,7 +102,6 @@ crates/app/                package detached-app, binary detached
   src/search/              V3: palette, find in files
   src/history/             V4: log, graph, commit details; api.rs is the contract
   src/forge/               V5: MR list and page, threads, merge widget, MR chip, pipelines, job log
-  src/update.rs            V6
   tests/                   UI tests, one file per vertical, shared fixtures in tests/common
 ```
 
@@ -250,7 +252,7 @@ file. V7 (terminal) starts after parity.
 | V3 search | `src/search/` | actions, nav, store (`refs`), `files::open`, `repos::checkout`, `settings::open` |
 | V4 history | `src/history/` | shell's bottom slot, `files::show_diff`, `repos::checkout`, `store.shown()` |
 | V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `cache`, `store.show`, `nav::open` with `DocRef`, `history::CommitDetails` |
-| V6 ship | `src/update.rs`, packaging, `.github/workflows/`, `scripts/`, `install.sh`, the Tauri client's removal | everything, for the release |
+| V6 ship | `core::update`, `kernel::update`, `settings/updates.rs`, packaging, `.github/workflows/`, `scripts/`, `install.sh`, the Tauri client's removal | everything, for the release |
 | V7 terminal | `src/terminal/` | shell's bottom slot |
 
 ### Contracts
@@ -308,7 +310,7 @@ provider then fills it in.
 - **Repos API** (`src/repos/api.rs`): `repos::checkout(cx, repo, CheckoutTarget)` (core's type;
   smart checkout with its dialogs).
 - **Settings API** (`src/settings/api.rs`): `settings::open(cx, id)` opens Settings at a page, or
-  shows it when open (`accounts`, `repository`, `git`, `appearance`, `keymap`);
+  shows it when open (`accounts`, `repository`, `git`, `appearance`, `keymap`, `updates`);
   `settings::register_page(cx, id, title, group, view)` adds one, listed by
   `Group::{App, Modules, Repo}` in the order registered.
 - **Files API** (`src/files/api.rs`):

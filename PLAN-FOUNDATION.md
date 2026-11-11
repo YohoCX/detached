@@ -726,6 +726,38 @@ Done when:
 Not covered, and it stays in docs/TECHDEBT.md: the install on Windows and from an AppImage has
 never been run by hand.
 
+Done on branch `foundation/5-updates`, 2026-11-11, not merged; `make check` and `make smoke` green:
+- `core::update::download` writes to a temp file in a directory it is given and verifies the file
+  with minisign's stream verifier; it returns a `TempPath`, so an error, a cancel or a drop leaves
+  no file. `Install::apply` takes the file's path. The local test server and keys are
+  `update::testutil`, behind core's `testutil` feature, for core's, the kernel's and the UI tests.
+- `kernel::update::Update` holds `state` (§6's nine) and `release` apart: a failed check keeps the
+  offered release. A background check and a manual one are the same call; a failure is "silent in
+  the status bar" because the marker shows only a release, and the page shows the error.
+- What tests replace is `Update.feed`: the base URL, the key, the running version and the download
+  directory (the system temp directory in the app). `kernel::init` makes `Update` with
+  `Install::current()`; `main` calls `kernel::update::start` for the launch and daily checks, not
+  under `--smoke`.
+- No check runs from the download to the restart, so a ready package stays until "Restart now".
+- A cancel sets the flag and the state stays "downloading" until the download's thread sees it at
+  its next read (a stalled read waits for its 30 s timeout), then "offered": nothing new starts
+  beside it, which was the bug.
+- The page is `settings/updates.rs` in the App group after Keymap, registered by the settings
+  feature as Appearance and Keymap are: its owner, the kernel, draws nothing, and `app/update.rs`
+  is gone. The marker is the status bar's own.
+- "Live" chats are the open ones with something in them, named by their tab's title
+  (`chat::live`); shells are every shell, in the Terminal app or a tab of its own
+  (`terminal::live`). With none, "Restart now" restarts at once.
+- docs/TECHDEBT.md had no update cancel row; `tests/update.rs` alone asserted the bug, and is
+  rewritten. The row of the updater's Unix-only tests is removed: they moved to core and are listed
+  in core's Unix-only row; the Windows and AppImage row stays.
+
+The owner checks: in a `make smoke`-style build nothing changes but the Updates page under App,
+which says updates are off; in a packaged build, the marker on an offer opens the page, Download
+shows the percent and Cancel brings the offer back with no `.detached-package*` file left in the
+temp directory; "Restart now" with a chat and a shell open names both, "Not now" keeps them, and
+"Restart anyway" restarts into the new version with no `.detached-update*` folder beside the app.
+
 ### Step 6. `Workspace` and `Repo`
 
 Size: 174 `Store::global` call sites; 14 `nav::`.

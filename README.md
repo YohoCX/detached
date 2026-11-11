@@ -48,9 +48,10 @@ Windows 10+ and Linux (x86-64, with a Vulkan or GL driver) packages are on the
 `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
 Credential Manager or the Secret Service (GNOME Keyring, KWallet).
 
-The app looks for a new release at launch and daily and offers it in the status bar; a click
-downloads it, checks its signature, installs it and restarts. A deb is updated by installing the
-new `.deb`.
+The app looks for a new release at launch and daily and offers it in the status bar, which opens
+the Updates page of Settings: there it downloads with its progress, its signature is checked, and
+it installs when you click Restart now, which first names the chats and shells a restart ends. A
+deb is updated by installing the new `.deb`.
 
 ## License
 
