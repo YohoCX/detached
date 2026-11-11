@@ -778,6 +778,33 @@ Done when:
 - no table keyed by a repo's path is left outside `Repo`;
 - a fetch's progress line re-renders the status bar and not the sidebar, shown by the test above.
 
+Done on branch `foundation/6-workspace-repo`, 2026-11-11, on top of `foundation/5-updates`, not
+merged; `make check` and `make smoke` green:
+- While the features moved, `Store` was a copy of the kernel: its writes went to the kernel and it
+  copied `Workspace` and every `Repo` back on each change, so each feature's commit moved alone. The
+  writers of the compare base, the tree ref and the outcome moved in the first commit, since the
+  copy would have overwritten theirs; so did the shell's `Shown`, which through the copy came after
+  the chat list's deferred focus.
+- `Workspace` keeps the list and one `Repo` per listed repo in the list's order, no map by path. It
+  notifies for its list, the current repo and the shown doc; a repo notifies its own observers, and
+  `Workspace` emits `Changed(path)` for it and `Status(path)` after a status refresh, for views that
+  follow a repo by path (a file, a diff, the Log). `Workspace::observe(cx, f)` calls `f` on both,
+  for views without a window; views that need the window subscribe themselves.
+- A repo that leaves the list loses its entity, and with it its compare base, tree ref and branch
+  names, which `Store` kept; a status of a repo not listed is not kept, its `Status` still emitted.
+- `Repo::set_outcome` fades a success itself; the repos feature's fade counter went. Left in their
+  features as views' memory, not repo state: the branch popup's recent branches, the tree's
+  expanded folders, the pipelines' seen jobs, and `cache.rs` until step 7.
+- `set_current` notifies even for the repo already current, as `Store`'s did: File History sets the
+  Log's filters and relies on it. The test: a switch notifies `Workspace`'s observers once and no
+  repo's.
+- GPUI redraws the whole window when any entity drawn in it notifies, so the progress test is on
+  notifications: a progress line notifies `Activity`, which the status bar observes, and neither
+  `Workspace` nor a `Repo`, which the sidebar observes; the op's end notifies its repo alone.
+- `nav` is `kernel::nav`; `app/nav.rs` only registers `nav.back` and `nav.forward`, since actions
+  need a window. `kernel::init` makes `Workspace` and starts its first rescan; the kernel's test
+  boot waits for it.
+
 The owner checks: the repo switcher and workspaces on and off; fetch and pull of one repo and of
 all; statuses, ahead and behind, the branch widget; Compare with a base; the tree at a ref; back,
 forward and recent files; a repo added and removed on disk.

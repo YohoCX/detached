@@ -8,7 +8,7 @@ Decided with the owner on 2026-11-07, after a revmux plan review
 (`.revmux/tasks/extensibility-ideas/`, kept locally):
 - Chat comes first; the app registry and zones are built once chat and the terminal show what they must
   carry.
-- No `crates/sdk`: built-ins stay on `Store` and the `api.rs` contracts, and `crates/kernel` is
+- No `crates/sdk`: built-ins stay on the kernel's entities and the `api.rs` contracts, and `crates/kernel` is
   internal. A registry lives in `crates/app`. The only versioned public API, when one is needed, is the plugin manifest and protocol.
 - [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md), agreed on 2026-11-10, changes the decisions above as its
   steps land: a kernel crate, registries, settings, updates, invalidation, the watcher.

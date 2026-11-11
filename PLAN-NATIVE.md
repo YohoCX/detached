@@ -77,17 +77,19 @@ crates/kernel/             package detached-kernel: the app's live state on gpui
   src/ui_state.rs          ui.json
   src/activity.rs          ops, notices, the status message, the log the Events app shows
   src/doc.rs               Doc, Location, DiffDoc, DocRef
+  src/workspace.rs         Workspace: the listed repos, a Repo each, the current one, the shown doc
+  src/repo.rs              Repo: a repo's status, branch names, compare base, tree ref, last outcome
+  src/nav.rs               back/forward and recent files
   src/settings.rs          the read-only snapshot of core's settings
   src/update.rs            Update: the updater's state, its checks, the download and the restart
 crates/app/                package detached-app, binary detached
   icons/                   the app icons
   src/main.rs              args (--self-test, --smoke), window, menus, boot
-  src/store.rs             app-wide state entity
   src/cache.rs             last-value cache with the 30 s focus-refresh skip
   src/util.rs              helpers several verticals use: path names, change letters, times, fuzzy
   src/keymap.rs            defaults, keymap.json, contexts, Double Shift
   src/actions.rs           action ids, registration, run
-  src/nav.rs               back/forward and recent files
+  src/nav.rs               registers nav.back and nav.forward
   src/ui/                  theme tokens, icons, panel, icon button, segmented control, row, grip,
                            the parts of a Settings page, the Appearance page
   src/settings/            the Settings layer and its pages' registry, the Updates page; api.rs is
@@ -152,12 +154,14 @@ Streams (log rows, find matches, progress lines) come back over a channel draine
 task that batches per frame. Each op or query has an id from the kernel (`Activity::run_op`'s op id,
 `blocking::QueryId`); dropping the view or starting a new query cancels the old id.
 
-**Store.** One GPUI entity holds what `src/lib/app.svelte.ts` holds today: repos, workspaces,
-current repo, statuses, outcomes, the document of the tab last
-on screen (`shown: Option<Doc>`), the per-repo
-session maps other verticals read (tree ref `refs`, Compare base `compare`) and branch names per
-repo for the ref inputs (`branch_names`, loaded on demand). Views observe it and read what they
-need. Ops, notices and the status message are the kernel's `Activity`. Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
+**Workspace and Repo.** The kernel's `Workspace` holds the repos the active workspaces list, the
+current repo and the document of the tab last on screen (`shown: Option<Doc>`); each listed repo
+has a `Repo` entity with its status, its last sync's outcome, the tree ref (`tree_ref`) and Compare
+base (`compare`) other verticals read, and its branch names for the ref inputs (`branch_names`,
+loaded on demand). A repo's change notifies its own entity; `Workspace` emits `Changed(path)` for
+it, `Status(path)` after a status refresh and `Shown` after `show`. Views observe what they read.
+Workspaces are the kernel's `Settings`; ops, notices and the status message its `Activity`.
+Refresh on window activation, status after each op, the same coalescing as `refreshAll`.
 
 **Keymap.** `keymap.rs` keeps the action ids of docs/KEYMAP.md, parses the same chord strings and
 the `keymap.json` overrides into `KeyBinding::load` (an override that does not parse unbinds the
@@ -246,12 +250,12 @@ file. V7 (terminal) starts after parity.
 
 | Vertical | Owns | Needs from others |
 | --- | --- | --- |
-| F foundation | workspace, `crates/core`, `crates/forge-fake` control and project routes, `main`, `store`, `blocking`, `cache`, `util`, `keymap`, `actions`, `nav`, `ui_state`, `ui/` (including the context-menu helper), `shell`, `status_bar`, `notices`, the first version of `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` (contracts and stubs), test fixtures, Makefile, CI | — |
-| V1 repos | `src/repos/` | store, shell slots, forge-fake `/user` and `/version` for account verify |
-| V2 files | `src/files/` | store (`refs`, `compare`), nav, `core::api::file_patch` |
-| V3 search | `src/search/` | actions, nav, store (`refs`), `files::open`, `repos::checkout`, `settings::open` |
-| V4 history | `src/history/` | shell's bottom slot, `files::show_diff`, `repos::checkout`, `store.shown()` |
-| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `cache`, `store.show`, `nav::open` with `DocRef`, `history::CommitDetails` |
+| F foundation | workspace, `crates/core`, `crates/kernel` (in place of `store`, `blocking`, `nav` and `ui_state`), `crates/forge-fake` control and project routes, `main`, `cache`, `util`, `keymap`, `actions`, `ui/` (including the context-menu helper), `shell`, `status_bar`, `notices`, the first version of `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` (contracts and stubs), test fixtures, Makefile, CI | — |
+| V1 repos | `src/repos/` | `Workspace`, `Repo`, shell slots, forge-fake `/user` and `/version` for account verify |
+| V2 files | `src/files/` | `Repo` (`tree_ref`, `compare`), nav, `core::api::file_patch` |
+| V3 search | `src/search/` | actions, nav, `Repo` (`tree_ref`), `files::open`, `repos::checkout`, `settings::open` |
+| V4 history | `src/history/` | shell's bottom slot, `files::show_diff`, `repos::checkout`, `Workspace::shown()` |
+| V5 forge | `src/forge/`, forge-fake MR, pipeline and job routes | top-bar slot, `files::DiffView` with annotations, `files::Markdown`, `settings::open`, `cache`, `Workspace::show`, `nav::open` with `DocRef`, `history::CommitDetails` |
 | V6 ship | `core::update`, `kernel::update`, `settings/updates.rs`, packaging, `.github/workflows/`, `scripts/`, `install.sh`, the Tauri client's removal | everything, for the release |
 | V7 terminal | `src/terminal/` | shell's bottom slot |
 
@@ -261,13 +265,13 @@ Fixed by F before the verticals start. Changing an existing signature or meaning
 edit agreed with the owner. [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md) is such an edit, agreed on
 2026-11-10: its steps change the contracts below, each in the step that makes the change true.
 Adding is lighter: a vertical that finds a missing piece (a field, a
-variant, a function) adds it with a stub to the provider's `api.rs` or the store in its own small
+variant, a function) adds it with a stub to the provider's `api.rs` or the kernel in its own small
 commit on main, with the matching line in this section, without changing what is there; the
 provider then fills it in.
 
-- **Store:** fields and events above; `store.current()`, `store.status(repo)`, `Activity::run_op(...)`,
-  `store.tree_ref(repo)`, `store.compare(repo)`, `store.shown()`, `store.show(Doc)`, which opens
-  the doc in a tab or brings its tab forward.
+- **Workspace and Repo:** fields and events above; `Workspace::current()`, `Repo::get(cx, repo)`
+  with its `status()`, `tree_ref` and `compare`, `Activity::run_op(...)`, `Workspace::shown()`,
+  `Workspace::show(Doc)`, which opens the doc in a tab or brings its tab forward.
 - **Dock:** `dock::open(name, window, cx)`, which shows the app of that name in its zone (never
   toggles; an app's `panel.*` action toggles it with `dock::toggle`), for Compare with Base (V1
   opens `changes`), file history (V4 opens `log`) and Run Pipeline and the badge (V5 open
@@ -334,12 +338,12 @@ provider then fills it in.
 - **Helpers** (`util.rs`, F): `base_name`, `dir_name`, `folder_name`, `in_folder`, the change
   `letter` and `status_of`, `when` (commit and pipeline times), `fuzzy::filter`/`segments`; the
   context-menu helper in `ui/`. A vertical's own helpers stay in its directory.
-- **Navigation:** `nav::open(cx, Location)` records and shows any location (file, MR, job),
+- **Navigation:** `kernel::nav::open(cx, Location)` records and shows any location (file, MR, job),
   back/forward, recent files (files only) with today's caps (50, 100).
 - **UI:** `ui` primitives and theme tokens; a vertical needing a new primitive adds it to `ui/` in
   its own commit. `kernel::ui_state::get/set` with the vertical's key prefix.
 - **Fixtures:** `Sandbox` repos, `settle`/`wait_until`, the forge fake, `open_app(cx)` returning a
-  test window with the store booted; `open_app_with(cx, layout)` for e2e's sandbox (`ws/`, `solo`)
+  test window with the kernel booted; `open_app_with(cx, layout)` for e2e's sandbox (`ws/`, `solo`)
   and `open_forge(cx)` for its `forge/` repos on a seeded fake, with the `Fixture` paths
   (`sb.repo("group/api")`, ...) and `sb.commit_files`.
 - **Forge fake:** F ports the control routes (`/health`, `/reset` with the seed of projects, bare
@@ -357,7 +361,7 @@ provider then fills it in.
 | shell.md §1.1 (top bar shell) | F; its widgets per the slot list |
 | shell.md §1.3–1.7, §1.9, §1.10, §2.1 (the rest: checkout and its notices, recent branches, sync, prune, add folders, `settingsCall`, and the handlers per the actions' owner column), §2.4, §3 (sidebar keys), §4 | V1 |
 | shell.md §1.8; files.md §1.4, §1.6, §4 | V3 |
-| files.md §0, §1.7 | F (store, nav, actions, viewer lifetime), V2 (viewer) |
+| files.md §0, §1.7 | F (kernel, nav, actions, viewer lifetime), V2 (viewer) |
 | files.md §1.1–1.3, §1.5, §2, §3, §5, §6 | V2 |
 | history.md §0 | F (panel toggles, strip), V5 (MR chip, badge) |
 | history.md §1 | V4 |

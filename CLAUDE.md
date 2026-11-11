@@ -58,8 +58,9 @@ Keep this list in sync with the Makefile.
 
 ## Native UI
 
-- Views read the `Store`, the kernel's entities (`Activity`, `Settings`) and their own state; they do not cache
-  what those already hold. The exception: the Settings pages reload their own copy of the settings in
+- Views read the kernel's entities (`Workspace`, `Repo`, `Activity`, `Settings`, `Update`) and their
+  own state. A view may keep what exists only to draw (a laid-out text, a scroll position); it keeps
+  no state the kernel holds. The exception: the Settings pages reload their own copy of the settings in
   the job that writes them, so a picker never lags a change made on the page.
 - Colors, radii, spacing and fonts come from `ui::theme` tokens, never literals in views.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
@@ -94,7 +95,7 @@ Keep this list in sync with the Makefile.
   separate commit with a reason.
 - PLAN-NATIVE "Contracts": changing an existing signature takes a plan edit agreed with the owner;
   adding a missing piece is your own small commit on main (stub in the provider's `api.rs` or the
-  store, plus its line in the plan).
+  kernel, plus its line in the plan).
 - Before merge: rebase on main, `make check` green, a revmux round (claude-only profile, opus high)
   without blocking findings, the owner's check on macOS.
 
