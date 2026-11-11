@@ -63,6 +63,8 @@ struct Current {
     root: PathBuf,
     /// The global excludes and `info/exclude`.
     base: Vec<Arc<Gitignore>>,
+    /// `info/exclude` as read, to walk again when it changed.
+    exclude: Vec<u8>,
     /// Each directory's `.gitignore`, read when an event first passes it.
     ignores: HashMap<PathBuf, Arc<Gitignore>>,
 }
@@ -121,11 +123,11 @@ impl Watcher {
         let git = inner.apply(&old, git);
         let mut s = inner.state.lock().unwrap();
         (s.repos, s.git) = (dirs, git);
-        let root = |c: &Option<Current>| c.as_ref().map(|c| c.root.clone());
-        let moved = root(&s.current) != root(&current);
+        let key = |c: &Option<Current>| c.as_ref().map(|c| (c.root.clone(), c.exclude.clone()));
+        let changed = key(&s.current) != key(&current);
         s.current = current;
         drop(s);
-        if moved {
+        if changed {
             inner.walk();
         }
     }
@@ -302,8 +304,9 @@ impl Dirs {
 impl Current {
     fn new(repo: &str, common: &Path) -> Option<Current> {
         let root = canon(repo)?;
+        let path = common.join("info").join("exclude");
         let mut exclude = GitignoreBuilder::new(&root);
-        exclude.add(common.join("info").join("exclude"));
+        exclude.add(&path);
         let base = [
             GitignoreBuilder::new(&root).build_global().0,
             exclude.build().unwrap_or_else(|_| Gitignore::empty()),
@@ -312,6 +315,7 @@ impl Current {
             repo: repo.into(),
             root,
             base: base.map(Arc::new).into(),
+            exclude: std::fs::read(path).unwrap_or_default(),
             ignores: HashMap::new(),
         })
     }
@@ -615,27 +619,31 @@ mod tests {
         fs::write(t.dir("a").join(".gitignore"), "target/\n").unwrap();
         t.write("a", "target/x/o");
         t.watch(Some("a"));
-        let dropped = |p: PathBuf| {
-            let mut b = Batch::default();
-            t.w.0.state.lock().unwrap().dropped(&p, &mut b);
-            b.repos
+        let dropped = |paths: Vec<PathBuf>| {
+            let mut e = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+            e.paths = paths;
+            t.w.0.mark(vec![Ok(e)]).repos
         };
         let a = canon(t.dir("a")).unwrap();
-        assert!(dropped(a.join("target/x")).is_empty());
-        assert_eq!(dropped(a.join("src")), set(&["a"], &t));
-        assert_eq!(dropped(PathBuf::new()), set(&["a", "b", "control"], &t));
+        assert!(dropped(vec![a.join("target/x")]).is_empty());
+        assert_eq!(dropped(vec![a.join("src")]), set(&["a"], &t));
+        assert_eq!(dropped(vec![]), set(&["a", "b", "control"], &t));
     }
 
     #[test]
-    fn the_excludes_are_read_again_on_each_set() {
+    fn the_excludes_are_read_again_on_each_set_and_a_change_walks_again() {
         let t = T::new(&["a"]);
+        t.write("a", "gen/f");
+        let exclude = t.dir("a").join(".git/info/exclude");
+        fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        fs::write(&exclude, "gen/\n").unwrap();
         t.watch(Some("a"));
+        assert!(t.after(|| t.write("a", "gen/x")).repos.is_empty());
         assert_eq!(t.after(|| t.write("a", "x.tmp")).repos, set(&["a"], &t));
-        let info = t.dir("a").join(".git/info");
-        fs::create_dir_all(&info).unwrap();
-        fs::write(info.join("exclude"), "*.tmp\n").unwrap();
+        fs::write(&exclude, "*.tmp\n").unwrap();
         t.watch(Some("a"));
         assert!(t.after(|| t.write("a", "x.tmp")).repos.is_empty());
+        assert_eq!(t.after(|| t.write("a", "gen/y")).repos, set(&["a"], &t));
     }
 
     #[test]

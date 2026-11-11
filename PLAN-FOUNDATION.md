@@ -911,7 +911,8 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
   by name), so a tracked `Cargo.lock` marks its repo.
 - The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes
   the directory and forgotten when a `.gitignore` changes, over the global excludes and
-  `info/exclude`, which each `set` reads again; the deepest rule for a path decides. A directory's
+  `info/exclude`, which each `set` reads again; the deepest rule for a path decides. Linux walks
+  again when `info/exclude` changed; a change to the global excludes reaches the filter alone. A directory's
   own modified event is dropped: Windows raises it beside its child's, so an ignored file made in
   the root would mark the repo. Linux's walk is core's `files::walker`, the tree's. A new
   directory or a changed `.gitignore` runs the walk again on a thread of its own, which watches
