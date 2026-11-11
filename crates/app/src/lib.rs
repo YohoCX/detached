@@ -17,7 +17,6 @@ pub mod status_bar;
 pub mod store;
 pub mod terminal;
 pub mod ui;
-pub mod update;
 pub mod util;
 
 use gpui_kit::{App, Global};

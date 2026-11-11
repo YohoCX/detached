@@ -1,6 +1,7 @@
 //! The Settings layer: a modal over the window with the pages features register, listed by group.
 
 mod api;
+mod updates;
 
 pub use api::*;
 
@@ -53,6 +54,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         ui::appearance::page,
     );
     register_page(cx, "keymap", "Keymap", Group::App, keymap::page);
+    register_page(cx, "updates", "Updates", Group::App, updates::page);
     vec![]
 }
 

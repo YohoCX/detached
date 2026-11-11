@@ -36,6 +36,7 @@ fn each_page_opens_by_its_id(cx: &mut TestAppContext) {
         ("git", "settings.git"),
         ("appearance", "settings.appearance"),
         ("keymap", "settings.keymap"),
+        ("updates", "settings.updates"),
         ("repository", "settings.removed"),
     ];
     for (id, page) in pages {
@@ -62,6 +63,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Git",
         "Appearance",
         "Keymap",
+        "Updates",
         "Modules",
         "Stub",
         "Current repository",

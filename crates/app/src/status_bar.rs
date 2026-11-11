@@ -4,18 +4,19 @@
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
-    relative,
+    App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Role,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    prelude::FluentBuilder, px, relative,
 };
+
+use detached_core::update::Install;
 
 use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::update;
-use crate::{actions, keymap};
+use crate::{actions, keymap, settings};
 use kernel::activity::{Activity, Level};
-use kernel::update::Update;
+use kernel::update::{State, Update};
 
 pub struct StatusBar {
     _store: Subscription,
@@ -187,7 +188,37 @@ impl Render for StatusBar {
             .child(left)
             .child(div().flex_1())
             .children(ops)
-            .children(update::item(cx))
+            .children(update(cx))
             .children(events)
     }
+}
+
+/// The marker of an offered release, with the download's percent; a click opens the Updates page.
+fn update(cx: &App) -> Option<impl IntoElement + use<>> {
+    let u = Update::global(cx).read(cx);
+    let v = &u.release.as_ref()?.version;
+    let t = theme(cx);
+    let label = match (&u.install, &u.state) {
+        (Some(Install::Deb), _) => format!("Detached {v} is out"),
+        (_, State::Ready) => format!("Restart to update to {v}"),
+        (_, s) => s
+            .percent()
+            .map_or(format!("Update to {v}"), |p| format!("Updating {p}%")),
+    };
+    let busy = matches!(
+        u.state,
+        State::Downloading { .. } | State::Verifying | State::Installing
+    );
+    Some(
+        ui::pressable("update")
+            .test_support()
+            .gap(px(4.))
+            .role(Role::Button)
+            .aria_label(label.clone())
+            .text_color(t.accent)
+            .font_weight(FontWeight::SEMIBOLD)
+            .when(busy, |d| d.child(ui::spinner(t.accent)))
+            .child(label)
+            .on_click(|_, _, cx| settings::open(cx, "updates")),
+    )
 }
