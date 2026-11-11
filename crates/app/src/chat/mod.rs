@@ -18,11 +18,11 @@ pub use session::{Item, Session, State};
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec, DocKind};
-use crate::store::Store;
 use crate::ui::{self, Icon, theme};
 use crate::util::first_line;
 use kernel::activity::Activity;
 use kernel::doc::Doc;
+use kernel::workspace::Workspace;
 
 /// Sessions outlive their page, which goes when another document is shown.
 #[derive(Default)]
@@ -52,8 +52,7 @@ pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Session>> {
 
 /// A chat's place by name: the repo's, or the folder's with a slash.
 pub fn label(path: &str, cx: &App) -> String {
-    let s = Store::global(cx).read(cx);
-    match s.repos.iter().find(|r| r.path == path) {
+    match Workspace::get(cx).repos().iter().find(|r| r.path == path) {
         Some(r) => r.name.clone(),
         None => format!("{}/", crate::util::base_name(path)),
     }
@@ -78,7 +77,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             && find(repo, n, cx).is_some()
         {
             let repo = repo.to_string();
-            Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo, n }, cx));
+            Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
             cx.activate(true);
         }
     });
@@ -87,7 +86,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         "agent.chat",
         "Claude",
         actions::Group::View,
-        |_, cx| match Store::global(cx).read(cx).current().map(String::from) {
+        |_, cx| match Workspace::get(cx).current().map(String::from) {
             Some(repo) => show(repo, cx),
             None => Activity::global(cx).update(cx, |a, cx| {
                 a.say("Select a repository to chat about", false, cx)
@@ -102,14 +101,14 @@ pub fn show(repo: String, cx: &mut App) {
         .into_iter()
         .find(|(r, ..)| *r == repo)
         .map_or(0, |(_, n, _)| n);
-    Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo, n }, cx));
+    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
 /// Shows a chat on `repo` with nothing in it: an untouched open one, else a new one with `from`'s
 /// mode, model and effort.
 pub fn new_chat(repo: String, from: Option<&Entity<Session>>, cx: &mut App) {
     let n = fresh(&repo, from, cx);
-    Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo, n }, cx));
+    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
 /// Shows past conversation `id`: in the chat that has it, else in a chat on `cwd` with nothing in it.
@@ -122,7 +121,7 @@ pub fn resume(cwd: String, id: String, cx: &mut App) {
             (cwd, n)
         }
     };
-    Store::global(cx).update(cx, |s, cx| s.show(Doc::Chat { repo, n }, cx));
+    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
 fn fresh(repo: &str, from: Option<&Entity<Session>>, cx: &mut App) -> u32 {

@@ -16,10 +16,10 @@ use gpui_kit::{App, AppContext, Context, Entity, Task};
 use serde::{Deserialize, Serialize};
 
 use crate::files::{Links, Markdown};
-use crate::store::Store;
 use kernel::activity::{Activity, Level};
 use kernel::blocking;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 /// The last commands each repo's session listed, for `/` before a session runs.
 const COMMANDS: &str = "chat.commands";
@@ -347,12 +347,12 @@ impl Session {
 
     /// The repos this chat works in: its own, or every one inside its folder.
     pub fn repos(&self, cx: &App) -> Vec<String> {
-        let s = Store::global(cx).read(cx);
-        if s.repos.iter().any(|r| r.path == self.repo) {
+        let repos = Workspace::get(cx).repos();
+        if repos.iter().any(|r| r.path == self.repo) {
             return vec![self.repo.clone()];
         }
         let folder = std::path::Path::new(&self.repo);
-        s.repos
+        repos
             .iter()
             .filter(|r| std::path::Path::new(&r.path).starts_with(folder))
             .map(|r| r.path.clone())
@@ -524,7 +524,7 @@ impl Session {
                 }
                 if restored && let Some(Item::Changes { repo, .. }) = s.items.get(item) {
                     let repo = repo.clone();
-                    Store::global(cx).update(cx, |st, cx| st.refresh(repo, cx).detach());
+                    Workspace::global(cx).update(cx, |w, cx| w.refresh(repo, cx).detach());
                 }
                 cx.notify();
             })
@@ -910,7 +910,7 @@ impl Session {
                 self.ask_gone(None);
                 self.end_turn(cx);
                 for repo in self.repos(cx) {
-                    Store::global(cx).update(cx, |s, cx| s.refresh(repo, cx).detach());
+                    Workspace::global(cx).update(cx, |w, cx| w.refresh(repo, cx).detach());
                 }
             }
             Event::Sessions { sessions } => self.past = Some(sessions),

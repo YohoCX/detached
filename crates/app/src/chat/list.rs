@@ -17,13 +17,13 @@ use gpui_kit::{
 };
 
 use super::{Item, Session, label, open, state_icon};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, now};
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::settings::Settings;
+use kernel::workspace::Workspace;
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
@@ -98,7 +98,7 @@ impl ChatList {
             _run: None,
             runs: 0,
             _subscriptions: vec![
-                cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Workspace::global(cx), |_, _, cx| cx.notify()),
                 cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
                 cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
@@ -320,7 +320,7 @@ impl ChatList {
                     repo: repo.clone(),
                     n: *n,
                 };
-                Store::global(cx).update(cx, |s, cx| s.show(doc, cx));
+                Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
             }
             Key::Past(id) => {
                 let past = self.past.iter().find(|p| p.id == *id);
@@ -684,7 +684,7 @@ impl Render for ChatList {
                         )
                         .test_support()
                         .on_click(|_, _, cx| {
-                            match Store::global(cx).read(cx).current().map(String::from) {
+                            match Workspace::get(cx).current().map(String::from) {
                                 Some(repo) => super::new_chat(repo, None, cx),
                                 None => Activity::global(cx).update(cx, |a, cx| {
                                     a.say("Select a repository to chat about", false, cx)

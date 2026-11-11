@@ -19,11 +19,11 @@ use detached_core::git::snapshot::Skip;
 use detached_core::types::Side;
 
 use super::session::{Answer, Back, Item, Session};
-use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
+use kernel::workspace::Workspace;
 
 const MODES: &[(&str, &str, Option<&str>)] = &[
     (
@@ -915,7 +915,7 @@ impl ChatView {
         };
         // A folder's chat says which of its repos.
         if self.session.read(cx).repo != *repo {
-            title += &format!(" in {}", Store::global(cx).read(cx).name_of(repo));
+            title += &format!(" in {}", Workspace::get(cx).name_of(repo));
         }
         let rows = files.iter().enumerate().map(|(j, f)| {
             let doc = Doc::Diff(DiffDoc {
@@ -931,7 +931,7 @@ impl ChatView {
                 .gap(px(6.))
                 .on_click(move |_, _, cx| {
                     let doc = doc.clone();
-                    Store::global(cx).update(cx, |s, cx| s.show(doc, cx))
+                    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx))
                 })
                 .child(
                     div()

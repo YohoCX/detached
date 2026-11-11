@@ -6,11 +6,12 @@ use detached_core::agent;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
+use kernel::repo::Repo;
 
 fn open_bare(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);
     let solo = app.sb.solo().display().to_string();
-    app.store(|s, cx| s.set_current(Some(solo), cx));
+    app.workspace(|w, cx| w.set_current(Some(solo), cx));
     app.click("top.chat");
     app
 }
@@ -28,7 +29,7 @@ fn open_seeded(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> TestApp 
         std::fs::copy(env!("CARGO_BIN_EXE_fake_sidecar"), installed).unwrap();
     });
     let solo = app.sb.solo().display().to_string();
-    app.store(|s, cx| s.set_current(Some(solo), cx));
+    app.workspace(|w, cx| w.set_current(Some(solo), cx));
     app.click("top.chat");
     app
 }
@@ -201,8 +202,8 @@ fn the_session_outlives_its_page(cx: &mut TestAppContext) {
     wait_for_item(cx, "said hello");
     idle(cx);
     let solo = cx.sb.solo().display().to_string();
-    cx.store(|s, cx| {
-        s.show(
+    cx.workspace(|w, cx| {
+        w.show(
             Doc::Mr {
                 repo: solo,
                 number: 1,
@@ -225,9 +226,9 @@ fn the_end_of_a_turn_refreshes_the_repo(cx: &mut TestAppContext) {
     std::fs::write(solo.join("by-the-agent.txt"), "x").unwrap();
     let repo = solo.display().to_string();
     let has = |cx: &mut VisualTestContext, repo: &str| {
-        cx.store(|s, _| {
-            s.status(repo)
-                .is_some_and(|st| st.changes.iter().any(|c| c.path == "by-the-agent.txt"))
+        cx.update(|_, cx| {
+            let st = Repo::get(cx, repo).and_then(Repo::status);
+            st.is_some_and(|st| st.changes.iter().any(|c| c.path == "by-the-agent.txt"))
         })
     };
     assert!(!has(cx, &repo));
@@ -301,9 +302,9 @@ fn an_active_chat_archives_or_deletes_its_conversation_and_ends(cx: &mut TestApp
 #[gpui_kit::test]
 fn no_repo_selected_says_so(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, layout);
-    app.store(|s, cx| s.set_current(None, cx));
+    app.workspace(|w, cx| w.set_current(None, cx));
     app.click("top.chat");
-    assert!(app.store(|s, _| s.shown().is_none()));
+    assert!(app.workspace(|w, _| w.shown().is_none()));
     assert!(app.activity(|s, _| s.message.is_some()));
 }
 
@@ -404,7 +405,7 @@ fn an_empty_chat_brings_forward_the_chat_that_already_shows_a_past_conversation(
     cx.click(("chat.past", 0usize));
     let repo = cx.sb.solo().display().to_string();
     assert_eq!(
-        cx.store(|s, _| s.shown().cloned()),
+        cx.workspace(|w, _| w.shown().cloned()),
         Some(Doc::Chat { repo, n: 0 })
     );
     assert_eq!(items(cx), ["You: fix it", "fixed"]);
@@ -447,8 +448,8 @@ fn a_chat_that_needs_you_while_the_window_is_away_notifies_and_the_notice_shows_
     assert_eq!(notice.body, "solo · hello");
 
     let solo = cx.sb.solo().display().to_string();
-    cx.store(|s, cx| {
-        s.show(
+    cx.workspace(|w, cx| {
+        w.show(
             Doc::Mr {
                 repo: solo,
                 number: 1,
@@ -551,7 +552,7 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
         "2 files changed in this turn: README.md, made-by-agent.txt",
     );
     cx.click(SharedString::from(format!("chat.file.{i}.0")));
-    let shown = cx.store(|s, _| s.shown().cloned());
+    let shown = cx.workspace(|w, _| w.shown().cloned());
     assert!(
         matches!(shown, Some(Doc::Diff(d)) if d.path == "README.md" && matches!(d.right, detached_core::types::Side::Rev { .. }))
     );
@@ -699,7 +700,7 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     let cx = &mut open(cx);
     let group = cx.sb.ws().join("group");
     let repo = group.display().to_string();
-    cx.store(|s, cx| s.show(Doc::Chat { repo, n: 0 }, cx));
+    cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
     settle(cx);
     assert!(label(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
     say(cx, "edit both");
