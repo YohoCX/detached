@@ -11,8 +11,9 @@ use super::{active, color, core, glyph, name, pipelines::Session, poll};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
 use crate::dock;
-use crate::store::Store;
 use crate::ui::{self, radius, theme};
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// The current branch's latest pipeline; a click opens Pipelines. It also runs `pipeline.run`.
 pub struct PipelineBadge {
@@ -37,7 +38,7 @@ impl PipelineBadge {
             },
         );
         let subscriptions = vec![
-            cx.observe(&Store::global(cx), |this, _, cx| this.sync(cx)),
+            Workspace::observe(cx, |this, cx| this.sync(cx)),
             cx.observe_global::<Cache<Option<Pipeline>>>(|_, cx| cx.notify()),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -57,10 +58,11 @@ impl PipelineBadge {
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let repo = s.current().map(String::from);
+        let repo = Workspace::get(cx).current().map(String::from);
         let key = repo.as_deref().and_then(|r| {
-            let st = s.status(r).filter(|st| st.upstream.is_some())?;
+            let st = Repo::get(cx, r)?
+                .status()
+                .filter(|st| st.upstream.is_some())?;
             Some(format!("badge {r} {:?} {:?}", st.head, st.branch))
         });
         if key != self.key {

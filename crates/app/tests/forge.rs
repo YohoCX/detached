@@ -14,25 +14,26 @@ use gpui_kit::{
     point, px,
 };
 use kernel::doc::Doc;
+use kernel::repo::Repo;
 use serde_json::{Value, json};
 
 /// Makes the forge repo `name` (`gitlab`, `github`) current.
 fn show(cx: &mut VisualTestContext, name: &str) {
-    cx.store(|s, cx| {
-        let repo = s
-            .repos
+    cx.workspace(|w, cx| {
+        let repo = w
+            .repos()
             .iter()
             .find(|r| r.name == name)
             .unwrap()
             .path
             .clone();
-        s.set_current(Some(repo), cx)
+        w.set_current(Some(repo), cx)
     });
     settle(cx);
 }
 
 fn shown_mr(cx: &mut VisualTestContext) -> Option<u64> {
-    match cx.store(|s, _| s.shown().cloned()) {
+    match cx.workspace(|w, _| w.shown().cloned()) {
         Some(Doc::Mr { number, .. }) => Some(number),
         _ => None,
     }
@@ -148,7 +149,7 @@ fn gitlab_badge_opens_pipelines_jobs_retry_and_run_with_variables(cx: &mut TestA
     }
 
     click_in(cx, job, "open");
-    let shown = cx.store(|s, _| s.shown().cloned());
+    let shown = cx.workspace(|w, _| w.shown().cloned());
     assert!(matches!(shown, Some(Doc::Job { id: 101, .. })), "{shown:?}");
 
     click_in(cx, job, "retry");
@@ -241,7 +242,7 @@ fn github_runs_jobs_rerun_and_dispatch(cx: &mut TestAppContext) {
 fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     let accounts = api::list_accounts(&core).unwrap();
     let gitlab = accounts.iter().find(|a| a.label == "Fake GitLab").unwrap();
     api::remove_account(&core, &gitlab.id).unwrap();
@@ -505,7 +506,7 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
     assert_eq!(cx.find(row).unwrap().selected(), Some(true));
 
     let (core, repo) =
-        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
+        cx.workspace(|w, cx| (kernel::core(cx).clone(), w.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Approve).unwrap();
     cx.click("mrs.refresh");
     wait_until(cx, |cx| label(cx, row).unwrap().contains(" tester ✓1 "));
@@ -537,10 +538,10 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
         &["branch", "-q", "--set-upstream-to", "origin/topic"],
     );
     show(cx, "gitlab");
-    cx.store(|s, cx| s.refresh_all(cx));
+    cx.workspace(|w, cx| w.refresh_all(cx));
     let path = repo.display().to_string();
     let upstream = |cx: &mut VisualTestContext| {
-        cx.store(|s, _| s.status(&path).and_then(|st| st.upstream.clone()))
+        cx.update(|_, cx| Repo::get(cx, &path)?.status()?.upstream.clone())
     };
     // Until then the create button can show under the old branch, read after the switch.
     wait_until(cx, |cx| upstream(cx).as_deref() == Some("origin/topic"));
@@ -584,7 +585,7 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
 fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     let second = AccountInput {
         id: None,
         provider: Provider::GitlabSelfHosted,
@@ -607,7 +608,7 @@ fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppCont
         cx.find(option.clone()).is_some()
     });
     cx.click(option);
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
     wait_until(cx, |_| {
         api::get_settings(&core).forge_accounts.contains_key(&repo)
     });
@@ -716,8 +717,8 @@ fn the_list_filters_searches_and_polls_every_60_s(cx: &mut TestAppContext) {
 /// Shows MR 1 of the forge repo `name`, loaded.
 fn open_mr(cx: &mut VisualTestContext, name: &str) {
     show(cx, name);
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
-    cx.store(|s, cx| s.show(Doc::Mr { repo, number: 1 }, cx));
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
+    cx.workspace(|w, cx| w.show(Doc::Mr { repo, number: 1 }, cx));
     wait_until(cx, |cx| label(cx, "mr.title").is_some());
 }
 
@@ -843,7 +844,7 @@ fn replies_and_resolves_a_gitlab_thread(cx: &mut TestAppContext) {
     let cx = &mut app;
     show(cx, "gitlab");
     let (core, repo) =
-        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
+        cx.workspace(|w, cx| (kernel::core(cx).clone(), w.current().unwrap().to_string()));
     let comment = MrAction::LineComment {
         body: "Why?".into(),
         path: "README.md".into(),
@@ -950,7 +951,7 @@ fn a_failed_action_shows_until_dismissed(cx: &mut TestAppContext) {
     let cx = &mut app;
     open_mr(cx, "gitlab");
     let (core, repo) =
-        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
+        cx.workspace(|w, cx| (kernel::core(cx).clone(), w.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
     cx.click("merge.submit");
     wait_until(cx, |cx| cx.find("mr.failure").is_some());
@@ -995,7 +996,7 @@ fn the_changes_tab_lists_files_by_path_with_thread_badges(cx: &mut TestAppContex
     let cx = &mut app;
     show(cx, "gitlab");
     let (core, repo) =
-        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
+        cx.workspace(|w, cx| (kernel::core(cx).clone(), w.current().unwrap().to_string()));
     let head = &seed.projects[0].mrs[0].head_sha;
     let comment = |old_line, new_line| MrAction::LineComment {
         body: "Hm".into(),
@@ -1187,7 +1188,7 @@ fn a_closed_mr_takes_no_line_comments(cx: &mut TestAppContext) {
     open_file(cx, 1);
     assert!(plus_at(cx, "new", 3));
     let (core, repo) =
-        cx.store(|s, cx| (kernel::core(cx).clone(), s.current().unwrap().to_string()));
+        cx.workspace(|w, cx| (kernel::core(cx).clone(), w.current().unwrap().to_string()));
     api::mr_action(&core, &repo, 1, &MrAction::Close).unwrap();
     cx.click("mr.refresh");
     wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));
@@ -1200,7 +1201,7 @@ fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut Test
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
     let readme: String = (1..=30)
         .map(|i| match i {
             3 => "line 3 changed\n".into(),
@@ -1220,7 +1221,7 @@ fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut Test
     cx.update(|_, cx| files::show_diff(cx, shown, true));
     wait_until(cx, |cx| current_line(cx) == "line 20 edited");
 
-    cx.store(|s, cx| s.show(Doc::Mr { repo, number: 1 }, cx));
+    cx.workspace(|w, cx| w.show(Doc::Mr { repo, number: 1 }, cx));
     wait_until(cx, |cx| label(cx, "mr.title").is_some());
     open_file(cx, 1);
     cx.press("secondary-l");

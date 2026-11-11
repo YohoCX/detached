@@ -15,10 +15,10 @@ use gpui_kit::{
 use super::mr::{bare_title, number, setup_problem, show_mr, tone};
 use super::{core, name, note, now, poll, setup_note};
 use crate::cache::{self, Cache};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{ago, fuzzy};
 use kernel::doc::Doc;
+use kernel::workspace::Workspace;
 
 const FILTERS: [(MrFilter, &str); 5] = [
     (MrFilter::Open, "Open"),
@@ -51,7 +51,7 @@ impl MrList {
         let labels = SearchableVec::new(FILTERS.map(|f| f.1).to_vec());
         let pick = cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(0)), window, cx));
         let subscriptions = vec![
-            cx.observe(&Store::global(cx), |this, _, cx| {
+            cx.observe(&Workspace::global(cx), |this, _, cx| {
                 this.sync(cx);
                 cx.notify();
             }),
@@ -88,7 +88,7 @@ impl MrList {
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let repo = Store::global(cx).read(cx).current().map(String::from);
+        let repo = Workspace::get(cx).current().map(String::from);
         if repo != self.repo {
             self.repo = repo;
             self.load(false, cx);
@@ -243,7 +243,7 @@ impl Render for MrList {
         );
         let loaded = cached.is_some();
         let query = self.query.read(cx).value().to_string();
-        let shown = match Store::global(cx).read(cx).shown() {
+        let shown = match Workspace::get(cx).shown() {
             Some(Doc::Mr { repo, number }) if self.repo.as_ref() == Some(repo) => Some(*number),
             _ => None,
         };

@@ -14,10 +14,11 @@ use super::core;
 use super::mr::{bare_title, number, setup_problem, show_mr};
 use crate::actions::{self, Group, Registration};
 use crate::cache::{self, Cache};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::activity::Activity;
 use kernel::blocking;
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 struct Form {
     new: NewMr,
@@ -54,7 +55,7 @@ impl MrChip {
             },
         );
         let subscriptions = vec![
-            cx.observe(&Store::global(cx), |this, _, cx| this.sync(cx)),
+            Workspace::observe(cx, |this, cx| this.sync(cx)),
             cx.observe_global::<Cache<Option<MergeRequest>>>(|_, cx| cx.notify()),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -75,10 +76,9 @@ impl MrChip {
 
     /// A new key reloads and drops the form.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let repo = s.current().map(String::from);
+        let repo = Workspace::get(cx).current().map(String::from);
         let key = repo.as_deref().and_then(|r| {
-            let st = s.status(r)?;
+            let st = Repo::get(cx, r)?.status()?;
             let (branch, upstream) = (st.branch.as_ref()?, st.upstream.as_ref()?);
             Some(format!("chip\0{r}\0{branch}\0{upstream}"))
         });

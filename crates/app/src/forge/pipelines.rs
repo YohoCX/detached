@@ -22,11 +22,12 @@ use super::mr::setup_problem;
 use super::{active, color, core, glyph, name, note, now, poll, setup_note, took};
 use crate::cache::{self, Cache};
 use crate::settings;
-use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::{nav, util};
 use kernel::blocking;
 use kernel::doc::{DocRef, Location};
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// For the session: the branch scope, and a Run Pipeline… request for the panel.
 #[derive(Default)]
@@ -88,7 +89,7 @@ impl Pipelines {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscriptions = vec![
-            cx.observe(&Store::global(cx), |this, _, cx| this.sync(cx)),
+            Workspace::observe(cx, |this, cx| this.sync(cx)),
             cx.observe_global::<Cache<Vec<Pipeline>>>(|_, cx| cx.notify()),
             cx.observe_global_in::<Session>(window, |this, window, cx| {
                 this.sync(cx);
@@ -126,9 +127,9 @@ impl Pipelines {
 
     /// Follows the repo, the scope and the head: each change reloads, a new key collapses all.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let repo = self.fixed.clone().or_else(|| s.current().map(String::from));
-        let st = repo.as_deref().and_then(|r| s.status(r));
+        let current = Workspace::get(cx).current().map(String::from);
+        let repo = self.fixed.clone().or(current);
+        let st = repo.as_deref().and_then(|r| Repo::get(cx, r)?.status());
         let head = format!("{:?}", st.map(|s| (&s.head, &s.branch)));
         let at = repo.as_deref().unwrap_or_default();
         let key = format!("pipes {at} {} {}", self.mr.unwrap_or(0), Self::all(cx));
@@ -276,7 +277,7 @@ impl Pipelines {
         };
         let listed = cache::cached::<Vec<Pipeline>>(&self.key, cx)
             .and_then(|c| Some(c.value.as_ref()?.first()?.project.clone()));
-        let st = Store::global(cx).read(cx).status(&repo);
+        let st = Repo::get(cx, &repo).and_then(Repo::status);
         let branch = st.and_then(|s| s.branch.clone()).unwrap_or_default();
         let (core, r) = (core(cx), repo.clone());
         let form = blocking::run(cx, move || -> Result<_> {

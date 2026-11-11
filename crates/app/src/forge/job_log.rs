@@ -13,11 +13,11 @@ use gpui_kit::{
 use super::ansi::{Color, LogParser, Span, visible};
 use super::pipelines::{Seen, job_key, status};
 use super::{core, glyph, note, text_of};
-use crate::store::{Event, Store};
 use crate::ui::theme::{Theme, mono};
 use crate::ui::{self, Icon, text, theme};
 use kernel::blocking;
 use kernel::doc::Doc;
+use kernel::workspace::{Event, Workspace};
 
 const MB: usize = 1 << 20;
 
@@ -59,8 +59,8 @@ impl JobLog {
             unreachable!("the shell's pages are MRs and job logs")
         };
         // Opening the shown job again starts it over, as it does after a retry.
-        let shown = cx.subscribe(&Store::global(cx), |this: &mut Self, store, e, cx| {
-            if matches!(e, Event::Shown) && store.read(cx).shown() == Some(&this.doc) {
+        let shown = cx.subscribe(&Workspace::global(cx), |this: &mut Self, w, e, cx| {
+            if matches!(e, Event::Shown) && w.read(cx).shown() == Some(&this.doc) {
                 this.start(cx);
             }
         });
