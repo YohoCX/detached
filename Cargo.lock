@@ -1525,6 +1525,7 @@ dependencies = [
  "libc",
  "minisign",
  "minisign-verify",
+ "notify",
  "nucleo-matcher",
  "open",
  "security-framework",
