@@ -18,7 +18,9 @@ use gpui_kit::{
 };
 use kernel::activity::{Activity, Level, Message, Notice};
 use kernel::doc::Doc;
+use kernel::repo::Repo;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 /// A sidebar row as drawn: a repo's path (None for a header or folder), its label, its branch and
 /// where its name starts.
@@ -131,10 +133,9 @@ fn a_worktree_deleted_on_disk_drops_out_when_the_window_gets_focus(cx: &mut Test
         paths(cx) == [api.as_str(), &web, &app, &lib, &solo]
     });
     wait_until(cx, |cx| {
-        cx.store(|s, _| {
-            s.repos
-                .iter()
-                .all(|r| matches!(s.statuses.get(&r.path), Some(Ok(_))))
+        cx.update(|_, cx| {
+            let mut repos = Workspace::get(cx).repos().iter();
+            repos.all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status().is_some()))
         })
     });
 }
@@ -270,7 +271,7 @@ fn chat_here_on_a_folder_opens_a_chat_on_it(cx: &mut TestAppContext) {
         settle(cx);
         let repo = path(folder);
         assert_eq!(
-            cx.store(|s, _| s.shown().cloned()),
+            cx.workspace(|w, _| w.shown().cloned()),
             Some(Doc::Chat { repo, n: 0 })
         );
     }
@@ -305,7 +306,7 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
     let id = row(cx, &api).id;
     cx.update(|w, cx| w.right_click(id, cx));
     assert_eq!(
-        cx.store(|s, _| s.current().map(String::from)),
+        cx.workspace(|w, _| w.current().map(String::from)),
         Some(api),
         "right click selects"
     );
@@ -324,7 +325,12 @@ fn says(cx: &mut VisualTestContext, text: &str, error: bool) {
 }
 
 fn outcome(cx: &mut VisualTestContext, repo: &str) -> Option<String> {
-    cx.store(|s, _| s.outcomes.get(repo).map(|o| o.text.clone()))
+    cx.update(|_, cx| {
+        Repo::get(cx, repo)?
+            .outcome
+            .as_ref()
+            .map(|o| o.text.clone())
+    })
 }
 
 #[gpui_kit::test]
@@ -635,7 +641,7 @@ fn the_repository_switcher_starts_on_the_current_repo_type_enter_selects(cx: &mu
     let [lib, api] = ["lib", "group/api"].map(|n| path(cx.sb.repo(n)));
     let solo = path(cx.sb.solo());
     let current = lib.clone();
-    cx.store(|s, cx| s.set_current(Some(current), cx));
+    cx.workspace(|w, cx| w.set_current(Some(current), cx));
     cx.click("switcher");
     assert_eq!(chosen(cx), Some(lib.clone()));
     assert_eq!(folder_label(cx, &api).as_deref(), Some("ws"));
@@ -658,7 +664,7 @@ fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    let all = cx.store(|s, _| s.repos.iter().map(|r| r.path.clone()).collect::<Vec<_>>());
+    let all = cx.workspace(|w, _| w.repos().iter().map(|r| r.path.clone()).collect::<Vec<_>>());
     cx.click("switcher");
     assert_eq!(chosen(cx).as_ref(), Some(&all[0]), "the current repo");
     cx.press("up");
@@ -679,7 +685,7 @@ fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_
     let sidebar_row = row(cx, &lib).id;
     cx.click(sidebar_row);
     assert!(cx.find("switcher.popup").is_none());
-    let current = cx.store(|s, _| s.current().map(String::from));
+    let current = cx.workspace(|w, _| w.current().map(String::from));
     assert_eq!(
         current.as_ref(),
         Some(&all[0]),
@@ -696,7 +702,7 @@ fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_
 fn select(cx: &mut TestApp, repo: &str) -> String {
     let repo = path(cx.sb.repo(repo));
     let current = repo.clone();
-    cx.store(|s, cx| s.set_current(Some(current), cx));
+    cx.workspace(|w, cx| w.set_current(Some(current), cx));
     repo
 }
 
@@ -1187,7 +1193,7 @@ fn save_mine(cx: &mut VisualTestContext) {
         label: "Mine".into(),
         token: None,
     };
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     api::save_account(&core, input).unwrap();
 }
 
@@ -1273,7 +1279,7 @@ fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_acc
     let cx = &mut app;
     let gitlab = path(cx.sb.forge_dir().join("gitlab"));
     let current = gitlab.clone();
-    cx.store(|s, cx| s.set_current(Some(current), cx));
+    cx.workspace(|w, cx| w.set_current(Some(current), cx));
     cx.update(|_, cx| settings::open(cx, "repository"));
     let value = |cx: &mut VisualTestContext, id: ElementId| {
         let e = cx.find(id);
@@ -1283,12 +1289,12 @@ fn the_account_for_a_repo_persists_and_its_merge_requests_name_the_automatic_acc
     wait_until(cx, |cx| value(cx, account.clone()).is_some());
     assert_eq!(value(cx, account.clone()).as_deref(), Some("Fake GitLab"));
     let chosen = |cx: &mut VisualTestContext| {
-        let (core, repo) = (cx.store(|_, cx| kernel::core(cx).clone()), gitlab.clone());
+        let (core, repo) = (cx.update(|_, cx| kernel::core(cx).clone()), gitlab.clone());
         api::get_settings(&core).repo_accounts.get(&repo).cloned()
     };
     assert_eq!(chosen(cx), None, "found, not chosen");
     click_option(cx, account.clone(), "Fake GitLab");
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     let id = api::list_accounts(&core).unwrap()[0].id.clone();
     wait_until(cx, |cx| chosen(cx).as_ref() == Some(&id));
     click_option(cx, account.clone(), "Automatic");

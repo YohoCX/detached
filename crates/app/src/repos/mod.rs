@@ -33,12 +33,12 @@ use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec};
 use crate::settings;
 use crate::shell::{self, TopBar};
-use crate::store::Store;
 use crate::ui::{self, radius, theme};
 use branches::Intent;
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::settings::Settings;
+use kernel::workspace::Workspace;
 use sync::{Bulk, Kind};
 
 /// What this vertical keeps beside the kernel: the bulk sync, recent branches, the branches
@@ -96,7 +96,7 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
     use actions::register;
     let current = |f: fn(String, &mut App)| {
         move |_: &mut _, cx: &mut App| {
-            if let Some(repo) = Store::global(cx).read(cx).current() {
+            if let Some(repo) = Workspace::get(cx).current() {
                 f(repo.to_string(), cx)
             }
         }
@@ -153,13 +153,13 @@ pub(crate) fn settings_call(
     cx: &mut App,
     f: impl FnOnce(&AppState) -> Result<Vec<RepoInfo>> + Send + 'static,
 ) -> Task<()> {
-    let store = Store::global(cx);
+    let workspace = Workspace::global(cx);
     let core = kernel::core(cx).clone();
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         let r = done.await;
         cx.update(|cx| match r {
-            Ok(list) => store.update(cx, |s, cx| s.load_repos(Some(list), cx)),
+            Ok(list) => workspace.update(cx, |w, cx| w.load_repos(Some(list), cx)),
             Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
         })
     })

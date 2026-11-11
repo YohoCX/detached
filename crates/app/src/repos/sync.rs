@@ -16,10 +16,10 @@ use gpui_kit::{
 
 use super::State;
 use crate::keymap;
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, theme};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::repo::{Outcome, Repo};
+use kernel::workspace::Workspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -121,7 +121,7 @@ pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
         let o = outcome(done.await);
         cx.update(|cx| {
             show_outcome(&repo, &o, cx);
-            let text = format!("{}: {}", Store::global(cx).read(cx).name_of(&repo), o.text);
+            let text = format!("{}: {}", Workspace::get(cx).name_of(&repo), o.text);
             Activity::global(cx).update(cx, |a, cx| a.say(text, !o.ok, cx));
         });
     })
@@ -134,11 +134,9 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
     if state.read(cx).sync.is_some() {
         return;
     }
-    let store = Store::global(cx);
     let repos = repos.unwrap_or_else(|| {
-        store
-            .read(cx)
-            .repos
+        Workspace::get(cx)
+            .repos()
             .iter()
             .map(|r| r.path.clone())
             .collect()
@@ -171,7 +169,7 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
                 s.sync = None;
                 cx.notify();
             });
-            let s = store.read(cx);
+            let w = Workspace::get(cx);
             let failed: Vec<_> = results.iter().filter(|(_, o)| !o.ok).collect();
             let (verb, noun) = match kind {
                 Kind::Fetch => ("Fetched", "Fetch"),
@@ -182,7 +180,7 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
             let notice = (!failed.is_empty()).then(|| {
                 let lines = failed
                     .iter()
-                    .map(|(r, o)| format!("{}: {}", s.name_of(r), o.text));
+                    .map(|(r, o)| format!("{}: {}", w.name_of(r), o.text));
                 Notice {
                     level: Level::Warn,
                     title: format!("{noun} all: {} not updated", failed.len()),
@@ -216,7 +214,7 @@ pub fn prune(repo: String, cx: &mut App) {
         cx.update(|cx| {
             let (text, error) = match pruned {
                 Ok(()) => {
-                    let name = Store::global(cx).read(cx).name_of(&repo).to_string();
+                    let name = Workspace::get(cx).name_of(&repo).to_string();
                     (format!("{name}: pruned stale remote branches"), false)
                 }
                 Err(e) => (e.to_string(), true),
@@ -238,9 +236,9 @@ pub struct Bulk {
 /// Fetch All and Pull All, for the top bar's right slot.
 pub fn sync_buttons(cx: &mut App) -> AnyView {
     cx.new(|cx| {
-        let (store, state) = (Store::global(cx), State::global(cx));
+        let (workspace, state) = (Workspace::global(cx), State::global(cx));
         let _subscriptions = vec![
-            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.observe(&state, |_, _, cx| cx.notify()),
         ];
         SyncButtons { _subscriptions }
@@ -255,7 +253,7 @@ struct SyncButtons {
 impl Render for SyncButtons {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
-        let idle = bulk.is_none() && !Store::global(cx).read(cx).repos.is_empty();
+        let idle = bulk.is_none() && !Workspace::get(cx).repos().is_empty();
         let t = theme(cx);
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
         let button = |kind, id: &'static str, icon: Icon, label: &str| {

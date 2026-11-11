@@ -23,10 +23,10 @@ use gpui_kit::{
 
 use super::{say, settings_call};
 use crate::settings::{Group, register_page};
-use crate::store::Store;
 use crate::ui::page::{Opt, Pick, button, heading, labeled, muted, row, section, select};
 use crate::ui::{self, radius, text, theme, theme::mono};
 use kernel::blocking;
+use kernel::workspace::Workspace;
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -343,7 +343,7 @@ impl Model {
         let (focus, accounts) = (cx.focus_handle(), cx.focus_handle());
         let git = "git binary (empty: from your shell PATH)";
         let mut this = Model {
-            repo: Store::global(cx).read(cx).current().map(String::from),
+            repo: Workspace::get(cx).current().map(String::from),
             _focus_in: cx.on_focus_in(&accounts, window, Self::reload),
             focus,
             accounts,
@@ -654,7 +654,7 @@ impl Model {
     }
 
     fn repo_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let name = Store::global(cx).read(cx).name_of(repo).to_string();
+        let name = Workspace::get(cx).name_of(repo).to_string();
         let rows = self.data.hosts.iter().zip(&self.picks.hosts).enumerate();
         let none = "No https remotes; git uses your own credentials (ssh agent, keychain).";
         section("settings.repo", format!("Account for {name}"), cx)
@@ -663,7 +663,7 @@ impl Model {
     }
 
     fn mrs_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let name = Store::global(cx).read(cx).name_of(repo).to_string();
+        let name = Workspace::get(cx).name_of(repo).to_string();
         let s = section("settings.mrs", format!("Merge requests for {name}"), cx);
         let (Some(f), Some((remote, picks))) = (&self.data.forge, &self.picks.forge) else {
             return s.child(muted("No remote is on GitLab or GitHub.", cx));

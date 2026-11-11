@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use detached_core::api;
 use detached_core::error;
-use detached_core::settings::Workspace;
+use detached_core::settings;
 use detached_core::state::AppState;
 use detached_core::types::{InProgress, RepoInfo, RepoStatus};
 use gpui_kit::base::{ObservedElement, TestSupportExt};
@@ -24,13 +24,13 @@ use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
 use crate::dock;
-use crate::store::Store;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
 use kernel::activity::Activity;
 use kernel::repo::Repo;
 use kernel::settings::Settings;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 const COLLAPSED: &str = "sidebar.collapsed";
 
@@ -80,7 +80,7 @@ struct RepoRow {
 /// holds it, ignoring case, all unfolded.
 fn rows(
     repos: &[RepoInfo],
-    workspaces: &[Workspace],
+    workspaces: &[settings::Workspace],
     collapsed: &BTreeSet<String>,
     filter: &str,
 ) -> Vec<Row> {
@@ -274,7 +274,7 @@ impl Sidebar {
         Sidebar {
             collapsed: ui_state::get(COLLAPSED, cx).unwrap_or_default(),
             _subs: [
-                cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+                Workspace::observe(cx, |_, cx| cx.notify()),
                 cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
                 cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
@@ -375,9 +375,11 @@ impl Sidebar {
     ) -> impl IntoElement {
         let t = theme(cx);
         let open = !self.collapsed.contains(path);
-        let s = Store::global(cx).read(cx);
-        let inside = s.repos.iter().filter(|r| !open && in_folder(&r.path, path));
-        let statuses: Vec<_> = inside.filter_map(|r| s.statuses.get(&r.path)).collect();
+        let inside = Workspace::get(cx).repos().iter();
+        let inside = inside.filter(|r| !open && in_folder(&r.path, path));
+        let statuses: Vec<_> = inside
+            .filter_map(|r| Repo::get(cx, &r.path)?.status.as_ref())
+            .collect();
         let changes: usize = statuses
             .iter()
             .filter_map(|s| s.as_ref().ok())
@@ -407,11 +409,11 @@ impl Sidebar {
 
     fn repo(&self, ix: usize, r: &RepoRow, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let s = Store::global(cx).read(cx);
         let path = r.repo.path.clone();
-        let status = s.statuses.get(&path);
+        let repo = Repo::get(cx, &path);
+        let status = repo.and_then(|r| r.status.as_ref());
         let st = status.and_then(|s| s.as_ref().ok());
-        let selected = s.current() == Some(path.as_str());
+        let selected = Workspace::get(cx).current() == Some(path.as_str());
         let name = folder_name(&path).to_string();
         let tip: SharedString = match st.and_then(|s| s.last_commit.as_ref()) {
             Some(c) => format!("{path}\n{}", c.subject).into(),
@@ -437,7 +439,7 @@ impl Sidebar {
         });
 
         // The branch, or an error or the last sync's outcome in its place; the tooltip says all.
-        let outcome = s.outcomes.get(&path);
+        let outcome = repo.and_then(|r| r.outcome.as_ref());
         let (mut said, mut ab) = (vec![], vec![]);
         let shown = match status {
             Some(Err(e)) => {
@@ -532,13 +534,17 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = Store::global(cx).read(cx);
         let ws = &Settings::get(cx).workspaces;
         let filter = self.filter.read(cx).value();
-        let rows = Rc::new(rows(&s.repos, ws, &self.collapsed, &filter));
+        let rows = Rc::new(rows(
+            Workspace::get(cx).repos(),
+            ws,
+            &self.collapsed,
+            &filter,
+        ));
         let none_on = !ws.is_empty() && !ws.iter().any(|w| w.active);
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            Store::global(cx).update(cx, |s, cx| s.refresh_all(cx))
+            Workspace::global(cx).update(cx, |w, cx| w.refresh_all(cx))
         };
         let t = theme(cx);
         let toolbar = div()
@@ -723,9 +729,8 @@ fn empty(text: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
 /// The menu of an added folder or one in the tree.
 fn folder_menu(this: WeakEntity<Sidebar>, path: &str, open: bool, cx: &mut App) -> Menu {
     let idle = State::global(cx).read(cx).sync.is_none();
-    let s = Store::global(cx).read(cx);
-    let repos: Vec<_> = s
-        .repos
+    let repos: Vec<_> = Workspace::get(cx)
+        .repos()
         .iter()
         .filter(|r| in_folder(&r.path, path))
         .map(|r| r.path.clone())
@@ -753,7 +758,7 @@ fn folder_menu(this: WeakEntity<Sidebar>, path: &str, open: bool, cx: &mut App) 
 
 fn select_repo(path: &str, cx: &mut App) {
     let path = path.to_string();
-    Store::global(cx).update(cx, |s, cx| s.set_current(Some(path), cx));
+    Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(path), cx));
 }
 
 fn click(f: impl Fn(&mut Window, &mut App)) -> impl Fn(&ClickEvent, &mut Window, &mut App) {
@@ -812,7 +817,7 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
             r.compare.get_or_insert_default();
             cx.notify();
         });
-        Store::global(cx).update(cx, |s, cx| s.set_current(Some(r), cx));
+        Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(r), cx));
         dock::open("changes", window, cx);
     };
     let zed = {
@@ -875,8 +880,8 @@ mod tests {
         }
     }
 
-    fn ws(name: &str, folders: &[&str], active: bool) -> Workspace {
-        Workspace {
+    fn ws(name: &str, folders: &[&str], active: bool) -> settings::Workspace {
+        settings::Workspace {
             name: name.into(),
             folders: folders.iter().map(|f| f.to_string()).collect(),
             excluded_repos: vec![],
@@ -886,13 +891,17 @@ mod tests {
 
     /// `ws:<name>`, `dir:<folder>`, then the tree indented two spaces a level: folders as `<name>/`,
     /// repos as their path, `+` marking a solo one and `>` a worktree.
-    fn show(repos: &[RepoInfo], workspaces: &[Workspace], collapsed: &[&str]) -> Vec<String> {
+    fn show(
+        repos: &[RepoInfo],
+        workspaces: &[settings::Workspace],
+        collapsed: &[&str],
+    ) -> Vec<String> {
         filtered(repos, workspaces, collapsed, "")
     }
 
     fn filtered(
         repos: &[RepoInfo],
-        workspaces: &[Workspace],
+        workspaces: &[settings::Workspace],
         collapsed: &[&str],
         filter: &str,
     ) -> Vec<String> {

@@ -1,5 +1,7 @@
 //! The repos the active workspaces list, one `Repo` each, the current one and the document shown.
 
+use std::rc::Rc;
+
 use detached_core::api;
 use detached_core::types::RepoInfo;
 use futures::StreamExt;
@@ -63,6 +65,21 @@ impl Workspace {
     }
 
     /// None before `kernel::init`.
+    /// Calls `f` when the workspace changes or emits: its list, current repo or shown doc, or a
+    /// listed repo's state.
+    pub fn observe<V: 'static>(
+        cx: &mut Context<V>,
+        f: impl Fn(&mut V, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        let w = Workspace::global(cx);
+        let f = Rc::new(f);
+        let g = f.clone();
+        Subscription::join(
+            cx.observe(&w, move |v, _, cx| f(v, cx)),
+            cx.subscribe(&w, move |v, _, _: &Event, cx| g(v, cx)),
+        )
+    }
+
     pub fn try_global(cx: &App) -> Option<Entity<Workspace>> {
         cx.try_global::<GlobalWorkspace>().map(|g| g.0.clone())
     }

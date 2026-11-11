@@ -7,18 +7,16 @@ use gpui_kit::{App, Task};
 pub use detached_core::types::CheckoutTarget;
 
 use super::State;
-use crate::store::Store;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// Smart checkout with its dialogs and notices; the task ends after the repo's status refresh.
 pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
-    let store = Store::global(cx);
-    let s = store.read(cx);
-    let (core, from) = (
-        kernel::core(cx).clone(),
-        s.status(repo).and_then(|st| st.branch.clone()),
-    );
+    let workspace = Workspace::global(cx);
+    let from = Repo::get(cx, repo).and_then(|r| r.status()?.branch.clone());
+    let core = kernel::core(cx).clone();
     let (name, rev) = match &target {
         CheckoutTarget::Rev { sha } => (sha.get(..10).unwrap_or(sha).to_string(), true),
         CheckoutTarget::Local { name } | CheckoutTarget::Remote { name, .. } => {
@@ -33,7 +31,7 @@ pub fn checkout(cx: &mut App, repo: &str, target: CheckoutTarget) -> Task<()> {
     let done = blocking::run(cx, move || api::checkout(&core, &r, &target));
     cx.spawn(async move |cx| {
         let result = done.await;
-        let refreshed = store.update(cx, |s, cx| s.refresh(repo.clone(), cx));
+        let refreshed = workspace.update(cx, |w, cx| w.refresh(repo.clone(), cx));
         let n = match result {
             Err(e) => Notice {
                 level: Level::Error,

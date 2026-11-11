@@ -17,22 +17,23 @@ use gpui_kit::{
 
 use super::sidebar::tone_of;
 use super::widget;
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{folder_name, fuzzy};
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// The repo widget; disabled with no repos.
 pub fn switcher(cx: &mut App) -> AnyView {
     cx.new(|cx| Switcher {
         open: None,
-        _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+        _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
     })
     .into()
 }
 
 struct Switcher {
     open: Option<Open>,
-    _store: Subscription,
+    _workspace: Subscription,
 }
 
 struct Open {
@@ -50,10 +51,10 @@ type Item = (RepoInfo, Vec<usize>);
 impl Switcher {
     fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open.take().is_none() {
-            let s = Store::global(cx).read(cx);
-            let current = s.current();
-            let sel = s
-                .repos
+            let w = Workspace::get(cx);
+            let current = w.current();
+            let sel = w
+                .repos()
                 .iter()
                 .position(|r| Some(r.path.as_str()) == current);
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("Switch repository"));
@@ -85,7 +86,7 @@ impl Switcher {
             return vec![];
         };
         let query = open.input.read(cx).value();
-        let repos = &Store::global(cx).read(cx).repos;
+        let repos = Workspace::get(cx).repos();
         fuzzy::filter(repos, &query, |r| &r.name)
             .into_iter()
             .map(|h| (h.item.clone(), h.indices))
@@ -106,7 +107,7 @@ impl Switcher {
             return;
         };
         self.close(cx);
-        Store::global(cx).update(cx, |s, cx| s.set_current(Some(repo.path), cx));
+        Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo.path), cx));
     }
 
     fn row(
@@ -116,8 +117,7 @@ impl Switcher {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let s = Store::global(cx).read(cx);
-        let status = s.statuses.get(&repo.path);
+        let status = Repo::get(cx, &repo.path).and_then(|r| r.status.as_ref());
         let selected = self.open.as_ref().is_some_and(|o| o.sel == i);
         let branch = match status {
             Some(Err(e)) => e.clone(),
@@ -165,9 +165,10 @@ impl Switcher {
                     .flex_none()
                     .w(px(14.))
                     .text_color(t.accent)
-                    .when(s.current() == Some(repo.path.as_str()), |d| {
-                        d.child(Icon::Check.size(px(14.)))
-                    }),
+                    .when(
+                        Workspace::get(cx).current() == Some(repo.path.as_str()),
+                        |d| d.child(Icon::Check.size(px(14.))),
+                    ),
             )
             .child(
                 div()
@@ -279,11 +280,11 @@ impl Switcher {
 impl Render for Switcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let s = Store::global(cx).read(cx);
-        let none = s.repos.is_empty();
-        let label = s
+        let w = Workspace::get(cx);
+        let none = w.repos().is_empty();
+        let label = w
             .current()
-            .map_or("No repository".into(), |c| s.name_of(c).to_string());
+            .map_or("No repository".into(), |c| w.name_of(c).to_string());
         let trigger = widget("switcher", "Switch repository", label.clone(), cx)
             .max_w(px(320.))
             .bg(t.input)

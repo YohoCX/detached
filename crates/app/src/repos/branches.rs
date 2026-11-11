@@ -22,11 +22,12 @@ use gpui_kit::{
 };
 
 use super::{CheckoutTarget, State, checkout, say, sync, widget};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// What the popup was opened for; a new intent mounts a new popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +50,7 @@ pub fn branches(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let state = State::global(cx);
         let _subscriptions = vec![
-            cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            Workspace::observe(cx, |_, cx| cx.notify()),
             cx.observe_in(&state, window, |this: &mut Widget, _, window, cx| {
                 this.sync(window, cx)
             }),
@@ -81,9 +82,8 @@ impl Widget {
 impl Render for Widget {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let s = Store::global(cx).read(cx);
-        let current = s.current().is_some();
-        let st = s.current().and_then(|r| s.status(r));
+        let current = Workspace::get(cx).current().is_some();
+        let st = Repo::current(cx).and_then(Repo::status);
         let label = st.map_or("—".to_string(), |st| {
             let head = st.head.as_deref().map_or("?", |h| h.get(..8).unwrap_or(h));
             st.branch.clone().unwrap_or(format!("{head} (detached)"))
@@ -249,9 +249,8 @@ struct Popup {
 
 impl Popup {
     fn new(intent: Intent, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let s = Store::global(cx).read(cx);
-        let repo = s.current().map(String::from);
-        let head = repo.as_deref().and_then(|r| s.status(r)?.branch.clone());
+        let repo = Workspace::get(cx).current().map(String::from);
+        let head = Repo::current(cx).and_then(|r| r.status()?.branch.clone());
         let head = head.unwrap_or("HEAD".into());
         let placeholder = match intent {
             Intent::Delete => "Delete branch…",
@@ -561,7 +560,6 @@ impl Popup {
         cx.spawn_in(window, async move |this, cx| {
             let done = done.await;
             cx.update(|window, cx| {
-                let store = Store::global(cx);
                 let next = match done {
                     Ok(v) => Some(then(v, cx)),
                     Err(e) => {
@@ -575,7 +573,9 @@ impl Popup {
                         None
                     }
                 };
-                store.update(cx, |s, cx| s.refresh(repo, cx)).detach();
+                Workspace::global(cx)
+                    .update(cx, |w, cx| w.refresh(repo, cx))
+                    .detach();
                 this.update(cx, |this, cx| {
                     this.busy = false;
                     match next {
