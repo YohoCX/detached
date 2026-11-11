@@ -3,21 +3,25 @@
 use detached_core::update::{Install, RELEASES};
 use gpui_kit::{
     AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Styled, Subscription,
-    Window, prelude::FluentBuilder,
+    Window, div, prelude::FluentBuilder,
 };
 use kernel::update::{State, Update};
 
 use crate::ui::page::{button, labeled, row, section};
 use crate::ui::theme;
+use crate::{chat, terminal};
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| Updates {
+        warning: None,
         _update: cx.observe(&Update::global(cx), |_, _, cx| cx.notify()),
     })
     .into()
 }
 
 struct Updates {
+    /// The chats and shells a restart would end, shown before it.
+    warning: Option<Vec<String>>,
     _update: Subscription,
 }
 
@@ -100,9 +104,16 @@ impl Render for Updates {
                         r.child(button(
                             "settings.update.restart",
                             "Restart now",
-                            true,
+                            self.warning.is_none(),
                             cx,
-                            act(Update::restart),
+                            |this, _, cx| {
+                                let live = [chat::live(cx), terminal::live(cx)].concat();
+                                match live.is_empty() {
+                                    true => Update::global(cx).update(cx, Update::restart),
+                                    false => this.warning = Some(live),
+                                }
+                                cx.notify();
+                            },
                         ))
                     })
                     .when(deb, |r| {
@@ -113,6 +124,45 @@ impl Render for Updates {
                             cx,
                             |_, _, cx| cx.open_url(RELEASES),
                         ))
+                    }),
+            )
+            .children(
+                self.warning
+                    .as_ref()
+                    .filter(|_| *state == State::Ready)
+                    .map(|live| {
+                        let text = format!("Restarting ends {}.", live.join(", "));
+                        let keep = |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
+                            this.warning = None;
+                            cx.notify();
+                        };
+                        div()
+                            .child(
+                                row().child(
+                                    labeled("settings.update.warning", text)
+                                        .text_color(theme(cx).warning),
+                                ),
+                            )
+                            .child(
+                                row()
+                                    .child(button(
+                                        "settings.update.anyway",
+                                        "Restart anyway",
+                                        true,
+                                        cx,
+                                        move |this, w, cx| {
+                                            keep(this, w, cx);
+                                            Update::global(cx).update(cx, Update::restart);
+                                        },
+                                    ))
+                                    .child(button(
+                                        "settings.update.keep",
+                                        "Not now",
+                                        true,
+                                        cx,
+                                        keep,
+                                    )),
+                            )
                     }),
             )
     }

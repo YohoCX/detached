@@ -165,6 +165,13 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Session>)> {
     all
 }
 
+/// The open chats with something in them, by their tabs' titles.
+pub fn live(cx: &App) -> Vec<String> {
+    let live = open(cx).into_iter().filter(|(.., s)| !s.read(cx).is_new());
+    live.map(|(repo, n, _)| ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into())
+        .collect()
+}
+
 /// Resets the idle open chat that shows past conversation `id`, which is going away.
 pub fn forget(id: &str, cx: &mut App) {
     for (.., s) in open(cx) {

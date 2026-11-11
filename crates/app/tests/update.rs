@@ -3,7 +3,8 @@
 mod common;
 
 use common::*;
-use detached_app::settings;
+use detached_app::chat::{self, Item};
+use detached_app::{settings, terminal};
 use detached_core::update::testutil::{Server, keys};
 use detached_core::update::{Install, Release};
 use gpui_kit::{TestAppContext, VisualTestContext};
@@ -194,6 +195,10 @@ fn the_page_cancels_a_download_and_offers_it_again(cx: &mut TestAppContext) {
         |cx| matches!(state(cx), State::Downloading { received, .. } if received == half),
     );
     assert_eq!(label(cx, "update").as_deref(), Some("Updating 50%"));
+    assert!(
+        cx.activity(|a, _| a.ops.is_empty()),
+        "the download is no job"
+    );
     cx.click("settings.update.cancel");
     let (text, buttons) = page(cx);
     assert_eq!(text, "Downloading 9.9.9: 50%", "it runs until it ends");
@@ -202,4 +207,52 @@ fn the_page_cancels_a_download_and_offers_it_again(cx: &mut TestAppContext) {
     wait_until(cx, |cx| state(cx) == State::Offered);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     assert_eq!(page(cx).1, ["check", "download"]);
+}
+
+#[gpui_kit::test]
+fn restart_now_names_the_live_chats_and_shells_first(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    offer(cx, Install::Windows);
+    set(cx, |u| u.state = State::Ready);
+    cx.update(|_, cx| {
+        let talked = chat::session("/x/api", 0, cx);
+        talked.update(cx, |s, _| s.items.push(Item::User("fix the login".into())));
+        chat::session("/x/web", 0, cx);
+    });
+    cx.press("alt-f12");
+    wait_until(cx, |cx| cx.update(|_, cx| !terminal::live(cx).is_empty()));
+    page(cx);
+    cx.click("settings.update.restart");
+    let shell = cx.update(|_, cx| terminal::live(cx)).join(", ");
+    let warning = format!("Restarting ends api/ · fix the login, {shell}.");
+    assert_eq!(label(cx, "settings.update.warning"), Some(warning));
+    assert_eq!(state(cx), State::Ready);
+    cx.click("settings.update.keep");
+    assert!(cx.find("settings.update.warning").is_none());
+    assert_eq!(state(cx), State::Ready);
+}
+
+#[gpui_kit::test]
+fn restart_now_installs_the_package_and_a_failure_shows_on_the_page(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let (key, sign) = keys();
+    let server = Server::start(&sign, "9.9.9", b"not a zip", &sign(b"not a zip"));
+    let dir = feed(cx, &server, &key);
+    let app = dir.path().join("Detached.app");
+    std::fs::create_dir(&app).unwrap();
+    let mac = Install::Mac(app.clone());
+    set(cx, |u| u.install = Some(mac));
+    page(cx);
+    cx.click("settings.update.check");
+    wait_until(cx, |cx| state(cx) == State::Offered);
+    cx.click("settings.update.download");
+    wait_until(cx, |cx| state(cx) == State::Ready);
+    cx.click("settings.update.restart");
+    wait_until(cx, |cx| matches!(state(cx), State::Failed(_)));
+    let (text, buttons) = page(cx);
+    assert!(!text.is_empty());
+    assert_eq!(buttons, ["check", "download"]);
+    let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(left.len(), 1, "the app and no package or temp folder");
+    assert!(app.is_dir());
 }

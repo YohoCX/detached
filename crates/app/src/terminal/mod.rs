@@ -173,6 +173,16 @@ impl Terminals {
     }
 }
 
+/// The titles of the shells, in the Terminal app and in tabs of their own.
+pub fn live(cx: &App) -> Vec<String> {
+    let Some(t) = cx.try_global::<Global_>() else {
+        return vec![];
+    };
+    let t = t.0.read(cx);
+    let shells = t.sessions.iter().chain(&t.docked);
+    shells.map(|s| s.read(cx).title().to_string()).collect()
+}
+
 pub fn register(cx: &mut App) -> Vec<Registration> {
     let terminal = AppSpec {
         name: "terminal",
