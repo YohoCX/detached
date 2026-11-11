@@ -84,8 +84,8 @@ impl Watcher {
         Ok(Watcher(inner))
     }
 
-    /// Watches `repos` and the worktree of `current`, and nothing else. A repo whose git
-    /// directories cannot be resolved is not watched.
+    /// Watches `repos` and the worktree of `current`, and nothing else; reads the current repo's
+    /// excludes again. A repo whose git directories cannot be resolved is not watched.
     pub fn set(&self, repos: &[RepoInfo], current: Option<&str>) {
         let inner = &self.0;
         let _setup = inner.setup.lock().unwrap();
@@ -121,9 +121,10 @@ impl Watcher {
         let mut s = inner.state.lock().unwrap();
         (s.repos, s.git) = (dirs, git);
         let root = |c: &Option<Current>| c.as_ref().map(|c| c.root.clone());
-        if root(&s.current) != root(&current) {
-            s.current = current;
-            drop(s);
+        let moved = root(&s.current) != root(&current);
+        s.current = current;
+        drop(s);
+        if moved {
             inner.walk();
         }
     }
@@ -195,11 +196,19 @@ impl State {
         let Some(name) = p.file_name().map(|n| n.to_string_lossy()) else {
             return false;
         };
+        let gone = matches!(
+            kind,
+            EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+        );
+        // inotify drops the watch of a directory that went, so one made again there is new.
+        if cfg!(target_os = "linux") && gone && !p.exists() {
+            self.git.retain(|k, _| !k.starts_with(p));
+            self.work.retain(|k, _| !k.starts_with(p));
+        }
         let dir = p.is_dir();
-        // Git writes `X.lock` and renames it over `X`; Windows reports a directory modified when
-        // a child changes, and the child too.
+        // Windows reports a directory modified when a child changes, and the child too.
         let touched = matches!(kind, EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
-        if name.ends_with(".lock") || (dir && touched) {
+        if dir && touched {
             return false;
         }
         let mut hit = false;
@@ -209,8 +218,9 @@ impl State {
                 b.repos.insert(d.repo.clone());
                 hit = true;
             }
+            // Git writes `X.lock` and renames it over `X`.
             if (parent == Some(d.common.as_path()) && name == "packed-refs")
-                || p.starts_with(&d.refs)
+                || (p.starts_with(&d.refs) && !name.ends_with(".lock"))
             {
                 b.repos.insert(d.repo.clone());
                 b.refs.insert(d.repo.clone());
@@ -539,9 +549,47 @@ mod tests {
         assert_eq!(t.after(|| t.write("a", "src/new/a")).repos, set(&["a"], &t));
         t.walked();
         assert_eq!(t.after(|| t.write("a", "src/new/b")).repos, set(&["a"], &t));
-        fs::write(t.dir("a").join(".gitignore"), "").unwrap();
+        let b = t.after(|| fs::write(t.dir("a").join(".gitignore"), "").unwrap());
+        assert_eq!(b.repos, set(&["a"], &t));
         t.walked();
         assert_eq!(t.after(|| t.write("a", "x.log")).repos, set(&["a"], &t));
+    }
+
+    #[test]
+    fn a_tracked_lock_file_marks_and_a_directory_made_again_is_watched_again() {
+        let t = T::new(&["a"]);
+        t.write("a", "Cargo.lock");
+        t.write("a", "d/f");
+        t.git("a", &["add", "-A"]);
+        t.git("a", &["commit", "-qm", "lock"]);
+        t.watch(Some("a"));
+        assert_eq!(
+            t.after(|| t.write("a", "Cargo.lock")).repos,
+            set(&["a"], &t)
+        );
+        let d = t.dir("a").join("d");
+        assert_eq!(
+            t.after(|| fs::remove_dir_all(&d).unwrap()).repos,
+            set(&["a"], &t)
+        );
+        assert_eq!(
+            t.after(|| fs::create_dir(&d).unwrap()).repos,
+            set(&["a"], &t)
+        );
+        t.walked();
+        assert_eq!(t.after(|| t.write("a", "d/g")).repos, set(&["a"], &t));
+    }
+
+    #[test]
+    fn the_excludes_are_read_again_on_each_set() {
+        let t = T::new(&["a"]);
+        t.watch(Some("a"));
+        assert_eq!(t.after(|| t.write("a", "x.tmp")).repos, set(&["a"], &t));
+        let info = t.dir("a").join(".git/info");
+        fs::create_dir_all(&info).unwrap();
+        fs::write(info.join("exclude"), "*.tmp\n").unwrap();
+        t.watch(Some("a"));
+        assert!(t.after(|| t.write("a", "x.tmp")).repos.is_empty());
     }
 
     #[test]

@@ -905,17 +905,22 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
 - `core::watch::Watcher::new(on_batch)` and `set(repos, current)`; a batch is the events within
   100 ms of its first, named as the repos they mark and those whose refs moved. An event that says
   the OS dropped some marks every repo. The watches are diffed on each `set`, so an unchanged list
-  touches nothing.
+  touches nothing. `*.lock` is dropped under `refs` alone (`HEAD`, `index` and `packed-refs` are
+  matched by name), so a tracked `Cargo.lock` marks its repo.
 - The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes the
-  directory and forgotten when a `.gitignore` changes, over the global excludes and `info/exclude`;
-  the deepest rule for a path decides. A directory's own modified event is dropped: Windows raises
+  directory and forgotten when a `.gitignore` changes, over the global excludes and `info/exclude`,
+  which each `set` reads again; the deepest rule for a path decides. A directory's own modified event is dropped: Windows raises
   it beside its child's, so an ignored file made in the root would mark the repo. Linux's walk is
   core's `files::walker`, the tree's. A new directory or a changed `.gitignore` runs the walk again
   on a thread of its own, which watches what it finds and drops what went; at most one more waits.
+  inotify drops the watch of a directory deleted or moved away, so the watcher forgets it and its
+  children, and one made again at that path is new to the walk.
 - `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does not,
   so the tests that count a repo's notifications see no refresh they did not cause, and a test that
   wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a time, again
-  when `Workspace` changed meanwhile. A batch calls `invalidate::status` per repo, and a repo whose
+  when `Workspace` changed meanwhile. Activation sets it again, which brings back a git directory's
+  watch the OS dropped (a repo cloned again, a worktree removed and added) and reads the excludes
+  again. A batch calls `invalidate::status` per repo, and a repo whose
   refs moved reloads its branch names if a view loaded them (they load on demand).
 - "Over the cap" exists on Linux alone, so its test runs there, with the cap at 50 under test: the
   worktree gets no watch and a commit still marks the repo. Activation's rescan, which refreshes it,
@@ -927,7 +932,8 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
   repo, the start's rescan and activation's, as many with this branch's first commit, which starts
   no watcher; step 0 measured 60 while the lost call of `refresh_all` dropped the second. That
   figure goes to the owner.
-- docs/TECHDEBT.md: a watch the OS refuses (inotify's limit) is skipped without a word.
+- docs/TECHDEBT.md: a watch the OS refuses (inotify's limit) is skipped without a word, and on
+  Windows a lost folder watch or an overflow is not seen.
 
 The owner checks: an agent's edits appear in Changes during its turn; a commit from the terminal
 updates the sidebar and the branch widget; a switch made outside; a folder renamed and a repo

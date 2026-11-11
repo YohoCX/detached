@@ -149,11 +149,16 @@ pub fn rescanning(cx: &App) -> bool {
     cx.try_global::<Rescan>().is_some_and(|r| r.running)
 }
 
-/// The window came forward: the folders are rescanned with every status, and a resource older
-/// than its policy allows reloads.
+/// The window came forward: the folders are rescanned with every status, a resource older than
+/// its policy allows reloads, and the watcher is set again, which brings back a watch the OS
+/// dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
     rescan(cx);
     resource::input(cx, Input::Activated);
+    if cx.has_global::<Watch>() {
+        cx.global_mut::<Watch>().applied = None;
+        follow(cx);
+    }
 }
 
 /// Whether the window shows: polls tick only while it does.
