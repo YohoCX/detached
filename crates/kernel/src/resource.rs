@@ -23,6 +23,8 @@ pub type When<T> = fn(&T) -> bool;
 /// What else marks a resource stale.
 #[derive(Clone, PartialEq)]
 pub enum On {
+    /// The repo's status loaded: its worktree may have changed.
+    Status(String),
     /// The repo's head or branch moved.
     Head(String),
 }

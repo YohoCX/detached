@@ -411,6 +411,38 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_status_load_reloads_what_follows_that_repo_and_nothing_else(cx: &mut TestAppContext) {
+        use crate::resource::{self, Interest, On, Policy, Resource};
+        let (_dir, a, b) = boot(cx);
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let loads = n.clone();
+        let r = cx.update(|cx| {
+            let policy = Policy {
+                fresh_for: None,
+                poll: None,
+            };
+            let load = move |_: &App| {
+                let n = loads.clone();
+                move || Ok(n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1)
+            };
+            let r = resource::get(cx, "follows a".into(), || {
+                Resource::new(policy, load).on(On::Status(a.clone()))
+            });
+            Interest::new(r, cx)
+        });
+        let value = |cx: &mut TestAppContext| {
+            wait_until(cx, |cx| !r.read(cx).loading());
+            cx.read(|cx| r.read(cx).value)
+        };
+        assert_eq!(value(cx), Some(1));
+        for (repo, want) in [(&b, 1), (&a, 2)] {
+            let task = cx.update(|cx| crate::invalidate::status(cx, repo));
+            cx.foreground_executor().block_test(task);
+            assert_eq!(value(cx), Some(want));
+        }
+    }
+
+    #[gpui::test]
     fn switching_the_current_repo_notifies_once(cx: &mut TestAppContext) {
         let (_dir, a, b) = boot(cx);
         let workspace = cx.read(Workspace::global);

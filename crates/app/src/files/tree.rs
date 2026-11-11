@@ -14,7 +14,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle,
     Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 
@@ -23,8 +23,8 @@ use super::changes::branch_names;
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
-use kernel::blocking;
 use kernel::repo::Repo;
+use kernel::resource::{self, Interest, On, Policy, Resource};
 use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
@@ -103,9 +103,9 @@ pub struct Tree {
     sel: Option<String>,
     /// The current repo and the ref its tree browses.
     key: Option<(String, Option<String>)>,
-    /// The last listing's repo and tree, kept while the next one runs.
-    last: Option<(String, Result<Dir, String>)>,
-    _load: Task<()>,
+    files: Option<Interest<Dir>>,
+    /// The listing before, of the same repo, shown until the current one loads.
+    prev: Option<Entity<Resource<Dir>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -122,15 +122,7 @@ impl Tree {
                 this.sync(window, cx);
                 cx.notify();
             }),
-            cx.subscribe_in(&workspace, window, |this, _, e, window, cx| {
-                let worktree = |repo: &String| {
-                    this.key
-                        .as_ref()
-                        .is_some_and(|k| k.0 == *repo && k.1.is_none())
-                };
-                if matches!(e, Event::Status(repo) if worktree(repo)) {
-                    this.load(window, cx);
-                }
+            cx.subscribe_in(&workspace, window, |this, _, _: &Event, window, cx| {
                 this.sync(window, cx);
                 cx.notify();
             }),
@@ -148,8 +140,8 @@ impl Tree {
             field,
             sel: None,
             key: None,
-            last: None,
-            _load: Task::ready(()),
+            files: None,
+            prev: None,
             _subscriptions: subscriptions,
         };
         this.sync(window, cx);
@@ -165,44 +157,38 @@ impl Tree {
         if key == self.key {
             return;
         }
+        let same = key
+            .as_ref()
+            .zip(self.key.as_ref())
+            .is_some_and(|(a, b)| a.0 == b.0);
+        let prev = self.files.take().filter(|_| same);
+        self.prev = prev.map(|f| f.resource().clone());
         self.key = key;
         let at = self.key.as_ref().and_then(|k| k.1.clone());
         self.field.update(cx, |f, cx| {
             f.set_value(at.as_deref().unwrap_or(""), window, cx);
             f.set_highlighted(at.is_some());
         });
-        self.load(window, cx);
+        self.files = self
+            .key
+            .clone()
+            .map(|(repo, at)| Interest::view(files(cx, &repo, at), cx));
     }
 
-    /// Replacing the task drops a listing still running, so stale results never land.
-    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((repo, rev)) = self.key.clone() else {
-            self._load = Task::ready(());
-            return;
-        };
-        let core = kernel::core(cx).clone();
-        let r = repo.clone();
-        let job = blocking::run(cx, move || {
-            api::list_files(&core, &r, rev.as_deref()).map(build_tree)
-        });
-        self._load = cx.spawn_in(window, async move |this, cx| {
-            let result = job.await.map_err(|e| e.to_string());
-            this.update(cx, |v, cx| {
-                v.last = Some((repo, result));
-                cx.notify();
-            })
-            .ok();
-        });
-    }
-
-    /// The last listing of the current repo.
-    fn listed(&self) -> Option<&Result<Dir, String>> {
-        let (repo, _) = self.key.as_ref()?;
-        self.last.as_ref().filter(|l| l.0 == *repo).map(|l| &l.1)
+    /// The current listing once it loaded, else the one before.
+    fn listed<'a>(&self, cx: &'a App) -> Option<&'a Resource<Dir>> {
+        let current = self.files.as_ref()?.read(cx);
+        match &self.prev {
+            Some(prev) if current.at.is_none() => Some(prev.read(cx)),
+            _ => Some(current),
+        }
     }
 
     fn rows(&self, cx: &App) -> Vec<Row> {
-        let (Some((repo, _)), Some(Ok(root))) = (&self.key, self.listed()) else {
+        let (Some((repo, _)), Some(listed)) = (&self.key, self.listed(cx)) else {
+            return vec![];
+        };
+        let Some(root) = listed.value.as_ref().filter(|_| listed.error.is_none()) else {
             return vec![];
         };
         let nest = ui_state::get("tree.nesting", cx).unwrap_or(true);
@@ -404,9 +390,10 @@ impl Render for Tree {
                 .child(text)
                 .into_any_element()
         };
-        let body = match (&self.key, self.listed()) {
+        let failed = self.listed(cx).and_then(|l| l.error.clone());
+        let body = match (&self.key, failed) {
             (None, _) => note("No repository".into(), false),
-            (_, Some(Err(e))) => note(e.clone(), true),
+            (_, Some(e)) => note(e, true),
             _ => {
                 let rows = Rc::new(self.rows(cx));
                 let focused = self.focus.contains_focused(window, cx);
@@ -468,6 +455,28 @@ fn rules(user: &BTreeMap<String, Vec<String>>) -> Vec<(&str, Vec<&str>)> {
         }
     }
     rules
+}
+
+/// `repo`'s files at `rev`; the working tree's reload with the repo's status.
+fn files(cx: &mut App, repo: &str, rev: Option<String>) -> Entity<Resource<Dir>> {
+    let key = format!("tree\0{repo}\0{rev:?}");
+    let worktree = rev.is_none();
+    let r = repo.to_string();
+    resource::get(cx, key, || {
+        let policy = Policy {
+            fresh_for: None,
+            poll: None,
+        };
+        let load = move |cx: &App| {
+            let (core, repo, rev) = (kernel::core(cx).clone(), r.clone(), rev.clone());
+            move || api::list_files(&core, &repo, rev.as_deref()).map(build_tree)
+        };
+        let files = Resource::new(policy, load);
+        match worktree {
+            true => files.on(On::Status(repo.into())),
+            false => files,
+        }
+    })
 }
 
 fn build_tree(entries: Vec<FileEntry>) -> Dir {

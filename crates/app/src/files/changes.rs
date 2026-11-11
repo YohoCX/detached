@@ -12,7 +12,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight, Global,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle,
     Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 
@@ -20,9 +20,9 @@ use super::api::{DiffDoc, Location, Side, open, show_diff};
 use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
-use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::repo::Repo;
+use kernel::resource::{self, Interest, On, Policy, Resource};
 use kernel::workspace::{Event, Workspace};
 
 /// Around the tool; Show Diff takes the selected change while focus is inside.
@@ -52,9 +52,9 @@ pub struct Changes {
     collapsed: HashSet<String>,
     /// In Compare, the current repo and its base.
     key: Option<(String, String)>,
-    /// The last compare's repo and result, kept while the next one runs.
-    last: Option<(String, Result<Compared, String>)>,
-    _load: Task<()>,
+    compare: Option<(Interest<Compared>, Subscription)>,
+    /// The compare before, of the same repo, shown until the current one loads.
+    prev: Option<Entity<Resource<Compared>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,11 +67,7 @@ impl Changes {
                 this.sync(window, cx);
                 cx.notify();
             }),
-            cx.subscribe_in(&workspace, window, |this, _, e, window, cx| {
-                if matches!(e, Event::Status(repo) if this.key.as_ref().is_some_and(|k| k.0 == *repo))
-                {
-                    this.load(window, cx);
-                }
+            cx.subscribe_in(&workspace, window, |this, _, _: &Event, window, cx| {
                 this.sync(window, cx);
                 cx.notify();
             }),
@@ -94,8 +90,8 @@ impl Changes {
             base,
             collapsed: HashSet::new(),
             key: None,
-            last: None,
-            _load: Task::ready(()),
+            compare: None,
+            prev: None,
             _subscriptions: subscriptions,
         };
         this.sync(window, cx);
@@ -108,55 +104,50 @@ impl Changes {
         if key == self.key {
             return;
         }
+        let same = key
+            .as_ref()
+            .zip(self.key.as_ref())
+            .is_some_and(|(a, b)| a.0 == b.0);
+        let prev = self.compare.take().filter(|_| same);
+        self.prev = prev.map(|(c, _)| c.resource().clone());
         self.key = key;
         if let Some((repo, base)) = self.key.clone() {
             self.base.update(cx, |b, cx| b.set_value(&base, window, cx));
             Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
-        }
-        self.load(window, cx);
-    }
-
-    /// Replacing the task drops a compare still running, so stale results never land.
-    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((repo, base)) = self.key.clone() else {
-            self._load = Task::ready(());
-            return;
-        };
-        self.show_placeholder(window, cx);
-        let core = kernel::core(cx).clone();
-        let r = repo.clone();
-        let job = blocking::run(cx, move || compare(&core, &r, &base));
-        self._load = cx.spawn_in(window, async move |this, cx| {
-            let result = job.await.map_err(|e| e.to_string());
-            this.update_in(cx, |v, window, cx| {
-                v.last = Some((repo, result));
-                v.show_placeholder(window, cx);
+            let compare = compared(cx, &repo, &base);
+            let landed = cx.observe_in(&compare, window, |this, _, window, cx| {
+                this.show_placeholder(window, cx);
                 cx.notify();
-            })
-            .ok();
-        });
+            });
+            self.compare = Some((Interest::new(compare, cx), landed));
+        }
+        self.show_placeholder(window, cx);
     }
 
     fn show_placeholder(&self, window: &mut Window, cx: &mut App) {
-        let base = self.done().map(|(info, _)| info.base.clone());
+        let base = self.done(cx).map(|(info, _)| info.base.clone());
         let base = base.unwrap_or_else(|| "default branch".into());
         self.base
             .update(cx, |b, cx| b.set_placeholder(&base, window, cx));
     }
 
-    /// The last compare of the current repo, in Compare.
-    fn compared(&self) -> Option<&Result<Compared, String>> {
-        let (repo, _) = self.key.as_ref()?;
-        self.last.as_ref().filter(|c| c.0 == *repo).map(|c| &c.1)
+    /// In Compare, the current compare once it loaded, else the one before.
+    fn shown<'a>(&self, cx: &'a App) -> Option<&'a Resource<Compared>> {
+        let current = self.compare.as_ref()?.0.read(cx);
+        match &self.prev {
+            Some(prev) if current.at.is_none() => Some(prev.read(cx)),
+            _ => Some(current),
+        }
     }
 
-    fn done(&self) -> Option<&Compared> {
-        self.compared()?.as_ref().ok()
+    fn done<'a>(&self, cx: &'a App) -> Option<&'a Compared> {
+        let shown = self.shown(cx)?;
+        shown.value.as_ref().filter(|_| shown.error.is_none())
     }
 
     fn rows(&self, cx: &App) -> Vec<Row> {
         let groups = match (&self.key, Repo::current(cx)) {
-            (Some(_), _) => self.done().map_or(vec![], |(info, changes)| {
+            (Some(_), _) => self.done(cx).map_or(vec![], |(info, changes)| {
                 vec![(format!("Changes since {}", info.base), changes.clone())]
             }),
             (None, Some(repo)) => group_changes(repo.status().map_or(&[], |st| &st.changes)),
@@ -184,7 +175,7 @@ impl Changes {
         let Some(repo) = Workspace::get(cx).current().map(String::from) else {
             return;
         };
-        let left = self.done().map_or(Side::Head, |(info, _)| Side::Rev {
+        let left = self.done(cx).map_or(Side::Head, |(info, _)| Side::Rev {
             rev: info.merge_base.clone(),
         });
         cx.set_global(Selected(repo.clone(), c.clone()));
@@ -296,7 +287,7 @@ impl Changes {
 
     fn base_row(&self, cx: &App) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let ab = self.done().map(|(info, _)| {
+        let ab = self.done(cx).map(|(info, _)| {
             let ab: SharedString = format!("↑{} ↓{}", info.ahead, info.behind).into();
             let tip: SharedString =
                 format!("Commits on this branch / on {} since they split", info.base).into();
@@ -442,12 +433,13 @@ impl Render for Changes {
                 .into_any_element()
         };
         let status = Repo::current(cx).and_then(|r| r.status.as_ref());
-        let body = match (current, status, self.compared()) {
+        let failed = self.shown(cx).and_then(|c| c.error.clone());
+        let body = match (current, status, failed) {
             (None, ..) => note("No repository".into(), false),
             (_, Some(Err(e)), _) => note(e.clone(), true),
-            (_, _, Some(Err(e))) => note(e.clone(), true),
+            (_, _, Some(e)) => note(e, true),
             _ if rows.is_empty() => {
-                let text = match (&self.key, self.done()) {
+                let text = match (&self.key, self.done(cx)) {
                     (None, _) => "No local changes".into(),
                     (_, Some((info, _))) => format!("No changes since {}", info.base),
                     _ => "Comparing…".into(),
@@ -524,6 +516,22 @@ pub(super) fn selected_diff(window: &Window, cx: &App) -> Option<DiffDoc> {
         orig_path: c.orig_path.clone(),
         left: Side::Head,
         right: Side::Worktree,
+    })
+}
+
+/// `repo`'s changes since it left `base`, reloaded with its status.
+fn compared(cx: &mut App, repo: &str, base: &str) -> Entity<Resource<Compared>> {
+    let (r, b) = (repo.to_string(), base.to_string());
+    let policy = Policy {
+        fresh_for: None,
+        poll: None,
+    };
+    resource::get(cx, format!("changes\0{repo}\0{base}"), || {
+        let load = move |cx: &App| {
+            let (core, repo, base) = (kernel::core(cx).clone(), r.clone(), b.clone());
+            move || compare(&core, &repo, &base)
+        };
+        Resource::new(policy, load).on(On::Status(repo.into()))
     })
 }
 

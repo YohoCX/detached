@@ -67,6 +67,7 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
 
 /// `repo`'s status loaded; `moved` when its head or branch did.
 pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
+    resource::input(cx, Input::On(On::Status(repo.into())));
     if moved {
         resource::input(cx, Input::On(On::Head(repo.into())));
     }
