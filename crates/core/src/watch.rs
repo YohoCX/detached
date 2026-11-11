@@ -52,6 +52,7 @@ struct State {
 
 struct Dirs {
     repo: String,
+    work: PathBuf,
     git: PathBuf,
     common: PathBuf,
     refs: PathBuf,
@@ -167,8 +168,13 @@ impl Inner {
         let mut again = false;
         for e in events.into_iter().flatten() {
             if e.need_rescan() {
-                b.repos.extend(s.repos.iter().map(|d| d.repo.clone()));
-                b.refs.extend(s.repos.iter().map(|d| d.repo.clone()));
+                let all = [PathBuf::new()];
+                let paths = if e.paths.is_empty() {
+                    &all[..]
+                } else {
+                    &e.paths
+                };
+                paths.iter().for_each(|p| s.dropped(p, &mut b));
             } else if !matches!(e.kind, EventKind::Access(_)) {
                 // inotify reports reads, and core's own status opens HEAD.
                 for p in &e.paths {
@@ -190,6 +196,24 @@ impl Inner {
 }
 
 impl State {
+    /// The OS dropped events under `p`: what lies there or above it is stale, unless git ignores
+    /// `p`. An empty `p` is everything.
+    fn dropped(&mut self, p: &Path, b: &mut Batch) {
+        if let Some(c) = &mut self.current
+            && let Ok(rel) = p.strip_prefix(&c.root)
+            && c.ignored(rel)
+        {
+            return;
+        }
+        let near = |d: &Path| p.starts_with(d) || d.starts_with(p);
+        for d in &self.repos {
+            if near(&d.work) || near(&d.git) || near(&d.common) {
+                b.repos.insert(d.repo.clone());
+                b.refs.insert(d.repo.clone());
+            }
+        }
+    }
+
     /// Marks what `p` changed; true when the worktree's walk should run again: an ignore file
     /// changed or a directory appeared.
     fn mark(&mut self, p: &Path, kind: EventKind, b: &mut Batch) -> bool {
@@ -266,6 +290,7 @@ impl Dirs {
         };
         Some(Dirs {
             repo: r.path.clone(),
+            work: canon(work)?,
             refs: common.join("refs"),
             git,
             common,
@@ -578,6 +603,23 @@ mod tests {
         );
         t.walked();
         assert_eq!(t.after(|| t.write("a", "d/g")).repos, set(&["a"], &t));
+    }
+
+    #[test]
+    fn events_the_os_dropped_mark_the_repos_near_them_unless_git_ignores_them() {
+        let t = T::new(&["a", "b"]);
+        fs::write(t.dir("a").join(".gitignore"), "target/\n").unwrap();
+        t.write("a", "target/x/o");
+        t.watch(Some("a"));
+        let dropped = |p: PathBuf| {
+            let mut b = Batch::default();
+            t.w.0.state.lock().unwrap().dropped(&p, &mut b);
+            b.repos
+        };
+        let a = canon(t.dir("a")).unwrap();
+        assert!(dropped(a.join("target/x")).is_empty());
+        assert_eq!(dropped(a.join("src")), set(&["a"], &t));
+        assert_eq!(dropped(PathBuf::new()), set(&["a", "b", "control"], &t));
     }
 
     #[test]
