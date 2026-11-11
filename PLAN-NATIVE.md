@@ -166,10 +166,9 @@ loaded on demand). A repo's change notifies its own entity; `Workspace` emits `C
 it, `Status(path)` after a status refresh and `Shown` after `show`. Views observe what they read.
 Workspaces are the kernel's `Settings`; ops, notices and the status message its `Activity`.
 `kernel::invalidate` decides what is stale: window activation rescans with every status that
-loaded before the window last lost focus and reloads a resource older than its policy allows; an
-op's end, a write (`invalidate::status`) and a Refresh button load a repo's status, one load at a
-time per repo; a settings change's list goes through
-`invalidate::listed`. `invalidate::watch`, which `main` starts, sets `core::watch` to the listed
+loaded before the window last lost focus or while it was away, and reloads a resource older than
+its policy allows; an op's end, a write (`invalidate::status`) and a Refresh button load a repo's
+status, one load at a time per repo; a settings change's list goes through `invalidate::listed`. `invalidate::watch`, which `main` starts, sets `core::watch` to the listed
 repos and the current one: a change in a repo's git files loads its status, and its branch names
 when loaded and its refs moved; a change in the current worktree outside what git ignores loads its
 status. A `Resource` (the forge's lists, the changes in Compare, the tree) loads

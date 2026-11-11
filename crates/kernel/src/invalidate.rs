@@ -28,13 +28,13 @@ struct Loading(HashMap<String, Vec<oneshot::Sender<()>>>);
 
 impl Global for Loading {}
 
-/// How many times the window lost focus.
+/// How many times the window lost focus, and whether it is away now.
 #[derive(Default)]
-struct Away(u64);
+struct Away(u64, bool);
 
 impl Global for Away {}
 
-/// Each repo's `Away` when its last status load began.
+/// Each repo's `Away` count when its last status load began with the window active.
 #[derive(Default)]
 struct Loaded(HashMap<String, u64>);
 
@@ -72,8 +72,14 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
         cx.spawn(async move |cx| {
             loop {
                 let (waiting, load) = cx.update(|cx| {
-                    let away = cx.default_global::<Away>().0;
-                    cx.default_global::<Loaded>().0.insert(repo.clone(), away);
+                    let Away(n, away) = *cx.default_global::<Away>();
+                    let loaded = &mut cx.default_global::<Loaded>().0;
+                    // A load while away may miss what no watch sees, so it counts as old.
+                    if away {
+                        loaded.remove(&repo);
+                    } else {
+                        loaded.insert(repo.clone(), n);
+                    }
                     let waiting = cx.global_mut::<Loading>().0.get_mut(&repo).map(mem::take);
                     let load =
                         Workspace::global(cx).update(cx, |w, cx| w.refresh(repo.clone(), cx));
@@ -176,9 +182,10 @@ pub fn rescanning(cx: &App) -> bool {
 }
 
 /// The window came forward: the folders are rescanned with every status loaded before the window
-/// last lost focus, a resource older than its policy allows reloads, and the watcher is set again,
+/// last lost focus or while it was away, a resource older than its policy allows reloads, and the watcher is set again,
 /// which brings back a watch the OS dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
+    cx.default_global::<Away>().1 = false;
     pass(cx, false);
     resource::input(cx, Input::Activated);
     if cx.has_global::<Watch>() {
@@ -187,9 +194,11 @@ pub fn activated(cx: &mut App) {
     }
 }
 
-/// The window lost focus: what changes meanwhile may escape the watcher, so activation reloads it.
+/// The window lost focus: what changes until it comes back may escape the watcher, so activation
+/// reloads every status loaded before or meanwhile.
 pub fn deactivated(cx: &mut App) {
-    cx.default_global::<Away>().0 += 1;
+    let away = cx.default_global::<Away>();
+    (away.0, away.1) = (away.0 + 1, true);
 }
 
 /// Whether the window shows: polls tick only while it does.
@@ -324,7 +333,12 @@ mod tests {
         cx.update(deactivated);
         assert_eq!(run(cx, activated), 1);
         assert_eq!(run(cx, activated), 1);
-        assert_eq!(run(cx, rescan), 2);
+        cx.update(deactivated);
+        let repo = cx.read(|cx| Workspace::get(cx).repos()[0].path.clone());
+        let load = cx.update(|cx| status(cx, &repo));
+        cx.foreground_executor().block_test(load);
+        assert_eq!(run(cx, activated), 3, "a load while away counts as old");
+        assert_eq!(run(cx, rescan), 4);
     }
 
     #[gpui::test]

@@ -225,7 +225,7 @@ One place in the kernel decides what is stale. Its inputs:
 | The watcher: a repo's git files (below) | that `Repo`'s status and branch names |
 | The watcher: the current repo's worktree | its changes and tree |
 | A job's end | what the job declares (a repo's status after an op) |
-| Window activation | the rescan and every status that loaded before the window last lost focus; forge resources older than 30 s, as `Cache` does (`FRESH`) |
+| Window activation | the rescan and every status that loaded before the window last lost focus or while it was away; forge resources older than 30 s, as `Cache` does (`FRESH`) |
 | Time | a `Resource` whose policy says so |
 
 - A `Resource<T>` has a policy: `fresh_for`, and an optional `poll` period with its condition (5 s
@@ -928,8 +928,8 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
   the excludes again. A batch calls `invalidate::status` per repo, and a repo whose refs moved
   reloads its branch names if a view loaded them (they load on demand).
 - Activation's rescan lists the folders and loads every status that loaded before the window last
-  lost focus (the shell reports the loss, `invalidate::deactivated`), so nothing the watcher
-  missed while the user was away stays stale; the sidebar's button and a settings change load
+  lost focus or while it was away (the shell reports the loss, `invalidate::deactivated`), so
+  nothing the watcher missed while the user was away stays stale; the sidebar's button and a settings change load
   every status. The window never loses focus between the start's rescan and the activation right
   after it, so each status loads once there, not twice.
 - "Over the cap" exists on Linux alone, so its test runs there, with the cap at 50 under test: the
