@@ -64,7 +64,6 @@ impl Workspace {
         cx.global::<GlobalWorkspace>().0.clone()
     }
 
-    /// None before `kernel::init`.
     /// Calls `f` when the workspace changes or emits: its list, current repo or shown doc, or a
     /// listed repo's state.
     pub fn observe<V: 'static>(
@@ -78,10 +77,6 @@ impl Workspace {
             cx.observe(&w, move |v, _, cx| f(v, cx)),
             cx.subscribe(&w, move |v, _, _: &Event, cx| g(v, cx)),
         )
-    }
-
-    pub fn try_global(cx: &App) -> Option<Entity<Workspace>> {
-        cx.try_global::<GlobalWorkspace>().map(|g| g.0.clone())
     }
 
     pub fn get(cx: &App) -> &Workspace {

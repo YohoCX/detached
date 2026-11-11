@@ -343,9 +343,7 @@ pub fn init(config_dir: &Path, cx: &mut App) {
     });
     apply(name, found, cx);
     // Ends with the workspace, which lives as long as the app.
-    let Some(workspace) = Workspace::try_global(cx).map(|w| w.downgrade()) else {
-        return;
-    };
+    let workspace = Workspace::global(cx).downgrade();
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(POLL).await;
