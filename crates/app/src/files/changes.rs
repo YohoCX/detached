@@ -109,7 +109,10 @@ impl Changes {
             .as_ref()
             .zip(self.key.as_ref())
             .is_some_and(|(a, b)| a.0 == b.0);
-        let prev = self.compare.take().filter(|_| same);
+        let prev = self
+            .compare
+            .take()
+            .filter(|(c, _)| same && c.loaded(cx).is_some());
         self.prev = prev.map(|(c, _)| c.resource().clone());
         self.key = key;
         if let Some((repo, base)) = self.key.clone() {

@@ -161,7 +161,7 @@ impl Tree {
             .as_ref()
             .zip(self.key.as_ref())
             .is_some_and(|(a, b)| a.0 == b.0);
-        let prev = self.files.take().filter(|_| same);
+        let prev = self.files.take().filter(|f| same && f.loaded(cx).is_some());
         self.prev = prev.map(|f| f.resource().clone());
         self.key = key;
         let at = self.key.as_ref().and_then(|k| k.1.clone());
