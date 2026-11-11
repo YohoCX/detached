@@ -165,8 +165,8 @@ base (`compare`) other verticals read, and its branch names for the ref inputs (
 loaded on demand). A repo's change notifies its own entity; `Workspace` emits `Changed(path)` for
 it, `Status(path)` after a status refresh and `Shown` after `show`. Views observe what they read.
 Workspaces are the kernel's `Settings`; ops, notices and the status message its `Activity`.
-`kernel::invalidate` decides what is stale: window activation rescans with every status and reloads
-a resource older than its policy allows; an op's end, a write (`invalidate::status`) and a Refresh
+`kernel::invalidate` decides what is stale: window activation rescans with every status older
+than 30 s and reloads a resource older than its policy allows; an op's end, a write (`invalidate::status`) and a Refresh
 button load a repo's status, one load at a time per repo; a settings change's list goes through
 `invalidate::listed`. `invalidate::watch`, which `main` starts, sets `core::watch` to the listed
 repos and the current one: a change in a repo's git files loads its status, and its branch names

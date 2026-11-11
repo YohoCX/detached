@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use detached_core::api;
 use detached_core::types::RepoInfo;
@@ -28,10 +29,21 @@ struct Loading(HashMap<String, Vec<oneshot::Sender<()>>>);
 
 impl Global for Loading {}
 
+/// When each repo's status last loaded.
+#[derive(Default)]
+struct Loaded(HashMap<String, Instant>);
+
+impl Global for Loaded {}
+
+/// Activation skips a status loaded this recently, as `forge`'s resources skip a load.
+const FRESH: Duration = Duration::from_secs(30);
+
 #[derive(Default)]
 struct Rescan {
     running: bool,
     again: bool,
+    /// The next pass loads every status, however fresh.
+    all: bool,
     /// Bumped by each list a settings change applies, so a listing begun before it is dropped.
     listed: u64,
 }
@@ -66,6 +78,8 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
                 load.await;
                 waiting.into_iter().flatten().for_each(|tx| _ = tx.send(()));
                 let done = cx.update(|cx| {
+                    let now = cx.background_executor().now();
+                    cx.default_global::<Loaded>().0.insert(repo.clone(), now);
                     let loading = &mut cx.global_mut::<Loading>().0;
                     let done = loading.get(&repo).is_none_or(Vec::is_empty);
                     if done {
@@ -94,7 +108,13 @@ pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
 /// Rescans the folders, where repos and worktrees come and go, then loads every status, 8 at a
 /// time. Calls during a pass run one more pass after it.
 pub fn rescan(cx: &mut App) {
+    pass(cx, true);
+}
+
+/// A rescan; without `all`, a status that loaded within `FRESH` is not loaded again.
+fn pass(cx: &mut App, all: bool) {
     let r = cx.default_global::<Rescan>();
+    r.all |= all;
     if r.running {
         r.again = true;
         return;
@@ -102,11 +122,11 @@ pub fn rescan(cx: &mut App) {
     r.running = true;
     cx.spawn(async move |cx| {
         loop {
-            let (core, listed) = cx.update(|cx| {
+            let (core, listed, all) = cx.update(|cx| {
                 let r = cx.global_mut::<Rescan>();
                 r.again = false;
-                let listed = r.listed;
-                (crate::core(cx).clone(), listed)
+                let (listed, all) = (r.listed, mem::take(&mut r.all));
+                (crate::core(cx).clone(), listed, all)
             });
             let list = cx
                 .update(|cx| blocking::run(cx, move || api::list_repos(&core)))
@@ -116,8 +136,15 @@ pub fn rescan(cx: &mut App) {
                 if cx.global::<Rescan>().listed == listed {
                     workspace.update(cx, |w, cx| w.set_repos(list, cx));
                 }
+                let now = cx.background_executor().now();
+                let loaded = cx.try_global::<Loaded>().map(|l| &l.0);
+                let fresh = |r: &str| {
+                    let at = loaded.and_then(|l| l.get(r));
+                    at.is_some_and(|at| now.saturating_duration_since(*at) < FRESH)
+                };
                 let repos = workspace.read(cx).repos().iter();
-                repos.map(|r| r.path.clone()).collect::<Vec<_>>()
+                let stale = repos.filter(|r| all || !fresh(&r.path));
+                stale.map(|r| r.path.clone()).collect::<Vec<_>>()
             });
             futures::stream::iter(repos)
                 .map(|repo| cx.update(|cx| status(cx, &repo)))
@@ -149,11 +176,11 @@ pub fn rescanning(cx: &App) -> bool {
     cx.try_global::<Rescan>().is_some_and(|r| r.running)
 }
 
-/// The window came forward: the folders are rescanned with every status, a resource older than
-/// its policy allows reloads, and the watcher is set again, which brings back a watch the OS
-/// dropped and reads the excludes again.
+/// The window came forward: the folders are rescanned with every status older than `FRESH`, a
+/// resource older than its policy allows reloads, and the watcher is set again, which brings back
+/// a watch the OS dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
-    rescan(cx);
+    pass(cx, false);
     resource::input(cx, Input::Activated);
     if cx.has_global::<Watch>() {
         cx.global_mut::<Watch>().applied = None;
@@ -255,6 +282,45 @@ mod tests {
 
     use super::*;
     use crate::wait_until;
+
+    #[gpui::test]
+    fn activation_skips_a_status_loaded_within_30_s_and_a_rescan_never_skips(
+        cx: &mut TestAppContext,
+    ) {
+        let sb = detached_core::git::testutil::Sandbox::new();
+        let repo = sb.path("ws/a");
+        std::fs::create_dir_all(&repo).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        let detached_core::git::testutil::Sandbox { dir: _dir, state } = sb;
+        state
+            .add_folder(
+                "Default".into(),
+                repo.parent().unwrap().display().to_string(),
+            )
+            .unwrap();
+        cx.update(|cx| crate::init(std::sync::Arc::new(state), cx));
+        wait_until(cx, |cx| {
+            !rescanning(cx) && cx.try_global::<Loaded>().is_some()
+        });
+        let loads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let n = loads.clone();
+        let _s = cx.update(|cx| {
+            cx.subscribe(&Workspace::global(cx), move |_, e, _| {
+                if matches!(e, crate::workspace::Event::Status(_)) {
+                    n.set(n.get() + 1)
+                }
+            })
+        });
+        let run = |cx: &mut TestAppContext, f: fn(&mut App)| {
+            cx.update(f);
+            wait_until(cx, |cx| !rescanning(cx));
+            loads.get()
+        };
+        assert_eq!(run(cx, activated), 0);
+        cx.executor().advance_clock(FRESH);
+        assert_eq!(run(cx, activated), 1);
+        assert_eq!(run(cx, rescan), 2);
+    }
 
     #[gpui::test]
     fn rescans_called_before_a_pass_starts_fold_into_it(cx: &mut TestAppContext) {

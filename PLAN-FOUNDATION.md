@@ -904,7 +904,8 @@ Done when:
 Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and `make smoke` green:
 - `core::watch::Watcher::new(on_batch)` and `set(repos, current)`; a batch is the events within
   100 ms of its first, named as the repos they mark and those whose refs moved. An event that says
-  the OS dropped some marks every repo. The watches are diffed on each `set`, so an unchanged list
+  the OS dropped some marks the repos at or under its path unless git ignores the path, and every
+  repo without one. The watches are diffed on each `set`, so an unchanged list
   touches nothing. `*.lock` is dropped under `refs` alone (`HEAD`, `index` and `packed-refs` are
   matched by name), so a tracked `Cargo.lock` marks its repo.
 - The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes the
@@ -925,13 +926,16 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
 - "Over the cap" exists on Linux alone, so its test runs there, with the cap at 50 under test: the
   worktree gets no watch and a commit still marks the repo. Activation's rescan, which refreshes it,
   is unchanged. Step 0's Windows rows run as one test on the three OSes. Nothing is `#[cfg]` off.
+- Activation's rescan lists the folders and loads only the statuses older than 30 s, as the forge's
+  resources skip a fresh load; the sidebar's button and a settings change still load every one. So
+  the start's rescan and the activation right after it load each status once, not twice.
 - Measured on a temp config directory, 20 new repos and a logging git shim, the `--profile app`
-  binary, the window left as it opened: 120 git calls in the first minute, none in the next five
-  idle minutes; 2,000 files written under an ignored `target/` of the current repo, none; 20 writes
-  to tracked and new files there, one status (3 calls). The first minute's 120 are two statuses per
-  repo, the start's rescan and activation's, as many with this branch's first commit, which starts
-  no watcher; step 0 measured 60 while the lost call of `refresh_all` dropped the second. That
-  figure goes to the owner.
+  binary, the window left as it opened: 60 git calls in the first minute (120 before activation
+  skipped fresh statuses), none in the next five idle minutes; 2,000 files written under an ignored
+  `target/` of the current repo, none; 20 writes to tracked and new files there, one status (3
+  calls). Of three runs, one had a full pass of every status as the burst began, not seen again
+  after a dropped-events signal was scoped to its path; another was disturbed by the window being
+  used and is not counted.
 - docs/TECHDEBT.md: a watch the OS refuses (inotify's limit) is skipped without a word, and on
   Windows a lost folder watch or an overflow is not seen.
 
