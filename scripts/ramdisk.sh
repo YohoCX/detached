@@ -8,5 +8,7 @@ dev=$(diskutil image attach --noMount ram://2097152 | awk '{print $1; exit}')
 diskutil erasevolume APFS DetachedTests "$dev" >/dev/null
 # FSEvents' log of every sandbox's files would fill it; it is read at mount.
 mkdir -p /Volumes/DetachedTests/.fseventsd && touch /Volumes/DetachedTests/.fseventsd/no_log
-diskutil unmount /Volumes/DetachedTests >/dev/null && diskutil mount "${dev}s1" >/dev/null
+# APFS puts the volume in a container disk of its own, not on "$dev".
+vol=$(df /Volumes/DetachedTests | awk 'NR==2 {print $1}')
+diskutil unmount /Volumes/DetachedTests >/dev/null && diskutil mount "$vol" >/dev/null
 echo "ramdisk: /Volumes/DetachedTests"
