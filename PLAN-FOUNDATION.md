@@ -225,7 +225,7 @@ One place in the kernel decides what is stale. Its inputs:
 | The watcher: a repo's git files (below) | that `Repo`'s status and branch names |
 | The watcher: the current repo's worktree | its changes and tree |
 | A job's end | what the job declares (a repo's status after an op) |
-| Window activation | the rescan and every status, as today; forge resources older than 30 s, as `Cache` does (`FRESH`) |
+| Window activation | the rescan and every status that loaded before the window last lost focus; forge resources older than 30 s, as `Cache` does (`FRESH`) |
 | Time | a `Resource` whose policy says so |
 
 - A `Resource<T>` has a policy: `fresh_for`, and an optional `poll` period with its condition (5 s
@@ -250,7 +250,7 @@ folder. A change under a common directory marks the main repo and each listed wo
 Any other repo whose `.git` is a file (a submodule listed by itself, a `--separate-git-dir`
 clone) has its git directory resolved from that file's `gitdir:` line and that directory's
 `commondir`, not assumed to be `.git`. A repo whose directories cannot be resolved is not
-watched and refreshes on activation, as today.
+watched and refreshes when the window comes back, as today.
 
 The watches are on directories, never on those files: git writes each as `X.lock` renamed over
 `X`, and on Linux a watch on the file dies with the old inode. So: the git directory, not
@@ -272,8 +272,9 @@ inotify pays per directory:
   folder's watch above.
 - **Linux: a watch per directory**, from a walk that follows the repo's ignore rules, with the
   `ignore` crate core's search already uses, and never enters `.git`, so `node_modules/`,
-  `target/` and the like cost nothing. A cap of 10,000 directories on one worktree. A worktree over the cap is not watched at all and refreshes on window activation, as
-  every worktree does today. A directory created later gains its watch when its creation is
+  `target/` and the like cost nothing. A cap of 10,000 directories on one worktree. A worktree
+  over the cap is not watched at all and refreshes when the window comes back, as every worktree
+  does today. A directory created later gains its watch when its creation is
   seen, unless it is ignored. The walk runs on a worker, never on the thread that reads events,
   and again when the current repo or one of its ignore files changes.
 - **Every OS**: an event under an ignored path or under `.git` is dropped before invalidation, so
@@ -892,8 +893,8 @@ commit inside a linked worktree marks that worktree, and a ref moved in the main
 `packed-refs` rewritten by `git gc`; a repo whose `.git` is a file elsewhere; `index.lock` alone
 marks nothing; a write under an ignored directory marks nothing; a file saved in the current
 repo shows in Changes with the window never left; a branch made outside shows in the branch
-list; a repo over the cap is not watched and still refreshes on activation; step 0's Windows
-renames, moves and deletes, kept as tests.
+list; a repo over the cap is not watched and still refreshes when the window comes back; step
+0's Windows renames, moves and deletes, kept as tests.
 
 Done when:
 - in five idle minutes on the owner's workspace the app starts no git process;
@@ -905,39 +906,43 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
 - `core::watch::Watcher::new(on_batch)` and `set(repos, current)`; a batch is the events within
   100 ms of its first, named as the repos they mark and those whose refs moved. An event that says
   the OS dropped some marks the repos at or under its path unless git ignores the path, and every
-  repo without one. The watches are diffed on each `set`, so an unchanged list
-  touches nothing. `*.lock` is dropped under `refs` alone (`HEAD`, `index` and `packed-refs` are
-  matched by name), so a tracked `Cargo.lock` marks its repo.
-- The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes the
-  directory and forgotten when a `.gitignore` changes, over the global excludes and `info/exclude`,
-  which each `set` reads again; the deepest rule for a path decides. A directory's own modified event is dropped: Windows raises
-  it beside its child's, so an ignored file made in the root would mark the repo. Linux's walk is
-  core's `files::walker`, the tree's. A new directory or a changed `.gitignore` runs the walk again
-  on a thread of its own, which watches what it finds and drops what went; at most one more waits.
-  inotify drops the watch of a directory deleted or moved away, so the watcher forgets it and its
-  children, and one made again at that path is new to the walk.
-- `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does not,
-  so the tests that count a repo's notifications see no refresh they did not cause, and a test that
-  wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a time, again
-  when `Workspace` changed meanwhile. Activation sets it again, which brings back a git directory's
-  watch the OS dropped (a repo cloned again, a worktree removed and added) and reads the excludes
-  again. A batch calls `invalidate::status` per repo, and a repo whose
-  refs moved reloads its branch names if a view loaded them (they load on demand).
+  repo when it has none. The watches are diffed on each `set`, so an unchanged list touches
+  nothing. `*.lock` is dropped under `refs` alone (`HEAD`, `index` and `packed-refs` are matched
+  by name), so a tracked `Cargo.lock` marks its repo.
+- The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes
+  the directory and forgotten when a `.gitignore` changes, over the global excludes and
+  `info/exclude`, which each `set` reads again; the deepest rule for a path decides. A directory's
+  own modified event is dropped: Windows raises it beside its child's, so an ignored file made in
+  the root would mark the repo. Linux's walk is core's `files::walker`, the tree's. A new
+  directory or a changed `.gitignore` runs the walk again on a thread of its own, which watches
+  what it finds and drops what went; at most one more waits. inotify drops the watch of a
+  directory deleted or moved away, so the watcher forgets it and its children, and one made again
+  at that path is new to the walk.
+- `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does
+  not, so the tests that count a repo's notifications see no refresh they did not cause, and a
+  test that wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a
+  time, again when `Workspace` changed meanwhile. Activation sets it again, which brings back a git
+  directory's watch the OS dropped (a repo cloned again, a worktree removed and added) and reads
+  the excludes again. A batch calls `invalidate::status` per repo, and a repo whose refs moved
+  reloads its branch names if a view loaded them (they load on demand).
+- Activation's rescan lists the folders and loads every status that loaded before the window last
+  lost focus (the shell reports the loss, `invalidate::deactivated`), so nothing the watcher
+  missed while the user was away stays stale; the sidebar's button and a settings change load
+  every status. The window never loses focus between the start's rescan and the activation right
+  after it, so each status loads once there, not twice.
 - "Over the cap" exists on Linux alone, so its test runs there, with the cap at 50 under test: the
-  worktree gets no watch and a commit still marks the repo. Activation's rescan, which refreshes it,
-  is unchanged. Step 0's Windows rows run as one test on the three OSes. Nothing is `#[cfg]` off.
-- Activation's rescan lists the folders and loads only the statuses older than 30 s, as the forge's
-  resources skip a fresh load; the sidebar's button and a settings change still load every one. So
-  the start's rescan and the activation right after it load each status once, not twice.
+  worktree gets no watch and a commit still marks the repo; its edits show when the window comes
+  back. Step 0's Windows rows run as one test on the three OSes. Nothing is `#[cfg]` off.
 - Measured on a temp config directory, 20 new repos and a logging git shim, the `--profile app`
-  binary, the window left as it opened: 60 git calls in the first minute (120 before activation
-  skipped fresh statuses), none in the next five idle minutes; 2,000 files written under an ignored
+  binary, the window left as it opened: 60 git calls in the first minute (120 while activation
+  loaded every status), none in the next five idle minutes; 2,000 files written under an ignored
   `target/` of the current repo, none; 20 writes to tracked and new files there, one status (3
   calls). Of three runs, one had a full pass of every status as the burst began, not seen again
   after a dropped-events signal was scoped to its path; another was disturbed by the window being
   used and is not counted.
 - docs/TECHDEBT.md: a watch the OS refuses (inotify's limit) is skipped without a word, and on
-  Windows a lost folder watch or an overflow is not seen.
+  Windows a lost folder watch or an overflow is not seen; what they miss shows when the window
+  comes back.
 
 The owner checks: an agent's edits appear in Changes during its turn; a commit from the terminal
 updates the sidebar and the branch widget; a switch made outside; a folder renamed and a repo

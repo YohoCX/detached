@@ -119,6 +119,8 @@ impl Shell {
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
                     invalidate::activated(cx);
+                } else {
+                    invalidate::deactivated(cx);
                 }
             }),
             cx.observe_window_visibility(window, |_, v, _, cx| {

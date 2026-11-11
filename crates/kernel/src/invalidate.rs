@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use detached_core::api;
 use detached_core::types::RepoInfo;
@@ -29,20 +28,23 @@ struct Loading(HashMap<String, Vec<oneshot::Sender<()>>>);
 
 impl Global for Loading {}
 
-/// When each repo's status last loaded.
+/// How many times the window lost focus.
 #[derive(Default)]
-struct Loaded(HashMap<String, Instant>);
+struct Away(u64);
+
+impl Global for Away {}
+
+/// Each repo's `Away` when its last status load began.
+#[derive(Default)]
+struct Loaded(HashMap<String, u64>);
 
 impl Global for Loaded {}
-
-/// Activation skips a status loaded this recently, as `forge`'s resources skip a load.
-const FRESH: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 struct Rescan {
     running: bool,
     again: bool,
-    /// The next pass loads every status, however fresh.
+    /// The next pass loads every status, not only those loaded before the window went away.
     all: bool,
     /// Bumped by each list a settings change applies, so a listing begun before it is dropped.
     listed: u64,
@@ -70,6 +72,8 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
         cx.spawn(async move |cx| {
             loop {
                 let (waiting, load) = cx.update(|cx| {
+                    let away = cx.default_global::<Away>().0;
+                    cx.default_global::<Loaded>().0.insert(repo.clone(), away);
                     let waiting = cx.global_mut::<Loading>().0.get_mut(&repo).map(mem::take);
                     let load =
                         Workspace::global(cx).update(cx, |w, cx| w.refresh(repo.clone(), cx));
@@ -78,8 +82,6 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
                 load.await;
                 waiting.into_iter().flatten().for_each(|tx| _ = tx.send(()));
                 let done = cx.update(|cx| {
-                    let now = cx.background_executor().now();
-                    cx.default_global::<Loaded>().0.insert(repo.clone(), now);
                     let loading = &mut cx.global_mut::<Loading>().0;
                     let done = loading.get(&repo).is_none_or(Vec::is_empty);
                     if done {
@@ -111,7 +113,7 @@ pub fn rescan(cx: &mut App) {
     pass(cx, true);
 }
 
-/// A rescan; without `all`, a status that loaded within `FRESH` is not loaded again.
+/// A rescan; without `all`, only the statuses not loaded since the window last lost focus load.
 fn pass(cx: &mut App, all: bool) {
     let r = cx.default_global::<Rescan>();
     r.all |= all;
@@ -136,14 +138,11 @@ fn pass(cx: &mut App, all: bool) {
                 if cx.global::<Rescan>().listed == listed {
                     workspace.update(cx, |w, cx| w.set_repos(list, cx));
                 }
-                let now = cx.background_executor().now();
+                let away = cx.try_global::<Away>().map_or(0, |a| a.0);
                 let loaded = cx.try_global::<Loaded>().map(|l| &l.0);
-                let fresh = |r: &str| {
-                    let at = loaded.and_then(|l| l.get(r));
-                    at.is_some_and(|at| now.saturating_duration_since(*at) < FRESH)
-                };
+                let old = |r: &str| loaded.and_then(|l| l.get(r)).is_none_or(|n| *n < away);
                 let repos = workspace.read(cx).repos().iter();
-                let stale = repos.filter(|r| all || !fresh(&r.path));
+                let stale = repos.filter(|r| all || old(&r.path));
                 stale.map(|r| r.path.clone()).collect::<Vec<_>>()
             });
             futures::stream::iter(repos)
@@ -176,9 +175,9 @@ pub fn rescanning(cx: &App) -> bool {
     cx.try_global::<Rescan>().is_some_and(|r| r.running)
 }
 
-/// The window came forward: the folders are rescanned with every status older than `FRESH`, a
-/// resource older than its policy allows reloads, and the watcher is set again, which brings back
-/// a watch the OS dropped and reads the excludes again.
+/// The window came forward: the folders are rescanned with every status loaded before the window
+/// last lost focus, a resource older than its policy allows reloads, and the watcher is set again,
+/// which brings back a watch the OS dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
     pass(cx, false);
     resource::input(cx, Input::Activated);
@@ -186,6 +185,11 @@ pub fn activated(cx: &mut App) {
         cx.global_mut::<Watch>().applied = None;
         follow(cx);
     }
+}
+
+/// The window lost focus: what changes meanwhile may escape the watcher, so activation reloads it.
+pub fn deactivated(cx: &mut App) {
+    cx.default_global::<Away>().0 += 1;
 }
 
 /// Whether the window shows: polls tick only while it does.
@@ -284,7 +288,7 @@ mod tests {
     use crate::wait_until;
 
     #[gpui::test]
-    fn activation_skips_a_status_loaded_within_30_s_and_a_rescan_never_skips(
+    fn activation_loads_the_statuses_loaded_before_the_window_went_away_and_a_rescan_all(
         cx: &mut TestAppContext,
     ) {
         let sb = detached_core::git::testutil::Sandbox::new();
@@ -317,7 +321,8 @@ mod tests {
             loads.get()
         };
         assert_eq!(run(cx, activated), 0);
-        cx.executor().advance_clock(FRESH);
+        cx.update(deactivated);
+        assert_eq!(run(cx, activated), 1);
         assert_eq!(run(cx, activated), 1);
         assert_eq!(run(cx, rescan), 2);
     }
