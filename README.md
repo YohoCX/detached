@@ -86,7 +86,7 @@ base64 -i Detached.p12 | gh secret set MACOS_CERTIFICATE
 ```
 
 Each package, and the `latest.json` the app checks for updates, is also signed with a minisign
-key, whose public half is `PUBLIC_KEY` in `crates/app/src/update.rs`; the release job refuses to
+key, whose public half is `PUBLIC_KEY` in `crates/core/src/update.rs`; the release job refuses to
 publish without both. Once
 (`brew install minisign`):
 

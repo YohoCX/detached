@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prints the latest.json that update.rs reads: version $1, and per platform the package's URL under
+# Prints the latest.json that crates/core/src/update.rs reads: version $1, and per platform the package's URL under
 # $2 with the signature from its .minisig in directory $3.
 set -eu
 jq -n --arg version "$1" --arg url "$2" \

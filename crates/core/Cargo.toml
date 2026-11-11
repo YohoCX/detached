@@ -9,7 +9,7 @@ license.workspace = true
 # Plain http to localhost counts as https, for the fake forges. Test builds only.
 e2e = []
 # `git::testutil::Sandbox` for other crates' tests.
-testutil = []
+testutil = ["dep:minisign"]
 
 [dependencies]
 serde.workspace = true
@@ -27,6 +27,13 @@ nucleo-matcher = "0.3.1"
 imara-diff = "0.2"
 dirs = "7"
 open = { version = "5.4", features = ["shellexecute-on-windows"] }
+minisign-verify = "0.3"
+semver = { version = "1", features = ["serde"] }
+# Signs the test feed in `update::testutil`.
+minisign = { version = "0.10", optional = true }
+
+[dev-dependencies]
+minisign = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"

@@ -14,3 +14,4 @@ pub mod settings;
 pub mod state;
 pub mod trust;
 pub mod types;
+pub mod update;

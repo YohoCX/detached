@@ -3,8 +3,9 @@ mod common;
 use std::sync::atomic::Ordering;
 
 use common::*;
-use detached_app::update::{Install, Release, Update};
+use detached_app::update::Update;
 use detached_core::state::Cancel;
+use detached_core::update::{Install, Release};
 use gpui_kit::{TestAppContext, VisualTestContext};
 use semver::Version;
 

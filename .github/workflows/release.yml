@@ -83,15 +83,15 @@ jobs:
           path: out
           merge-multiple: true
 
-      # latest.json, which update.rs reads, and minisign signatures of it and of the packages.
+      # latest.json, which core's update.rs reads, and minisign signatures of it and of the packages.
       - name: Sign
         env:
           SECRET: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
           [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME, but Cargo.toml says $version."; exit 1; }
-          key=$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";$/\1/p' crates/app/src/update.rs)
-          [ -n "$key" ] || { echo "::error::Set PUBLIC_KEY in crates/app/src/update.rs (see README)."; exit 1; }
+          key=$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";$/\1/p' crates/core/src/update.rs)
+          [ -n "$key" ] || { echo "::error::Set PUBLIC_KEY in crates/core/src/update.rs (see README)."; exit 1; }
           [ -n "$SECRET" ] || { echo "::error::Set the UPDATE_SIGNING_KEY secret (see README)."; exit 1; }
           sudo apt-get update
           sudo apt-get install -y minisign
