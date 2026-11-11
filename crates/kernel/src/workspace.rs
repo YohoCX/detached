@@ -7,7 +7,6 @@ use detached_core::types::RepoInfo;
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
-use crate::activity::{Activity, OpEnded};
 use crate::blocking;
 use crate::doc::Doc;
 use crate::repo::Repo;
@@ -29,7 +28,6 @@ pub struct Workspace {
     shown: Option<Doc>,
     pub(crate) refreshing: bool,
     again: bool,
-    _activity: Subscription,
 }
 
 struct GlobalWorkspace(Entity<Workspace>);
@@ -48,10 +46,6 @@ pub(crate) fn init(cx: &mut App) {
             shown: None,
             refreshing: false,
             again: false,
-            _activity: cx.subscribe(
-                &Activity::global(cx),
-                |w: &mut Workspace, _, e: &OpEnded, cx| w.refresh(e.repo.clone(), cx).detach(),
-            ),
         };
         w.refresh_all(cx);
         w
@@ -199,10 +193,7 @@ impl Workspace {
                     return;
                 };
                 futures::stream::iter(paths)
-                    .map(|repo| {
-                        this.update(&mut cx.clone(), |w, cx| w.refresh(repo, cx))
-                            .unwrap_or_else(|_| Task::ready(()))
-                    })
+                    .map(|repo| cx.update(|cx| crate::invalidate::status(cx, &repo)))
                     .buffer_unordered(8)
                     .collect::<Vec<()>>()
                     .await;
@@ -238,6 +229,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::activity::Activity;
     use crate::repo::{Outcome, Repo};
     use crate::settings::Settings;
     use crate::wait_until;

@@ -5,8 +5,10 @@
 pub mod activity;
 pub mod blocking;
 pub mod doc;
+pub mod invalidate;
 pub mod nav;
 pub mod repo;
+pub mod resource;
 pub mod settings;
 pub mod ui_state;
 pub mod update;
@@ -26,6 +28,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     activity::init(cx);
     settings::init(cx);
     update::init(cx);
+    invalidate::init(cx);
     workspace::init(cx);
 }
 

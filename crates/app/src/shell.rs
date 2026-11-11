@@ -17,6 +17,7 @@ use crate::status_bar::StatusBar;
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
+use kernel::invalidate;
 use kernel::workspace::{Event, Workspace};
 
 const MAC: bool = cfg!(target_os = "macos");
@@ -117,8 +118,11 @@ impl Shell {
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
-                    Workspace::global(cx).update(cx, |w, cx| w.refresh_all(cx));
+                    invalidate::activated(cx);
                 }
+            }),
+            cx.observe_window_visibility(window, |_, v, _, cx| {
+                invalidate::set_visible(cx, v.is_visible())
             }),
         ];
         let Slots {
