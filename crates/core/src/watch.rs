@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
 use crate::error::{Error, Result};
@@ -170,7 +171,7 @@ impl Inner {
             } else if !matches!(e.kind, EventKind::Access(_)) {
                 // inotify reports reads, and core's own status opens HEAD.
                 for p in &e.paths {
-                    again |= s.mark(p, &mut b);
+                    again |= s.mark(p, e.kind, &mut b);
                 }
             }
         }
@@ -190,12 +191,15 @@ impl Inner {
 impl State {
     /// Marks what `p` changed; true when the worktree's walk should run again: an ignore file
     /// changed or a directory appeared.
-    fn mark(&mut self, p: &Path, b: &mut Batch) -> bool {
+    fn mark(&mut self, p: &Path, kind: EventKind, b: &mut Batch) -> bool {
         let Some(name) = p.file_name().map(|n| n.to_string_lossy()) else {
             return false;
         };
-        // Git writes `X.lock` and renames it over `X`.
-        if name.ends_with(".lock") {
+        let dir = p.is_dir();
+        // Git writes `X.lock` and renames it over `X`; Windows reports a directory modified when
+        // a child changes, and the child too.
+        let touched = matches!(kind, EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
+        if name.ends_with(".lock") || (dir && touched) {
             return false;
         }
         let mut hit = false;
@@ -230,7 +234,7 @@ impl State {
             return false;
         }
         b.repos.insert(c.repo.clone());
-        ignores || (p.is_dir() && !self.work.contains_key(p))
+        ignores || (dir && !self.work.contains_key(p))
     }
 }
 
@@ -429,12 +433,13 @@ mod tests {
             all
         }
 
-        /// What `f` marked, up to a commit in `control` made after it: events come in order.
+        /// What `f` marked, up to a commit in `control` made after it: events come in order, and
+        /// the commit's ref moves last but for what marks nothing, so no part of it is left over.
         fn after(&self, f: impl FnOnce()) -> Batch {
             f();
             self.commit("control");
             let control = self.path("control");
-            let mut b = self.until(|b| b.repos.contains(&control));
+            let mut b = self.until(|b| b.refs.contains(&control));
             b.repos.remove(&control);
             b.refs.remove(&control);
             b

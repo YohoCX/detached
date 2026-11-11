@@ -908,9 +908,10 @@ Done on branch `foundation/8-watcher`, 2026-11-11, not merged; `make check` and 
   touches nothing.
 - The ignore rules of the filter: each directory's `.gitignore`, read when an event first passes the
   directory and forgotten when a `.gitignore` changes, over the global excludes and `info/exclude`;
-  the deepest rule for a path decides. Linux's walk is core's `files::walker`, the tree's. A new
-  directory or a changed `.gitignore` runs the walk again on a thread of its own, which watches what
-  it finds and drops what went; at most one more waits.
+  the deepest rule for a path decides. A directory's own modified event is dropped: Windows raises
+  it beside its child's, so an ignored file made in the root would mark the repo. Linux's walk is
+  core's `files::walker`, the tree's. A new directory or a changed `.gitignore` runs the walk again
+  on a thread of its own, which watches what it finds and drops what went; at most one more waits.
 - `kernel::invalidate::watch` starts it and `main` calls it, `--smoke` too; `kernel::init` does not,
   so the tests that count a repo's notifications see no refresh they did not cause, and a test that
   wants the watcher starts it. It sets the watcher on the blocking pool, one `set` at a time, again
