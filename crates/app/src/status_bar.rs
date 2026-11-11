@@ -12,21 +12,23 @@ use gpui_kit::{
 use crate::dock;
 use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::update::{self, Update};
+use crate::update;
 use crate::{actions, keymap};
 use kernel::activity::{Activity, Level};
+use kernel::update::Update;
 
 pub struct StatusBar {
     _store: Subscription,
     _activity: Subscription,
+    _update: Subscription,
 }
 
 impl StatusBar {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        cx.observe_global::<Update>(|_, cx| cx.notify()).detach();
         StatusBar {
             _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
             _activity: cx.observe(&Activity::global(cx), |_, _, cx| cx.notify()),
+            _update: cx.observe(&Update::global(cx), |_, _, cx| cx.notify()),
         }
     }
 }

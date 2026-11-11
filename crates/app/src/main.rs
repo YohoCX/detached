@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use detached_app::store::Store;
-use detached_app::{actions, keymap, shell, update};
+use detached_app::{actions, keymap, shell};
 use detached_core::state::AppState;
 use gpui_kit::App;
 use kernel::ui_state;
@@ -49,7 +49,7 @@ fn main() {
             // or occluded window gets no frames. Linux's event loop drops a quit made before it runs.
             cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
         } else {
-            update::init(cx);
+            kernel::update::start(cx);
         }
         cx.activate(true);
     });

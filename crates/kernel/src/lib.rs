@@ -7,6 +7,7 @@ pub mod blocking;
 pub mod doc;
 pub mod settings;
 pub mod ui_state;
+pub mod update;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     cx.set_global(Core(core));
     activity::init(cx);
     settings::init(cx);
+    update::init(cx);
 }
 
 /// Core's state, for the calls that go through `blocking`.
