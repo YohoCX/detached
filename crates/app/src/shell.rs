@@ -14,7 +14,6 @@ use gpui_kit::{
 use crate::dock;
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
-use crate::store::Store;
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
@@ -74,7 +73,7 @@ pub fn window_options(cx: &App) -> WindowOptions {
     }
 }
 
-/// Opens the main window; the store must be booted.
+/// Opens the main window; the kernel must be booted.
 pub fn open(cx: &mut App) -> gpui_kit::Result<AnyWindowHandle> {
     let options = window_options(cx);
     let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
@@ -100,29 +99,25 @@ impl Shell {
         let config_dir = kernel::core(cx).config_dir.clone();
         ui::theme::init(&config_dir, cx);
         ui::theme::sync(window, cx);
-        let store = Store::global(cx);
+        let workspace = Workspace::global(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let dock = dock::area(window, cx);
         let subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
-            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.observe(&dock, |_, _, cx| cx.notify()),
-            cx.subscribe_in(
-                &Workspace::global(cx),
-                window,
-                |this, w, e: &Event, window, cx| {
-                    if let (Event::Shown, Some(doc)) = (e, w.read(cx).shown().cloned()) {
-                        this.dock
-                            .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
-                    }
-                },
-            ),
+            cx.subscribe_in(&workspace, window, |this, w, e: &Event, window, cx| {
+                if let (Event::Shown, Some(doc)) = (e, w.read(cx).shown().cloned()) {
+                    this.dock
+                        .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
+                }
+            }),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
-                    Store::global(cx).update(cx, |s, cx| s.refresh_all(cx));
+                    Workspace::global(cx).update(cx, |w, cx| w.refresh_all(cx));
                 }
             }),
         ];
@@ -168,7 +163,7 @@ impl Shell {
                 move |window: &mut Window, cx: &mut App| actions::dispatch(window, cx, action);
             bar_button(id, icon, title, on, run, cx)
         };
-        let chat_on = matches!(Store::global(cx).read(cx).shown(), Some(Doc::Chat { .. }));
+        let chat_on = matches!(Workspace::get(cx).shown(), Some(Doc::Chat { .. }));
         TitleBar::new()
             .h(px(40.))
             .pl_0()
@@ -307,7 +302,7 @@ mod tests {
     /// The shell over a config with no folders.
     fn open_shell(cx: &mut TestAppContext) -> (TempDir, AnyWindowHandle) {
         let Sandbox { dir, state } = Sandbox::new();
-        // The store's first refresh runs on core threads.
+        // The workspace's first refresh runs on core threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::init(cx);
@@ -315,7 +310,7 @@ mod tests {
             ui_state::init(dir.path(), cx);
             keymap::bind(&BTreeMap::new(), cx);
             kernel::init(Arc::new(state), cx);
-            Store::init(cx);
+            crate::store::Store::init(cx);
             crate::register(cx);
         });
         let window = cx.update(open).unwrap();

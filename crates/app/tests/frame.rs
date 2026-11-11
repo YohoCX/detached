@@ -9,6 +9,7 @@ use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
 use gpui_kit::{TestAppContext, VisualTestContext};
+use kernel::repo::Repo;
 
 /// Whether the toggle `id` is on; None when it is not drawn.
 fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
@@ -71,20 +72,20 @@ fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
 }
 
 fn names(cx: &mut VisualTestContext) -> Vec<String> {
-    cx.store(|s, _| s.repos.iter().map(|r| r.name.clone()).collect())
+    cx.workspace(|w, _| w.repos().iter().map(|r| r.name.clone()).collect())
 }
 
 #[gpui_kit::test]
-fn sandbox_repos_show_in_the_store(cx: &mut TestAppContext) {
+fn sandbox_repos_show_in_the_workspace(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         repo(sb, "app");
     });
     assert_eq!(names(cx), ["app"]);
-    let branch = cx.store(|s, _| s.status(s.current()?)?.branch.clone());
+    let branch = cx.update(|_, cx| Repo::current(cx)?.status()?.branch.clone());
     assert_eq!(branch.as_deref(), Some("main"));
 
     repo(&cx.sb, "lib");
-    cx.store(|s, cx| s.refresh_all(cx));
+    cx.workspace(|w, cx| w.refresh_all(cx));
     wait_until(cx, |cx| names(cx) == ["app", "lib"]);
 }
 
@@ -97,7 +98,7 @@ fn the_apps_accounts_reach_the_fake_forge(cx: &mut TestAppContext) {
         projects: vec![],
     };
     let forge = forge(&cx.sb, seed);
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     let accounts = api::list_accounts(&core).unwrap();
     assert_eq!(accounts.len(), 2);
     let ok = VerifyResult::Ok { user };
@@ -130,7 +131,7 @@ fn the_e2e_layout_lists_its_repos_with_their_branch_state(cx: &mut TestAppContex
     assert_eq!(branches, "main\nother\nspike\nwt");
     assert_eq!(sb.git(&sb.solo(), &["ls-files"]).lines().count(), 1046);
 
-    let repos = cx.store(|s, _| s.repos.clone());
+    let repos = cx.workspace(|w, _| w.repos().to_vec());
     let paths: Vec<_> = repos.iter().map(|r| &r.path).collect();
     assert_eq!(paths, [&solo, &app, &wt, &api, &web, &lib]);
     // Windows: names hold `\` and the worktree's link is unchecked (docs/TECHDEBT.md).
@@ -142,7 +143,10 @@ fn the_e2e_layout_lists_its_repos_with_their_branch_state(cx: &mut TestAppContex
         );
         assert_eq!(repos[2].worktree_of.as_ref(), Some(&app));
     }
-    let mut status = |p: &str| cx.store(|s, _| s.status(p).cloned()).unwrap();
+    let mut status = |p: &str| {
+        cx.update(|_, cx| Repo::get(cx, p)?.status().cloned())
+            .unwrap()
+    };
     let (a, w, l, m) = (status(&api), status(&web), status(&lib), status(&app));
     assert_eq!(
         (a.branch.as_deref(), a.ahead, a.behind),
@@ -166,7 +170,7 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
     assert_eq!(names(cx), ["github", "gitlab"]);
-    let core = cx.store(|_, cx| kernel::core(cx).clone());
+    let core = cx.update(|_, cx| kernel::core(cx).clone());
     let mounts = [
         ("gitlab", forge.gitlab(), "group/app/-"),
         ("github", forge.ghe(), "owner/app"),
@@ -264,9 +268,9 @@ fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_br
 ) {
     let cx = &mut open_app_with(cx, layout);
     let api = cx.sb.repo("group/api").display().to_string();
-    let name = cx.store(|s, cx| {
-        s.set_current(Some(api.clone()), cx);
-        s.name_of(&api).to_string()
+    let name = cx.workspace(|w, cx| {
+        w.set_current(Some(api.clone()), cx);
+        w.name_of(&api).to_string()
     });
     let repo = |cx: &mut VisualTestContext| {
         cx.find("status.repo")

@@ -11,11 +11,11 @@ use gpui_kit::component::Theme as Kit;
 use gpui_kit::{App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, px, rgba};
 use serde_json::{Map, Value};
 
-use crate::store::Store;
 use crate::util::Status;
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 pub const DEFAULT: &str = "Fleet";
 const BUNDLED: [&str; 2] = [
@@ -342,14 +342,14 @@ pub fn init(config_dir: &Path, cx: &mut App) {
         error: None,
     });
     apply(name, found, cx);
-    // Ends with the store, which lives as long as the app.
-    let Some(store) = Store::try_global(cx).map(|s| s.downgrade()) else {
+    // Ends with the workspace, which lives as long as the app.
+    let Some(workspace) = Workspace::try_global(cx).map(|w| w.downgrade()) else {
         return;
     };
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(POLL).await;
-            if store.upgrade().is_none() {
+            if workspace.upgrade().is_none() {
                 return;
             }
             let d = dir.clone();
