@@ -4,14 +4,17 @@ The layer the agent host will stand on: a kernel crate with the app's live state
 settings, registries instead of closed enums, the updater as a Settings page, and one place that
 decides what is stale, fed by a file watcher.
 
-**Status (2026-11-11): accepted by the owner on 2026-11-10 after step 0 (step 1); steps 0, 0b, 1,
-2, 3 and 4 done. §1–§11 were reviewed in seven revmux rounds
+**Status (2026-11-11): accepted by the owner on 2026-11-10 after step 0 (step 1); steps 0 to 8
+done. §1–§11 were reviewed in seven revmux rounds
 (`.revmux/tasks/agent-host-architecture/`, kept locally); the last found nothing major. §12, the
 execution and acceptance, is written and not yet reviewed. Step 0b is on main (7e5a833); step 0
 is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock tests are on main
 (faf27c8); the owner's own baseline is left. Steps 2 (the kernel crate), 3 (registries) and 4
 (Settings) each had a revmux round with its findings fixed, passed the owner's check on macOS on
-2026-11-11 and are on main. Step 5, Updates, is next.**
+2026-11-11 and are on main. Steps 5 (Updates), 6 (`Workspace` and `Repo`), 7 (resources) and 8
+(the watcher) had their revmux rounds with every major fixed and are on local main; the owner's
+checks of each on macOS, the baseline on the owner's workspace and the week's work on a build
+are left.**
 
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the

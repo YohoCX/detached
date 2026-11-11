@@ -182,8 +182,8 @@ pub fn rescanning(cx: &App) -> bool {
 }
 
 /// The window came forward: the folders are rescanned with every status loaded before the window
-/// last lost focus or while it was away, a resource older than its policy allows reloads, and the watcher is set again,
-/// which brings back a watch the OS dropped and reads the excludes again.
+/// last lost focus or while it was away, a resource older than its policy allows reloads, and the
+/// watcher is set again, which brings back a watch the OS dropped and reads the excludes again.
 pub fn activated(cx: &mut App) {
     cx.default_global::<Away>().1 = false;
     pass(cx, false);
