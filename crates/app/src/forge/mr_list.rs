@@ -1,4 +1,3 @@
-use detached_core::api;
 use detached_core::types::{MergeRequest, MrFilter, MrState};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -8,16 +7,17 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
     App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div,
     prelude::FluentBuilder, px, relative, transparent_black,
 };
 
-use super::mr::{bare_title, number, setup_problem, show_mr, tone};
-use super::{core, name, note, now, poll, setup_note};
-use crate::cache::{self, Cache};
+use super::mr::{bare_title, number, show_mr, tone};
+use super::{name, note, now, setup_note};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{ago, fuzzy};
 use kernel::doc::Doc;
+use kernel::forge::{self, Listed};
+use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
 const FILTERS: [(MrFilter, &str); 5] = [
@@ -28,20 +28,13 @@ const FILTERS: [(MrFilter, &str); 5] = [
     (MrFilter::All, "All states"),
 ];
 
-/// A repo's MRs, or why they cannot load.
-#[derive(Clone)]
-enum Listed {
-    Mrs(Vec<MergeRequest>),
-    Setup(String),
-}
-
 /// The current repo's MRs. Search and filter belong to the view, so they reset when it remounts.
 pub struct MrList {
     repo: Option<String>,
     filter: usize,
     query: Entity<InputState>,
     pick: Entity<SelectState<SearchableVec<&'static str>>>,
-    _poll: Task<()>,
+    mrs: Option<Interest<Listed>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -55,17 +48,11 @@ impl MrList {
                 this.sync(cx);
                 cx.notify();
             }),
-            cx.observe_global::<Cache<Listed>>(|_, cx| cx.notify()),
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    this.load(true, cx);
-                }
-            }),
             cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
             cx.subscribe(&pick, |this, _, e: &SelectEvent<_>, cx| {
                 if let SelectEvent::Confirm(Some(label)) = e {
                     this.filter = FILTERS.iter().position(|f| f.1 == *label).unwrap_or(0);
-                    this.load(false, cx);
+                    this.watch(cx);
                     cx.notify();
                 }
             }),
@@ -75,38 +62,26 @@ impl MrList {
             filter: 0,
             query,
             pick,
-            _poll: poll(60, |this, cx| this.load(false, cx), window, cx),
+            mrs: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
         this
     }
 
-    fn key(&self) -> Option<String> {
-        let filter = &FILTERS[self.filter].0;
-        Some(format!("mrs\0{}\0{filter:?}", self.repo.as_ref()?))
-    }
-
     fn sync(&mut self, cx: &mut Context<Self>) {
         let repo = Workspace::get(cx).current().map(String::from);
         if repo != self.repo {
             self.repo = repo;
-            self.load(false, cx);
+            self.watch(cx);
         }
     }
 
-    fn load(&mut self, focus: bool, cx: &mut Context<Self>) {
-        let (Some(repo), Some(key)) = (self.repo.clone(), self.key()) else {
-            return;
-        };
-        let (core, filter) = (core(cx), FILTERS[self.filter].0.clone());
-        let list = move || {
-            Ok(match setup_problem(&api::forge_hosts(&core, &repo)?) {
-                Some(s) => Listed::Setup(s),
-                None => Listed::Mrs(api::list_mrs(&core, &repo, filter)?),
-            })
-        };
-        cache::refresh(key, focus, list, cx).detach();
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        self.mrs = self.repo.clone().map(|repo| {
+            let mrs = forge::mrs(cx, &repo, FILTERS[self.filter].0.clone());
+            Interest::view(mrs, cx)
+        });
     }
 
     fn header(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
@@ -129,7 +104,11 @@ impl MrList {
                 ui::icon_button("mrs.refresh", Icon::Refresh, cx)
                     .test_support()
                     .tooltip(|window, cx| Tooltip::new("Refresh").build(window, cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.load(false, cx))),
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(mrs) = &this.mrs {
+                            mrs.refresh(cx);
+                        }
+                    })),
             )
     }
 
@@ -236,12 +215,12 @@ impl MrList {
 impl Render for MrList {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let cached = self.key().and_then(|k| cache::cached::<Listed>(&k, cx));
+        let mrs = self.mrs.as_ref().map(|m| m.read(cx));
         let (value, error) = (
-            cached.and_then(|c| c.value.clone()),
-            cached.and_then(|c| c.error.clone()),
+            mrs.and_then(|m| m.value.clone()),
+            mrs.and_then(|m| m.error.clone()),
         );
-        let loaded = cached.is_some();
+        let loaded = mrs.is_some_and(|m| m.at.is_some());
         let query = self.query.read(cx).value().to_string();
         let shown = match Workspace::get(cx).shown() {
             Some(Doc::Mr { repo, number }) if self.repo.as_ref() == Some(repo) => Some(*number),

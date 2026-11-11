@@ -11,13 +11,14 @@ use gpui_kit::{
 };
 
 use super::core;
-use super::mr::{bare_title, number, setup_problem, show_mr};
+use super::mr::{bare_title, number, show_mr};
 use crate::actions::{self, Group, Registration};
-use crate::cache::{self, Cache};
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::activity::Activity;
 use kernel::blocking;
+use kernel::forge::{self, setup_problem};
 use kernel::repo::Repo;
+use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
 struct Form {
@@ -37,13 +38,14 @@ pub struct MrChip {
     repo: Option<String>,
     /// None without a branch with an upstream.
     key: Option<String>,
+    mr: Option<Interest<Option<MergeRequest>>>,
     form: Option<Form>,
     _create: Registration,
     _subscriptions: Vec<Subscription>,
 }
 
 impl MrChip {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         let this = cx.weak_entity();
         let create = actions::register(
             cx,
@@ -54,18 +56,11 @@ impl MrChip {
                 this.update(cx, |this, cx| this.open_form(window, cx)).ok();
             },
         );
-        let subscriptions = vec![
-            Workspace::observe(cx, |this, cx| this.sync(cx)),
-            cx.observe_global::<Cache<Option<MergeRequest>>>(|_, cx| cx.notify()),
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    this.load(true, cx);
-                }
-            }),
-        ];
+        let subscriptions = vec![Workspace::observe(cx, |this, cx| this.sync(cx))];
         let mut this = MrChip {
             repo: None,
             key: None,
+            mr: None,
             form: None,
             _create: create,
             _subscriptions: subscriptions,
@@ -80,29 +75,22 @@ impl MrChip {
         let key = repo.as_deref().and_then(|r| {
             let st = Repo::get(cx, r)?.status()?;
             let (branch, upstream) = (st.branch.as_ref()?, st.upstream.as_ref()?);
-            Some(format!("chip\0{r}\0{branch}\0{upstream}"))
+            Some(format!("{branch}\0{upstream}"))
         });
-        if key != self.key {
+        if (&repo, &key) != (&self.repo, &self.key) {
             (self.repo, self.key, self.form) = (repo, key, None);
-            self.load(false, cx);
+            self.mr = self
+                .repo
+                .as_ref()
+                .zip(self.key.as_ref())
+                .map(|(repo, key)| Interest::view(forge::current_mr(cx, repo, key), cx));
             cx.notify();
         }
     }
 
-    fn load(&mut self, focus: bool, cx: &mut Context<Self>) {
-        let (Some(repo), Some(key)) = (self.repo.clone(), self.key.clone()) else {
-            return;
-        };
-        let core = core(cx);
-        cache::refresh(key, focus, move || api::current_mr(&core, &repo), cx).detach();
-    }
-
-    /// The MR, Some(None) when there is none; None while unknown or failing with nothing cached.
+    /// The MR, Some(None) when there is none; None while unknown or failing with nothing loaded.
     fn mr(&self, cx: &App) -> Option<Option<MergeRequest>> {
-        let key = self.key.as_ref()?;
-        cache::cached::<Option<MergeRequest>>(key, cx)?
-            .value
-            .clone()
+        self.mr.as_ref()?.read(cx).value.clone()
     }
 
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -164,7 +152,9 @@ impl MrChip {
                 match done {
                     Ok(m) => {
                         this.form = None;
-                        this.load(false, cx);
+                        if let Some(mr) = &this.mr {
+                            mr.refresh(cx);
+                        }
                         show_mr(cx, repo, m.number);
                     }
                     Err(e) => {

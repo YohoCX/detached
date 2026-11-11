@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use detached_core::api;
 use detached_core::error::Result;
@@ -14,20 +15,19 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FontWeight, Global,
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
 };
 
-use super::mr::setup_problem;
-use super::{active, color, core, glyph, name, note, now, poll, setup_note, took};
-use crate::cache::{self, Cache};
+use super::{color, core, glyph, name, note, now, setup_note, took};
 use crate::settings;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util;
 use kernel::blocking;
 use kernel::doc::{DocRef, Location};
+use kernel::forge::{self, setup_problem};
 use kernel::nav;
 use kernel::repo::Repo;
+use kernel::resource::{Interest, Resource};
 use kernel::workspace::Workspace;
 
 /// For the session: the branch scope, and a Run Pipeline… request for the panel.
@@ -69,7 +69,9 @@ pub struct Pipelines {
     mr: Option<u64>,
     repo: Option<String>,
     key: String,
-    head: String,
+    list: Option<Interest<Vec<Pipeline>>>,
+    /// When the list last loaded, to refresh the expanded pipelines after each load.
+    at: Option<Instant>,
     /// The last action's error.
     note: Option<String>,
     busy: bool,
@@ -78,7 +80,7 @@ pub struct Pipelines {
     setup: Option<String>,
     run: Option<RunForm>,
     stages: HashMap<u64, Jobs>,
-    poll: Option<Task<()>>,
+    _list: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -91,15 +93,9 @@ impl Pipelines {
     ) -> Self {
         let subscriptions = vec![
             Workspace::observe(cx, |this, cx| this.sync(cx)),
-            cx.observe_global::<Cache<Vec<Pipeline>>>(|_, cx| cx.notify()),
             cx.observe_global_in::<Session>(window, |this, window, cx| {
                 this.sync(cx);
                 this.take_run(window, cx);
-            }),
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    this.load(true, cx);
-                }
             }),
         ];
         let mut this = Pipelines {
@@ -107,14 +103,15 @@ impl Pipelines {
             mr,
             repo: None,
             key: String::new(),
-            head: String::new(),
+            list: None,
+            at: None,
             note: None,
             busy: false,
             github: HashSet::new(),
             setup: None,
             run: None,
             stages: HashMap::new(),
-            poll: None,
+            _list: None,
             _subscriptions: subscriptions,
         };
         this.sync(cx);
@@ -126,12 +123,10 @@ impl Pipelines {
         cx.try_global::<Session>().is_some_and(|s| s.all)
     }
 
-    /// Follows the repo, the scope and the head: each change reloads, a new key collapses all.
+    /// Follows the repo and the scope: a new key collapses all.
     fn sync(&mut self, cx: &mut Context<Self>) {
         let current = Workspace::get(cx).current().map(String::from);
         let repo = self.fixed.clone().or(current);
-        let st = repo.as_deref().and_then(|r| Repo::get(cx, r)?.status());
-        let head = format!("{:?}", st.map(|s| (&s.head, &s.branch)));
         let at = repo.as_deref().unwrap_or_default();
         let key = format!("pipes {at} {} {}", self.mr.unwrap_or(0), Self::all(cx));
         if repo != self.repo {
@@ -143,10 +138,45 @@ impl Pipelines {
         }
         if key != self.key {
             self.stages.clear();
+            (self.repo, self.key, self.at) = (repo, key, None);
+            self.watch(cx);
         }
-        if (&repo, &key, &head) != (&self.repo, &self.key, &self.head) {
-            (self.repo, self.key, self.head) = (repo, key, head);
-            self.load(false, cx);
+    }
+
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        let Some(repo) = self.repo.clone() else {
+            (self.list, self._list) = (None, None);
+            return;
+        };
+        let all = Self::all(cx);
+        let list = forge::pipelines(cx, &repo, self.mr, all);
+        self._list = Some(cx.observe(&list, |this, list, cx| this.landed(list, cx)));
+        self.list = Some(Interest::view(list, cx));
+    }
+
+    /// After each load of the list, the expanded pipelines still listed load their jobs again.
+    fn landed(&mut self, list: Entity<Resource<Vec<Pipeline>>>, cx: &mut Context<Self>) {
+        let list = list.read(cx);
+        if list.at == self.at {
+            return;
+        }
+        self.at = list.at;
+        let Some(list) = list.value.clone().filter(|_| list.error.is_none()) else {
+            return;
+        };
+        self.stages.retain(|id, _| list.iter().any(|p| p.id == *id));
+        let open: Vec<_> = list
+            .into_iter()
+            .filter(|p| self.stages.contains_key(&p.id))
+            .collect();
+        for p in open {
+            self.jobs(p, cx);
+        }
+    }
+
+    fn refresh(&self, cx: &mut App) {
+        if let Some(list) = &self.list {
+            list.refresh(cx);
         }
     }
 
@@ -161,37 +191,6 @@ impl Pipelines {
                 if this.repo.as_ref() == Some(&repo) {
                     (this.github, this.setup) = (github, setup);
                     cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Refreshes the list, then the expanded pipelines still listed.
-    fn load(&mut self, focus: bool, cx: &mut Context<Self>) {
-        let Some(repo) = self.repo.clone() else {
-            return;
-        };
-        let (key, mr, all, core) = (self.key.clone(), self.mr, Self::all(cx), core(cx));
-        let list = move || match mr {
-            Some(n) => api::mr_pipelines(&core, &repo, n),
-            None => api::list_pipelines(&core, &repo, all),
-        };
-        let list = cache::refresh(key.clone(), focus, list, cx);
-        cx.spawn(async move |this, cx| {
-            let Some(list) = list.await else { return };
-            this.update(cx, |this, cx| {
-                if this.key != key {
-                    return;
-                }
-                this.stages.retain(|id, _| list.iter().any(|p| p.id == *id));
-                let open: Vec<_> = list
-                    .into_iter()
-                    .filter(|p| this.stages.contains_key(&p.id))
-                    .collect();
-                for p in open {
-                    this.jobs(p, cx);
                 }
             })
             .ok();
@@ -258,7 +257,7 @@ impl Pipelines {
                     Ok(()) => then(this),
                     Err(e) => this.note = Some(e.to_string()),
                 }
-                this.load(false, cx);
+                this.refresh(cx);
             })
             .ok();
         })
@@ -276,8 +275,10 @@ impl Pipelines {
         let Some(repo) = self.repo.clone() else {
             return;
         };
-        let listed = cache::cached::<Vec<Pipeline>>(&self.key, cx)
-            .and_then(|c| Some(c.value.as_ref()?.first()?.project.clone()));
+        let listed = self
+            .list
+            .as_ref()
+            .and_then(|l| Some(l.read(cx).value.as_ref()?.first()?.project.clone()));
         let st = Repo::get(cx, &repo).and_then(Repo::status);
         let branch = st.and_then(|s| s.branch.clone()).unwrap_or_default();
         let (core, r) = (core(cx), repo.clone());
@@ -477,7 +478,7 @@ impl Pipelines {
                 ui::icon_button("pipelines.refresh", Icon::Refresh, cx)
                     .test_support()
                     .tooltip(|window, cx| Tooltip::new("Refresh").build(window, cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.load(false, cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
     }
 
@@ -791,18 +792,12 @@ impl Pipelines {
 }
 
 impl Render for Pipelines {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let cached = cache::cached::<Vec<Pipeline>>(&self.key, cx);
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let loaded = self.list.as_ref().map(|l| l.read(cx));
         let (list, error) = (
-            cached.and_then(|c| c.value.clone()),
-            cached.and_then(|c| c.error.clone()),
+            loaded.and_then(|l| l.value.clone()),
+            loaded.and_then(|l| l.error.clone()),
         );
-        let jobs = self.stages.values().flatten().flatten().flatten();
-        let running = list.iter().flatten().any(|p| active(&p.status))
-            || jobs.flat_map(|s| &s.jobs).any(|j| active(&j.status));
-        if running != self.poll.is_some() {
-            self.poll = running.then(|| poll(5, |this, cx| this.load(false, cx), window, cx));
-        }
         let t = theme(cx);
         if self.repo.is_none() {
             return note("pipelines.note", "No repository", t.muted);

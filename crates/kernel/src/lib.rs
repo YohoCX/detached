@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod blocking;
 pub mod doc;
+pub mod forge;
 pub mod invalidate;
 pub mod nav;
 pub mod repo;

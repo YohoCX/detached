@@ -1,33 +1,12 @@
 //! What the MR list, chip and page share.
 
-use detached_core::types::{ForgeHosts, MergeRequest, PipelineStatus, Provider};
+use detached_core::types::{MergeRequest, PipelineStatus, Provider};
 use gpui_kit::{App, Hsla};
 
 use crate::files::Links;
 use crate::ui::theme;
 use kernel::doc::{DocRef, Location};
 use kernel::nav;
-
-/// Why MRs cannot load for a repo; None when they can.
-pub fn setup_problem(h: &ForgeHosts) -> Option<String> {
-    let Some(remote) = &h.mr_remote else {
-        return Some("Choose the remote that holds the merge requests in Settings.".into());
-    };
-    let Some(host) = h.hosts.iter().find(|x| x.remotes.contains(remote)) else {
-        return Some(format!("Remote {remote} is not on a forge."));
-    };
-    match (&host.account_id, host.ambiguous) {
-        (Some(_), _) => None,
-        (None, true) => Some(format!(
-            "Several accounts fit {}; choose one in Settings.",
-            host.host
-        )),
-        (None, false) => Some(format!(
-            "No account for {}; add one in Settings.",
-            host.host
-        )),
-    }
-}
 
 pub fn is_gitlab(mr: &MergeRequest) -> bool {
     matches!(mr.provider, Provider::Gitlab | Provider::GitlabSelfHosted)
@@ -93,31 +72,9 @@ pub fn show_mr(cx: &mut App, repo: String, number: u64) {
 
 #[cfg(test)]
 mod tests {
-    use detached_core::types::{HostAccount, MrState, Project};
+    use detached_core::types::{MrState, Project};
 
     use super::*;
-
-    #[test]
-    fn names_what_is_missing_to_load_mrs() {
-        let h = |account: Option<&str>, ambiguous, remote: Option<&str>| ForgeHosts {
-            mr_remote: remote.map(String::from),
-            hosts: vec![HostAccount {
-                host: "h".into(),
-                remotes: vec!["origin".into()],
-                account_id: account.map(String::from),
-                ambiguous,
-            }],
-        };
-        let says = |h: ForgeHosts| setup_problem(&h).unwrap_or_default();
-        assert_eq!(setup_problem(&h(Some("a"), false, Some("origin"))), None);
-        assert!(says(h(None, false, Some("origin"))).starts_with("No account for h"));
-        assert!(says(h(None, true, Some("origin"))).starts_with("Several accounts fit h"));
-        assert!(says(h(Some("a"), false, None)).starts_with("Choose the remote"));
-        assert_eq!(
-            says(h(Some("a"), false, Some("up"))),
-            "Remote up is not on a forge."
-        );
-    }
 
     fn mr(title: &str, draft: bool) -> MergeRequest {
         let project = Project {

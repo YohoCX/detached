@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use detached_core::error::Result;
-use gpui::{AnyEntity, App, AppContext, Context, Entity, Global, Task};
+use gpui::{AnyEntity, App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use crate::blocking;
 
@@ -20,6 +20,13 @@ pub struct Policy<T> {
 
 pub type When<T> = fn(&T) -> bool;
 
+/// What else marks a resource stale.
+#[derive(Clone, PartialEq)]
+pub enum On {
+    /// The repo's head or branch moved.
+    Head(String),
+}
+
 type Job<T> = Box<dyn FnOnce() -> std::result::Result<T, String> + Send>;
 type Load<T> = Box<dyn Fn(&App) -> Job<T>>;
 
@@ -30,6 +37,7 @@ pub struct Resource<T> {
     /// When the last load ended.
     pub at: Option<Instant>,
     policy: Policy<T>,
+    on: Option<On>,
     load: Load<T>,
     loading: Option<Task<()>>,
     held: Rc<()>,
@@ -40,11 +48,13 @@ pub struct Resource<T> {
 pub struct Interest<T> {
     resource: Entity<Resource<T>>,
     _held: Rc<()>,
+    _redraw: Option<Subscription>,
 }
 
 /// What reaches every resource.
 pub(crate) enum Input {
     Activated,
+    On(On),
 }
 
 type Apply = fn(AnyEntity, &Input, &mut App);
@@ -93,6 +103,7 @@ impl<T: Send + 'static> Resource<T> {
             error: None,
             at: None,
             policy,
+            on: None,
             load: Box::new(move |cx| {
                 let f = load(cx);
                 Box::new(move || f().map_err(|e| e.to_string()))
@@ -100,6 +111,13 @@ impl<T: Send + 'static> Resource<T> {
             loading: None,
             held: Rc::default(),
             polling: false,
+        }
+    }
+
+    pub fn on(self, on: On) -> Self {
+        Resource {
+            on: Some(on),
+            ..self
         }
     }
 
@@ -138,6 +156,7 @@ impl<T: Send + 'static> Resource<T> {
                 let old = |f| self.at.is_none_or(|at| now.duration_since(at) >= f);
                 self.loading.is_none() && self.policy.fresh_for.is_some_and(old)
             }
+            Input::On(on) => self.on.as_ref() == Some(on),
         };
         if stale && self.held() {
             self.refresh(cx);
@@ -185,6 +204,16 @@ impl<T: Send + 'static> Interest<T> {
         Interest {
             resource,
             _held: held,
+            _redraw: None,
+        }
+    }
+
+    /// An interest of the view `cx`, which redraws when the resource changes.
+    pub fn view<V: 'static>(resource: Entity<Resource<T>>, cx: &mut Context<V>) -> Self {
+        let redraw = cx.observe(&resource, |_, _, cx| cx.notify());
+        Interest {
+            _redraw: Some(redraw),
+            ..Interest::new(resource, cx)
         }
     }
 

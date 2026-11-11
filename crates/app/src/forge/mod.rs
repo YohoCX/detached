@@ -12,16 +12,14 @@ mod pipelines;
 mod thread;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
 use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Context, Div, Hsla, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, Window, div,
-    px,
+    AnyElement, AnyView, App, AppContext, Div, Hsla, InteractiveElement, IntoElement,
+    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 pub use badge::PipelineBadge;
@@ -141,10 +139,6 @@ impl DocKind for JobDocs {
     }
 }
 
-pub fn active(s: &PipelineStatus) -> bool {
-    matches!(s, PipelineStatus::Pending | PipelineStatus::Running)
-}
-
 pub fn glyph(s: &PipelineStatus) -> &'static str {
     use PipelineStatus::*;
     match s {
@@ -228,30 +222,6 @@ fn setup_note(id: &'static str, button: &'static str, text: String, cx: &App) ->
                 .on_click(|_, _, cx| settings::open(cx, "repository")),
         )
         .into_any_element()
-}
-
-/// Runs `load` every `secs` while the window shows, until the task drops.
-fn poll<V: 'static>(
-    secs: u64,
-    load: fn(&mut V, &mut Context<V>),
-    window: &Window,
-    cx: &mut Context<V>,
-) -> Task<()> {
-    cx.spawn_in(window, async move |this, cx| {
-        loop {
-            cx.background_executor()
-                .timer(Duration::from_secs(secs))
-                .await;
-            let tick = this.update_in(cx, |this, window, cx| {
-                if window.is_visible() {
-                    load(this, cx);
-                }
-            });
-            if tick.is_err() {
-                return;
-            }
-        }
-    })
 }
 
 #[cfg(test)]

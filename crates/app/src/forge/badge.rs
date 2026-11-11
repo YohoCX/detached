@@ -1,18 +1,18 @@
-use detached_core::api;
 use detached_core::types::Pipeline;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 
-use super::{active, color, core, glyph, name, pipelines::Session, poll};
+use super::{color, glyph, name, pipelines::Session};
 use crate::actions::{self, Group, Registration};
-use crate::cache::{self, Cache};
 use crate::dock;
 use crate::ui::{self, radius, theme};
+use kernel::forge;
 use kernel::repo::Repo;
+use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
 /// The current branch's latest pipeline; a click opens Pipelines. It also runs `pipeline.run`.
@@ -20,13 +20,13 @@ pub struct PipelineBadge {
     repo: Option<String>,
     /// None without an upstream: then the forge lists every branch's pipelines.
     key: Option<String>,
-    poll: Option<Task<()>>,
+    latest: Option<Interest<Option<Pipeline>>>,
     _run: Registration,
     _subscriptions: Vec<Subscription>,
 }
 
 impl PipelineBadge {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         let run = actions::register(
             cx,
             "pipeline.run",
@@ -37,19 +37,11 @@ impl PipelineBadge {
                 dock::open("pipelines", window, cx);
             },
         );
-        let subscriptions = vec![
-            Workspace::observe(cx, |this, cx| this.sync(cx)),
-            cx.observe_global::<Cache<Option<Pipeline>>>(|_, cx| cx.notify()),
-            cx.observe_window_activation(window, |this, window, cx| {
-                if window.is_window_active() {
-                    this.load(true, cx);
-                }
-            }),
-        ];
+        let subscriptions = vec![Workspace::observe(cx, |this, cx| this.sync(cx))];
         let mut this = PipelineBadge {
             repo: None,
             key: None,
-            poll: None,
+            latest: None,
             _run: run,
             _subscriptions: subscriptions,
         };
@@ -63,36 +55,23 @@ impl PipelineBadge {
             let st = Repo::get(cx, r)?
                 .status()
                 .filter(|st| st.upstream.is_some())?;
-            Some(format!("badge {r} {:?} {:?}", st.head, st.branch))
+            Some(format!("{:?} {:?}", st.head, st.branch))
         });
-        if key != self.key {
+        if (&repo, &key) != (&self.repo, &self.key) {
             (self.repo, self.key) = (repo, key);
-            self.load(false, cx);
+            self.latest = self
+                .repo
+                .as_ref()
+                .zip(self.key.as_ref())
+                .map(|(repo, key)| Interest::view(forge::latest_pipeline(cx, repo, key), cx));
         }
-    }
-
-    fn load(&mut self, focus: bool, cx: &mut Context<Self>) {
-        let (Some(repo), Some(key)) = (self.repo.clone(), self.key.clone()) else {
-            return;
-        };
-        let core = core(cx);
-        let latest = move || Ok(api::list_pipelines(&core, &repo, false)?.into_iter().next());
-        cache::refresh(key, focus, latest, cx).detach();
     }
 }
 
 impl Render for PipelineBadge {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let cached = self
-            .key
-            .as_ref()
-            .and_then(|k| cache::cached::<Option<Pipeline>>(k, cx));
-        let p = cached.and_then(|c| c.value.clone().flatten());
-        let running = p.as_ref().is_some_and(|p| active(&p.status));
-        if running != self.poll.is_some() {
-            self.poll = running.then(|| poll(5, |this, cx| this.load(false, cx), window, cx));
-        }
-        let Some(p) = p else {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let latest = self.latest.as_ref().map(|l| l.read(cx));
+        let Some(p) = latest.and_then(|l| l.value.clone().flatten()) else {
             return div().hidden().into_any_element();
         };
         let t = theme(cx);

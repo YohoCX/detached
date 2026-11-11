@@ -1553,6 +1553,7 @@ name = "detached-kernel"
 version = "0.5.0"
 dependencies = [
  "detached-core",
+ "detached-forge-fake",
  "futures",
  "gpui-pre",
  "serde",

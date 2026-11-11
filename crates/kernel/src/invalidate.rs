@@ -7,7 +7,7 @@ use futures::channel::oneshot;
 use gpui::{App, Global, Task};
 
 use crate::activity::{Activity, OpEnded};
-use crate::resource::{self, Input};
+use crate::resource::{self, Input, On};
 use crate::workspace::Workspace;
 
 struct Visible(bool);
@@ -63,6 +63,13 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
         .detach();
     }
     cx.spawn(async move |_| _ = rx.await)
+}
+
+/// `repo`'s status loaded; `moved` when its head or branch did.
+pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
+    if moved {
+        resource::input(cx, Input::On(On::Head(repo.into())));
+    }
 }
 
 /// The window came forward: the folders are rescanned with every status, and a resource older

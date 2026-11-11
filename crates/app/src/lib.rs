@@ -1,5 +1,4 @@
 pub mod actions;
-pub mod cache;
 pub mod chat;
 pub mod dock;
 pub mod events;

@@ -6,10 +6,10 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
 
-use super::active;
 use super::mr::is_gitlab;
 use super::mr_page::{MrPage, button};
 use crate::ui::{self, radius, theme};
+use kernel::forge::active;
 
 /// The merge status and controls of an open MR; its choices last while its Overview shows.
 #[derive(Default)]

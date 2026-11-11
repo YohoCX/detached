@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use detached_core::api;
-use detached_core::types::RepoInfo;
+use detached_core::types::{RepoInfo, RepoStatus};
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
@@ -132,13 +132,18 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let status = status.await;
             this.update(cx, |w, cx| {
-                if let Some(r) = w.repo(&repo) {
+                let head = |s: Option<&RepoStatus>| s.map(|s| (s.head.clone(), s.branch.clone()));
+                let new = head(status.as_ref().ok());
+                let moved = w.repo(&repo).cloned().is_some_and(|r| {
                     r.update(cx, |r, cx| {
+                        let moved = head(r.status()) != new;
                         r.status = Some(status);
                         cx.notify();
-                    });
-                }
-                cx.emit(Event::Status(repo));
+                        moved
+                    })
+                });
+                cx.emit(Event::Status(repo.clone()));
+                crate::invalidate::status_loaded(cx, &repo, moved);
             })
             .ok();
         })
