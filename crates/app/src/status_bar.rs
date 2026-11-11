@@ -12,14 +12,15 @@ use gpui_kit::{
 use detached_core::update::Install;
 
 use crate::dock;
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap, settings};
 use kernel::activity::{Activity, Level};
+use kernel::repo::Repo;
 use kernel::update::{State, Update};
+use kernel::workspace::Workspace;
 
 pub struct StatusBar {
-    _store: Subscription,
+    _workspace: Subscription,
     _activity: Subscription,
     _update: Subscription,
 }
@@ -27,7 +28,7 @@ pub struct StatusBar {
 impl StatusBar {
     pub fn new(cx: &mut Context<Self>) -> Self {
         StatusBar {
-            _store: cx.observe(&Store::global(cx), |_, _, cx| cx.notify()),
+            _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
             _activity: cx.observe(&Activity::global(cx), |_, _, cx| cx.notify()),
             _update: cx.observe(&Update::global(cx), |_, _, cx| cx.notify()),
         }
@@ -37,8 +38,7 @@ impl StatusBar {
 impl Render for StatusBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let store = Store::global(cx);
-        let s = store.read(cx);
+        let w = Workspace::get(cx);
         let activity = Activity::global(cx);
         let a = activity.read(cx);
         let left = match &a.message {
@@ -61,8 +61,8 @@ impl Render for StatusBar {
                     .child(m.text.clone())
                     .into_any_element()
             }
-            None => s.current().map_or(div().into_any_element(), |repo| {
-                let st = s.status(repo);
+            None => w.current().map_or(div().into_any_element(), |repo| {
+                let st = Repo::get(cx, repo).and_then(Repo::status);
                 let branch = st.map(|st| {
                     let head = st.head.as_deref().unwrap_or("?");
                     let head = head.get(..8).unwrap_or(head);
@@ -74,7 +74,7 @@ impl Render for StatusBar {
                     .filter(|(_, n)| *n > 0)
                     .map(|(arrow, n)| format!("{arrow}{n}"))
                     .collect();
-                let name = s.name_of(repo).to_string();
+                let name = w.name_of(repo).to_string();
                 let mut said = vec![name.clone()];
                 said.extend(branch.clone().into_iter().chain(ab.clone()));
                 let tip = keymap::tip("Checkout Branch…", "vcs.checkout", cx);
@@ -131,7 +131,7 @@ impl Render for StatusBar {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(op.label.clone()),
                 )
-                .child(div().flex_none().child(s.name_of(&op.repo).to_string()))
+                .child(div().flex_none().child(w.name_of(&op.repo).to_string()))
                 .when(!op.line.is_empty(), |d| {
                     d.child(div().min_w_0().truncate().child(op.line.clone()))
                 })
