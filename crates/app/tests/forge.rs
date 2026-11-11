@@ -14,6 +14,7 @@ use gpui_kit::{
     point, px,
 };
 use kernel::doc::Doc;
+use kernel::invalidate;
 use kernel::repo::Repo;
 use serde_json::{Value, json};
 
@@ -538,7 +539,7 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
         &["branch", "-q", "--set-upstream-to", "origin/topic"],
     );
     show(cx, "gitlab");
-    cx.workspace(|w, cx| w.refresh_all(cx));
+    cx.update(|_, cx| invalidate::rescan(cx));
     let path = repo.display().to_string();
     let upstream = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| Repo::get(cx, &path)?.status()?.upstream.clone())

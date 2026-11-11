@@ -37,6 +37,7 @@ use crate::ui::{self, radius, theme};
 use branches::Intent;
 use kernel::activity::Activity;
 use kernel::blocking;
+use kernel::invalidate;
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 use sync::{Bulk, Kind};
@@ -153,13 +154,12 @@ pub(crate) fn settings_call(
     cx: &mut App,
     f: impl FnOnce(&AppState) -> Result<Vec<RepoInfo>> + Send + 'static,
 ) -> Task<()> {
-    let workspace = Workspace::global(cx);
     let core = kernel::core(cx).clone();
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         let r = done.await;
         cx.update(|cx| match r {
-            Ok(list) => workspace.update(cx, |w, cx| w.load_repos(Some(list), cx)),
+            Ok(list) => invalidate::listed(cx, list),
             Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
         })
     })

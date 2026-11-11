@@ -9,6 +9,7 @@ use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
 use gpui_kit::{TestAppContext, VisualTestContext};
+use kernel::invalidate;
 use kernel::repo::Repo;
 
 /// Whether the toggle `id` is on; None when it is not drawn.
@@ -85,7 +86,7 @@ fn sandbox_repos_show_in_the_workspace(cx: &mut TestAppContext) {
     assert_eq!(branch.as_deref(), Some("main"));
 
     repo(&cx.sb, "lib");
-    cx.workspace(|w, cx| w.refresh_all(cx));
+    cx.update(|_, cx| invalidate::rescan(cx));
     wait_until(cx, |cx| names(cx) == ["app", "lib"]);
 }
 

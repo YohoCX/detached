@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use detached_core::api;
 use detached_core::types::{RepoInfo, RepoStatus};
-use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use crate::blocking;
@@ -26,8 +25,6 @@ pub struct Workspace {
     entities: Vec<(Entity<Repo>, Subscription)>,
     current: Option<String>,
     shown: Option<Doc>,
-    pub(crate) refreshing: bool,
-    again: bool,
 }
 
 struct GlobalWorkspace(Entity<Workspace>);
@@ -38,19 +35,14 @@ impl EventEmitter<Event> for Workspace {}
 
 /// Makes the workspace global and lists the repos.
 pub(crate) fn init(cx: &mut App) {
-    let workspace = cx.new(|cx| {
-        let mut w = Workspace {
-            repos: vec![],
-            entities: vec![],
-            current: None,
-            shown: None,
-            refreshing: false,
-            again: false,
-        };
-        w.refresh_all(cx);
-        w
+    let workspace = cx.new(|_| Workspace {
+        repos: vec![],
+        entities: vec![],
+        current: None,
+        shown: None,
     });
     cx.set_global(GlobalWorkspace(workspace));
+    crate::invalidate::rescan(cx);
 }
 
 impl Workspace {
@@ -150,7 +142,7 @@ impl Workspace {
     }
 
     /// Keeps the entities of repos still listed, makes one for each new repo and drops the rest.
-    fn set_repos(&mut self, list: Vec<RepoInfo>, cx: &mut Context<Self>) {
+    pub(crate) fn set_repos(&mut self, list: Vec<RepoInfo>, cx: &mut Context<Self>) {
         let mut old: Vec<_> = self.repos.drain(..).zip(self.entities.drain(..)).collect();
         for r in &list {
             let kept = old.iter().position(|(o, _)| o.path == r.path);
@@ -172,54 +164,6 @@ impl Workspace {
         }
         self.repos = list;
         cx.notify();
-    }
-
-    /// Rescans the folders (repos and worktrees come and go on disk), then every status, 8 at a time.
-    /// Calls during a pass run one more pass after it.
-    pub fn refresh_all(&mut self, cx: &mut Context<Self>) {
-        if self.refreshing {
-            self.again = true;
-            return;
-        }
-        self.refreshing = true;
-        let core = crate::core(cx).clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                let core = core.clone();
-                // Before the listing, so a call made while it runs gets a pass of its own.
-                this.update(cx, |w, _| w.again = false).ok();
-                let list = cx
-                    .update(|cx| blocking::run(cx, move || api::list_repos(&core)))
-                    .await;
-                let Ok(paths) = this.update(cx, |w, cx| {
-                    w.set_repos(list, cx);
-                    w.repos.iter().map(|r| r.path.clone()).collect::<Vec<_>>()
-                }) else {
-                    return;
-                };
-                futures::stream::iter(paths)
-                    .map(|repo| cx.update(|cx| crate::invalidate::status(cx, &repo)))
-                    .buffer_unordered(8)
-                    .collect::<Vec<()>>()
-                    .await;
-                let again = this.update(cx, |w, _| {
-                    w.refreshing = w.again;
-                    w.again
-                });
-                if !again.unwrap_or(false) {
-                    return;
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Applies `list` when given, then `refresh_all`.
-    pub fn load_repos(&mut self, list: Option<Vec<RepoInfo>>, cx: &mut Context<Self>) {
-        if let Some(list) = list {
-            self.set_repos(list, cx);
-        }
-        self.refresh_all(cx);
     }
 }
 
@@ -256,7 +200,7 @@ mod tests {
         wait_until(cx, |cx| {
             let w = Workspace::get(cx);
             let loaded = w.repos.len() == 2 && w.repos.iter().all(|r| status(cx, &r.path));
-            loaded && !w.refreshing && !Settings::get(cx).workspaces.is_empty()
+            loaded && !crate::invalidate::rescanning(cx) && !Settings::get(cx).workspaces.is_empty()
         });
         let path = |name| cx.read(|cx| path_of(cx, name));
         (dir, path("a"), path("b"))
@@ -286,10 +230,9 @@ mod tests {
         cx.read(|cx| Workspace::get(cx).repo(repo).unwrap().clone())
     }
 
-    fn refresh_all(cx: &mut TestAppContext) {
-        let workspace = cx.read(Workspace::global);
-        workspace.update(cx, |w, cx| w.refresh_all(cx));
-        wait_until(cx, |cx| !Workspace::get(cx).refreshing);
+    fn rescan(cx: &mut TestAppContext) {
+        cx.update(crate::invalidate::rescan);
+        wait_until(cx, |cx| !crate::invalidate::rescanning(cx));
     }
 
     #[gpui::test]
@@ -394,7 +337,7 @@ mod tests {
         let gone = entity(cx, &b).downgrade();
         std::fs::rename(dir.path().join("later/c"), dir.path().join("repos/c")).unwrap();
         std::fs::remove_dir_all(&b).unwrap();
-        refresh_all(cx);
+        rescan(cx);
         cx.read(|cx| {
             let names: Vec<_> = Workspace::get(cx)
                 .repos()
@@ -470,20 +413,6 @@ mod tests {
             assert_eq!(w.current(), None);
             assert!(w.entities.is_empty());
         });
-    }
-
-    #[gpui::test]
-    fn calls_before_a_pass_starts_fold_into_it(cx: &mut TestAppContext) {
-        let _ = boot(cx);
-        let workspace = cx.read(Workspace::global);
-        workspace.update(cx, |w, cx| {
-            w.refresh_all(cx);
-            w.refresh_all(cx);
-            w.refresh_all(cx);
-            assert!(w.refreshing && w.again);
-        });
-        wait_until(cx, |cx| !Workspace::get(cx).refreshing);
-        assert!(!workspace.read_with(cx, |w, _| w.again));
     }
 
     #[gpui::test]

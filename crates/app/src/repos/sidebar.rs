@@ -27,6 +27,7 @@ use crate::dock;
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
 use kernel::activity::Activity;
+use kernel::invalidate;
 use kernel::repo::Repo;
 use kernel::settings::Settings;
 use kernel::ui_state;
@@ -543,9 +544,7 @@ impl Render for Sidebar {
             &filter,
         ));
         let none_on = !ws.is_empty() && !ws.iter().any(|w| w.active);
-        let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            Workspace::global(cx).update(cx, |w, cx| w.refresh_all(cx))
-        };
+        let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| invalidate::rescan(cx);
         let t = theme(cx);
         let toolbar = div()
             .flex()

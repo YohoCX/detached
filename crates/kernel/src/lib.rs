@@ -45,9 +45,7 @@ fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
     let detached_core::git::testutil::Sandbox { dir, state } =
         detached_core::git::testutil::Sandbox::new();
     cx.update(|cx| init(Arc::new(state), cx));
-    wait_until(cx, |cx| {
-        settings::loaded(cx) && !workspace::Workspace::get(cx).refreshing
-    });
+    wait_until(cx, |cx| settings::loaded(cx) && !invalidate::rescanning(cx));
     dir
 }
 

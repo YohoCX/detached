@@ -3,10 +3,14 @@
 use std::collections::HashMap;
 use std::mem;
 
+use detached_core::api;
+use detached_core::types::RepoInfo;
+use futures::StreamExt;
 use futures::channel::oneshot;
 use gpui::{App, Global, Task};
 
 use crate::activity::{Activity, OpEnded};
+use crate::blocking;
 use crate::resource::{self, Input, On};
 use crate::workspace::Workspace;
 
@@ -19,6 +23,16 @@ impl Global for Visible {}
 struct Loading(HashMap<String, Vec<oneshot::Sender<()>>>);
 
 impl Global for Loading {}
+
+#[derive(Default)]
+struct Rescan {
+    running: bool,
+    again: bool,
+    /// Bumped by each list a settings change applies, so a listing begun before it is dropped.
+    listed: u64,
+}
+
+impl Global for Rescan {}
 
 pub(crate) fn init(cx: &mut App) {
     cx.subscribe(&Activity::global(cx), |_, e: &OpEnded, cx| {
@@ -73,10 +87,68 @@ pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
     }
 }
 
+/// Rescans the folders, where repos and worktrees come and go, then loads every status, 8 at a
+/// time. Calls during a pass run one more pass after it.
+pub fn rescan(cx: &mut App) {
+    let r = cx.default_global::<Rescan>();
+    if r.running {
+        r.again = true;
+        return;
+    }
+    r.running = true;
+    cx.spawn(async move |cx| {
+        loop {
+            let (core, listed) = cx.update(|cx| {
+                let r = cx.global_mut::<Rescan>();
+                r.again = false;
+                let listed = r.listed;
+                (crate::core(cx).clone(), listed)
+            });
+            let list = cx
+                .update(|cx| blocking::run(cx, move || api::list_repos(&core)))
+                .await;
+            let repos = cx.update(|cx| {
+                let workspace = Workspace::global(cx);
+                if cx.global::<Rescan>().listed == listed {
+                    workspace.update(cx, |w, cx| w.set_repos(list, cx));
+                }
+                let repos = workspace.read(cx).repos().iter();
+                repos.map(|r| r.path.clone()).collect::<Vec<_>>()
+            });
+            futures::stream::iter(repos)
+                .map(|repo| cx.update(|cx| status(cx, &repo)))
+                .buffer_unordered(8)
+                .collect::<Vec<()>>()
+                .await;
+            let again = cx.update(|cx| {
+                let r = cx.global_mut::<Rescan>();
+                r.running = r.again;
+                r.again
+            });
+            if !again {
+                return;
+            }
+        }
+    })
+    .detach();
+}
+
+/// The repos a settings change returned: they are listed at once, then rescanned.
+pub fn listed(cx: &mut App, list: Vec<RepoInfo>) {
+    cx.default_global::<Rescan>().listed += 1;
+    Workspace::global(cx).update(cx, |w, cx| w.set_repos(list, cx));
+    rescan(cx);
+}
+
+/// Whether a rescan runs.
+pub fn rescanning(cx: &App) -> bool {
+    cx.try_global::<Rescan>().is_some_and(|r| r.running)
+}
+
 /// The window came forward: the folders are rescanned with every status, and a resource older
 /// than its policy allows reloads.
 pub fn activated(cx: &mut App) {
-    Workspace::global(cx).update(cx, |w, cx| w.refresh_all(cx));
+    rescan(cx);
     resource::input(cx, Input::Activated);
 }
 
@@ -87,4 +159,24 @@ pub fn set_visible(cx: &mut App, visible: bool) {
 
 pub(crate) fn visible(cx: &App) -> bool {
     cx.try_global::<Visible>().is_none_or(|v| v.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+
+    use super::*;
+    use crate::wait_until;
+
+    #[gpui::test]
+    fn rescans_called_before_a_pass_starts_fold_into_it(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        cx.update(|cx| {
+            (0..3).for_each(|_| rescan(cx));
+            let r = cx.global::<Rescan>();
+            assert!(r.running && r.again);
+        });
+        wait_until(cx, |cx| !rescanning(cx));
+        assert!(!cx.read(|cx| cx.global::<Rescan>().again));
+    }
 }

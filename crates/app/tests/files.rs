@@ -19,6 +19,7 @@ use gpui_kit::{
     TestAppContext, VisualContext, VisualTestContext, Window, div, point, px,
 };
 use kernel::doc::Doc;
+use kernel::invalidate;
 use kernel::ui_state;
 
 fn diff(app: &TestApp, path: &str, orig_path: Option<&str>) -> DiffDoc {
@@ -228,7 +229,7 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
         (50, "line 50 changed"),
     ];
     write(&cx.sb.repo("app"), [("README.md", readme_text(&edits))]);
-    cx.workspace(|w, cx| w.refresh_all(cx));
+    cx.update(|_, cx| invalidate::rescan(cx));
     wait_until(cx, |cx| {
         text(cx, "new", 20).as_deref() == Some("line 20 edited")
     });
@@ -524,7 +525,7 @@ fn a_file_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
     shown(cx, "line 60");
     let edits = [(5, "line 5 changed and longer"), (50, "line 50 edited")];
     write(&app, [("README.md", readme_text(&edits))]);
-    cx.workspace(|w, cx| w.refresh_all(cx));
+    cx.update(|_, cx| invalidate::rescan(cx));
     wait_until(cx, |cx| {
         editor_text(cx).is_some_and(|t| t.contains("line 50 edited"))
     });
