@@ -23,10 +23,10 @@ use super::goto::{Goto, GotoLine};
 use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::keymap;
-use crate::store::{Event, Store};
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::blocking;
 use kernel::ui_state;
+use kernel::workspace::{Event, Workspace};
 
 /// A run of changed lines as Monaco reports it: a side without lines has end 0 and the line
 /// before the change as start.
@@ -112,7 +112,7 @@ impl DiffView {
             actions::register(cx, "diff.prev", "Previous Change", Group::Diff, step(false)),
             actions::register(cx, "editor.gotoLine", "Go to Line", Group::Navigate, goto),
         ];
-        let store = cx.subscribe(&Store::global(cx), |this: &mut Self, _, e, cx| {
+        let store = cx.subscribe(&Workspace::global(cx), |this: &mut Self, _, e, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.doc.repo) {
                 this.load(cx);
             }
@@ -325,7 +325,7 @@ impl DiffView {
                 cx,
             )
         });
-        let repo = Store::global(cx).read(cx).name_of(&d.repo).to_string();
+        let repo = Workspace::get(cx).name_of(&d.repo).to_string();
         let zed = cx.listener(|this, _, _, cx| this.zed(cx));
         viewer::header(&d.path, repo, cx)
             .child(

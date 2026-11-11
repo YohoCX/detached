@@ -16,11 +16,11 @@ use super::goto::{Goto, GotoLine};
 use super::markdown::is_markdown;
 use super::viewer;
 use crate::actions::{self, Group, Registration};
-use crate::store::{Event, Store};
 use crate::ui;
 use kernel::blocking;
 use kernel::doc::Location;
 use kernel::ui_state;
+use kernel::workspace::{Event, Workspace};
 
 enum Body {
     Loading,
@@ -71,8 +71,8 @@ impl FileView {
                 preview,
             ),
         ];
-        let store = Store::global(cx);
-        let store = cx.subscribe_in(&store, window, |this: &mut Self, _, e, window, cx| {
+        let workspace = Workspace::global(cx);
+        let store = cx.subscribe_in(&workspace, window, |this: &mut Self, _, e, window, cx| {
             if matches!(e, Event::Status(repo) if *repo == this.loc.repo) {
                 this.load(window, cx);
             }
@@ -221,7 +221,7 @@ impl FileView {
 impl Render for FileView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let l = &self.loc;
-        let name = Store::global(cx).read(cx).name_of(&l.repo).to_string();
+        let name = Workspace::get(cx).name_of(&l.repo).to_string();
         let repo = match &l.rev {
             Some(rev) => format!("{name} @ {rev}"),
             None => name,

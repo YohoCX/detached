@@ -14,12 +14,13 @@ use super::file::FileView;
 use crate::actions::{Group, Registration, register};
 use crate::dock::DocKind;
 use crate::keymap;
-use crate::store::Store;
 use crate::ui::{self, Icon, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 /// Set by `show_diff`, read by the next show.
 pub(super) struct FocusDiff(pub(super) bool);
@@ -105,8 +106,10 @@ impl Viewer {
     }
 
     fn zed(&mut self, cx: &mut Context<Self>) {
-        let store = Store::global(cx);
-        if !matches!(store.read(cx).shown(), Some(Doc::File(_) | Doc::Diff(_))) {
+        if !matches!(
+            Workspace::get(cx).shown(),
+            Some(Doc::File(_) | Doc::Diff(_))
+        ) {
             return;
         }
         match &self.shown {
@@ -133,14 +136,13 @@ fn diff_shown(window: &mut Window, cx: &mut App) {
     if let Some(doc) = changes::selected_diff(window, cx) {
         return show_diff(cx, doc, false);
     }
-    let s = Store::global(cx).read(cx);
-    let Some(Doc::File(loc)) = s.shown() else {
+    let Some(Doc::File(loc)) = Workspace::get(cx).shown() else {
         return;
     };
     let (left, orig_path) = match &loc.rev {
         Some(rev) => (Side::Rev { rev: rev.clone() }, None),
         None => {
-            let changes = s.status(&loc.repo).map(|st| &st.changes[..]);
+            let changes = Repo::get(cx, &loc.repo).and_then(|r| Some(&r.status()?.changes[..]));
             let change = changes.and_then(|c| c.iter().find(|c| c.path == loc.path));
             (Side::Head, change.and_then(|c| c.orig_path.clone()))
         }

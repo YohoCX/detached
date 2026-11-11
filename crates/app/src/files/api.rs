@@ -11,9 +11,9 @@ pub use super::diff::DiffView;
 pub use super::markdown::Markdown;
 use super::viewer::FocusDiff;
 use crate::nav;
-use crate::store::Store;
 use kernel::doc::Doc;
 pub use kernel::doc::{DiffDoc, DocRef, Location};
+use kernel::workspace::Workspace;
 
 /// Records `loc` in back/forward and shows it.
 pub fn open(cx: &mut App, loc: Location) {
@@ -24,7 +24,7 @@ pub fn open(cx: &mut App, loc: Location) {
 /// click or Enter); `false` leaves it in the caller's list (a click, arrow keys).
 pub fn show_diff(cx: &mut App, doc: DiffDoc, focus: bool) {
     cx.set_global(FocusDiff(focus));
-    Store::global(cx).update(cx, |s, cx| s.show(Doc::Diff(doc), cx));
+    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Diff(doc), cx));
 }
 
 /// Gets a line's side, its number and, when it is unchanged, its number on the other side.

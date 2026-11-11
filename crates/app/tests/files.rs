@@ -228,7 +228,7 @@ fn the_diff_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
         (50, "line 50 changed"),
     ];
     write(&cx.sb.repo("app"), [("README.md", readme_text(&edits))]);
-    cx.store(|s, cx| s.refresh_all(cx));
+    cx.workspace(|w, cx| w.refresh_all(cx));
     wait_until(cx, |cx| {
         text(cx, "new", 20).as_deref() == Some("line 20 edited")
     });
@@ -524,7 +524,7 @@ fn a_file_reloads_in_place_on_a_status_refresh(cx: &mut TestAppContext) {
     shown(cx, "line 60");
     let edits = [(5, "line 5 changed and longer"), (50, "line 50 edited")];
     write(&app, [("README.md", readme_text(&edits))]);
-    cx.store(|s, cx| s.refresh_all(cx));
+    cx.workspace(|w, cx| w.refresh_all(cx));
     wait_until(cx, |cx| {
         editor_text(cx).is_some_and(|t| t.contains("line 50 edited"))
     });
@@ -781,7 +781,7 @@ fn forge_markdown_breaks_lines_and_opens_only_web_links(cx: &mut TestAppContext)
 
 fn make_current(cx: &mut VisualTestContext, repo: &Path) {
     let repo = repo.display().to_string();
-    cx.store(|s, cx| s.set_current(Some(repo), cx));
+    cx.workspace(|w, cx| w.set_current(Some(repo), cx));
     settle(cx);
 }
 
@@ -1095,7 +1095,7 @@ fn nest_layout(sb: &Sandbox) {
 }
 
 fn shown_file(cx: &mut VisualTestContext) -> Option<Location> {
-    cx.store(|s, _| match s.shown() {
+    cx.workspace(|w, _| match w.shown() {
         Some(Doc::File(loc)) => Some(loc.clone()),
         _ => None,
     })
@@ -1244,7 +1244,7 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
     wait_until(cx, |cx| tree(cx).first().is_some_and(|r| r == "src"));
     assert_eq!(field(cx).value(), Some(""));
     assert!(cx.find("tree.back").is_none());
-    assert!(cx.store(|s, _| s.tree_ref(&lib).is_none()));
+    assert!(cx.repo(&lib, |r, _| r.tree_ref.is_none()));
 
     cx.click("tree.ref");
     cx.input(" main ");
@@ -1260,8 +1260,7 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
     ];
     wait_until(cx, |cx| tree(cx) == at_main);
     assert_eq!(
-        cx.store(|s, _| s.tree_ref(&lib).map(String::from))
-            .as_deref(),
+        cx.repo(&lib, |r, _| r.tree_ref.clone()).as_deref(),
         Some("main")
     );
     assert_eq!(field(cx).value(), Some("main"));
@@ -1276,7 +1275,7 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
 
     cx.click("tree.back");
     wait_until(cx, |cx| tree(cx).contains(&"feature.txt".to_string()));
-    assert!(cx.store(|s, _| s.tree_ref(&lib).is_none()));
+    assert!(cx.repo(&lib, |r, _| r.tree_ref.is_none()));
 }
 
 #[gpui_kit::test]
@@ -1308,7 +1307,7 @@ fn rows_take_their_change_status_and_the_working_tree_reloads_with_the_status(
     let app = cx.sb.repo("app");
     write(&app, [("fresh.txt", "x\n")]);
     let repo = app.display().to_string();
-    cx.store(|s, cx| s.refresh(repo, cx).detach());
+    cx.workspace(|w, cx| w.refresh(repo, cx).detach());
     wait_until(cx, |cx| {
         statuses(cx).contains(&"fresh.txt untracked".to_string())
     });

@@ -20,7 +20,6 @@ use gpui_kit::{
 
 use super::api::{Location, open};
 use super::changes::branch_names;
-use crate::store::{Event, Store};
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
@@ -28,6 +27,7 @@ use kernel::blocking;
 use kernel::repo::Repo;
 use kernel::settings::Settings;
 use kernel::ui_state;
+use kernel::workspace::{Event, Workspace};
 
 /// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
 const NESTING: [(&str, &[&str]); 13] = [
@@ -111,18 +111,18 @@ pub struct Tree {
 
 impl Tree {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = Store::global(cx);
+        let workspace = Workspace::global(cx);
         let field = cx.new(|cx| {
             let field = Suggest::new(branch_names, window, cx);
             field.set_placeholder("Working tree", window, cx);
             field
         });
         let subscriptions = vec![
-            cx.observe_in(&store, window, |this, _, window, cx| {
+            cx.observe_in(&workspace, window, |this, _, window, cx| {
                 this.sync(window, cx);
                 cx.notify();
             }),
-            cx.subscribe_in(&store, window, |this, _, e, window, cx| {
+            cx.subscribe_in(&workspace, window, |this, _, e, window, cx| {
                 let worktree = |repo: &String| {
                     this.key
                         .as_ref()
@@ -131,15 +131,15 @@ impl Tree {
                 if matches!(e, Event::Status(repo) if worktree(repo)) {
                     this.load(window, cx);
                 }
+                this.sync(window, cx);
+                cx.notify();
             }),
             cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&field, |_, _, Commit(value), cx| set_ref(value, cx)),
             cx.subscribe(&field, |_, _, _: &Focused, cx| {
-                Store::global(cx).update(cx, |s, cx| {
-                    if let Some(repo) = s.current().map(String::from) {
-                        s.load_branch_names(repo, cx);
-                    }
-                })
+                if let Some(repo) = Workspace::get(cx).current().map(String::from) {
+                    Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
+                }
             }),
         ];
         let mut this = Tree {
@@ -158,10 +158,10 @@ impl Tree {
 
     /// Lists the files again when the current repo or its ref changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let key = s
-            .current()
-            .map(|r| (r.to_string(), s.tree_ref(r).map(String::from)));
+        let key = Workspace::get(cx).current().map(|r| {
+            let at = Repo::get(cx, r).and_then(|r| r.tree_ref.clone());
+            (r.to_string(), at)
+        });
         if key == self.key {
             return;
         }
@@ -447,7 +447,7 @@ impl Render for Tree {
 
 /// Browses `value`, trimmed, in the current repo's tree; empty goes back to the working tree.
 fn set_ref(value: &str, cx: &mut App) {
-    let Some(repo) = Store::global(cx).read(cx).current().map(String::from) else {
+    let Some(repo) = Workspace::get(cx).current().map(String::from) else {
         return;
     };
     let v = value.trim();

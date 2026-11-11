@@ -17,13 +17,13 @@ use gpui_kit::{
 };
 
 use super::api::{DiffDoc, Location, Side, open, show_diff};
-use crate::store::{Event, Store};
 use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::repo::Repo;
+use kernel::workspace::{Event, Workspace};
 
 /// Around the tool; Show Diff takes the selected change while focus is inside.
 const CONTEXT: &str = "Changes";
@@ -60,22 +60,24 @@ pub struct Changes {
 
 impl Changes {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = Store::global(cx);
+        let workspace = Workspace::global(cx);
         let base = cx.new(|cx| Suggest::new(branch_names, window, cx));
         let subscriptions = vec![
-            cx.observe_in(&store, window, |this, _, window, cx| {
+            cx.observe_in(&workspace, window, |this, _, window, cx| {
                 this.sync(window, cx);
                 cx.notify();
             }),
-            cx.subscribe_in(&store, window, |this, _, e, window, cx| {
+            cx.subscribe_in(&workspace, window, |this, _, e, window, cx| {
                 if matches!(e, Event::Status(repo) if this.key.as_ref().is_some_and(|k| k.0 == *repo))
                 {
                     this.load(window, cx);
                 }
+                this.sync(window, cx);
+                cx.notify();
             }),
             // Only in Compare: the field also commits when Local hides it.
             cx.subscribe(&base, |_, _, Commit(base), cx| {
-                let Some(repo) = Store::global(cx).read(cx).current().map(String::from) else {
+                let Some(repo) = Workspace::get(cx).current().map(String::from) else {
                     return;
                 };
                 Repo::update(cx, &repo, |r, cx| {
@@ -102,17 +104,14 @@ impl Changes {
 
     /// Starts a compare when the current repo or its base changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let key = s
-            .current()
-            .and_then(|r| Some((r.to_string(), s.compare(r)?.to_string())));
+        let key = Repo::current(cx).and_then(|r| Some((r.path.clone(), r.compare.clone()?)));
         if key == self.key {
             return;
         }
         self.key = key;
         if let Some((repo, base)) = self.key.clone() {
             self.base.update(cx, |b, cx| b.set_value(&base, window, cx));
-            Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+            Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
         }
         self.load(window, cx);
     }
@@ -156,12 +155,11 @@ impl Changes {
     }
 
     fn rows(&self, cx: &App) -> Vec<Row> {
-        let s = Store::global(cx).read(cx);
-        let groups = match (&self.key, s.current()) {
+        let groups = match (&self.key, Repo::current(cx)) {
             (Some(_), _) => self.done().map_or(vec![], |(info, changes)| {
                 vec![(format!("Changes since {}", info.base), changes.clone())]
             }),
-            (None, Some(repo)) => group_changes(s.status(repo).map_or(&[], |st| &st.changes)),
+            (None, Some(repo)) => group_changes(repo.status().map_or(&[], |st| &st.changes)),
             (None, None) => vec![],
         };
         let groups = groups.into_iter().filter(|g| !g.1.is_empty());
@@ -176,14 +174,14 @@ impl Changes {
     }
 
     fn selected(&self, cx: &App) -> Option<String> {
-        let current = Store::global(cx).read(cx).current();
+        let current = Workspace::get(cx).current();
         let sel = cx.try_global::<Selected>()?;
         (Some(sel.0.as_str()) == current).then(|| sel.1.path.clone())
     }
 
     /// Selects `c` and shows its diff against HEAD, or the merge base in Compare.
     fn select(&mut self, c: FileChange, focus: bool, cx: &mut Context<Self>) {
-        let Some(repo) = Store::global(cx).read(cx).current().map(String::from) else {
+        let Some(repo) = Workspace::get(cx).current().map(String::from) else {
             return;
         };
         let left = self.done().map_or(Side::Head, |(info, _)| Side::Rev {
@@ -218,7 +216,7 @@ impl Changes {
         let k = &e.keystroke;
         match k.key.as_str() {
             "down" if k.modifiers.secondary(cx) => {
-                let repo = Store::global(cx).read(cx).current().map(String::from);
+                let repo = Workspace::get(cx).current().map(String::from);
                 if let (Some(repo), Some(i)) = (repo, at) {
                     let loc = Location {
                         repo,
@@ -247,7 +245,7 @@ impl Changes {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let repo = Store::global(cx).read(cx).current().map(String::from);
+        let repo = Workspace::get(cx).current().map(String::from);
         let mode = repo.map(|repo| {
             let options = [
                 (false, "Local", None),
@@ -266,9 +264,9 @@ impl Changes {
             ui::segmented_tips("changes.mode", &options, self.key.is_some(), set, cx)
         });
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            Store::global(cx).update(cx, |s, cx| {
-                if let Some(repo) = s.current().map(String::from) {
-                    s.refresh(repo, cx).detach();
+            Workspace::global(cx).update(cx, |w, cx| {
+                if let Some(repo) = w.current().map(String::from) {
+                    w.refresh(repo, cx).detach();
                 }
             })
         };
@@ -430,7 +428,7 @@ impl Render for Changes {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let rows = self.rows(cx);
-        let s = Store::global(cx).read(cx);
+        let current = Workspace::get(cx).current();
         let note = |text: String, error: bool| {
             let text: SharedString = text.into();
             div()
@@ -443,8 +441,8 @@ impl Render for Changes {
                 .child(text)
                 .into_any_element()
         };
-        let status = s.current().and_then(|r| s.statuses.get(r));
-        let body = match (s.current(), status, self.compared()) {
+        let status = Repo::current(cx).and_then(|r| r.status.as_ref());
+        let body = match (current, status, self.compared()) {
             (None, ..) => note("No repository".into(), false),
             (_, Some(Err(e)), _) => note(e.clone(), true),
             (_, _, Some(Err(e))) => note(e.clone(), true),
@@ -506,8 +504,7 @@ impl Render for Changes {
 
 /// The current repo's branch names loaded so far, for a ref field's suggestions.
 pub(super) fn branch_names(cx: &App) -> Vec<SharedString> {
-    let s = Store::global(cx).read(cx);
-    let names = s.current().and_then(|r| s.branch_names.get(r));
+    let names = Repo::current(cx).and_then(|r| r.branch_names.as_ref());
     names
         .into_iter()
         .flatten()
@@ -520,7 +517,7 @@ pub(super) fn branch_names(cx: &App) -> Vec<SharedString> {
 pub(super) fn selected_diff(window: &Window, cx: &App) -> Option<DiffDoc> {
     let Selected(repo, c) = cx.try_global::<Selected>()?;
     let inside = window.context_stack().iter().any(|k| k.contains(CONTEXT));
-    let file = matches!(Store::global(cx).read(cx).shown(), Some(Doc::File(_)));
+    let file = matches!(Workspace::get(cx).shown(), Some(Doc::File(_)));
     (inside || !file).then(|| DiffDoc {
         repo: repo.clone(),
         path: c.path.clone(),
