@@ -11,13 +11,14 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
 use kernel::activity::{Level, Notice};
 use kernel::doc::{Doc, Location};
+use kernel::repo::Repo;
 
 /// The sandbox layout with `app` current; returns its path.
 fn open(cx: &mut TestAppContext) -> (TestApp, String) {
     let mut app = open_app_with(cx, layout);
     let repo = app.sb.repo("app").display().to_string();
     let r = repo.clone();
-    app.store(|s, cx| s.set_current(Some(r), cx));
+    app.workspace(|w, cx| w.set_current(Some(r), cx));
     (app, repo)
 }
 
@@ -85,7 +86,7 @@ fn double_shift(cx: &mut VisualTestContext) {
 }
 
 fn shown(cx: &mut VisualTestContext) -> Option<Doc> {
-    cx.store(|s, _| s.shown().cloned())
+    cx.workspace(|w, _| w.shown().cloned())
 }
 
 fn file(repo: &str, rev: Option<&str>, path: &str) -> Option<Doc> {
@@ -172,7 +173,8 @@ fn go_to_file_again_toggles_all_repositories(cx: &mut TestAppContext) {
     search(cx, "readme", "README.md");
     let mut details: Vec<_> = rows(cx).into_iter().map(|r| r.1).collect();
     details.sort();
-    let mut names = cx.store(|s, _| s.repos.iter().map(|r| r.name.clone()).collect::<Vec<_>>());
+    let mut names =
+        cx.workspace(|w, _| w.repos().iter().map(|r| r.name.clone()).collect::<Vec<_>>());
     names.sort();
     assert_eq!(details, names);
 
@@ -286,7 +288,7 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
     cx.press("enter");
     assert_eq!(title(cx), None);
     let branch = |cx: &mut VisualTestContext| {
-        cx.store(|s, _| s.status(&repo).and_then(|st| st.branch.clone()))
+        cx.update(|_, cx| Repo::get(cx, &repo)?.status()?.branch.clone())
     };
     wait_until(cx, |cx| branch(cx).as_deref() == Some("spike"));
     let app_repo = cx.sb.repo("app");
@@ -402,7 +404,7 @@ fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut
         std::fs::write(sb.state.config_dir.join("ui.json"), ui.to_string()).unwrap();
     });
     let repo = app.sb.repo("app").display().to_string();
-    app.store(|s, cx| s.set_current(Some(repo), cx));
+    app.workspace(|w, cx| w.set_current(Some(repo), cx));
     let cx = &mut app;
     let row = |path: &str, repo: &str| (path.to_string(), repo.to_string());
 
@@ -424,7 +426,7 @@ fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut
     assert_eq!(saved["nav.recent"][0]["path"], "src/index.ts");
 
     let solo = cx.sb.solo().display().to_string();
-    cx.store(|s, cx| s.set_current(Some(solo), cx));
+    cx.workspace(|w, cx| w.set_current(Some(solo), cx));
     cx.press("secondary-shift-o");
     assert_eq!(empty(cx).as_deref(), Some("No recent files"));
     cx.input("zzzz");
@@ -467,7 +469,7 @@ fn open_solo(cx: &mut TestAppContext) -> (TestApp, String) {
     let mut app = open_app_with(cx, layout);
     let repo = app.sb.solo().display().to_string();
     let r = repo.clone();
-    app.store(|s, cx| s.set_current(Some(r), cx));
+    app.workspace(|w, cx| w.set_current(Some(r), cx));
     (app, repo)
 }
 
@@ -734,7 +736,7 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
         );
     });
     let solo = app.sb.solo().display().to_string();
-    app.store(|s, cx| s.set_current(Some(solo.clone()), cx));
+    app.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
     let cx = &mut app;
     cx.press("secondary-shift-f");
     cx.input("gamma");
@@ -761,9 +763,9 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
     let scope = cx.find("find.scope").unwrap();
     assert_eq!(scope.label(), Some("All repositories"));
     retype(cx, "upstream");
-    let mut want: Vec<String> = cx.store(|s, _| {
+    let mut want: Vec<String> = cx.workspace(|w, _| {
         let has = |r: &&RepoInfo| Path::new(&r.path).join("CHANGELOG.md").exists();
-        let repos = s.repos.iter().filter(has);
+        let repos = w.repos().iter().filter(has);
         repos.map(|r| format!("{} 1", r.name)).collect()
     });
     want.sort();

@@ -21,11 +21,12 @@ use gpui_kit::{
 use super::Search;
 use crate::actions::{self, Group, Registration};
 use crate::files;
-use crate::store::Store;
 use crate::ui::{self, radius, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::blocking::{self, QueryId};
 use kernel::doc::Location;
+use kernel::repo::Repo;
+use kernel::workspace::Workspace;
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 const TRUNCATED: &str = "Results truncated at 10,000 matches. Narrow the search.";
@@ -103,7 +104,7 @@ impl Find {
         };
         let subscriptions = vec![
             cx.observe_global_in::<Search>(window, Self::opened),
-            cx.observe(&Store::global(cx), |this, _, cx| this.changed(cx)),
+            Workspace::observe(cx, |this, cx| this.changed(cx)),
             cx.subscribe(&input, edit),
             cx.subscribe(&glob, edit),
         ];
@@ -160,7 +161,7 @@ impl Find {
 
     /// The current repo at its tree ref, or every repo's working tree.
     fn ask(&self, cx: &App) -> Ask {
-        let store = Store::global(cx).read(cx);
+        let w = Workspace::get(cx);
         let [case_sensitive, whole_word, regex] = self.toggles;
         let glob = self.glob.read(cx).value().trim().to_string();
         let q = FindQuery {
@@ -171,14 +172,12 @@ impl Find {
             glob: (!glob.is_empty()).then_some(glob),
         };
         if self.all {
-            return (
-                q,
-                store.repos.iter().map(|r| r.path.clone()).collect(),
-                None,
-            );
+            return (q, w.repos().iter().map(|r| r.path.clone()).collect(), None);
         }
-        let repo = store.current();
-        let rev = repo.and_then(|r| store.tree_ref(r)).map(String::from);
+        let repo = w.current();
+        let rev = repo
+            .and_then(|r| Repo::get(cx, r).and_then(|r| r.tree_ref.as_deref()))
+            .map(String::from);
         (q, repo.into_iter().map(String::from).collect(), rev)
     }
 
@@ -312,7 +311,7 @@ impl Find {
                 let (name, path) = (base_name(&file.path).to_string(), file.path.clone());
                 let count = match self.all {
                     true => {
-                        let repo = Store::global(cx).read(cx).name_of(&file.repo);
+                        let repo = Workspace::get(cx).name_of(&file.repo);
                         format!("{repo} {}", file.hits.len())
                     }
                     false => file.hits.len().to_string(),
@@ -442,14 +441,14 @@ impl Render for Find {
             return div();
         }
         let t = theme(cx);
-        let store = Store::global(cx).read(cx);
-        let scope = match (self.all, store.current()) {
+        let w = Workspace::get(cx);
+        let scope = match (self.all, w.current()) {
             (true, _) => "All repositories".into(),
             (false, None) => "No repository".into(),
             (false, Some(r)) => {
-                let name = store.name_of(r);
-                store
-                    .tree_ref(r)
+                let name = w.name_of(r);
+                Repo::get(cx, r)
+                    .and_then(|r| r.tree_ref.as_ref())
                     .map_or(name.to_string(), |rev| format!("{name} @ {rev}"))
             }
         };

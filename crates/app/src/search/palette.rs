@@ -16,12 +16,13 @@ use gpui_kit::{
 use super::{Mode, Search, close, open};
 use crate::actions::{self, Action, Group, Registration};
 use crate::repos::{self, CheckoutTarget};
-use crate::store::Store;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
 use crate::{files, keymap, nav};
 use kernel::blocking;
 use kernel::doc::Location;
+use kernel::repo::Repo;
+use kernel::workspace::{Event, Workspace};
 
 #[derive(Clone)]
 enum Item {
@@ -93,9 +94,14 @@ impl Palette {
         let input = cx.new(|cx| InputState::new(window, cx));
         let subscriptions = vec![
             cx.observe_global_in::<Search>(window, Self::opened),
-            cx.observe_in(&Store::global(cx), window, |this, _, window, cx| {
+            cx.observe_in(&Workspace::global(cx), window, |this, _, window, cx| {
                 this.sync(window, cx)
             }),
+            cx.subscribe_in(
+                &Workspace::global(cx),
+                window,
+                |this, _, _: &Event, window, cx| this.sync(window, cx),
+            ),
             cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
                 if let InputEvent::Change = e {
                     this.sel = 0;
@@ -155,12 +161,12 @@ impl Palette {
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = cx.global::<Search>().all;
         let recent = nav::recent(cx);
-        let store = Store::global(cx).read(cx);
+        let w = Workspace::get(cx);
         let mine =
-            |l: &Location| all || self.mode != Some(Mode::File) || store.current() == Some(&l.repo);
+            |l: &Location| all || self.mode != Some(Mode::File) || w.current() == Some(&l.repo);
         self.recent = recent.into_iter().filter(mine).map(Item::File).collect();
-        let placeholder = match (self.mode, all, store.current()) {
-            (Some(Mode::File), false, Some(repo)) => format!("Files in {}", store.name_of(repo)),
+        let placeholder = match (self.mode, all, w.current()) {
+            (Some(Mode::File), false, Some(repo)) => format!("Files in {}", w.name_of(repo)),
             (Some(Mode::File), false, None) => "Files in no repository".into(),
             _ => "Type to search".into(),
         };
@@ -175,11 +181,11 @@ impl Palette {
 
     fn ask(&self, cx: &App) -> Ask {
         let all = cx.global::<Search>().all;
-        let store = Store::global(cx).read(cx);
+        let w = Workspace::get(cx);
         let query = self.input.read(cx).value().to_string();
         let repos: Vec<String> = match all {
-            true => store.repos.iter().map(|r| r.path.clone()).collect(),
-            false => store.current().into_iter().map(String::from).collect(),
+            true => w.repos().iter().map(|r| r.path.clone()).collect(),
+            false => w.current().into_iter().map(String::from).collect(),
         };
         let limit = match self.mode {
             Some(Mode::File) => 50,
@@ -190,10 +196,10 @@ impl Palette {
             return None;
         }
         // One repo browses its tree's ref; across repos, the working trees.
-        let rev = store
+        let rev = w
             .current()
             .filter(|_| !all)
-            .and_then(|r| store.tree_ref(r));
+            .and_then(|r| Repo::get(cx, r).and_then(|r| r.tree_ref.as_deref()));
         Some((query, repos, rev.map(String::from), limit))
     }
 
@@ -240,9 +246,12 @@ impl Palette {
     }
 
     fn load_branches(&mut self, cx: &mut Context<Self>) {
-        let store = Store::global(cx).read(cx);
         let wanted = self.mode == Some(Mode::Everywhere) && self.load.is_none();
-        let Some(repo) = store.current().filter(|_| wanted).map(String::from) else {
+        let Some(repo) = Workspace::get(cx)
+            .current()
+            .filter(|_| wanted)
+            .map(String::from)
+        else {
             return;
         };
         let core = kernel::core(cx).clone();
@@ -315,7 +324,7 @@ impl Palette {
             Item::File(loc) => files::open(cx, loc),
             Item::Action(a, _) => actions::dispatch(window, cx, a.id),
             Item::Branch { target, .. } => {
-                if let Some(repo) = Store::global(cx).read(cx).current().map(String::from) {
+                if let Some(repo) = Workspace::get(cx).current().map(String::from) {
                     repos::checkout(cx, &repo, target).detach();
                 }
             }
@@ -327,7 +336,7 @@ impl Palette {
         let label = row.item.text().to_string();
         let (detail, off) = match &row.item {
             Item::File(l) => {
-                let name = Store::global(cx).read(cx).name_of(&l.repo);
+                let name = Workspace::get(cx).name_of(&l.repo);
                 let at = |rev| format!("{name} @ {rev}");
                 (l.rev.as_ref().map_or(name.to_string(), at), false)
             }
