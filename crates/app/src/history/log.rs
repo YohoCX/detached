@@ -26,12 +26,13 @@ use super::{Chip, CommitDetails, Pick, chip, lanes, message, pick};
 use crate::actions::{self, Group, Registration};
 use crate::dock;
 use crate::repos::{self, CheckoutTarget};
-use crate::store::{Event, Store};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, now, when};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking::{self, QueryId};
 use kernel::doc::Doc;
+use kernel::repo::Repo;
+use kernel::workspace::{Event, Workspace};
 
 /// The filters of the session, kept while the panel is closed.
 #[derive(Clone, PartialEq)]
@@ -73,8 +74,8 @@ pub(super) fn register(cx: &mut App) -> Registration {
 
 /// The Log on the shown file's repo and path; refs, text and author stay.
 fn file_history(window: &mut Window, cx: &mut App) {
-    let store = Store::global(cx);
-    let (repo, path) = match store.read(cx).shown() {
+    let workspace = Workspace::global(cx);
+    let (repo, path) = match workspace.read(cx).shown() {
         Some(Doc::File(l)) => (l.repo.clone(), l.path.clone()),
         Some(Doc::Diff(d)) => (d.repo.clone(), d.path.clone()),
         _ => {
@@ -86,7 +87,7 @@ fn file_history(window: &mut Window, cx: &mut App) {
     let f = cx.default_global::<Filters>();
     f.repo = Some(repo.clone());
     f.fields[PATH] = path;
-    store.update(cx, |s, cx| s.set_current(Some(repo), cx));
+    workspace.update(cx, |w, cx| w.set_current(Some(repo), cx));
     dock::open("log", window, cx);
 }
 
@@ -118,8 +119,9 @@ fn choices(names: &[String]) -> Vec<Refs> {
 /// What reloads the log when it changes: HEAD moving or a fetch bringing commits.
 type Head = Option<(Option<String>, Option<String>, u32)>;
 
-fn head(s: &Store, repo: &str) -> Head {
-    s.status(repo)
+fn head(cx: &App, repo: &str) -> Head {
+    Repo::get(cx, repo)?
+        .status()
         .map(|st| (st.head.clone(), st.branch.clone(), st.behind))
 }
 
@@ -171,21 +173,24 @@ pub struct Log {
 
 impl Log {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let store = Store::global(cx);
+        let workspace = Workspace::global(cx);
         let inputs =
             FIELDS.map(|(_, hint, _)| cx.new(|cx| InputState::new(window, cx).placeholder(hint)));
         let first = Some(IndexPath::default());
         let refs = cx.new(|cx| SelectState::new(choices(&[]), first, window, cx));
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("Branch name"));
         let mut subscriptions = vec![
-            cx.observe_in(&store, window, |this, _, window, cx| this.sync(window, cx)),
-            cx.subscribe(&store, |this, store, e: &Event, cx| {
+            cx.observe_in(&workspace, window, |this, _, window, cx| {
+                this.sync(window, cx)
+            }),
+            cx.subscribe_in(&workspace, window, |this, _, e: &Event, window, cx| {
                 if let Event::Status(repo) = e
                     && this.filters.repo.as_ref() == Some(repo)
-                    && head(store.read(cx), repo) != this.head
+                    && head(cx, repo) != this.head
                 {
                     this.load(cx);
                 }
+                this.sync(window, cx);
             }),
             cx.subscribe_in(&refs, window, |this, _, e: &SelectEvent<_>, window, cx| {
                 if let SelectEvent::Confirm(Some(refs)) = e {
@@ -245,11 +250,12 @@ impl Log {
     }
 
     /// Resets refs and path when the repo changes, brings the widgets to the filters and the
-    /// store's branches, and reloads when the filters changed.
+    /// repo's branches, and reloads when the filters changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let s = Store::global(cx).read(cx);
-        let repo = s.current().map(String::from);
-        let names = repo.as_ref().and_then(|r| s.branch_names.get(r));
+        let repo = Workspace::get(cx).current().map(String::from);
+        let names = repo
+            .as_ref()
+            .and_then(|r| Repo::get(cx, r)?.branch_names.as_ref());
         let names = (names.map_or(&[][..], Vec::as_slice) != self.names)
             .then(|| names.cloned().unwrap_or_default());
         let f = cx.default_global::<Filters>();
@@ -282,7 +288,7 @@ impl Log {
             self.sel.clear();
             self.details = None;
             if let Some(repo) = f.repo.clone() {
-                Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+                Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
             }
         }
         self.filters = f;
@@ -307,8 +313,7 @@ impl Log {
             text,
             author,
         };
-        let s = Store::global(cx).read(cx);
-        self.head = head(s, &repo);
+        self.head = head(cx, &repo);
         let (id, core) = (QueryId::new(cx), kernel::core(cx).clone());
         let qid = id.id;
         let this = cx.weak_entity();
@@ -356,7 +361,7 @@ impl Log {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         if let Some(repo) = self.filters.repo.clone() {
-            Store::global(cx).update(cx, |s, cx| s.load_branch_names(repo, cx));
+            Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
         }
         self.load(cx);
     }
@@ -769,7 +774,7 @@ fn thousands(n: usize) -> String {
 impl Render for Log {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        if Store::global(cx).read(cx).current().is_none() {
+        if Workspace::get(cx).current().is_none() {
             return message("log.message", "No repository", t.muted).into_any_element();
         }
         let status = match self.loading {

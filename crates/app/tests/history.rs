@@ -110,9 +110,9 @@ fn filter(cx: &mut VisualTestContext, id: &'static str, text: &str) {
 /// Picks `title` in the refs select with the keyboard, its menu listing the current repo's
 /// branches after "All branches" and "HEAD".
 fn pick(cx: &mut VisualTestContext, title: &str) {
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
-    wait_until(cx, |cx| cx.store(|s, _| s.branch_names.contains_key(&repo)));
-    let names = cx.store(|s, _| s.branch_names[&repo].clone());
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
+    wait_until(cx, |cx| cx.repo(&repo, |r, _| r.branch_names.is_some()));
+    let names = cx.repo(&repo, |r, _| r.branch_names.clone().unwrap());
     let titles: Vec<&str> = ["All branches", "HEAD"]
         .into_iter()
         .chain(names.iter().map(String::as_str))
@@ -130,7 +130,7 @@ fn pick(cx: &mut VisualTestContext, title: &str) {
 
 fn set_current(cx: &mut VisualTestContext, repo: &Path) {
     let repo = repo.display().to_string();
-    cx.store(|s, cx| s.set_current(Some(repo), cx));
+    cx.workspace(|w, cx| w.set_current(Some(repo), cx));
 }
 
 #[gpui_kit::test]
@@ -166,7 +166,7 @@ fn a_new_commit_reloads_the_log_on_the_status_refresh(cx: &mut TestAppContext) {
     cx.sb
         .commit_files(&solo, "fresh work", [("fresh.txt", "fresh\n")]);
     let path = solo.display().to_string();
-    cx.store(|s, cx| s.refresh(path, cx).detach());
+    cx.workspace(|w, cx| w.refresh(path, cx).detach());
     wait_for_status(cx, "4 commits");
     assert_eq!(subjects(cx)[0], "fresh work");
 }
@@ -251,7 +251,7 @@ fn a_branch_made_outside_shows_after_refresh_not_on_a_status_refresh(cx: &mut Te
         cx.sb.git(&solo, &[cmd, name, "HEAD~2"]);
     }
     let path = solo.display().to_string();
-    let refresh = cx.store(|s, cx| s.refresh(path, cx));
+    let refresh = cx.workspace(|w, cx| w.refresh(path, cx));
     cx.foreground_executor().block_test(refresh);
     settle(cx);
     assert_eq!(status(cx).as_deref(), Some("3 commits"), "no reload");
@@ -475,7 +475,7 @@ fn filters_survive_closing_and_opening_the_log(cx: &mut TestAppContext) {
 }
 
 fn file_history(cx: &mut VisualTestContext, doc: Doc) {
-    cx.store(|s, cx| s.show(doc, cx));
+    cx.workspace(|w, cx| w.show(doc, cx));
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fileHistory")));
     settle(cx);
 }
@@ -516,7 +516,10 @@ fn file_history_of_a_diff_moves_to_its_repo_and_keeps_refs_text_and_author(
         right: Side::Worktree,
     };
     file_history(cx, Doc::Diff(diff));
-    assert_eq!(cx.store(|s, _| s.current().map(String::from)), Some(app));
+    assert_eq!(
+        cx.workspace(|w, _| w.current().map(String::from)),
+        Some(app)
+    );
     wait_for_rows(cx, &["initial"]);
     assert_eq!(value(cx, "log.path").as_deref(), Some("README.md"));
     assert_eq!(value(cx, "log.refs").as_deref(), Some("HEAD"));
@@ -791,7 +794,7 @@ fn rev(sha: &str) -> Side {
 }
 
 fn shown(cx: &mut VisualTestContext) -> Option<Doc> {
-    cx.store(|s, _| s.shown().cloned())
+    cx.workspace(|w, _| w.shown().cloned())
 }
 
 /// The diff of `path` in the current repo.
@@ -802,7 +805,7 @@ fn diff(
     left: Side,
     right: Side,
 ) -> Option<Doc> {
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
     Some(Doc::Diff(DiffDoc {
         repo,
         path: path.into(),
@@ -1021,13 +1024,13 @@ fn arrows_and_enter_step_through_the_files_and_show_each_diff(cx: &mut TestAppCo
     assert_eq!(rows, [Some(false), Some(false), Some(true), Some(false)]);
 
     let file = Location {
-        repo: cx.store(|s, _| s.current().unwrap().to_string()),
+        repo: cx.workspace(|w, _| w.current().unwrap().to_string()),
         rev: None,
         path: "notes.txt".into(),
         line: None,
         doc: None,
     };
-    cx.store(|s, cx| s.show(Doc::File(file), cx));
+    cx.workspace(|w, cx| w.show(Doc::File(file), cx));
     cx.press("enter");
     assert_eq!(
         path(cx).as_deref(),
@@ -1094,7 +1097,7 @@ fn worktree_mode_compares_the_commit_with_the_working_tree(cx: &mut TestAppConte
     let r = cx.sb.path("repos/details");
     write(&r, [("README.md", "local\n")]);
     let sha = cx.sb.git(&r, &["rev-parse", "HEAD"]);
-    let repo = cx.store(|s, _| s.current().unwrap().to_string());
+    let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
     let (r, s) = (repo.clone(), sha.clone());
     let window = cx.update(|_, cx| {
         let view =
@@ -1192,7 +1195,7 @@ fn new_branch_without_checkout_creates_it_at_the_row_and_reloads(cx: &mut TestAp
     assert_eq!(cx.sb.git(&solo, &["rev-parse", "topic"]), sha);
     assert_eq!(cx.sb.git(&solo, &["branch", "--show-current"]), "main");
     assert_eq!(said(cx), Some(("Created branch topic".into(), false)));
-    let names = |cx: &mut VisualTestContext| cx.store(|s, _| s.branch_names.get(&repo).cloned());
+    let names = |cx: &mut VisualTestContext| cx.repo(&repo, |r, _| r.branch_names.clone());
     wait_until(cx, |cx| {
         names(cx).is_some_and(|n| n.contains(&"topic".into()))
     });
