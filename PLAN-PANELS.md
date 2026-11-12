@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01 and 02 are fixed in this text; round 03 is next. No choice is open.
+follow it. Review rounds 01–03 are fixed in this text; round 04 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3).
@@ -77,24 +77,34 @@ Every brief says that finding nothing is a valid answer.
 - **Isolation by trust.**
   - **Trusted subject**, run as the chat runs, on every OS, with no sandbox. A subject is trusted
     when all three hold:
-    - it is the owner's own repo or branch;
-    - it is not fetched from someone else's MR or fork;
-    - its trust files hash to an accepted set.
-
-    Its settings and MCP servers are the chat's for that repo.
+    - **it is the owner's own:** a local branch that the owner marked trusted in the start dialog.
+      - The dialog shows each commit's author in base..head, and warns when any is not one of the
+        owner's identities (the repo's `user.email` and any listed in Settings).
+      - The mark stays while every new commit on the branch is by those identities. A commit by
+        anyone else, or a head moved by a fetch, drops it.
+      - Everything else is untrusted by default: a remote branch, a colleague's branch reviewed
+        from the sidebar, an MR or a fork.
+      - Limit, stated in the dialog: authorship is what git records, so it can be forged.
+    - **it is not fetched from someone else's MR or fork**: these can never be marked;
+    - **its trust files hash to an accepted set.**
+  - **The chat's configuration in the pinned tree.** A trusted subject's participants get the chat's
+    settings and MCP servers for that repo, even though they run in the pinned tree:
+    - the host passes the repo's MCP servers in `session/new`'s `mcpServers`, from `.mcp.json` and
+      the CLI's per-project entries for the repo's path (servers only, never the login);
+    - the host copies `.claude/settings.local.json`, which is gitignored and so absent from a tree
+      made at a SHA.
   - **Untrusted subject**, such as someone else's MR or a branch whose trust files changed:
     - participants are isolated: no write, no egress from tools, no cross-read (host §5);
     - `settingSources: []` and `strictMcpConfig: true`;
     - Claude runs under its sandbox with `strictAllowlist` network deny, `Read(..)` deny rules,
       and its own `CLAUDE_CODE_TMPDIR` (host §5);
     - Codex runs under a permission profile extending `:read-only` with the same denied reads,
-      and every request to leave it is denied. Codex joins rosters only after host H13 checks this
+      and every request to leave it is denied. Codex joins rosters only after host H13a checks this
       live; until then panels are Claude-only.
     - On Linux the sandbox needs `bubblewrap` and `socat`, and on Ubuntu 24.04 also bwrap's
       AppArmor profile. Codex on 24.04 needs the sysctl. A participant row that cannot start shows
       the CLI's message and the commands (host §5).
-  - The header names which applies. The owner can mark a trusted subject untrusted for one run,
-    never the reverse.
+  - The header names which applies. The owner can run a trusted subject as untrusted for one run.
 - **Settings in both cases**: model, effort and mode set explicitly, and an env the host builds.
 - **The user's `claude`** must meet `min_cli` (host §2). Below it, an isolated Claude participant
   refuses to start: an older CLI may ignore the sandbox.
@@ -144,13 +154,14 @@ hold, the run says so, and the UI shows it before start.
 | 10 | The env store's secrets never reach a participant | host H4: a participant's env has allowlisted names only | — |
 | 11 | A run cannot burn without bound | P2: the budget pauses; attempts stop at 3; the cap holds | — |
 | 12 | Sessions share no temp dir | P2: a participant cannot read or write another session's file in `/tmp/claude-<uid>` or its own peers' `CLAUDE_CODE_TMPDIR` | Windows without WSL, after the consent |
-| 13 | A Fix on an untrusted subject runs none of its code unsandboxed | P4: a `postinstall` marker and a `.husky/pre-commit` marker never appear; a write outside the worktree and a `curl` fail | as lines 2–3 |
+| 13 | A Fix on an untrusted subject runs none of its code unsandboxed | P4, on macOS, Linux and Windows in WSL2: `postinstall` and `.husky/pre-commit` markers never appear; a write outside the worktree, to the common git dir, and a `curl` fail; a `.husky/post-merge` the Fix adds does not run at merge | as lines 2–3 |
 
 ## 5. Reporting through tools
 
 ```
-report_finding { severity: critical|major|minor, title, body, fix?, file, line, end_line?,
-                 quote, lenses: [..] }
+report_finding { severity: critical|major|minor,
+                 class: correctness|security|performance|design|docs|tests,
+                 title, body, fix?, file, line, end_line?, quote, lenses: [..] }
 report_verdict { finding, verdict: confirmed|refined|rejected|immaterial|pre_existing,
                  quote, body? }
 done           { nothing_found: bool, note? }
@@ -173,9 +184,13 @@ done           { nothing_found: bool, note? }
 
 ## 7. Failure, offline and cancel
 
-- **A participant** that stalls (no update for 2 minutes, a setting) or dies is retried.
-  - The retry resumes with `session/load` and a new host secret, then sets model, effort and mode
-    again.
+- **A participant** that stalls or dies is retried.
+  - **Stalled** means no update for 2 minutes outside a tool call. A tool call in progress counts as
+    activity up to its own limit of 20 minutes (both are settings), since `cargo test` can sit in
+    one Bash call. H4's harness records what the adapter sends during a long command.
+  - **Before any retry** the host sends `session/cancel` and `session/close` to the stalled session
+    and revokes its secret, so the old CLI can report nothing.
+  - The retry resumes with `session/load`, a new host secret and the session's `configOptions`.
   - If the load fails, the participant restarts with its brief and its findings so far.
   - After 3 attempts it is degraded.
 - **An adapter's exit** fails one attempt for each of its participants.
@@ -219,12 +234,14 @@ brings back a separate Agent SDK credit pool (host §2).
 
 ## 9. Rounds, fingerprints and the loop
 
-- **A fingerprint** is the location (the file path and the normalized quoted lines with two lines
-  around them) plus the lens. Titles change between runs, so they are not part of it.
+- **A fingerprint** is the file, the finding's line range mapped to each later round's head
+  through the diff between the two heads, and its `class`. The title, the exact quote span and the
+  lens are not part of it: models change all three between runs.
 - **Across rounds** a finding is `new`, `still open` or `fixed`.
-- **A dismissal** covers later findings with the same fingerprint at the same severity or lower.
+- **A dismissal** covers any later finding in the same file whose mapped range overlaps the
+  dismissed one's within 3 lines, at the same severity or lower, whatever its lens.
   - Each such finding goes to `verify` with the dismissed one beside it, and the verifier rules
-    "same issue" or "different".
+    "same issue" or "different". `class` is shown to it as a hint, not a gate.
   - The same issue goes under "dismissed before". A different issue, or a higher severity,
     surfaces, marked with the earlier dismissal.
 - **The loop** stops on a round with no `major` or `critical` finding; minors never gate.
@@ -270,10 +287,16 @@ transcripts/   pointers to the providers' own transcripts
   subject's head.
 - **On an untrusted subject:**
   - the recipe's copies and `install` do not run;
-  - every git call in the session gets `core.hooksPath` pinned to an empty directory, through
-    `GIT_CONFIG_COUNT` in its env;
   - the session runs under the participants' sandbox, with writes allowed only inside its
-    worktree and no egress.
+    worktree and no egress. The common git dir (`objects`, `refs`, `config`, `hooks`,
+    `worktrees/<name>/`) stays read-only, so the agent can neither commit nor plant a
+    `core.fsmonitor` or a hook;
+  - **the agent only edits files; the host commits.** When the session ends, the host commits the
+    worktree's diff outside the sandbox, with `-c core.hooksPath=<empty dir> -c core.fsmonitor=`.
+    Every git call the host makes on that worktree uses the same settings.
+  - **On Windows** the Fix runs in Detached's distro: on a branch cloned there from a bundle of the
+    subject's head, under the same sandbox. The host commits inside the distro with the same
+    settings, then fetches the commits back as a bundle into the Fix branch.
 
   So no lifecycle script, `build.rs` or `.husky` hook of the subject runs unsandboxed or beside a
   `.env`.
@@ -284,7 +307,12 @@ transcripts/   pointers to the providers' own transcripts
 - **Its diff comes back to the card**, and the re-check runs (§9).
 - **Merge** is the owner's button ([decision](docs/decisions/2026-11-12-write-fix-merge.md)): a
   fast-forward of the subject's branch, refused when its worktree is dirty or the merge is not a
-  fast-forward. It never pushes. Discard removes the worktree and keeps the branch.
+  fast-forward.
+  - It runs with `-c core.hooksPath=<empty dir>`, so a `.husky/post-merge` the Fix wrote does not
+    run as the owner.
+  - Before the click, any change to hook files (`.husky/**`, `.githooks/**`, `lefthook*.yml`,
+    `.pre-commit-config.yaml`) is shown as its own diff.
+  - It never pushes. Discard removes the worktree and keeps the branch.
 
 ## 13. The progress UI
 
@@ -379,7 +407,7 @@ Work:
    - the one-time elevated firewall step;
    - an adapter process and a job per run.
 6. The tools' handlers and the quote check.
-7. Mixed models and corroboration, across Claude models until H13.
+7. Mixed models and corroboration, across Claude models until H13b.
 8. The estimate and the budget.
 9. The review and gate modes.
 10. The live UI of §13.
@@ -389,8 +417,17 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
 §17):
 - every threat-model line marked P2 (§4), on each OS where it holds, Windows in WSL2 included;
   where it does not, the UI line appears;
-- a trusted subject's participants run their shell with no sandbox, with `["user", "project",
-  "local"]` and the chat's MCP servers; an untrusted one's are isolated;
+- trust:
+  - a remote branch with another author's commits is isolated;
+  - the owner's local branch is isolated until marked trusted, and runs unsandboxed after;
+  - a commit by someone else drops the mark;
+- on the real adapter against the fake Messages API, a trusted participant in the pinned tree
+  runs with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
+  servers among the tools offered; an untrusted one's are isolated;
+- the read scope: a participant's query for another participant's findings returns nothing, and a
+  verifier sees only its finding;
+- a 3-minute command does not trip the stall, and a retried participant's old session reports
+  nothing;
 - a `claude` below `min_cli` refuses an isolated participant;
 - WSL:
   - a write through `cmd.exe`, a call through `powershell.exe`, and a read of a Windows-side seed
@@ -424,8 +461,9 @@ Work: dispositions; Defer's clipboard row; fingerprints; round compare; suppress
 
 Tests:
 - a finding moved by an unrelated edit keeps its fingerprint;
-- a dismissed minor comes back next round with a reworded title, and is set aside after `verify`
-  rules it the same issue;
+- a dismissed minor comes back next round with a reworded title, a quote span shifted by two
+  lines, and another lens, and is set aside after `verify` rules it the same issue;
+- a dismissed finding whose lines moved through an unrelated edit above them still matches;
 - a different issue or a major on the same lines surfaces;
 - the loop stops without a major;
 - Defer writes nothing.
@@ -443,7 +481,9 @@ re-check, merge and discard.
 Tests:
 - the brief holds the finding as quoted data;
 - a subject that changes trust files asks first;
-- threat line 13 on an untrusted subject;
+- threat line 13 on an untrusted subject, on Windows in WSL2 too;
+- an untrusted Fix ends in a commit the host made, and the re-check reads it;
+- a merge shows a changed hook file as its own diff and runs no hook;
 - merge fast-forwards only and is refused on a dirty tree or a non-fast-forward subject;
 - nothing pushes;
 - discard keeps the branch;
