@@ -7,7 +7,7 @@ case "$(uname)" in
   Darwin) base="$HOME/Library/Application Support" ;;
   *) base="${XDG_CONFIG_HOME:-$HOME/.config}" ;;
 esac
-dir="${DETACHED_CONFIG_DIR:-$base/dev.wdevs.detached}/plugins/claude"
+dir="${DETACHED_CONFIG_DIR:-$base/com.w-devs.detached}/plugins/claude"
 mkdir -p "$dir"
 bun build --compile sidecar.ts --outfile "$dir/sidecar"
 echo "installed $dir/sidecar"

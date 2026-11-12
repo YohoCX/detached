@@ -117,12 +117,12 @@ root.
 
 ## Carried over unchanged
 
-- Config directory `dev.wdevs.detached` with the same path per OS as Tauri computes it
+- Config directory `com.w-devs.detached` with the same path per OS as Tauri computes it
   (docs/native/core.md §2), `settings.json`, `accounts.json`, `keymap.json` with the same action ids
   and chord syntax, tokens under service `workbench`.
 - `settings.json` keeps its top-level keys; a module adds one of its own, and a save keeps the keys
   a build does not know. A build from before PLAN-FOUNDATION's step 4 drops them on its next save.
-- macOS: bundle id `dev.wdevs.detached`, `Detached.app`, executable `detached`, signed with the
+- macOS: bundle id `com.w-devs.detached`, `Detached.app`, executable `detached`, signed with the
   "Detached Dev" identity, so Keychain entries stay readable without prompts. `install.sh` keeps its
   URL and behavior.
 - The look: the tokens in `src/app.css` (shell.md §5) become the GPUI theme, light and dark following
@@ -149,7 +149,7 @@ from `lib.rs` to `paths.rs` and `AppState::boot()`. During the move:
 
 **Config directory.** `paths::config_dir()` honors `DETACHED_CONFIG_DIR`, which `make smoke` and CI
 set to a temp directory. While both clients existed, `make app` pointed it at a copy,
-`dev.wdevs.detached.native`; since V6 the native client, `make app` included, uses the real one.
+`com.w-devs.detached.native`; since V6 the native client, `make app` included, uses the real one.
 
 **Threads.** Core calls block, some for minutes (a fetch waits up to 120 s of silence, holding the
 repo lock). They never run on GPUI's executors: `kernel::blocking::run(cx, f)` sends `f` to a pool of std

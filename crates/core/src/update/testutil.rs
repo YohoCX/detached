@@ -1,7 +1,6 @@
 //! A release feed on localhost and keys to sign it, for the updater's tests.
 
 use std::collections::HashMap;
-use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,7 +100,7 @@ impl Server {
         package: &[u8],
         signature: &str,
     ) {
-        let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
+        let platform = super::platform();
         let url = format!("{}/package", self.base);
         let entry = serde_json::json!({"url": url, "signature": signature});
         let latest = serde_json::json!({"version": version, "platforms": {platform: entry}});

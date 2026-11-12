@@ -375,7 +375,7 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     cx.executor().allow_parking();
     let keys = cx.update(|cx| {
         gpui_kit::init(cx);
-        cx.set_app_identity("dev.wdevs.detached", "Detached");
+        cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
         ui_state::init(&dir, cx);
         let keys = keymap::load(core.clone(), cx);

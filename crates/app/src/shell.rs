@@ -69,7 +69,7 @@ pub fn window_options(cx: &App) -> WindowOptions {
         // The title bar moves the window itself, as the kit's does.
         app_owns_titlebar_drag: true,
         window_decorations: Some(WindowDecorations::Client),
-        app_id: Some("dev.wdevs.detached".into()),
+        app_id: Some("com.w-devs.detached".into()),
         ..WindowOptions::default()
     }
 }

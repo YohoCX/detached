@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod agent;
 pub mod api;
+pub mod crash;
 pub mod env;
 pub mod error;
 pub mod forge;

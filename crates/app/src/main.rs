@@ -8,6 +8,13 @@ use gpui_kit::App;
 use kernel::ui_state;
 
 fn main() {
+    if let Ok(dir) = detached_core::paths::config_dir() {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            default(info);
+            detached_core::crash::save(&dir, info);
+        }));
+    }
     let args: Vec<String> = std::env::args().collect();
     // Before GPUI starts any thread: the self-test sets environment variables.
     #[cfg(unix)]
@@ -23,7 +30,7 @@ fn main() {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        cx.set_app_identity("dev.wdevs.detached", "Detached");
+        cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
         ui_state::init(&core.config_dir, cx);
         let keys = keymap::load(core.clone(), cx);

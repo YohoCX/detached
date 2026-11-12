@@ -42,8 +42,33 @@ pub fn check(base: &str, current: &str, key: &str) -> Result<Option<Release>> {
     let json = get("latest.json")?;
     let signature = get("latest.json.minisig")?;
     verify(&json, &String::from_utf8_lossy(&signature), key)?;
-    let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
-    release(&json, &platform, current)
+    release(&json, &platform(), current)
+}
+
+/// This machine's key in `latest.json`'s platforms: an Apple silicon Mac takes its own build even
+/// when this one runs under Rosetta.
+fn platform() -> String {
+    #[cfg(target_os = "macos")]
+    if apple_silicon() {
+        return "macos-aarch64".into();
+    }
+    format!("{}-{}", env::consts::OS, env::consts::ARCH)
+}
+
+#[cfg(target_os = "macos")]
+fn apple_silicon() -> bool {
+    let (mut v, mut len) = (0i32, size_of::<i32>());
+    // SAFETY: the name is NUL-terminated and `v` holds the int the key returns.
+    let r = unsafe {
+        libc::sysctlbyname(
+            c"hw.optional.arm64".as_ptr(),
+            (&raw mut v).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    r == 0 && v == 1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -463,8 +488,8 @@ mod tests {
         let (key, sign) = keys();
         let dir = tempfile::tempdir().unwrap();
         let packages = [
-            ("macos-aarch64", "Detached-macos.zip"),
-            ("macos-x86_64", "Detached-macos.zip"),
+            ("macos-aarch64", "Detached-macos-arm64.zip"),
+            ("macos-x86_64", "Detached-macos-x64.zip"),
             ("windows-x86_64", "Detached-windows-x64-setup.exe"),
             ("linux-x86_64", "Detached-linux-x86_64.AppImage"),
         ];
@@ -491,6 +516,15 @@ mod tests {
             let release = release(json, platform, "0.2.9").unwrap().unwrap();
             assert_eq!(release.url, format!("https://x/{file}"));
             verify(file.as_bytes(), &release.signature, &key).unwrap();
+        }
+        if cfg!(target_os = "macos") {
+            let arch = if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            };
+            let mine = release(json, &platform(), "0.2.9").unwrap().unwrap();
+            assert_eq!(mine.url, format!("https://x/Detached-macos-{arch}.zip"));
         }
         assert_eq!(release(json, "linux-aarch64", "0.2.9").unwrap(), None);
         assert!(release(&json[..40], "linux-x86_64", "0.2.9").is_err());

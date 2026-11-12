@@ -1,4 +1,4 @@
-//! What differs between Unix and Windows: process groups, local time, opening a path.
+//! What differs between Unix and Windows: process groups, local and UTC time, opening a path.
 
 use std::path::Path;
 use std::process::Command;
@@ -46,6 +46,19 @@ pub fn local(t: i64) -> libc::tm {
         libc::localtime_r(&t, &mut tm);
         #[cfg(windows)]
         libc::localtime_s(&mut tm, &t);
+        tm
+    }
+}
+
+/// Unix time `t` in UTC.
+pub fn utc(t: i64) -> libc::tm {
+    // SAFETY: only writes into the zeroed `tm` we own.
+    unsafe {
+        let mut tm = std::mem::zeroed();
+        #[cfg(unix)]
+        libc::gmtime_r(&t, &mut tm);
+        #[cfg(windows)]
+        libc::gmtime_s(&mut tm, &t);
         tm
     }
 }

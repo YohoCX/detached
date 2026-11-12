@@ -22,23 +22,18 @@ gpui-kit = { version = "=0.9.0", features = [
     "tree-sitter-cpp",
     "tree-sitter-csharp",
     "tree-sitter-css",
-    "tree-sitter-elixir",
     "tree-sitter-go",
     "tree-sitter-graphql",
     "tree-sitter-html",
     "tree-sitter-java",
     "tree-sitter-javascript",
-    "tree-sitter-kotlin",
     "tree-sitter-lua",
     "tree-sitter-markdown",
     "tree-sitter-php",
     "tree-sitter-proto",
     "tree-sitter-python",
-    "tree-sitter-ruby",
     "tree-sitter-rust",
-    "tree-sitter-scala",
     "tree-sitter-sql",
-    "tree-sitter-swift",
     "tree-sitter-tsx",
     "tree-sitter-typescript",
     "tree-sitter-yaml",
@@ -73,9 +68,9 @@ semver = "1"
 
 [package.metadata.packager]
 product-name = "Detached"
-identifier = "dev.wdevs.detached"
+identifier = "com.w-devs.detached"
 # The deb's Maintainer, without which dpkg warns on every run.
-authors = ["wdevs"]
+authors = ["w-devs.com"]
 binaries = [{ path = "detached", main = true }]
 icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
 category = "DeveloperTool"
