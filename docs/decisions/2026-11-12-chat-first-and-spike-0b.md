@@ -7,7 +7,8 @@ Decided by the owner on 2026-11-12.
   on ACP while panels are built. The sidecar still goes only when every parity row holds and the
   owner has used the ACP chat daily for 5 working days.
 - **Spike 0b first.** It runs before H1 (the release adapter under bun over `ByteStreams`, three
-  OSes, the Linux sandbox, Codex live, the argv and deny checks), and H1 waits for its answers.
+  OSes, the Linux sandbox, the argv and deny checks), and H1 waits for its answers. Codex live is
+  deferred to H13a (PLAN-AGENT-HOST §14).
 - **Why:** parity gaps and platform failures show before code depends on them, and every later
   owner check uses the real chat instead of a debug view.
 - **Rejected:**

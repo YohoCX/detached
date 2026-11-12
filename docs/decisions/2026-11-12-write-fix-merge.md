@@ -8,6 +8,9 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - the merge is not a fast-forward.
 
   Nothing is pushed.
+- How: with `-c core.hooksPath=<empty dir>`, so no hook the Fix wrote (a `.husky/post-merge`) runs
+  as the owner. Changed hook files are shown as their own diff before the click.
 - Why: the owner takes a fix without leaving the client, and their tree is never left mid-merge.
 - Rejected: merge commits and conflict resolution in the client; an automatic merge.
-- Test: PLAN-PANELS P4: a dirty tree, a non-fast-forward subject.
+- Test: PLAN-PANELS P4: a dirty tree, a non-fast-forward subject, a `.husky/post-merge` that never
+  runs.
