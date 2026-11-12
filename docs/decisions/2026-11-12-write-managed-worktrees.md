@@ -8,9 +8,9 @@ Proposed on 2026-11-12, decided at the agent host's H1.
     teardown commands;
   - remove keeps the branch.
 - On an untrusted subject the agent works in a tree git checked out with no `.git`, through a temp
-  index. The host stages it back with `add -A` into that index, so git's own path checks refuse
-  every `.git` spelling, and commits with `commit-tree`, with hooks, `core.fsmonitor` and signing
-  off. The Fix branch is checked out by git into a managed worktree the agent never touched. No
+  index, and edits through its sandboxed shell only. The host stages it back with `add -A` into
+  that index, refuses a tree with a `.git` entry in any spelling or a new gitlink, and commits with
+  `commit-tree`, with hooks, `core.fsmonitor` and signing off. The Fix branch is checked out by git into a managed worktree the agent never touched. No
   recipe copy or `install` runs. The installed git must pass a probe of the bad-path cases
   (PLAN-PANELS §12).
 - Why: Fix and the owner's parallel work get their own trees, as `wt` gives them today.
