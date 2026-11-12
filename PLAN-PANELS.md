@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–03 are fixed in this text; round 04 is next. No choice is open.
+follow it. Review rounds 01–04 are fixed in this text; round 05 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3).
@@ -89,8 +89,12 @@ Every brief says that finding nothing is a valid answer.
     - **its trust files hash to an accepted set.**
   - **The chat's configuration in the pinned tree.** A trusted subject's participants get the chat's
     settings and MCP servers for that repo, even though they run in the pinned tree:
-    - the host passes the repo's MCP servers in `session/new`'s `mcpServers`, from `.mcp.json` and
-      the CLI's per-project entries for the repo's path (servers only, never the login);
+    - the repo's MCP servers (from `.mcp.json` and the CLI's per-project entries for the repo's
+      path, never the login) go into a 0600 config file in the run's data folder. The CLI reads it
+      by path through `_meta.claudeCode.options.extraArgs` (`--mcp-config <path>`).
+      - `mcpServers` would put their `env` and `headers` into argv, so it is not used.
+      - If the CLI cannot take the path, trusted participants run without the repo's local MCP
+        servers, and the header says so;
     - the host copies `.claude/settings.local.json`, which is gitignored and so absent from a tree
       made at a SHA.
   - **Untrusted subject**, such as someone else's MR or a branch whose trust files changed:
@@ -154,7 +158,7 @@ hold, the run says so, and the UI shows it before start.
 | 10 | The env store's secrets never reach a participant | host H4: a participant's env has allowlisted names only | — |
 | 11 | A run cannot burn without bound | P2: the budget pauses; attempts stop at 3; the cap holds | — |
 | 12 | Sessions share no temp dir | P2: a participant cannot read or write another session's file in `/tmp/claude-<uid>` or its own peers' `CLAUDE_CODE_TMPDIR` | Windows without WSL, after the consent |
-| 13 | A Fix on an untrusted subject runs none of its code unsandboxed | P4, on macOS, Linux and Windows in WSL2: `postinstall` and `.husky/pre-commit` markers never appear; a write outside the worktree, to the common git dir, and a `curl` fail; a `.husky/post-merge` the Fix adds does not run at merge | as lines 2–3 |
+| 13 | A Fix on an untrusted subject runs none of its code unsandboxed, and the host reads no git config or pointer it wrote | P4, on macOS, Linux and Windows in WSL2: `postinstall` and `.husky/pre-commit` markers never appear; a write outside the export and a `curl` fail; a planted `.git`, filter, textconv or `gpg.program` runs nothing at commit, status or diff; a `.husky/post-merge` the Fix adds does not run at merge | as lines 2–3 |
 
 ## 5. Reporting through tools
 
@@ -187,7 +191,8 @@ done           { nothing_found: bool, note? }
 - **A participant** that stalls or dies is retried.
   - **Stalled** means no update for 2 minutes outside a tool call. A tool call in progress counts as
     activity up to its own limit of 20 minutes (both are settings), since `cargo test` can sit in
-    one Bash call. H4's harness records what the adapter sends during a long command.
+    one Bash call. H4's harness tests that the adapter sends an `in_progress` `tool_call` during a
+    long command (host H4).
   - **Before any retry** the host sends `session/cancel` and `session/close` to the stalled session
     and revokes its secret, so the old CLI can report nothing.
   - The retry resumes with `session/load`, a new host secret and the session's `configOptions`.
@@ -234,17 +239,24 @@ brings back a separate Agent SDK credit pool (host §2).
 
 ## 9. Rounds, fingerprints and the loop
 
-- **A fingerprint** is the file, the finding's line range mapped to each later round's head
-  through the diff between the two heads, and its `class`. The title, the exact quote span and the
-  lens are not part of it: models change all three between runs.
+- **A fingerprint** is the file and the finding's line range, mapped to each later round's head
+  through the diff between the two heads. The title, the exact quote span, the lens and the
+  `class` are not part of it: models change all four between runs.
+- **Tracking across rounds.** A finding whose mapped range overlaps an earlier one's within 3 lines
+  goes to `verify` with the earlier one beside it. The verifier rules "same issue" or "different",
+  for open findings as for dismissals.
 - **Across rounds** a finding is `new`, `still open` or `fixed`.
 - **A dismissal** covers any later finding in the same file whose mapped range overlaps the
   dismissed one's within 3 lines, at the same severity or lower, whatever its lens.
   - Each such finding goes to `verify` with the dismissed one beside it, and the verifier rules
-    "same issue" or "different". `class` is shown to it as a hint, not a gate.
+    "same issue" or "different".
   - The same issue goes under "dismissed before". A different issue, or a higher severity,
     surfaces, marked with the earlier dismissal.
-- **The loop** stops on a round with no `major` or `critical` finding; minors never gate.
+- **The loop** stops only when the latest round has no `major` or `critical` finding and no
+  earlier `major` or `critical` is still `open`. Minors never gate.
+  - A finding is `fixed` only after a Fix with a passing re-check, or when commits changed its
+    mapped range and the re-check did not raise it again.
+  - A later round that simply does not report it leaves it `open`.
 - **A re-check after a fix** runs the impl lens on the fix's commits, plus the lens that raised the
   finding.
 
@@ -283,31 +295,35 @@ transcripts/   pointers to the providers' own transcripts
 
 ## 12. Fix in a worktree
 
-- **Fix** starts a session in a managed worktree (host H6), with hooks off, on a new branch from the
-  subject's head.
-- **On an untrusted subject:**
-  - the recipe's copies and `install` do not run;
-  - the session runs under the participants' sandbox, with writes allowed only inside its
-    worktree and no egress. The common git dir (`objects`, `refs`, `config`, `hooks`,
-    `worktrees/<name>/`) stays read-only, so the agent can neither commit nor plant a
-    `core.fsmonitor` or a hook;
-  - **the agent only edits files; the host commits.** When the session ends, the host commits the
-    worktree's diff outside the sandbox, with `-c core.hooksPath=<empty dir> -c core.fsmonitor=`.
-    Every git call the host makes on that worktree uses the same settings.
-  - **On Windows** the Fix runs in Detached's distro: on a branch cloned there from a bundle of the
-    subject's head, under the same sandbox. The host commits inside the distro with the same
-    settings, then fetches the commits back as a bundle into the Fix branch.
+- **Fix on a trusted subject** starts a session in a managed worktree (host H6), with hooks off,
+  on a new branch from the subject's head.
+- **Fix on an untrusted subject never gives the agent a git directory.**
+  - **The agent's tree.** The agent works in a plain export of the subject's head: `git archive`
+    unpacked into `data/fix/<id>/`, with no `.git` entry. It runs under the participants' sandbox,
+    with writes allowed only in that folder and no egress, and no recipe copy or `install` runs.
+    On Windows the export is unpacked in Detached's distro.
+  - **The host commits.** When the session ends, the host copies the changed files into its own
+    managed worktree on a new Fix branch, which the agent never touched.
+    - A path named `.git` at any depth is refused.
+    - Symlinks are copied as links.
+    - On Windows the files come back from the distro as a tar stream.
+  - **Every host git call on that worktree** uses `--git-dir` and `--work-tree` from Detached's own
+    record, never discovery. It also sets `-c core.hooksPath=<empty dir> -c core.fsmonitor=
+    -c commit.gpgSign=false`, and passes `--no-textconv --no-ext-diff` on diffs. This covers the
+    commit, the watcher's and sidebar's status, and the card's diff.
 
-  So no lifecycle script, `build.rs` or `.husky` hook of the subject runs unsandboxed or beside a
-  `.env`.
+  So no lifecycle script, build script or hook of the subject runs unsandboxed or beside a `.env`,
+  and no git config or `.git` pointer the agent wrote is ever read.
 - **Its trust is the hash of the trust files at that head.** A difference from the accepted set asks
   before the session starts.
 - **The brief** holds the finding as quoted data, labelled as another agent's, and the owner sees
   and edits it first.
 - **Its diff comes back to the card**, and the re-check runs (§9).
-- **Merge** is the owner's button ([decision](docs/decisions/2026-11-12-write-fix-merge.md)): a
-  fast-forward of the subject's branch, refused when its worktree is dirty or the merge is not a
-  fast-forward.
+- **Merge** is the owner's button ([decision](docs/decisions/2026-11-12-write-fix-merge.md)), and
+  exists only when the subject is a local branch: a fast-forward of that branch, refused when its
+  worktree is dirty or the merge is not a fast-forward.
+  - For a remote branch or an MR, the Fix branch is kept for the owner to push, and the card says
+    so.
   - It runs with `-c core.hooksPath=<empty dir>`, so a `.husky/post-merge` the Fix wrote does not
     run as the owner.
   - Before the click, any change to hook files (`.husky/**`, `.githooks/**`, `lefthook*.yml`,
@@ -426,8 +442,9 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   servers among the tools offered; an untrusted one's are isolated;
 - the read scope: a participant's query for another participant's findings returns nothing, and a
   verifier sees only its finding;
-- a 3-minute command does not trip the stall, and a retried participant's old session reports
-  nothing;
+- on the real adapter against the fake Messages API, a 3-minute command does not trip the stall;
+  a retried participant's old session reports nothing;
+- no MCP server's `env` or `headers` value appears in any spawned process's argv (`ps -ww`);
 - a `claude` below `min_cli` refuses an isolated participant;
 - WSL:
   - a write through `cmd.exe`, a call through `powershell.exe`, and a read of a Windows-side seed
@@ -465,7 +482,8 @@ Tests:
   lines, and another lens, and is set aside after `verify` rules it the same issue;
 - a dismissed finding whose lines moved through an unrelated edit above them still matches;
 - a different issue or a major on the same lines surfaces;
-- the loop stops without a major;
+- a finding reported with another `class` in round 2 stays `still open`;
+- the loop stops without a major, and does not stop when round 2 omits an unaddressed round-1 major;
 - Defer writes nothing.
 
 Done when a three-round loop on a seeded branch ends with the seeded majors fixed or dismissed with
@@ -481,8 +499,13 @@ re-check, merge and discard.
 Tests:
 - the brief holds the finding as quoted data;
 - a subject that changes trust files asks first;
-- threat line 13 on an untrusted subject, on Windows in WSL2 too;
-- an untrusted Fix ends in a commit the host made, and the re-check reads it;
+- threat line 13 on an untrusted subject, on macOS, Linux and Windows in WSL2;
+- an untrusted Fix's agent plants a `.git` file with a `gitdir:` redirect, a `.gitattributes`
+  filter and a textconv, and a `gpg.program` in a fake config. No marker appears at the host's
+  commit, its status, or the card's diff, and the `.git` path is refused;
+- an untrusted Fix ends in a commit the host made, on Windows from the distro's tar stream too, and
+  the re-check reads it;
+- an MR subject's Fix card offers no Merge and says the branch is kept;
 - a merge shows a changed hook file as its own diff and runs no hook;
 - merge fast-forwards only and is refused on a dirty tree or a non-fast-forward subject;
 - nothing pushes;
