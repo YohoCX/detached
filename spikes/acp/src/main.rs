@@ -25,6 +25,8 @@ mod mcp;
 
 static START: OnceLock<Instant> = OnceLock::new();
 static TASK: Mutex<String> = Mutex::new(String::new());
+#[cfg(windows)]
+static JOB: Mutex<usize> = Mutex::new(0);
 const READONLY_CMDS: &[&str] = &[
     "git diff",
     "git log",
@@ -99,6 +101,7 @@ fn main() {
             if code.is_none() {
                 let _ = child.kill();
             }
+            close_job();
             let check = env("CHECK");
             survivors(
                 &check
@@ -265,6 +268,17 @@ fn job(child: &Child) {
         );
         let assigned = AssignProcessToJobObject(h, child.as_raw_handle() as _);
         say(&format!("job: set {set}, assigned {assigned}"));
+        *JOB.lock().unwrap() = h as usize;
+    }
+}
+
+/// Closes the job as an app does once its adapter is gone, which kills whatever is left in it.
+#[cfg(windows)]
+fn close_job() {
+    let h = std::mem::take(&mut *JOB.lock().unwrap());
+    if h != 0 {
+        let closed = unsafe { windows_sys::Win32::Foundation::CloseHandle(h as _) };
+        say(&format!("job closed: {closed}"));
     }
 }
 
@@ -272,6 +286,9 @@ fn job(child: &Child) {
 fn job(_: &Child) {
     say("job: not on this OS");
 }
+
+#[cfg(not(windows))]
+fn close_job() {}
 
 /// Every process but this one whose command line holds `marker`.
 fn procs(marker: &str) -> Vec<String> {

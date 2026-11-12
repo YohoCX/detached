@@ -43,6 +43,12 @@ jobs:
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
           which bwrap socat || true
           dpkg -l bubblewrap socat 2>&1 | tail -2 || true
+      - name: Row 7, Codex's sandbox
+        run: |
+          npm install --prefix "$RUNNER_TEMP/codex" --no-fund --no-audit @openai/codex@0.166.0 > /dev/null
+          export CODEX=$(find "$RUNNER_TEMP/codex/node_modules/@openai" -type f -name codex -path '*vendor*' | head -1)
+          "$CODEX" --version
+          . spikes/acp/0b/lib.sh && codex_sandbox
       - name: Row 1, lifecycle
         run: . spikes/acp/0b/lib.sh && lifecycle
       - name: Rows 5 and 6, host tools
@@ -129,14 +135,24 @@ jobs:
         run: |
           . spikes/acp/0b/lib.sh && setup native
           META='{"claudeCode":{"options":{"tools":["Read","Bash"],"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}}}' \
-            MODE=default PERM=allow FAKE=spikes/acp/0b/echo.json "$SPIKE" run go 2>&1 | grep -E "session/new|prompt ->|ERROR|tool_call" | cut -c1-300
-          grep -iE "sandbox" "$LOG.stderr" | head -5 | cut -c1-300 || true
+            MODE=default PERM=allow FAKE=spikes/acp/0b/echo.json "$SPIKE" run go 2>&1 | grep -E "prompt ->|ERROR" | cut -c1-600
+      - name: Row 10, the gated native Windows sandbox (internal override, not a release feature)
+        continue-on-error: true
+        run: |
+          . spikes/acp/0b/lib.sh && setup kestrel
+          printf '[[{"tool":"Bash","input":{"command":"echo x > w1.txt; ls w1.txt","description":"a"}}],[{"tool":"Bash","input":{"command":"echo x > ~/w3-spike.txt; ls ~/w3-spike.txt; rm -f ~/w3-spike.txt","description":"b"}}],[{"tool":"Bash","input":{"command":"cat ~/.gitconfig | head -1","description":"c"}}],[{"tool":"Bash","input":{"command":"curl -sS -m 8 -o /dev/null -w %%{http_code} https://example.com","description":"d"}}]]' > "$RUNNER_TEMP/k.json"
+          export PASS=CLAUDE_CODE_NANKEEN_KESTREL CLAUDE_CODE_NANKEEN_KESTREL=1
+          META="{\"claudeCode\":{\"options\":{\"tools\":[\"Read\",\"Bash\"],\"sandbox\":{\"enabled\":true,\"failIfUnavailable\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"filesystem\":{\"denyWrite\":[\"$(cygpath -m "$RUN/repo")\"],\"denyRead\":[\"$(cygpath -m ~/.gitconfig)\"]},\"network\":{\"strictAllowlist\":true}}}}}" \
+            MODE=default PERM=allow FAKE=$RUNNER_TEMP/k.json "$SPIKE" run go 2>&1 | grep -E "PERMISSION|prompt ->|ERROR" | cut -c1-600
+          python "$(cygpath -w spikes/acp/0b/results.py)" "$LOG.api"; ls "$RUN/repo"
+          tail -20 "$LOG.stderr" | cut -c1-300
       - name: WSL facts
+        continue-on-error: true
         shell: pwsh
         run: |
           systeminfo | Select-String -Pattern "OS Name|OS Version|Hyper-V|Virtualization|Second Level"
           Get-CimInstance Win32_Processor | Select-Object Name, VirtualizationFirmwareEnabled, SecondLevelAddressTranslationExtensions
-          Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform, Microsoft-Windows-Subsystem-Linux | Select-Object FeatureName, State
+          foreach ($f in "VirtualMachinePlatform", "Microsoft-Windows-Subsystem-Linux", "Microsoft-Hyper-V") { Get-WindowsOptionalFeature -Online -FeatureName $f | Select-Object FeatureName, State }
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         id: wsl
         continue-on-error: true
