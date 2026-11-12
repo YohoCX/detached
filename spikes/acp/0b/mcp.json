@@ -1,0 +1,3 @@
+[[{"tool":"mcp__detached-host-abc123__report_finding","input":{"message":"bug one","file":"calc.py","line":2,"severity":"high"}}],[{"text":"ok"}],
+ [{"tool":"mcp__detached-host-abc123__report_finding","input":{"message":"bug two"}}],[{"text":"ok"}],
+ [{"tool":"mcp__detached-host-abc123__done","input":{"nothing_found":false}}]]

@@ -1,0 +1,1 @@
+[[{"tool":"Bash","input":{"command":"echo hello > a.txt && cat a.txt","description":"write a file"}}]]
