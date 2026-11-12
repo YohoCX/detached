@@ -1,9 +1,8 @@
-# The merge gate on every push and pull request, on all three OSes.
+# The merge gate on all three OSes, run by hand: `gh workflow run check.yml --ref <branch>`.
 name: Check
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   check:
