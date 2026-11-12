@@ -35,7 +35,9 @@ jobs:
           CWD: ${{ github.workspace }}
         run: |
           spikes/acp/target/debug/acp-spike init
-          spikes/acp/target/debug/acp-spike run
+          # The adapter may exit 1 on EPIPE when the host leaves right after session/new.
+          spikes/acp/target/debug/acp-spike run | tee out.txt || true
+          grep -q "session/new [0-9]*ms" out.txt
       - name: Codex
         env:
           ADAPTERS: ${{ runner.temp }}/adapters
@@ -45,4 +47,5 @@ jobs:
         run: |
           mkdir -p "$CODEX_HOME"
           spikes/acp/target/debug/acp-spike init
-          spikes/acp/target/debug/acp-spike run || echo "session/new failed, as expected without a login"
+          spikes/acp/target/debug/acp-spike run | tee out.txt || true
+          grep -q "Authentication required" out.txt
