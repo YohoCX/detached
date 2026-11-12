@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–08 are fixed in this text; round 09 is next. No choice is open.
+follow it. Review rounds 01–10 are fixed in this text; round 11 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
@@ -80,11 +80,16 @@ Every brief says that finding nothing is a valid answer.
   - On trusted work, agents work freely, and the owner orchestrates and reviews it as commits.
   - On untrusted work, participants read and report under the sandbox, and nothing writes.
 - **What is trusted:**
-  - **A workspace or a repo the owner marks trusted**, such as work projects. Everything in it is
-    trusted: local branches, colleagues' remote branches, and MRs and branches from that repo's own
-    remote.
-    - An MR from a fork outside the repo's own remote stays untrusted unless the owner also ticks
-      "include forks" for that repo or workspace.
+  - **A workspace or a repo the owner marks trusted**, such as work projects. Trusted in it:
+    - colleagues' remote branches and MRs from the repo's own remote (the remote the mark names,
+      `origin` by default);
+    - a local branch whose upstream is that own remote;
+    - a local branch the owner marked.
+
+    Untrusted in it:
+    - a local branch whose upstream is another remote, which is how `gh pr checkout` and
+      `glab mr checkout` bring in a fork;
+    - an MR from a fork, unless the owner also ticks "include forks" for that repo or workspace.
     - The marks are shown on the Sharing page and in each panel's start dialog ("trusted by
       workspace X").
     - They are stored per machine, in the personal scope, and never shared through git.
@@ -92,7 +97,10 @@ Every brief says that finding nothing is a valid answer.
     dialog.
     - The dialog shows each commit's author in base..head against the owner's identities (the repo's
       `user.email` and any listed in Settings).
-    - The mark drops on a commit by anyone else or on a head moved by a fetch.
+    - The mark records the head SHA. Before every run the host compares the head with it. A new
+      head keeps the mark only if each new commit is by the owner's identities and the head did
+      not move by a fetch: no new commit is reachable from a remote-tracking ref, and the branch's
+      reflog since the recorded head names no fetch, pull or merge. The upstream is checked too.
     - Authorship can be forged, and the dialog says so.
   - **And in every case**, the subject's trust files must hash to an accepted set (host §4);
     otherwise the start dialog asks first.
@@ -101,23 +109,50 @@ Every brief says that finding nothing is a valid answer.
 - **A trusted subject runs in orchestrator mode**, on every OS, with no sandbox and no permission
   prompts (`bypassPermissions`). It is the owner's call.
   - **Finders** each work in their own `git worktree add` (a plain worktree, not H6's managed one)
-    on their own branch `detached/<run>/<participant>` from the subject's SHA, in
-    `data/trees/<run>/<participant>/`, made with hooks off
+    on their own branch `detached-run/<run>/<participant>` from the subject's SHA, in
+    `data/trees/trusted/<run>/finders/<participant>/`, made with hooks off
     ([decision](docs/decisions/2026-11-12-write-pinned-trees.md)). Each has the full shell, the file
-    tools and commits.
-  - **Verifiers** get no branch: they run read-only in the run's pinned tree.
-  - **At the run's end,** a branch with no commits beyond the subject is deleted. A branch with
-    commits stays, shown in the run view, until the owner merges or discards it there.
+    tools and commits. If a branch named `detached-run` exists, git cannot make these refs, and
+    the run refuses to start with that message.
+  - **Verifiers** get no branch and run read-only in the run's pinned tree,
+    `data/trees/trusted/<run>/pinned/`, a sibling of the finders' trees, never their parent:
+    - mode `default`, `tools: [Read, Grep, Glob, Bash]`, the trusted repo's settings and MCP;
+    - the sandbox with `autoAllowBashIfSandboxed`, `denyWrite` on the pinned tree and the git
+      common dir, and no network deny, since the subject is trusted.
+
+    So parallel verifiers cannot change what the others read, or write refs.
+  - **At the run's end** each finder's worktree is removed:
+    - **no commits and no changes:** the worktree is removed and the branch deleted;
+    - **commits, and a clean tree:** the worktree is removed and the branch kept;
+    - **uncommitted changes:** the worktree and the branch are kept, marked "uncommitted edits" in
+      the run view.
+  - **The run view** lists kept branches with Merge and Discard
+    ([decision](docs/decisions/2026-11-12-write-finder-branches.md)):
+    - Merge is a fast-forward of a local-branch subject, with hooks off, refused when its worktree
+      is dirty or the merge is not a fast-forward. With several finders, the next one's Merge is
+      usually not a fast-forward any more; the owner merges it with git.
+    - A remote-branch or MR subject has no Merge; the branch is kept for the owner to push.
+    - Discard deletes the branch and its worktree after a confirm.
   - **The chat's configuration in its worktree:**
     - The repo's MCP servers (from `.mcp.json` and the CLI's per-project entries for the repo's
-      path, never the login) go into a 0600 config file in the run's data folder, which the CLI
+      path, never the login) go into a 0600 config file in `data/private/<run>/`, which the CLI
       reads by path through `_meta.claudeCode.options.extraArgs` (`--mcp-config <path>`).
       `mcpServers` would put their `env` and `headers` into argv. If the CLI cannot take the path,
       the repo's local MCP servers are left out and the header says so.
     - The host copies `.claude/settings.local.json`, which is gitignored.
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
   nothing writes and nothing commits. This is the isolation spike 0b verified (host §5):
-  - the pinned tree at the subject's SHA, made with hooks off, read-only to the participant;
+  - the pinned tree at the subject's SHA, `data/untrusted/<root>/pinned/` (host §5), read-only to
+    the participant, made with hooks and every filter off, so none of the owner's filter drivers
+    runs under the subject's `.gitattributes` or `.lfsconfig`:
+
+    ```
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_LFS_SKIP_SMUDGE=1 \
+      git -c core.hooksPath=<empty dir> -c filter.lfs.process= -c filter.lfs.smudge= \
+          -c filter.lfs.required=false worktree add --detach <tree> <sha>
+    ```
+
+    Any other filter that the repo's own config names gets the same empty `process` and `smudge`;
   - tools: the sandboxed shell, `Read`, `Grep`, `Glob` and the host tools;
   - `denyWrite` on the tree;
   - `denyRead` on the enumerated secret classes, peers' trees and the records;
@@ -170,7 +205,7 @@ line has a test. Where a line does not hold, the run says so, and the UI shows i
 
 | # | The line | Test | Does not hold |
 | --- | --- | --- | --- |
-| 1 | Nothing from the subject runs: no repo settings, hooks, MCP servers or git hooks | P2: a branch with `.claude/settings.json` hooks, `.mcp.json`, a `post-checkout` hook and a relative `core.hooksPath`; the pinned tree and the run execute none of them | — |
+| 1 | Nothing from the subject runs: no repo settings, hooks, MCP servers, git hooks or filters | P2: a branch with `.claude/settings.json` hooks, `.mcp.json`, a `post-checkout` hook, a relative `core.hooksPath`, and `filter=lfs` with an `.lfsconfig` pointing at the forge fake; the pinned tree and the run execute none of them, and the fake gets no request | — |
 | 2 | Participants write nothing | P2: `Write`, `echo > f`, `git diff --output=f` in the pinned tree and outside it all fail, on macOS, Linux and Windows in WSL2; in WSL a write through `cmd.exe` or `/mnt/c` fails too | Windows without WSL, after the consent (§3) |
 | 3 | No egress from tools | P2: `curl` fails without a permission request (`strictAllowlist`), and a network host request is rejected, on the same systems; in WSL a call through `powershell.exe` fails | Windows without WSL, after the consent; Linux without `bubblewrap` refuses rather than run open |
 | 4 | No cross-read: other participants' trees and output, run records, transcripts, home secrets, the main checkout's `.env*` | P2: reading each fails through `Read`, through a link to it in the tree, through Bash and through `detached_read` (the read scope), on the same systems, at `min_cli`, with a seeded target in each secret class of host §5 and WSL's targets seeded on the Windows side; Codex with its deny profile | Codex until H13a; Windows without WSL, after the consent |
@@ -219,7 +254,8 @@ done           { nothing_found: bool, note? }
     long command (host H4).
   - **Before any retry** the host sends `session/cancel` and `session/close` to the stalled session
     and revokes its secret, so the old CLI can report nothing.
-  - The retry resumes with `session/load`, a new host secret and the session's `configOptions`.
+  - The retry resumes with `session/load`, a new host secret, the session's `configOptions` and its
+    whole `_meta.claudeCode.options`, so the isolation is re-applied (host §6).
   - If the load fails, the participant restarts with its brief and its findings so far.
   - After 3 attempts it is degraded.
 - **An adapter's exit** fails one attempt for each of its participants.
@@ -431,9 +467,15 @@ The owner checks: every round under `.revmux/tasks/` imports and reads faster th
 
 Work:
 1. The event schema and the record.
-2. Each participant's tree: for a trusted subject, a worktree on its own branch for each finder
-   and the pinned tree for verifiers; for an untrusted subject, the pinned tree. Plus the trust
-   marks by workspace, repo, forks and branch, on the Sharing page and the start dialog.
+2. Each participant's tree, in host §10's layout:
+   - for a trusted subject, a worktree on its own branch for each finder, and the pinned tree for
+     verifiers;
+   - for an untrusted subject, the pinned tree, made with filters off;
+   - the run-end removal;
+   - the run view's Merge and Discard for kept finder branches.
+
+   Plus the trust marks by workspace, repo, forks and branch, with the upstream and head checks, on
+   the Sharing page and the start dialog.
 3. The scheduler: stages, the cap, chat priority, attempts, offline, sleep, back-off.
 4. Orchestrator mode and the read-only sandbox per §3; `diff`, `log` and `search` for reviewers;
    each participant's read scope (host §7).
@@ -457,10 +499,23 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   - a colleague's remote branch in a trusted workspace runs unsandboxed;
   - in a repo not trusted as a whole, a remote branch with another author's commits is sandboxed;
   - the owner's local branch is sandboxed until marked, and unsandboxed after;
-  - a commit by someone else drops the mark;
+  - a commit by someone else drops the mark, and so does a pull of commits with forged owner
+    authorship;
+  - in a trusted repo, a branch whose upstream is a fork remote (as `gh pr checkout` makes) is
+    sandboxed;
+  - "untrusted for one run" on a trusted subject is sandboxed;
   - the marks live in the personal scope and never appear in `.detached/`;
-- trusted branches: a finder with no commits has its branch deleted at the run's end; a finder with
-  commits keeps it until the owner merges or discards it in the run view; a verifier gets none;
+- trusted branches:
+  - a finder with no commits or changes has its branch and worktree removed at the run's end;
+  - one with commits keeps its branch;
+  - one with uncommitted changes keeps both, marked;
+  - Merge fast-forwards a local subject with hooks off, and refuses a second finder's that is not a
+    fast-forward;
+  - Discard deletes after a confirm;
+  - a branch named `detached-run` makes the run refuse to start;
+  - a verifier gets none;
+- trusted verifiers: two run in parallel, and one's write to the pinned tree and a `git branch` both
+  fail;
 - orchestrator mode, on the real adapter against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
     with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
@@ -475,7 +530,17 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
 - no MCP server's `env` or `headers` value appears in any spawned process's argv (`ps -ww`);
 - a `claude` below `min_cli` refuses a sandboxed participant;
 - every sandboxed participant's `Read` deny holds through a link in its tree, at `min_cli`;
-- the home rule: which of host §5's two forms the sandbox expresses, recorded in this plan;
+- the enumerated deny list holds through Bash and `Read` for each entry, including
+  `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`, `~/.config/glab-cli` and an
+  H6 worktree's `.env`; a store not on the list is readable; a real turn still logs in;
+- an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
+  finder worktree, both made after it started, and cannot list `data/untrusted/` to find another
+  run;
+- the untrusted pinned tree, from a subject with `* filter=lfs`, pointer files and an
+  `.lfsconfig` pointing at the forge fake: the fake gets no request, and an owner filter named in
+  the subject's `.gitattributes` writes no marker;
+- after a stall, close and load, an untrusted participant's write, `curl` and denied read still
+  fail, and a project hook does not run;
 - WSL:
   - a write through `cmd.exe`, a call through `powershell.exe`, and a read of a Windows-side seed
     under `/mnt/c` all fail;

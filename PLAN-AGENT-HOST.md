@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–08); round 09 is next, then H1. No choice is open (§14).
+fixed (rounds 01–10); round 11 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -109,7 +109,7 @@ What every provider must do; the host holds each row:
 | "Always allow" writes no file | the host keeps always-rules and sends only `allow_once` (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a panel over a trusted subject: the chat's for that repo; over an untrusted subject: `[]` |
 | MCP servers | chat and a trusted subject's participants: as the chat; an untrusted subject's: `strictMcpConfig: true`, or the account's claude.ai connectors join |
-| Model, effort, mode as asked | `configOptions` on `session/new` and on every `session/load`, so the session starts in them. Without them a load falls back to `~/.claude/settings.json` (about 60× the cost), and the CLI starts in `auto` with `--allow-dangerously-skip-permissions`; `_meta…permissionMode` is ignored. Later switches use `set_config_option` |
+| Model, effort, mode as asked | `configOptions` on `session/new` and on every `session/load`, so the session starts in them. Without them a load falls back to `~/.claude/settings.json` (about 60× the cost), and the CLI starts in `auto` with `--allow-dangerously-skip-permissions`; `_meta…permissionMode` is ignored. Later switches use `set_config_option`. Every `session/load` also re-sends the session's whole `_meta.claudeCode.options` (§6) |
 | Questions reach the host | the client declares `elicitation.form` |
 | Usage is reported | `usage_update`, `config_option_update`, `current_mode_update`; missing means unknown, never zero |
 
@@ -248,8 +248,8 @@ a session loads none of it.
     branch), finders and Fix agents run with no sandbox and no permission prompts
     (`bypassPermissions`), each in its own worktree on its own branch.
   - The owner reviews their commits and merges what he wants. That is the owner's call.
-  - Codex there runs in `workspace-write` or full access. Its `workspace-write` also allows `/tmp`
-    and `$TMPDIR`, which is accepted on trusted work.
+  - Codex there runs with full access (`danger-full-access`): a linked worktree's git dir is
+    outside the workspace, and `workspace-write` could not commit.
 - **An untrusted subject gets a sandboxed, read-only review**
   ([decision](docs/decisions/2026-11-12-untrusted-read-only.md)). Participants have no write, no
   egress from tools, and no cross-read. H0b tested this on macOS, Ubuntu 22.04 and 24.04, and WSL2.
@@ -260,9 +260,9 @@ a session loads none of it.
       network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
       permission request; the host rejects every such request anyway;
     - `Read(..)` deny rules for the same paths;
-    - its own `CLAUDE_CODE_TMPDIR` at `data/tmp/<run>/<participant>/`, outside the run record (in
-      the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every Claude session of
-      the user and is readable and writable inside the sandbox, so it is denied.
+    - its own `CLAUDE_CODE_TMPDIR` at `data/untrusted/<root>/tmp/<participant>/` (below), outside
+      the run record (in the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every
+      Claude session of the user and is readable and writable inside the sandbox, so it is denied.
 
     The denied reads are an enumerated list. `$HOME` is not denied as a whole, so toolchains under
     it stay readable:
@@ -272,19 +272,86 @@ a session loads none of it.
       - `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials*`;
       - `~/.docker/config.json`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`;
       - the Keychain files (`~/Library/Keychains`);
+      - the agents' logins: `~/.claude/.credentials.json` (and `$CLAUDE_CONFIG_DIR`'s),
+        `~/.claude.json` (MCP servers with their `env` and `headers`), `~/.codex/auth.json`;
+      - glab's config and token (`~/.config/glab-cli`);
     - other sessions' data:
       - the CLI's transcripts (`~/.claude/projects`);
       - Codex's sessions;
       - `/tmp/claude-<uid>`.
 
-      The rest of the CLI's config dir stays the user's, so the login works. Spike 0b row 3 ran
-      the same: `~/.claude/projects` denied, the config dir otherwise left to the CLI;
-    - other participants' trees, the run records (`<git common dir>/detached/`), the data tier's
-      other runs, and `data/tmp/` except the participant's own directory;
-    - the main checkout's `.env*`;
+      These denies bind only the sandboxed shell and the file tools. The `claude` process reads
+      its own login itself, unsandboxed, so the login works with them, as it does with the
+      Keychain denied on macOS;
+    - per-run data, by static roots, so a run started later is covered too, since a session's
+      list is fixed at `session/new`:
+      - `data/private/**`: every secret-bearing per-run file, such as a trusted run's 0600 MCP
+        config and its copied `settings.local.json`. The `claude` process reads its own by path,
+        unsandboxed;
+      - `data/trees/trusted/**`: trusted runs' pinned trees and finder worktrees;
+      - each untrusted run lives under `data/untrusted/<root>/`, where `<root>` is 128 random bits
+        and the parent is mode 0711, so no session can list it to find another run. Within a run,
+        the peers' directories are denied by name; sessions of an earlier stage are closed before
+        a later stage starts (§6);
+      - the run records: `<git common dir>/detached/`;
+    - the main checkout's `.env*`, and every `.env*` copy that H6 put in a managed worktree;
     - `/mnt` under WSL.
 
     Threat line 4's test seeds a target in each class.
+  - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
+    `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
+    - **22.04:** `sudo apt install bubblewrap socat`.
+    - **24.04:** the same, plus an AppArmor profile for `bwrap`, written to `/etc/apparmor.d/bwrap`
+      and loaded with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. The alternative is
+      `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, which holds until reboot.
+
+      ```
+      abi <abi/4.0>,
+      include <tunables/global>
+      profile bwrap /usr/bin/bwrap flags=(unconfined) {
+        userns,
+        include if exists <local/bwrap>
+      }
+      ```
+    - **Codex on 24.04:** its bundled `bwrap` needs the sysctl, or every command fails closed.
+  - **Windows:** Claude's sandbox does not run natively (an unreleased native sandbox is gated off),
+    so an isolated Claude participant runs in WSL2, where the Linux sandbox enforces everything
+    above (H0b row 10). It runs in **Detached's own distro**, `detached`, made by P2.
+    - **Its `wsl.conf`** has `[interop] enabled=false` and `[automount] enabled=false`.
+      - Without interop, no Windows binary (`cmd.exe`, `powershell.exe`) runs from inside, outside
+        bubblewrap.
+      - Without automount, no Windows path (run records, `%USERPROFILE%\.ssh`, the data tier, a
+        checkout's `.env`) is under `/mnt` to read. `/mnt` is in the denied reads as well.
+    - **What the distro holds.**
+      - The Linux adapter artifact, installed by H3's downloader through `wsl.exe`.
+      - The user's `claude` from the official installer, checked against `min_cli` there, and its
+        login run in a `wsl.exe -d detached` terminal tab.
+      - `bubblewrap`, `socat` and `git`.
+      - Each participant's `CLAUDE_CODE_TMPDIR`.
+    - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
+      over stdio, the variables passed through `WSLENV`.
+    - **The pinned tree** is streamed in as a `git bundle` of the subject's SHA and checked out
+      there with filters off, as on the host (PLAN-PANELS §3), so no mount is needed. The
+      distro's filesystem is 30–450× faster than `/mnt/<drive>`.
+    - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
+      also listens on the WSL gateway address (from `ip route` in the distro), with the same
+      secret binding; the `Host` check accepts that address.
+      - Binding that one address, which keeps the port off the LAN, is unverified; P2 tests it.
+      - An inbound firewall rule for it comes from a one-time elevated step: Detached asks on the
+        first untrusted WSL run and runs `netsh advfirewall firewall add rule …` through a UAC
+        prompt. The per-user NSIS installer and its silent updates never elevate.
+      - Mirrored networking and Windows 11's Hyper-V firewall are owner checks: CI's Server 2025
+        cannot run them.
+    - **"WSL ready"** means:
+      - the distro exists with interop and automount off;
+      - the adapter is installed;
+      - `claude` meets `min_cli` and is logged in;
+      - `bubblewrap`, `socat` and `git` are there;
+      - the firewall rule exists.
+
+      The panel's start screen checks each and offers its fix. Without WSL at all, it offers to
+      install it, or to run unisolated after a consent that names PLAN-PANELS §4's lines 2–4
+      and 12.
   - **Codex:** `read-only` (no write, no network) with a permission profile that also denies reads
     (spike 0b row 7): `[permissions.reviewer] extends = ":read-only"`, and under
     `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
@@ -294,7 +361,9 @@ a session loads none of it.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
 - **A woken turn (§9)** runs with the host's always-rules suspended and in the provider's asking
-  mode.
+  mode. Before sending the wake prompt, the host sets `mode` to the asking mode (Claude's
+  `default`) through `session/set_config_option`, which spike 0 saw work live. It sets the previous
+  mode back when that turn ends.
 
 ## 6. Sessions
 
@@ -307,8 +376,11 @@ a session loads none of it.
     restore progress. Snapshot and restore stay core calls.
 - **Watching.** A session's trees join the watcher's list while it lives.
 - **Activity** shows a running turn as a job; Stop is its cancel.
-- **Resume** is `session/load` with the session's `configOptions` (§2): about 0.45 s, history
-  replayed, all of it re-sent to the model with a cold cache.
+- **Resume** is `session/load` with the session's `configOptions` and its whole
+  `_meta.claudeCode.options` (§2): about 0.45 s, history replayed, all of it re-sent to the model
+  with a cold cache. A load of a closed session creates it anew from the load's own `_meta`, so
+  without them the isolation (`tools`, `sandbox`, `settingSources`, `strictMcpConfig`,
+  `disallowedTools`, `allowedTools`, `env`) would fall back to the defaults.
 - **Memory.** A live Claude session is a `claude` CLI of 250–320 MB beside its adapter of about
   140 MB; five took 1.5–1.7 GB. `session/close` ends that CLI within 3 s and frees about 235 MB,
   so headless sessions close as soon as they report.
@@ -472,7 +544,7 @@ Later steps add to the SDL:
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
 | config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
-| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/<run>/`: the pinned tree, and each trusted finder's `git worktree add`), the owner socket, cross-repo panels |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`; an untrusted run's `untrusted/<root>/pinned/` and `tmp/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels |
 | cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
 | repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
@@ -577,7 +649,7 @@ back.
 | P3 | Dispositions, rounds, the loop | P2 | Fix/Dismiss/Defer |
 | H6 | Managed worktrees and recipes | H2 | worktrees from the client |
 | P4 | Fix in a worktree | P3, H6 | fixes as diffs |
-| P5 | Triage and plan review | P3 | panels over MRs, issues, plans |
+| P5 | Triage and plan review | P3, P4 | panels over MRs, issues, plans |
 | P6 | Dialectic and brainstorm | P5 | two modes |
 | P7 | Corpus, calibration, stats | P3 | numbers per lens and model |
 | H7 | Docs | H11 | the Docs app |
@@ -632,7 +704,9 @@ settings, ops and invalidation findings.
       P5;
     - [Share and Make local](docs/decisions/2026-11-12-write-share-toggle.md), H2;
     - [a fetched MR head](docs/decisions/2026-11-12-write-mr-fetch.md), P5;
-    - [a Fix's fast-forward](docs/decisions/2026-11-12-write-fix-merge.md), P4.
+    - [a Fix's fast-forward](docs/decisions/2026-11-12-write-fix-merge.md), P4;
+    - [merging or discarding a finder's branch](docs/decisions/2026-11-12-write-finder-branches.md),
+      P2.
 
     Defer writes nothing: it copies a drafted row.
   - **Crates:** `crates/acp` (async deps confined, no async type out) at H4; `core`'s
@@ -895,6 +969,8 @@ Tests:
   - no session runs a tool in `auto` before its mode is set: the first scripted tool call asks
     under `default`;
   - a load comes back on the model it had;
+  - a chat in an untrusted repo, closed and loaded, still runs with `["user"]` and the `.env`
+    deny;
   - the `.env` deny refuses `Read` and `cat .env`;
   - on Windows, closing the job after the adapter's exit leaves no `bash.exe` or command;
   - the AIR declaration changes nothing but async stop (the adapter's other behaviors compared
@@ -1065,6 +1141,8 @@ Tests:
 - wake sends the fixed line only with wake on;
 - the sixth woken turn is stopped;
 - always-rules are suspended in a woken turn;
+- a receiver in `auto` is woken: its first scripted tool call asks, and `auto` is back after the
+  turn;
 - a process becoming ready and a pipeline ending each put one message into the watcher's inbox.
 
 Done when two grouped sessions finish one change by messages and one Stop ends both.
