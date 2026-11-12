@@ -4,8 +4,9 @@ Proposed on 2026-11-12, decided at the agent host's H1.
 
 - What:
   - files under `<git common dir>/detached/`: run records and local assets;
-  - refs under `refs/detached/subjects/` for MR heads fetched for a panel, and for a subject's
-    SHA bundled into the WSL distro (deleted after), besides today's `refs/detached/turns/`.
+  - refs under `refs/detached/subjects/` for MR heads fetched for a panel, and under
+    `refs/detached/wsl/` for a subject's SHA bundled into the WSL distro (deleted after and at
+    startup), besides today's `refs/detached/turns/`.
 - Why: per-repo data follows every linked worktree, stays out of the working tree and is never
   pushed or cloned.
 - Rejected: a `.revmux/`-style folder in the working tree.

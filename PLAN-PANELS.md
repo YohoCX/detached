@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–13 are fixed in this text; round 14 is next. No choice is open.
+follow it. Review rounds 01–14 are fixed in this text; round 15 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
@@ -83,8 +83,9 @@ Every brief says that finding nothing is a valid answer.
   - **A workspace or a repo the owner marks trusted**, such as work projects. Trusted in it:
     - colleagues' remote branches and MRs from the repo's own remote (the remote the mark names,
       `origin` by default). A ref under `refs/remotes/<own remote>/` counts as a colleague's branch
-      only if the remote's fetch refspec maps it from `refs/heads/*`; one mapped from `refs/pull/*`,
-      `refs/merge-requests/*` or anything else is untrusted;
+      only if every fetch refspec of that remote that can produce it maps from `refs/heads/*`. If
+      any such refspec maps from `refs/pull/*`, `refs/merge-requests/*` or anything else, the ref
+      is untrusted;
     - a local branch whose upstream is a `refs/heads/*` branch on that own remote;
     - a local branch with no upstream: the owner's own;
     - a local branch the owner marked.
@@ -133,17 +134,22 @@ Every brief says that finding nothing is a valid answer.
       comes anyway, the host denies it and notes it in the run.
     - Where the "sandbox ready" probe passes (host §5): the sandbox with `failIfUnavailable: true`,
       `allowUnsandboxedCommands: false`, `autoAllowBashIfSandboxed`, `denyWrite` on the pinned tree
-      and the git common dir, and no network deny.
-    - **The state check, everywhere.** The host records the pinned tree's state before the verify
-      stage and once after:
-      - HEAD, and every ref (`git for-each-ref`);
-      - the index contents (`git ls-files -s`, not stat data, so a read-only `git status` does
-        not trip it);
-      - `git status --porcelain --ignored`.
+      and the git common dir, and no `network` section, so every host is allowed. How an unlisted
+      host behaves under `bypassPermissions` there (allowed, or a request the host denies) is a
+      P2 check.
+    - **The state check, everywhere.** The host records the pinned worktree's own state before the
+      verify stage and once after:
+      - its HEAD;
+      - its index (`git ls-files -s`, not stat data, so a read-only `git status` does not trip it);
+      - `git status --porcelain` with untracked files but without `--ignored`, so build and test
+        output under ignored paths is allowed.
 
-      If it changed, the stage's verdicts are dropped, the run says so, the tree is rebuilt and
-      the stage runs once more. A second drop ends the gate as "verify failed". A write undone
-      within the stage is not caught; that is accepted for trusted work.
+      Shared refs are not compared: chat turns, the owner's commits and other runs move them.
+      - If the state changed, the stage's verdicts are dropped, the run says so, the tree is
+        rebuilt and the stage runs once more. A second drop ends the gate as "verify failed".
+      - A write undone within the stage is not caught; that is accepted for trusted work.
+      - Where the sandbox exists, writes to the common dir are denied. Where it does not, a ref a
+        verifier writes is an accepted limit of trusted work.
   - **At the run's end** each finder's worktree is removed:
     - **no commits and no changes:** the worktree is removed and the branch deleted;
     - **commits, and a clean tree:** the worktree is removed and the branch kept;
@@ -165,7 +171,7 @@ Every brief says that finding nothing is a valid answer.
     - The host copies `.claude/settings.local.json`, which is gitignored.
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
   nothing writes and nothing commits. This is the isolation spike 0b verified (host §5):
-  - the pinned tree at the subject's SHA, `<tmp>/detached-untrusted/<run>/pinned/` (host §5),
+  - the pinned tree at the subject's SHA, `<untrusted root>/<run>/pinned/` (host §5),
     outside the config and data tiers, read-only to
     the participant. It is an export, never a linked worktree, so the subject repo's git dir does
     not name it and the tree has no `.git`; participants read history through the host tools.
@@ -511,9 +517,9 @@ Work:
    the Sharing page and the start dialog.
 3. The scheduler: stages, the cap, chat priority, attempts, offline, sleep, back-off.
    - One untrusted run at a time: a second one waits, shown "waiting" in the run view.
-   - An untrusted run is never resumed after a crash; it starts over. At startup every
-     `detached-untrusted/*` folder, the WSL distro's included, is removed, and each run's folder
-     at its end.
+   - An untrusted run is never resumed after a crash; it starts over. Each run's folder is removed
+     at its end. Startup removes this instance's folders whose lock is not held, and the distro's
+     only before the next untrusted run or when the distro is already running (host §5).
    - The "sandbox ready" probe (host §5) and the Ubuntu 24.04 CI setup (host H4).
 4. Orchestrator mode and the read-only sandbox per §3; `diff`, `log` and `search` for reviewers;
    each participant's read scope (host §7).
@@ -535,7 +541,8 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   where it does not, the UI line appears;
 - trust, on local and remote-branch subjects (the MR cases are P5's):
   - a colleague's remote branch in a trusted workspace runs unsandboxed;
-  - with a `+refs/pull/*/head:refs/remotes/origin/pr/*` refspec, `origin/pr/7` is sandboxed;
+  - with the default refspec plus `+refs/pull/*/head:refs/remotes/origin/pr/*`, `origin/pr/7` is
+    sandboxed and `origin/main` is not;
   - in a repo not trusted as a whole, a remote branch with another author's commits is sandboxed;
   - the owner's local branch is sandboxed until marked, and unsandboxed after;
   - the mark holds through `commit`, `commit (amend)` and a push; a commit by someone else, a
@@ -565,7 +572,8 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
     unloading the profile), a verifier that writes the pinned tree has the stage's verdicts
     dropped, the run says so, the tree is rebuilt and the stage runs again; a second write ends the
     gate as "verify failed";
-  - a read-only `git status` does not trip the state check;
+  - a read-only `git status`, a build into an ignored folder, and a chat turn that moves a shared
+    ref do not trip the state check;
   - a permission request from a verifier is denied by the host and noted in the run;
 - orchestrator mode, on the real adapter against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
@@ -589,7 +597,12 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
 - an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
   finder worktree, both made after it started;
 - a second untrusted run waits, shown "waiting", until the first ends; a crashed run's
-  `<tmp>/detached-untrusted/<run>/`, and the distro's, are removed at the next start;
+  folder is removed at the next start, while a live run's locked folder and another instance's
+  root are not touched; the distro's are cleaned before the next untrusted run, without booting
+  WSL at start;
+- the untrusted export is not a worktree: `git worktree list` in the repo does not name it;
+- an untrusted participant cannot read the config, data or cache tier, each a separate temp dir in
+  the test;
 - a workspace root that is `$HOME` or contains the data tier makes an untrusted run refuse to
   start, with the message;
 - in a finding body and a transcript, `http:` and `https:` images, inline `![](u)`, reference

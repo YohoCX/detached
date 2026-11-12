@@ -8,12 +8,14 @@ Proposed on 2026-11-12, decided at the agent host's H1.
     - For a trusted subject it is a `git worktree add --detach` at
       `data/trees/trusted/<run>/pinned/`, where verifiers read.
     - For an untrusted subject it is not a worktree but an export at
-      `<tmp>/detached-untrusted/<run>/pinned/`, outside the config and data tiers (`read-tree` and
+      `<untrusted root>/<run>/pinned/` (a per-instance root in the OS temp dir, host §5), outside
+      the config, data and cache tiers (`read-tree` and
       `checkout-index` through a temp index), so the repo's git dir never names it. Every
       participant reads there. It is made with the global and system config off,
       `GIT_LFS_SKIP_SMUDGE=1`, and every filter's `process` and `smudge` empty, so no filter runs
-      under the subject's attributes. One untrusted run goes at a time; its folder is deleted at
-      its end, and leftover ones at startup. A crashed untrusted run starts over.
+      under the subject's attributes. One untrusted run goes at a time, holding a lock file; its
+      folder is deleted at its end, and this instance's unlocked leftovers at startup. A crashed
+      untrusted run starts over.
   - **A trusted subject's finders:** each gets its own plain `git worktree add` of a branch
     `detached-run/<run>/<participant>` at that SHA, at
     `data/trees/trusted/<run>/finders/<participant>/`, with hooks off. At the run's end:
