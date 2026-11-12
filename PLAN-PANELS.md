@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–14 are fixed in this text; round 15 is next. No choice is open.
+follow it. Review rounds 01–15 are fixed in this text; round 16 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
@@ -128,21 +128,24 @@ Every brief says that finding nothing is a valid answer.
     `data/trees/trusted/<run>/pinned/`, a sibling of the finders' trees, never their parent. This
     is for a correct result, not for security, since trusted work is orchestrator mode on purpose:
     parallel verifiers must not change what the others read, or write refs.
+    - **The role.** Verifiers do not build or run tests, anywhere. They check a finding by reading
+      and by read-only commands; building is the finders' job. So their behavior is the same with
+      and without the sandbox.
     - Mode `bypassPermissions`, like the finders, since this is trusted work; `tools: [Read, Grep,
       Glob, Bash]` on every OS (the shell everywhere); `settingSources: ["user"]` and
       `strictMcpConfig: true`: no repo hooks or MCP, only the host tools. If a permission request
       comes anyway, the host denies it and notes it in the run.
     - Where the "sandbox ready" probe passes (host §5): the sandbox with `failIfUnavailable: true`,
       `allowUnsandboxedCommands: false`, `autoAllowBashIfSandboxed`, `denyWrite` on the pinned tree
-      and the git common dir, and no `network` section, so every host is allowed. How an unlisted
-      host behaves under `bypassPermissions` there (allowed, or a request the host denies) is a
-      P2 check.
+      and the git common dir. Spike 0b showed that, with no `strictAllowlist`, an unlisted host
+      becomes a permission request (kind `other`); under `bypassPermissions` that was not tested,
+      and P2 records it.
     - **The state check, everywhere.** The host records the pinned worktree's own state before the
       verify stage and once after:
       - its HEAD;
       - its index (`git ls-files -s`, not stat data, so a read-only `git status` does not trip it);
-      - `git status --porcelain` with untracked files but without `--ignored`, so build and test
-        output under ignored paths is allowed.
+      - `git status --porcelain` with untracked files but without `--ignored`, since tools write
+        caches under ignored paths.
 
       Shared refs are not compared: chat turns, the owner's commits and other runs move them.
       - If the state changed, the stage's verdicts are dropped, the run says so, the tree is
@@ -572,8 +575,12 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
     unloading the profile), a verifier that writes the pinned tree has the stage's verdicts
     dropped, the run says so, the tree is rebuilt and the stage runs again; a second write ends the
     gate as "verify failed";
-  - a read-only `git status`, a build into an ignored folder, and a chat turn that moves a shared
-    ref do not trip the state check;
+  - a read-only `git status`, a tool cache under an ignored folder, and a chat turn that moves a
+    shared ref do not trip the state check;
+  - a sandboxed verifier's `curl` to an unlisted host: whether it runs or becomes a request is
+    recorded here, and the host denies any request;
+  - a cached probe pass that is wrong: `failIfUnavailable` fails the verifier, the host re-runs
+    the probe and takes the fallback;
   - a permission request from a verifier is denied by the host and noted in the run;
 - orchestrator mode, on the real adapter against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
@@ -603,8 +610,13 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
 - the untrusted export is not a worktree: `git worktree list` in the repo does not name it;
 - an untrusted participant cannot read the config, data or cache tier, each a separate temp dir in
   the test;
-- a workspace root that is `$HOME` or contains the data tier makes an untrusted run refuse to
-  start, with the message;
+- a workspace root that is `$HOME`, or contains the data tier or the untrusted root, makes an
+  untrusted run refuse to start, with the message;
+- the untrusted root is created 0700; an existing one that is a symlink, someone else's or not
+  0700 is refused, at start, before an export and before cleanup;
+- the probe's and every participant's env come from the allowlist: with `CLAUDE_CODE_USE_BEDROCK`,
+  `CLAUDE_CODE_USE_VERTEX` and `ANTHROPIC_BASE_URL` set in the app's env, the probe still reaches
+  its responder;
 - in a finding body and a transcript, `http:` and `https:` images, inline `![](u)`, reference
   `![][r]` and a raw `<img src>`, each show a link, and the fetch stub gets no request;
 - the untrusted pinned tree, from a subject with `* filter=lfs`, pointer files and an

@@ -4,8 +4,9 @@ Proposed on 2026-11-12, decided at the agent host's H1.
 
 - What:
   - `git worktree add` and `remove` under `<folder>/worktrees/<repo>/<branch>` for a workspace
-    folder that holds repos, as `wt` does, or `data/worktrees/<repo>/<branch>` when the folder is
-    itself a repo, with hooks off;
+    folder that holds repos, as `wt` does, or
+    `data/worktrees/<repo>-<short hash of the repo path>/<branch>` when the folder is itself a
+    repo, with hooks off. The sidebar finds them through `git worktree list`;
   - the recipe copies ignored files (`.env`, `.env.local`) at mode 0600 and runs its install and
     teardown commands;
   - remove keeps the branch.

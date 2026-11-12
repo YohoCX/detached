@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–14); round 15 is next, then H1. No choice is open (§14).
+fixed (rounds 01–15); round 16 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -31,7 +31,8 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
   - managed worktrees go in `<folder>/worktrees/<repo>/<branch>` for a workspace folder that holds
-    repos, as `wt` does, and in `data/worktrees/<repo>/<branch>` when the folder is itself a repo;
+    repos, as `wt` does, and in `data/worktrees/<repo>-<hash>/<branch>` when the folder is itself
+    a repo;
   - revmux and `.revmux/` stay, and whether panels replace revmux is deferred.
 
 "Right" means what it meant in the foundation:
@@ -290,17 +291,20 @@ a session loads none of it.
       index, secret-bearing per-run files (`data/private/<run>/`: a trusted run's 0600 MCP config
       and its copied `settings.local.json`, which the `claude` process reads by path, unsandboxed),
       trusted runs' trees, and anything added later, with no nested allow;
-    - **the untrusted run's own folder lives outside the tiers**, in a per-instance root of the OS
-      temp dir, `<untrusted root>`, which is
-      `<tmp>/detached-<short hash of the config dir>-<uid>/untrusted/`, or the same under the
-      distro's temp dir in WSL. Its `<run>/` holds the exported pinned tree
-      and the temp dirs.
+    - **the untrusted run's own folder lives outside the tiers**, in a per-user, per-instance
+      root, `<untrusted root>` = `<base>/detached-<short hash of the config dir>/untrusted/`. Its
+      `<run>/` holds the exported pinned tree and the temp dirs.
+      - `<base>`: `$XDG_RUNTIME_DIR` on Linux, or, when that is unset,
+        `$XDG_CACHE_HOME/com.w-devs.detached-untrusted/` (a sibling of the denied cache tier);
+        `$TMPDIR` on macOS; `%TEMP%` on Windows; the same rules inside the WSL distro.
+      - The root is created with mode 0700. An existing one is refused if it is a symlink (checked
+        with `lstat`), belongs to someone else or is not 0700. The same check runs before each
+        export and before cleanup.
       - Only one untrusted run goes at a time (P2's queue), and its folder is deleted at its end.
       - Each live run holds a lock file in its folder.
       - An untrusted run is never resumed after a crash; it starts over, since exports are cheap.
-      - At startup, cleanup removes this instance's run folders whose lock is not held, and
-        deletes leftover `refs/detached/wsl/*`. It never touches another instance's root; tests,
-        with their own temp config dir, get their own.
+      - At startup, cleanup removes this instance's run folders whose lock is not held. It never
+        touches another instance's root; tests, with their own temp config dir, get their own.
       - The distro's run folders are cleaned only before the next untrusted run, or at startup when
         the distro is already running; WSL is never booted just to clean.
       - Within a run, the peers' directories are denied by name, and sessions of an earlier stage
@@ -309,9 +313,9 @@ a session loads none of it.
     - every workspace root and every repo the app knows, so new repos, worktrees and `.env` files
       under them are covered. A managed worktree sits under a workspace folder
       (`<folder>/worktrees`) or, when the folder is itself a repo, in `data/worktrees/` (H6); both
-      are denied. A workspace root that is `$HOME`,
-      or that contains the config or data tier, makes untrusted runs refuse to start, with a
-      message asking for narrower workspace folders;
+      are denied. A workspace root that is `$HOME`, or that contains the config or data tier or
+      the untrusted root, makes untrusted runs refuse to start, with a message asking for narrower
+      workspace folders;
     - `/mnt` under WSL.
 
     Threat line 4's test seeds a target in each class.
@@ -319,12 +323,17 @@ a session loads none of it.
     the sandbox; it is unverified until P2 runs it.
     - It is one turn through the real adapter and the user's `claude` against a small loopback
       responder that ships in the product, not test code, modeled on the spike's `fake.rs`. Its one
-      reply asks for one Bash call. No model call is made.
-    - It runs with the same options an untrusted participant gets. The responder needs no login,
-      so it gets a dummy key and its base URL.
+      reply asks for one Bash call. No model call is made. Under WSL the responder listens on the
+      gateway address, behind the same firewall rule as the MCP listener.
+    - It runs with the same options an untrusted participant gets. Its env is built from the
+      allowlist, as every participant's is: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+      `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the proxy variables
+      are left out before it sets its own dummy key and the responder's base URL.
     - It passes only if that call ran sandboxed: its write to the cwd is denied.
-    - It runs once per app version and after any change to the sandbox setup, and its result is
-      cached. A failure is retried before the next untrusted run.
+    - Its result is cached under a key of the app version, `claude --version`, the boot id (or
+      uptime) and the sandbox setup. A failure is retried before the next untrusted run. If a
+      cached pass is wrong anyway, `failIfUnavailable` fails the session; the host re-runs the
+      probe and takes the fallback.
     - That covers `bubblewrap`, `socat` and Ubuntu 24.04's user-namespace restriction alike.
     - Untrusted participants and trusted verifiers both use it (PLAN-PANELS §3); in WSL it is part
       of "WSL ready".
@@ -360,10 +369,10 @@ a session loads none of it.
       - Each participant's `CLAUDE_CODE_TMPDIR`.
     - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
       over stdio, the variables passed through `WSLENV`.
-    - **The pinned tree** comes in as a `git bundle` of a temporary ref,
-      `refs/detached/wsl/<run>` at the subject's SHA, deleted after and at startup cleanup. It is
-      exported there with filters off, as on the host (PLAN-PANELS §3), so no mount is needed. The
-      distro's filesystem is 30–450× faster than `/mnt/<drive>`.
+    - **The pinned tree** is the host's own export (PLAN-PANELS §3, filters off) made on the
+      Windows side, streamed as a tar through `wsl.exe` into `tar -x` in the distro's run folder,
+      then deleted on the Windows side. No mount, bundle or ref is needed. The distro's filesystem
+      is 30–450× faster than `/mnt/<drive>`.
     - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
       also listens on the WSL gateway address (from `ip route` in the distro), with the same
       secret binding; the `Host` check accepts that address.
@@ -378,7 +387,8 @@ a session loads none of it.
       - the adapter is installed;
       - `claude` meets `min_cli` and is logged in;
       - `bubblewrap`, `socat` and `git` are there;
-      - the firewall rule exists.
+      - the firewall rule exists;
+      - the "sandbox ready" probe passes there.
 
       The panel's start screen checks each and offers its fix. Without WSL at all, it offers to
       install it, or to run unisolated after a consent that names PLAN-PANELS §4's lines 2–4
@@ -589,7 +599,8 @@ Later steps add to the SDL:
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
 
 - **Config stays where `paths::config_dir()` puts it today.** Under `DETACHED_CONFIG_DIR`, config is
-  that folder, as now, with `data/` and `cache/` in it.
+  that folder, as now, with `data/` and `cache/` in it unless `DETACHED_DATA_DIR` and
+  `DETACHED_CACHE_DIR` set them apart; the tests' `Sandbox` sets all three to separate temp dirs.
 - **Ignored by the watcher.** `core::watch` drops events under `<git dir>/detached/`.
 - **Transcripts stay with the agents.** The host keeps an index, not copies.
 - **Secrets live only in `core::secrets`.**
@@ -1130,18 +1141,21 @@ removed at §13's end condition, in their own commit, after a grep of `crates/ap
 
 Work:
 1. Worktrees under `<folder>/worktrees/<repo>/<branch>` for a workspace folder that holds repos,
-   as `wt` does, or `data/worktrees/<repo>/<branch>` when the folder is itself a repo; hooks off.
+   as `wt` does, or `data/worktrees/<repo>-<short hash of the repo path>/<branch>` when the folder
+   is itself a repo; hooks off.
 2. The recipe (`worktree.toml`): `copies` (ignored files only, mode 0600; ACLs on Windows),
    `install`, `teardown`.
 3. Remove keeps the branch.
-4. The sidebar shows managed worktrees.
+4. The sidebar shows managed worktrees, found through `git worktree list` per repo, not by
+   scanning folders, so their location does not matter.
 
 Tests:
 - create, copy, install, teardown;
 - copying a file the repo does not ignore is refused;
 - a branch with a `post-checkout` hook creates a worktree with nothing run;
 - a shared recipe asks for trust;
-- a dirty worktree is not removed without force.
+- a dirty worktree is not removed without force;
+- two repo-folder workspaces with the same basename each show their own worktrees.
 
 Done when the owner's DHP setup, written as a recipe, matches `wt new`.
 

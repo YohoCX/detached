@@ -8,7 +8,7 @@ Proposed on 2026-11-12, decided at the agent host's H1.
     - For a trusted subject it is a `git worktree add --detach` at
       `data/trees/trusted/<run>/pinned/`, where verifiers read.
     - For an untrusted subject it is not a worktree but an export at
-      `<untrusted root>/<run>/pinned/` (a per-instance root in the OS temp dir, host §5), outside
+      `<untrusted root>/<run>/pinned/` (a per-user, per-instance root, mode 0700, host §5), outside
       the config, data and cache tiers (`read-tree` and
       `checkout-index` through a temp index), so the repo's git dir never names it. Every
       participant reads there. It is made with the global and system config off,
