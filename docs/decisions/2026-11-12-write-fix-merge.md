@@ -15,4 +15,4 @@ Proposed on 2026-11-12, decided at the agent host's H1.
 - Why: the owner takes a fix without leaving the client, and their tree is never left mid-merge.
 - Rejected: merge commits and conflict resolution in the client; an automatic merge.
 - Test: PLAN-PANELS P4: a dirty tree, a non-fast-forward subject, a `.husky/post-merge` that never
-  runs, an MR subject with no Merge.
+  runs, a remote-branch subject with no Merge; P5: an MR subject with no Merge.
