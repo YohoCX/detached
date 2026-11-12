@@ -6,8 +6,10 @@ between agents, one storage layout with a share-or-local toggle, skills from fol
 docs read and written by a mechanism. [PLAN-PANELS.md](PLAN-PANELS.md) builds multi-agent panels
 on it. The two plans share one order (§13).
 
-**Status (2026-11-12): draft, not reviewed, not accepted. Step 0, the adapter spike, runs on
-`agent-host/0-spikes`. Nothing is built.**
+**Status (2026-11-12): draft, not reviewed, not accepted. Step 0 is answered (§16, from
+`agent-host/0-spikes` at 4fa09ab; Codex from its source only) and the sections it settles are
+rewritten. Open for the owner: how the adapters reach a user's machine, Node or not (§2.2), what a
+panel does on Windows (PLAN-PANELS §3), and the context breakdown (§12). Nothing is built.**
 
 Owner's decisions, each in [docs/decisions/](docs/decisions/):
 - [2026-11-09](docs/decisions/2026-11-09-acp-for-every-provider.md): every provider goes through
@@ -21,6 +23,11 @@ Owner's decisions, each in [docs/decisions/](docs/decisions/):
 - [2026-11-12](docs/decisions/2026-11-12-storage-scopes.md): three storage scopes and a
   share-or-local toggle.
 - [2026-11-12](docs/decisions/2026-11-12-docs-mechanism.md): docs by a mechanism.
+- [2026-11-12](docs/decisions/2026-11-12-host-schema.md): `detached_read` is described by an SDL
+  file and executed by our own synchronous executor; `async-graphql` is rejected.
+- 2026-11-12, in answers to the plan: `~/.agents/skills` is read by default when it exists;
+  managed worktrees go in `<workspace>/worktrees/<repo>/<branch>`; revmux and `.revmux/` stay, and
+  whether panels replace revmux is not decided.
 
 "Right" here means what it meant in the foundation:
 - each piece of state has one owner;
@@ -41,12 +48,18 @@ kernel  Session, Proc, Inbox, Panel (PLAN-PANELS), the host tools' dispatch, inv
 app     the chat, Processes, Panels and Docs apps, their Settings pages; the binary
 ```
 
-- `core::acp` is blocking: a JSON-RPC client over the adapter's stdio, one reader thread per
-  session, events into a channel the kernel drains through `kernel::blocking::stream`. Whether
-  the Rust crate `agent-client-protocol` fits without an async runtime is step 0's row 9. If it does
-  not, core keeps the crate's schema types and its own client loop.
-- The host tool server's sockets and threads are in `core::host`. A call crosses to the kernel's
-  main thread and returns, as a job does the other way. Reads resolve from entities there.
+- `core::acp` uses the crate `agent-client-protocol` (5.2.0), which needs no tokio: it runs on
+  `futures::executor::block_on` on a core thread per adapter, and events go into a channel the
+  kernel drains through `kernel::blocking::stream`.
+  - Core enables the crate's `unstable_*` features it reads. Without them the typed values
+    silently drop fields such as `PromptResponse.usage`.
+  - Core spawns the adapter itself and connects over `ByteStreams`, never through `AcpAgent`.
+    `AcpAgent` can only add env vars, its drop SIGKILLs the process group (which orphans a running
+    Bash command), and on Windows it kills only the direct child.
+- One adapter process per provider serves every session of that provider. Codex's adapter runs
+  one `codex app-server` for all its sessions, so they share one crash domain.
+- The host tool server is HTTP on `127.0.0.1` inside the app, in `core::host`. A call crosses to
+  the kernel's main thread and returns, as a job does the other way.
 - The console binary for `detached q` and `detached env run` is
   `crates/app/src/bin/detached-cli.rs`, a client of the socket only, so no window code on
   Windows' console (docs/BACKLOG.md).
@@ -59,16 +72,20 @@ be added in the config directory for others.
 ```toml
 [provider.claude]
 command  = ["claude-agent-acp"]          # resolved under cache/adapters/, §2.2
-version  = "0.101.1"
+version  = "0.106.0"
 trust    = [".claude/settings.json", ".claude/settings.local.json", ".claude/skills/**",
-            ".claude/agents/**", ".claude/commands/**", ".mcp.json"]
+            ".claude/agents/**", ".claude/commands/**", ".mcp.json", "CLAUDE.md"]
 env      = ["CLAUDE_CODE_EXECUTABLE"]    # names added to the host's allowlist
 
 [provider.codex]
 command  = ["codex-acp"]
 version  = "2.6.0"
-trust    = [".codex/**", "AGENTS.md"]
+trust    = [".codex/**", ".agents/skills/**", "AGENTS.md"]
+env      = ["CODEX_HOME", "CODEX_PATH"]
 ```
+
+Both reuse the user's logins: Claude through the user's `claude` (`CLAUDE_CODE_EXECUTABLE`) or
+the CLI it bundles, Codex through `CODEX_HOME`'s `codex login`.
 
 ### 2.1 What every provider must do
 
@@ -77,29 +94,50 @@ The host enforces each row itself where it can; a row it cannot enforce is a spi
 | Row | How |
 | --- | --- |
 | Starts in a folder with extra folders | `session/new` `cwd`, `additionalDirectories` |
-| The environment is the host's allowlist plus the manifest's names, never inherited | `core::proc` clears the env (`KEPT_ENV` moves from `core::agent`) |
-| Dies with the host: EOF on stdin, a killed app, a crash | a process group on Unix; a job object with `KILL_ON_JOB_CLOSE` on Windows, which `win::Job` gains |
-| Stop ends the turn and what it started in the background | `session/cancel`, then the adapter's task stop if it has one (row 5), else the group's children are killed |
-| "Always allow" never writes a file | the host keeps always-rules itself and answers adapters only with once-options (§4) |
-| A repo's project settings load only when trusted | per-session setting sources, row 8 |
+| The environment is the host's allowlist plus the manifest's names, never inherited | `core::proc` builds it from nothing (`KEPT_ENV` moves from `core::agent`); the adapters pass their whole env on to the CLI, so this is the only place it can be held |
+| Dies with the host | stdin EOF ends the adapter, the CLI and the running command with no orphan (row 5). Shutdown closes stdin and waits 5 s before any signal; killing the process group first orphans the Bash command. A killed app gives EOF by itself; Windows adds a job object with `KILL_ON_JOB_CLOSE`, which `win::Job` gains |
+| A nonzero exit at shutdown is not an error | the Claude adapter exits 1 on `EPIPE` when stdin closes right after `session/new` (Linux, Windows) |
+| Stop ends the turn and its foreground command | `session/cancel` (row 5). Background commands survive it by design; `_session/async_task/stop` ends one, and the chat's Stop calls it for the turn's tasks, as the sidecar's `stopTask` does |
+| "Always allow" never writes a file | the host keeps always-rules itself and answers adapters only with `allow_once` (§4) |
+| A repo's project settings load only when trusted | Claude: `settingSources: []` until accepted (row 8); Codex: only in accepted repos (§3) |
+| The model, effort and mode are the ones asked for | set with `session/set_config_option` after `session/new` and again after every `session/load`, which otherwise falls back to `~/.claude/settings.json` (row 2) |
+| Only the host's MCP servers | Claude: `strictMcpConfig: true` in `_meta.claudeCode.options`, or the account's claude.ai connectors join the session (row 3) |
 | A change to trusted files mid-session cannot run unseen | §3 |
 | `.env` files are not read through the agent's own file tools | §4 |
-| Takes the host's tools | `mcpServers` in `session/new`, row 3 |
-| Reports what it ran on: model, mode, usage | session updates, row 1; missing fields show as unknown, never as zero |
+| Takes the host's tools | HTTP MCP in `session/new` (row 3) |
+| Questions to the user reach the host | the client declares `elicitation.form`; without it Claude disables `AskUserQuestion` and Codex answers `{}` |
+| Reports what it ran on: model, mode, usage | `usage_update`, `config_option_update`, `current_mode_update`; missing fields show as unknown, never as zero |
 
 Optional, hidden in the UI when missing: past sessions (list, load, delete, archive), plan limits,
-models, efforts and modes, steering in mid-turn.
+models, efforts and modes, steering in mid-turn. Plan limits never come from ACP (row 1); §12 gives
+them their own source.
 
 ### 2.2 Adapters on disk
 
-- Adapters are npm packages that need Node (`claude-agent-acp`) or start the user's `codex`
-  (`codex-acp`). The host installs each at its manifest's pinned version into
-  `cache/adapters/<name>@<version>/` from the npm registry, on the owner's click, never at start.
-- The user's `claude` and `codex` stay the user's: the host finds them on the login shell's PATH as
-  the self-test does, checks a minimum version and shows what it found.
-- How a user without Node gets an adapter is row 8's second half. If a package can be compiled to
-  one file (`bun build --compile`), the host downloads that file per OS from a release asset with a
-  checksum; if not, Node is a stated requirement.
+What a user installs (row 8):
+
+| Adapter | Package | Node-free |
+| --- | --- | --- |
+| Claude | npm, Node ≥ 22, pulls a 321 MB `claude` binary; with Codex's the tree was 785 MB | the adapter's GitHub release: a bun-compiled `claude-agent-acp` beside the CLI, 177–209 MB per OS and arch (macOS, Linux glibc and musl, Windows; x64 and arm64) |
+| Codex | npm only (`dist/index.js`), Node; starts Codex through `@openai/codex`'s launcher unless `CODEX_PATH` names the native binary | none |
+
+**Open for the owner.** The options:
+1. **Release archive for Claude, npm under a found Node for Codex.** Claude needs no Node: the
+   archive is 177–209 MB and is downloaded on a click. Codex is offered only where the host finds
+   Node ≥ 22 on the login shell's PATH.
+2. **npm for both.** Node ≥ 22 is a stated requirement. The tree is about 785 MB with both, and
+   one updater covers both adapters.
+3. **Option 1, plus the user's own `claude`** through `CLAUDE_CODE_EXECUTABLE` where it is found.
+   The adapter's bundled CLI then goes unused, and the CLI's version is the user's.
+
+The agent's view: option 1 with 3's choice where the user has `claude`.
+
+Whatever the choice:
+- adapters go to `cache/adapters/<name>@<version>/`, pinned by the manifest and checked against a
+  checksum;
+- they install on the owner's click, never at start;
+- the user's `claude` and `codex` are found on the login shell's PATH, as the self-test does, and
+  shown with their versions.
 
 ## 3. Trust
 
@@ -111,31 +149,65 @@ repo would run, a session loads no project settings.
   knows is one item: "an unparsed `.codex/config.toml`". A repo is "nothing to trust" only when
   every path is absent or parsed empty.
 - Acceptance is stored against a hash of the files, as today, per provider.
-- Setting sources per session: Claude through `_meta.claudeCode.options.settingSources`; Codex
-  through whatever row 8 finds. If an adapter cannot be kept from loading an untrusted repo's
-  project config, that provider runs only in repos whose files the owner accepted, and its
-  sessions in a repo that is not trusted are refused with that reason.
-- Mid-session: the watcher's list grows by the trust paths of every repo with a live session
-  (PLAN-FOUNDATION §9). A change pauses permission answers, re-hashes, and on a difference cancels
-  the turn and ends the session until accepted. Without the SDK's `ConfigChange` block there is a
-  window between a write and the next tool call in which a new hook can fire; the trust prompt says
-  so. If row 8 finds the block can be passed through `_meta`, the window closes.
+- **Claude.** `_meta.claudeCode.options.settingSources` is `[]` until the repo is accepted, then
+  `["user", "project", "local"]`. Under `[]` the session saw no CLAUDE.md, no project hook and no
+  project skill (row 8).
+  - The adapter still reads `~/.claude/settings.json` for the model and the mode, whatever the
+    sources. Its default mode is `auto` even with no settings.
+  - So the host always sets the model, effort and mode itself (§2.1), and adds
+    `strictMcpConfig: true`.
+- **Codex** (from source, to confirm live in H3):
+  - the adapter marks the cwd and every additional directory `trusted` in Codex's config and loads
+    the project layer;
+  - a server named like one in the user's `config.toml` is skipped without a word.
+
+  The "then" fired: **Codex runs only in repos whose `.codex/`, `.agents/skills/` and
+  `AGENTS.md` the owner accepted**. A session elsewhere is refused with that reason. The host's MCP
+  server takes a name no user config holds (`detached-host-<id>`).
+- **Mid-session.** The watcher's list grows by the trust paths of every repo with a live session
+  (PLAN-FOUNDATION §9).
+  - A change pauses permission answers and re-hashes. On a difference the host cancels the turn and
+    ends the session until the change is accepted.
+  - The SDK's `ConfigChange` block cannot be passed through the adapter (the first drafts' reading;
+    the spike did not find a way). So a trusted repo keeps a window between a write and the next
+    tool call in which a new hook can fire. The trust prompt says so. An untrusted repo has no
+    window: it loads no project settings at all.
 - Shared panel roles, modes, skills and recipes from `<repo>/.detached/` are trust items too (§9).
 
 ## 4. Permissions
 
-- The host answers every `session/request_permission`. "Always allow" in the UI stores a rule in
-  the session's host-side list and sends the adapter the once-option; later requests that match are
-  answered by the host without a card. No adapter ever receives an always-option, so nothing is
-  written to `.claude/settings.local.json`.
-- Modes: what the provider offers, shown as it reports them. The host compares the reported mode
-  with the one it asked for and shows a difference (PLAN-EXTENSIBLE).
-- `.env`: Claude's options deny `Read(//**/.env*)` and the matching Bash patterns, as the sidecar
-  does, if `_meta` carries `disallowedTools` (row 4). Codex's sandbox does not read-protect files;
-  its sessions say so on start. A real limit is a sandbox, a separate decision.
-- Headless participants (panels) have a policy instead of cards: an allow-list of read tools and
-  read commands, a deny for writes, network and the rest, and an escalation to the owner shown in
-  the panel's row (PLAN-PANELS §6).
+- **The host answers every `session/request_permission`.**
+  - A request carries the tool's `kind` (`execute`, `edit`, `other`, `switch_mode`), a title,
+    `rawInput`, and the options `allow_once`, `allow_always` and `reject_once`.
+  - "Always allow" in the UI stores a rule in the session's host-side list and sends the adapter
+    `allow_once`. Later requests that match are answered by the host without a card.
+  - No adapter ever receives `allow_always`, so nothing is written to
+    `.claude/settings.local.json`.
+- **What asks.** In Claude's `default` mode, `Read` and commands Claude Code classes as read-only
+  (`git diff`, `rg` in the cwd) run without a request; host MCP tools ask. The host's own tools are
+  therefore pre-allowed through `allowedTools` (`mcp__detached-host-<id>__*`).
+- **Modes.**
+  - Claude: `default`, `acceptEdits`, `plan`, `auto` (its default), `bypassPermissions`.
+  - Codex: `read-only`, `workspace-write`, `agent` (its default, with a guardian model),
+    `agent-full-access`; a change takes effect on the next turn.
+  - The host compares the reported mode with the one it asked for and shows a difference
+    (PLAN-EXTENSIBLE).
+- **`.env`.** Claude's options deny `Read(//**/.env*)` and the matching Bash patterns, as the
+  sidecar does, through `_meta.claudeCode.options.disallowedTools`. The spike did not exercise it;
+  H3 tests it. Codex's sandbox does not read-protect files; its sessions say so on start. A real
+  limit is a sandbox, a separate decision.
+- **Read-only is enforced by the provider's sandbox, not by a mode or a policy** (row 4):
+  - Plan mode ended at the first allowed `switch_mode`, and all three test files were written.
+  - A prefix policy on command strings let `git diff --output=w3.txt` write a file.
+  - What held:
+    - Claude: `tools: [Read, Grep, Glob, Bash]` with `sandbox {enabled, failIfUnavailable,
+      allowUnsandboxedCommands: false, filesystem.denyWrite: [cwd]}`. Seatbelt on macOS; nothing
+      was written and nothing asked.
+    - Codex: its `read-only` mode, an OS sandbox on all three systems (from source).
+  - Claude's sandbox does not run on native Windows, so a read-only Claude session there refuses to
+    start (`failIfUnavailable`). PLAN-PANELS §3 has the owner's open choice.
+  - Headless participants use that, and the host's policy only answers what still asks
+    (PLAN-PANELS §3).
 - A woken turn (§8) runs with the host's always-rules suspended and in the provider's asking mode.
   A trusted repo's own allow list still applies; the wake toggle says so.
 
@@ -152,28 +224,102 @@ what exists only to draw. `ui_state` is the kernel's since the foundation.
 - A session's repos join the watcher's list while it lives.
 - Activity shows a running turn as a job with the session's title; Stop is its cancel.
 - Sessions survive their tab, as `Terminals` do today.
-- `Resource<Vec<PastSession>>` per provider and folder, for the session list: interest-held,
-  reloaded on a session's end.
+- **Resume** is `session/load`.
+  - It replays the history as `session/update`s before it answers, about 0.4 s.
+  - The whole history is sent to the model again with a cold cache.
+  - It does not keep the model: in the test a Haiku session came back on Opus from
+    `~/.claude/settings.json`, about 60 times the cost of the turn.
+  - So model, effort and mode are set again right after every load (§2.1).
+- **Memory.** Each live Claude session is a `claude` CLI of 250–320 MB beside one adapter of about
+  140 MB: five sessions take 1.5–1.7 GB. `session/new` takes 2.9 s cold and 0.3 s warm. Codex
+  serves all sessions from one app-server (memory not measured). Headless sessions close as soon
+  as they report.
+- **The session list** is `Resource<Vec<PastSession>>` per provider and folder, held by interest
+  and reloaded on a session's end. Codex's `session/list` also returns the Codex CLI's and VS
+  Code's sessions under the same `CODEX_HOME`; the list shows only those in the host's own index,
+  and the rest under "Other clients".
 
 ## 6. Host tools
 
 Agents get Detached's data and a closed list of actions as tools, not as pasted text.
 
-- **Transport.** Row 3 picks it.
-  - Preferred: HTTP on `127.0.0.1` with a per-session path that holds a random secret, passed in
-    `session/new`'s `mcpServers`. That way the secret is in neither argv nor env, where another
-    session's `ps eww` or `/proc/<pid>/environ` would find it.
-  - If an adapter takes stdio servers only, the host's console binary is the stdio server and gets
-    its secret on stdin from the adapter's `env` entry. The stated limit is that a same-user
-    process can read that env.
-- **Two tools**: `detached_read` and `detached_act`. A rule that always allows reading cannot
-  allow acting.
-- **Reads**: a GraphQL subset over entities, executed synchronously on the main thread; a costly
-  read (a log grep) is a job.
-  - Covers sessions, processes (only those open to agents), Repos' status, MRs, pipelines,
-    findings, docs (§11).
-  - A GraphQL library that runs synchronously in core-free code is chosen in step 3, or a
-    hand-written subset if none fits. Either way it is the owner's call before step 3 starts.
+- **Transport.** Streamable HTTP on `127.0.0.1`, served from inside the app, with a per-session
+  path that holds a random secret, passed in `session/new`'s `mcpServers` (row 3).
+  - Both adapters accept HTTP; Codex refuses SSE. No extra binary is needed.
+  - The secret is in neither argv nor env, where another session's `ps eww` or
+    `/proc/<pid>/environ` would find it.
+  - The server's name is `detached-host-<id>`, so no user config shadows it (§3).
+- **Two tools**: `detached_read` and `detached_act`, pre-allowed (§4). A rule that always allows
+  reading cannot allow acting. When the host rejected the tool, the agent answered in prose
+  instead, so a refused tool is a failure the host sees, never a silent gap.
+- **Reads are a query language over one schema**
+  ([decision](docs/decisions/2026-11-12-host-schema.md)):
+  - The schema is an SDL file, `crates/kernel/src/host/schema.graphql`, the single source of
+    truth. A test fails when a type or field has no resolver, or a resolver has no field.
+  - `graphql-parser` 0.4.1 parses queries and the SDL. It is synchronous, about 13 crates and 4.4k
+    lines in its tree.
+  - Our own synchronous executor runs over a kernel snapshot. The snapshot is taken on the main
+    thread; the executor runs through `kernel::blocking`. It validates against the SDL and limits
+    depth (8) and result size (256 KB); the limits are settings.
+  - No introspection protocol: asking "what is there" (`{ schema }`) returns the SDL.
+  - No GraphQL subscriptions: events and messages reach a session through the host's delivery
+    (§8, `watch`).
+  - A costly read, such as a log grep, is a job.
+  - About 600–900 lines of executor and resolvers.
+
+```graphql
+schema { query: Query }
+
+type Query {
+  schema: String!                       # this SDL
+  workspace: Workspace!
+  repo(path: String!): Repo
+  sessions(repo: String): [Session!]!
+  panels(repo: String, state: PanelState): [Panel!]!
+  findings(repo: String, status: Disposition, severity: Severity): [Finding!]!
+  processes(repo: String): [Process!]!  # only those open to this participant
+  docs(repo: String!, query: String!): [DocSection!]!
+  skills(repo: String): [Skill!]!
+  inbox: [Message!]!                    # this participant's own
+}
+
+type Workspace { repos: [Repo!]!  current: Repo }
+type Repo {
+  path: String!  name: String!  branch: String  ahead: Int  behind: Int
+  status: Status  mrs(state: MrState): [MergeRequest!]!  pipelines(last: Int): [Pipeline!]!
+}
+type Status { changed: Int!  staged: Int!  conflicted: Int!  files(limit: Int): [FileChange!]! }
+type FileChange { path: String!  kind: ChangeKind! }
+type MergeRequest { id: ID!  title: String!  state: MrState!  author: String!  url: String!
+                    pipeline: Pipeline }
+type Pipeline { id: ID!  state: RunState!  ref: String!  jobs: [Job!]! }
+type Job { name: String!  state: RunState! }
+type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
+               repo: Repo  doing: String }
+type Panel { id: ID!  mode: String!  subject: String!  state: PanelState!  stage: String
+             participants: [Participant!]!  findings(severity: Severity): [Finding!]! }
+type Participant { role: String!  provider: String!  model: String  state: ParticipantState!
+                   raised: Int!  attempt: Int! }
+type Finding { id: ID!  fingerprint: String!  severity: Severity!  title: String!  body: String!
+               file: String  line: Int  verdict: Verdict  disposition: Disposition!
+               sources: [String!]! }
+type Process { name: String!  status: RunState!  exitCode: Int  ready: Boolean!
+               log(last: Int, grep: String): [String!]! }
+type DocSection { path: String!  heading: String!  line: Int!  text: String!  stale: Boolean! }
+type Skill { name: String!  scope: Scope!  path: String! }
+type Message { id: ID!  from: String!  at: String!  text: String! }
+
+enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }
+enum MrState { OPENED MERGED CLOSED }
+enum RunState { PENDING RUNNING SUCCESS FAILED CANCELED }
+enum SessionState { IDLE RUNNING WAITING ENDED }
+enum PanelState { RUNNING PAUSED DONE CANCELED }
+enum ParticipantState { QUEUED RUNNING QUIET WAITING RETRYING DEGRADED DONE }
+enum Severity { CRITICAL MAJOR MINOR }
+enum Verdict { CONFIRMED REFINED REJECTED IMMATERIAL PRE_EXISTING UNVERIFIED }
+enum Disposition { OPEN FIXED DISMISSED DEFERRED }
+enum Scope { BUILTIN PERSONAL LOCAL SHARED }
+```
 - **Actions**, each its own decision and test:
   - `send` and `ask` (§8);
   - `report_finding`, `report_verdict` and `done` (PLAN-PANELS §4);
@@ -216,7 +362,13 @@ Agents get Detached's data and a closed list of actions as tools, not as pasted 
   its sender. It is never placed in a prompt.
 - **Wake**: to wake an idle receiver, the host sends a fixed prompt that carries no sender text,
   "You have new messages". It does so only when that session has wake on. A busy receiver gets the
-  same line by steering if the provider has it, else with its next turn.
+  same line by steering if the provider has it (`_session/steering`, Claude v1 only), else with
+  its next turn.
+  - A steer sent 3 s into a running command arrived. Claude Code moved the command to the
+    background so the message could reach the model.
+  - One sent as a tool call was first announced was acknowledged and lost, 2 of 2 times. So the
+    host sends a steer only after the current tool call's first update, and repeats the line with
+    the next turn if the session's feed does not show it.
 - **Who may message whom**: sessions the owner put in one group. No group by default.
 - **Caps and stops**: at most N woken turns in a group without a user turn between, 5 by default.
   One Stop ends the group's turns. Every message and woken turn shows in both feeds.
@@ -277,12 +429,20 @@ what a CLI's `--help` does not.
 
 - A setting lists the folders to read. By default:
   - `~/.claude/skills` and `<repo>/.claude/skills`;
-  - `~/.agents/skills` when it exists;
+  - `~/.agents/skills` when it exists (the owner's choice);
   - the personal, local and shared scopes of §9.
-- Each session gets the folders its provider does not read by itself. Row 8 says how:
-  - if an adapter takes extra skill folders, the host passes them;
-  - if not, `detached_read skills` lists them and returns one on demand. The skill is then read on
-    request rather than triggered by the provider.
+- **Each session gets the folders its provider does not read by itself** (row 8):
+  - **Claude.** `_meta.claudeCode.options.plugins: [{type: "local", path}]`. The host builds one
+    plugin folder per session in `cache/plugins/<id>/` (`.claude-plugin/plugin.json` and
+    `skills/<name>` links to the chosen skills). Under `settingSources: []` the test skill showed
+    as a command.
+  - **Codex** (from source): each directory of the session gets a skills root at
+    `<dir>/.agents/skills`, plus `CODEX_HOME`'s.
+    - Skills already there reach it by themselves.
+    - Others reach it through `detached_read skills`, read on request rather than triggered.
+    - The host does not add a directory to a Codex session for skills alone: `additionalDirectories`
+      become writable roots of its sandbox.
+- Skills are trust items when they come from a repo (§3, §9.2).
 - A Skills page lists every skill with its scope, its source folder and what overrides it.
 
 ## 11. Docs
@@ -330,22 +490,29 @@ one the owner's `doc-reader` and `doc-writer` skills use.
 The chat moves last, once ACP carries everything the sidecar does today. Until then the sidecar
 stays, out of the packages, behind the same `Session`, so the switch is one provider change.
 
-| Today on the sidecar | On ACP |
-| --- | --- |
-| Streaming, model and effort, `/` commands, `@` files | session updates and config options; row 7 |
-| History, resume, list, delete, archive | `session/list`, `session/load` if offered; row 2 |
-| Stop: `interrupt` and `stopTask` | `session/cancel`, then row 5's stop or the group kill |
-| `auto` by default, the mode indicator, re-arm after a model switch | row 7 |
-| Approval cards | `session/request_permission` (§4) |
-| Context ring and its breakdown | row 1 |
-| Plan limits and `accountInfo` in the bar | row 1; until it comes, the bar asks `claude` with no settings, as today |
-| Snapshot and restore | host-side, unchanged |
-| The env allowlist, EOF as a kill, the `.env` deny | §2.1, §4 |
-| Per-repo trust and the `ConfigChange` block | §3 |
-| Always allow kept to the session | §4 |
-| Extra folders, host tools | new on both; ACP has them |
+| Today on the sidecar | On ACP (row 7) | Gap and what the host does |
+| --- | --- | --- |
+| Streaming, `/` commands, `@` files | session updates; `available_commands_update` lists skills and commands | none |
+| Model, effort, mode and its indicator; `auto` re-armed after a model switch | config options (Claude: `mode`, `model`, `effort`, `fast`; Codex: `mode`, `model`, `reasoning_effort`), `set_config_option`, `config_option_update`, `current_mode_update` | no per-model metadata (which efforts, whether `auto` works) beyond the effort list rebuilt for the current model: the host re-reads the options after each switch and re-arms `auto` when it is offered |
+| History and resume | `session/load` (§5) | the model falls back on load: set again |
+| List and delete | `session/list`, `session/delete` | Codex's delete only archives and its list holds other clients' sessions (§5); the UI says so |
+| Archive | `_session/archive` only for clients declaring JetBrains AIR's `sessionIndex` | missing for a plain client: archive is a flag in the host's own index, which hides the session from the list |
+| Stop: `interrupt` and `stopTask` | `session/cancel` ends the foreground command; `_session/async_task/stop` ends a background one | none |
+| Approval cards | `session/request_permission` (§4) | none |
+| Questions to the user (`AskUserQuestion`) | elicitation, form | only when the client declares `elicitation.form`: it does |
+| Context ring | `usage_update {used, size}` | none |
+| Its breakdown by category | `/context` returns markdown only | missing as data: **owner's choice**, parse `/context` against the pinned adapter version with a test, or drop the breakdown |
+| Plan limits in the bar | nothing structured; Claude's `_meta["_claude/rateLimit"]` arrives only as a warning, and `/usage` as markdown; Codex keeps its limits to itself | their own source: `detached-usage`, a few lines on the SDK's usage call compiled per OS with `bun build --compile` in our release and installed beside the adapter. `_claude/rateLimit` shows a live warning. Codex's limits show as unknown |
+| `accountInfo` | `_auth/status_update` (`label`, `plan`) | none |
+| Steering | `_session/steering` (Claude v1) | lost when sent as a tool call is announced: §8's rule |
+| Snapshot and restore | host-side, unchanged | none |
+| The env allowlist, EOF as a kill, the `.env` deny | §2.1, §4 | the env is built by the host, which spawns the adapter itself |
+| Per-repo trust and the `ConfigChange` block | §3 | the block is lost: a trusted repo keeps a stated window |
+| Always allow kept to the session | §4 | none |
+| Extra folders, host tools | new on both | none |
 
-- **Done when**: every row holds on ACP in the owner's use for a week.
+- **Done when**: every row holds on ACP in the owner's use for a week, with the breakdown row as
+  the owner chose.
 - **Then** `sidecars/claude`, `core::agent` and `bin/fake_sidecar.rs` go, and `tests/chat.rs`
   runs on the fake ACP agent.
 - **If a row cannot hold**: the owner decides whether the chat ships without it or the step waits.
@@ -386,14 +553,14 @@ plans. The foundation answered the kernel, settings, ops and invalidation findin
 | Finding | Answer |
 | --- | --- |
 | claude-agent-acp writes "Always allow" into the trust-hashed `.claude/settings.local.json` | §4: the host keeps always-rules; adapters get once-options only |
-| No `ConfigChange` block; polling detects after a hook ran; non-current repos unwatched | §3: trust paths of every live session watched; the window stated; row 8 tries to keep the block |
-| codex-acp marks every root trusted and loads `.codex/config.toml` | §3 and row 8: refused or gated per repo |
+| No `ConfigChange` block; polling detects after a hook ran; non-current repos unwatched | §3: an untrusted repo loads no project settings (`settingSources: []`); trust paths of every live session watched; a trusted repo's window stated |
+| codex-acp marks every root trusted and loads `.codex/config.toml` | §3: confirmed from source; Codex runs only in accepted repos |
 | `trust_files` as paths but trust gates on Claude-only parsed items | §3: an unparsed non-empty file is an item |
 | Gateways expose `repo.checkout` | §6: a closed action list, no repo writes |
 | `startProc` and `proc restart` run repo code unsandboxed with the login env | §7: `start` is an explicit grant worded as code execution; off by default |
-| Per-session tokens in the env are readable by other sessions | §6: secret in the HTTP path; the stdio fallback's limit stated |
+| Per-session tokens in the env are readable by other sessions | §6: the secret travels only in the HTTP path, never in env or argv |
 | The CLI path bypasses `detached_act` | §6: terminal agents are their own participants, read-only by default |
-| ACP losses missed: `stopTask`, EOF as kill, session list, auto re-arm | §2.1 and §12, rows 2, 5, 7 |
+| ACP losses missed: `stopTask`, EOF as kill, session list, auto re-arm | §2.1 and §12: all carried, archive in the host's index |
 | Private protocol going deletes the env allowlist and kill-on-drop | §2.1: both are host-side in `core::proc` |
 | The sidecar takes no extra folders and no host tools | §12: new on both sides, stated |
 | `.env` deny, approvals to the host and modes missing from required rows | §2.1, §4 |
@@ -410,6 +577,8 @@ plans. The foundation answered the kernel, settings, ops and invalidation findin
 
 - **CLAUDE.md:**
   - the crate lines name `core::acp`, `host`, `proc`, `secrets`, `docs`, `store`;
+  - `crates/kernel/src/host/schema.graphql` is the read tool's contract; a field is added there
+    first (H4);
   - "Views read the kernel's entities" gains `Session`, `Proc`, `Inbox`, `Panel`;
   - the chat's sidecar line goes at H10;
   - the Docs section names `docs/INDEX.md`, module docs and `covers:` at H6;
@@ -429,13 +598,15 @@ plans. The foundation answered the kernel, settings, ops and invalidation findin
 
 PLAN-FOUNDATION §12's gate, with these changes:
 - branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`;
-- the revmux round's job passes to the panels' own gate mode once P3 is on main. Each later step is
-  reviewed by both until P7 shows the gate finds what revmux finds.
+- revmux and the local `.revmux/` stay; each step still gets a revmux round. From P3 on, a step is
+  also run through the panels' gate for comparison. Whether panels replace revmux is deferred.
+- Codex's rows say "from source, to confirm live"; H3 confirms them once Codex is installed and
+  logged in on the owner's Mac, and a row that does not hold reopens its section.
 
 ### Step H0. The adapter spike
 
-Throwaway code on `agent-host/0-spikes`, never merged, against `claude-agent-acp` 0.101.1 and
-`codex-acp` 2.6.0 or newer, with the versions written down. Linux and Windows run in the spike
+Throwaway code on `agent-host/0-spikes`, never merged, against `claude-agent-acp` and `codex-acp`
+at their latest versions, written down. Linux and Windows run in the spike
 branch's own CI workflow.
 
 | # | Question | If | Then |
@@ -451,6 +622,100 @@ branch's own CI workflow.
 | 9 | Cross-OS and the driver: both adapters start, prompt and stop on macOS, Linux, Windows; the job object kills them; does the Rust crate need an async runtime | Windows fails | that provider is off on Windows with a TECHDEBT row; a runtime need means core's own client loop |
 
 Done when every row has its answer written here, with what it changed above.
+
+Answers, 2026-11-12, from `agent-host/0-spikes` at 4fa09ab (`spikes/acp/ANSWERS.md`), macOS arm64
+with real calls on Claude Haiku (about $0.2), Linux and Windows in run 43170005120:
+- `claude-agent-acp` 0.106.0 on the SDK 0.3.322;
+- `codex-acp` 2.6.0 bundling Codex 0.166.0;
+- the crate 5.2.0, schema 1.17.0.
+
+Codex was not installed or logged in, so its answers are read from `dist/index.js` and marked
+*(source)*. H3 confirms them live.
+
+1. **Usage and limits.**
+   - Answer:
+     - Claude reports context fill (`usage_update {used, size}`) and each turn's cost in USD with
+       its model.
+     - The prompt response carries `usage` (input, output, cache read and write) and token counts
+       per model.
+     - Limits arrive only as `_meta["_claude/rateLimit"]` when the SDK raises a warning (here
+       `seven_day` at 0.77, no `five_hour`). `/usage` returns markdown.
+     - Codex *(source)* has `used`/`size` and `usage`, no cost, and never forwards its rate limits.
+   - Changed: the "then" fired for limits only. The bar gets `detached-usage` (§12); panel cost is
+     tokens on both providers and USD on Claude (PLAN-PANELS §7).
+2. **Resume.**
+   - Answer:
+     - `session/load` after a SIGKILL brought the conversation back in 395 ms, replaying the
+       history before answering. The whole history was re-sent with a cold cache.
+     - The mode came back; the model did not: Opus from `~/.claude/settings.json`, about 60 times
+       the cost.
+     - `session/resume`, `fork` and `close` are offered too. Codex *(source)* resumes the same way.
+   - Changed: §2.1 and §5 set model, effort and mode after every load. PLAN-PANELS §6 resumes a
+     participant instead of restarting it.
+3. **Host tools.**
+   - Answer:
+     - Claude took both stdio and HTTP, with arguments intact. Codex *(source)* takes stdio and
+       HTTP, refuses SSE, and skips a server whose name the user's `config.toml` already has.
+     - Each host tool call asked permission. When it was rejected, the agent answered in prose;
+       when allowed, it called `report_finding` and `done` and still wrote prose.
+     - An end without `done` shows as `end_turn` with no `done` recorded.
+     - The account's claude.ai connectors joined the session unless `strictMcpConfig: true`.
+   - Changed: §6 is HTTP in-process only, the stdio fallback is gone, the tools are pre-allowed,
+     and the server name is unique. PLAN-PANELS §4 fails an attempt without `done`.
+4. **Headless permissions and read-only.**
+   - Answer:
+     - In `default`, `Read`, `git diff` and `rg` ran without asking; host tools asked. Requests
+       carry kind, title, raw input and options.
+     - Plan mode ended at the first allowed `switch_mode`, and all three test files were written.
+     - A host prefix policy let `git diff --output=` write.
+     - Claude with `tools: [Read, Grep, Glob, Bash]` and its sandbox (`denyWrite: [cwd]`,
+       `allowUnsandboxedCommands: false`) wrote nothing and asked nothing.
+     - Codex's `read-only` mode is its OS sandbox on all three systems *(source)*.
+     - Claude's sandbox does not run on native Windows.
+   - Changed: §4 and PLAN-PANELS §3 enforce read-only by the provider's sandbox. Windows panels
+     with Claude are the owner's open choice.
+5. **Cancel.**
+   - Answer:
+     - `session/cancel` returned in under 0.1 s and the foreground command was gone.
+     - A killed host (stdin EOF) left no orphan.
+     - Killing the adapter's process group orphaned the command, which is what `AcpAgent`'s drop
+       does.
+     - Background commands survive cancel by design; `_session/async_task/stop` ends one.
+     - Codex *(source)*: `turn/interrupt`, background terminals end on `session/close`.
+   - Changed: the "then" did not fire for cancel, but shutdown changed. §2.1 closes stdin and
+     waits, and §1 spawns adapters itself.
+6. **Parallelism.**
+   - Answer:
+     - Five Claude sessions on one adapter ran a prompt at once in 4.1 s with no error.
+     - They took 1.53 GB idle and 1.71 GB after a turn: about 300 MB per `claude` CLI plus 140 MB
+       for the adapter.
+     - No rate limit was hit. Codex shares one app-server per adapter *(source)*.
+   - Changed: one adapter per provider (§1). PLAN-PANELS §7's cap counts memory, with 4 live
+     Claude sessions by default.
+7. **Chat parity.**
+   - Answer: covered except archive for a plain client, the context breakdown, and structured
+     limits. Steering is lost when sent as a tool call is announced. Elicitation needs
+     `elicitation.form`. Codex's delete archives, and its list holds other clients' sessions.
+   - Changed: §12's table. The "then" fired for the breakdown, which is the owner's choice.
+8. **Distribution and settings trust.**
+   - Answer:
+     - The packages and sizes are in §2.2. Both adapters reuse existing logins.
+     - `settingSources: []` blocked the project's CLAUDE.md, hook and skill.
+     - The adapter still reads `~/.claude/settings.json` for model and mode, defaults to `auto`,
+       and passes its whole env to the CLI.
+     - Skills from any folder pass as a local plugin.
+     - Codex *(source)* force-trusts its roots.
+   - Changed: §2.2 is open for the owner with three options; §3 and §10 rewritten; Codex runs
+     only in accepted repos.
+9. **Cross-OS and the driver.**
+   - Answer:
+     - Both adapters answered `initialize` on Linux and Windows. Claude's `session/new` started
+       its CLI on both. Codex's answered "Authentication required", as expected with no login.
+     - The Claude adapter exits 1 on `EPIPE` when stdin closes right after `session/new`.
+     - The crate needs no tokio and ran on `block_on`. It drops fields of `unstable_*` features
+       not enabled.
+   - Changed: no provider is off on any OS. §1 enables the unstable features, and §2.1 treats an
+     exit at shutdown as normal.
 
 ### Step H1. The owner accepts the plans
 
@@ -482,25 +747,48 @@ shared item from a branch made elsewhere asks for trust.
 ### Step H3. ACP, providers and the headless session
 
 Work:
-1. `core::proc`: env clear, the allowlist, groups, Windows job objects.
-2. `core::acp`: the client, as row 9 decided.
-3. Manifests, adapters installed into `cache/adapters/`, the found `claude` and `codex`.
-4. `kernel::Session` without a view: start, prompt, stream, cancel, end. Trust and snapshots as
-   §5's sequences.
-5. Permissions as §4, the host's always-rules.
-6. `bin/fake_acp.rs`: a scripted agent that streams, stalls, dies, asks permission, skips a tool,
-   sends malformed arguments.
-7. Settings: an Agents page with adapters, versions, the found CLIs.
+1. `core::proc`: an env built from nothing with the allowlist, process groups, Windows job objects,
+   shutdown by closing stdin and waiting 5 s before any signal.
+2. `core::acp`:
+   - the crate 5.2.0 with the `unstable_*` features it reads;
+   - the adapter spawned by core over `ByteStreams`;
+   - one adapter process per provider;
+   - an exit at shutdown is not an error.
+3. Manifests, adapters installed into `cache/adapters/` as the owner decided in §2.2, the found
+   `claude` and `codex`.
+4. `kernel::Session` without a view:
+   - start, prompt, stream, cancel, load, end;
+   - model, effort and mode set after `session/new` and after every load;
+   - `settingSources` and `strictMcpConfig` per §3;
+   - `elicitation.form` declared;
+   - trust and snapshots as §5's sequences.
+5. Permissions as §4: the host's always-rules, `allow_once` only, the `.env` deny through
+   `disallowedTools`.
+6. `bin/fake_acp.rs`, a scripted agent that:
+   - streams, stalls and dies;
+   - asks permission;
+   - skips a tool or answers in prose;
+   - sends malformed arguments;
+   - exits 1 on EPIPE.
+7. Settings: an Agents page with adapters, versions and the found CLIs.
+8. Codex installed and logged in on the owner's Mac; every *(source)* answer of step 0 confirmed
+   live, and the plan edited where one does not hold.
 
 Tests:
-- on the fake: stream, cancel kills children, a crash ends the session, EOF and a killed host
-  leave no process;
-- the env has only allowlisted names;
-- an always-rule never reaches the adapter;
-- an untrusted repo starts with user settings only;
+- on the fake:
+  - stream;
+  - cancel ends the foreground command;
+  - a crash ends the session;
+  - closing stdin and a killed host leave no process;
+  - an EPIPE exit at shutdown is quiet;
+- the env has only allowlisted names, under a parent env full of others;
+- `allow_always` never reaches the adapter;
+- an untrusted repo starts with `settingSources: []` and only the host's MCP servers;
+- after a load, the session runs on the model it had;
 - a trust file changed mid-turn ends the session.
-- One real-adapter test per provider, marked to run only where the adapter is installed, listed in
-  TECHDEBT.
+- Real-adapter tests:
+  - one per provider, run only where the adapter is installed, listed in TECHDEBT;
+  - on Claude, `.env` is refused through `Read` and `cat`.
 
 Done when the chat still runs on the sidecar unchanged, and a headless session runs on both real
 adapters on macOS.
@@ -511,17 +799,26 @@ temp repo; kills the app mid-turn and finds no process left.
 ### Step H4. Host tools
 
 Work:
-1. `core::host`: the transport per row 3, per-session secrets.
+1. `core::host`: streamable HTTP on `127.0.0.1`, per-session secret paths, the unique server name.
 2. `kernel`: participants, capabilities, the dispatch to the main thread.
-3. `detached_read`: the subset, sessions, Repos, MRs, pipelines.
-4. `detached_act`: `report_finding`, `report_verdict`, `done`, `watch`.
-5. `detached-cli`: `detached q`, `detached do`.
+3. `crates/kernel/src/host/schema.graphql` (§6's draft), `graphql-parser` 0.4.1, and the executor:
+   - it runs over a kernel snapshot through `kernel::blocking`;
+   - validation, depth and size limits;
+   - `{ schema }` returns the SDL.
+4. `detached_read`'s resolvers: Workspace, Repo, Session, MRs, pipelines.
+5. `detached_act`: `report_finding`, `report_verdict`, `done`, `watch`.
+6. Both tools pre-allowed in every session.
+7. `detached-cli`: `detached q`, `detached do`.
 
 Tests:
+- every SDL field has a resolver and every resolver a field;
+- a query past the depth or size limit is refused with the limit named;
+- an unknown field is refused against the SDL;
 - a session's secret reads only its participant's scope;
 - an act without the capability is refused;
 - another session's secret from its env is useless over HTTP;
 - `report_finding` with a bad schema is an error the agent sees;
+- a turn that ends without `done` is recorded as such;
 - `q` without a grant cannot act.
 
 Done when a fake agent reports findings through the tool and a real adapter reads a Repo's status.
@@ -531,7 +828,7 @@ The owner checks: asks a session "what is the status of repo X" and sees the too
 ### Step H5. Managed worktrees and recipes
 
 Work:
-1. Worktrees under `<workspace>/worktrees/<repo>/<branch>`, as `wt` does.
+1. Worktrees under `<workspace>/worktrees/<repo>/<branch>`, as `wt` does (the owner's choice).
 2. The recipe in the worktree-recipe kind (`worktree.toml`):
    - `links` (symlinked from the main checkout and added to `info/exclude`);
    - `copies` (copied with mode 0600: `.env`, `.env.local`);
@@ -577,13 +874,16 @@ The owner checks: the Docs app on this repo; a stale flag after an edit; the lin
 Work:
 1. The folder list in Settings.
 2. Skills in the four scopes.
-3. Passing them to sessions per row 8.
+3. Claude: the per-session local plugin under `cache/plugins/<id>/`. Codex: `detached_read
+   skills` for the ones outside its roots.
 4. The Skills page.
 
 Tests:
 - precedence;
+- `~/.agents/skills` is read when it exists and skipped when it does not;
 - an untrusted shared skill is not passed;
-- a session gets the folders its provider does not read itself.
+- a Claude session under `settingSources: []` lists a personal skill from the plugin;
+- no directory is added to a Codex session for skills.
 
 The owner checks: a personal skill reaches a Codex and a Claude session.
 
