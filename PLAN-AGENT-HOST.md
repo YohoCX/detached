@@ -13,8 +13,8 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Step 0 answered (§17). Review round 01
 (`.revmux/tasks/agent-host-plan/01-initial/`: revmux, 25 findings; Fable, B1–B10) is fixed in
-this text; round 02 is next. Three choices are open for the owner (§14): public builds and the
-claude.ai login, where the chat moves to ACP, and spike 0b before H1. Nothing is built.**
+this text; round 02 is next. The owner settled the claude.ai login on 2026-11-12 (§2). Two
+choices are open (§14): where the chat moves to ACP, and spike 0b before H1. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09);
@@ -24,6 +24,7 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - storage scopes;
   - docs by a mechanism;
   - the read tool's schema;
+  - Claude through the user's own `claude`, on any login;
   - the six repo writes of §16, proposed until H1;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
@@ -73,11 +74,13 @@ A provider is an adapter and a manifest, built in for Claude and Codex.
 ```toml
 [provider.claude]
 adapter = "claude-agent-acp"           # installed per §3
-min_cli = "2.1.319"                    # for "my own claude"
-login   = ["claude", "auth", "login"]  # or ACP's advertised authMethods when present
+name    = "Claude Agent"               # never "Claude Code"
+cli     = "claude"                     # the user's own, found on PATH or set in Settings
+min_cli = "2.1.319"
+login   = ["claude", "/login"]         # run in a terminal tab; or ACP's authMethods
 trust   = [".claude/settings.json", ".claude/settings.local.json", ".claude/skills/*/SKILL.md",
            ".claude/commands/**", ".claude/agents/**", ".mcp.json"]
-env     = ["CLAUDE_CODE_EXECUTABLE", "DISABLE_AUTOUPDATER"]
+env     = ["CLAUDE_CODE_EXECUTABLE"]
 
 [provider.codex]
 adapter = "codex-acp"
@@ -102,6 +105,30 @@ What every provider must do; the host holds each row:
 
 Optional, hidden when missing: past sessions, models, efforts, modes.
 
+**Claude** ([decision](docs/decisions/2026-11-12-claude-own-cli.md)) runs as Detached →
+`claude-agent-acp` (the Agent SDK) → the user's own `claude` → Anthropic, as OpenCode's built-in
+provider does.
+- **The CLI is the user's.**
+  - It is installed by Anthropic's official installer, which the Agents page runs or links to, and
+    it updates itself. Detached never ships or downloads a Claude CLI.
+  - The adapter gets it through `CLAUDE_CODE_EXECUTABLE`; the spike verified that.
+  - `min_cli` is checked before every session, and a read-only participant refuses below it, since
+    an older CLI may ignore the sandbox, `strictMcpConfig` or `settingSources`.
+- **Login.**
+  - The user runs `claude /login` (or `claude auth login`) in a Detached terminal tab.
+  - Any login type is accepted: subscription, API key, cloud.
+  - Detached never reads the saved login, passes a token, or sits between the CLI and Anthropic.
+    It uses the public SDK only, through the adapter.
+- **Name.** The UI says "Claude Agent", never "Claude Code", per the SDK's branding guidelines.
+- **Cost.**
+  - A subscription session shows its cost as $0 and its plan limits.
+  - The pool a session draws from is shown when the CLI reports it, so a returning separate "Agent
+    SDK credit" pool is visible.
+  - "Extra usage" and "out of extra usage" errors get a clear message naming the pool and the
+    fallback.
+- **The documented fallback** that stays on plan limits whatever the SDK's terms is the official
+  `claude` in a Detached terminal tab.
+
 ## 3. Adapters: install and update
 
 Node-free, from the Settings "Agents" page; built in step H3.
@@ -119,25 +146,22 @@ Node-free, from the Settings "Agents" page; built in step H3.
     default). A manual install may take it at once.
 - **Download.** Size and sha256 are checked before extract. Extraction refuses any entry that
   leaves its folder (path traversal). The folder is installed by an atomic rename.
-- **Claude**: the adapter's GitHub release archive (a bun-compiled `claude-agent-acp` beside the
-  CLI, 177–209 MB).
-  - Our copy runs with `DISABLE_AUTOUPDATER=1`.
-  - "Use my own claude" points `CLAUDE_CODE_EXECUTABLE` at the found CLI, checked against
-    `min_cli`. It is never used for read-only participants: an older CLI may ignore the sandbox,
-    `strictMcpConfig` or `settingSources`.
-- **Codex**: first check upstream for a native `codex-acp` binary (an earlier Zed `codex-acp` was
-  Rust).
+- **Claude's adapter** is our own `bun build --compile` of `claude-agent-acp`, pinned by its
+  lockfile, with its license file shipped. Upstream's Node-free archive (177–209 MB) bundles a CLI
+  we would not use. The CLI is the user's (§2); H0b checks that the adapter runs under bun.
+- **Codex's adapter**: first check upstream for a native `codex-acp` binary (an earlier Zed
+  `codex-acp` was Rust).
   - If there is one: its release assets.
-  - Otherwise: our CI builds `codex-acp` with `bun build --compile`, pinned by its lockfile, and
-    ships its license file.
+  - Otherwise: the same lockfile-pinned bun build, with its license file.
   - It runs the user's `codex` through `CODEX_PATH`.
 - **No "latest from npm".**
 - **Versions side by side.**
   - A new version starts its own adapter process.
   - Running sessions finish on the old one.
   - The previous version is kept for rollback; older ones are removed.
-- **CI vetting** on each catalog bump: download, verify, `initialize`, and Claude's `session/new`,
-  which needs no login (the spike's CI did it).
+- **CI vetting** on each catalog bump: download, verify, install `claude` with the official
+  installer, run `initialize` and Claude's `session/new`, which needs no login (the spike's CI did
+  it).
   - Without a paid key that is all. Codex's `session/new` needs a login, and no prompt turn runs.
   - With a test key budgeted by the owner, one turn per adapter is added.
 - **Windows**: SmartScreen and Defender on a downloaded, never-run executable is an owner check
@@ -422,7 +446,8 @@ Later steps add to the SDL:
 | Approval cards, questions | `request_permission`, elicitation | `elicitation.form` declared |
 | Context ring | `usage_update {used, size}` | **the breakdown by category is dropped** |
 | Plan limits in the bar | `_claude/rateLimit` warnings, `/usage` as markdown | `/usage` sent to a utility session (it answers without the model), parsed against the pinned adapter with a test; unknown when the parse fails; Codex unknown |
-| Account and plan | `_auth/status_update` | none |
+| Account and plan | `_auth/status_update` | the pool a session draws from, when reported (§2) |
+| The name | "Claude" | "Claude Agent" |
 | Untrusted repo | `settingSources: ["user"]` | none |
 | `ConfigChange` block | — | **lost**: a trusted repo keeps a window, and an agent editing its own `.claude/settings.json` ends its session (§4) |
 | Env allowlist, EOF as kill, `.env` deny, always-rules in the session | §1, §2, §5 | none |
@@ -456,23 +481,9 @@ back.
 | H9 | Processes and the env store | H5 | the Processes app |
 | H10 | Messages, groups, `watch` | H9 | agents talk |
 | H11 | The chat on ACP | H5, H8 | the chat on ACP |
-| H12 | Release | all, and choice 1 | 0.6.0 |
+| H12 | Release | all | 0.6.0 |
 
-**Choice 1 — public builds and the claude.ai login.** PLAN-EXTENSIBLE says that before any public
-build a provider runs only on an API key, and refuses `apiKeySource` other than
-`ANTHROPIC_API_KEY`. Both adapters reuse the user's subscription logins.
-- **A. Keep the rule.**
-  - Public builds run Claude only on an API key, and Codex only on an API-key login; H4 adds the
-    gate and its test.
-  - Subscription users cannot use agents in a public build.
-  - The limits bar (`/usage`, subscription data) shows nothing there.
-  - Personal builds are unchanged.
-- **B. Ask Anthropic and OpenAI** whether a client may run their CLIs on the user's own
-  subscription login.
-  - On a yes, a decision file drops the rule and §16 edits PLAN-EXTENSIBLE.
-  - Until then, H12 waits or ships under A.
-
-H12 cannot start without this choice.
+Choice 1, Claude's login in public builds, was settled on 2026-11-12 (§2, H12).
 
 **Choice 2 — where the chat moves to ACP.**
 - **A. H11 stays last.**
@@ -538,7 +549,8 @@ settings, ops and invalidation findings.
   - step 1's sidecar, private protocol and "current folder" (H4, H11);
   - the second slice's tools (H5);
   - step 4's terminal env (H9);
-  - the public-build rule (choice 1).
+  - the public-build rule: it goes, per the 2026-11-12 decision (H12).
+  - "UI text says Claude" becomes "Claude Agent" (H3).
 - **PLAN-NATIVE:** the chat's contract and the Layout's agent lines.
 - **docs/BACKLOG.md:** the env store and `detached env run` (H9).
 - **README:** what a user installs (H12).
@@ -580,8 +592,9 @@ Linux and Windows, the Linux sandbox, any Codex row live. Those are H0b.
 
 ### Step H0b. Spike 0b — pending the owner's yes (choice 3)
 
-The same throwaway branch, on the Claude release archive over `ByteStreams`, with a test key on
-macOS, Linux (Ubuntu 22.04 and 24.04) and Windows, and Codex logged in on the owner's Mac.
+The same throwaway branch, on our bun-compiled `claude-agent-acp` over `ByteStreams` against
+`claude` from the official installer, with a test login on macOS, Linux (Ubuntu 22.04 and 24.04)
+and Windows, and Codex logged in on the owner's Mac.
 
 | # | Question | If | Then |
 | --- | --- | --- | --- |
@@ -593,13 +606,14 @@ macOS, Linux (Ubuntu 22.04 and 24.04) and Windows, and Codex logged in on the ow
 | 6 | `--mcp-config` in argv: `ps -ww` shows the URL; the single-use binding refuses a second client | the CLI reconnects with a new `initialize` | binding moves to the peer process (the CLI's pid from the adapter's children) |
 | 7 | Codex live: the `read-only` sandbox (write, egress, cross-read), `turn/interrupt`, HTTP MCP, a same-named server skipped, whether force-trusting pinned trees adds entries to `~/.codex/config.toml` | entries pile up | Codex participants run with a host-owned `CODEX_HOME` beside a copy of the login |
 | 8 | `_session/async_task/stop`; `session/close` returns the CLI's memory; the `.env` deny through `disallowedTools` | one fails | §2's and §5's rows change |
+| 9 | `claude-agent-acp` built with `bun build --compile` runs a session, a turn, cancel and load as under Node, against the user's `claude` through `CLAUDE_CODE_EXECUTABLE` | it fails under bun | Claude's adapter ships upstream's archive with its CLI unused, or Node becomes a stated requirement; the owner decides |
 
 Done when every row is answered here.
 
 ### Step H1. The owner accepts the plans
 
-Both plans, after round 02 has no major finding. The owner decides choices 1–3 and the Windows
-choice, and accepts the six write decisions; each goes to `docs/decisions/`.
+Both plans, after round 02 has no major finding. The owner decides choices 2 and 3 and the
+Windows choice, and accepts the six write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -631,8 +645,9 @@ Work:
 2. The downloader: verify, a path-traversal guard, atomic rename.
 3. The cool-down.
 4. Side-by-side versions with rollback.
-5. `DISABLE_AUTOUPDATER` for our CLI.
-6. "My own claude" with `min_cli`.
+5. Claude: the bun build of `claude-agent-acp`; the user's `claude` found or installed through
+   Anthropic's installer, checked against `min_cli`; the login in a terminal tab.
+6. The "Claude Agent" name, the pool and extra-usage messages (§2).
 7. Login from the manifest.
 8. The Codex build per §3.
 9. The CI vetting workflow.
@@ -646,7 +661,10 @@ Tests:
 - an entry outside `min_app`/`max_app` is ignored;
 - an old version keeps serving its sessions while a new one starts;
 - rollback restarts on the kept version;
-- "my own claude" below `min_cli` is refused, and is never offered to read-only participants.
+- a `claude` below `min_cli` refuses a read-only participant and warns a chat;
+- no Claude CLI is downloaded or shipped, and no login file is read (the fake CLI records reads);
+- an "out of extra usage" error from the fake shows the pool and the fallback;
+- the UI never says "Claude Code".
 
 Done when a clean temp config installs both adapters from the catalog and logs in.
 
@@ -659,7 +677,7 @@ Work:
 2. Manifests and §2's rows.
 3. `kernel::Session` without a view: start, prompt, stream, cancel, load, end; §6's sequences.
 4. §5's permissions, the `.env` deny.
-5. The minimal Session view, if choice 2 is A.
+5. The minimal Session view, if choice 2 keeps H11 last.
 6. `bin/fake_acp.rs`, a scripted agent that:
    - streams, stalls and dies;
    - asks permission;
@@ -808,8 +826,14 @@ Work:
 
 ### Step H12. Release
 
-Choice 1 applied; version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with
-everything.
+Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with everything.
+
+- **Personal builds** use the subscription login now
+  ([decision](docs/decisions/2026-11-12-claude-own-cli.md)).
+- **Before the public release** the owner asks Anthropic for the same permission, citing the
+  OpenCode precedent.
+- **If refused,** public builds take an API key or another login through the same `claude`, with no
+  code change: the CLI owns the login.
 
 ### The agent host is done when
 
