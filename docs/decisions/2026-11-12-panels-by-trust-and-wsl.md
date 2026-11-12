@@ -25,5 +25,5 @@ Decided by the owner on 2026-11-12. These are options E and F of the Windows cho
   - host tools in place of the shell.
 - **Later:** a native Windows sandbox (AppContainer or a restricted token with a proxy allowlist),
   in docs/BACKLOG.md.
-- **Plan:** [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §4; [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md)
-  §5, H0b.
+- **Plan:** [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §4;
+  [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §5, H0b.
