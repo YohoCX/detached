@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–05 are fixed in this text; round 06 is next. No choice is open.
+follow it. Review rounds 01–06 are fixed in this text; round 07 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3).
@@ -158,7 +158,7 @@ hold, the run says so, and the UI shows it before start.
 | 10 | The env store's secrets never reach a participant | host H4: a participant's env has allowlisted names only | — |
 | 11 | A run cannot burn without bound | P2: the budget pauses; attempts stop at 3; the cap holds | — |
 | 12 | Sessions share no temp dir | P2: a participant cannot read or write another session's file in `/tmp/claude-<uid>` or its own peers' `CLAUDE_CODE_TMPDIR` | Windows without WSL, after the consent |
-| 13 | A Fix on an untrusted subject runs none of its code unsandboxed, and the host reads no git config or pointer it wrote | P4, on macOS, Linux and Windows in WSL2: `postinstall` and `.husky/pre-commit` markers never appear; a write outside the tree (Bash, `Write`, `Edit`) and a `curl` fail; every `.git` spelling, a nested repo, a filter, a textconv, a `gpg.program` and a link to a secret do nothing at commit, status or diff; a `.husky/post-merge` the Fix adds does not run at merge | as lines 2–3 |
+| 13 | A Fix on an untrusted subject runs none of its code unsandboxed, and the host reads no git config or pointer it wrote. It gets no `Edit` or `Write`: those run outside the OS sandbox and follow links | P4, on macOS, Linux and Windows in WSL2: `postinstall` and `.husky/pre-commit` markers never appear; a write outside the tree, through a link too, and a `curl` fail; every `.git` spelling, a nested repo, a filter, a textconv, a `gpg.program` and a link to a secret do nothing at commit, status or diff; a `.husky/post-merge` the Fix adds does not run at merge | as lines 2–3 |
 
 ## 5. Reporting through tools
 
@@ -256,9 +256,10 @@ brings back a separate Agent SDK credit pool (host §2).
   earlier `major` or `critical` is still `open`. Minors never gate.
   - **Fixed by hand (P3).** A finding is `fixed` when commits changed its mapped range and the next
     round, which is the re-check for those commits, raised nothing there.
-  - **Fixed through Fix (P4).** It is `fix ready` once its Fix passes its re-check, and `fixed` only
-    once the subject's head contains the Fix commit: a merged local branch, or a head that holds it
-    after the owner pushed and fetched. `fix ready` still gates the loop.
+  - **Fixed through Fix (P4).** It is `fix ready` once its Fix passes its re-check. Whenever the
+    subject's head moves, every `fix ready` finding gets the re-check on that head, and becomes
+    `fixed` when the re-check does not raise it. No commit identity is needed, so a merge, a
+    cherry-pick, a squash or a rebase all count. `fix ready` still gates the loop.
   - A later round that simply does not report it, over an unchanged range, leaves it `open`.
 - **A re-check after a fix** runs the impl lens on the fix's commits, plus the lens that raised the
   finding.
@@ -307,35 +308,44 @@ transcripts/   pointers to the providers' own transcripts
 
     ```
     GIT_INDEX_FILE=<tmp> git --git-dir=<recorded> --work-tree=<tree> \
-        -c core.hooksPath= read-tree <head>
-    GIT_INDEX_FILE=<tmp> git ... checkout-index -a
+        -c core.hooksPath= -c core.autocrlf=false read-tree <head>
+    GIT_INDEX_FILE=<tmp> git ... checkout-index -a -u
     ```
 
     - This applies no `export-ignore` or `export-subst`, so the tree is the head byte for byte.
+    - `-u` keeps stat data in the temp index. Every call here and below runs with the head's own
+      `.gitattributes`, `core.autocrlf=false` and no renormalisation, so an untouched file, CRLF
+      or filtered, produces no diff.
     - The tree has no `.git`.
     - It is written with `core.protectNTFS` and `core.protectHFS` on, and `core.symlinks` as on the
       host, so links are links or text files as git writes them, and never followed.
   - **The agent.** It runs under the participants' sandbox, with writes only inside the tree and no
     egress, and no recipe copy or `install` runs.
-    - Its tools are the shell plus `Read`, `Edit` and `Write`. `Edit` and `Write` run in the CLI
-      outside the OS sandbox, so they are allowed only for paths in the tree, by rules.
-    - The host denies every other write request itself, and never forwards one to the owner.
+    - **Its tools are the sandboxed shell and `Read`; no `Edit`, no `Write`.** Those two run in the
+      CLI outside the OS sandbox, and path rules do not follow links, so a link in the tree could
+      carry a write outside it. The agent edits through the shell, where the OS sandbox holds
+      "writes only inside the tree" on every path, links included.
+    - The host denies any write request itself, and never forwards one to the owner.
   - **Back into git.** When the session ends, the host stages the edited tree into the same temp
     index with `add -A`, with `core.protectNTFS`, `core.protectHFS`, hooks and fsmonitor off. Then
     it runs `write-tree`, and `commit-tree` on the head with signing off, and `update-ref` for the
     new Fix branch.
     - Deletions are carried by `add -A`.
-    - git's `verify_path` refuses `.git` in every spelling: `.GIT`, `.git.`, `GIT~1`, and the NTFS
-      and HFS variants.
-    - `add` records a symlink as a link and never follows it.
-    - A tree that adds a gitlink (a nested repo) is refused.
-  - **We rely on git's own checks.** The found git must be at least 2.45.1, which carries the 2024
-    fixes for symlinks and case-insensitive paths. Below that, an untrusted Fix is refused.
+    - `add` leaves out `.git` in its spellings (`.GIT`, `.git.`, `GIT~1`, the NTFS and HFS
+      variants), sometimes silently, and records a symlink as a link without following it.
+    - Before `commit-tree` the host checks the written tree: an entry named `.git` in any spelling,
+      or a new gitlink (a nested repo such as `sub/.GIT/`), refuses the commit.
+  - **We rely on git's own behaviour, probed rather than versioned.** Distributions backport the
+    2024 fixes (CVE-2024-32002, 32004) without changing the version, so there is no version floor.
+    At the first untrusted Fix, and whenever the git binary changes, Detached runs the bad-path
+    cases against the installed git in a temp repo: each `.git` spelling, `sub/.GIT/`, a gitlink and
+    a symlink. An untrusted Fix is allowed only if every case behaves.
   - **The worktree the owner sees** is checked out from that commit by git, with the same
     protections, in a managed worktree the agent never touched.
   - **On Windows** the tree is in Detached's distro:
     - the subject's head comes in as a bundle;
-    - the export, the agent and the commit run there, with the distro's git (also 2.45.1 or later);
+    - the export, the agent and the commit run there, with the distro's own patched `git` package,
+      which must pass the same probe;
     - the commit comes back as a bundle, fetched into a temp ref;
     - the host makes the Fix branch at that commit and checks it out with Windows' git.
   - **Every host git call on the Fix's worktree** uses `--git-dir` and `--work-tree` from Detached's
@@ -535,13 +545,15 @@ Tests:
 - threat line 13 on an untrusted subject, on macOS, Linux and Windows in WSL2;
 - an untrusted Fix's agent, on macOS, Linux and Windows in WSL2:
   - writes `.git`, `.GIT`, `.git.`, `GIT~1` and `sub/.GIT/`, each with a `gitdir:` redirect or a
-    config: `add` refuses each, no gitlink is committed, and the worktree's `.git` is unchanged;
+    config: the resulting commit's tree has no `.git` entry in any spelling and no gitlink, and the
+    worktree's `.git` is unchanged;
   - plants a `.gitattributes` filter, a textconv and a `gpg.program`: no marker appears at the
     commit, the status or the card's diff;
   - links `leak -> ~/.ssh/id_test`: the commit holds the link, never the key's bytes;
   - replaces a subject link `lib -> ../../..` with a file: nothing outside the tree changes;
-  - tries `Write` and `Edit` outside the tree: the host denies both and no question reaches the
-    owner;
+  - is offered no `Edit` and no `Write`;
+  - links a file outside the tree and writes through the link from the shell: the sandbox denies
+    it;
 - a subject with `tests/ export-ignore` and an `export-subst` file, and a Fix that edits one
   other file: the export has `tests/` and the unexpanded file, and the commit holds only the edit;
 - a Fix that deletes a file carries the deletion;
@@ -550,7 +562,11 @@ Tests:
 - a remote-branch subject's Fix card offers no Merge and says the branch is kept;
 - Fix, re-check passes, Discard, round 2 omits the finding: it stays `fix ready` and the loop does
   not stop;
-- a git below 2.45.1 refuses an untrusted Fix;
+- the git probe: a git that mishandles any bad-path case refuses an untrusted Fix, and the stock
+  patched git of Ubuntu 22.04, 24.04 and Debian 12 passes;
+- an untouched CRLF file and a filtered file yield an empty Fix diff;
+- a Fix that the owner squashes and rebases onto the subject becomes `fixed` once the subject's head
+  moves and the re-check does not raise it;
 - a merge shows a changed hook file as its own diff and runs no hook;
 - merge fast-forwards only and is refused on a dirty tree or a non-fast-forward subject;
 - nothing pushes;

@@ -12,8 +12,8 @@ Agents as first-class participants of the client:
 (§14).
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01–05 (`.revmux/tasks/agent-host-plan/`) are
-fixed; round 06 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
+their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
+fixed; round 07 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
 built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
