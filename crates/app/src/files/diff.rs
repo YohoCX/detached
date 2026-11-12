@@ -86,11 +86,12 @@ pub struct DiffView {
 impl DiffView {
     pub fn reveal_line(&mut self, line: u32, cx: &mut Context<Self>) {
         self.target = Some(line);
-        if self.last.is_some() {
+        if matches!(self.body, Body::Diff) {
             self.target = None;
             self.reveal = false;
             self.move_to((DiffSide::Modified, line), cx);
         }
+        cx.notify();
     }
 
     pub fn raise(&self, cx: &App) {
@@ -217,7 +218,9 @@ impl DiffView {
         {
             self.move_to(first, cx);
         }
-        if let Some(line) = self.target.take() {
+        if matches!(self.body, Body::Diff)
+            && let Some(line) = self.target.take()
+        {
             self.move_to((DiffSide::Modified, line), cx);
         }
         cx.notify();
@@ -500,6 +503,12 @@ impl Render for DiffView {
                 .code
                 .get_or_insert_with(|| cx.new(|cx| Code::new(window, cx)));
             code.update(cx, |c, cx| c.set(&self.doc.path, &text, keep, window, cx));
+        }
+        if matches!(self.body, Body::Conflict)
+            && let Some(code) = &self.code
+            && let Some(line) = self.target.take()
+        {
+            code.update(cx, |c, cx| c.reveal(line, 1, window, cx));
         }
         if self._numbers.is_none() {
             self._numbers = Some(cx.subscribe_in(&self.state, window, Self::number_pressed));

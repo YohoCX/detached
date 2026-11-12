@@ -129,3 +129,87 @@ fn set_aside_findings_are_folded_and_show_their_verdict(cx: &mut TestAppContext)
     app.click("panel.setAside");
     assert!(app.find("panel.finding.aside").is_none());
 }
+
+#[gpui_kit::test]
+fn panels_action_toggles_its_zone(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| drop(repo(sb, "reviewed")));
+    for shown in [true, false] {
+        assert!(app.update(|w, cx| detached_app::actions::run(w, cx, "panel.panels")));
+        settle(&app);
+        assert_eq!(on_screen(&mut app, "tab.panels"), shown);
+    }
+}
+
+#[gpui_kit::test]
+fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    app.click(("panels.round", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find("panel.finding.bugs+impl-2").is_some()
+    });
+    let tasks = app.sb.path("repos/reviewed/.revmux/tasks");
+    fs::remove_dir_all(&tasks).unwrap();
+    fs::write(&tasks, "not a directory").unwrap();
+    app.click("panels.refresh");
+    wait_until(&mut app, |cx| {
+        cx.find("panels.stale").is_some() && cx.find("panel.stale").is_some()
+    });
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    let error = app.update(|_, cx| {
+        kernel::panel::rounds(cx, &repo)
+            .read(cx)
+            .error
+            .clone()
+            .unwrap()
+    });
+    for id in ["panels.stale", "panel.stale"] {
+        assert_eq!(app.find(id).unwrap().label(), Some(error.as_str()));
+    }
+    assert!(app.find(("panels.round", 0usize)).is_some());
+    assert!(app.find("panel.finding.bugs+impl-2").is_some());
+}
+
+#[gpui_kit::test]
+fn finding_location_reveals_the_line_in_a_conflict_editor(cx: &mut TestAppContext) {
+    use detached_core::git::runner::{Kind, Opts, run};
+
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let path = "crates/core/src/watch.rs";
+        let text = (1..=300).map(|i| format!("line {i}\n")).collect::<String>();
+        fs::create_dir_all(repo.join("crates/core/src")).unwrap();
+        sb.commit(&repo, path, &text, "watcher");
+        sb.git(&repo, &["switch", "-qc", "side"]);
+        sb.commit(&repo, path, &text.replace("line 290\n", "side\n"), "side");
+        sb.git(&repo, &["switch", "-q", "main"]);
+        sb.commit(&repo, path, &text.replace("line 290\n", "main\n"), "main");
+        run(
+            &sb.state.env(),
+            &repo,
+            &["merge", "side"],
+            Kind::Write,
+            Opts::default(),
+        )
+        .unwrap();
+        copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    app.click(("panels.round", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find("panel.location.bugs+impl-2").is_some()
+    });
+    app.click("panel.location.bugs+impl-2");
+    wait_until(&mut app, |cx| cx.find("viewer.conflict").is_some());
+    app.press("shift-end");
+    app.press("secondary-c");
+    assert_eq!(
+        app.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("line 228")
+    );
+}

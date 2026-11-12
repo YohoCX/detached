@@ -9,7 +9,7 @@ use kernel::doc::{DiffDoc, Doc};
 use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
-use crate::actions::{self, Registration};
+use crate::actions::Registration;
 use crate::dock::{self, AppSpec, DocKind};
 use crate::files::{DiffOptions, DiffView, Side};
 use crate::ui::theme::{GAP, text};
@@ -29,13 +29,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         },
     );
     dock::register_doc(cx, "panel", PanelDocs);
-    vec![actions::register(
-        cx,
-        "panel.panels",
-        "Panels",
-        actions::Group::View,
-        |w, cx| dock::open("panels", w, cx),
-    )]
+    vec![]
 }
 
 struct List {
@@ -73,9 +67,11 @@ impl List {
 impl Render for List {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rows = vec![];
+        let mut error = None;
         let mut message = "Select a repository".to_string();
         if let Some(interest) = &self.rounds {
             let resource = interest.read(cx);
+            error = resource.error.clone().filter(|_| resource.value.is_some());
             message = resource.error.clone().unwrap_or_else(|| {
                 if resource.loading() {
                     "Loading rounds…"
@@ -130,6 +126,16 @@ impl Render for List {
                         }
                     })),
             )
+            .when_some(error, |d, e| {
+                d.child(
+                    div()
+                        .id("panels.stale")
+                        .test_support()
+                        .aria_label(e.clone())
+                        .text_color(theme(cx).error)
+                        .child(e),
+                )
+            })
             .child(
                 div()
                     .id("panels.rounds")
@@ -267,6 +273,16 @@ impl Render for RunView {
             .min_w_0()
             .gap(GAP);
         if let Some(run) = run {
+            content = content.when_some(resource.error.clone(), |d, e| {
+                d.child(
+                    div()
+                        .id("panel.stale")
+                        .test_support()
+                        .aria_label(e.clone())
+                        .text_color(theme(cx).error)
+                        .child(e),
+                )
+            });
             content = content
                 .child(div().id("panel.header").test_support().child(format!(
                     "{} / {} · {} · {} · {} recorded tokens",
