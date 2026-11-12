@@ -6,7 +6,7 @@ name: ACP spike 0b
 on:
   push:
     branches: [agent-host/0-spikes]
-    paths: [spikes/acp/**, .github/workflows/acp-spike-0b.yml]
+    paths: [spikes/acp/**, '!spikes/acp/**/*.md', .github/workflows/acp-spike-0b.yml]
   workflow_dispatch:
 
 jobs:

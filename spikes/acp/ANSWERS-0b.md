@@ -20,7 +20,11 @@
 
 **Install type.** The official installer's `claude` 2.1.322, the owner's bun-installed one and the SDK's bundled one are byte-identical (same sha256). The SDK 0.3.322 pins `claudeCodeVersion` 2.1.322. So the install type does not matter; the version does, through `min_cli`.
 
-CI runs: 43193124811, 43193455379, 43195088622, 43196545001 (the last has the WSL rows).
+CI runs of `acp-spike-0b.yml`:
+- 43193455379, 43195088622: Linux rows;
+- 43196545001: Windows natively, mirrored networking;
+- 43198772857 (cancelled in row 12): WSL rows 10, 1 and 11, and the gated sandbox;
+- 43201622901: the final run, row 11's `git diff` workload and row 12.
 
 ## 1. A real turn, cancel mid-command, stdin-close shutdown, job-object kill, on each OS
 
@@ -109,7 +113,7 @@ The host allows every request. The scripted calls:
 - `curl https://example.com`, a `dangerouslyDisableSandbox` write, `Write`;
 - a read and a write in `/tmp/claude-<uid>/`.
 
-The OSes were macOS (Seatbelt), Ubuntu 22.04, and 24.04 with the profile.
+The OSes were macOS (Seatbelt), Ubuntu 22.04, 24.04 with the profile, and WSL2 (row 10).
 
 **What happened:**
 - **Writes:** every one failed. Seatbelt says "operation not permitted", bwrap "Read-only file system", and `Write` is not a tool.
@@ -251,7 +255,7 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
 
 **Ran:**
 - `bun install --frozen-lockfile` of `adapter/package.json`, then `bun build --compile …/dist/index.js`. 0.2 s on macOS, 0.15 s on Linux.
-- **Sizes:** 92 MB (macOS arm64), 112 MB (Linux x64), and a Windows build in CI.
+- **Sizes:** 92 MB (macOS arm64), 112 MB (Linux x64), and a Windows x64 build in CI that ran rows 1 and 10 there.
 - The `claude` is given by `CLAUDE_CODE_EXECUTABLE`:
   - on macOS, the official installer's binary from a temp HOME, run on the owner's login;
   - in CI, the installer's own.
@@ -271,15 +275,86 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
 
 ## 10. Windows: Claude Code's sandbox inside WSL2
 
-<!-- WSL -->
+**Is WSL2 there?** Yes, on `windows-latest` (Windows Server 2025, build 26100):
+- `Vampire/setup-wsl` installed Ubuntu-24.04;
+- `wsl -l -v` shows VERSION 2 on WSL 3.0.3.0 with kernel `6.18.54.1-microsoft-standard-WSL2`;
+- VirtualMachinePlatform and Hyper-V are enabled, so nested virtualization works on the runner.
+
+`SecondLevelAddressTranslationExtensions` reads False, and it did not matter.
+
+**Ran:** inside WSL, with the linux-x64 spike and adapter from the Ubuntu job, `bubblewrap` and `socat` from apt, and `claude` from the official installer: `lifecycle`, then `attack` with `strictAllowlist`. Natively on Windows, the same sandbox options.
+
+**What happened:**
+- **WSL2:**
+  - `bwrap` works with no AppArmor step; WSL's kernel has no Ubuntu restriction.
+  - Every write, every denied read (Bash and file tools) and `curl` failed, exactly as on Ubuntu.
+  - The shared `/tmp/claude-<uid>` hole is there too ("OTHER-SESSION wrote"), with row 3's fix.
+  - Row 1 inside WSL matches Linux: cancel 5 ms, stdin close 20 ms, `claude` 2.5 s, host killed 0.2 s.
+- **Natively:** refused with "sandbox is enabled but the Windows sandbox is not active on this session (feature gate off)".
+- **The gated native sandbox, for the backlog.** 2.1.322 has a native Windows sandbox behind the `tengu_nankeen_kestrel` gate. It is not released and not a plan input.
+  - With the env override `CLAUDE_CODE_NANKEEN_KESTREL=1`, it first asked for provisioning: "Sandbox user is not provisioned … ask your administrator to install the network filters".
+  - The hidden `claude sandbox install` (self-elevating) then created a sandbox user and network filters. It granted that user read on the user's profile except credential stores.
+  - After that: writes in the cwd were denied, and `curl` was refused by the allowlist. Every Bash command still asked.
+
+**Then:** does not fire. WSL2 enforces `denyWrite`, `denyRead` and network deny.
+
+**For the plan:** §5's Windows path stands, with row 3's changes. docs/BACKLOG.md's native sandbox entry can name Claude Code's own gated sandbox, which needs admin provisioning.
 
 ## 11. Windows: a review's speed in WSL's filesystem vs the Windows one
 
-<!-- WSL -->
+**Ran:** in WSL2 on the runner, `git/git` cloned twice (4.6k files): once into `~` (ext4), once into `D:\a\_temp` (reached as `/mnt/d`). Three passes each of `git status`, `git grep`, reading every tracked file, and `grep -r` over `*.c`. The final run adds `git diff HEAD~20` and `rg`.
+
+**What happened** (seconds; three runs):
+
+| | WSL's ext4 | `/mnt/d` |
+| --- | --- | --- |
+| `git status` | 0.01–0.13 | 2.9–3.4 |
+| `git grep` | 0.03 | 4.6–5.3 |
+| read every file | 0.09–0.11 | 12.1–13.1 |
+| `grep -r *.c` | 0.01 | 1.7–1.9 |
+
+Run 43201622901, the scripted workload (`--depth 30` clones):
+
+| | WSL's ext4 | `/mnt/d` |
+| --- | --- | --- |
+| `git diff HEAD~20` | 0.07 (0.37 cold) | 4.2–5.4 |
+| `git status` | 0.02 (0.33 cold) | 4.4–5.7 |
+| read every file | 0.14–0.18 | 16.8–17.8 |
+
+`rg` exited 1 in 0.00 s in both trees, so it read nothing and is not counted.
+
+**Then:** does not fire. WSL's filesystem is 30–450× faster.
+
+**For the plan:** the pinned tree lives in WSL's own filesystem, as §5 says.
 
 ## 12. Windows: the adapter and `claude` inside WSL over stdio, the host's HTTP tool from WSL
 
-<!-- WSL -->
+**Ran** on `windows-latest`:
+- the Windows spike as host, with `ADAPTER="wsl.exe -d Ubuntu-24.04 -- env CLAUDE_CODE_EXECUTABLE=/root/.local/bin/claude /root/bin/claude-agent-acp"` and `WSLENV` carrying the fake API's variables;
+- the fake API and the host's MCP server on Windows, first on loopback, then on all interfaces advertising WSL's gateway address (`FAKE_IP`, `HOST_IP`), without and with an inbound firewall rule for the host;
+- `0b/reach.sh` from WSL against a Windows listener bound to loopback and to all interfaces;
+- mirrored networking through `.wslconfig`.
+
+**What happened:**
+- **Over stdio through `wsl.exe`:** `initialize` and `session/new` worked (1.7–2.1 s).
+- **NAT:**
+  - The Windows host's `127.0.0.1` is not reachable from WSL ("Couldn't connect").
+  - A host listener on all interfaces, reached at the gateway (`172.25.80.1`), timed out: the Windows firewall drops it.
+  - With an inbound rule, the connection is accepted.
+  - With the host on loopback, the turn never reached the fake API, and the CLI retried until the 150 s timeout.
+- **NAT with a firewall rule for the host, both on the gateway:** the CLI in WSL reached the fake API and the host's MCP server.
+  - The server saw `server/discover`, one `initialize` (bound), `tools/list` and the `report_finding` call.
+  - Every request carried `Host: 172.25.80.1:<port>`.
+  - With the API on the gateway and the host tool on loopback, the turn ended and the tool never connected.
+- **Mirrored:** unsupported on this runner. `wsl --shutdown` with `networkingMode=mirrored` gave "The specified request is unsupported. CreateInstance/CreateVm/ConfigureNetworking/0x803b0015 … falling back to networkingMode None", which left WSL with no network at all. Windows Server 2025 here; mirrored mode needs Windows 11 22H2+.
+
+**Then:** fires. NAT mode cannot reach the host on loopback.
+
+**For the plan:**
+- **In NAT mode, the host also listens on the WSL interface,** at the gateway address from `ip route` inside the distro. It keeps the same single-use secret binding. The spike bound all interfaces; binding that one address alone, which keeps the port off the LAN, is not tested.
+- **The `Host` check accepts that address.**
+- **The installer adds an inbound firewall rule** for the app on that interface (admin, once). Without it the connection is dropped.
+- **Mirrored mode is untested:** an owner check on Windows 11.
 
 ## Also found
 
@@ -299,10 +374,13 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
    ```
 
    It runs `read-only` through the adapter (write, egress, cross-read), `turn/interrupt` mid-command, an HTTP MCP call, and the `[projects]` count before and after. It costs a few cents on the default model.
-2. **Windows rows the runner cannot answer:** listed under 10–12.
+2. **Windows 11 (the owner's machine; CI's Server 2025 cannot):**
+   - mirrored networking with the host on `127.0.0.1` (row 12);
+   - whether Windows 11's Hyper-V firewall for WSL drops the gateway listener the way Server 2025's firewall did.
 
 ## Surprises
 
+- **WSL2 runs on GitHub's `windows-latest`** (nested virtualization included), but mirrored networking does not.
 - **`/tmp/claude-<uid>` is shared and writable inside Claude's sandbox:** a cross-read and write channel between every session of the user (row 3).
 - **Network deny needs `strictAllowlist`.** Otherwise each new host is a permission request.
 - **Codex's permission profiles can deny reads.** The plan said they cannot.
