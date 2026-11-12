@@ -3,7 +3,7 @@
 //! Env: AGENT, ADAPTERS, ADAPTER (a command line), PASS (extra env names), CWD, LOG, CAPS (client
 //! capabilities JSON), MCP (stdio|http), MCP_NAME, PS, META (session/new `_meta`), MODE,
 //! CONFIG (k=v,..), PERM (allow|deny|readonly), LOAD (session id), N, CANCEL_AFTER, CLOSE_AFTER,
-//! ABORT_AFTER, STEER, STEER_AFTER, EXT, RSS, HOLD, QUIET, FAKE (script file), JOB, CHECK (markers), HOST_IP,
+//! ABORT_AFTER, STEER, STEER_AFTER, EXT, RSS, HOLD, QUIET, FAKE (script file), FAKE_IP, JOB, CHECK (markers), HOST_IP,
 //! CHECK_TURN (a marker after each turn), CHECK_EXT (after EXT).
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::*;
@@ -290,10 +290,10 @@ fn job(_: &Child) {
 #[cfg(not(windows))]
 fn close_job() {}
 
-/// A listener on loopback, or on every interface when HOST_IP names the address to advertise
-/// (a WSL guest in NAT mode reaches the host only through its gateway address).
-fn listen() -> (std::net::TcpListener, String) {
-    let ip = env("HOST_IP");
+/// A listener on loopback, or on every interface when the env var `var` names the address to
+/// advertise (a WSL guest in NAT mode reaches the host only through its gateway address).
+fn listen(var: &str) -> (std::net::TcpListener, String) {
+    let ip = env(var);
     let l = std::net::TcpListener::bind(if ip.is_empty() {
         "127.0.0.1:0"
     } else {

@@ -202,7 +202,7 @@ jobs:
         run: |
           $lo = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 47123); $lo.Start()
           $any = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 47125); $any.Start()
-          $p = wsl -d Ubuntu-24.04 -- wslpath -a "$env:GITHUB_WORKSPACE/spikes/acp/0b/reach.sh"
+          $p = wsl -d Ubuntu-24.04 -- wslpath -a ($env:GITHUB_WORKSPACE.Replace('\', '/') + "/spikes/acp/0b/reach.sh")
           "loopback-bound:"; wsl -d Ubuntu-24.04 -- bash $p 47123
           "bound to all interfaces:"; wsl -d Ubuntu-24.04 -- bash $p 47125
           New-NetFirewallRule -DisplayName spike0b-wsl -Direction Inbound -LocalPort 47125 -Protocol TCP -Action Allow | Out-Null
@@ -223,9 +223,11 @@ jobs:
             META='{"claudeCode":{"options":{"settingSources":[],"strictMcpConfig":true,"allowedTools":["mcp__detached-host-abc123__*"]}}}' \
               ADAPTER="wsl.exe -d Ubuntu-24.04 -- env CLAUDE_CODE_EXECUTABLE=/root/.local/bin/claude /root/bin/claude-agent-acp" \
               CWD=/root MCP=http MCP_NAME=detached-host-abc123 MODE=default PERM=deny FAKE=spikes/acp/0b/mcp.json \
-              "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|"name"|ERROR|TEXT' | cut -c1-250
+              timeout 150 "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|"name"|ERROR|TEXT' | cut -c1-250
+            echo "exit ${PIPESTATUS[0]}"
           }
-          echo "## host on loopback"; (setup wslnat; run)
-          echo "## host on all interfaces, advertised as the gateway"; (setup wslgw; HOST_IP=$gw run)
+          echo "## both on loopback (the CLI in WSL cannot reach the fake API either)"; (setup wslnat; run)
+          echo "## both on all interfaces, advertised as the gateway, no firewall rule"; (setup wslgw; FAKE_IP=$gw HOST_IP=$gw run)
           powershell -NoProfile -Command "New-NetFirewallRule -DisplayName spike0b-acp -Direction Inbound -Program '$(cygpath -w "$SPIKE")' -Action Allow | Out-Null"
-          echo "## the same, with a firewall rule for the host"; (setup wslfw; HOST_IP=$gw run)
+          echo "## with a firewall rule: the API on the gateway, the host tool on loopback"; (setup wslfwlo; FAKE_IP=$gw run)
+          echo "## with a firewall rule: both on the gateway"; (setup wslfw; FAKE_IP=$gw HOST_IP=$gw run)

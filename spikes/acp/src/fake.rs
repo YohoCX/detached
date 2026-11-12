@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use std::io::Write;
 
 pub fn serve(script: Value, log: String) -> String {
-    let (listener, addr) = crate::listen();
+    let (listener, addr) = crate::listen("FAKE_IP");
     let url = format!("http://{addr}");
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
