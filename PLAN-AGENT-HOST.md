@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–07); round 08 is next, then H1. No choice is open (§14).
+fixed (rounds 01–08); round 09 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -208,8 +208,8 @@ a session loads none of it.
 - **Acceptance** is stored against a hash of a tree's trust files, per provider.
 - **Trust marks** for panels and Fix (a workspace, a repo, "include forks", a branch;
   PLAN-PANELS §3) are personal and per machine, stored in config and never in `.detached/`. They
-  decide orchestrator mode or the sandboxed clone (§5); a tree's trust files still need acceptance
-  either way.
+  decide orchestrator mode or the read-only sandbox (§5); a tree's trust files still need
+  acceptance either way.
 - **Which tree.** A session checks the tree it runs in: the repo, a pinned panel tree, or a Fix
   worktree. So a reviewed branch whose `.claude/settings.json` differs from the accepted one is
   not trusted.
@@ -245,117 +245,51 @@ a session loads none of it.
 - **Orchestrator mode for trusted work**
   ([decision](docs/decisions/2026-11-12-orchestrator-mode.md)).
   - Over a trusted subject (PLAN-PANELS §3: a workspace or repo the owner marked, or a marked
-    branch), participants and Fix agents run with no sandbox and no permission prompts
+    branch), finders and Fix agents run with no sandbox and no permission prompts
     (`bypassPermissions`), each in its own worktree on its own branch.
   - The owner reviews their commits and merges what he wants. That is the owner's call.
-- **Isolation applies only to an untrusted subject**, and only to what a commit review cannot undo:
-  reading secrets, network egress, outward actions.
-  - Its sessions run free inside a full clone of their own: shell, file tools, commits, their own
-    hooks.
-  - The sandbox denies writes outside the clone, reads outside it except what the CLI needs, and
-    egress from tools except the registries the owner opened for the run.
-  - H0b tested the sandbox on macOS, Ubuntu 22.04 and 24.04, and WSL2.
+  - Codex there runs in `workspace-write` or full access. Its `workspace-write` also allows `/tmp`
+    and `$TMPDIR`, which is accepted on trusted work.
+- **An untrusted subject gets a sandboxed, read-only review**
+  ([decision](docs/decisions/2026-11-12-untrusted-read-only.md)). Participants have no write, no
+  egress from tools, and no cross-read. H0b tested this on macOS, Ubuntu 22.04 and 24.04, and WSL2.
   - **Claude:**
-    - `tools: [Read, Edit, Write, Grep, Glob, Bash]`. The file tools run in the CLI outside the OS
-      sandbox, so `Edit(..)` and `Write(..)` rules limit them to the clone, and the host denies any
-      other write request. Whether those rules hold through a link is P2's test (PLAN-PANELS §4,
-      line 2). If they do not, `Edit` and `Write` are dropped and the agent edits through the shell;
+    - `tools: [Read, Grep, Glob, Bash]`, plus the host tools;
     - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed: true,
-      allowUnsandboxedCommands: false, filesystem.allowWrite: [clone, its temp dir],
-      filesystem.denyRead: [..], network: {strictAllowlist: true, allowedDomains: [registries
-      opened for the run]}}`. Without `strictAllowlist`, an unlisted host becomes a permission
-      request; the host rejects every such request anyway;
+      allowUnsandboxedCommands: false, filesystem.denyWrite: [cwd], filesystem.denyRead: [..],
+      network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
+      permission request; the host rejects every such request anyway;
     - `Read(..)` deny rules for the same paths;
     - its own `CLAUDE_CODE_TMPDIR` at `data/tmp/<run>/<participant>/`, outside the run record (in
       the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every Claude session of
       the user and is readable and writable inside the sandbox, so it is denied.
 
-    The denied reads:
-    - **all of `$HOME`**, other users' folders, and `/Volumes` on macOS, except what the CLI needs:
-      its config dir (a temp dir the host sets), its clone, and the session's temp dir. A list of
-      known stores would always miss one;
-    - other participants' clones and trees;
-    - the run records: `<git common dir>/detached/`;
-    - `/tmp/claude-<uid>`;
+    The denied reads are an enumerated list. `$HOME` is not denied as a whole, so toolchains under
+    it stay readable:
+    - secret stores:
+      - `~/.ssh`, `~/.aws`, `~/.config/gh`;
+      - `~/.git-credentials`, `~/.config/git/credentials`;
+      - `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials*`;
+      - `~/.docker/config.json`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`;
+      - the Keychain files (`~/Library/Keychains`);
+    - other sessions' data:
+      - the CLI's transcripts (`~/.claude/projects`);
+      - Codex's sessions;
+      - `/tmp/claude-<uid>`.
+
+      The rest of the CLI's config dir stays the user's, so the login works. Spike 0b row 3 ran
+      the same: `~/.claude/projects` denied, the config dir otherwise left to the CLI;
+    - other participants' trees, the run records (`<git common dir>/detached/`), the data tier's
+      other runs, and `data/tmp/` except the participant's own directory;
     - the main checkout's `.env*`;
-    - the data tier's other runs, and `data/tmp/` except the participant's own directory;
     - `/mnt` under WSL.
 
-    If the sandbox cannot express "deny home except", the fallback is an enumerated list that
-    includes at least:
-    - `~/.ssh`, `~/.aws`, `~/.config/gh`;
-    - `~/.git-credentials`, `~/.config/git/credentials`;
-    - `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials*`;
-    - `~/.docker/config.json`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`;
-    - the Keychain files (`~/Library/Keychains`);
-    - `~/.claude*` other than the session's own, and Codex's sessions.
-
-    P2 records which form holds, and threat line 4's test seeds a target in each class.
-
-    If the sandbox cannot allow a path under a denied parent, each participant's tmp directory
-    gets a random name under a parent of mode 0711, which cannot be listed. P2's line-12 test
-    decides which.
-
-    With `autoAllowBashIfSandboxed` on, no Bash command asks; the escape flag still ran sandboxed.
-  - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
-    `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
-    - **22.04:** `sudo apt install bubblewrap socat`.
-    - **24.04:** the same, plus an AppArmor profile for `bwrap`, written to `/etc/apparmor.d/bwrap`
-      and loaded with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. The alternative is
-      `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, which holds until reboot.
-
-      ```
-      abi <abi/4.0>,
-      include <tunables/global>
-      profile bwrap /usr/bin/bwrap flags=(unconfined) {
-        userns,
-        include if exists <local/bwrap>
-      }
-      ```
-    - **Codex on 24.04:** its bundled `bwrap` needs the sysctl, or every command fails closed.
-  - **Windows:** Claude's sandbox does not run natively (an unreleased native sandbox is gated off),
-    so an isolated Claude participant runs in WSL2, where the Linux sandbox enforces everything
-    above (H0b row 10). It runs in **Detached's own distro**, `detached`, made by P2.
-    - **Its `wsl.conf`** has `[interop] enabled=false` and `[automount] enabled=false`.
-      - Without interop, no Windows binary (`cmd.exe`, `powershell.exe`) runs from inside, outside
-        bubblewrap.
-      - Without automount, no Windows path (run records, `%USERPROFILE%\.ssh`, the data tier, a
-        checkout's `.env`) is under `/mnt` to read. `/mnt` is in the denied reads as well.
-    - **What the distro holds.**
-      - The Linux adapter artifact, installed by H3's downloader through `wsl.exe`.
-      - The user's `claude` from the official installer, checked against `min_cli` there, and its
-        login run in a `wsl.exe -d detached` terminal tab.
-      - `bubblewrap`, `socat` and `git`.
-      - Each participant's `CLAUDE_CODE_TMPDIR`.
-    - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
-      over stdio, the variables passed through `WSLENV`.
-    - **The pinned tree** is streamed in as a `git bundle` of the subject's SHA, so no mount is
-      needed. The distro's filesystem is 30–450× faster than `/mnt/<drive>`.
-    - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
-      also listens on the WSL gateway address (from `ip route` in the distro), with the same
-      secret binding; the `Host` check accepts that address.
-      - Binding that one address, which keeps the port off the LAN, is unverified; P2 tests it.
-      - An inbound firewall rule for it comes from a one-time elevated step: Detached asks on the
-        first untrusted WSL run and runs `netsh advfirewall firewall add rule …` through a UAC
-        prompt. The per-user NSIS installer and its silent updates never elevate.
-      - Mirrored networking and Windows 11's Hyper-V firewall are owner checks: CI's Server 2025
-        cannot run them.
-    - **"WSL ready"** means:
-      - the distro exists with interop and automount off;
-      - the adapter is installed;
-      - `claude` meets `min_cli` and is logged in;
-      - `bubblewrap`, `socat` and `git` are there;
-      - the firewall rule exists.
-
-      The panel's start screen checks each and offers its fix. Without WSL at all, it offers to
-      install it, or to run unisolated after a consent that names PLAN-PANELS §4's lines 2–4
-      and 12.
-  - **Codex:** the `workspace-write` sandbox in its clone (writes there only, no network), with a
-    permission profile that also denies reads: `[permissions.reviewer] extends = ":workspace-write"`
-    (or `":read-only"` for a review that writes nothing), and under
+    Threat line 4's test seeds a target in each class.
+  - **Codex:** `read-only` (no write, no network) with a permission profile that also denies reads
+    (spike 0b row 7): `[permissions.reviewer] extends = ":read-only"`, and under
     `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
-    - The read denies blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter
-      they are checked live in H13a.
+    - That blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter it is
+      checked live in H13a.
     - The host approves host-tool calls and denies every request to leave the sandbox.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
@@ -538,7 +472,7 @@ Later steps add to the SDL:
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
 | config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
-| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, pinned trees (`trees/`), the owner socket, cross-repo panels |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/<run>/`: the pinned tree, and each trusted finder's `git worktree add`), the owner socket, cross-repo panels |
 | cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
 | repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
@@ -662,8 +596,8 @@ The owner's choices, settled on 2026-11-12
 3. **Spike 0b runs before H1**, and H1 waits for its answers.
 
 4. **Windows panels**: isolation by trust, an untrusted subject through WSL2 (PLAN-PANELS §3).
-5. **Orchestrator mode and trust by workspace or repo**: trusted work runs free on its own branch,
-   untrusted work free inside a sandboxed clone (§5, PLAN-PANELS §3, §12).
+5. **Orchestrator mode and trust by workspace or repo**: trusted work runs free on its own branch;
+   an untrusted subject gets a sandboxed, read-only review and no Fix (§5, PLAN-PANELS §3, §12).
 
 ## 15. What the first drafts' review asked
 
