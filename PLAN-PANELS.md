@@ -7,7 +7,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 **Status (2026-11-12): draft, not accepted. Review round 01 is fixed in this text; round 02 is
 next. Open for the owner:
 - what a panel does on Windows (§3);
-- the host's three choices (host §14).
+- the host's two open choices (host §14).
 
 revmux and `.revmux/` stay, and whether panels replace revmux is deferred. Nothing is built.**
 
@@ -76,6 +76,8 @@ Every brief says that finding nothing is a valid answer.
     `execute` request, since there such a request asks to leave the sandbox.
 - **Settings**: `settingSources: []`, `strictMcpConfig: true`, and model, effort and mode set
   explicitly. The env is built by the host.
+- **The user's `claude`** must meet `min_cli` (host §2). Below it, a read-only Claude participant
+  refuses to start: an older CLI may ignore the sandbox.
 - **Mixed models**: any role names a provider and a model.
   - Corroboration counts across models only: two Opus sources count once, Opus plus Codex twice.
   - The verifier runs on a model other than the finding's sources.
@@ -159,13 +161,19 @@ done           { nothing_found: bool, note? }
 
 ## 8. Cost
 
+Panels are the client's biggest spender, so the estimate and the cap matter most if Anthropic
+brings back a separate Agent SDK credit pool (host §2).
+
 - **Estimate before start** from earlier runs of the mode and roster on subjects of similar size:
-  tokens, plus USD on Claude. Starting needs a click.
+  tokens, plus USD on Claude, and the pool the runs drew from when the CLI reported it. Starting
+  needs a click.
   - Limits come from the host's `/usage` parse, or show as unknown.
   - `_claude/rateLimit` warnings show live.
 - **Live**: tokens per participant from `usage_update` and each turn's `usage`; Claude's cost per
   turn. A resume re-sends the whole history with a cold cache, and the estimate counts it.
 - **Budget**, optional per run: on reaching it the run pauses and asks.
+- **Out of extra usage**: an "extra usage" or "out of extra usage" error pauses the run's Claude
+  participants with a message naming the pool. It never counts as a failed attempt.
 - **Concurrency**: a global cap on live participants, 4 Claude sessions by default (250–320 MB
   each).
   - Chat turns go first.
