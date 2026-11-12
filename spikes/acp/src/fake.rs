@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use std::io::Write;
 
 pub fn serve(script: Value, log: String) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (listener, addr) = crate::listen();
+    let url = format!("http://{addr}");
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
             let (script, log) = (script.clone(), log.clone());

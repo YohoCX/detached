@@ -86,8 +86,8 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 /// The first `initialize` binds the path to the `Mcp-Session-Id` it returns; any later request
 /// without that id, a second `initialize` included, is refused and logged.
 pub fn http(log: &str, secret: &str) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/mcp/{secret}", listener.local_addr().unwrap());
+    let (listener, addr) = crate::listen();
+    let url = format!("http://{addr}/mcp/{secret}");
     let (log, path) = (log.to_string(), format!("/mcp/{secret}"));
     let bound: Arc<Mutex<Option<String>>> = Default::default();
     std::thread::spawn(move || {

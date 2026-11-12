@@ -145,6 +145,7 @@ jobs:
           . spikes/acp/0b/lib.sh && setup kestrel
           printf '[[{"tool":"Bash","input":{"command":"echo x > w1.txt; ls w1.txt","description":"a"}}],[{"tool":"Bash","input":{"command":"echo x > ~/w3-spike.txt; ls ~/w3-spike.txt; rm -f ~/w3-spike.txt","description":"b"}}],[{"tool":"Bash","input":{"command":"cat ~/.gitconfig | head -1","description":"c"}}],[{"tool":"Bash","input":{"command":"curl -sS -m 8 -o /dev/null -w %%{http_code} https://example.com","description":"d"}}]]' > "$RUNNER_TEMP/k.json"
           export PASS=CLAUDE_CODE_NANKEEN_KESTREL CLAUDE_CODE_NANKEEN_KESTREL=1
+          "$CLAUDE" sandbox install 2>&1 | tail -3
           META="{\"claudeCode\":{\"options\":{\"tools\":[\"Read\",\"Bash\"],\"sandbox\":{\"enabled\":true,\"failIfUnavailable\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"filesystem\":{\"denyWrite\":[\"$(cygpath -m "$RUN/repo")\"],\"denyRead\":[\"$(cygpath -m ~/.gitconfig)\"]},\"network\":{\"strictAllowlist\":true}}}}}" \
             MODE=default PERM=allow FAKE=$RUNNER_TEMP/k.json "$SPIKE" run go 2>&1 | grep -E "PERMISSION|prompt ->|ERROR" | cut -c1-600
           python "$(cygpath -w spikes/acp/0b/results.py)" "$LOG.api"; ls "$RUN/repo"
@@ -179,7 +180,6 @@ jobs:
         if: steps.wsl.outcome == 'success'
         shell: wsl-bash {0}
         run: |
-          set -x
           L=$(wslpath '${{ runner.temp }}')/linux; mkdir -p ~/bin; cp $L/target/debug/acp-spike $L/adapter/claude-agent-acp ~/bin/ 2>/dev/null || cp $(find $L -name acp-spike) $(find $L -name claude-agent-acp) ~/bin/
           chmod +x ~/bin/*; ls -la ~/bin
           curl -fsSL https://claude.ai/install.sh | bash
@@ -193,6 +193,7 @@ jobs:
         if: steps.wsl.outcome == 'success'
         shell: wsl-bash {0}
         run: |
+          set +e
           W=$(wslpath '${{ runner.temp }}')/git-win
           git clone -q --depth 1 https://github.com/git/git ~/git-wsl
           git clone -q --depth 1 https://github.com/git/git "$W"
@@ -201,45 +202,41 @@ jobs:
             for i in 1 2 3; do
               /usr/bin/time -f "status %es" git status -s > /dev/null
               /usr/bin/time -f "grep %es" git grep -c strbuf_addf > /dev/null
-              /usr/bin/time -f "read-all %es" sh -c 'git ls-files -z | xargs -0 cat > /dev/null'
+              /usr/bin/time -f "read-all %es" sh -c 'git ls-files -z | xargs -0 cat > /dev/null 2>&1'
               /usr/bin/time -f "grep-r %es" grep -rc strbuf_addf --include='*.c' . > /dev/null
             done
           done
-      - name: Row 12, a Windows listener seen from WSL (NAT)
+      - name: Row 12, Windows listeners seen from WSL (NAT)
         continue-on-error: true
         if: steps.wsl.outcome == 'success'
         shell: pwsh
         run: |
-          $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 47123); $l.Start()
-          wsl -d Ubuntu-24.04 -- sh -c 'ip route | head -2; H=$(ip route | awk "/default/ {print \$3}"); for u in http://127.0.0.1:47123 http://$H:47123; do curl -s -m 3 -o /dev/null -w "$u -> %{http_code} %{errormsg}\n" $u; done'
-          $l.Stop()
+          $lo = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 47123); $lo.Start()
+          $any = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 47125); $any.Start()
+          $p = wsl -d Ubuntu-24.04 -- wslpath -a "$env:GITHUB_WORKSPACE/spikes/acp/0b/reach.sh"
+          "loopback-bound:"; wsl -d Ubuntu-24.04 -- bash $p 47123
+          "bound to all interfaces:"; wsl -d Ubuntu-24.04 -- bash $p 47125
+          New-NetFirewallRule -DisplayName spike0b-wsl -Direction Inbound -LocalPort 47125 -Protocol TCP -Action Allow | Out-Null
+          "all interfaces, with a firewall rule:"; wsl -d Ubuntu-24.04 -- bash $p 47125
+          Remove-NetFirewallRule -DisplayName spike0b-wsl
+          $lo.Stop(); $any.Stop()
       - name: Row 12, the adapter in WSL over stdio, host on Windows (NAT)
         continue-on-error: true
         if: steps.wsl.outcome == 'success'
+        env:
+          MSYS_NO_PATHCONV: 1
+          MSYS2_ENV_CONV_EXCL: '*'
         run: |
-          . spikes/acp/0b/lib.sh && setup wslhost
-          export WSLENV=ANTHROPIC_BASE_URL/u:ANTHROPIC_API_KEY/u PASS=WSLENV
-          META='{"claudeCode":{"options":{"settingSources":[],"strictMcpConfig":true,"allowedTools":["mcp__detached-host-abc123__*"]}}}' \
-            ADAPTER="wsl.exe -d Ubuntu-24.04 -- env CLAUDE_CODE_EXECUTABLE=/root/.local/bin/claude /root/bin/claude-agent-acp" \
-            CWD=/root MCP=http MCP_NAME=detached-host-abc123 MODE=default PERM=deny FAKE=spikes/acp/0b/mcp.json \
-            "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|ERROR|TEXT' | cut -c1-250
-      - name: Row 12, mirrored networking
-        continue-on-error: true
-        if: steps.wsl.outcome == 'success'
-        shell: pwsh
-        run: |
-          "[wsl2]`nnetworkingMode=mirrored" | Out-File -Encoding ascii "$env:USERPROFILE\.wslconfig"
-          wsl --shutdown
-          $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 47124); $l.Start()
-          wsl -d Ubuntu-24.04 -- sh -c 'ip -br addr | head -4; curl -s -m 3 -o /dev/null -w "127.0.0.1 -> %{http_code} %{errormsg}\n" http://127.0.0.1:47124'
-          $l.Stop()
-      - name: Row 12, the adapter in WSL, mirrored
-        continue-on-error: true
-        if: steps.wsl.outcome == 'success'
-        run: |
-          . spikes/acp/0b/lib.sh && setup wslmirror
-          export WSLENV=ANTHROPIC_BASE_URL/u:ANTHROPIC_API_KEY/u PASS=WSLENV
-          META='{"claudeCode":{"options":{"settingSources":[],"strictMcpConfig":true,"allowedTools":["mcp__detached-host-abc123__*"]}}}' \
-            ADAPTER="wsl.exe -d Ubuntu-24.04 -- env CLAUDE_CODE_EXECUTABLE=/root/.local/bin/claude /root/bin/claude-agent-acp" \
-            CWD=/root MCP=http MCP_NAME=detached-host-abc123 MODE=default PERM=deny FAKE=spikes/acp/0b/mcp.json \
-            "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|ERROR|TEXT' | cut -c1-250
+          . spikes/acp/0b/lib.sh
+          export WSLENV=ANTHROPIC_BASE_URL/u:ANTHROPIC_API_KEY/u PASS=WSLENV,MSYS_NO_PATHCONV,MSYS2_ENV_CONV_EXCL
+          gw=$(wsl.exe -d Ubuntu-24.04 -- ip route show default | cut -d' ' -f3); echo "gateway $gw"
+          run() {
+            META='{"claudeCode":{"options":{"settingSources":[],"strictMcpConfig":true,"allowedTools":["mcp__detached-host-abc123__*"]}}}' \
+              ADAPTER="wsl.exe -d Ubuntu-24.04 -- env CLAUDE_CODE_EXECUTABLE=/root/.local/bin/claude /root/bin/claude-agent-acp" \
+              CWD=/root MCP=http MCP_NAME=detached-host-abc123 MODE=default PERM=deny FAKE=spikes/acp/0b/mcp.json \
+              "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|"name"|ERROR|TEXT' | cut -c1-250
+          }
+          echo "## host on loopback"; (setup wslnat; run)
+          echo "## host on all interfaces, advertised as the gateway"; (setup wslgw; HOST_IP=$gw run)
+          powershell -NoProfile -Command "New-NetFirewallRule -DisplayName spike0b-acp -Direction Inbound -Program '$(cygpath -w "$SPIKE")' -Action Allow | Out-Null"
+          echo "## the same, with a firewall rule for the host"; (setup wslfw; HOST_IP=$gw run)
