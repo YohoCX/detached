@@ -13,8 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed, and round 07 partly: the untrusted Fix's write path (PLAN-PANELS §12) waits for the owner's
-answer on whether it becomes patch-only. Then round 08 and H1. No other choice is open (§14).
+fixed (rounds 01–07); round 08 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -207,6 +206,10 @@ a session loads none of it.
     item: "unparsed".
   - Instruction files (`CLAUDE.md`, `AGENTS.md`) are not items, as today.
 - **Acceptance** is stored against a hash of a tree's trust files, per provider.
+- **Trust marks** for panels and Fix (a workspace, a repo, "include forks", a branch;
+  PLAN-PANELS §3) are personal and per machine, stored in config and never in `.detached/`. They
+  decide orchestrator mode or the sandboxed clone (§5); a tree's trust files still need acceptance
+  either way.
 - **Which tree.** A session checks the tree it runs in: the repo, a pinned panel tree, or a Fix
   worktree. So a reviewed branch whose `.claude/settings.json` differs from the accepted one is
   not trusted.
@@ -237,18 +240,31 @@ a session loads none of it.
   - Globs and interpreters get through (`cat .e*`, `python3 -c "open('.env')"`).
   - So this is a mitigation, and the chat's docs say so. Only the sandbox's `denyRead` enforces it.
 - **Agents keep the shell everywhere**
-  ([decision](docs/decisions/2026-11-12-panels-by-trust-and-wsl.md)). The chat and a panel over a
-  trusted subject run as the chat does, with no sandbox. Host tools (§7) come in addition to the
-  shell, never instead of it.
-- **Isolation applies only to an untrusted subject** (PLAN-PANELS §3). Its participants have no
-  write, no egress from tools, and no cross-read. H0b tested this on macOS, Ubuntu 22.04 and 24.04,
-  and WSL2.
+  ([decision](docs/decisions/2026-11-12-panels-by-trust-and-wsl.md)). Host tools (§7) come in
+  addition to the shell, never instead of it.
+- **Orchestrator mode for trusted work**
+  ([decision](docs/decisions/2026-11-12-orchestrator-mode.md)).
+  - Over a trusted subject (PLAN-PANELS §3: a workspace or repo the owner marked, or a marked
+    branch), participants and Fix agents run with no sandbox and no permission prompts
+    (`bypassPermissions`), each in its own worktree on its own branch.
+  - The owner reviews their commits and merges what he wants. That is the owner's call.
+- **Isolation applies only to an untrusted subject**, and only to what a commit review cannot undo:
+  reading secrets, network egress, outward actions.
+  - Its sessions run free inside a full clone of their own: shell, file tools, commits, their own
+    hooks.
+  - The sandbox denies writes outside the clone, reads outside it except what the CLI needs, and
+    egress from tools except the registries the owner opened for the run.
+  - H0b tested the sandbox on macOS, Ubuntu 22.04 and 24.04, and WSL2.
   - **Claude:**
-    - `tools: [Read, Grep, Glob, Bash]`;
+    - `tools: [Read, Edit, Write, Grep, Glob, Bash]`. The file tools run in the CLI outside the OS
+      sandbox, so `Edit(..)` and `Write(..)` rules limit them to the clone, and the host denies any
+      other write request. Whether those rules hold through a link is P2's test (PLAN-PANELS §4,
+      line 2). If they do not, `Edit` and `Write` are dropped and the agent edits through the shell;
     - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed: true,
-      allowUnsandboxedCommands: false, filesystem.denyWrite: [cwd], filesystem.denyRead: [..],
-      network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
-      permission request; the host rejects every such request anyway;
+      allowUnsandboxedCommands: false, filesystem.allowWrite: [clone, its temp dir],
+      filesystem.denyRead: [..], network: {strictAllowlist: true, allowedDomains: [registries
+      opened for the run]}}`. Without `strictAllowlist`, an unlisted host becomes a permission
+      request; the host rejects every such request anyway;
     - `Read(..)` deny rules for the same paths;
     - its own `CLAUDE_CODE_TMPDIR` at `data/tmp/<run>/<participant>/`, outside the run record (in
       the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every Claude session of
@@ -256,8 +272,9 @@ a session loads none of it.
 
     The denied reads:
     - **all of `$HOME`**, other users' folders, and `/Volumes` on macOS, except what the CLI needs:
-      its config dir (a temp dir the host sets), the tree, and the session's temp dir. A list of
+      its config dir (a temp dir the host sets), its clone, and the session's temp dir. A list of
       known stores would always miss one;
+    - other participants' clones and trees;
     - the run records: `<git common dir>/detached/`;
     - `/tmp/claude-<uid>`;
     - the main checkout's `.env*`;
@@ -333,11 +350,12 @@ a session loads none of it.
       The panel's start screen checks each and offers its fix. Without WSL at all, it offers to
       install it, or to run unisolated after a consent that names PLAN-PANELS §4's lines 2–4
       and 12.
-  - **Codex:** the `read-only` mode's OS sandbox (no write, no network), with a permission profile
-    that also denies reads: `[permissions.reviewer] extends = ":read-only"`, and under
+  - **Codex:** the `workspace-write` sandbox in its clone (writes there only, no network), with a
+    permission profile that also denies reads: `[permissions.reviewer] extends = ":workspace-write"`
+    (or `":read-only"` for a review that writes nothing), and under
     `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
-    - That blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter it is
-      checked live in H13a.
+    - The read denies blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter
+      they are checked live in H13a.
     - The host approves host-tool calls and denies every request to leave the sandbox.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
@@ -644,6 +662,8 @@ The owner's choices, settled on 2026-11-12
 3. **Spike 0b runs before H1**, and H1 waits for its answers.
 
 4. **Windows panels**: isolation by trust, an untrusted subject through WSL2 (PLAN-PANELS §3).
+5. **Orchestrator mode and trust by workspace or repo**: trusted work runs free on its own branch,
+   untrusted work free inside a sandboxed clone (§5, PLAN-PANELS §3, §12).
 
 ## 15. What the first drafts' review asked
 
