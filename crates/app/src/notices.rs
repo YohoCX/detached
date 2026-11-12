@@ -4,10 +4,13 @@ use gpui_kit::base::{SelectableText, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, BoxShadow, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
 
-use detached_core::api;
+use std::path::PathBuf;
+
+use detached_core::error::Result;
+use detached_core::{api, os};
 
 use crate::ui::{self, Icon, text, theme};
 use kernel::activity::{Activity, Level, Notice};
@@ -114,6 +117,15 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
                     )
             }))
     });
+    let open = n.open.map(|file| {
+        ui::button("open", "Open", cx)
+            .test_support()
+            .mt(px(6.))
+            .h(px(24.))
+            .px(px(10.))
+            .text_size(text::SMALL)
+            .on_click(move |_, _, cx| open_file(file.clone(), cx))
+    });
     ui::glass(div(), cx)
         .id(("notice", id as usize))
         .test_support()
@@ -125,11 +137,22 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
         .child(title)
         .children(body)
         .children(files)
+        .children(open)
 }
 
 fn open_in_zed(repo: String, file: String, cx: &mut App) {
     let core = kernel::core(cx).clone();
-    let opened = blocking::run(cx, move || api::open_in_zed(&core, &repo, &file, None));
+    say_error(
+        blocking::run(cx, move || api::open_in_zed(&core, &repo, &file, None)),
+        cx,
+    );
+}
+
+fn open_file(file: PathBuf, cx: &mut App) {
+    say_error(blocking::run(cx, move || os::open_path(&file)), cx);
+}
+
+fn say_error(opened: Task<Result<()>>, cx: &mut App) {
     cx.spawn(async move |cx| {
         if let Err(e) = opened.await {
             cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)));

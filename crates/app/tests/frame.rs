@@ -8,6 +8,7 @@ use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
+use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, VisualTestContext};
 use kernel::invalidate;
 use kernel::repo::Repo;
@@ -236,6 +237,37 @@ fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_s
     assert_eq!(on(cx, "zone.left"), Some(false), "closed");
     cx.click("zone.left");
     assert_eq!(width(cx), Some(px(280.)), "reopens at the width it had");
+}
+
+/// The panic hook's reports, in the config dir the app boots from.
+#[gpui_kit::test]
+fn a_crash_report_newer_than_the_last_noticed_raises_a_notice_once(cx: &mut TestAppContext) {
+    let (seen, new) = (
+        "2026-01-01T00-00-00.000Z.txt",
+        "2026-01-02T00-00-00.000Z.txt",
+    );
+    let mut app = open_app_with(cx, |sb| {
+        let dir = &sb.state.config_dir;
+        write(&dir.join("crashes"), [(seen, "old"), (new, "new")]);
+        let ui = format!(r#"{{"crash.seen": "{seen}"}}"#);
+        std::fs::write(dir.join("ui.json"), ui).unwrap();
+    });
+    let file = app.sb.state.config_dir.join("crashes").join(new);
+    let cx = &mut app.cx;
+    wait_until(cx, |cx| cx.activity(|s, _| !s.notices.is_empty()));
+    let n = cx.activity(|s, _| s.notices[0].clone());
+    assert_eq!(n.title, "Detached closed because of an error");
+    assert_eq!(n.open, Some(file));
+    let open = cx.update(|w, cx| {
+        w.render_frame(cx);
+        w.within(("notice", n.id as usize)).try_find("open")
+    });
+    assert!(open.is_some(), "an Open button");
+
+    let again = cx.update(|_, cx| kernel::crash::check(cx));
+    cx.foreground_executor().block_test(again);
+    settle(cx);
+    assert_eq!(cx.activity(|s, _| s.notices.len()), 1, "noticed once");
 }
 
 #[gpui_kit::test]

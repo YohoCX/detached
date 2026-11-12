@@ -1,6 +1,7 @@
 //! What the app is doing and has said: running ops, notices, the status message, and the log of
 //! errors and warnings the Events app shows.
 
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use detached_core::state::AppState;
@@ -25,7 +26,8 @@ pub enum Level {
     Error,
 }
 
-/// `repo` and `files` list files with an Open in Zed button (checkout conflicts).
+/// `repo` and `files` list files with an Open in Zed button (checkout conflicts); `open` is a file
+/// an Open button shows in its default app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Notice {
     pub id: u64,
@@ -34,6 +36,7 @@ pub struct Notice {
     pub body: Option<String>,
     pub repo: Option<String>,
     pub files: Vec<String>,
+    pub open: Option<PathBuf>,
 }
 
 /// An error or a warning, kept for the Events app.

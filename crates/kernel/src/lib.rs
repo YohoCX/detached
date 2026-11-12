@@ -4,6 +4,7 @@
 
 pub mod activity;
 pub mod blocking;
+pub mod crash;
 pub mod doc;
 pub mod forge;
 pub mod invalidate;
@@ -27,6 +28,7 @@ impl Global for Core {}
 pub fn init(core: Arc<AppState>, cx: &mut App) {
     cx.set_global(Core(core));
     activity::init(cx);
+    crash::check(cx).detach();
     settings::init(cx);
     update::init(cx);
     invalidate::init(cx);
