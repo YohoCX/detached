@@ -19,7 +19,14 @@ pub struct Tiers {
 
 impl Tiers {
     pub fn detect() -> Result<Self> {
-        let mut tiers = Self::overrides(|key| std::env::var_os(key).map(PathBuf::from));
+        let config = paths::override_dir("DETACHED_CONFIG_DIR")?;
+        let data = paths::override_dir("DETACHED_DATA_DIR")?;
+        let cache = paths::override_dir("DETACHED_CACHE_DIR")?;
+        let mut tiers = Self::overrides(|key| match key {
+            "DETACHED_CONFIG_DIR" => config.clone(),
+            "DETACHED_DATA_DIR" => data.clone(),
+            _ => cache.clone(),
+        });
         if tiers.config.as_os_str().is_empty() {
             tiers.config = paths::config_dir()?;
             if tiers.data.as_os_str().is_empty() {
@@ -300,28 +307,57 @@ impl RepoStore {
             return Err(Error::Other("Accept this item before moving it".into()));
         }
         let to = self.path(state, item.kind, scope, &item.name)?;
-        create(&to, &files)?;
-        for rel in files.keys() {
-            let from = if rel.as_os_str().is_empty() {
-                item.path.clone()
-            } else {
-                item.path.join(rel)
-            };
-            let dest = if rel.as_os_str().is_empty() {
-                to.clone()
-            } else {
-                to.join(rel)
-            };
-            fs::set_permissions(dest, fs::metadata(from)?.permissions())?;
+        if to.exists() {
+            return Err(Error::Other("Destination item already exists".into()));
         }
         remember(state, &to, &item.hash)?;
-        if item.path.is_dir() {
-            fs::remove_dir_all(&item.path)?;
-        } else {
-            fs::remove_file(&item.path)?;
+        fs::create_dir_all(to.parent().unwrap())?;
+        match fs::rename(&item.path, &to) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+                copy_move(&item.path, &to, &files, || Ok(()))?;
+            }
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     }
+}
+
+fn copy_move(
+    from: &Path,
+    to: &Path,
+    files: &Files,
+    copied: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
+    let stage = tmp.path().join("item");
+    create(&stage, files)?;
+    for rel in files.keys() {
+        let source = if rel.as_os_str().is_empty() {
+            from.to_path_buf()
+        } else {
+            from.join(rel)
+        };
+        let dest = if rel.as_os_str().is_empty() {
+            stage.clone()
+        } else {
+            stage.join(rel)
+        };
+        fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
+    }
+    fs::rename(&stage, to)?;
+    copied()?;
+    if hash(&read(from)?) != hash(files) {
+        return Err(Error::Other(
+            "Item changed while moving; both copies kept".into(),
+        ));
+    }
+    if from.is_dir() {
+        fs::remove_dir_all(from)?;
+    } else {
+        fs::remove_file(from)?;
+    }
+    Ok(())
 }
 
 fn writable(scope: Scope) -> Result<()> {
@@ -561,6 +597,40 @@ mod tests {
     }
 
     #[test]
+    fn empty_overrides_are_errors() {
+        const CHILD: &str = "DETACHED_EMPTY_OVERRIDE_TEST";
+        if let Ok(key) = std::env::var(CHILD) {
+            assert!(Tiers::detect().is_err());
+            if key == "DETACHED_CONFIG_DIR" {
+                assert!(paths::config_dir().is_err());
+            }
+            return;
+        }
+        let sb = Sandbox::new();
+        for key in [
+            "DETACHED_CONFIG_DIR",
+            "DETACHED_DATA_DIR",
+            "DETACHED_CACHE_DIR",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "store::tests::empty_overrides_are_errors"])
+                .env(CHILD, key)
+                .env("DETACHED_CONFIG_DIR", sb.path("config"))
+                .env_remove("DETACHED_DATA_DIR")
+                .env_remove("DETACHED_CACHE_DIR")
+                .env(key, "")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
     fn os_tiers_use_the_existing_identifier() {
         assert_eq!(IDENTIFIER, "com.w-devs.detached");
         let cache = dirs::cache_dir().unwrap().join(IDENTIFIER);
@@ -698,6 +768,90 @@ mod tests {
             store.load(&sb.state, Kind::Skills, "check", None).unwrap(),
             Some(files)
         );
+    }
+
+    #[test]
+    fn failed_trust_save_leaves_a_move_retryable() {
+        let (sb, store) = setup();
+        store
+            .write(&sb.state, Kind::Roles, "review.md", &file("review"))
+            .unwrap();
+        for scope in [Scope::Shared, Scope::Local] {
+            let item = store.list(&sb.state, Kind::Roles).unwrap().remove(0);
+            let to = store
+                .path(&sb.state, Kind::Roles, scope, &item.name)
+                .unwrap();
+            let settings = sb.state.config_dir.join("settings.json");
+            fs::remove_file(&settings).unwrap();
+            fs::create_dir(&settings).unwrap();
+            assert!(store.move_item(&sb.state, &item).is_err());
+            assert_eq!(read(&item.path).unwrap(), file("review"));
+            assert!(!to.exists());
+            assert_eq!(
+                store
+                    .load(&sb.state, Kind::Roles, &item.name, None)
+                    .unwrap(),
+                Some(file("review"))
+            );
+            fs::remove_dir(&settings).unwrap();
+            store.move_item(&sb.state, &item).unwrap();
+            assert!(!item.path.exists());
+            assert_eq!(read(&to).unwrap(), file("review"));
+            assert_eq!(
+                store
+                    .load(&sb.state, Kind::Roles, &item.name, None)
+                    .unwrap(),
+                Some(file("review"))
+            );
+        }
+    }
+
+    #[test]
+    fn cross_device_copy_keeps_source_edits_and_added_attachments() {
+        let sb = Sandbox::new();
+        for (name, files) in [
+            ("file", file("first")),
+            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
+        ] {
+            let root = sb.dir.path().canonicalize().unwrap();
+            let from = root.join(format!("{name}-source"));
+            let to = root.join(format!("{name}-destination"));
+            create(&from, &files).unwrap();
+            assert!(
+                copy_move(&from, &to, &files, || {
+                    if from.is_dir() {
+                        fs::write(from.join("attachment"), "added")?;
+                    } else {
+                        fs::write(&from, "edited")?;
+                    }
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(read(&to).unwrap(), files);
+            if from.is_dir() {
+                assert_eq!(fs::read(from.join("attachment")).unwrap(), b"added");
+            } else {
+                assert_eq!(read(&from).unwrap(), file("edited"));
+            }
+        }
+    }
+
+    #[test]
+    fn cross_device_copy_removes_only_an_unchanged_source() {
+        let sb = Sandbox::new();
+        for (name, files) in [
+            ("file", file("first")),
+            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
+        ] {
+            let root = sb.dir.path().canonicalize().unwrap();
+            let from = root.join(format!("{name}-source"));
+            let to = root.join(format!("{name}-destination"));
+            create(&from, &files).unwrap();
+            copy_move(&from, &to, &files, || Ok(())).unwrap();
+            assert!(!from.exists());
+            assert_eq!(read(&to).unwrap(), files);
+        }
     }
 
     #[test]
