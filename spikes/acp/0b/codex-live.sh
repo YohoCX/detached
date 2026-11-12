@@ -1,4 +1,4 @@
-# Row 7 on the owner's Codex login (a few cents). From the repo root, after:
+# Row 7 live, deferred until Codex is used: needs the owner's Codex login (a few cents). From the repo root, after:
 #   cargo build --manifest-path spikes/acp/Cargo.toml
 #   (cd spikes/acp/adapter-codex && bun install --frozen-lockfile && bun build --compile node_modules/@agentclientprotocol/codex-acp/dist/index.js --outfile codex-acp)
 #   codex login

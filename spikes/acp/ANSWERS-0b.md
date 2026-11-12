@@ -11,7 +11,7 @@
 - **The client spawns the adapter itself.** It uses `std::process` with an env built from nothing (an allowlist plus `PASS`), over `ByteStreams` on `blocking::Unblock` pipes, and logs every wire line.
 - **A scripted fake Messages API** (`src/fake.rs`) stands in for the model. `FAKE=<script>` points `ANTHROPIC_BASE_URL` at it. The real CLI then runs the scripted tool calls (Bash, Read, Grep, Glob, Write, MCP) with its real permissions and sandbox, at no cost. The fake logs every tool result it gets back, which is the evidence for rows 3, 4 and 8.
 - **The scenarios** are in `0b/lib.sh` (`lifecycle`, `attack`, `mcp`, `codex_sandbox`) and run the same way on macOS, in CI and in WSL.
-- **Real model calls:** Haiku on the owner's login, macOS only, four turns in all, about $0.01. There is no `ANTHROPIC_API_KEY` secret, so CI's real-turn step was skipped.
+- **Real model calls:** Haiku on the owner's subscription through his own `claude`, macOS only, four turns in all, about $0.01. The owner decided on 2026-11-12: no model calls and no secrets in CI. Every Linux and Windows row runs on the fake API, so where a row's real turn can only run on the Mac it says "macOS only for the real turn".
 - **Where:**
   - macOS 27 arm64, this machine;
   - CI: `.github/workflows/acp-spike-0b.yml` on `ubuntu-22.04`, `ubuntu-24.04` and `windows-latest` (Server 2025), with WSL2 inside the Windows job;
@@ -42,7 +42,7 @@ After each, the spike polls for 10 s for any process holding the marker.
 | Windows, no job | **`perl.exe` survives** the cancel and the session | adapter 40 ms, `claude.exe` exits, **`bash.exe` ×2 and `perl.exe` survive** | nothing survived (0.5 s) |
 | Windows, job closed after the adapter's exit | `perl.exe` survives until the job closes, then is gone in 0.5 s | all gone in 0.5 s | all gone in 0.5 s |
 
-A real turn ran on macOS only, and every OS ran the fake turn.
+**macOS only for the real turn.** Every OS ran the fake turn, which drives the same CLI, Bash tool and process tree.
 
 **Then:** fires on Windows for cancel. `session/cancel` ends the turn but not its foreground command; Git Bash's tree outlives both the cancel and `claude.exe`.
 
@@ -188,7 +188,7 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
 
 ## 7. Codex live
 
-**No login here.** These ran without the owner's:
+**Deferred until Codex is used** (the owner's decision). These rows come from the source and from probes that need no login:
 - **Its sandbox, directly.** `codex sandbox -P :read-only` on macOS (Seatbelt), Ubuntu 22.04 and 24.04 (bwrap). That is the `read-only` mode's own permission profile; the adapter's `read-only` mode is the same profile, not run here.
 - **`codex-acp` with a placeholder API-key login.** `echo sk-placeholder | codex login --with-api-key` into a temp `CODEX_HOME`: no real credential, and no request ever reaches OpenAI. With it, `session/new` succeeds and the MCP and trust rows can be seen.
 - **Upstream.** `agentclientprotocol/codex-acp` 2.x (TypeScript) has no release assets. Zed's Rust `codex-acp` stopped at 0.16.0 (2026-06-08). Our bun build is 91 MB, and it answered `initialize` and `session/new`.
@@ -211,9 +211,9 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
   - The only writer is `_codex/hooks/trust` → `configBatchWrite`, which the client calls itself.
 - **Stdin close:** `codex-acp` takes 2.0 s to exit (Claude's adapter takes 20–40 ms).
 
-**Pending the owner's Codex login:** `turn/interrupt` mid-command, and the `read-only` mode through the adapter with a model (write, egress, cross-read). `0b/codex-live.sh` runs both, plus a live HTTP MCP call and the `[projects]` count before and after.
+**Deferred with Codex:** `turn/interrupt` mid-command, and the `read-only` mode through the adapter with a model (write, egress, cross-read). `0b/codex-live.sh` runs both, plus a live HTTP MCP call and the `[projects]` count before and after, once the owner has a Codex login.
 
-**Then:** "entries pile up" does not fire, so far: no `config.toml` write on `session/new`. The live turn is pending.
+**Then:** "entries pile up" does not fire, so far: no `config.toml` write on `session/new`. The live turn is deferred.
 
 **For the plan:**
 - §5's "Codex does not stop cross-reads" changes: a Codex participant gets a permission profile that extends `:read-only` with the same denied paths as Claude's. Reads are then enforced, pending the live check through the adapter.
@@ -257,7 +257,7 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
   - in CI, the installer's own.
 
 **What happened:**
-- **macOS, real Haiku:**
+- **macOS, real Haiku** (macOS only for the real turn):
   - `session/new` in 0.56 s;
   - a turn with a cancel mid-command (`stopReason: cancelled`, the command gone);
   - `session/load` in 446 ms with the history replayed;
@@ -288,7 +288,7 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
 
 ## Pending the owner
 
-1. **Codex login (row 7).** On the Mac, in this worktree:
+1. **Codex, deferred until Codex is used (row 7).** On the Mac, in this worktree:
 
    ```sh
    npm i -g @openai/codex@0.166.0 && codex login
@@ -299,8 +299,7 @@ With those, the threat-model lines 2–4 hold on macOS and Linux.
    ```
 
    It runs `read-only` through the adapter (write, egress, cross-read), `turn/interrupt` mid-command, an HTTP MCP call, and the `[projects]` count before and after. It costs a few cents on the default model.
-2. **`ANTHROPIC_API_KEY` as a repo secret** (`gh secret set ANTHROPIC_API_KEY`). The workflow's "Real turn" step then runs one Haiku turn with a cancel on both Ubuntus. Nothing else needs it: every other row ran on the fake API.
-3. **Windows rows the runner cannot answer:** listed under 10–12 when they apply.
+2. **Windows rows the runner cannot answer:** listed under 10–12.
 
 ## Surprises
 

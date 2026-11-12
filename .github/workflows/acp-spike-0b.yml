@@ -1,5 +1,6 @@
 # Agent-host spike 0b only: the bun-built Claude adapter and the official `claude` on Linux and
-# Windows, on a scripted fake Messages API (no model). Real turns run only with the secret.
+# Windows, on a scripted fake Messages API. No model calls and no secrets: real turns run on the
+# owner's Mac only.
 name: ACP spike 0b
 
 on:
@@ -7,9 +8,6 @@ on:
     branches: [agent-host/0-spikes]
     paths: [spikes/acp/**, .github/workflows/acp-spike-0b.yml]
   workflow_dispatch:
-
-env:
-  HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
 
 jobs:
   linux:
@@ -84,15 +82,6 @@ jobs:
           mkdir -p "$CLAUDE_CODE_TMPDIR"; attack tmp true '{"strictAllowlist": true}'
       - name: Row 4, autoAllowBashIfSandboxed off, no strictAllowlist
         run: . spikes/acp/0b/lib.sh && attack off false
-      - name: Real turn (needs the secret)
-        if: env.HAS_KEY == 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          . spikes/acp/0b/lib.sh && setup real
-          PASS=ANTHROPIC_API_KEY CONFIG=model=haiku MODE=default PERM=allow CANCEL_AFTER=3 CHECK_TURN=$M CHECK=$M,claude-real \
-            "$SPIKE" run "Use the Bash tool to run exactly: perl -e 'sleep 30' $M" 2>&1 \
-            | grep -E "running with|session/cancel|prompt ->|survivors|adapter after|ERROR" | cut -c1-200
       - name: Linux binaries for WSL
         if: matrix.os == 'ubuntu-22.04'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -163,7 +152,7 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: bubblewrap socat git perl curl ca-certificates python3
+          additional-packages: bubblewrap socat git perl curl ca-certificates python3 ripgrep
       - name: WSL version
         continue-on-error: true
         shell: pwsh
@@ -188,22 +177,22 @@ jobs:
           bwrap --ro-bind / / true && echo "bwrap alone: ok" || echo "bwrap alone: failed"
           . "$(wslpath '${{ github.workspace }}')/spikes/acp/0b/lib.sh"
           lifecycle; attack wsl true '{"strictAllowlist": true}'
-      - name: Row 11, a review's file work in WSL's filesystem and on /mnt
+      - name: Row 11, a scripted review workload in WSL's filesystem and on /mnt
         continue-on-error: true
         if: steps.wsl.outcome == 'success'
         shell: wsl-bash {0}
         run: |
           set +e
           W=$(wslpath '${{ runner.temp }}')/git-win
-          git clone -q --depth 1 https://github.com/git/git ~/git-wsl
-          git clone -q --depth 1 https://github.com/git/git "$W"
+          git clone -q --depth 30 https://github.com/git/git ~/git-wsl
+          git clone -q --depth 30 https://github.com/git/git "$W"
           for d in ~/git-wsl "$W"; do
             echo "== $d"; cd "$d"
             for i in 1 2 3; do
-              /usr/bin/time -f "status %es" git status -s > /dev/null
-              /usr/bin/time -f "grep %es" git grep -c strbuf_addf > /dev/null
-              /usr/bin/time -f "read-all %es" sh -c 'git ls-files -z | xargs -0 cat > /dev/null 2>&1'
-              /usr/bin/time -f "grep-r %es" grep -rc strbuf_addf --include='*.c' . > /dev/null
+              /usr/bin/time -f "  git diff HEAD~20 %es" git diff HEAD~20 > /dev/null
+              /usr/bin/time -f "  git status %es" git status -s > /dev/null
+              /usr/bin/time -f "  rg %es" rg -c strbuf_addf > /dev/null
+              /usr/bin/time -f "  read all %es" sh -c 'git ls-files -z | xargs -0 cat > /dev/null 2>&1'
             done
           done
       - name: Row 12, Windows listeners seen from WSL (NAT)
