@@ -8,14 +8,12 @@ Proposed on 2026-11-12, decided at the agent host's H1.
     - For a trusted subject it is a `git worktree add --detach` at
       `data/trees/trusted/<run>/pinned/`, where verifiers read.
     - For an untrusted subject it is not a worktree but an export at
-      `<untrusted root>/<run>/pinned/` (a per-user, per-instance root, mode 0700, host §5), outside
-      the config, data and cache tiers (`read-tree` and
-      `checkout-index` through a temp index), so the repo's git dir never names it. Every
-      participant reads there. It is made with the global and system config off,
-      `GIT_LFS_SKIP_SMUDGE=1`, and every filter's `process` and `smudge` empty, so no filter runs
-      under the subject's attributes. One untrusted run goes at a time, holding a lock file; its
-      folder is deleted at its end, and this instance's unlocked leftovers at startup. A crashed
-      untrusted run starts over.
+      `<untrusted root>/<run>/pinned/` (per-user across instances, 0700, host §5), outside
+      the config, data and cache tiers, so the repo's git dir never names it. Participants read there. Raw Git trees/blobs supply bytes and modes, without filters or archive
+      attributes, with hooks and global/system config off. WSL receives tar entries directly
+      from those objects, preserving symlinks without a Windows checkout. One root lock across
+      instances covers export through session shutdown and deletion; under it, remove leftovers
+      before starting. Waiters create no output; crashed runs start over.
   - **A trusted subject's finders:** each gets its own plain `git worktree add` of a branch
     `detached-run/<run>/<participant>` at that SHA, at
     `data/trees/trusted/<run>/finders/<participant>/`, with hooks off. At the run's end:
@@ -33,5 +31,5 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - a branch that commits a `post-checkout` hook and an LFS filter makes trees with nothing run;
   - the run-end cases;
   - an existing `detached-run` branch refuses the run;
-  - the untrusted export is not a worktree, and an LFS filter in it makes no request;
-  - a second untrusted run waits, and a crashed run's folder is removed at the next start.
+  - exports and reviewer diffs run no filter; WSL preserves Git symlinks and executable modes;
+  - different-config instances serialize with no readable predecessor export or temp output.

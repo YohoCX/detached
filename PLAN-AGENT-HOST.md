@@ -12,8 +12,8 @@ Agents as first-class participants of the client:
 (§14).
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–15); round 16 is next, then H1. No choice is open (§14).
+their answers change are rewritten. Review rounds 01–16 are fixed; H1 is next.
+No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -62,7 +62,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
 - **Core spawns each adapter itself.** `AcpAgent` can only add env vars, and its drop SIGKILLs the
   process group, which orphans a running Bash command. On Windows it kills only the direct child.
 - **One adapter process per provider and version**, with two exceptions:
-  - on Windows each panel run gets its own adapter in its own job (PLAN-PANELS §7);
+  - on native Windows each panel participant attempt gets its own adapter and job (PLAN-PANELS §7);
   - a WSL participant's adapter runs in Detached's distro (§5).
 
   H4's registry is keyed so these fit. The sessions on one adapter share a crash domain: for Claude
@@ -212,9 +212,10 @@ a session loads none of it.
   PLAN-PANELS §3) are personal and per machine, stored in config and never in `.detached/`. They
   decide orchestrator mode or the read-only sandbox (§5); a tree's trust files still need
   acceptance either way.
-- **Which tree.** A session checks the tree it runs in: the repo, a pinned panel tree, or a Fix
-  worktree. So a reviewed branch whose `.claude/settings.json` differs from the accepted one is
-  not trusted.
+- **Which tree.** A session checks its repo, pinned commit or Fix worktree. For untrusted panels,
+  parse raw Git blobs at the pinned SHA, never exported paths: refuse symlink trust entries or
+  ancestors; reject blob sizes or reads over 1 MiB total per scan. Hash the same bytes without filters.
+  A changed `.claude/settings.json` needs acceptance; a refused scan cannot start a participant.
 - **Codex** marks its roots trusted and loads the project layer (from source). So Codex runs only
   in a tree whose trust files hash to an accepted set. A server named like one in the user's
   `config.toml` is skipped silently, so the host's server is `detached-host-<id>`.
@@ -291,24 +292,18 @@ a session loads none of it.
       index, secret-bearing per-run files (`data/private/<run>/`: a trusted run's 0600 MCP config
       and its copied `settings.local.json`, which the `claude` process reads by path, unsandboxed),
       trusted runs' trees, and anything added later, with no nested allow;
-    - **the untrusted run's own folder lives outside the tiers**, in a per-user, per-instance
-      root, `<untrusted root>` = `<base>/detached-<short hash of the config dir>/untrusted/`. Its
-      `<run>/` holds the exported pinned tree and the temp dirs.
-      - `<base>`: `$XDG_RUNTIME_DIR` on Linux, or, when that is unset,
-        `$XDG_CACHE_HOME/com.w-devs.detached-untrusted/` (a sibling of the denied cache tier);
-        `$TMPDIR` on macOS; `%TEMP%` on Windows; the same rules inside the WSL distro.
-      - The root is created with mode 0700. An existing one is refused if it is a symlink (checked
-        with `lstat`), belongs to someone else or is not 0700. The same check runs before each
-        export and before cleanup.
-      - Only one untrusted run goes at a time (P2's queue), and its folder is deleted at its end.
-      - Each live run holds a lock file in its folder.
-      - An untrusted run is never resumed after a crash; it starts over, since exports are cheap.
-      - At startup, cleanup removes this instance's run folders whose lock is not held. It never
-        touches another instance's root; tests, with their own temp config dir, get their own.
-      - The distro's run folders are cleaned only before the next untrusted run, or at startup when
-        the distro is already running; WSL is never booted just to clean.
-      - Within a run, the peers' directories are denied by name, and sessions of an earlier stage
-        are closed before a later stage starts (§6);
+    - **the untrusted root is shared by every instance of this OS user**, outside the tiers:
+      `/tmp/detached-<uid>/untrusted/` on Linux and WSL, `/private/tmp/detached-<uid>/untrusted/`
+      on macOS. Windows uses the distro's root and lock; no Windows staging export.
+      Ignore config/temp overrides. `<run>/` holds the export and temp dirs.
+      - Create root and app-owned parent 0700; refuse symlinks, foreign owners or other modes,
+        at startup, before export and before cleanup.
+      - One root lock serializes all instances from before export through session shutdown and
+        deletion. A waiting instance creates no export or temp output. No per-instance roots.
+      - Under that lock, remove leftovers before starting; crashed runs start over, never resume.
+        At startup clean only if the lock is free; never boot WSL just to clean.
+      - Within a run, deny peers' temp directories by name; close earlier-stage sessions before
+        starting a later stage (§6).
     - the run records: `<git common dir>/detached/`;
     - every workspace root and every repo the app knows, so new repos, worktrees and `.env` files
       under them are covered. A managed worktree sits under a workspace folder
@@ -369,10 +364,9 @@ a session loads none of it.
       - Each participant's `CLAUDE_CODE_TMPDIR`.
     - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
       over stdio, the variables passed through `WSLENV`.
-    - **The pinned tree** is the host's own export (PLAN-PANELS §3, filters off) made on the
-      Windows side, streamed as a tar through `wsl.exe` into `tar -x` in the distro's run folder,
-      then deleted on the Windows side. No mount, bundle or ref is needed. The distro's filesystem
-      is 30–450× faster than `/mnt/<drive>`.
+    - **The pinned tree** is a tar stream built from raw Git trees and blobs (PLAN-PANELS §3),
+      sent through `wsl.exe` to `tar -x` in the distro. Git modes supply symlinks and executable
+      bits; no Windows checkout, mount, bundle or ref is needed.
     - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
       also listens on the WSL gateway address (from `ip route` in the distro), with the same
       secret binding; the `Host` check accepts that address.
@@ -494,7 +488,8 @@ Agents get Detached's data and a closed list of actions as tools.
   - **A panel participant** reads only its run's subject repo and its own findings; in `verify`,
     only the one finding it was given.
   - **An untrusted subject's participant** sees no sessions, no other repo and no MR but its
-    subject.
+    subject. Its revision/diff readers use raw Git blobs, never `cat-file --filters`, textconv,
+    external diff or LFS credentials; P2 bypasses the existing filtered `file_patch` path.
 - **The owner socket**, for the console binary `detached-cli`
   (`crates/app/src/bin/detached-cli.rs`). The GUI binary is `detached`. The packages ship both,
   and Settings has an Install-to-PATH command:
