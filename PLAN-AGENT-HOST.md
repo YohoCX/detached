@@ -12,8 +12,8 @@ Agents as first-class participants of the client:
 (§14).
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01 and 02 (`.revmux/tasks/agent-host-plan/`) are
-fixed; round 03 is next, then H1. No choice is open (§14). Codex stays off until H13. Nothing is
+their answers change are rewritten. Review rounds 01–03 (`.revmux/tasks/agent-host-plan/`) are
+fixed; round 04 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
 built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -59,10 +59,14 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   fields such as `PromptResponse.usage` silently.
 - **Core spawns each adapter itself.** `AcpAgent` can only add env vars, and its drop SIGKILLs the
   process group, which orphans a running Bash command. On Windows it kills only the direct child.
-- **One adapter process per provider and version.** Every session on it shares one crash domain:
-  for Claude that is the owner's chat and every panel participant. An adapter's exit ends each of
-  its sessions with that cause (H4), and panels count it as a failed attempt, never as offline
-  (PLAN-PANELS §7).
+- **One adapter process per provider and version**, with two exceptions:
+  - on Windows each panel run gets its own adapter in its own job (PLAN-PANELS §7);
+  - a WSL participant's adapter runs in Detached's distro (§5).
+
+  H4's registry is keyed so these fit. The sessions on one adapter share a crash domain: for Claude
+  outside those exceptions, that is the owner's chat and every panel participant. An adapter's exit
+  ends each of its sessions with that cause (H4), and panels count it as a failed attempt, never as
+  offline (PLAN-PANELS §7).
 - **Shutdown** closes stdin and waits 5 s before any signal; a killed app gives EOF by itself.
   - Claude's adapter exits in 20–40 ms, Codex's in 2 s.
   - An exit with code 1 on `EPIPE` at shutdown is normal.
@@ -82,7 +86,7 @@ A provider is an adapter and a manifest, built in for Claude and Codex.
 adapter = "claude-agent-acp"           # installed per §3
 name    = "Claude Agent"               # never "Claude Code"
 cli     = "claude"                     # the user's own, found on PATH or set in Settings
-min_cli = "2.1.322"                    # the version spike 0b verified isolation on
+min_cli = "2.1.322"                    # a floor; the catalog entry in use may raise it (§3)
 login   = ["claude", "/login"]         # run in a terminal tab; or ACP's authMethods
 trust   = [".claude/settings.json", ".claude/settings.local.json", ".claude/skills/*/SKILL.md",
            ".claude/commands/**", ".claude/agents/**", ".mcp.json"]
@@ -144,7 +148,16 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - The login command comes from the manifest (or ACP's advertised auth methods) and runs in a
     terminal tab.
 - **The catalog** is `adapters.json`, signed with its own minisign key, not the app's update key.
+  - **Publishing:** its own workflow, `adapters.yml`, triggered by a change to the catalog file,
+    an `adapters-*` tag, or a manual dispatch. It publishes to a fixed URL: the asset of a rolling
+    `adapters` release. So the catalog exists from H3 on and moves independently of app releases.
+    Tests use a locally signed catalog.
   - **Freshness:** a monotonic `serial`; an older catalog is refused.
+  - **`min_cli`** comes from each entry, never below the manifest's floor, with an optional
+    `blocked_cli` list. The client reads them from the entry it runs, so a bump raises the floor
+    for installed apps.
+  - **Weekly vetting** (H4) runs the latest `claude` against each entry. A failure publishes a bump
+    that lists that version in `blocked_cli`, and the Agents page names it.
   - **Compatibility:** `min_app` and `max_app` per entry, since every app version reads the same
     catalog.
   - **Artifacts:** per OS, arch and libc, a `url`, `size` and `sha256`.
@@ -303,7 +316,7 @@ a session loads none of it.
     that also denies reads: `[permissions.reviewer] extends = ":read-only"`, and under
     `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
     - That blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter it is
-      checked live in H13.
+      checked live in H13a.
     - The host approves host-tool calls and denies every request to leave the sandbox.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
@@ -484,9 +497,9 @@ Later steps add to the SDL:
 
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
-| config | `~/Library/Application Support/dev.wdevs.detached/` | `$XDG_CONFIG_HOME/dev.wdevs.detached/` | `%APPDATA%\dev.wdevs.detached\` | today's files; personal roles and modes |
-| data | `…/dev.wdevs.detached/data/` | `$XDG_DATA_HOME/dev.wdevs.detached/` | `%LOCALAPPDATA%\dev.wdevs.detached\` | adapters, the session index, pinned trees (`trees/`), the owner socket, cross-repo panels |
-| cache | `~/Library/Caches/dev.wdevs.detached/` | `$XDG_CACHE_HOME/dev.wdevs.detached/` | `%LOCALAPPDATA%\dev.wdevs.detached\cache\` | per-session plugin folders, logs |
+| config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, pinned trees (`trees/`), the owner socket, cross-repo panels |
+| cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
 | repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
 
@@ -593,8 +606,9 @@ back.
 | H7 | Docs | H11 | the Docs app |
 | H9 | Processes and the env store | H11 | the Processes app |
 | H10 | Messages, groups, `watch` | H9 | agents talk |
-| H13 | Codex live, when the owner enables Codex | H4 | Codex chats and participants |
-| H12 | Release | all but H13 | 0.6.0 |
+| H13a | Codex live rows as headless tests, when the owner enables Codex | H5 | — |
+| H13b | Codex in the chat and in panels | H13a, H11, P2 | Codex chats and participants |
+| H12 | Release | all but H13a and H13b | 0.6.0 |
 
 The owner's choices, settled on 2026-11-12
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)):
@@ -671,7 +685,7 @@ PLAN-FOUNDATION §12's gate, with these changes:
     tool calls with its real permissions and sandbox.
   - They run in CI on macOS, Ubuntu 22.04 and 24.04, Windows, and WSL2 inside the Windows job
     (GitHub's runner has it), from H4 on, beside the fake ACP agent.
-  - Codex runs on a placeholder API-key login; its live rows are H13's.
+  - Codex runs on a placeholder API-key login; its live rows are H13a's.
   - The rows that cannot hold on an OS are in PLAN-PANELS §4.
 
 ### Step H0. The adapter spike
@@ -681,7 +695,7 @@ PLAN-FOUNDATION §12's gate, with these changes:
   crate 5.2.0.
 - **How:** `node dist/index.js` through `AcpAgent`, real calls on Claude Haiku on macOS; Linux and
   Windows in CI (`initialize` and `session/new` only).
-- **Codex** answers come from its source and are marked *(source)*; H13 checks them live.
+- **Codex** answers come from its source and are marked *(source)*; H13a checks them live.
 
 | # | Question | Answer | Changed |
 | --- | --- | --- | --- |
@@ -781,8 +795,8 @@ Also found:
 
 ### Step H1. The owner accepts the plans
 
-Both plans, after round 02 has no major finding. The owner accepts the six write decisions; each
-goes to `docs/decisions/`.
+Both plans, after a review round with no major finding (round 04 or later). The owner accepts the
+six write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -794,7 +808,8 @@ Work:
 5. The Sharing page.
 
 Tests:
-- the Linux config dir equals today's `paths::config_dir()`;
+- the Linux config dir equals today's `paths::config_dir()` (`com.w-devs.detached`), and data and
+  cache use the same identifier constant;
 - under `DETACHED_CONFIG_DIR`, config is the folder itself;
 - a write under `.git/detached/` reloads no status;
 - precedence holds;
@@ -820,8 +835,8 @@ Work:
 7. Login from the manifest.
 8. The Codex build per §3 (installed only when the owner enables Codex).
 9. The Agents page.
-10. `release.yml` publishes a signed catalog. Each catalog bump raises `min_cli` when the pinned
-    SDK's `claudeCodeVersion` moves.
+10. `adapters.yml` publishes the signed catalog (§3). Each bump raises the entry's `min_cli` when
+    the pinned SDK's `claudeCodeVersion` moves.
 
 Tests:
 - a bad signature, an older serial, a wrong size or sha256, and an entry leaving its folder are
@@ -829,13 +844,20 @@ Tests:
 - a version inside its cool-down does not auto-install;
 - an entry outside `min_app`/`max_app` is ignored;
 - two versions sit side by side, and rollback points at the kept one;
-- the `min_cli` function refuses a CLI below it;
+- the `min_cli` function refuses a CLI below the entry's value or the floor, and one in
+  `blocked_cli`;
 - no Claude CLI is downloaded or shipped;
-- the host never opens the login: each login path in the test's temp HOME is a FIFO, and the test
-  fails if a reader ever opens it;
+- **the host never opens the login:**
+  - Unix: each login path in the test's temp HOME is a FIFO, and the test fails if a reader ever
+    opens it. The test is `#[cfg(unix)]`, with a TECHDEBT row.
+  - Windows: the test holds the credentials file with an exclusive share handle, so any open by
+    the host fails and is recorded.
+  - macOS keeps the login in the Keychain (`Claude Code-credentials`): a source scan fails the
+    build if that service name appears outside tests;
 - the UI never says "Claude Code".
 
-Done when a clean temp config installs Claude's adapter from the catalog and the login runs.
+Done when a clean temp config installs Claude's adapter from the published catalog and the login
+runs.
 
 The owner checks: install, update, rollback; SmartScreen and Defender on a Windows VM.
 
@@ -917,11 +939,9 @@ Tests:
 - a client that polls `ps` and races the CLI's first `initialize` is refused, since it is not the
   adapter's `claude` child;
 - a second `initialize` on a bound path ends the session;
-- the read scope:
-  - a participant's query for another participant's findings, or for another repo, returns
-    nothing;
-  - a verifier sees only its finding;
-- an untrusted subject's participant has `strictMcpConfig` and only the host's server;
+- the read scope, on the fields H5 has: an identity scoped to one repo reads no other repo, no
+  `sessions`, and no MR outside its repo (the findings and verifier scopes are P2's tests);
+- a session built with the untrusted flag has `strictMcpConfig` and only the host's server;
 - a request with an `Origin` header or another `Host` is refused;
 - an act without the capability is refused;
 - a turn that ends without `done` is recorded;
@@ -930,7 +950,8 @@ Tests:
 
 Done when a fake agent reports findings and a real adapter reads a repo's status.
 
-The owner checks: asks a session for a repo's status; runs `detached q` in a terminal.
+The owner checks: asks a headless session (H4's debug action) for a repo's status; runs
+`detached q` in a terminal tab.
 
 ### Step H8. Skills
 
@@ -943,10 +964,10 @@ Tests:
 - a Claude session under `[]` lists a personal skill;
 - no directory is added to a Codex session.
 
-Done when a personal skill reaches a Claude session in a temp repo (and a Codex session, once H13
-has passed).
+Done when a personal skill reaches a Claude session in a temp repo (and a Codex session, once
+H13a has passed).
 
-The owner checks: the same, in the chat.
+The owner checks: the same, through H4's headless debug action. The in-chat check is H11's.
 
 ### Step H11. The chat on ACP
 
@@ -956,8 +977,9 @@ Work:
 3. §13's rows; the `/usage` parse; the `min_cli` warning.
 
 Tests:
-- **All 38 tests of `crates/app/tests/chat.rs` move to the fake ACP agent.** These change in what
-  they assert:
+- **All 36 tests of `crates/app/tests/chat.rs`, and `dock.rs`'s
+  `a_running_chat_moves_to_another_zone_with_its_turn_going_on`, move to the fake ACP agent.**
+  These change in what they assert:
   - `without_a_sidecar_it_says_how_to_get_one`: no adapter installed points to the Agents page;
   - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from the `/usage`
     parse, and unknown when it fails;
@@ -980,10 +1002,11 @@ Tests:
 
 Done when the chat runs on ACP with every §13 row holding. That is what P2 needs.
 
-The owner checks: daily use of the ACP chat.
+The owner checks: daily use of the ACP chat; a personal skill reaching it (H8).
 
 Follow-up, which P2 does not wait for: the sidecar, `core::agent` and `bin/fake_sidecar.rs` are
-removed at §13's end condition, in their own commit.
+removed at §13's end condition, in their own commit, after a grep of `crates/app/tests` for
+`fake_sidecar` and `agent::` finds nothing left.
 
 ### Step H6. Managed worktrees and recipes
 
@@ -1055,16 +1078,19 @@ The owner checks: the same.
 
 ### Step H13. Codex live
 
-When the owner enables Codex. Until H13 passes, Codex rows stay off: no Codex chat, no Codex
+When the owner enables Codex. Until H13a passes, Codex rows stay off: no Codex chat, no Codex
 participant, and line 4 of PLAN-PANELS §4 does not hold for Codex.
 
-Work:
-1. `spikes/acp/0b/codex-live.sh`'s rows as tests, on the owner's login: the deny profile through
-   the adapter (write, egress, cross-read), `turn/interrupt` mid-command, an HTTP MCP call, and
-   `config.toml` unchanged.
-2. Codex's install, login and session list in the Agents page and the chat.
+**H13a** (needs H5): `spikes/acp/0b/codex-live.sh`'s rows as headless tests on the owner's login:
+- the deny profile through the adapter: write, egress, cross-read;
+- `turn/interrupt` mid-command;
+- an HTTP MCP call to the host;
+- `config.toml` unchanged.
 
-Done when every row passes on macOS and the owner's Linux or WSL check.
+Done when every row passes on macOS and in the owner's Linux or WSL check.
+
+**H13b** (needs H13a, H11, P2): Codex's install, login and session list in the Agents page and the
+chat; Codex in panel rosters.
 
 The owner checks: a Codex chat and a review with a Codex verifier on a trusted subject.
 
