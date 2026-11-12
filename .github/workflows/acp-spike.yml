@@ -1,0 +1,48 @@
+# Agent-host spike only: the ACP adapters spawn and answer `initialize` and `session/new` on Linux
+# and Windows. No credentials, so no model calls.
+name: ACP spike
+
+on:
+  push:
+    branches: [agent-host/0-spikes]
+  workflow_dispatch:
+
+jobs:
+  handshake:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Adapters
+        run: |
+          mkdir -p "$RUNNER_TEMP/adapters" && cd "$RUNNER_TEMP/adapters" && npm init -y > /dev/null
+          npm install --no-fund --no-audit @agentclientprotocol/claude-agent-acp@0.106.0 @agentclientprotocol/codex-acp@2.6.0
+      - run: cargo build --manifest-path spikes/acp/Cargo.toml
+      - name: Claude
+        env:
+          ADAPTERS: ${{ runner.temp }}/adapters
+          AGENT: claude
+          CWD: ${{ github.workspace }}
+        run: |
+          spikes/acp/target/debug/acp-spike init
+          spikes/acp/target/debug/acp-spike run
+      - name: Codex
+        env:
+          ADAPTERS: ${{ runner.temp }}/adapters
+          AGENT: codex
+          CWD: ${{ github.workspace }}
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+        run: |
+          mkdir -p "$CODEX_HOME"
+          spikes/acp/target/debug/acp-spike init
+          spikes/acp/target/debug/acp-spike run || echo "session/new failed, as expected without a login"

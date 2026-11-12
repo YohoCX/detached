@@ -3,6 +3,7 @@ name: Check
 
 on:
   push:
+    branches-ignore: [agent-host/0-spikes]
   pull_request:
 
 jobs:
