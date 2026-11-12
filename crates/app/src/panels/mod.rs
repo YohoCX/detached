@@ -199,7 +199,11 @@ impl RunView {
     fn card(&self, finding: &Finding, aside: bool, cx: &Context<Self>) -> impl IntoElement {
         let f = finding.clone();
         let label = format!("{}:{}", f.file, f.line);
-        let verdict = f.verdict.as_deref().unwrap_or("unverified");
+        let verdict = f
+            .verdict
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .unwrap_or("unverified");
         div()
             .id(SharedString::from(format!("panel.finding.{}", finding.id)))
             .test_support()
