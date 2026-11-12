@@ -72,6 +72,7 @@ pub struct DiffView {
     at: Option<(DiffSide, u32)>,
     /// Put the cursor on the first change once loaded.
     reveal: bool,
+    target: Option<u32>,
     /// Focus the diff once loaded.
     pub(super) focus: bool,
     hover: Option<DiffLinePosition>,
@@ -83,6 +84,15 @@ pub struct DiffView {
 }
 
 impl DiffView {
+    pub fn reveal_line(&mut self, line: u32, cx: &mut Context<Self>) {
+        self.target = Some(line);
+        if self.last.is_some() {
+            self.target = None;
+            self.reveal = false;
+            self.move_to((DiffSide::Modified, line), cx);
+        }
+    }
+
     pub fn raise(&self, cx: &App) {
         actions::raise(&self._actions, cx);
     }
@@ -132,6 +142,7 @@ impl DiffView {
             last: None,
             at: None,
             reveal: true,
+            target: None,
             focus: false,
             hover: None,
             _numbers: None,
@@ -205,6 +216,9 @@ impl DiffView {
             && let Some(&first) = starts(&self.changes).first()
         {
             self.move_to(first, cx);
+        }
+        if let Some(line) = self.target.take() {
+            self.move_to((DiffSide::Modified, line), cx);
         }
         cx.notify();
     }

@@ -1,0 +1,159 @@
+{
+  "sources": {
+    "degraded": [],
+    "agents": [
+      {
+        "name": "bugs+impl",
+        "lenses": [
+          "bugs",
+          "impl"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 505054,
+        "raised": 3,
+        "degraded": false
+      },
+      {
+        "name": "arch+quality",
+        "lenses": [
+          "architecture",
+          "quality"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 1091097,
+        "raised": 3,
+        "degraded": false
+      },
+      {
+        "name": "docs+tests",
+        "lenses": [
+          "docs",
+          "tests",
+          "comments"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 861966,
+        "raised": 5,
+        "degraded": false
+      },
+      {
+        "name": "adversarial",
+        "lenses": [
+          "adversarial"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 738567,
+        "raised": 3,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "bugs+impl-2",
+      "file": "crates/core/src/watch.rs",
+      "line": 228,
+      "end_line": 231,
+      "severity": "major",
+      "title": "Linux: a directory removed and recreated within one 100 ms batch keeps a dead inotify watch, and activation does not restore it",
+      "body": "`State::mark` forgets a watch only when `gone && !p.exists()`. That check runs when the batch is processed, up to 100 ms after the first event, not when the event happened. notify's inotify backend drops its watch on DELETE, DELETE_SELF and MOVED_FROM. It does not add one back on CREATE under a NonRecursive parent.\n\nIf the directory exists again by the time the batch is processed:\n- the `work` (or `git`) entry stays;\n- the Create event fails `dir && !self.work.contains_key(p)`, so no walk starts;\n- `apply` keeps unchanged entries without calling `paths.add`;\n- activation's `set` walks only when the root moved, and for git dirs it sees `*old == new` and returns early.\n\nTriggers:\n- `rm -rf d && mkdir d`;\n- a `git switch`, `checkout`, `rebase` or `stash pop` that removes and rewrites a directory;\n- codegen that deletes and rewrites its output directory;\n- a scripted `git worktree remove wt && git worktree add wt`, or `rm -rf r && git clone … r`. The Done note names these as cases activation brings back.\n\nAfter that, edits under the path (or HEAD, index and ref writes, for git dirs) mark nothing until the current repo changes. This leaves the round-01 finding unfixed in the fast case. The new test `a_tracked_lock_file_marks_and_a_directory_made_again_is_watched_again` does the remove and the create in separate `after()` batches, so it cannot catch this.",
+      "fix": "Drop the `!p.exists()` condition and forget `p` and its children on every Remove/rename event. If `p` exists again, `dir && !self.work.contains_key(p)` triggers a walk that re-adds the watch, and the next `set` re-adds pruned git dirs. Add a test that does `remove_dir_all(&d); create_dir(&d)` inside one `t.after`.",
+      "sources": [
+        "bugs+impl",
+        "docs+tests",
+        "adversarial"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "arch+quality-2",
+      "file": "crates/core/src/watch.rs",
+      "line": 125,
+      "end_line": 130,
+      "severity": "minor",
+      "title": "Linux: `set` re-reads the excludes for the filter but never walks again, so a directory taken out of `info/exclude` stays unwatched",
+      "body": "`set` now rebuilds `Current` on every call, so the event filter uses the new `info/exclude` and global excludes. `inner.walk()` still runs only when the root moved. On Linux the per-directory inotify watches come from `files::walker`, an `ignore` WalkBuilder that honors `info/exclude` and `core.excludesFile`. A directory that was excluded at the last walk therefore has no watch.\n\nFailure:\n1. `build/` is listed in `.git/info/exclude`.\n2. The user removes that line and activates the window.\n3. Activation's `set` updates the filter, but no walk runs.\n4. Edits under `build/` produce no events and mark nothing, until an unrelated new directory, a `.gitignore` change or a switch of the current repo triggers a walk.\n\nThis breaks the goal's \"an `info/exclude` change is honored by the next activation\" and §7's claim that the walk reruns when an ignore file changes. Three comments overclaim it: `set`'s doc, `activated`'s doc (\"reads the excludes again\") and the Done note. `the_excludes_are_read_again_on_each_set` tests only the excluding direction, which the filter handles alone. macOS and Windows are not affected.\n\nOne reviewer also notes, as pre-existing, that an inotify `Q_OVERFLOW` loses the Create events of directories made during the burst, and `dropped` requests no walk to recover them.",
+      "fix": "On Linux, walk in `set` when the rebuilt excludes differ from the previous `Current` (or on every activation's `set`). Add the un-exclude direction to the test.",
+      "sources": [
+        "arch+quality",
+        "docs+tests",
+        "bugs+impl",
+        "adversarial"
+      ],
+      "verdict": "refined"
+    },
+    {
+      "id": "docs+tests-5",
+      "file": "crates/core/src/watch.rs",
+      "line": 608,
+      "end_line": 623,
+      "severity": "minor",
+      "title": "The dropped-events test bypasses `Inner::mark`, so nothing checks that an inotify overflow (a Rescan with no paths) marks every repo",
+      "body": "inotify's `Q_OVERFLOW` arrives from notify as an `Other` event with the Rescan flag and no paths. Only the new branch in `Inner::mark` (lines 171-177) maps empty `e.paths` to `[PathBuf::new()]`, which means everything.\n\nThe test passes `PathBuf::new()` to `dropped` directly and never goes through `Inner::mark`. If that branch regressed, every Linux overflow would mark nothing and the test would still pass.",
+      "fix": "Have the test also call `t.w.0.mark(vec![Ok(Event::new(EventKind::Other).set_flag(Flag::Rescan))])` and assert that every repo is marked.",
+      "sources": [
+        "docs+tests"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "docs+tests-3",
+      "file": "PLAN-FOUNDATION.md",
+      "line": 228,
+      "end_line": 228,
+      "severity": "minor",
+      "title": "§7 and TECHDEBT still say activation refreshes every status and every unwatched worktree, but it now skips statuses loaded within 30 s",
+      "body": "`activated` now calls `pass(cx, false)`, which skips a repo whose status loaded less than 30 s ago. The spec and TECHDEBT still treat activation as the catch-all refresh: §7's table (\"the rescan and every status, as today\"), §7's over-cap bullet (\"refreshes on window activation, as every worktree does today\"), and the Step 8 test list (\"still refreshes on activation\"). TECHDEBT's row says edits \"show on activation only\" and Windows loses events \"until the next activation\". None of these hold within 30 s of a repo's last load. The Done note's line 927 (\"which refreshes it, is unchanged\") is qualified by its very next bullet, which states the 30 s rule, so the outdated text is mainly §7 and TECHDEBT. This is the documentation side of bugs+impl-1: fixing the code there makes these passages true again.",
+      "fix": "Preferably fix the code as in bugs+impl-1 (skip only where a worktree watch covers the repo), which makes §7 and TECHDEBT true again. Otherwise reword §7's activation row, the over-cap bullet and the TECHDEBT row: a status older than 30 s reloads on activation, and Refresh always reloads.",
+      "sources": [
+        "docs+tests"
+      ],
+      "verdict": "refined"
+    },
+    {
+      "id": "bugs+impl-1",
+      "file": "crates/kernel/src/invalidate.rs",
+      "line": 146,
+      "end_line": 183,
+      "severity": "major",
+      "title": "Activation skips statuses loaded in the last 30 s, including repos whose changes no watch can see",
+      "body": "`activated` now calls `pass(cx, false)`. That pass reloads only repos whose `Loaded` entry is 30 s old or older. The entry is set whenever any status load finishes, for any reason: startup, the end of an op, or a watcher batch on the repo's git files. The skip is safe only if the watcher would have marked every change stale, and nothing records that. Several cases depend on activation as their only refresh:\n- the worktree of any non-current repo, because PLAN §7 watches only the current repo's worktree and `mark` marks other repos only on HEAD, index, refs and packed-refs;\n- a Linux worktree over the 10,000-directory cap, which gets no watch at all;\n- directories past `max_user_watches`;\n- a failed `Watcher::new`;\n- repos whose git dirs `Dirs::of` cannot resolve;\n- the macOS FSEvents restart gap, and the Windows overflow or unwatch listed in TECHDEBT.\n\nConcrete failure, on every OS: the window activates at t=0 and every status loads. The user saves a file in repo B, which is not the current repo, at t=10 and switches back at t=20. Activation sees B's status is 20 s old and skips it, so the sidebar shows B clean while it is dirty. It stays wrong until an activation more than 30 s after the load. The current repo's Changes (`fresh_for: None`, follows `On::Status`) has the same problem when its worktree is over the cap.\n\nThis breaks the goal's \"activation never shows a stale status as fresh\". It also contradicts §7's table (\"the rescan and every status, as today\") and the Done note's \"Activation's rescan, which refreshes it, is unchanged\".",
+      "fix": "Apply the freshness skip only to repos whose worktree the watcher actually covers: the current repo when it has a worktree watch. Every other repo should reload on activation as before. Alternatively, drop the skip.",
+      "sources": [
+        "bugs+impl",
+        "arch+quality",
+        "adversarial"
+      ],
+      "verdict": "confirmed"
+    }
+  ],
+  "pre_existing": [],
+  "immaterial": [
+    {
+      "id": "docs+tests-4",
+      "file": "crates/core/src/watch.rs",
+      "line": 199,
+      "end_line": 200,
+      "severity": "minor",
+      "title": "`dropped`'s doc comment and the Done note each describe a different half of what it marks",
+      "body": "The code marks a repo when `p.starts_with(d) || d.starts_with(p)`, which covers both a repo containing `p` and a repo under `p`. The test asserts both directions.\n- The doc comment says \"what lies there or above it is stale\", which leaves out repos under `p`.\n- The Done note (PLAN-FOUNDATION.md:907) and the commit summary say \"the repos at or under its path\". That leaves out the repo containing `p`, which is the common case for a macOS MustScanSubDirs inside a worktree.",
+      "fix": "Say \"the repos at, under or above its path\" in both places.",
+      "sources": [
+        "docs+tests"
+      ],
+      "verdict": "immaterial"
+    }
+  ],
+  "stats": {
+    "duration_ms": 343716,
+    "tokens": 3736424
+  }
+}

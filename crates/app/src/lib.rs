@@ -8,6 +8,7 @@ pub mod history;
 pub mod keymap;
 pub mod nav;
 pub mod notices;
+pub mod panels;
 pub mod repos;
 pub mod search;
 pub mod settings;
@@ -34,6 +35,7 @@ pub fn register(cx: &mut App) {
         search::register(cx),
         terminal::register(cx),
         events::register(cx),
+        panels::register(cx),
     ];
     cx.set_global(Kept {
         _actions: kept.into_iter().flatten().collect(),

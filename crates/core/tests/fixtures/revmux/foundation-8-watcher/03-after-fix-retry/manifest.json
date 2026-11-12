@@ -1,0 +1,59 @@
+{
+  "profile": "claude-only",
+  "duration_ms": 343716,
+  "tokens": 3736424,
+  "agents": [
+    {
+      "name": "bugs+impl",
+      "lenses": [
+        "bugs",
+        "impl"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 505054,
+      "raised": 3,
+      "degraded": false
+    },
+    {
+      "name": "arch+quality",
+      "lenses": [
+        "architecture",
+        "quality"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 1091097,
+      "raised": 3,
+      "degraded": false
+    },
+    {
+      "name": "docs+tests",
+      "lenses": [
+        "docs",
+        "tests",
+        "comments"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 861966,
+      "raised": 5,
+      "degraded": false
+    },
+    {
+      "name": "adversarial",
+      "lenses": [
+        "adversarial"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 738567,
+      "raised": 3,
+      "degraded": false
+    }
+  ]
+}
