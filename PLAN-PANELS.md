@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–12 are fixed in this text; round 13 is next. No choice is open.
+follow it. Review rounds 01–13 are fixed in this text; round 14 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
@@ -82,7 +82,9 @@ Every brief says that finding nothing is a valid answer.
 - **What is trusted:**
   - **A workspace or a repo the owner marks trusted**, such as work projects. Trusted in it:
     - colleagues' remote branches and MRs from the repo's own remote (the remote the mark names,
-      `origin` by default);
+      `origin` by default). A ref under `refs/remotes/<own remote>/` counts as a colleague's branch
+      only if the remote's fetch refspec maps it from `refs/heads/*`; one mapped from `refs/pull/*`,
+      `refs/merge-requests/*` or anything else is untrusted;
     - a local branch whose upstream is a `refs/heads/*` branch on that own remote;
     - a local branch with no upstream: the owner's own;
     - a local branch the owner marked.
@@ -125,15 +127,23 @@ Every brief says that finding nothing is a valid answer.
     `data/trees/trusted/<run>/pinned/`, a sibling of the finders' trees, never their parent. This
     is for a correct result, not for security, since trusted work is orchestrator mode on purpose:
     parallel verifiers must not change what the others read, or write refs.
-    - Mode `default`, `tools: [Read, Grep, Glob, Bash]` on every OS (the shell everywhere),
-      `settingSources: ["user"]` and `strictMcpConfig: true`: no repo hooks or MCP, only the host
-      tools.
+    - Mode `bypassPermissions`, like the finders, since this is trusted work; `tools: [Read, Grep,
+      Glob, Bash]` on every OS (the shell everywhere); `settingSources: ["user"]` and
+      `strictMcpConfig: true`: no repo hooks or MCP, only the host tools. If a permission request
+      comes anyway, the host denies it and notes it in the run.
     - Where the "sandbox ready" probe passes (host §5): the sandbox with `failIfUnavailable: true`,
       `allowUnsandboxedCommands: false`, `autoAllowBashIfSandboxed`, `denyWrite` on the pinned tree
       and the git common dir, and no network deny.
-    - Everywhere, the host records the pinned tree's state (HEAD, `git status --porcelain` and the
-      index) before the verify stage and checks it after. If it changed, the stage's verdicts are
-      dropped, the run says so, and the tree is rebuilt.
+    - **The state check, everywhere.** The host records the pinned tree's state before the verify
+      stage and once after:
+      - HEAD, and every ref (`git for-each-ref`);
+      - the index contents (`git ls-files -s`, not stat data, so a read-only `git status` does
+        not trip it);
+      - `git status --porcelain --ignored`.
+
+      If it changed, the stage's verdicts are dropped, the run says so, the tree is rebuilt and
+      the stage runs once more. A second drop ends the gate as "verify failed". A write undone
+      within the stage is not caught; that is accepted for trusted work.
   - **At the run's end** each finder's worktree is removed:
     - **no commits and no changes:** the worktree is removed and the branch deleted;
     - **commits, and a clean tree:** the worktree is removed and the branch kept;
@@ -155,7 +165,8 @@ Every brief says that finding nothing is a valid answer.
     - The host copies `.claude/settings.local.json`, which is gitignored.
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
   nothing writes and nothing commits. This is the isolation spike 0b verified (host §5):
-  - the pinned tree at the subject's SHA, `data/untrusted/<run>/pinned/` (host §5), read-only to
+  - the pinned tree at the subject's SHA, `<tmp>/detached-untrusted/<run>/pinned/` (host §5),
+    outside the config and data tiers, read-only to
     the participant. It is an export, never a linked worktree, so the subject repo's git dir does
     not name it and the tree has no `.git`; participants read history through the host tools.
     It is made with hooks and every filter off, so none of the owner's filter drivers runs under
@@ -361,8 +372,9 @@ transcripts/   pointers to the providers' own transcripts
     versions, schema version;
   - `stage`, `participant_started`, `activity`, `tool_call`, `finding`, `verdict`;
   - `attempt` with its cause, `paused`, `resumed`, `disposition`, `run_ended`.
-- **State is derived** by replaying the log, so an interrupted run is resumed or closed, never
-  stuck. The record explains a run; it does not promise to reproduce it.
+- **State is derived** by replaying the log, so an interrupted trusted run is resumed or closed,
+  never stuck; an interrupted untrusted run starts over (host §5). The record explains a run; it
+  does not promise to reproduce it.
 - **The schema is fixed in P2** against real ACP events. P1's import maps revmux archives into an
   in-memory model only.
 
@@ -499,7 +511,10 @@ Work:
    the Sharing page and the start dialog.
 3. The scheduler: stages, the cap, chat priority, attempts, offline, sleep, back-off.
    - One untrusted run at a time: a second one waits, shown "waiting" in the run view.
-   - At startup and after a run ends, every `data/untrusted/*` folder with no live run is removed.
+   - An untrusted run is never resumed after a crash; it starts over. At startup every
+     `detached-untrusted/*` folder, the WSL distro's included, is removed, and each run's folder
+     at its end.
+   - The "sandbox ready" probe (host §5) and the Ubuntu 24.04 CI setup (host H4).
 4. Orchestrator mode and the read-only sandbox per §3; `diff`, `log` and `search` for reviewers;
    each participant's read scope (host §7).
 5. On Windows:
@@ -520,6 +535,7 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   where it does not, the UI line appears;
 - trust, on local and remote-branch subjects (the MR cases are P5's):
   - a colleague's remote branch in a trusted workspace runs unsandboxed;
+  - with a `+refs/pull/*/head:refs/remotes/origin/pr/*` refspec, `origin/pr/7` is sandboxed;
   - in a repo not trusted as a whole, a remote branch with another author's commits is sandboxed;
   - the owner's local branch is sandboxed until marked, and unsandboxed after;
   - the mark holds through `commit`, `commit (amend)` and a push; a commit by someone else, a
@@ -545,9 +561,12 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   repo hook or MCP server loaded:
   - where the "sandbox ready" probe passes, two run in parallel, and one's write to the pinned tree
     and a `git branch` both fail, with no permission prompt;
-  - where it fails (native Windows, Ubuntu 24.04 without the AppArmor profile), a verifier that
-    writes the pinned tree has the stage's verdicts dropped, the run says so, and the tree is
-    rebuilt;
+  - where it fails (native Windows; on Linux CI, forced through a test flag rather than by
+    unloading the profile), a verifier that writes the pinned tree has the stage's verdicts
+    dropped, the run says so, the tree is rebuilt and the stage runs again; a second write ends the
+    gate as "verify failed";
+  - a read-only `git status` does not trip the state check;
+  - a permission request from a verifier is denied by the host and noted in the run;
 - orchestrator mode, on the real adapter against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
     with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
@@ -570,7 +589,9 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
 - an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
   finder worktree, both made after it started;
 - a second untrusted run waits, shown "waiting", until the first ends; a crashed run's
-  `data/untrusted/<run>/` is removed at the next start;
+  `<tmp>/detached-untrusted/<run>/`, and the distro's, are removed at the next start;
+- a workspace root that is `$HOME` or contains the data tier makes an untrusted run refuse to
+  start, with the message;
 - in a finding body and a transcript, `http:` and `https:` images, inline `![](u)`, reference
   `![][r]` and a raw `<img src>`, each show a link, and the fetch stub gets no request;
 - the untrusted pinned tree, from a subject with `* filter=lfs`, pointer files and an

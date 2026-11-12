@@ -16,7 +16,8 @@ Decided by the owner on 2026-11-12.
 - **Trust by workspace or repo.**
   - The owner can mark a whole workspace or a single repo trusted, such as work projects.
     Trusted in it: local branches with no upstream or with an upstream on a `refs/heads/*` branch of
-    the repo's own remote, colleagues' remote branches, and MRs and branches from that remote.
+    the repo's own remote, colleagues' remote branches (refs the remote's fetch refspec maps from
+    `refs/heads/*`), and MRs and branches from that remote.
     Untrusted in it: a branch whose upstream is `refs/pull/*`, `refs/merge-requests/*`, another
     remote or a URL. That is a best-effort guard against the common fork checkouts (`gh pr
     checkout`, `glab mr checkout`), not a guarantee. Code the owner brings into a trusted repo's

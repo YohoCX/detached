@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–12); round 13 is next, then H1. No choice is open (§14).
+fixed (rounds 01–13); round 14 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -107,8 +107,8 @@ What every provider must do; the host holds each row:
 | Dies with the host, no orphan | §1's shutdown |
 | Stop ends the turn and its foreground command | `session/cancel` (on Windows the foreground command runs on until the adapter goes; a TECHDEBT row). Background tasks: `_session/async_task/stop`, which works only when the client declares `_meta.jetbrains.air` with `asyncTasks`. We declare it; H4 checks what else the declaration changes, and drops it with stopTask parity if it changes anything else |
 | "Always allow" writes no file | the host keeps always-rules and sends only `allow_once` (§5) |
-| Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a panel over a trusted subject: the chat's for that repo; over an untrusted subject: `[]` |
-| MCP servers | chat and a trusted subject's participants: as the chat; an untrusted subject's: `strictMcpConfig: true`, or the account's claude.ai connectors join |
+| Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]` |
+| MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
 | Model, effort, mode as asked | `configOptions` on `session/new` and on every `session/load`, so the session starts in them. Without them a load falls back to `~/.claude/settings.json` (about 60× the cost), and the CLI starts in `auto` with `--allow-dangerously-skip-permissions`; `_meta…permissionMode` is ignored. Later switches use `set_config_option`. Every `session/load` also re-sends the session's whole `_meta.claudeCode.options` (§6) |
 | Questions reach the host | the client declares `elicitation.form` |
 | Usage is reported | `usage_update`, `config_option_update`, `current_mode_update`; missing means unknown, never zero |
@@ -260,9 +260,10 @@ a session loads none of it.
       network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
       permission request; the host rejects every such request anyway;
     - `Read(..)` deny rules for the same paths;
-    - its own `CLAUDE_CODE_TMPDIR` at `data/untrusted/<run>/tmp/<participant>/` (below), outside
-      the run record (in the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every
-      Claude session of the user and is readable and writable inside the sandbox, so it is denied.
+    - its own `CLAUDE_CODE_TMPDIR` at `<tmp>/detached-untrusted/<run>/tmp/<participant>/`
+      (below), outside the run record (in the distro's temp dir under WSL). `/tmp/claude-<uid>` is
+      shared by every Claude session of the user and is readable and writable inside the sandbox,
+      so it is denied.
 
     The denied reads are an enumerated list. `$HOME` is not denied as a whole, so toolchains under
     it stay readable:
@@ -283,30 +284,37 @@ a session loads none of it.
       These denies bind only the sandboxed shell and the file tools. The `claude` process reads
       its own login itself, unsandboxed, so the login works with them, as it does with the
       Keychain denied on macOS;
-    - per-run data, by static roots, so a run started later is covered too, since a session's
-      list is fixed at `session/new`:
-      - `data/private/**`: every secret-bearing per-run file, such as a trusted run's 0600 MCP
-        config and its copied `settings.local.json`. The `claude` process reads its own by path,
-        unsandboxed;
-      - `data/trees/trusted/**`: trusted runs' pinned trees and finder worktrees;
-      - each untrusted run lives under `data/untrusted/<run>/` (its exported pinned tree and its
-        temp dirs). Only one untrusted run goes at a time (P2's queue), and its folder is deleted
-        at its end; folders with no live run are removed at startup too. So no other run's is
-        there to read.
-        - Within a run, the peers' directories are denied by name, and sessions of an earlier
-          stage are closed before a later stage starts (§6);
-      - the run records: `<git common dir>/detached/`;
-    - every workspace root, every managed-worktree root (`<workspace>/worktrees`) and every repo the
-      app knows, so new repos, worktrees and `.env` files under them are covered. The pinned tree
-      lives in the data tier, outside all of them. A workspace root that is `$HOME` or contains
-      the data tier is not denied whole; its repos are denied one by one;
+    - **the whole config tier and the whole data tier**, by static roots, so a run started later is
+      covered too, since a session's list is fixed at `session/new`. That covers the session
+      index, secret-bearing per-run files (`data/private/<run>/`: a trusted run's 0600 MCP config
+      and its copied `settings.local.json`, which the `claude` process reads by path, unsandboxed),
+      trusted runs' trees, and anything added later, with no nested allow;
+    - **the untrusted run's own folder lives outside both tiers**, in the OS temp dir:
+      `<tmp>/detached-untrusted/<run>/`, or the distro's temp dir under WSL. It holds the exported
+      pinned tree and the temp dirs.
+      - Only one untrusted run goes at a time (P2's queue), and its folder is deleted at its end.
+      - An untrusted run is never resumed after a crash; it starts over, since exports are cheap.
+        At startup every `detached-untrusted/*` folder, the distro's included, is removed.
+      - Within a run, the peers' directories are denied by name, and sessions of an earlier stage
+        are closed before a later stage starts (§6);
+    - the run records: `<git common dir>/detached/`;
+    - every workspace root and every repo the app knows, so new repos, worktrees and `.env` files
+      under them are covered. A managed-worktree root is one per workspace folder
+      (`<folder>/worktrees`, H6), so it sits inside a denied root. A workspace root that is `$HOME`,
+      or that contains the config or data tier, makes untrusted runs refuse to start, with a
+      message asking for narrower workspace folders;
     - `/mnt` under WSL.
 
     Threat line 4's test seeds a target in each class.
-  - **"Sandbox ready"** is a probe, not a package check. The host runs one sandboxed command
-    through the adapter with `failIfUnavailable`. That covers `bubblewrap`, `socat` and Ubuntu
-    24.04's user-namespace restriction alike. Untrusted participants and trusted verifiers both
-    use it (PLAN-PANELS §3); in WSL it is part of "WSL ready".
+  - **"Sandbox ready"** is a probe, not a package check, built in P2, the first step that needs
+    the sandbox; it is unverified until P2 runs it.
+    - It is one turn through the real adapter and the user's `claude` against Detached's scripted
+      fake Messages API (the spike's `fake.rs`), whose reply asks for one Bash call. No model call
+      is made.
+    - It passes only if that call ran sandboxed: its write to the cwd is denied.
+    - That covers `bubblewrap`, `socat` and Ubuntu 24.04's user-namespace restriction alike.
+    - Untrusted participants and trusted verifiers both use it (PLAN-PANELS §3); in WSL it is part
+      of "WSL ready".
   - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
     `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
     - **22.04:** `sudo apt install bubblewrap socat`.
@@ -339,8 +347,9 @@ a session loads none of it.
       - Each participant's `CLAUDE_CODE_TMPDIR`.
     - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
       over stdio, the variables passed through `WSLENV`.
-    - **The pinned tree** is streamed in as a `git bundle` of the subject's SHA and checked out
-      there with filters off, as on the host (PLAN-PANELS §3), so no mount is needed. The
+    - **The pinned tree** comes in as a `git bundle` of a temporary ref,
+      `refs/detached/subjects/<run>` at the subject's SHA, deleted after. It is exported there with
+      filters off, as on the host (PLAN-PANELS §3), so no mount is needed. The
       distro's filesystem is 30–450× faster than `/mnt/<drive>`.
     - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
       also listens on the WSL gateway address (from `ip route` in the distro), with the same
@@ -561,7 +570,7 @@ Later steps add to the SDL:
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
 | config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
-| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`; an untrusted run's `untrusted/<run>/pinned/` (an export) and `tmp/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, trusted panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels. An untrusted run's export and temp dirs live in `<tmp>/detached-untrusted/<run>/` instead (§5) |
 | cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
 | repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
@@ -945,7 +954,9 @@ Work:
 5. The Windows job object, closed when the adapter exits.
 6. The scripted fake Messages API from the spike, as the real-adapter harness (§17).
    - **A CI matrix** for §17's OSes builds the adapter, installs `claude` at `min_cli` and the
-     Linux sandbox's packages, and fails rather than skips when one is missing.
+     Linux sandbox's packages, and fails rather than skips when one is missing. On Ubuntu 24.04
+     the job setup installs `bubblewrap` and `socat` and loads bwrap's AppArmor profile. These
+     tests use the fake Messages API, so CI makes no model call.
    - **Every test** runs under a temp `HOME` and `CLAUDE_CONFIG_DIR`, never the owner's
      `~/.claude`.
    - **Locally** they run with `make agent-test`.
@@ -1061,7 +1072,8 @@ Work:
 2. `tests/chat.rs` on the fake ACP agent.
 3. §13's rows; the `/usage` parse; the `min_cli` warning.
 4. The agent mode of `Markdown` (§6): no network image loads from agent text, whatever the scheme
-   or syntax.
+   or syntax. `web_image` gains an injectable fetcher, `ImageFetch`, which the tests replace with a
+   recording stub.
 
 Tests:
 - **All 36 tests of `crates/app/tests/chat.rs`, and `dock.rs`'s
@@ -1103,7 +1115,8 @@ removed at §13's end condition, in their own commit, after a grep of `crates/ap
 ### Step H6. Managed worktrees and recipes
 
 Work:
-1. Worktrees under `<workspace>/worktrees/<repo>/<branch>`, with hooks off.
+1. Worktrees under `<workspace folder>/worktrees/<repo>/<branch>`, one root per workspace folder,
+   with hooks off.
 2. The recipe (`worktree.toml`): `copies` (ignored files only, mode 0600; ACLs on Windows),
    `install`, `teardown`.
 3. Remove keeps the branch.
