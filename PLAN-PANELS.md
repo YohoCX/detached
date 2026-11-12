@@ -5,7 +5,7 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
 **Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–11 are fixed in this text; round 12 is next. No choice is open.
+follow it. Review rounds 01–12 are fixed in this text; round 13 is next. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
@@ -91,9 +91,11 @@ Every brief says that finding nothing is a valid answer.
     - a local branch whose upstream is `refs/pull/*`, `refs/merge-requests/*`, another remote or a
       URL. That is how `gh pr checkout` and `glab mr checkout` bring in a fork: gh sets
       `origin` with `refs/pull/<N>/head` when the fork disallows maintainer edits;
-    - a branch created or moved by a fetch (its reflog says so), as
-      `git fetch origin pull/7/head:pr-7` makes;
     - an MR from a fork, unless the owner also ticks "include forks" for that repo or workspace.
+
+    The upstream rule is a best-effort guard against the common fork checkouts, not a guarantee.
+    Code the owner brings into a trusted repo's checkout any other way (`FETCH_HEAD`, a pull by URL,
+    a reset or a rebase) is the owner's, the same as running `claude` there from a terminal.
     - The marks are shown on the Sharing page and in each panel's start dialog ("trusted by
       workspace X").
     - They are stored per machine, in the personal scope, and never shared through git.
@@ -102,9 +104,10 @@ Every brief says that finding nothing is a valid answer.
     - The dialog shows each commit's author in base..head against the owner's identities (the repo's
       `user.email` and any listed in Settings).
     - The mark records the head SHA. Before every run the host reads the branch's reflog since that
-      head. The mark holds while every entry is a local commit, amend, rebase or cherry-pick, and
-      each new commit is by the owner's identities; a push does not touch it. A pull, a merge from
-      a remote ref, or a reset onto one drops it. The upstream is checked too.
+      head, as an allowlist that fails safe. The mark holds while every entry is `commit` or
+      `commit (amend)` and each new commit is by the owner's identities; a push adds no entry.
+      Anything else drops it: a rebase, a reset, a pull, a merge, a cherry-pick, or a reflog that
+      no longer reaches the recorded head. The upstream is checked too.
     - Authorship can be forged, and the dialog says so.
   - **And in every case**, the subject's trust files must hash to an accepted set (host §4);
     otherwise the start dialog asks first.
@@ -118,16 +121,19 @@ Every brief says that finding nothing is a valid answer.
     ([decision](docs/decisions/2026-11-12-write-pinned-trees.md)). Each has the full shell, the file
     tools and commits. If a branch named `detached-run` exists, git cannot make these refs, and
     the run refuses to start with that message.
-  - **Verifiers** get no branch and run read-only in the run's pinned tree,
+  - **Verifiers** get no branch and read in the run's pinned tree,
     `data/trees/trusted/<run>/pinned/`, a sibling of the finders' trees, never their parent. This
     is for a correct result, not for security, since trusted work is orchestrator mode on purpose:
     parallel verifiers must not change what the others read, or write refs.
-    - Mode `default` and the trusted repo's settings and MCP.
-    - Where the sandbox exists: `tools: [Read, Grep, Glob, Bash]`, the sandbox with
-      `failIfUnavailable: true`, `allowUnsandboxedCommands: false`, `autoAllowBashIfSandboxed`,
-      `denyWrite` on the pinned tree and the git common dir, and no network deny.
-    - Where it does not (native Windows, Linux without `bubblewrap`): no Bash, only `Read`,
-      `Grep`, `Glob` and the host read tool.
+    - Mode `default`, `tools: [Read, Grep, Glob, Bash]` on every OS (the shell everywhere),
+      `settingSources: ["user"]` and `strictMcpConfig: true`: no repo hooks or MCP, only the host
+      tools.
+    - Where the "sandbox ready" probe passes (host §5): the sandbox with `failIfUnavailable: true`,
+      `allowUnsandboxedCommands: false`, `autoAllowBashIfSandboxed`, `denyWrite` on the pinned tree
+      and the git common dir, and no network deny.
+    - Everywhere, the host records the pinned tree's state (HEAD, `git status --porcelain` and the
+      index) before the verify stage and checks it after. If it changed, the stage's verdicts are
+      dropped, the run says so, and the tree is rebuilt.
   - **At the run's end** each finder's worktree is removed:
     - **no commits and no changes:** the worktree is removed and the branch deleted;
     - **commits, and a clean tree:** the worktree is removed and the branch kept;
@@ -481,7 +487,8 @@ The owner checks: every round under `.revmux/tasks/` imports and reads faster th
 
 Work:
 1. The event schema and the record.
-2. Each participant's tree, in host §10's layout:
+2. Each participant's tree, in host §10's layout (the trusted verifiers' state check of §3
+   included):
    - for a trusted subject, a worktree on its own branch for each finder, and the pinned tree for
      verifiers;
    - for an untrusted subject, the pinned tree, made with filters off;
@@ -491,6 +498,8 @@ Work:
    Plus the trust marks by workspace, repo, forks and branch, with the upstream and head checks, on
    the Sharing page and the start dialog.
 3. The scheduler: stages, the cap, chat priority, attempts, offline, sleep, back-off.
+   - One untrusted run at a time: a second one waits, shown "waiting" in the run view.
+   - At startup and after a run ends, every `data/untrusted/*` folder with no live run is removed.
 4. Orchestrator mode and the read-only sandbox per §3; `diff`, `log` and `search` for reviewers;
    each participant's read scope (host §7).
 5. On Windows:
@@ -513,11 +522,11 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   - a colleague's remote branch in a trusted workspace runs unsandboxed;
   - in a repo not trusted as a whole, a remote branch with another author's commits is sandboxed;
   - the owner's local branch is sandboxed until marked, and unsandboxed after;
-  - a commit by someone else drops the mark, and so does a pull of a foreign commit, even with
-    forged owner authorship; a push of the marked branch keeps it;
+  - the mark holds through `commit`, `commit (amend)` and a push; a commit by someone else, a
+    rebase, a reset, a pull, a merge, a cherry-pick, and a reflog that no longer reaches the
+    recorded head each drop it;
   - in a trusted repo:
     - a local branch with no upstream is trusted;
-    - a branch fetched as `git fetch origin pull/7/head:pr-7` is sandboxed;
     - a branch whose upstream is a fork remote is sandboxed;
     - `gh pr checkout` of a fork PR without maintainer edits (upstream `origin` at
       `refs/pull/<N>/head`) is sandboxed;
@@ -532,10 +541,13 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   - Discard deletes after a confirm;
   - a branch named `detached-run` makes the run refuse to start;
   - a verifier gets none;
-- trusted verifiers, on the real adapter against the fake Messages API:
-  - where the sandbox exists, two run in parallel, and one's write to the pinned tree and a
-    `git branch` both fail, with no permission prompt;
-  - on native Windows and on Linux without `bubblewrap`, a verifier is offered no Bash;
+- trusted verifiers, on the real adapter against the fake Messages API, each with Bash and with no
+  repo hook or MCP server loaded:
+  - where the "sandbox ready" probe passes, two run in parallel, and one's write to the pinned tree
+    and a `git branch` both fail, with no permission prompt;
+  - where it fails (native Windows, Ubuntu 24.04 without the AppArmor profile), a verifier that
+    writes the pinned tree has the stage's verdicts dropped, the run says so, and the tree is
+    rebuilt;
 - orchestrator mode, on the real adapter against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
     with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
@@ -557,10 +569,10 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   under it after `session/new`, all fail to read;
 - an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
   finder worktree, both made after it started;
-- whether the sandbox allows a run's own root under a denied `data/untrusted/**`, recorded in this
-  plan (host §5);
-- a finding body and a transcript with `![](<forge fake URL>)`: the image shows as a link, and the
-  fake gets no request;
+- a second untrusted run waits, shown "waiting", until the first ends; a crashed run's
+  `data/untrusted/<run>/` is removed at the next start;
+- in a finding body and a transcript, `http:` and `https:` images, inline `![](u)`, reference
+  `![][r]` and a raw `<img src>`, each show a link, and the fetch stub gets no request;
 - the untrusted pinned tree, from a subject with `* filter=lfs`, pointer files and an
   `.lfsconfig` pointing at the forge fake: the fake gets no request, and an owner filter named in
   the subject's `.gitattributes` writes no marker;

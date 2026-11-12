@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–11); round 12 is next, then H1. No choice is open (§14).
+fixed (rounds 01–12); round 13 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -290,19 +290,23 @@ a session loads none of it.
         unsandboxed;
       - `data/trees/trusted/**`: trusted runs' pinned trees and finder worktrees;
       - each untrusted run lives under `data/untrusted/<run>/` (its exported pinned tree and its
-        temp dirs). Only one untrusted run goes at a time, and its folder is deleted at its end,
-        so no other run's is there to read.
-        - If P2 shows the sandbox allows a run's own folder under a denied `data/untrusted/**`,
-          runs may overlap, each denying the rest.
+        temp dirs). Only one untrusted run goes at a time (P2's queue), and its folder is deleted
+        at its end; folders with no live run are removed at startup too. So no other run's is
+        there to read.
         - Within a run, the peers' directories are denied by name, and sessions of an earlier
           stage are closed before a later stage starts (§6);
       - the run records: `<git common dir>/detached/`;
     - every workspace root, every managed-worktree root (`<workspace>/worktrees`) and every repo the
       app knows, so new repos, worktrees and `.env` files under them are covered. The pinned tree
-      lives in the data tier, outside all of them;
+      lives in the data tier, outside all of them. A workspace root that is `$HOME` or contains
+      the data tier is not denied whole; its repos are denied one by one;
     - `/mnt` under WSL.
 
     Threat line 4's test seeds a target in each class.
+  - **"Sandbox ready"** is a probe, not a package check. The host runs one sandboxed command
+    through the adapter with `failIfUnavailable`. That covers `bubblewrap`, `socat` and Ubuntu
+    24.04's user-namespace restriction alike. Untrusted participants and trusted verifiers both
+    use it (PLAN-PANELS §3); in WSL it is part of "WSL ready".
   - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
     `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
     - **22.04:** `sudo apt install bubblewrap socat`.
@@ -375,10 +379,13 @@ a session loads none of it.
 `kernel::Session` owns the state machine and the feed as data. The chat view keeps a laid-out
 `Markdown` per item, which exists only to draw.
 
-**Agent text never makes Detached fetch.** All agent output (chat feed, panel cards, transcripts,
-outcomes) renders through `Markdown` built with remote images off:
-`crates/app/src/files/markdown.rs` shows an `https:` image as a link and never loads it. Only a
-file the owner opened loads remote images. H11 tests it in the chat, P2 in panels.
+**Agent text never makes Detached fetch.** This is new behavior, built in H11. Today
+`crates/app/src/files/markdown.rs` loads `https:` images in every Markdown, the chat's included.
+- H11 adds an agent mode to `Markdown`, used for all agent output (chat feed, panel cards,
+  transcripts, outcomes). It never loads an image over the network, whatever the scheme. Inline
+  `![](u)`, reference `![][r]` and raw `<img src>` each render as a link.
+- Only a file the owner opened loads remote images.
+- H11 tests it in the chat, P2 in panels.
 
 - **Turn sequences.**
   - Start, awaited: trust, snapshot, the prompt.
@@ -1053,6 +1060,8 @@ Work:
 1. The chat view on `kernel::Session`.
 2. `tests/chat.rs` on the fake ACP agent.
 3. §13's rows; the `/usage` parse; the `min_cli` warning.
+4. The agent mode of `Markdown` (§6): no network image loads from agent text, whatever the scheme
+   or syntax.
 
 Tests:
 - **All 36 tests of `crates/app/tests/chat.rs`, and `dock.rs`'s
@@ -1072,7 +1081,8 @@ Tests:
 
   No assertion is dropped. The context breakdown had no test.
 - **One test per §13 row not covered above:**
-  - an agent reply with `![](<forge fake URL>)` shows a link, and the fake gets no request;
+  - an agent reply with `http:` and `https:` images, inline `![](u)`, reference `![][r]` and a raw
+    `<img src>`, shows a link for each, and the fetch stub records no request;
   - `auto` re-armed after a model switch;
   - async stop through the AIR declaration;
   - `elicitation.form`;

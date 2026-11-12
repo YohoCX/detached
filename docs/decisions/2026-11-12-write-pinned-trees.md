@@ -3,9 +3,10 @@
 Proposed on 2026-11-12, decided at the agent host's H1.
 
 - What:
-  - **Every run:** a pinned tree, `git worktree add --detach` at the subject's SHA, made with hooks
-    off (`-c core.hooksPath=<empty dir>`) and removed at the run's end.
-    - For a trusted subject it is at `data/trees/trusted/<run>/pinned/`, where verifiers read.
+  - **Every run:** a pinned tree at the subject's SHA, made with hooks off
+    (`-c core.hooksPath=<empty dir>`) and removed at the run's end.
+    - For a trusted subject it is a `git worktree add --detach` at
+      `data/trees/trusted/<run>/pinned/`, where verifiers read.
     - For an untrusted subject it is not a worktree but an export at
       `data/untrusted/<run>/pinned/` (`read-tree` and `checkout-index` through a temp index), so the
       repo's git dir never names it. Every participant reads there. It is made with the global and

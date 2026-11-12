@@ -18,7 +18,9 @@ Decided by the owner on 2026-11-12.
     Trusted in it: local branches with no upstream or with an upstream on a `refs/heads/*` branch of
     the repo's own remote, colleagues' remote branches, and MRs and branches from that remote.
     Untrusted in it: a branch whose upstream is `refs/pull/*`, `refs/merge-requests/*`, another
-    remote or a URL, and a branch created or moved by a fetch.
+    remote or a URL. That is a best-effort guard against the common fork checkouts (`gh pr
+    checkout`, `glab mr checkout`), not a guarantee. Code the owner brings into a trusted repo's
+    checkout any other way is the owner's, as with running `claude` there from a terminal.
   - MRs from a fork stay untrusted unless "include forks" is ticked for that repo or workspace.
   - The per-branch mark stays for repos not trusted as a whole.
   - Marks are shown on the Sharing page and in each panel's start dialog, stored per machine in the
