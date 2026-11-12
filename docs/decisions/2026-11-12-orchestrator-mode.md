@@ -15,8 +15,10 @@ Decided by the owner on 2026-11-12.
   ([decision](2026-11-12-untrusted-read-only.md)).
 - **Trust by workspace or repo.**
   - The owner can mark a whole workspace or a single repo trusted, such as work projects.
-    Everything in it is trusted: local branches, colleagues' remote branches, and MRs and branches
-    from that repo's own remote.
+    Trusted in it: local branches with no upstream or with an upstream on a `refs/heads/*` branch of
+    the repo's own remote, colleagues' remote branches, and MRs and branches from that remote.
+    Untrusted in it: a branch whose upstream is `refs/pull/*`, `refs/merge-requests/*`, another
+    remote or a URL, and a branch created or moved by a fetch.
   - MRs from a fork stay untrusted unless "include forks" is ticked for that repo or workspace.
   - The per-branch mark stays for repos not trusted as a whole.
   - Marks are shown on the Sharing page and in each panel's start dialog, stored per machine in the

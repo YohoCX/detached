@@ -13,7 +13,7 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed (rounds 01–10); round 11 is next, then H1. No choice is open (§14).
+fixed (rounds 01–11); round 12 is next, then H1. No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -27,7 +27,7 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - Claude through the user's own `claude`, on any login;
   - the chat on ACP first, and spike 0b before H1;
   - panels isolate by trust, with WSL2 on Windows, and agents keep the shell everywhere;
-  - the six repo writes of §16, proposed until H1;
+  - the seven repo writes of §16, proposed until H1;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
   - managed worktrees go in `<workspace>/worktrees/<repo>/<branch>`;
@@ -260,7 +260,7 @@ a session loads none of it.
       network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
       permission request; the host rejects every such request anyway;
     - `Read(..)` deny rules for the same paths;
-    - its own `CLAUDE_CODE_TMPDIR` at `data/untrusted/<root>/tmp/<participant>/` (below), outside
+    - its own `CLAUDE_CODE_TMPDIR` at `data/untrusted/<run>/tmp/<participant>/` (below), outside
       the run record (in the distro's data tier under WSL). `/tmp/claude-<uid>` is shared by every
       Claude session of the user and is readable and writable inside the sandbox, so it is denied.
 
@@ -289,12 +289,17 @@ a session loads none of it.
         config and its copied `settings.local.json`. The `claude` process reads its own by path,
         unsandboxed;
       - `data/trees/trusted/**`: trusted runs' pinned trees and finder worktrees;
-      - each untrusted run lives under `data/untrusted/<root>/`, where `<root>` is 128 random bits
-        and the parent is mode 0711, so no session can list it to find another run. Within a run,
-        the peers' directories are denied by name; sessions of an earlier stage are closed before
-        a later stage starts (§6);
+      - each untrusted run lives under `data/untrusted/<run>/` (its exported pinned tree and its
+        temp dirs). Only one untrusted run goes at a time, and its folder is deleted at its end,
+        so no other run's is there to read.
+        - If P2 shows the sandbox allows a run's own folder under a denied `data/untrusted/**`,
+          runs may overlap, each denying the rest.
+        - Within a run, the peers' directories are denied by name, and sessions of an earlier
+          stage are closed before a later stage starts (§6);
       - the run records: `<git common dir>/detached/`;
-    - the main checkout's `.env*`, and every `.env*` copy that H6 put in a managed worktree;
+    - every workspace root, every managed-worktree root (`<workspace>/worktrees`) and every repo the
+      app knows, so new repos, worktrees and `.env` files under them are covered. The pinned tree
+      lives in the data tier, outside all of them;
     - `/mnt` under WSL.
 
     Threat line 4's test seeds a target in each class.
@@ -369,6 +374,11 @@ a session loads none of it.
 
 `kernel::Session` owns the state machine and the feed as data. The chat view keeps a laid-out
 `Markdown` per item, which exists only to draw.
+
+**Agent text never makes Detached fetch.** All agent output (chat feed, panel cards, transcripts,
+outcomes) renders through `Markdown` built with remote images off:
+`crates/app/src/files/markdown.rs` shows an `https:` image as a link and never loads it. Only a
+file the owner opened loads remote images. H11 tests it in the chat, P2 in panels.
 
 - **Turn sequences.**
   - Start, awaited: trust, snapshot, the prompt.
@@ -544,7 +554,7 @@ Later steps add to the SDL:
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
 | config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
-| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`; an untrusted run's `untrusted/<root>/pinned/` and `tmp/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`; an untrusted run's `untrusted/<run>/pinned/` (an export) and `tmp/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels |
 | cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
 | repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
@@ -851,7 +861,7 @@ Also found:
 ### Step H1. The owner accepts the plans
 
 Both plans, after a review round with no major finding (round 04 or later). The owner accepts the
-six write decisions; each goes to `docs/decisions/`.
+seven write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -1062,6 +1072,7 @@ Tests:
 
   No assertion is dropped. The context breakdown had no test.
 - **One test per §13 row not covered above:**
+  - an agent reply with `![](<forge fake URL>)` shows a link, and the fake gets no request;
   - `auto` re-armed after a model switch;
   - async stop through the AIR declaration;
   - `elicitation.form`;

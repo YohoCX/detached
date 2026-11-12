@@ -6,9 +6,12 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - **Every run:** a pinned tree, `git worktree add --detach` at the subject's SHA, made with hooks
     off (`-c core.hooksPath=<empty dir>`) and removed at the run's end.
     - For a trusted subject it is at `data/trees/trusted/<run>/pinned/`, where verifiers read.
-    - For an untrusted subject it is at `data/untrusted/<root>/pinned/`, where every participant
-      reads. It is made with the global and system config off, `GIT_LFS_SKIP_SMUDGE=1`, and every
-      filter's `process` and `smudge` empty, so no filter runs under the subject's attributes.
+    - For an untrusted subject it is not a worktree but an export at
+      `data/untrusted/<run>/pinned/` (`read-tree` and `checkout-index` through a temp index), so the
+      repo's git dir never names it. Every participant reads there. It is made with the global and
+      system config off, `GIT_LFS_SKIP_SMUDGE=1`, and every filter's `process` and `smudge` empty,
+      so no filter runs under the subject's attributes. One untrusted run goes at a time, and its
+      folder is deleted at the end.
   - **A trusted subject's finders:** each gets its own plain `git worktree add` of a branch
     `detached-run/<run>/<participant>` at that SHA, at
     `data/trees/trusted/<run>/finders/<participant>/`, with hooks off. At the run's end:
