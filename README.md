@@ -102,6 +102,15 @@ updates signed with the key it was built with.
 
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 
+A panic leaves a report in `crashes/` of the config directory (on macOS `~/Library/Application
+Support/dev.wdevs.detached`). Release builds carry no symbols, so its backtrace is addresses; on
+macOS the release's `Detached-macos-<arch>-dSYM.zip` names them, with the report's load address:
+
+```sh
+ditto -x -k Detached-macos-arm64-dSYM.zip .
+atos -o detached.dSYM -arch arm64 -l <load address> <addresses> | rustfilt  # cargo install rustfilt
+```
+
 `crates/core` is the backend (git, forges, accounts, search, settings), `crates/app` the GPUI
 client and `crates/forge-fake` a local GitLab and GitHub Enterprise for the UI tests in
 `crates/app/tests`, which drive real views headless against temp repos.

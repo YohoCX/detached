@@ -28,6 +28,13 @@ Darwin)
   fi
   codesign --force --options runtime -s "$identity" "$out/Detached.app"
   ditto -c -k --keepParent "$out/Detached.app" "$out/Detached-macos.zip"
+  for arch in arm64:aarch64 x64:x86_64; do
+    dir=$out/${arch%:*}
+    mkdir "$dir"
+    # Cargo's detached.dSYM is a link to deps/detached-<hash>.dSYM.
+    cp -RL "target/${arch#*:}-apple-darwin/release/detached.dSYM" "$dir/"
+    ditto -c -k --keepParent "$dir/detached.dSYM" "$out/Detached-macos-${arch%:*}-dSYM.zip"
+  done
   ;;
 MINGW* | MSYS* | CYGWIN*)
   cargo build --release -p detached-app
