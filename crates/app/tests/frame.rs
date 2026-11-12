@@ -256,7 +256,7 @@ fn a_crash_report_newer_than_the_last_noticed_raises_a_notice_once(cx: &mut Test
     let cx = &mut app.cx;
     wait_until(cx, |cx| cx.activity(|s, _| !s.notices.is_empty()));
     let n = cx.activity(|s, _| s.notices[0].clone());
-    assert_eq!(n.title, "Detached closed because of an error");
+    assert_eq!(n.title, "Detached hit an error in its last run");
     assert_eq!(n.open, Some(file));
     let open = cx.update(|w, cx| {
         w.render_frame(cx);

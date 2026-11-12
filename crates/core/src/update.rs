@@ -45,9 +45,30 @@ pub fn check(base: &str, current: &str, key: &str) -> Result<Option<Release>> {
     release(&json, &platform(), current)
 }
 
-/// This build's key in `latest.json`'s platforms.
+/// This machine's key in `latest.json`'s platforms: an Apple silicon Mac takes its own build even
+/// when this one runs under Rosetta.
 fn platform() -> String {
+    #[cfg(target_os = "macos")]
+    if apple_silicon() {
+        return "macos-aarch64".into();
+    }
     format!("{}-{}", env::consts::OS, env::consts::ARCH)
+}
+
+#[cfg(target_os = "macos")]
+fn apple_silicon() -> bool {
+    let (mut v, mut len) = (0i32, size_of::<i32>());
+    // SAFETY: the name is NUL-terminated and `v` holds the int the key returns.
+    let r = unsafe {
+        libc::sysctlbyname(
+            c"hw.optional.arm64".as_ptr(),
+            (&raw mut v).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    r == 0 && v == 1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

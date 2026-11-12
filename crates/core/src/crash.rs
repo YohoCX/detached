@@ -3,10 +3,13 @@
 use std::backtrace::Backtrace;
 use std::panic::{Location, PanicHookInfo};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs, io, thread};
 
 const KEEP: usize = 20;
+
+static SAVED: AtomicBool = AtomicBool::new(false);
 
 /// Writes the report of the panic `info`, keeping the newest 20. It never panics and loses the
 /// report on an IO error.
@@ -15,6 +18,13 @@ pub fn save(config_dir: &Path, info: &PanicHookInfo) {
     let message = (payload.downcast_ref::<&str>().copied())
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
     let message = message.unwrap_or("(no message)");
+    // A panic unwinding into GPUI's `extern "C"` frames panics again there, with nothing to tell.
+    if message.starts_with("panic in a function that cannot unwind")
+        && SAVED.load(Ordering::Relaxed)
+    {
+        return;
+    }
+    SAVED.store(true, Ordering::Relaxed);
     let _ = write(
         &config_dir.join("crashes"),
         &report(message, info.location()),

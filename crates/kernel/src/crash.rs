@@ -1,4 +1,4 @@
-//! The notice that the last run crashed, from core's crash reports.
+//! The notice of a crash report the last run wrote.
 
 use detached_core::crash;
 use gpui::{App, Task};
@@ -29,7 +29,7 @@ pub fn check(cx: &mut App) -> Task<()> {
             ui_state::set(SEEN, &name, cx);
             let n = Notice {
                 level: Level::Error,
-                title: "Detached closed because of an error".into(),
+                title: "Detached hit an error in its last run".into(),
                 open: Some(file),
                 ..Notice::default()
             };
