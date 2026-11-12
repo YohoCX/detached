@@ -224,6 +224,9 @@ impl RepoStore {
                 .collect::<Result<Vec<_>>>()?;
             names.sort();
             for name in names {
+                if name == ".detached-trash" {
+                    continue;
+                }
                 let name = name
                     .into_string()
                     .map_err(|_| Error::Other("Invalid item name".into()))?;
@@ -307,18 +310,9 @@ impl RepoStore {
             return Err(Error::Other("Accept this item before moving it".into()));
         }
         let to = self.path(state, item.kind, scope, &item.name)?;
-        if to.exists() {
-            return Err(Error::Other("Destination item already exists".into()));
-        }
         remember(state, &to, &item.hash)?;
         fs::create_dir_all(to.parent().unwrap())?;
-        match fs::rename(&item.path, &to) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-                copy_move(&item.path, &to, &files, || Ok(()))?;
-            }
-            Err(e) => return Err(e.into()),
-        }
+        copy_move(&item.path, &to, &files, || Ok(()), || {})?;
         Ok(())
     }
 }
@@ -328,6 +322,7 @@ fn copy_move(
     to: &Path,
     files: &Files,
     copied: impl FnOnce() -> Result<()>,
+    verified: impl FnOnce(),
 ) -> Result<()> {
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
@@ -345,17 +340,51 @@ fn copy_move(
         };
         fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
     }
-    fs::rename(&stage, to)?;
+    publish(&stage, to)?;
     copied()?;
-    if hash(&read(from)?) != hash(files) {
-        return Err(Error::Other(
-            "Item changed while moving; both copies kept".into(),
-        ));
+    let trash = from.parent().unwrap().join(".detached-trash");
+    no_links(&trash)?;
+    fs::create_dir_all(&trash)?;
+    let trash = tempfile::Builder::new()
+        .prefix(&format!("{}-", from.file_name().unwrap().to_string_lossy()))
+        .tempdir_in(trash)?;
+    let frozen = trash.path().join("item");
+    fs::rename(from, &frozen)?;
+    let trash = trash.keep();
+    let checked = read(&frozen).map(|actual| hash(&actual) == hash(files));
+    verified();
+    match checked {
+        Ok(true) => fs::remove_dir_all(trash)?,
+        _ => {
+            return Err(Error::Other(format!(
+                "Item changed or could not be verified; source kept at {}",
+                frozen.display()
+            )));
+        }
     }
+    Ok(())
+}
+
+fn publish(from: &Path, to: &Path) -> Result<()> {
     if from.is_dir() {
-        fs::remove_dir_all(from)?;
+        fs::create_dir(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            publish(&entry.path(), &to.join(entry.file_name()))?;
+        }
     } else {
-        fs::remove_file(from)?;
+        match fs::hard_link(from, to) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+                let mut dest = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(to)?;
+                std::io::copy(&mut fs::File::open(from)?, &mut dest)?;
+                dest.set_permissions(fs::metadata(from)?.permissions())?;
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
     Ok(())
 }
@@ -439,9 +468,6 @@ fn hash(files: &Files) -> String {
 }
 
 fn create(path: &Path, files: &Files) -> Result<()> {
-    if path.exists() {
-        return Err(Error::Other("Destination item already exists".into()));
-    }
     if files.is_empty() {
         return Err(Error::Other("An item needs files".into()));
     }
@@ -469,7 +495,7 @@ fn create(path: &Path, files: &Files) -> Result<()> {
             fs::create_dir_all(dest.parent().unwrap())?;
             fs::write(dest, bytes)?;
         }
-        fs::rename(tmp.path(), path)?;
+        publish(tmp.path(), path)?;
     }
     Ok(())
 }
@@ -807,6 +833,60 @@ mod tests {
     }
 
     #[test]
+    fn publication_preserves_a_destination_created_after_staging() {
+        let sb = Sandbox::new();
+        let root = sb.dir.path().canonicalize().unwrap();
+        for files in [
+            file("first"),
+            [("SKILL.md".into(), b"first".to_vec())].into(),
+        ] {
+            let stage = tempfile::tempdir_in(&root).unwrap();
+            let from = stage.path().join("item");
+            let to = stage.path().join("destination");
+            create(&from, &files).unwrap();
+            create(&to, &file("concurrent")).unwrap();
+            assert!(publish(&from, &to).is_err());
+            assert_eq!(read(&to).unwrap(), file("concurrent"));
+            assert_eq!(read(&from).unwrap(), files);
+        }
+        let from = root.join("source");
+        let to = root.join("destination");
+        create(&from, &[("SKILL.md".into(), b"first".to_vec())].into()).unwrap();
+        fs::create_dir(&to).unwrap();
+        assert!(publish(&from, &to).is_err());
+        assert_eq!(fs::read_dir(to).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn saves_during_verification_survive_at_the_original_path() {
+        let sb = Sandbox::new();
+        let root = sb.dir.path().canonicalize().unwrap();
+        for (name, files) in [
+            ("file", file("first")),
+            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
+        ] {
+            let from = root.join(format!("{name}-source"));
+            let to = root.join(format!("{name}-destination"));
+            create(&from, &files).unwrap();
+            let edited = if name == "file" {
+                file("edited")
+            } else {
+                [("attachment".into(), b"added".to_vec())].into()
+            };
+            copy_move(
+                &from,
+                &to,
+                &files,
+                || Ok(()),
+                || create(&from, &edited).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(read(&from).unwrap(), edited);
+            assert_eq!(read(&to).unwrap(), files);
+        }
+    }
+
+    #[test]
     fn cross_device_copy_keeps_source_edits_and_added_attachments() {
         let sb = Sandbox::new();
         for (name, files) in [
@@ -817,22 +897,33 @@ mod tests {
             let from = root.join(format!("{name}-source"));
             let to = root.join(format!("{name}-destination"));
             create(&from, &files).unwrap();
-            assert!(
-                copy_move(&from, &to, &files, || {
+            let error = copy_move(
+                &from,
+                &to,
+                &files,
+                || {
                     if from.is_dir() {
                         fs::write(from.join("attachment"), "added")?;
                     } else {
                         fs::write(&from, "edited")?;
                     }
                     Ok(())
-                })
-                .is_err()
-            );
+                },
+                || {},
+            )
+            .unwrap_err();
             assert_eq!(read(&to).unwrap(), files);
-            if from.is_dir() {
-                assert_eq!(fs::read(from.join("attachment")).unwrap(), b"added");
+            assert!(!from.exists());
+            let trash = fs::read_dir(root.join(".detached-trash"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path().join("item"))
+                .find(|path| path.is_dir() == (name == "folder"))
+                .unwrap();
+            assert!(error.to_string().contains(&trash.display().to_string()));
+            if trash.is_dir() {
+                assert_eq!(fs::read(trash.join("attachment")).unwrap(), b"added");
             } else {
-                assert_eq!(read(&from).unwrap(), file("edited"));
+                assert_eq!(read(&trash).unwrap(), file("edited"));
             }
         }
     }
@@ -848,7 +939,7 @@ mod tests {
             let from = root.join(format!("{name}-source"));
             let to = root.join(format!("{name}-destination"));
             create(&from, &files).unwrap();
-            copy_move(&from, &to, &files, || Ok(())).unwrap();
+            copy_move(&from, &to, &files, || Ok(()), || {}).unwrap();
             assert!(!from.exists());
             assert_eq!(read(&to).unwrap(), files);
         }
