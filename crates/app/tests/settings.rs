@@ -38,6 +38,7 @@ fn each_page_opens_by_its_id(cx: &mut TestAppContext) {
         ("keymap", "settings.keymap"),
         ("updates", "settings.updates"),
         ("repository", "settings.removed"),
+        ("sharing", "settings.sharing"),
     ];
     for (id, page) in pages {
         cx.update(|_, cx| settings::open(cx, id));
@@ -68,6 +69,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Stub",
         "Current repository",
         "Repository",
+        "Sharing",
     ];
     assert_eq!(nav(cx), groups);
     assert!(cx.find("stub").is_none());

@@ -33,11 +33,18 @@ impl Sandbox {
         let path = std::env::var("PATH").unwrap();
         let git = GIT.clone();
         let s = |p: &Path| p.display().to_string();
-        let vars = vec![
+        let mut vars = vec![
             ("HOME".into(), s(&home)),
             ("GIT_CONFIG_GLOBAL".into(), s(&global)),
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
         ];
+        for (key, folder) in [
+            ("DETACHED_CONFIG_DIR", "config"),
+            ("DETACHED_DATA_DIR", "data"),
+            ("DETACHED_CACHE_DIR", "cache"),
+        ] {
+            vars.push((key.into(), s(&dir.path().join(folder))));
+        }
         let state = AppState::new(
             dir.path().join("config"),
             Default::default(),

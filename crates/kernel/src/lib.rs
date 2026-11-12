@@ -12,6 +12,7 @@ pub mod nav;
 pub mod repo;
 pub mod resource;
 pub mod settings;
+pub mod sharing;
 pub mod ui_state;
 pub mod update;
 pub mod workspace;

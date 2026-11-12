@@ -7,10 +7,12 @@ use crate::accounts::store::{SystemStore, TokenStore};
 use crate::env::Env;
 use crate::error::Result;
 use crate::settings::Settings;
-use crate::{forge, paths, search::quick};
+use crate::{forge, search::quick};
 
 pub struct AppState {
     pub config_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub cache_dir: PathBuf,
     pub(crate) settings: Mutex<Settings>,
     pub(crate) revision: AtomicU64,
     pub env: RwLock<Env>,
@@ -30,7 +32,18 @@ impl AppState {
         env: Env,
         tokens: Arc<dyn TokenStore>,
     ) -> AppState {
+        let storage = crate::store::Tiers::overrides(|key| {
+            if key == "DETACHED_CONFIG_DIR" {
+                return Some(config_dir.clone());
+            }
+            env.vars
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.into())
+        });
         AppState {
+            data_dir: storage.data,
+            cache_dir: storage.cache,
             config_dir,
             settings: Mutex::new(settings),
             revision: Default::default(),
@@ -46,11 +59,15 @@ impl AppState {
 
     /// The app's state from its config dir, the login shell's PATH and the system's token store.
     pub fn boot() -> Result<AppState> {
-        let config_dir = paths::config_dir()?;
+        let storage = crate::store::Tiers::detect()?;
+        let config_dir = storage.config.clone();
         let settings = Settings::load(&config_dir);
         let (env, _) = Env::detect(settings.git_path.as_deref());
         let tokens = Arc::new(SystemStore::default());
-        Ok(AppState::new(config_dir, settings, env, tokens))
+        let mut state = AppState::new(config_dir, settings, env, tokens);
+        state.data_dir = storage.data;
+        state.cache_dir = storage.cache;
+        Ok(state)
     }
 
     pub fn env(&self) -> Env {

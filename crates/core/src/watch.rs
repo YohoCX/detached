@@ -198,9 +198,11 @@ impl Inner {
 }
 
 impl State {
-    /// The OS dropped events under `p`: what lies there or above it is stale, unless git ignores
-    /// `p`. An empty `p` is everything.
+    /// An empty path marks every repo; an ignored path marks none.
     fn dropped(&mut self, p: &Path, b: &mut Batch) {
+        if self.detached(p) {
+            return;
+        }
         if let Some(c) = &mut self.current
             && let Ok(rel) = p.strip_prefix(&c.root)
             && c.ignored(rel)
@@ -216,9 +218,17 @@ impl State {
         }
     }
 
-    /// Marks what `p` changed; true when the worktree's walk should run again: an ignore file
-    /// changed or a directory appeared.
+    fn detached(&self, p: &Path) -> bool {
+        self.repos.iter().any(|d| {
+            p.starts_with(d.git.join("detached")) || p.starts_with(d.common.join("detached"))
+        })
+    }
+
+    /// True when an ignore file or a new directory needs another worktree walk.
     fn mark(&mut self, p: &Path, kind: EventKind, b: &mut Batch) -> bool {
+        if self.detached(p) {
+            return false;
+        }
         let Some(name) = p.file_name().map(|n| n.to_string_lossy()) else {
             return false;
         };
@@ -496,6 +506,37 @@ mod tests {
 
     fn set(names: &[&str], t: &T) -> BTreeSet<String> {
         names.iter().map(|n| t.path(n)).collect()
+    }
+
+    #[test]
+    fn detached_events_mark_nothing_in_main_and_linked_worktrees() {
+        let t = T::new(&["main"]);
+        t.git(
+            "main",
+            &["worktree", "add", "-q", "-b", "side", &t.path("wt")],
+        );
+        let repos = discover(&[t.sb.path("ws").display().to_string()], &[]);
+        let mut state = State {
+            repos: repos.iter().filter_map(Dirs::of).collect(),
+            ..Default::default()
+        };
+        let common = canon(t.dir("main").join(".git")).unwrap();
+        for current in ["main", "wt"] {
+            state.current = Current::new(&t.path(current), &common);
+            t.write("main", ".git/detached/local/roles/reviewer.md");
+            let path = common.join("detached/local/roles/reviewer.md");
+            let mut batch = Batch::default();
+            assert!(!state.mark(&path, EventKind::Any, &mut batch));
+            state.dropped(&path, &mut batch);
+            assert!(batch.repos.is_empty());
+            assert!(batch.refs.is_empty());
+            t.write(current, ".detached/roles/shared.md");
+            let shared = canon(t.dir(current))
+                .unwrap()
+                .join(".detached/roles/shared.md");
+            state.mark(&shared, EventKind::Any, &mut batch);
+            assert_eq!(batch.repos, set(&[current], &t));
+        }
     }
 
     #[test]

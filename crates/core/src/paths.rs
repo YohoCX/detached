@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+pub const IDENTIFIER: &str = "com.w-devs.detached";
+
 /// `DETACHED_CONFIG_DIR`, else `com.w-devs.detached` in the OS config dir.
 pub fn config_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("DETACHED_CONFIG_DIR") {
@@ -12,8 +14,8 @@ pub fn config_dir() -> Result<PathBuf> {
 }
 
 /// Settings under a former identifier move over once, the newest first.
-fn in_base(base: &Path) -> PathBuf {
-    let dir = base.join("com.w-devs.detached");
+pub(crate) fn in_base(base: &Path) -> PathBuf {
+    let dir = base.join(IDENTIFIER);
     for old in ["dev.wdevs.detached", "dev.wdevs.workbench"] {
         if !dir.exists() {
             let _ = std::fs::rename(base.join(old), &dir);
