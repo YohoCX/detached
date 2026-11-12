@@ -11,12 +11,10 @@ Agents as first-class participants of the client:
 [PLAN-PANELS.md](PLAN-PANELS.md) builds multi-agent panels on it. The two plans share one order
 (§14).
 
-**Status (2026-11-12): draft, not accepted. Step 0 answered (§17). Review round 01
-(`.revmux/tasks/agent-host-plan/01-initial/`: revmux, 25 findings; Fable, B1–B10) is fixed in
-this text; round 02 is next. The owner settled §14's three choices on 2026-11-12: Claude on the
-user's own `claude` with any login (§2), the chat on ACP right after H5, and spike 0b before H1.
-Spike 0b is next; H1 waits for it. Panels isolate only an untrusted subject, through WSL2 on
-Windows (PLAN-PANELS §3). No choice is open. Nothing is built.**
+**Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
+their answers change are rewritten. Review round 01 (`.revmux/tasks/agent-host-plan/01-initial/`)
+is fixed; round 02 is next, then H1. No choice is open (§14). Codex's live rows wait until Codex is
+used. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09);
@@ -66,8 +64,12 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   its sessions with that cause (H4), and panels count it as a failed attempt, never as offline
   (PLAN-PANELS §7).
 - **Shutdown** closes stdin and waits 5 s before any signal; a killed app gives EOF by itself.
-  Windows adds a job object with `KILL_ON_JOB_CLOSE`. An exit with code 1 on `EPIPE` at shutdown
-  is normal.
+  - Claude's adapter exits in 20–40 ms, Codex's in 2 s.
+  - An exit with code 1 on `EPIPE` at shutdown is normal.
+- **The Windows job object is required.** Each adapter runs in a job with `KILL_ON_JOB_CLOSE`, and
+  the host closes the job as soon as the adapter has exited. On Windows, `session/cancel` leaves
+  the foreground command running, and Git Bash's tree outlives `claude.exe` when stdin closes;
+  closing the job ends everything in 0.5 s (H0b row 1).
 - **PTYs.** `portable-pty` moves from `app::terminal` to `core::proc` in H9; the emulator stays in
   `app`.
 
@@ -99,11 +101,11 @@ What every provider must do; the host holds each row:
 | --- | --- |
 | Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; the adapters pass their whole env on |
 | Dies with the host, no orphan | §1's shutdown |
-| Stop ends the turn and its foreground command | `session/cancel`; the chat's Stop also sends `_session/async_task/stop` for the turn's background tasks |
+| Stop ends the turn and its foreground command | `session/cancel` (on Windows the foreground command runs on until the adapter goes; a TECHDEBT row). Background tasks: `_session/async_task/stop`, which works only when the client declares `_meta.jetbrains.air` with `asyncTasks`. We declare it; H4 checks what else the declaration changes, and drops it with stopTask parity if it changes anything else |
 | "Always allow" writes no file | the host keeps always-rules and sends only `allow_once` (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; panel participants: `[]` |
 | MCP servers | chat: as today; participants: `strictMcpConfig: true`, or the account's claude.ai connectors join |
-| Model, effort, mode as asked | `session/set_config_option` after `session/new` and after every `session/load`, which otherwise falls back to `~/.claude/settings.json` (about 60× the cost in the spike) |
+| Model, effort, mode as asked | `configOptions` on `session/new` and on every `session/load`, so the session starts in them. Without them a load falls back to `~/.claude/settings.json` (about 60× the cost), and the CLI starts in `auto` with `--allow-dangerously-skip-permissions`; `_meta…permissionMode` is ignored. Later switches use `set_config_option` |
 | Questions reach the host | the client declares `elicitation.form` |
 | Usage is reported | `usage_update`, `config_option_update`, `current_mode_update`; missing means unknown, never zero |
 
@@ -150,24 +152,27 @@ Node-free, from the Settings "Agents" page; built in step H3.
     default). A manual install may take it at once.
 - **Download.** Size and sha256 are checked before extract. Extraction refuses any entry that
   leaves its folder (path traversal). The folder is installed by an atomic rename.
-- **Claude's adapter** is our own `bun build --compile` of `claude-agent-acp`, pinned by its
-  lockfile, with its license file shipped. Upstream's Node-free archive (177–209 MB) bundles a CLI
-  we would not use. The CLI is the user's (§2); H0b checks that the adapter runs under bun.
-- **Codex's adapter**: first check upstream for a native `codex-acp` binary (an earlier Zed
-  `codex-acp` was Rust).
-  - If there is one: its release assets.
-  - Otherwise: the same lockfile-pinned bun build, with its license file.
-  - It runs the user's `codex` through `CODEX_PATH`.
+- **Both adapters are our own `bun build --compile`**, pinned by lockfile, with their license
+  files shipped.
+  - **Claude's** (`--omit optional`, so the SDK's bundled CLI stays out) is 92 MB on macOS and
+    112 MB on Linux. It ran sessions, turns, cancel and load against the user's `claude` (H0b row
+    9).
+  - **Codex's** is 91 MB. There is no native upstream: `agentclientprotocol/codex-acp` ships no
+    assets, and Zed's Rust one stopped at 0.16.0. It runs the user's `codex` through `CODEX_PATH`.
+- **Install type does not matter.** Every `claude` of one version is the same file, whatever
+  installed it, so only `min_cli` is checked.
 - **No "latest from npm".**
 - **Versions side by side.**
   - A new version starts its own adapter process.
   - Running sessions finish on the old one.
   - The previous version is kept for rollback; older ones are removed.
-- **CI vetting** on each catalog bump: download, verify, install `claude` with the official
-  installer, run `initialize` and Claude's `session/new`, which needs no login (the spike's CI did
-  it).
-  - Without a paid key that is all. Codex's `session/new` needs a login, and no prompt turn runs.
-  - With a test key budgeted by the owner, one turn per adapter is added.
+- **CI vetting** on each catalog bump, with no model calls and no secrets in CI (the owner's
+  rule):
+  - download and verify;
+  - install `claude` with the official installer;
+  - run the real CLI through the adapter against the scripted fake Messages API (§17) on macOS,
+    Linux and Windows: a turn, cancel, load, and the sandbox.
+  - Codex's `session/new` runs on a placeholder API-key login, which reaches no server.
 - **Windows**: SmartScreen and Defender on a downloaded, never-run executable is an owner check
   in H3.
 
@@ -205,44 +210,74 @@ a session loads none of it.
   - Requests carry the tool's kind, title, raw input and options.
 - **What asks** (Claude, `default`): host MCP tools ask; `Read` and commands Claude Code classes as
   read-only (`git diff`, `rg` in the cwd) do not. The host's tools are pre-allowed through
-  `allowedTools` (`mcp__detached-host-<id>__*`), which 0b confirms.
-- **`.env`.** Claude denies `Read(//**/.env*)` and the matching Bash patterns through
-  `disallowedTools`, as the sidecar does; H4 tests it. Codex's sandbox does not protect reads, and
-  its sessions say so.
+  `allowedTools` (`mcp__detached-host-<id>__*`), as H0b confirmed.
+- **`.env` in the chat.** Claude denies `Read(//**/.env*)` and the matching Bash patterns through
+  `disallowedTools`, as the sidecar does.
+  - The rules also stop Bash commands on literal paths (`cat`, `grep`, `sed`, `cp` of `.env`).
+  - Globs and interpreters get through (`cat .e*`, `python3 -c "open('.env')"`).
+  - So this is a mitigation, and the chat's docs say so. Only the sandbox's `denyRead` enforces it.
 - **Agents keep the shell everywhere**
   ([decision](docs/decisions/2026-11-12-panels-by-trust-and-wsl.md)). The chat and a panel over a
   trusted subject run as the chat does, with no sandbox. Host tools (§7) come in addition to the
   shell, never instead of it.
-- **Isolation applies only to an untrusted subject** (PLAN-PANELS §3), such as someone else's MR.
-  Its participants are read-only: no write, no egress from tools, no cross-read, enforced by the
-  provider:
+- **Isolation applies only to an untrusted subject** (PLAN-PANELS §3). Its participants have no
+  write, no egress from tools, and no cross-read. H0b tested this on macOS, Ubuntu 22.04 and 24.04,
+  and WSL2.
   - **Claude:**
     - `tools: [Read, Grep, Glob, Bash]`;
-    - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed, allowUnsandboxedCommands:
-      false, filesystem.denyWrite: [cwd], filesystem.denyRead: [..], network: deny}`;
-    - `Read(..)` deny rules for the same paths, since the sandbox covers Bash and the deny rules
-      cover the file tools.
+    - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false, filesystem.denyWrite: [cwd], filesystem.denyRead: [..],
+      network: {strictAllowlist: true}}`. Without `strictAllowlist`, an unlisted host becomes a
+      permission request; the host rejects every such request anyway;
+    - `Read(..)` deny rules for the same paths;
+    - its own `CLAUDE_CODE_TMPDIR` under the run's folder. `/tmp/claude-<uid>` is shared by every
+      Claude session of the user and is readable and writable inside the sandbox, so it is denied.
 
-    The denied reads: `<git common dir>/detached/`, `~/.claude/projects`, Codex's sessions, the main
-    checkout's `.env*`, `~/.ssh`, `~/.aws`, `~/.config/gh`, and the data tier's other runs.
+    The denied reads: `<git common dir>/detached/`, `~/.claude/projects`, Codex's sessions,
+    `/tmp/claude-<uid>`, the main checkout's `.env*`, `~/.ssh`, `~/.aws`, `~/.config/gh`, and the
+    data tier's other runs.
 
-    The sandbox needs Seatbelt on macOS, and on Linux `bubblewrap`, `socat` and unprivileged user
-    namespaces (Ubuntu 24.04 restricts them). Where it is unavailable, `failIfUnavailable`
-    refuses, and the row says "sandbox unavailable: install bubblewrap".
-  - **Windows:** Claude's sandbox does not run natively, so an isolated Claude participant runs in
-    WSL2, where the Linux sandbox works.
-    - The host starts the adapter and the user's `claude` inside WSL (`wsl.exe -d <distro> --
-      <adapter>`) over the same stdio.
-    - The pinned tree lives in WSL's own filesystem for speed: fetched from the Windows repo by its
-      SHA, then a worktree there.
-    - The host's HTTP tool is reached through WSL's localhost forwarding; the `Host` check accepts
-      that address.
+    With `autoAllowBashIfSandboxed` on, no Bash command asks; the escape flag still ran sandboxed.
+  - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
+    `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
+    - **22.04:** `sudo apt install bubblewrap socat`.
+    - **24.04:** the same, plus an AppArmor profile for `bwrap`, written to `/etc/apparmor.d/bwrap`
+      and loaded with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. The alternative is
+      `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, which holds until reboot.
+
+      ```
+      abi <abi/4.0>,
+      include <tunables/global>
+      profile bwrap /usr/bin/bwrap flags=(unconfined) {
+        userns,
+        include if exists <local/bwrap>
+      }
+      ```
+    - **Codex on 24.04:** its bundled `bwrap` needs the sysctl, or every command fails closed.
+  - **Windows:** Claude's sandbox does not run natively (an unreleased native sandbox is gated off),
+    so an isolated Claude participant runs in WSL2, where the Linux sandbox enforces everything
+    above.
+    - The host starts the adapter and the user's `claude` with
+      `wsl.exe -d <distro> -- env CLAUDE_CODE_EXECUTABLE=… <adapter>` over stdio, the variables
+      passed through `WSLENV`.
+    - The pinned tree lives in WSL's own filesystem, fetched from the Windows repo by its SHA. It
+      is 30–450× faster than `/mnt/<drive>`.
+    - **Reaching the host tool from WSL.** In NAT mode WSL cannot reach the host's `127.0.0.1`, so
+      the host also listens on the WSL gateway address (from `ip route` in the distro), with the
+      same secret binding.
+      - The `Host` check accepts that address.
+      - The installer adds an inbound firewall rule for that interface (admin, once); without it
+        the connection is dropped.
+      - Mirrored networking and Windows 11's Hyper-V firewall are owner checks: CI's Server 2025
+        cannot run them.
     - Without WSL, Detached offers to install it, or to run the participant unisolated after a
-      consent that names PLAN-PANELS §4's lines 2–4.
-    - A native Windows sandbox is in docs/BACKLOG.md.
-  - **Codex:** the `read-only` mode, its OS sandbox: commands run inside it, with no write and no
-    network. **It does not stop cross-reads.** The host approves host-tool calls and denies every
-    request to run outside the sandbox.
+      consent that names PLAN-PANELS §4's lines 2–4 and 12.
+  - **Codex:** the `read-only` mode's OS sandbox (no write, no network), with a permission profile
+    that also denies reads: `[permissions.reviewer] extends = ":read-only"`, and under
+    `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
+    - That blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter it is
+      checked live once Codex is used.
+    - The host approves host-tool calls and denies every request to leave the sandbox.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
 - **A woken turn (§9)** runs with the host's always-rules suspended and in the provider's asking
@@ -259,10 +294,11 @@ a session loads none of it.
     restore progress. Snapshot and restore stay core calls.
 - **Watching.** A session's trees join the watcher's list while it lives.
 - **Activity** shows a running turn as a job; Stop is its cancel.
-- **Resume** is `session/load`: about 0.4 s, history replayed, all of it re-sent to the model with a
-  cold cache. Then model, effort and mode are set again (§2).
+- **Resume** is `session/load` with the session's `configOptions` (§2): about 0.45 s, history
+  replayed, all of it re-sent to the model with a cold cache.
 - **Memory.** A live Claude session is a `claude` CLI of 250–320 MB beside its adapter of about
-  140 MB; five took 1.5–1.7 GB. Headless sessions close when they report.
+  140 MB; five took 1.5–1.7 GB. `session/close` ends that CLI within 3 s and frees about 235 MB,
+  so headless sessions close as soon as they report.
 - **Past sessions** are `Resource<Vec<PastSession>>` per provider and folder. Codex's list also
   holds the Codex CLI's and VS Code's sessions; those are hidden.
 - **Archive** is a flag in the host's index, since ACP offers it only to clients declaring
@@ -276,14 +312,17 @@ Agents get Detached's data and a closed list of actions as tools.
   random secret, passed in `session/new`'s `mcpServers`.
   - **On Claude the URL is in argv.** The SDK passes `--mcp-config <json>` to the `claude` CLI, so
     `ps -ww` or `/proc/<pid>/cmdline` shows it.
-  - So the secret is single-use: the first `initialize` on it binds that path to the
-    `Mcp-Session-Id` it returns, and later requests without that id are refused. The CLI connects
-    before any tool of the session can run.
-  - A refused reconnect fails the session's tools. A panel attempt then resumes with a new secret;
-    a chat shows it and offers the same.
+  - **So the secret is single-use.** The CLI first sends `server/discover`, which the host
+    answers without binding. Then exactly one `initialize` binds the path to the
+    `Mcp-Session-Id` it returns, and later requests without that id are refused.
+  - **What H0b saw.** A second client's `initialize` and `tools/list` from `ps`'s URL were refused,
+    while the session's own calls went on. Over three turns the CLI sent no second `initialize`.
+  - **Every `session/load` passes a new secret**, since a load starts a new CLI.
+  - **Untested:** a reconnect after a long idle or a server error. A refused reconnect fails the
+    session's tools; a panel attempt then resumes with a new secret, and a chat offers the same.
   - Codex gets its servers as thread config over JSON-RPC, not in argv.
-  - Every request must carry `Host: 127.0.0.1:<port>` and no `Origin` header, so a browser's DNS
-    rebinding is refused.
+  - Every request must carry `Host: 127.0.0.1:<port>` (or the WSL gateway's address, §5) and no
+    `Origin` header, so a browser's DNS rebinding is refused.
 - **Two tools**, `detached_read` and `detached_act`, both pre-allowed (§5). Every agent and
   participant gets them in addition to its shell. A refused tool made the
   agent answer in prose, so a refusal is a failure the host sees.
@@ -461,10 +500,11 @@ Later steps add to the SDL:
 | Today on the sidecar | On ACP | Gap and what the host does |
 | --- | --- | --- |
 | Streaming, `/` commands, `@` files | updates, `available_commands_update` | none |
-| Model, effort, mode, `auto` re-armed | config options and `set_config_option` | no per-model metadata: the host re-reads options after a switch and re-arms `auto` when offered |
-| History, resume, list, delete | `session/load`, `list`, `delete` | model set again after a load; Codex's delete archives, the UI says so |
+| Model, effort, mode, `auto` re-armed | `configOptions` at start and load, `set_config_option` after | no per-model metadata: the host re-reads options after a switch and re-arms `auto` when offered |
+| History, resume, list, delete | `session/load`, `list`, `delete` | `configOptions` on every load; Codex's delete archives, the UI says so |
 | Archive | — | a flag in the host's index |
-| Stop with `stopTask` | `session/cancel`, `_session/async_task/stop` | none |
+| Stop with `stopTask` | `session/cancel`, `_session/async_task/stop` | stopTask parity kept by declaring JetBrains AIR's `asyncTasks` (§2); on Windows, Stop leaves the foreground command running until the adapter goes (TECHDEBT) |
+| The `.env` deny | `Read(..)` and Bash rules | literal paths only: a mitigation, stated (§5) |
 | Approval cards, questions | `request_permission`, elicitation | `elicitation.form` declared |
 | Context ring | `usage_update {used, size}` | **the breakdown by category is dropped** |
 | Plan limits in the bar | `_claude/rateLimit` warnings, `/usage` as markdown | `/usage` sent to a utility session (it answers without the model), parsed against the pinned adapter with a test; unknown when the parse fails; Codex unknown |
@@ -573,9 +613,15 @@ settings, ops and invalidation findings.
 PLAN-FOUNDATION §12's gate, with these changes:
 - Branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`.
 - **revmux stays.** From P3 on, a step also runs through the panels' gate for comparison.
-- **Real-adapter tests** run in a CI job with test keys, on macOS, Linux and Windows, from H4 on,
-  if the owner budgets the keys. Without keys, each such test is listed in TECHDEBT as unverified
-  on CI and runs on the owner's Mac. The rows that cannot hold on an OS are in PLAN-PANELS §4.
+- **Real-adapter tests need no credentials.** The owner's rule is no model calls and no secrets in
+  CI.
+  - They drive the real adapter and the user's real `claude` against a scripted fake Messages
+    API: the spike's `src/fake.rs`, pointed at by `ANTHROPIC_BASE_URL`. The CLI runs the scripted
+    tool calls with its real permissions and sandbox.
+  - They run in CI on macOS, Ubuntu 22.04 and 24.04, Windows, and WSL2 inside the Windows job
+    (GitHub's runner has it), from H4 on, beside the fake ACP agent.
+  - Codex runs on a placeholder API-key login until Codex is used.
+  - The rows that cannot hold on an OS are in PLAN-PANELS §4.
 
 ### Step H0. The adapter spike
 
@@ -603,9 +649,15 @@ Linux and Windows, the Linux sandbox, any Codex row live. Those are H0b.
 
 ### Step H0b. Spike 0b
 
-The same throwaway branch, on our bun-compiled `claude-agent-acp` over `ByteStreams` against
-`claude` from the official installer, with a test login on macOS, Linux (Ubuntu 22.04 and 24.04)
-and Windows (natively and in WSL2), and Codex logged in on the owner's Mac.
+Answered on `agent-host/0-spikes` at 93e0f36 (`spikes/acp/ANSWERS-0b.md`), 2026-11-12:
+- **Versions:** our bun builds of `claude-agent-acp` 0.106.0 and `codex-acp` 2.6.0, the
+  official installer's `claude` 2.1.322, Codex 0.166.0.
+- **How:** core-style spawning over `ByteStreams` with an env built from nothing, against the
+  scripted fake Messages API.
+- **Where:** macOS, Ubuntu 22.04 and 24.04, Windows Server 2025 natively and in WSL2 (CI runs
+  43193455379 to 43201622901). Real Haiku turns ran on macOS only, about $0.01.
+- **Codex** ran through `codex sandbox` and a placeholder login; its live turn is deferred until
+  Codex is used.
 
 | # | Question | If | Then |
 | --- | --- | --- | --- |
@@ -622,12 +674,64 @@ and Windows (natively and in WSL2), and Codex logged in on the owner's Mac.
 | 11 | Windows: a review's speed with the pinned tree in WSL's filesystem, against the Windows filesystem | WSL's is not faster | the tree stays on the Windows side, reached as `/mnt/<drive>` |
 | 12 | Windows: the adapter and `claude` started inside WSL over stdio, and the host's HTTP tool reached from WSL (NAT and mirrored networking) | unreachable in NAT mode | the host listens on the WSL interface too, with the same secret binding, or requires mirrored networking |
 
-Done when every row is answered here.
+Answers:
+1. **Lifecycle.**
+   - macOS and Linux: cancel ended the command in 6–36 ms, and stdin close and a killed host left
+     nothing.
+   - Windows: cancel left `perl.exe` running, and after stdin close `bash.exe` and `perl.exe`
+     outlived `claude.exe`. Closing the job after the adapter's exit ended all of it in 0.5 s.
+   - **Then fired** for cancel on Windows: §1's job close is required, and Stop's gap is a
+     TECHDEBT row (§13).
+2. **Linux sandbox.** 22.04 needs `bubblewrap` and `socat`. 24.04 also refuses until bwrap gets an
+   AppArmor profile, or the sysctl is set until reboot. The CLI's message names the fix. Codex's
+   bundled bwrap needs the sysctl. **Then fired:** §5 gives the commands.
+3. **Deny rules.** Writes and denied reads failed everywhere. `curl` got through until
+   `strictAllowlist: true`, and `/tmp/claude-<uid>` was a shared read and write channel until each
+   session got its own `CLAUDE_CODE_TMPDIR` with that path denied. **Then fired:** §5 and
+   PLAN-PANELS §4 changed.
+4. **`autoAllowBashIfSandboxed`.** On, no Bash command asks and nothing escaped; off, every command
+   asks. It stays on.
+5. **Pre-allow.** `allowedTools: ["mcp__detached-host-<id>__*"]` pre-allowed every call. It stands.
+6. **The binding.** `ps -ww` shows the URL. The CLI sends `server/discover`, then one
+   `initialize`. A second client was refused, and there was no reconnect over three turns.
+   **Then did not fire:** §7 answers `server/discover` without binding.
+7. **Codex** (deferred live):
+   - `:read-only` stops writes and egress but not reads; a profile extending it with denied paths
+     stops those reads;
+   - no `config.toml` entries pile up;
+   - same-named servers are skipped, live;
+   - no native upstream adapter, and our bun build works;
+   - stdin close takes 2 s.
+
+   §5 and §3 changed.
+8. **Stop, close, `.env`.**
+   - `_session/async_task/stop` works only for a client declaring JetBrains AIR's `asyncTasks`.
+   - `session/close` freed about 235 MB in 3 s.
+   - The `.env` rules stop literal paths, but not `cat .e*` or `python3`.
+
+   **Then fired:** §2 declares AIR, and §5 calls the deny a mitigation.
+9. **The bun build.** 92 MB on macOS and 112 MB on Linux; session, turn, cancel and load worked
+   against the user's `claude`. Every `claude` of a version is the same file. Distribution is
+   closed: Node-free, with the user's own `claude`.
+10. **WSL2.** The Linux sandbox enforced everything, with no AppArmor step. The native Windows
+    sandbox is gated off. F holds.
+11. **Speed.** WSL's filesystem is 30–450× faster than `/mnt/d`; the tree stays there.
+12. **WSL networking.** `wsl.exe` over stdio works. In NAT mode `127.0.0.1` is unreachable; a
+    listener on the gateway address works once a firewall rule allows it. Mirrored mode is
+    unsupported on Server 2025. **Then fired:** §5's gateway listener and firewall rule, with
+    mirrored mode as an owner check.
+
+Also found:
+- **`configOptions` on `session/new` and `session/load`** set mode and model before the session
+  starts, which fixes the load's model fallback.
+- **The CLI starts in `auto`** with `--allow-dangerously-skip-permissions` until the mode is set.
+
+§2 changed for both.
 
 ### Step H1. The owner accepts the plans
 
-Both plans, after spike 0b's answers are written in and round 02 has no major finding. The owner
-accepts the six write decisions; each goes to `docs/decisions/`.
+Both plans, after round 02 has no major finding. The owner accepts the six write decisions; each
+goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -690,14 +794,18 @@ Work:
 1. `core::proc` and `crates/acp` per §1.
 2. Manifests and §2's rows.
 3. `kernel::Session` without a view: start, prompt, stream, cancel, load, end; §6's sequences.
-4. §5's permissions, the `.env` deny.
-5. `bin/fake_acp.rs`, a scripted agent that:
+4. §5's permissions, the `.env` deny, the AIR declaration.
+5. The Windows job object, closed when the adapter exits.
+6. The scripted fake Messages API from the spike, as the real-adapter harness (§17).
+7. A docs/TECHDEBT.md row: on Windows, Stop leaves the foreground command running until the
+   session's adapter goes.
+8. `bin/fake_acp.rs`, a scripted agent that:
    - streams, stalls and dies;
    - asks permission;
    - answers in prose without a tool;
    - sends malformed arguments;
    - exits 1 on `EPIPE`;
-   - reports a different default model after `session/load` until `set_config_option` arrives;
+   - reports a different default model after `session/load` unless `configOptions` name one;
    - spawns a child in its own process group that outlives a group kill and exits on stdin EOF.
 
 Tests:
@@ -713,9 +821,17 @@ Tests:
 - a chat in an untrusted repo starts with `["user"]`, a participant with `[]` and only the host's
   MCP servers;
 - a trust item changed mid-turn ends the session, and an edit to `CLAUDE.md` does not.
-- On real adapters (§17's gate): the `.env` deny through `Read` and `cat`.
+- On the real adapter and `claude` against the fake Messages API, on every OS of §17:
+  - no session runs a tool in `auto` before its mode is set: the first scripted tool call asks
+    under `default`;
+  - a load comes back on the model it had;
+  - the `.env` deny refuses `Read` and `cat .env`;
+  - on Windows, closing the job after the adapter's exit leaves no `bash.exe` or command;
+  - the AIR declaration changes nothing but async stop (the adapter's other behaviors compared
+    with and without it).
 
-Done when the chat still runs on the sidecar and a headless session runs on both real adapters.
+Done when the chat still runs on the sidecar and a headless session passes the harness on every
+OS of §17.
 
 The owner checks: a headless session in a temp repo; kills the app mid-turn and finds no process.
 
