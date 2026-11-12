@@ -18,4 +18,4 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - symlinks: they need privilege on Windows;
   - edits to the shared `info/exclude`, which would also hide paths in the main checkout. A copy of
     a file the repo does not ignore is refused instead.
-- Test: PLAN-AGENT-HOST H6.
+- Test: PLAN-AGENT-HOST H6; PLAN-PANELS P4 for the untrusted Fix.

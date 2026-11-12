@@ -13,7 +13,8 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
-fixed; round 07 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
+fixed, and round 07 partly: the untrusted Fix's write path (PLAN-PANELS §12) waits for the owner's
+answer on whether it becomes patch-only. Then round 08 and H1. No other choice is open (§14). Codex stays off until H13a. Nothing is
 built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -254,11 +255,25 @@ a session loads none of it.
       the user and is readable and writable inside the sandbox, so it is denied.
 
     The denied reads:
+    - **all of `$HOME`**, other users' folders, and `/Volumes` on macOS, except what the CLI needs:
+      its config dir (a temp dir the host sets), the tree, and the session's temp dir. A list of
+      known stores would always miss one;
     - the run records: `<git common dir>/detached/`;
-    - other sessions' traces: `~/.claude/projects`, Codex's sessions, `/tmp/claude-<uid>`;
-    - secrets: the main checkout's `.env*`, `~/.ssh`, `~/.aws`, `~/.config/gh`;
+    - `/tmp/claude-<uid>`;
+    - the main checkout's `.env*`;
     - the data tier's other runs, and `data/tmp/` except the participant's own directory;
     - `/mnt` under WSL.
+
+    If the sandbox cannot express "deny home except", the fallback is an enumerated list that
+    includes at least:
+    - `~/.ssh`, `~/.aws`, `~/.config/gh`;
+    - `~/.git-credentials`, `~/.config/git/credentials`;
+    - `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.cargo/credentials*`;
+    - `~/.docker/config.json`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`;
+    - the Keychain files (`~/Library/Keychains`);
+    - `~/.claude*` other than the session's own, and Codex's sessions.
+
+    P2 records which form holds, and threat line 4's test seeds a target in each class.
 
     If the sandbox cannot allow a path under a denied parent, each participant's tmp directory
     gets a random name under a parent of mode 0711, which cannot be listed. P2's line-12 test
