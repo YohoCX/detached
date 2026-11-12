@@ -104,7 +104,7 @@ updates signed with the key it was built with.
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
 
 A panic leaves a report in `crashes/` of the config directory (on macOS `~/Library/Application
-Support/dev.wdevs.detached`). Release builds carry no symbols, so its backtrace is addresses; on
+Support/com.w-devs.detached`). Release builds carry no symbols, so its backtrace is addresses; on
 macOS the release's `Detached-macos-<arch>-dSYM.zip` names them, with the report's load address:
 
 ```sh

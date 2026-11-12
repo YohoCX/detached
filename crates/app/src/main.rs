@@ -30,7 +30,7 @@ fn main() {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        cx.set_app_identity("dev.wdevs.detached", "Detached");
+        cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
         ui_state::init(&core.config_dir, cx);
         let keys = keymap::load(core.clone(), cx);

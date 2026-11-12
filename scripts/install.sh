@@ -27,7 +27,7 @@ main() {
 
   if pgrep -qf "Detached.app/Contents/MacOS/detached"; then
     echo "Quitting Detached."
-    osascript -e 'quit app id "dev.wdevs.detached"'
+    osascript -e 'quit app "Detached"'
   fi
   mkdir -p "$dir"
   rm -rf "$dir/Detached.app"

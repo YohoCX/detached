@@ -2,8 +2,8 @@
 
 JetBrains macOS keymap. On Windows and Linux, Cmd is Ctrl and `Meta` names the Windows/Super key.
 Override chords by action id in `keymap.json` in the app's config directory
-(`~/Library/Application Support/dev.wdevs.detached`, `%APPDATA%\dev.wdevs.detached`,
-`~/.config/dev.wdevs.detached`), e.g. `{"file.goto": "Cmd+Shift+N"}`; an override that does not
+(`~/Library/Application Support/com.w-devs.detached`, `%APPDATA%\com.w-devs.detached`,
+`~/.config/com.w-devs.detached`), e.g. `{"file.goto": "Cmd+Shift+N"}`; an override that does not
 parse unbinds the action. M3 rows keep their chords free until their actions exist. Owner is the
 [PLAN-NATIVE.md](../PLAN-NATIVE.md) vertical that registers the action's handler.
 
