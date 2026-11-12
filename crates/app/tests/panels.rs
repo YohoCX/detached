@@ -56,7 +56,8 @@ fn finding_location_opens_a_diff_in_the_run(cx: &mut TestAppContext) {
         sb.commit(&repo, "crates/core/src/watch.rs", &text, "watcher");
         fs::write(
             repo.join("crates/core/src/watch.rs"),
-            text.replace("line 228\n", "changed line 228\n"),
+            text.replace("line 20\n", "changed line 20\n")
+                .replace("line 228\n", "changed line 228\n"),
         )
         .unwrap();
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");

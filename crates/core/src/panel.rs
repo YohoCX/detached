@@ -1,10 +1,9 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::git::runner::{self, Kind};
 use crate::state::AppState;
 
@@ -146,8 +145,8 @@ pub fn import(path: &Path) -> Result<Run> {
         run.duration_ms = m.duration_ms;
         run.tokens = m.tokens;
     }
-    // A failed revmux run can leave an empty manifest and only terminal archive events.
-    if !has_report && run.participants.is_empty() {
+    // Interrupted rounds may have only events, even with a populated manifest.
+    if !has_report && let Some(events) = optional(&path.join("events.jsonl"))? {
         #[derive(Deserialize)]
         struct Event {
             kind: String,
@@ -155,13 +154,17 @@ pub fn import(path: &Path) -> Result<Run> {
             agent: String,
             #[serde(default)]
             text: String,
+            #[serde(default)]
+            findings: Vec<Finding>,
         }
-        let file = fs::File::open(path.join("events.jsonl"))?;
-        for line in BufReader::new(file).lines() {
-            let e: Event = serde_json::from_str(&line?)?;
+        for p in &mut run.participants {
+            p.raised = 0;
+        }
+        for line in events.lines() {
+            let e: Event = serde_json::from_str(line)?;
             if !matches!(
                 e.kind.as_str(),
-                "agent_started" | "agent_done" | "agent_degraded"
+                "agent_started" | "agent_done" | "agent_degraded" | "findings"
             ) {
                 continue;
             }
@@ -185,6 +188,10 @@ pub fn import(path: &Path) -> Result<Run> {
                 "agent_degraded" => {
                     p.degraded = true;
                     p.cause = e.text;
+                }
+                "findings" => {
+                    p.raised += e.findings.len();
+                    run.findings.extend(e.findings);
                 }
                 "agent_done" => {
                     p.degraded = false;
@@ -237,16 +244,13 @@ pub fn list(root: &Path) -> Result<Rounds> {
 
 pub fn for_repo(core: &AppState, repo: &str) -> Result<Rounds> {
     let repo = Path::new(repo);
-    let common = runner::out(
+    let root = runner::out(
         &core.env(),
         repo,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        &["rev-parse", "--show-toplevel"],
         Kind::Read,
     )?;
-    let common = PathBuf::from(common.trim());
-    let root = common
-        .parent()
-        .ok_or_else(|| Error::Other("Git common directory has no parent".into()))?;
+    let root = PathBuf::from(root.trim());
     list(&root.join(".revmux/tasks"))
 }
 
@@ -319,6 +323,45 @@ mod tests {
     }
 
     #[test]
+    fn event_only_round_keeps_completed_reviewers_findings() {
+        let r = fixture("agent-host-plan/09-after-fix");
+        assert_eq!(r.findings.len(), 2);
+        for name in ["fit", "scope"] {
+            let p = r.participants.iter().find(|p| p.name == name).unwrap();
+            assert!(!p.degraded);
+            assert!(p.cause.is_empty());
+            assert_eq!(p.raised, 1);
+            assert!(r.findings.iter().any(|f| f.sources == [name]));
+        }
+        let risk = r.participants.iter().find(|p| p.name == "risk").unwrap();
+        assert!(risk.degraded);
+        assert_eq!(risk.cause, "claude run stopped: context canceled");
+        assert_eq!(risk.raised, 0);
+    }
+
+    #[test]
+    fn events_are_imported_with_manifest_participants() {
+        let sb = Sandbox::new();
+        let dir = sb.path("task/round");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("manifest.json"),
+            r#"{"agents":[{"name":"fit","raised":1}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            include_str!("../tests/fixtures/revmux/agent-host-plan/09-after-fix/events.jsonl"),
+        )
+        .unwrap();
+        let r = import(&dir).unwrap();
+        assert_eq!(r.findings.len(), 2);
+        assert_eq!(r.participants.len(), 4);
+        assert_eq!(r.participants[0].raised, 1);
+        assert!(!r.participants[0].degraded);
+    }
+
+    #[test]
     fn report_only_and_sources_degraded_are_supported() {
         let sb = Sandbox::new();
         let dir = sb.path("task/round");
@@ -334,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_rounds_from_the_common_repo_and_keeps_import_errors() {
+    fn lists_rounds_from_the_worktree_and_keeps_import_errors() {
         let sb = Sandbox::new();
         let repo = sb.path("repo");
         fs::create_dir_all(&repo).unwrap();
@@ -345,10 +388,10 @@ mod tests {
             &repo,
             &["worktree", "add", "-qb", "other", wt.to_str().unwrap()],
         );
-        let dir = repo.join(".revmux/tasks/task/round");
+        let dir = wt.join(".revmux/tasks/task/round");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("report.json"), r#"{"sources":{},"findings":[]}"#).unwrap();
-        let bad = repo.join(".revmux/tasks/task/bad");
+        let bad = wt.join(".revmux/tasks/task/bad");
         fs::create_dir_all(&bad).unwrap();
         fs::write(bad.join("findings.json"), "broken").unwrap();
         let r = for_repo(&sb.state, wt.to_str().unwrap()).unwrap();
@@ -357,5 +400,43 @@ mod tests {
         assert_eq!(r.errors.len(), 1);
         assert!(r.errors[0].starts_with("task/bad:"));
         assert!(list(&sb.path("missing")).unwrap().runs.is_empty());
+    }
+
+    #[test]
+    fn lists_rounds_in_a_submodule_and_a_separate_git_dir_repo() {
+        let sb = Sandbox::new();
+        let parent = sb.clone_pair("parent");
+        let source = sb.clone_pair("source");
+        sb.git(
+            &parent,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                source.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        let separate = sb.path("separate");
+        sb.git(
+            sb.dir.path(),
+            &[
+                "init",
+                "-q",
+                "--separate-git-dir",
+                sb.path("metadata.git").to_str().unwrap(),
+                separate.to_str().unwrap(),
+            ],
+        );
+        for repo in [parent.join("sub"), separate] {
+            let dir = repo.join(".revmux/tasks/task/round");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("report.json"), r#"{"sources":{},"findings":[]}"#).unwrap();
+            let r = for_repo(&sb.state, repo.to_str().unwrap()).unwrap();
+            assert!(r.errors.is_empty());
+            assert_eq!(r.runs.len(), 1);
+            assert_eq!((&*r.runs[0].task, &*r.runs[0].round), ("task", "round"));
+        }
     }
 }
