@@ -1,5 +1,6 @@
 # Spike 0b's scenarios on the fake API. Needs SPIKE, ADAPTER, CLAUDE (the user's claude), RUNS.
 D=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+RUNS=${RUNS:-$RUNNER_TEMP/runs}
 M=MARK; M=${M}CMD
 
 # A run dir with a temp HOME, a tiny repo with secrets to steal, and a marked link to claude.
