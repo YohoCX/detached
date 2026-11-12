@@ -7,8 +7,10 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - the recipe copies ignored files (`.env`, `.env.local`) at mode 0600 and runs its install and
     teardown commands;
   - remove keeps the branch.
-- On an untrusted subject, a Fix's worktree runs no recipe copies and no `install`, and the host,
-  not the agent, commits its diff with hooks and `core.fsmonitor` off (PLAN-PANELS §12).
+- On an untrusted subject the agent works in a plain export with no `.git`. The host copies its
+  changed files into a managed worktree the agent never touched, and commits there with hooks,
+  `core.fsmonitor` and signing off, through `--git-dir` and `--work-tree` from its own record. No
+  recipe copy or `install` runs (PLAN-PANELS §12).
 - Why: Fix and the owner's parallel work get their own trees, as `wt` gives them today.
 - Rejected:
   - symlinks: they need privilege on Windows;
