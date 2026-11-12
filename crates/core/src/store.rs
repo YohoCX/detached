@@ -312,66 +312,52 @@ impl RepoStore {
         let to = self.path(state, item.kind, scope, &item.name)?;
         remember(state, &to, &item.hash)?;
         fs::create_dir_all(to.parent().unwrap())?;
-        copy_move(&item.path, &to, &files, || Ok(()), || {})?;
+        copy_move(&item.path, &to, &files)?;
         Ok(())
     }
 }
 
-fn copy_move(
-    from: &Path,
-    to: &Path,
-    files: &Files,
-    copied: impl FnOnce() -> Result<()>,
-    verified: impl FnOnce(),
-) -> Result<()> {
+fn copy_move(from: &Path, to: &Path, files: &Files) -> Result<()> {
+    let trash = from.parent().unwrap().join(".detached-trash");
+    no_links(&trash)?;
+    fs::create_dir_all(&trash)?;
+    fs::write(trash.join(".gitignore"), "*\n")?;
+    for entry in fs::read_dir(&trash)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir()
+            && meta
+                .modified()?
+                .elapsed()
+                .is_ok_and(|age| age.as_secs() > 7 * 24 * 60 * 60)
+        {
+            fs::remove_dir_all(entry.path())?;
+        }
+    }
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
     create(&stage, files)?;
     for rel in files.keys() {
-        let source = if rel.as_os_str().is_empty() {
-            from.to_path_buf()
+        let (source, dest) = if rel.as_os_str().is_empty() {
+            (from.to_path_buf(), stage.clone())
         } else {
-            from.join(rel)
-        };
-        let dest = if rel.as_os_str().is_empty() {
-            stage.clone()
-        } else {
-            stage.join(rel)
+            (from.join(rel), stage.join(rel))
         };
         fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
     }
     publish(&stage, to)?;
-    copied()?;
-    let trash = from.parent().unwrap().join(".detached-trash");
-    no_links(&trash)?;
-    fs::create_dir_all(&trash)?;
-    let trash = tempfile::Builder::new()
-        .prefix(&format!("{}-", from.file_name().unwrap().to_string_lossy()))
-        .tempdir_in(trash)?;
-    let frozen = trash.path().join("item");
-    fs::rename(from, &frozen)?;
-    let trash = trash.keep();
-    let checked = read(&frozen).map(|actual| hash(&actual) == hash(files));
-    verified();
-    match checked {
-        Ok(true) => fs::remove_dir_all(trash)?,
-        _ => {
-            return Err(Error::Other(format!(
-                "Item changed or could not be verified; source kept at {}",
-                frozen.display()
-            )));
-        }
-    }
+    let trash = tempfile::tempdir_in(trash)?;
+    fs::rename(from, trash.path().join(from.file_name().unwrap()))?;
+    let _ = trash.keep();
     Ok(())
 }
 
 fn publish(from: &Path, to: &Path) -> Result<()> {
     if from.is_dir() {
-        fs::create_dir(to)?;
-        for entry in fs::read_dir(from)? {
-            let entry = entry?;
-            publish(&entry.path(), &to.join(entry.file_name()))?;
+        if to.try_exists()? {
+            return Err(Error::Other("Destination already exists".into()));
         }
+        fs::rename(from, to)?;
     } else {
         match fs::hard_link(from, to) {
             Ok(()) => {}
@@ -790,6 +776,14 @@ mod tests {
             sb.git(&store.repo, &["status", "--porcelain"])
                 .contains("D .detached/skills/check/SKILL.md")
         );
+        assert_eq!(store.list(&sb.state, Kind::Skills).unwrap().len(), 1);
+        assert!(
+            !sb.git(
+                &store.repo,
+                &["status", "--porcelain", "--untracked-files=all"]
+            )
+            .contains(".detached-trash")
+        );
         assert_eq!(
             store.load(&sb.state, Kind::Skills, "check", None).unwrap(),
             Some(files)
@@ -858,91 +852,89 @@ mod tests {
     }
 
     #[test]
-    fn saves_during_verification_survive_at_the_original_path() {
-        let sb = Sandbox::new();
-        let root = sb.dir.path().canonicalize().unwrap();
-        for (name, files) in [
-            ("file", file("first")),
-            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
-        ] {
-            let from = root.join(format!("{name}-source"));
-            let to = root.join(format!("{name}-destination"));
-            create(&from, &files).unwrap();
-            let edited = if name == "file" {
-                file("edited")
-            } else {
-                [("attachment".into(), b"added".to_vec())].into()
-            };
-            copy_move(
-                &from,
-                &to,
-                &files,
-                || Ok(()),
-                || create(&from, &edited).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(read(&from).unwrap(), edited);
-            assert_eq!(read(&to).unwrap(), files);
-        }
-    }
+    fn moved_sources_keep_their_names_and_open_handles_in_trash() {
+        use std::io::Write;
 
-    #[test]
-    fn cross_device_copy_keeps_source_edits_and_added_attachments() {
         let sb = Sandbox::new();
-        for (name, files) in [
-            ("file", file("first")),
-            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
+        for files in [
+            file("first"),
+            [("SKILL.md".into(), b"first".to_vec())].into(),
         ] {
-            let root = sb.dir.path().canonicalize().unwrap();
-            let from = root.join(format!("{name}-source"));
-            let to = root.join(format!("{name}-destination"));
+            let dir = tempfile::tempdir_in(sb.dir.path()).unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let name = "x".repeat(249);
+            let from = root.join(&name);
+            let to = root.join("destination");
             create(&from, &files).unwrap();
-            let error = copy_move(
-                &from,
-                &to,
-                &files,
-                || {
-                    if from.is_dir() {
-                        fs::write(from.join("attachment"), "added")?;
-                    } else {
-                        fs::write(&from, "edited")?;
-                    }
-                    Ok(())
-                },
-                || {},
-            )
-            .unwrap_err();
-            assert_eq!(read(&to).unwrap(), files);
+            let source = if from.is_dir() {
+                from.join("SKILL.md")
+            } else {
+                from.clone()
+            };
+            let mut handle = fs::OpenOptions::new().append(true).open(source).unwrap();
+            copy_move(&from, &to, &files).unwrap();
+            handle.write_all(b" edited").unwrap();
             assert!(!from.exists());
+            assert_eq!(read(&to).unwrap(), files);
             let trash = fs::read_dir(root.join(".detached-trash"))
                 .unwrap()
-                .map(|entry| entry.unwrap().path().join("item"))
-                .find(|path| path.is_dir() == (name == "folder"))
+                .map(|entry| entry.unwrap().path().join(&name))
+                .find(|path| path.exists())
                 .unwrap();
-            assert!(error.to_string().contains(&trash.display().to_string()));
-            if trash.is_dir() {
-                assert_eq!(fs::read(trash.join("attachment")).unwrap(), b"added");
+            let saved = if trash.is_dir() {
+                trash.join("SKILL.md")
             } else {
-                assert_eq!(read(&trash).unwrap(), file("edited"));
-            }
+                trash
+            };
+            assert_eq!(fs::read(saved).unwrap(), b"first edited");
         }
     }
 
     #[test]
-    fn cross_device_copy_removes_only_an_unchanged_source() {
+    fn moves_prune_only_trash_older_than_seven_days() {
+        use std::time::{Duration, SystemTime};
+
         let sb = Sandbox::new();
-        for (name, files) in [
-            ("file", file("first")),
-            ("folder", [("SKILL.md".into(), b"first".to_vec())].into()),
-        ] {
-            let root = sb.dir.path().canonicalize().unwrap();
-            let from = root.join(format!("{name}-source"));
-            let to = root.join(format!("{name}-destination"));
-            create(&from, &files).unwrap();
-            copy_move(&from, &to, &files, || Ok(()), || {}).unwrap();
-            assert!(!from.exists());
-            assert_eq!(read(&to).unwrap(), files);
+        let root = sb.dir.path().canonicalize().unwrap();
+        let trash = root.join(".detached-trash");
+        for (name, days) in [("old", 8), ("new", 6)] {
+            let entry = trash.join(name);
+            put(&entry.join("item"), "keep");
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.access_mode(0x180).custom_flags(0x02000000); // Directory timestamps need attribute access and backup semantics.
+            }
+            options
+                .open(entry)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60))
+                .unwrap();
         }
+        let from = root.join("source");
+        create(&from, &file("first")).unwrap();
+        copy_move(&from, &root.join("destination"), &file("first")).unwrap();
+        assert!(!trash.join("old").exists());
+        assert!(trash.join("new/item").exists());
+    }
+
+    #[test]
+    fn failed_directory_publish_cleans_up_and_can_be_retried() {
+        let sb = Sandbox::new();
+        let root = sb.dir.path().canonicalize().unwrap().join("move");
+        let from = root.join("source");
+        let to = root.join("destination");
+        let files = [("SKILL.md".into(), b"first".to_vec())].into();
+        create(&from, &files).unwrap();
+        let broken = [("a".into(), vec![]), ("a/b".into(), vec![])].into();
+        assert!(copy_move(&from, &to, &broken).is_err());
+        assert!(!to.exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+        assert_eq!(read(&from).unwrap(), files);
+        copy_move(&from, &to, &files).unwrap();
+        assert_eq!(read(&to).unwrap(), files);
     }
 
     #[test]

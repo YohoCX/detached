@@ -219,6 +219,9 @@ impl State {
     }
 
     fn detached(&self, p: &Path) -> bool {
+        if p.components().any(|c| c.as_os_str() == ".detached-trash") {
+            return true;
+        }
         self.repos.iter().any(|d| {
             p.starts_with(d.git.join("detached")) || p.starts_with(d.common.join("detached"))
         })
