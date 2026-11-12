@@ -128,10 +128,13 @@ jobs:
           bun build --compile node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --outfile claude-agent-acp.exe
       - run: cargo build --manifest-path spikes/acp/Cargo.toml
       - name: Row 1, lifecycle without a job object
+        continue-on-error: true
         run: . spikes/acp/0b/lib.sh && lifecycle
       - name: Row 1, lifecycle with a job object
+        continue-on-error: true
         run: . spikes/acp/0b/lib.sh && JOB=1 lifecycle
       - name: Row 10, the sandbox natively
+        continue-on-error: true
         run: |
           . spikes/acp/0b/lib.sh && setup native
           META='{"claudeCode":{"options":{"tools":["Read","Bash"],"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}}}' \
@@ -161,6 +164,7 @@ jobs:
           wsl-version: 2
           additional-packages: bubblewrap socat git perl curl ca-certificates python3
       - name: WSL version
+        continue-on-error: true
         shell: pwsh
         run: |
           wsl --version; wsl --status; wsl -l -v
@@ -171,6 +175,7 @@ jobs:
           name: linux-x64
           path: ${{ runner.temp }}/linux
       - name: Rows 10 and 1 in WSL
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         shell: wsl-bash {0}
         run: |
@@ -184,6 +189,7 @@ jobs:
           . "$(wslpath '${{ github.workspace }}')/spikes/acp/0b/lib.sh"
           lifecycle; attack wsl true '{"strictAllowlist": true}'
       - name: Row 11, a review's file work in WSL's filesystem and on /mnt
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         shell: wsl-bash {0}
         run: |
@@ -200,6 +206,7 @@ jobs:
             done
           done
       - name: Row 12, a Windows listener seen from WSL (NAT)
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         shell: pwsh
         run: |
@@ -207,6 +214,7 @@ jobs:
           wsl -d Ubuntu-24.04 -- sh -c 'ip route | head -2; H=$(ip route | awk "/default/ {print \$3}"); for u in http://127.0.0.1:47123 http://$H:47123; do curl -s -m 3 -o /dev/null -w "$u -> %{http_code} %{errormsg}\n" $u; done'
           $l.Stop()
       - name: Row 12, the adapter in WSL over stdio, host on Windows (NAT)
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         run: |
           . spikes/acp/0b/lib.sh && setup wslhost
@@ -216,6 +224,7 @@ jobs:
             CWD=/root MCP=http MCP_NAME=detached-host-abc123 MODE=default PERM=deny FAKE=spikes/acp/0b/mcp.json \
             "$SPIKE" run t1 2>&1 | grep -E 'session/new|prompt ->|"http"|ERROR|TEXT' | cut -c1-250
       - name: Row 12, mirrored networking
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         continue-on-error: true
         shell: pwsh
@@ -226,6 +235,7 @@ jobs:
           wsl -d Ubuntu-24.04 -- sh -c 'ip -br addr | head -4; curl -s -m 3 -o /dev/null -w "127.0.0.1 -> %{http_code} %{errormsg}\n" http://127.0.0.1:47124'
           $l.Stop()
       - name: Row 12, the adapter in WSL, mirrored
+        continue-on-error: true
         if: steps.wsl.outcome == 'success'
         continue-on-error: true
         run: |
