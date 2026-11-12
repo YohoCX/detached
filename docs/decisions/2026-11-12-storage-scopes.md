@@ -13,4 +13,4 @@ Decided by the owner on 2026-11-12, after looking at `~/.agents` and `wt`.
   worktree and stay out of the working tree.
 - Rejected: `.revmux/`-style folders in the working tree, symlinked into worktrees, and Detached
   committing anything itself.
-- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §9.
+- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §10.

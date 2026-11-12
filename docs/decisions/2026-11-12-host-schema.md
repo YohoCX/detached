@@ -13,4 +13,4 @@ Decided by the owner on 2026-11-12.
   resolvers.
 - Rejected: `async-graphql`, at about 100 crates and 47k lines with HTTP, multipart, `async-io`,
   federation and dataloader, plus async resolvers against the kernel's model.
-- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §6.
+- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §7.

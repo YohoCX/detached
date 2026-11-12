@@ -6,4 +6,4 @@ Decided by the owner on 2026-11-10: "make it work the way Claude Code does".
   an agent and not from the user.
 - Why: coordinated agents without the owner carrying text between tabs.
 - Rejected: a shared room every agent reads, and messages pasted into the receiver's prompt as if
-  the user wrote them. [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §8 has the rules.
+  the user wrote them. [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §9 has the rules.

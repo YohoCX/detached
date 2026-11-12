@@ -11,4 +11,4 @@ Decided by the owner on 2026-11-12: "a good way to document properly and to read
   searching old sessions.
 - Rejected: docs as free text that agents read in full, and the client writing docs by itself.
   Agents write them; the client routes, checks and asks.
-- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §11.
+- Plan: [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §12.

@@ -8,5 +8,5 @@ Decided by the owner on 2026-11-10.
   store").
 - Why: an agent that edits a server's code must see it run without the owner relaying logs.
 - Rejected: agents typing into the owner's shells. An agent gets a process's log and a start or
-  restart only where the definition allows it; [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §7
+  restart only where the definition allows it; [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §8
   says what that costs.
