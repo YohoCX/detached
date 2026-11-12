@@ -12,8 +12,8 @@ Agents as first-class participants of the client:
 (§14).
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01–04 (`.revmux/tasks/agent-host-plan/`) are
-fixed; round 05 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
+their answers change are rewritten. Review rounds 01–05 (`.revmux/tasks/agent-host-plan/`) are
+fixed; round 06 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
 built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -667,10 +667,12 @@ settings, ops and invalidation findings.
 
     Defer writes nothing: it copies a drafted row.
   - **Crates:** `crates/acp` (async deps confined, no async type out) at H4; `core`'s
-    "the agent's protocol" becomes "proc, host, secrets, docs, store" at H4.
+    "the agent's protocol" becomes "proc, host, secrets, docs, store" at H4; `crates/app` ships
+    `detached-cli` beside `detached` (H5).
   - **The read tool:** `schema.graphql` is its contract; a field comes with its resolver (H5).
   - **Docs:** `docs/INDEX.md`, module docs, `covers:` (H7). **Storage:** scopes (H2).
-  - **Commands:** `make agent-test` (H4); `make sidecar` goes with H11's follow-up.
+  - **Commands:** `make adapters-sign` (H3), `make agent-test` (H4); `make sidecar` goes with
+    H11's follow-up.
 - **PLAN-EXTENSIBLE:**
   - step 1's sidecar, private protocol and "current folder" (H4, H11);
   - the second slice's tools (H5);
@@ -847,6 +849,8 @@ Work:
 9. The Agents page.
 10. `adapters.yml` publishes the signed catalog (§3). Each bump raises the entry's `min_cli` when
     the pinned SDK's `claudeCodeVersion` moves.
+11. `make adapters-sign`, and the one-time setup of the catalog's minisign key on the owner's
+    machine, outside the repo.
 
 Tests:
 - a bad signature, an older serial, a wrong size or sha256, and an entry leaving its folder are
@@ -959,7 +963,10 @@ Tests:
 - a request with an `Origin` header or another `Host` is refused;
 - an act without the capability is refused;
 - a turn that ends without `done` is recorded;
-- the packaged `detached-cli q` answers in `make e2e-app` and the smoke run;
+- packaging: each OS's package from `make build` contains `detached-cli`, and
+  `detached-cli --version` runs, with no socket involved;
+- behavior: a UI test runs the built `detached-cli q` from a real terminal tab in the headless
+  harness, against the app's live socket. No self-test or smoke flag relaxes the peer check;
 - `detached-cli q` from a session's Bash is refused, also double-forked or after `setsid`, and from
   a Detached terminal tab it answers.
 
@@ -1000,6 +1007,9 @@ Tests:
   - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from the `/usage`
     parse, and unknown when it fails;
   - `a_model_without_auto_is_marked_and_the_mode_drop_reported`: `configOptions` and the re-arm;
+  - `a_permission_prompt_is_answered_or_goes_with_a_stop`: "Always" records a host rule, the agent
+    receives `allow_once`, and the repeated request is answered without a prompt. The Stop half
+    moves to a request the rule does not cover;
   - `the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar`: ending one closes its
     session, and the shared adapter lives on;
   - `an_active_chat_archives_or_deletes_its_conversation_and_ends` and
