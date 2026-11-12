@@ -114,12 +114,7 @@ impl Render for Code {
 }
 
 /// Monaco's languages the kit has a grammar for, by lower-cased file name.
-const NAMES: &[(&str, &str)] = &[
-    ("dockerfile", "dockerfile"),
-    ("jakefile", "javascript"),
-    ("rakefile", "ruby"),
-    ("gemfile", "ruby"),
-];
+const NAMES: &[(&str, &str)] = &[("dockerfile", "dockerfile"), ("jakefile", "javascript")];
 
 /// By extension; `.svelte`, `.vue` and `.astro` as HTML.
 const EXTENSIONS: &[(&str, &[&str])] = &[
@@ -129,7 +124,6 @@ const EXTENSIONS: &[(&str, &[&str])] = &[
     ("csharp", &[".cs", ".csx", ".cake"]),
     ("css", &[".css", ".scss"]),
     ("dockerfile", &[".dockerfile"]),
-    ("elixir", &[".ex", ".exs"]),
     ("go", &[".go"]),
     ("graphql", &[".graphql", ".gql"]),
     (
@@ -153,7 +147,6 @@ const EXTENSIONS: &[(&str, &[&str])] = &[
             ".har",
         ],
     ),
-    ("kotlin", &[".kt", ".kts"]),
     ("lua", &[".lua"]),
     (
         "markdown",
@@ -171,11 +164,8 @@ const EXTENSIONS: &[(&str, &[&str])] = &[
     ("php", &[".php", ".php4", ".php5", ".phtml", ".ctp"]),
     ("proto", &[".proto"]),
     ("python", &[".py", ".rpy", ".pyw", ".cpy", ".gyp", ".gypi"]),
-    ("ruby", &[".rb", ".rbx", ".rjs", ".gemspec", ".pp"]),
     ("rust", &[".rs", ".rlib"]),
-    ("scala", &[".scala", ".sc", ".sbt"]),
     ("sql", &[".sql"]),
-    ("swift", &[".swift"]),
     ("tsx", &[".tsx"]),
     ("typescript", &[".ts", ".cts", ".mts"]),
     ("yaml", &[".yaml", ".yml"]),
