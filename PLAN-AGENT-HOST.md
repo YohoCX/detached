@@ -12,8 +12,8 @@ Agents as first-class participants of the client:
 (§14).
 
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01–03 (`.revmux/tasks/agent-host-plan/`) are
-fixed; round 04 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
+their answers change are rewritten. Review rounds 01–04 (`.revmux/tasks/agent-host-plan/`) are
+fixed; round 05 is next, then H1. No choice is open (§14). Codex stays off until H13a. Nothing is
 built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
@@ -156,8 +156,14 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - **`min_cli`** comes from each entry, never below the manifest's floor, with an optional
     `blocked_cli` list. The client reads them from the entry it runs, so a bump raises the floor
     for installed apps.
-  - **Weekly vetting** (H4) runs the latest `claude` against each entry. A failure publishes a bump
-    that lists that version in `blocked_cli`, and the Agents page names it.
+  - **Signing stays off CI.** The catalog's minisign key lives on the owner's machine, and
+    `make adapters-sign` signs the file there. `adapters.yml` only uploads a catalog that is
+    already signed and committed, so no secret and no model credential is ever in CI.
+  - **Weekly vetting** (H4) runs the latest `claude` against each entry. A failure opens an issue
+    for the owner; nothing is published by itself. The owner decides whether to add that version
+    to `blocked_cli`, signs and pushes.
+  - **A `claude` in `blocked_cli`:** the chat warns and still runs; isolated participants refuse
+    to start; the Agents page names the version and the fix (update `claude`).
   - **Compatibility:** `min_app` and `max_app` per entry, since every app version reads the same
     catalog.
   - **Artifacts:** per OS, arch and libc, a `url`, `size` and `sha256`.
@@ -401,12 +407,13 @@ Agents get Detached's data and a closed list of actions as tools.
     only the one finding it was given.
   - **An untrusted subject's participant** sees no sessions, no other repo and no MR but its
     subject.
-- **The owner socket**, for the console binary `detached` (`crates/app/src/bin/detached-cli.rs`,
-  put on PATH by an Install command in Settings):
+- **The owner socket**, for the console binary `detached-cli`
+  (`crates/app/src/bin/detached-cli.rs`). The GUI binary is `detached`. The packages ship both,
+  and Settings has an Install-to-PATH command:
   - **Where:** a Unix socket at `data/run/detached.sock`, mode 0600 in a 0700 folder; on Windows a
     named pipe with an owner-only DACL.
-  - **`detached q`** reads with the owner's view.
-  - **`detached env run`** asks the owner once per calling terminal tab.
+  - **`detached-cli q`** reads with the owner's view.
+  - **`detached-cli env run`** asks the owner once per calling terminal tab.
   - **Accepted only from a Detached terminal tab.** The peer process is found through
     `SO_PEERCRED`, `LOCAL_PEERPID` or `GetNamedPipeClientProcessId`.
     - On Unix, each tab's shell is a session leader, and the peer must be in one of those sessions
@@ -464,7 +471,7 @@ Later steps add to the SDL:
   - `read`: agents read its log;
   - `start`: agents also start, stop and restart it.
 
-  Definitions are a shareable kind (§11); profile values are never shared.
+  Definitions are a shareable kind (§10); profile values are never shared.
 - **Running** is in a PTY through `core::proc`. `kernel::Proc` keeps the status, exit code,
   readiness and a bounded log in memory.
 - **A Processes app.** A shell is not a process, and agents never read or type into one.
@@ -508,10 +515,13 @@ Later steps add to the SDL:
 - **Ignored by the watcher.** `core::watch` drops events under `<git dir>/detached/`.
 - **Transcripts stay with the agents.** The host keeps an index, not copies.
 - **Secrets live only in `core::secrets`.**
-- **Kinds with scopes:** panel roles and modes, the project profile, the worktree recipe, process
-  definitions.
-  - Each item lives in one scope: built in, personal (`config/<kind>/`; roles and modes only),
-    local (`<git common dir>/detached/local/<kind>/`) or shared (`<repo>/.detached/<kind>/`).
+- **Kinds with scopes:** skills, panel roles and modes, the project profile, the worktree recipe,
+  process definitions.
+  - Each item lives in one scope:
+    - built in;
+    - personal: `config/<kind>/` for roles and modes, the folder list of §11 for skills;
+    - local: `<git common dir>/detached/local/<kind>/`;
+    - shared: `<repo>/.detached/<kind>/`.
   - Precedence is local, shared, personal, built in.
   - A repo's Sharing page sets where new items go (local by default). Each item has Share or Make
     local, a move that shows in Changes.
@@ -668,7 +678,7 @@ settings, ops and invalidation findings.
   - the public-build rule: it goes, per the 2026-11-12 decision (H12).
   - "UI text says Claude" becomes "Claude Agent" (H3).
 - **PLAN-NATIVE:** the chat's contract and the Layout's agent lines.
-- **docs/BACKLOG.md:** the env store and `detached env run` (H9).
+- **docs/BACKLOG.md:** the env store and `detached-cli env run` (H9).
 - **README:** what a user installs (H12).
 
 ## 17. Execution and acceptance
@@ -876,7 +886,10 @@ Work:
      `~/.claude`.
    - **Locally** they run with `make agent-test`.
    - **The catalog's CI vetting** (§3) runs on this harness, on each bump and weekly against the
-     latest `claude`.
+     latest `claude`; a weekly failure opens an issue, tested against a locally signed catalog.
+   - **What the adapter sends during a long command** is recorded: a scripted 3-minute Bash call
+     must produce a `tool_call` with status `in_progress` before it ends. PLAN-PANELS §7's stall
+     rule rests on this test.
 7. A docs/TECHDEBT.md row: on Windows, Stop leaves the foreground command running until the
    session's adapter goes.
 8. `bin/fake_acp.rs`, a scripted agent that:
@@ -927,8 +940,8 @@ Work:
 3. §7's SDL with its resolvers.
 4. The two-phase executor.
 5. `report_finding`, `report_verdict` and `done`.
-6. The owner socket, `detached q` and `detached env run`'s prompt.
-7. Install-to-PATH in Settings.
+6. The owner socket, `detached-cli q` and `detached-cli env run`'s prompt.
+7. `detached-cli` in `[package.metadata.packager] binaries`, and Install-to-PATH in Settings.
 
 Tests:
 - every SDL field has a resolver;
@@ -936,8 +949,9 @@ Tests:
 - `mrs` on a repo with no forge view loads within the wait, or is `null` with its error, never
   `[]`;
 - a secret read from `ps -ww` is refused from another process;
-- a client that polls `ps` and races the CLI's first `initialize` is refused, since it is not the
-  adapter's `claude` child;
+- the racer wins on purpose: the fake agent's child holds its `initialize` until a test client
+  that read the URL from `ps` has sent one. The racer is refused, the path stays unbound, and then
+  the child binds. This fails with the peer check removed;
 - a second `initialize` on a bound path ends the session;
 - the read scope, on the fields H5 has: an identity scoped to one repo reads no other repo, no
   `sessions`, and no MR outside its repo (the findings and verifier scopes are P2's tests);
@@ -945,21 +959,23 @@ Tests:
 - a request with an `Origin` header or another `Host` is refused;
 - an act without the capability is refused;
 - a turn that ends without `done` is recorded;
-- `detached q` from a session's Bash is refused, also double-forked or after `setsid`, and from a
-  Detached terminal tab it answers.
+- the packaged `detached-cli q` answers in `make e2e-app` and the smoke run;
+- `detached-cli q` from a session's Bash is refused, also double-forked or after `setsid`, and from
+  a Detached terminal tab it answers.
 
 Done when a fake agent reports findings and a real adapter reads a repo's status.
 
 The owner checks: asks a headless session (H4's debug action) for a repo's status; runs
-`detached q` in a terminal tab.
+`detached-cli q` in a terminal tab.
 
 ### Step H8. Skills
 
-Work: the folder list; repo skills; Claude's per-session plugin; `skills` in the SDL; the Skills
-page.
+Work: the folder list; repo skills with Share and Make local and hash acceptance (§10); Claude's
+per-session plugin; `skills` in the SDL; the Skills page.
 
 Tests:
 - `~/.agents/skills` is read when present;
+- Share then Make local round-trips a skill, and a foreign local skill asks once;
 - an untrusted shared skill is not passed;
 - a Claude session under `[]` lists a personal skill;
 - no directory is added to a Codex session.
@@ -1055,7 +1071,7 @@ Tests:
 - `off`, `read` and `start` gate reads and actions;
 - readiness fires;
 - an exit shows;
-- `detached env run` from a session's Bash is refused, also double-forked or after `setsid`.
+- `detached-cli env run` from a session's Bash is refused, also double-forked or after `setsid`.
 
 Done when a dev server runs from a definition and an agent with `read` quotes its error.
 
