@@ -1,18 +1,26 @@
-//! Throwaway ACP client for the agent-host spike; `acp-spike init | run [prompt...] | mcp <log>`.
-//! Env: AGENT, ADAPTERS, CWD, LOG, MCP (stdio|http), META (session/new `_meta`), MODE, CONFIG (k=v,..),
-//! PERM (allow|deny|readonly), LOAD (session id), N, CANCEL_AFTER, STEER, STEER_AFTER, EXT, RSS, HOLD, QUIET.
+//! Throwaway ACP client for the agent-host spike.
+//! `acp-spike init | run [prompt...] | mcp <log> | survivors <marker>...`.
+//! Env: AGENT, ADAPTERS, ADAPTER (a command line), PASS (extra env names), CWD, LOG, CAPS (client
+//! capabilities JSON), MCP (stdio|http), MCP_NAME, PS, META (session/new `_meta`), MODE,
+//! CONFIG (k=v,..), PERM (allow|deny|readonly), LOAD (session id), N, CANCEL_AFTER, CLOSE_AFTER,
+//! ABORT_AFTER, STEER, STEER_AFTER, EXT, RSS, HOLD, QUIET, FAKE (script file), JOB, CHECK (markers),
+//! CHECK_TURN (a marker after each turn).
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{
-    AcpAgent, Client, UntypedMessage, on_receive_notification, on_receive_request,
+    ByteStreams, Client, UntypedMessage, on_receive_notification, on_receive_request,
 };
 use futures::{FutureExt, StreamExt, channel::mpsc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Write;
+use std::pin::Pin;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+mod fake;
 mod mcp;
 
 static START: OnceLock<Instant> = OnceLock::new();
@@ -56,32 +64,253 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("mcp") => mcp::stdio(&args[1]),
+        Some("survivors") => survivors(&args[1..]),
         _ => {
-            if let Err(e) = futures::executor::block_on(run(args)) {
+            let mut extra = vec![];
+            if let Ok(f) = std::fs::read_to_string(env("FAKE")) {
+                let log = format!(
+                    "{}.api",
+                    if env("LOG").is_empty() {
+                        "fake".into()
+                    } else {
+                        env("LOG")
+                    }
+                );
+                let url = fake::serve(serde_json::from_str(&f).unwrap(), log);
+                extra.push(("ANTHROPIC_BASE_URL".into(), url));
+                extra.push(("ANTHROPIC_API_KEY".into(), "sk-ant-fake".into()));
+            }
+            let (mut child, io) = spawn(&extra);
+            let r = futures::executor::block_on(run(args, io));
+            if let Err(e) = &r {
                 say(&format!("ERROR {e:?}"));
+            }
+            let t = ms();
+            let mut code = None;
+            while code.is_none() && ms() - t < 5000 {
+                std::thread::sleep(Duration::from_millis(20));
+                code = child.try_wait().ok().flatten();
+            }
+            say(&format!(
+                "adapter after stdin closed: {code:?} in {}ms",
+                ms() - t
+            ));
+            if code.is_none() {
+                let _ = child.kill();
+            }
+            let check = env("CHECK");
+            survivors(
+                &check
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+            );
+            if r.is_err() {
                 std::process::exit(1);
             }
         }
     }
 }
 
-fn agent() -> AcpAgent {
+const ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "TERM",
+    "CLAUDE_CODE_EXECUTABLE",
+    "CODEX_HOME",
+    "CODEX_PATH",
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "TEMP",
+    "TMP",
+    "ComSpec",
+    "PATHEXT",
+    "USERNAME",
+    "ProgramData",
+    "ProgramFiles",
+    "HOMEDRIVE",
+    "HOMEPATH",
+];
+
+/// Wire lines in both directions, appended to LOG.
+struct Tee<T>(T, Option<Arc<Mutex<std::fs::File>>>, &'static str);
+
+impl<T: futures::AsyncRead + Unpin> futures::AsyncRead for Tee<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let r = Pin::new(&mut self.0).poll_read(cx, buf);
+        if let (Poll::Ready(Ok(n)), Some(f)) = (&r, &self.1) {
+            let _ = write!(
+                f.lock().unwrap(),
+                "{} {}{}",
+                ms(),
+                self.2,
+                String::from_utf8_lossy(&buf[..*n])
+            );
+        }
+        r
+    }
+}
+
+impl<T: futures::AsyncWrite + Unpin> futures::AsyncWrite for Tee<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let r = Pin::new(&mut self.0).poll_write(cx, buf);
+        if let (Poll::Ready(Ok(n)), Some(f)) = (&r, &self.1) {
+            let _ = write!(
+                f.lock().unwrap(),
+                "{} {}{}",
+                ms(),
+                self.2,
+                String::from_utf8_lossy(&buf[..*n])
+            );
+        }
+        r
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_close(cx)
+    }
+}
+
+type Io = ByteStreams<
+    Tee<blocking::Unblock<std::process::ChildStdin>>,
+    Tee<blocking::Unblock<std::process::ChildStdout>>,
+>;
+
+/// Spawns the adapter with an env built from nothing: the allowlist, PASS, and the fake API's.
+fn spawn(extra: &[(String, String)]) -> (Child, Io) {
     let dir = std::env::var("ADAPTERS").unwrap_or_else(|_| "adapters".into());
     let js = |p: &str| format!("{dir}/node_modules/@agentclientprotocol/{p}");
-    let cmd = match env("AGENT").as_str() {
-        "codex" => vec!["node".into(), js("codex-acp/dist/index.js")],
-        "" | "claude" => vec!["node".into(), js("claude-agent-acp/dist/index.js")],
-        other => other.split(' ').map(String::from).collect(),
+    let cmd: Vec<String> = match (env("ADAPTER"), env("AGENT").as_str()) {
+        (a, _) if !a.is_empty() => a.split(' ').map(String::from).collect(),
+        (_, "codex") => vec!["node".into(), js("codex-acp/dist/index.js")],
+        _ => vec!["node".into(), js("claude-agent-acp/dist/index.js")],
     };
+    let pass = env("PASS");
+    let names = ENV
+        .iter()
+        .copied()
+        .chain(pass.split(',').filter(|s| !s.is_empty()));
     let log = env("LOG");
-    let file = (!log.is_empty()).then(|| Mutex::new(std::fs::File::create(log).unwrap()));
-    AcpAgent::from_args(cmd)
-        .unwrap()
-        .with_debug(move |line, dir| {
-            if let Some(f) = &file {
-                let _ = writeln!(f.lock().unwrap(), "{} {dir:?} {line}", ms());
-            }
-        })
+    let stderr = if log.is_empty() {
+        Stdio::inherit()
+    } else {
+        std::fs::File::create(format!("{log}.stderr"))
+            .unwrap()
+            .into()
+    };
+    let mut child = Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .env_clear()
+        .envs(names.filter_map(|k| Some((k, std::env::var(k).ok()?))))
+        .envs(extra.iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .spawn()
+        .unwrap();
+    if !env("JOB").is_empty() {
+        job(&child);
+    }
+    let file = (!log.is_empty()).then(|| Arc::new(Mutex::new(std::fs::File::create(log).unwrap())));
+    let io = ByteStreams::new(
+        Tee(
+            blocking::Unblock::new(child.stdin.take().unwrap()),
+            file.clone(),
+            "-> ",
+        ),
+        Tee(
+            blocking::Unblock::new(child.stdout.take().unwrap()),
+            file,
+            "<- ",
+        ),
+    );
+    (child, io)
+}
+
+/// Puts the adapter in a job that kills every process in it when the host's handle closes.
+#[cfg(windows)]
+fn job(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::*;
+    unsafe {
+        let h = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let set = SetInformationJobObject(
+            h,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as _,
+            size_of_val(&info) as u32,
+        );
+        let assigned = AssignProcessToJobObject(h, child.as_raw_handle() as _);
+        say(&format!("job: set {set}, assigned {assigned}"));
+    }
+}
+
+#[cfg(not(windows))]
+fn job(_: &Child) {
+    say("job: not on this OS");
+}
+
+/// Every process but this one whose command line holds `marker`.
+fn procs(marker: &str) -> Vec<String> {
+    let out = if cfg!(windows) {
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"])
+            .output()
+    } else {
+        Command::new("ps")
+            .args(["-ww", "-A", "-o", "pid=,command="])
+            .output()
+    };
+    let me = std::process::id().to_string();
+    String::from_utf8_lossy(&out.map(|o| o.stdout).unwrap_or_default())
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.contains(marker) && l.split(' ').next() != Some(me.as_str()))
+        .map(String::from)
+        .collect()
+}
+
+/// Waits up to 10 s for the processes holding each marker to go; prints what is left.
+fn survivors(markers: &[String]) {
+    let t = Instant::now();
+    for m in markers {
+        let mut left = procs(m);
+        while !left.is_empty() && t.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(200));
+            left = procs(m);
+        }
+        say(&format!(
+            "survivors {m} after {}ms: {}",
+            t.elapsed().as_millis(),
+            left.len()
+        ));
+        for l in left {
+            say(&format!("  {}", cut(&json!(l), 200)));
+        }
+    }
 }
 
 /// Picks an option of the wanted kinds, in order.
@@ -119,13 +348,18 @@ fn summarize(v: &Value) -> String {
     }
 }
 
-async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
+async fn run(args: Vec<String>, io: Io) -> agent_client_protocol::Result<()> {
     let scenario = args.first().cloned().unwrap_or_default();
     let prompts: Vec<String> = args.iter().skip(1).cloned().collect();
     let (tx, mut rx) = mpsc::unbounded::<(String, String)>();
     let text: Arc<Mutex<HashMap<String, String>>> = Default::default();
     let (tx2, text2) = (tx.clone(), text.clone());
     let mcp_log = format!("{}/mcp.jsonl", std::env::temp_dir().display());
+    let secret = format!(
+        "{:x}{:x}",
+        std::process::id(),
+        START.get().unwrap().elapsed().as_nanos()
+    );
 
     Client
         .v1()
@@ -192,9 +426,10 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
             },
             on_receive_request!(),
         )
-        .connect_with(agent(), async move |cx| {
+        .connect_with(io, async move |cx| {
+            let caps: ClientCapabilities = serde_json::from_str(&env("CAPS")).unwrap_or_default();
             let init = cx
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps))
                 .block_task()
                 .await?;
             say(&format!(
@@ -205,14 +440,19 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
                 return Ok(());
             }
             let cwd = std::path::PathBuf::from(env("CWD"));
+            let name = if env("MCP_NAME").is_empty() {
+                "host".into()
+            } else {
+                env("MCP_NAME")
+            };
             let mcp = match env("MCP").as_str() {
                 "stdio" => vec![McpServer::Stdio(
-                    McpServerStdio::new("host", std::env::current_exe().unwrap())
+                    McpServerStdio::new(name, std::env::current_exe().unwrap())
                         .args(vec!["mcp".into(), mcp_log.clone()]),
                 )],
                 "http" => vec![McpServer::Http(McpServerHttp::new(
-                    "host",
-                    mcp::http(&mcp_log),
+                    name,
+                    mcp::http(&mcp_log, &secret),
                 ))],
                 _ => vec![],
             };
@@ -277,6 +517,9 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
                 }
                 sids.push(sid);
             }
+            if !env("PS").is_empty() {
+                second_client(&mcp, &secret);
+            }
             if !env("RSS").is_empty() {
                 rss("after sessions");
             }
@@ -293,7 +536,7 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
                 let all = futures::future::join_all(turns).fuse();
                 let watcher = watch(&cx, &mut rx, sids[0].clone()).fuse();
                 futures::pin_mut!(all, watcher);
-                let results = futures::select! { r = all => r, _ = watcher => unreachable!() };
+                let results = futures::select! { r = all => r, _ = watcher => return Ok(()) };
                 for (sid, r) in sids.iter().zip(results) {
                     let s = sid.to_string();
                     let said = text.lock().unwrap().remove(&s).unwrap_or_default();
@@ -315,6 +558,9 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
                 if !env("RSS").is_empty() {
                     rss("after turn");
                 }
+                if !env("CHECK_TURN").is_empty() {
+                    survivors(&[env("CHECK_TURN")]);
+                }
             }
             if let Ok(calls) = std::fs::read_to_string(&mcp_log) {
                 say(&format!("MCP calls:\n{calls}"));
@@ -333,6 +579,9 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
                     cut(&json!(format!("{r:?}")), 3000)
                 ));
             }
+            if !env("RSS").is_empty() && !env("EXT").is_empty() {
+                rss("after ext");
+            }
             if !env("HOLD").is_empty() {
                 say("holding; kill me");
                 futures::future::pending::<()>().await;
@@ -342,14 +591,20 @@ async fn run(args: Vec<String>) -> agent_client_protocol::Result<()> {
         .await
 }
 
-/// After the first tool call, cancels or steers the turn as CANCEL_AFTER/STEER say; never finishes.
+/// After the first tool call, cancels or steers the turn as CANCEL_AFTER/STEER say, or kills the
+/// host (ABORT_AFTER); returns only to close stdin (CLOSE_AFTER).
 async fn watch(
     cx: &agent_client_protocol::v1::ConnectionTo<agent_client_protocol::Agent>,
     rx: &mut mpsc::UnboundedReceiver<(String, String)>,
     sid: SessionId,
 ) {
-    let (cancel, steer) = (env("CANCEL_AFTER"), env("STEER"));
-    if cancel.is_empty() && steer.is_empty() {
+    let (cancel, steer, close, abort) = (
+        env("CANCEL_AFTER"),
+        env("STEER"),
+        env("CLOSE_AFTER"),
+        env("ABORT_AFTER"),
+    );
+    if cancel.is_empty() && steer.is_empty() && close.is_empty() && abort.is_empty() {
         return futures::future::pending().await;
     }
     while let Some((_, kind)) = rx.next().await {
@@ -357,6 +612,14 @@ async fn watch(
             break;
         }
     }
+    let running = || {
+        if !env("CHECK_TURN").is_empty() {
+            say(&format!(
+                "running with marker: {}",
+                procs(&env("CHECK_TURN")).len()
+            ));
+        }
+    };
     if !steer.is_empty() {
         async_io::Timer::after(Duration::from_secs(env("STEER_AFTER").parse().unwrap_or(0))).await;
         let p = json!({"sessionId": sid.to_string(), "prompt": [{"type": "text", "text": steer}]});
@@ -366,8 +629,21 @@ async fn watch(
             .await;
         say(&format!("_session/steering -> {r:?}"));
     }
+    if let Ok(secs) = abort.parse::<u64>() {
+        async_io::Timer::after(Duration::from_secs(secs)).await;
+        running();
+        say("abort: the host dies");
+        std::process::abort();
+    }
+    if let Ok(secs) = close.parse::<u64>() {
+        async_io::Timer::after(Duration::from_secs(secs)).await;
+        running();
+        say("closing stdin mid-turn");
+        return;
+    }
     if let Ok(secs) = cancel.parse::<u64>() {
         async_io::Timer::after(Duration::from_secs(secs)).await;
+        running();
         say("session/cancel");
         let _ = cx.send_notification(CancelNotification::new(sid));
         if !env("RSS").is_empty() {
@@ -417,4 +693,45 @@ fn rss(at: &str) {
         tree.len() - 1,
         total / 1024
     ));
+}
+
+/// Shows the host's URL in the process list with its secret redacted, then tries it as a second
+/// client from another process.
+fn second_client(mcp: &[McpServer], secret: &str) {
+    let Some(McpServer::Http(h)) = mcp.first() else {
+        return;
+    };
+    for l in procs(secret) {
+        say(&format!(
+            "PS {}",
+            cut(&json!(l.replace(secret, "<secret>")), 300)
+        ));
+    }
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"intruder","version":"0"}}}"#;
+    let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+    let sink = std::env::temp_dir().join("second-client.out");
+    for body in [init, list] {
+        let out = Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                sink.to_str().unwrap(),
+                "-w",
+                "%{http_code}",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-H",
+                "Accept: application/json, text/event-stream",
+                "-d",
+                body,
+                &h.url,
+            ])
+            .output();
+        let code = out
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        say(&format!("second client {} -> HTTP {code}", &body[37..60]));
+    }
 }
