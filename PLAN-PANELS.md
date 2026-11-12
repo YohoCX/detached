@@ -6,8 +6,10 @@ plan review, dialectic and brainstorm. Ideas come from revmux; the design is our
 
 **Status (2026-11-12): draft, not accepted. Review round 01 is fixed in this text; round 02 is
 next. Open for the owner:
-- what a panel does on Windows (§3);
-- the host's two open choices (host §14).
+- what a panel does on Windows (§3).
+
+The host's three choices are settled (host §14): the chat moves to ACP before P2, and spike 0b
+runs before H1.
 
 revmux and `.revmux/` stay, and whether panels replace revmux is deferred. Nothing is built.**
 

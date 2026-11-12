@@ -13,8 +13,10 @@ Agents as first-class participants of the client:
 
 **Status (2026-11-12): draft, not accepted. Step 0 answered (§17). Review round 01
 (`.revmux/tasks/agent-host-plan/01-initial/`: revmux, 25 findings; Fable, B1–B10) is fixed in
-this text; round 02 is next. The owner settled the claude.ai login on 2026-11-12 (§2). Two
-choices are open (§14): where the chat moves to ACP, and spike 0b before H1. Nothing is built.**
+this text; round 02 is next. The owner settled §14's three choices on 2026-11-12: Claude on the
+user's own `claude` with any login (§2), the chat on ACP right after H5, and spike 0b before H1.
+Spike 0b is next; H1 waits for it. Open: what a panel does on Windows (PLAN-PANELS §3). Nothing
+is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09);
@@ -25,6 +27,7 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - docs by a mechanism;
   - the read tool's schema;
   - Claude through the user's own `claude`, on any login;
+  - the chat on ACP first, and spike 0b before H1;
   - the six repo writes of §16, proposed until H1;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
@@ -462,47 +465,36 @@ back.
 | # | Step | Needs | Sees |
 | --- | --- | --- | --- |
 | H0 | Spike: ACP adapters | — | — |
-| H0b | Spike 0b, if the owner says yes (choice 3) | H0 | — |
-| H1 | The owner accepts both plans and the decisions they propose | H0 (H0b) | — |
+| H0b | Spike 0b | H0 | — |
+| H1 | The owner accepts both plans and the decisions they propose | H0b | — |
 | P1 | Import and list archived revmux rounds | H1 | past reviews in the client |
 | H2 | Storage tiers, scopes, the toggle | H1 | a Sharing page |
 | H3 | Adapters: install and update | H2 | the Agents page |
 | H4 | `crates/acp`, providers, `Session` headless, the fake ACP agent | H3 | — |
 | H5 | Host tools and the owner socket | H4 | — |
-| P2 | Panels on ACP: review and gate, live | P1, H5 | live panels |
+| H8 | Skills | H5 | a Skills page |
+| H11 | The chat on ACP; the sidecar goes at its end condition | H5, H8 | the chat on ACP |
+| P2 | Panels on ACP: review and gate, live | P1, H11 | live panels |
 | P3 | Dispositions, rounds, the loop | P2 | Fix/Dismiss/Defer |
 | H6 | Managed worktrees and recipes | H2 | worktrees from the client |
 | P4 | Fix in a worktree | P3, H6 | fixes as diffs |
 | P5 | Triage and plan review | P3 | panels over MRs, issues, plans |
 | P6 | Dialectic and brainstorm | P5 | two modes |
 | P7 | Corpus, calibration, stats | P3 | numbers per lens and model |
-| H7 | Docs | H5 | the Docs app |
-| H8 | Skills | H4 | a Skills page |
-| H9 | Processes and the env store | H5 | the Processes app |
+| H7 | Docs | H11 | the Docs app |
+| H9 | Processes and the env store | H11 | the Processes app |
 | H10 | Messages, groups, `watch` | H9 | agents talk |
-| H11 | The chat on ACP | H5, H8 | the chat on ACP |
 | H12 | Release | all | 0.6.0 |
 
-Choice 1, Claude's login in public builds, was settled on 2026-11-12 (§2, H12).
+The owner's choices, settled on 2026-11-12
+([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)):
+1. **Claude's login in public builds**: the user's own `claude` on any login (§2, H12).
+2. **The chat moves to ACP right after H5**, with H8 (skills) before it. The owner lives on ACP
+   while panels are built, so parity gaps show early, and every later check uses the real chat. The
+   sidecar still goes only at H11's end condition.
+3. **Spike 0b runs before H1**, and H1 waits for its answers.
 
-**Choice 2 — where the chat moves to ACP.**
-- **A. H11 stays last.**
-  - The owner keeps the sidecar chat while panels are built.
-  - H4 adds a minimal Session view (feed, approvals, prompt, group membership), which the checks of
-    H5 and H7–H10 use.
-  - The switch comes as one change at the end.
-- **B. H8 and H11 move right after H5. This is the coordinator's recommendation.**
-  - The owner lives on ACP while panels are built, so parity gaps show early.
-  - The checks use the real chat, and no debug view is needed.
-  - The sidecar still goes only at H11's end condition.
-  - The daily tool changes months earlier.
-
-**Choice 3 — spike 0b before H1.** It runs the rows of §17's H0b.
-- **Yes:** H1 waits for its answers, and a failed row reshapes sections before anything is built.
-- **No:** each row becomes a test in its step and a TECHDEBT row until it passes. A late failure
-  can reopen §1, §5 or PLAN-PANELS §3 after code depends on them.
-
-PLAN-PANELS §3 holds one more open choice: what a panel does on Windows.
+Still open: what a panel does on Windows (PLAN-PANELS §3).
 
 ## 15. What the first drafts' review asked
 
@@ -590,7 +582,7 @@ PLAN-FOUNDATION §12's gate, with these changes:
 Not shown by H0: the release binary over `ByteStreams`, a prompt, cancel or the job object on
 Linux and Windows, the Linux sandbox, any Codex row live. Those are H0b.
 
-### Step H0b. Spike 0b — pending the owner's yes (choice 3)
+### Step H0b. Spike 0b
 
 The same throwaway branch, on our bun-compiled `claude-agent-acp` over `ByteStreams` against
 `claude` from the official installer, with a test login on macOS, Linux (Ubuntu 22.04 and 24.04)
@@ -612,8 +604,8 @@ Done when every row is answered here.
 
 ### Step H1. The owner accepts the plans
 
-Both plans, after round 02 has no major finding. The owner decides choices 2 and 3 and the
-Windows choice, and accepts the six write decisions; each goes to `docs/decisions/`.
+Both plans, after spike 0b's answers are written in and round 02 has no major finding. The owner
+decides the Windows choice and accepts the six write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -677,8 +669,7 @@ Work:
 2. Manifests and §2's rows.
 3. `kernel::Session` without a view: start, prompt, stream, cancel, load, end; §6's sequences.
 4. §5's permissions, the `.env` deny.
-5. The minimal Session view, if choice 2 keeps H11 last.
-6. `bin/fake_acp.rs`, a scripted agent that:
+5. `bin/fake_acp.rs`, a scripted agent that:
    - streams, stalls and dies;
    - asks permission;
    - answers in prose without a tool;
@@ -733,6 +724,29 @@ Done when a fake agent reports findings and a real adapter reads a repo's status
 
 The owner checks: asks a session for a repo's status; runs `detached q` in a terminal.
 
+### Step H8. Skills
+
+Work: the folder list; repo skills; Claude's per-session plugin; `skills` in the SDL; the Skills
+page.
+
+Tests:
+- `~/.agents/skills` is read when present;
+- an untrusted shared skill is not passed;
+- a Claude session under `[]` lists a personal skill;
+- no directory is added to a Codex session.
+
+Done when a personal skill reaches a Claude session and a Codex session in a temp repo.
+
+The owner checks: the same, in the chat.
+
+### Step H11. The chat on ACP
+
+Work:
+1. The chat view on `kernel::Session`.
+2. `tests/chat.rs` on the fake.
+3. §13's rows and the `/usage` parse with its test.
+4. Then the removal at §13's end condition.
+
 ### Step H6. Managed worktrees and recipes
 
 Work:
@@ -769,21 +783,6 @@ Done when an agent asked about the watcher reads it through `docs` and not the t
 
 The owner checks: the Docs app on this repo.
 
-### Step H8. Skills
-
-Work: the folder list; repo skills; Claude's per-session plugin; `skills` in the SDL; the Skills
-page.
-
-Tests:
-- `~/.agents/skills` is read when present;
-- an untrusted shared skill is not passed;
-- a Claude session under `[]` lists a personal skill;
-- no directory is added to a Codex session.
-
-Done when a personal skill reaches a Claude session and a Codex session in a temp repo.
-
-The owner checks: the same, in the chat (choice 2) or the Session view.
-
 ### Step H9. Processes and the env store
 
 Work: `core::secrets`; profiles; definitions; `portable-pty` into `core::proc`; `kernel::Proc`;
@@ -815,14 +814,6 @@ Tests:
 Done when two grouped sessions finish one change by messages and one Stop ends both.
 
 The owner checks: the same.
-
-### Step H11. The chat on ACP
-
-Work:
-1. The chat view on `kernel::Session`.
-2. `tests/chat.rs` on the fake.
-3. §13's rows and the `/usage` parse with its test.
-4. Then the removal at §13's end condition.
 
 ### Step H12. Release
 
