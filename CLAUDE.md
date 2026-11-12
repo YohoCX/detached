@@ -107,6 +107,8 @@ Keep this list in sync with the Makefile.
 - Plans (`PLAN*.md`) keep a dated status line; update it when a step closes.
 - docs/KEYMAP.md is the keymap contract; docs/BACKLOG.md takes features, docs/TECHDEBT.md bugs and
   shortcuts found along the way.
+- docs/decisions/ holds one file per owner decision, `YYYY-MM-DD-<topic>.md`: what was decided,
+  why, what was rejected. Write one when the owner settles a question; plans link to it.
 - README describes what a user installs today.
 
 ## Git
