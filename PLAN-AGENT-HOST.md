@@ -14,8 +14,8 @@ Agents as first-class participants of the client:
 **Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
 their answers change are rewritten. Review rounds 01–06 (`.revmux/tasks/agent-host-plan/`) are
 fixed, and round 07 partly: the untrusted Fix's write path (PLAN-PANELS §12) waits for the owner's
-answer on whether it becomes patch-only. Then round 08 and H1. No other choice is open (§14). Codex stays off until H13a. Nothing is
-built.**
+answer on whether it becomes patch-only. Then round 08 and H1. No other choice is open (§14).
+Codex stays off until H13a. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09);
