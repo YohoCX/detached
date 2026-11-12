@@ -15,8 +15,8 @@ Agents as first-class participants of the client:
 (`.revmux/tasks/agent-host-plan/01-initial/`: revmux, 25 findings; Fable, B1–B10) is fixed in
 this text; round 02 is next. The owner settled §14's three choices on 2026-11-12: Claude on the
 user's own `claude` with any login (§2), the chat on ACP right after H5, and spike 0b before H1.
-Spike 0b is next; H1 waits for it. Open: what a panel does on Windows (PLAN-PANELS §3). Nothing
-is built.**
+Spike 0b is next; H1 waits for it. Panels isolate only an untrusted subject, through WSL2 on
+Windows (PLAN-PANELS §3). No choice is open. Nothing is built.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09);
@@ -28,6 +28,7 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - the read tool's schema;
   - Claude through the user's own `claude`, on any login;
   - the chat on ACP first, and spike 0b before H1;
+  - panels isolate by trust, with WSL2 on Windows, and agents keep the shell everywhere;
   - the six repo writes of §16, proposed until H1;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
@@ -115,7 +116,7 @@ provider does.
   - It is installed by Anthropic's official installer, which the Agents page runs or links to, and
     it updates itself. Detached never ships or downloads a Claude CLI.
   - The adapter gets it through `CLAUDE_CODE_EXECUTABLE`; the spike verified that.
-  - `min_cli` is checked before every session, and a read-only participant refuses below it, since
+  - `min_cli` is checked before every session, and an isolated participant refuses below it, since
     an older CLI may ignore the sandbox, `strictMcpConfig` or `settingSources`.
 - **Login.**
   - The user runs `claude /login` (or `claude auth login`) in a Detached terminal tab.
@@ -208,7 +209,13 @@ a session loads none of it.
 - **`.env`.** Claude denies `Read(//**/.env*)` and the matching Bash patterns through
   `disallowedTools`, as the sidecar does; H4 tests it. Codex's sandbox does not protect reads, and
   its sessions say so.
-- **Read-only means no write, no egress from tools, no cross-read**, enforced by the provider:
+- **Agents keep the shell everywhere**
+  ([decision](docs/decisions/2026-11-12-panels-by-trust-and-wsl.md)). The chat and a panel over a
+  trusted subject run as the chat does, with no sandbox. Host tools (§7) come in addition to the
+  shell, never instead of it.
+- **Isolation applies only to an untrusted subject** (PLAN-PANELS §3), such as someone else's MR.
+  Its participants are read-only: no write, no egress from tools, no cross-read, enforced by the
+  provider:
   - **Claude:**
     - `tools: [Read, Grep, Glob, Bash]`;
     - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed, allowUnsandboxedCommands:
@@ -220,12 +227,22 @@ a session loads none of it.
     checkout's `.env*`, `~/.ssh`, `~/.aws`, `~/.config/gh`, and the data tier's other runs.
 
     The sandbox needs Seatbelt on macOS, and on Linux `bubblewrap`, `socat` and unprivileged user
-    namespaces (Ubuntu 24.04 restricts them). It does not run on native Windows. Where it is
-    unavailable, `failIfUnavailable` refuses, and the row says "sandbox unavailable: install
-    bubblewrap".
-  - **Codex:** the `read-only` mode, its OS sandbox: no write, no network. **It does not stop
-    cross-reads.** For read-only participants the host approves only host-tool calls and denies
-    every `execute` request, since under `read-only` such a request asks to leave the sandbox.
+    namespaces (Ubuntu 24.04 restricts them). Where it is unavailable, `failIfUnavailable`
+    refuses, and the row says "sandbox unavailable: install bubblewrap".
+  - **Windows:** Claude's sandbox does not run natively, so an isolated Claude participant runs in
+    WSL2, where the Linux sandbox works.
+    - The host starts the adapter and the user's `claude` inside WSL (`wsl.exe -d <distro> --
+      <adapter>`) over the same stdio.
+    - The pinned tree lives in WSL's own filesystem for speed: fetched from the Windows repo by its
+      SHA, then a worktree there.
+    - The host's HTTP tool is reached through WSL's localhost forwarding; the `Host` check accepts
+      that address.
+    - Without WSL, Detached offers to install it, or to run the participant unisolated after a
+      consent that names PLAN-PANELS §4's lines 2–4.
+    - A native Windows sandbox is in docs/BACKLOG.md.
+  - **Codex:** the `read-only` mode, its OS sandbox: commands run inside it, with no write and no
+    network. **It does not stop cross-reads.** The host approves host-tool calls and denies every
+    request to run outside the sandbox.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
 - **A woken turn (§9)** runs with the host's always-rules suspended and in the provider's asking
@@ -267,7 +284,8 @@ Agents get Detached's data and a closed list of actions as tools.
   - Codex gets its servers as thread config over JSON-RPC, not in argv.
   - Every request must carry `Host: 127.0.0.1:<port>` and no `Origin` header, so a browser's DNS
     rebinding is refused.
-- **Two tools**, `detached_read` and `detached_act`, both pre-allowed (§5). A refused tool made the
+- **Two tools**, `detached_read` and `detached_act`, both pre-allowed (§5). Every agent and
+  participant gets them in addition to its shell. A refused tool made the
   agent answer in prose, so a refusal is a failure the host sees.
 - **Reads** use a query language over an SDL file, `crates/kernel/src/host/schema.graphql`,
   parsed by `graphql-parser` 0.4.1 ([decision](docs/decisions/2026-11-12-host-schema.md)).
@@ -329,7 +347,8 @@ enum SessionState { IDLE RUNNING WAITING ENDED }
 ```
 
 Later steps add to the SDL:
-- P2: `panels`, `Panel`, `Participant`, `Finding`;
+- P2: `panels`, `Panel`, `Participant`, `Finding`, and `diff`, `log` and `search` on `Repo` for
+  reviewers, over core's git and search;
 - H7: `docs`, `DocSection`;
 - H8: `skills`, `Skill`;
 - H9: `processes`, `Process` (`log` is nullable);
@@ -494,7 +513,7 @@ The owner's choices, settled on 2026-11-12
    sidecar still goes only at H11's end condition.
 3. **Spike 0b runs before H1**, and H1 waits for its answers.
 
-Still open: what a panel does on Windows (PLAN-PANELS §3).
+4. **Windows panels**: isolation by trust, an untrusted subject through WSL2 (PLAN-PANELS §3).
 
 ## 15. What the first drafts' review asked
 
@@ -586,7 +605,7 @@ Linux and Windows, the Linux sandbox, any Codex row live. Those are H0b.
 
 The same throwaway branch, on our bun-compiled `claude-agent-acp` over `ByteStreams` against
 `claude` from the official installer, with a test login on macOS, Linux (Ubuntu 22.04 and 24.04)
-and Windows, and Codex logged in on the owner's Mac.
+and Windows (natively and in WSL2), and Codex logged in on the owner's Mac.
 
 | # | Question | If | Then |
 | --- | --- | --- | --- |
@@ -599,13 +618,16 @@ and Windows, and Codex logged in on the owner's Mac.
 | 7 | Codex live: the `read-only` sandbox (write, egress, cross-read), `turn/interrupt`, HTTP MCP, a same-named server skipped, whether force-trusting pinned trees adds entries to `~/.codex/config.toml` | entries pile up | Codex participants run with a host-owned `CODEX_HOME` beside a copy of the login |
 | 8 | `_session/async_task/stop`; `session/close` returns the CLI's memory; the `.env` deny through `disallowedTools` | one fails | §2's and §5's rows change |
 | 9 | `claude-agent-acp` built with `bun build --compile` runs a session, a turn, cancel and load as under Node, against the user's `claude` through `CLAUDE_CODE_EXECUTABLE` | it fails under bun | Claude's adapter ships upstream's archive with its CLI unused, or Node becomes a stated requirement; the owner decides |
+| 10 | Windows: Claude Code's sandbox inside WSL2 enforces `denyWrite`, `denyRead` and network deny | it does not | an untrusted subject on Windows runs only after the consent of PLAN-PANELS §3 |
+| 11 | Windows: a review's speed with the pinned tree in WSL's filesystem, against the Windows filesystem | WSL's is not faster | the tree stays on the Windows side, reached as `/mnt/<drive>` |
+| 12 | Windows: the adapter and `claude` started inside WSL over stdio, and the host's HTTP tool reached from WSL (NAT and mirrored networking) | unreachable in NAT mode | the host listens on the WSL interface too, with the same secret binding, or requires mirrored networking |
 
 Done when every row is answered here.
 
 ### Step H1. The owner accepts the plans
 
 Both plans, after spike 0b's answers are written in and round 02 has no major finding. The owner
-decides the Windows choice and accepts the six write decisions; each goes to `docs/decisions/`.
+accepts the six write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
@@ -653,7 +675,7 @@ Tests:
 - an entry outside `min_app`/`max_app` is ignored;
 - an old version keeps serving its sessions while a new one starts;
 - rollback restarts on the kept version;
-- a `claude` below `min_cli` refuses a read-only participant and warns a chat;
+- a `claude` below `min_cli` refuses an isolated participant and warns a chat;
 - no Claude CLI is downloaded or shipped, and no login file is read (the fake CLI records reads);
 - an "out of extra usage" error from the fake shows the pool and the fallback;
 - the UI never says "Claude Code".

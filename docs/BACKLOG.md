@@ -4,6 +4,7 @@ Features after milestone 1, newest first. Milestone 2 scope is in [PLAN-M2.md](.
 
 | Feature | Notes |
 | --- | --- |
+| Native Windows sandbox for panels | Isolate an untrusted subject's participants on Windows without WSL2: an AppContainer or a restricted token, with a proxy allowlist for egress. Today they run in WSL2 or unisolated after a consent ([PLAN-PANELS.md](../PLAN-PANELS.md) §3). |
 | Theme editor | In Settings with a live preview, saving to a theme file; one mutable preview slot, so a `Theme` does not leak per edit. Themes come from JSON files first ([PLAN-EXTENSIBLE.md](../PLAN-EXTENSIBLE.md) step 2). |
 | Icon packs | UI and file type icons replaceable from the config directory; needs a licensed or own set of file type icons first. |
 | Density and a spacing scale | The ~530 `px()` in views onto tokens; many are geometry rather than spacing, such as the 90 px traffic light inset. |
