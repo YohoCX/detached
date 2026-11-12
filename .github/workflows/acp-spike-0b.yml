@@ -226,7 +226,6 @@ jobs:
       - name: Row 12, mirrored networking
         continue-on-error: true
         if: steps.wsl.outcome == 'success'
-        continue-on-error: true
         shell: pwsh
         run: |
           "[wsl2]`nnetworkingMode=mirrored" | Out-File -Encoding ascii "$env:USERPROFILE\.wslconfig"
@@ -237,7 +236,6 @@ jobs:
       - name: Row 12, the adapter in WSL, mirrored
         continue-on-error: true
         if: steps.wsl.outcome == 'success'
-        continue-on-error: true
         run: |
           . spikes/acp/0b/lib.sh && setup wslmirror
           export WSLENV=ANTHROPIC_BASE_URL/u:ANTHROPIC_API_KEY/u PASS=WSLENV
