@@ -7,12 +7,10 @@ Proposed on 2026-11-12, decided at the agent host's H1.
   - the recipe copies ignored files (`.env`, `.env.local`) at mode 0600 and runs its install and
     teardown commands;
   - remove keeps the branch.
-- On an untrusted subject the agent works in a tree git checked out with no `.git`, through a temp
-  index, and edits through its sandboxed shell only. The host stages it back with `add -A` into
-  that index, refuses a tree with a `.git` entry in any spelling or a new gitlink, and commits with
-  `commit-tree`, with hooks, `core.fsmonitor` and signing off. The Fix branch is checked out by
-  git into a managed worktree the agent never touched. No recipe copy or `install` runs. The
-  installed git must pass a probe of the bad-path cases (PLAN-PANELS §12).
+- On an untrusted subject the agent works in its own sandboxed clone. The host never runs git in
+  it. It takes the result from a bundle made inside the sandbox, fetched with fsck into
+  `refs/detached/fix/<id>`, then makes the Fix branch and checks it out with git, hooks off, into a
+  managed worktree the agent never touched. No recipe copy or `install` runs (PLAN-PANELS §12).
 - Why: Fix and the owner's parallel work get their own trees, as `wt` gives them today.
 - Rejected:
   - symlinks: they need privilege on Windows;

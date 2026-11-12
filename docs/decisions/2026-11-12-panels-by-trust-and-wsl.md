@@ -2,6 +2,10 @@
 
 Decided by the owner on 2026-11-12. These are options E and F of the Windows choice.
 
+Amended by [orchestrator mode](2026-11-12-orchestrator-mode.md): trust can come from a marked
+workspace or repo, trusted work runs free on its own branch, and untrusted work runs free inside
+a sandboxed clone. Where the two differ, that decision holds.
+
 - **The shell everywhere.** Every agent and panel participant keeps its terminal access on every
   OS. Host tools (diff, log, search, `detached_read`) are offered in addition, never instead.
 - **E, by trust.**
