@@ -4,7 +4,7 @@
 //! capabilities JSON), MCP (stdio|http), MCP_NAME, PS, META (session/new `_meta`), MODE,
 //! CONFIG (k=v,..), PERM (allow|deny|readonly), LOAD (session id), N, CANCEL_AFTER, CLOSE_AFTER,
 //! ABORT_AFTER, STEER, STEER_AFTER, EXT, RSS, HOLD, QUIET, FAKE (script file), JOB, CHECK (markers),
-//! CHECK_TURN (a marker after each turn).
+//! CHECK_TURN (a marker after each turn), CHECK_EXT (after EXT).
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{
@@ -24,6 +24,7 @@ mod fake;
 mod mcp;
 
 static START: OnceLock<Instant> = OnceLock::new();
+static TASK: Mutex<String> = Mutex::new(String::new());
 const READONLY_CMDS: &[&str] = &[
     "git diff",
     "git log",
@@ -369,6 +370,14 @@ async fn run(args: Vec<String>, io: Io) -> agent_client_protocol::Result<()> {
                 let v = serde_json::to_value(&n.update).unwrap();
                 let kind = v["sessionUpdate"].as_str().unwrap_or("?").to_string();
                 let sid = n.session_id.to_string();
+                let raw = v.to_string();
+                if let Some(i) = raw.find("with ID: ") {
+                    let id: String = raw[i + 9..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric())
+                        .collect();
+                    *TASK.lock().unwrap() = id;
+                }
                 if kind == "agent_message_chunk" || kind == "agent_thought_chunk" {
                     let t = v["content"]["text"].as_str().unwrap_or("");
                     text2
@@ -568,7 +577,9 @@ async fn run(args: Vec<String>, io: Io) -> agent_client_protocol::Result<()> {
             }
             for x in env("EXT").split(';').filter(|s| !s.is_empty()) {
                 let (method, params) = x.split_once(' ').unwrap_or((x, "{}"));
-                let params = params.replace("$SID", &sids[0].to_string());
+                let params = params
+                    .replace("$SID", &sids[0].to_string())
+                    .replace("$TASK", &TASK.lock().unwrap());
                 let p: Value = serde_json::from_str(&params).unwrap();
                 let r = cx
                     .send_request(UntypedMessage::new(method, p)?)
@@ -579,8 +590,14 @@ async fn run(args: Vec<String>, io: Io) -> agent_client_protocol::Result<()> {
                     cut(&json!(format!("{r:?}")), 3000)
                 ));
             }
+            if !env("CHECK_EXT").is_empty() {
+                survivors(&[env("CHECK_EXT")]);
+            }
             if !env("RSS").is_empty() && !env("EXT").is_empty() {
-                rss("after ext");
+                for s in [0, 3, 3] {
+                    async_io::Timer::after(Duration::from_secs(s)).await;
+                    rss("after ext");
+                }
             }
             if !env("HOLD").is_empty() {
                 say("holding; kill me");
@@ -702,15 +719,21 @@ fn second_client(mcp: &[McpServer], secret: &str) {
         return;
     };
     for l in procs(secret) {
+        let l = l.replace(secret, "<secret>");
+        let at = l.find("--mcp-config").unwrap_or(0);
         say(&format!(
-            "PS {}",
-            cut(&json!(l.replace(secret, "<secret>")), 300)
+            "PS pid {} ... {}",
+            l.split(' ').next().unwrap_or(""),
+            cut(&json!(&l[at..]), 200)
         ));
     }
     let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"intruder","version":"0"}}}"#;
     let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
     let sink = std::env::temp_dir().join("second-client.out");
-    for body in [init, list] {
+    for (what, body) in [
+        ("initialize", init),
+        ("tools/list without the session id", list),
+    ] {
         let out = Command::new("curl")
             .args([
                 "-s",
@@ -732,6 +755,6 @@ fn second_client(mcp: &[McpServer], secret: &str) {
         let code = out
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
-        say(&format!("second client {} -> HTTP {code}", &body[37..60]));
+        say(&format!("second client {what} -> HTTP {code}"));
     }
 }

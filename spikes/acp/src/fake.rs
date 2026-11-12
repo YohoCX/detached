@@ -47,9 +47,10 @@ fn answer(path: &str, req: &Value, script: &Value, log: &str) -> String {
         _ => vec![json!({"text": "done"})],
     };
     let results: Vec<String> = msgs
-        .last()
-        .and_then(|m| m["content"].as_array())
-        .into_iter()
+        .iter()
+        .rev()
+        .take_while(|m| m["role"] != "assistant")
+        .filter_map(|m| m["content"].as_array())
         .flatten()
         .filter(|c| c["type"] == "tool_result")
         .map(|c| crate::cut(&c["content"], 300))
