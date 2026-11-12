@@ -6,14 +6,18 @@ Decided by the owner on 2026-11-12. These are options E and F of the Windows cho
   OS. Host tools (diff, log, search, `detached_read`) are offered in addition, never instead.
 - **E, by trust.**
   - A trusted subject runs its participants with the full shell, as the chat does, on every OS and
-    with no sandbox. Trusted means the owner's own repo or branch, or an accepted repo.
+    with no sandbox. Trusted needs all three:
+    - the owner's own repo or branch;
+    - not fetched from someone else's MR or fork;
+    - trust files that hash to an accepted set.
   - Isolation applies only to an untrusted subject, such as someone else's MR: no write, no egress
     from tools, no cross-read.
 - **F, WSL2 on Windows.**
   - For an untrusted subject on Windows, Claude Code runs inside WSL2, where its Linux sandbox
-    (bubblewrap) works.
-  - The pinned tree lives in WSL's filesystem for speed, and the host's HTTP tool is reached through
-    localhost forwarding.
+    (bubblewrap) works. It runs in Detached's own distro, with interop and automount off.
+  - The pinned tree lives in WSL's filesystem for speed.
+  - The host's HTTP tool is reached on the WSL gateway address, behind a firewall rule from a
+    one-time elevated step.
   - Without WSL, Detached offers to install it, or to run unisolated after a consent that names
     the risk.
 - **Why:** reviewers need a real shell, and isolation costs only where a subject is hostile. WSL2

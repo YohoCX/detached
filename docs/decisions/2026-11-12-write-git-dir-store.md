@@ -3,7 +3,7 @@
 Proposed on 2026-11-12, decided at the agent host's H1.
 
 - What:
-  - files under `<git common dir>/detached/`: run records, local assets, the session index;
+  - files under `<git common dir>/detached/`: run records and local assets;
   - refs under `refs/detached/subjects/` for MR heads fetched for a panel, besides today's
     `refs/detached/turns/`.
 - Why: per-repo data follows every linked worktree, stays out of the working tree and is never
