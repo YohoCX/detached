@@ -13,12 +13,6 @@ package() { (cd crates/app && cargo packager --release -o "$out" "$@"); }
 
 case "$(uname -s)" in
 Darwin)
-  rustup target add aarch64-apple-darwin x86_64-apple-darwin
-  cargo build --release -p detached-app --target aarch64-apple-darwin --target x86_64-apple-darwin
-  mkdir -p target/universal-apple-darwin/release
-  lipo -create -output target/universal-apple-darwin/release/detached \
-    target/aarch64-apple-darwin/release/detached target/x86_64-apple-darwin/release/detached
-  package --target universal-apple-darwin -f app
   # Signed here, not by the packager, which always asks Apple for a secure timestamp.
   if security find-identity -v -p codesigning | grep -q '"Detached Dev"'; then
     identity="Detached Dev"
@@ -26,14 +20,19 @@ Darwin)
     echo "warning: no valid \"Detached Dev\" identity (see make sign-setup): signing ad-hoc." >&2
     identity=-
   fi
-  codesign --force --options runtime -s "$identity" "$out/Detached.app"
-  ditto -c -k --keepParent "$out/Detached.app" "$out/Detached-macos.zip"
+  rustup target add aarch64-apple-darwin x86_64-apple-darwin
+  cargo build --release -p detached-app --target aarch64-apple-darwin --target x86_64-apple-darwin
   for arch in arm64:aarch64 x64:x86_64; do
-    dir=$out/${arch%:*}
-    mkdir "$dir"
+    target=${arch#*:}-apple-darwin
+    arch=${arch%:*}
+    package --target "$target" -f app
+    mkdir "$out/$arch"
+    mv "$out/Detached.app" "$out/$arch/"
+    codesign --force --options runtime -s "$identity" "$out/$arch/Detached.app"
+    ditto -c -k --keepParent "$out/$arch/Detached.app" "$out/Detached-macos-$arch.zip"
     # Cargo's detached.dSYM is a link to deps/detached-<hash>.dSYM.
-    cp -RL "target/${arch#*:}-apple-darwin/release/detached.dSYM" "$dir/"
-    ditto -c -k --keepParent "$dir/detached.dSYM" "$out/Detached-macos-${arch%:*}-dSYM.zip"
+    cp -RL "target/$target/release/detached.dSYM" "$out/$arch/"
+    ditto -c -k --keepParent "$out/$arch/detached.dSYM" "$out/Detached-macos-$arch-dSYM.zip"
   done
   ;;
 MINGW* | MSYS* | CYGWIN*)

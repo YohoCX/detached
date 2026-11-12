@@ -26,13 +26,14 @@ project tree nests related files under their main file (`a.spec.ts` under `a.ts`
 
 ## Install
 
-macOS 15 or later (a universal app for Apple silicon and Intel):
+macOS 15 or later, on Apple silicon or Intel:
 
 ```sh
 curl -fsSL https://github.com/YohoCX/detached/releases/latest/download/install.sh | sh
 ```
 
-Installs `/Applications/Detached.app` (`DETACHED_DIR=~/Applications` to change). The app is signed
+Installs the package for the Mac's chip, `Detached-macos-arm64.zip` or `Detached-macos-x64.zip`, as
+`/Applications/Detached.app` (`DETACHED_DIR=~/Applications` to change). The app is signed
 with a self-signed identity and not notarized, so a copy downloaded in a browser is blocked by
 Gatekeeper; the script avoids that. Account tokens are kept in the macOS Keychain. Older Macs stay
 on v0.3.0:

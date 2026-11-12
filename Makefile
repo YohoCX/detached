@@ -38,7 +38,7 @@ smoke:
 fmt:
 	cargo fmt --all
 
-# The native packages for this OS in target/package: Detached.app and its zip, NSIS, or deb and AppImage.
+# The native packages for this OS in target/package: Detached.app and its zip per arch, NSIS, or deb and AppImage.
 build:
 	./scripts/package.sh
 

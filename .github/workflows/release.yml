@@ -61,8 +61,10 @@ jobs:
       - name: Check signature
         if: runner.os == 'macOS'
         run: |
-          codesign --verify --deep --strict target/package/Detached.app
-          codesign -dvv target/package/Detached.app 2>&1 | grep 'Authority=Detached Dev'
+          for app in target/package/arm64/Detached.app target/package/x64/Detached.app; do
+            codesign --verify --deep --strict "$app"
+            codesign -dvv "$app" 2>&1 | grep 'Authority=Detached Dev'
+          done
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

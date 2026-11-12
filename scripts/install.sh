@@ -5,7 +5,10 @@ set -eu
 
 # A function, so a truncated download runs nothing.
 main() {
-  url=${DETACHED_URL:-https://github.com/YohoCX/detached/releases/latest/download/Detached-macos.zip}
+  # Apple silicon says 1 even to a shell under Rosetta.
+  arch=x64
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ] && arch=arm64
+  url=${DETACHED_URL:-https://github.com/YohoCX/detached/releases/latest/download/Detached-macos-$arch.zip}
   dir=${DETACHED_DIR:-/Applications}
   [ "$(uname -s)" = Darwin ] || { echo "This script installs the macOS app only." >&2; exit 1; }
   if [ -z "${DETACHED_URL:-}" ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 15 ]; then
