@@ -4,7 +4,10 @@ Groups of agents over one subject: review, pre-merge gate, triage, plan review, 
 brainstorm, as stage graphs on one engine. Ideas come from revmux; the design is ours. It runs on
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md); the two plans share one order (host §13).
 
-**Status (2026-11-12): draft, not reviewed, not accepted. Nothing is built.**
+**Status (2026-11-12): draft, not reviewed, not accepted. The host's step 0 is answered and the
+sections it settles are rewritten (§3, §4, §6, §7). Open for the owner: what a panel does on
+Windows (§3). revmux and `.revmux/` stay; whether panels replace revmux is deferred. Nothing is
+built.**
 
 Owner's decision, [2026-11-12](docs/decisions/2026-11-12-panels.md): the full scope ships, with no
 v1 cuts. That means every mode, mixed models on any role, stats by lens and model, and Fix in a
@@ -78,17 +81,37 @@ Built-in modes:
   `<git common dir>/detached/trees/<run>`. That way the owner editing the live tree changes
   nothing they read, and their writes, if any, touch nothing the owner sees. The tree is removed
   with the run's end.
-- **Read-only.** The host's headless policy (host §4) allows reads and read commands, denies
-  writes and network, and escalates the rest to the owner in the participant's row. Where a
-  provider's requests do not reach the host (row 4), read-only rests on the pinned tree and the
-  prompt, and the run says so.
+- **Read-only is the provider's sandbox** (host §4, step 0 row 4). Plan mode and a host policy
+  on command strings both let files be written in the spike.
+  - **Claude**: `tools: [Read, Grep, Glob, Bash]` and
+    `sandbox {enabled, failIfUnavailable, allowUnsandboxedCommands: false,
+    filesystem.denyWrite: [cwd]}`. On macOS (Seatbelt) nothing was written and nothing asked. Linux
+    is confirmed in P2.
+  - **Codex**: the `read-only` mode, its OS sandbox on all three systems (from source; confirmed
+    in H3).
+  - The host's policy answers only what still asks. It escalates anything outside reads to the
+    owner in the participant's row.
+- **Windows, open for the owner.** Claude's sandbox does not run on native Windows, so a read-only
+  Claude participant refuses to start there. The options:
+  1. A Claude role on Windows moves to Codex when Codex is installed, and the run says so. With no
+     Codex, the panel does not start. This is the agent's view.
+  2. Claude roles run on Windows unenforced, after a per-run consent that names the risk. The
+     pinned worktree still keeps the owner's tree untouched.
+  3. No panels on Windows until Claude's sandbox runs there; a TECHDEBT row.
 - **Mixed models.** Any role names a provider and a model; a mode may put one role on two models.
   - Corroboration counts only across models: a finding raised by two Opus sessions counts as one
     source for confidence; one raised by Opus and by Codex counts as two.
   - The verifier runs on a different model from the finding's sources by default.
 - **The trust of the subject.** A reviewed branch carries its own `.claude/`, `.mcp.json`,
-  `.codex/` and hooks. Participants start with user settings only, whatever the repo's trust,
-  since the subject may be someone else's branch.
+  `.codex/` and hooks, and may be someone else's branch. So participants start, whatever the
+  repo's trust, with:
+  - `settingSources: []` and `strictMcpConfig: true`;
+  - the model, effort and mode set explicitly, since the adapter otherwise takes them from
+    `~/.claude/settings.json`;
+  - an env the host builds.
+
+  Codex participants run only in accepted repos (host §3); the pinned tree of an unaccepted
+  branch gets Claude participants only.
 
 ## 4. Reporting through tools
 
@@ -102,8 +125,11 @@ report_verdict { finding, verdict: confirmed|refined|rejected|immaterial|pre_exi
 done           { nothing_found: bool, note? }
 ```
 
+- The tools are pre-allowed in the session (host §4). In the spike, a refused tool made the agent
+  answer in prose instead.
 - The schema is checked by the host. A bad call returns the error to the agent, which can retry.
-- A participant that ends its turn without `done` failed that attempt, whatever it wrote in prose.
+- **A turn that ends (`end_turn`) without `done` recorded fails that attempt**, whatever it wrote
+  in prose. The spike's agent wrote a prose summary even after `done`; prose is ignored.
   `raised: 0` from a broken agent never reads as healthy.
 - `merge`, `synthesize`, `cluster` and `rank` have their own tools of the same kind (`report_group`,
   `report_outcome`, `report_rank`). A merge is a participant with attempts like any other.
@@ -123,8 +149,13 @@ done           { nothing_found: bool, note? }
 ## 6. Failure, offline and cancel
 
 - **Per participant**: an attempt that stalls (no update for the mode's idle limit, 2 min by
-  default) or dies is retried by resuming its session if row 2 allows, else restarted with its brief
-  and its findings so far. At most 3 attempts; then the participant is degraded.
+  default) or dies is retried.
+  - The retry resumes the session with `session/load`, then sets model, effort and mode again;
+    without that the load ran on Opus at about 60 times the cost.
+  - A load re-sends the whole history with a cold cache, which the estimate counts.
+  - If the load fails, the participant restarts with its brief and its findings so far, and the
+    record says "restarted".
+  - At most 3 attempts; then the participant is degraded.
 - **Per run**: when every running participant fails within one minute of each other, the run pauses
   as offline and spends no attempts.
   - Before resuming, the host probes reachability every 30 s.
@@ -133,18 +164,26 @@ done           { nothing_found: bool, note? }
   timers instead of counting the gap.
 - **Rate limits**: a provider's limit error pauses that provider's participants until the reset the
   error names. It never counts as a failure.
-- **Cancel** ends every participant's turn, then the host kills the group's children (host §2.1),
-  and records the run as cancelled with what it had.
+- **Cancel** sends `session/cancel` to every participant, which ends its foreground command. The
+  host then closes the sessions, shuts the adapter down only if no other session uses it, and
+  records the run as cancelled with what it had. A process group is never killed first: that
+  orphans the running command (host §2.1).
 - **Partial results** are stated: "3 of 4 reported". A degraded run never reads as clean.
 
 ## 7. Cost
 
-- **Estimate before start**: from the last runs of the same mode and roster on subjects of a similar
-  size, shown as a range of tokens and the share of the 5-hour and weekly limits where the provider
-  reports them (row 1). Starting needs a click.
-- **Live**: tokens per participant and the run's total beside the estimate.
+- **Estimate before start**: from the last runs of the same mode and roster on subjects of a
+  similar size, shown as a range of tokens, and USD for Claude. Starting needs a click.
+  - Neither adapter reports the 5-hour and weekly limits as data (row 1). The share of the limits
+    comes from the host's `detached-usage` helper (host §12) and shows as unknown for Codex.
+  - Claude's `_claude/rateLimit` warning shows live in the header.
+- **Live**: tokens per participant from `usage_update` and each turn's `usage`, the run's total
+  beside the estimate, and Claude's cost per turn.
 - **Budget**: optional per run. On reaching it, the run pauses and asks.
-- **Concurrency**: a global cap on live participants (default from row 6) across all panels.
+- **Concurrency**: a global cap on live participants across all panels.
+  - Its default is 4 live Claude sessions. Each is a `claude` CLI of 250–320 MB; five took
+    1.5–1.7 GB in the spike. Codex sessions share one app-server.
+  - A participant's session closes as soon as it reports, so the memory goes back.
   - Chat turns take priority: a panel's next attempt waits while a chat turn is running on the same
     provider and the cap is reached.
   - Re-reviews default to the gate's two-participant roster.
@@ -311,7 +350,8 @@ The owner checks: replays a round of this week and reads it faster than revmux's
 Work:
 1. The scheduler: stages, the cap, chat priority, attempts, the offline pause, sleep gaps,
    rate-limit pauses.
-2. Participants on pinned worktrees with the headless policy.
+2. Participants on pinned worktrees, read-only by the provider's sandbox (§3), with the headless
+   policy for what still asks, and Windows as the owner chose.
 3. The tools' handlers.
 4. The quote check.
 5. Mixed models and cross-model corroboration.
@@ -322,7 +362,10 @@ Tests, on the fake ACP agent and GPUI's clock:
 - a stalled participant retries, then degrades;
 - all failing together pauses offline and spends no attempt;
 - a sleep gap does not trip stalls;
-- `done` missing fails the attempt;
+- `end_turn` without `done` fails the attempt;
+- a resumed participant runs on its own model, not the settings' default;
+- a Claude participant cannot write in the pinned tree on macOS and Linux (`Write` absent, Bash
+  denied by the sandbox), checked on the real adapter;
 - a quote not in the commit makes the finding unverified;
 - two same-model sources count once;
 - cancel leaves no process;
@@ -409,6 +452,6 @@ The owner checks: the Stats page after the weeks of use since P3.
 ### The panels are done when
 
 - every step passed its gate;
-- this repo's own steps are reviewed by the panels' gate instead of revmux, by the owner's
-  decision after P7;
+- the panels' gate has run beside revmux on every step since P3, and the two are compared in
+  P7's numbers (whether panels replace revmux is deferred);
 - §12's UI shows every state from a real run.
