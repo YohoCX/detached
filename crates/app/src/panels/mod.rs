@@ -41,14 +41,12 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 struct List {
     repo: Option<String>,
     rounds: Option<Interest<Rounds>>,
-    collapsed: Vec<String>,
     _workspace: Subscription,
 }
 
 impl List {
     fn new(cx: &mut Context<Self>) -> Self {
         let mut list = Self {
-            collapsed: kernel::ui_state::get("panels.collapsed", cx).unwrap_or_default(),
             repo: None,
             rounds: None,
             _workspace: Workspace::observe(cx, |v: &mut Self, cx| {
@@ -102,114 +100,54 @@ impl Render for List {
                             .max(),
                     )
                 });
-                let mut index = 0usize;
                 for task in tasks {
                     let mut runs: Vec<_> = rounds.runs.iter().filter(|r| r.task == task).collect();
                     runs.sort_by(|a, b| (b.started_at, &b.round).cmp(&(a.started_at, &a.round)));
-                    let folded = self.collapsed.contains(&task);
-                    let toggle = task.clone();
+                    let Some(run) = runs.first() else { continue };
                     let doc = Doc::PanelTask {
                         repo: self.repo.clone().unwrap_or_default(),
                         task: task.clone(),
                     };
+                    let counts = run.counts();
+                    let color = if run.participants.iter().any(|p| p.degraded)
+                        || !run.warnings.is_empty()
+                    {
+                        theme(cx).warning
+                    } else if counts.critical + counts.major > 0 {
+                        theme(cx).error
+                    } else {
+                        theme(cx).success
+                    };
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let time = if run.started_at == 0 {
+                        "time unavailable".into()
+                    } else {
+                        crate::util::ago_text(run.started_at / 1000, now)
+                    };
+                    let label = format!("{task} · {} rounds · {time}", runs.len());
                     rows.push(
-                        div()
-                            .flex()
-                            .items_center()
+                        ui::row(SharedString::from(format!("panels.task.{task}")), false, cx)
+                            .test_support()
+                            .aria_label(label)
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(ui::dot(color))
+                            .child(div().flex_1().min_w_0().truncate().child(task))
                             .child(
-                                ui::icon_button(
-                                    SharedString::from(format!("panels.collapse.{task}")),
-                                    if folded {
-                                        ui::Icon::Chevron
-                                    } else {
-                                        ui::Icon::Down
-                                    },
-                                    cx,
-                                )
-                                .test_support()
-                                .aria_label("Collapse task")
-                                .on_click(cx.listener(
-                                    move |v, _, _, cx| {
-                                        if v.collapsed.contains(&toggle) {
-                                            v.collapsed.retain(|t| t != &toggle);
-                                        } else {
-                                            v.collapsed.push(toggle.clone());
-                                        }
-                                        kernel::ui_state::set("panels.collapsed", &v.collapsed, cx);
-                                        cx.notify();
-                                    },
-                                )),
+                                div()
+                                    .flex_none()
+                                    .text_size(text::SMALL)
+                                    .text_color(theme(cx).muted)
+                                    .child(format!("{} · {time}", runs.len())),
                             )
-                            .child(
-                                ui::row(
-                                    SharedString::from(format!("panels.task.{task}")),
-                                    false,
-                                    cx,
-                                )
-                                .test_support()
-                                .child(format!("{task} ({})", runs.len()))
-                                .on_click(move |_, _, cx| {
-                                    Workspace::global(cx)
-                                        .update(cx, |w, cx| w.show(doc.clone(), cx));
-                                }),
-                            )
+                            .on_click(move |_, _, cx| {
+                                Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));
+                            })
                             .into_any_element(),
                     );
-                    for run in runs {
-                        let i = index;
-                        index += 1;
-                        if folded {
-                            continue;
-                        }
-                        let doc = Doc::Panel {
-                            repo: self.repo.clone().unwrap_or_default(),
-                            task: run.task.clone(),
-                            round: run.round.clone(),
-                        };
-                        let counts = run.counts();
-                        let color = if run.participants.iter().any(|p| p.degraded)
-                            || !run.warnings.is_empty()
-                        {
-                            theme(cx).warning
-                        } else if counts.critical + counts.major > 0 {
-                            theme(cx).error
-                        } else {
-                            theme(cx).success
-                        };
-                        let label = format!(
-                            "{} / {} · {} findings",
-                            run.task,
-                            run.round,
-                            run.findings.len()
-                        );
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        rows.push(
-                            ui::row(("panels.round", i), false, cx)
-                                .test_support()
-                                .aria_label(label)
-                                .child(ui::dot(color))
-                                .child(run.round.clone())
-                                .child(
-                                    div()
-                                        .text_size(text::SMALL)
-                                        .text_color(theme(cx).muted)
-                                        .child(if run.started_at == 0 {
-                                            "time unavailable".into()
-                                        } else {
-                                            crate::util::ago_text(run.started_at / 1000, now)
-                                        }),
-                                )
-                                .child(count_badges(counts, cx))
-                                .on_click(move |_, _, cx| {
-                                    Workspace::global(cx)
-                                        .update(cx, |w, cx| w.show(doc.clone(), cx));
-                                })
-                                .into_any_element(),
-                        );
-                    }
                 }
                 rows.extend(rounds.errors.iter().map(|e| {
                     div()

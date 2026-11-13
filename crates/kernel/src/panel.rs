@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use detached_core::panel::{self, Counts, Run, Thread};
+use detached_core::panel::{self, Counts, Fix, Run, Thread};
 use gpui::{App, Entity};
 
 use crate::resource::{self, Policy, Resource};
@@ -16,6 +16,7 @@ pub struct Task {
     pub rounds: Vec<String>,
     pub counts: Vec<Counts>,
     pub threads: Vec<Thread>,
+    pub fixes: Vec<Option<Fix>>,
 }
 
 pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
@@ -36,6 +37,16 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                         tasks.entry(run.task.clone()).or_insert_with(|| {
                             let task = panel::task(&rounds.runs, &run.task);
                             Task {
+                                fixes: task
+                                    .rounds
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| {
+                                        (i > 0)
+                                            .then(|| panel::fix(&core, &repo, &r.scope))
+                                            .flatten()
+                                    })
+                                    .collect(),
                                 rounds: task.rounds.iter().map(|r| r.round.clone()).collect(),
                                 counts: task.counts,
                                 threads: task.threads,

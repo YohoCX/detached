@@ -1,7 +1,6 @@
 use super::*;
-use crate::ui::graph::{self, Edge};
-use detached_core::panel::ThreadMark;
-use gpui_kit::{Bounds, canvas, fill, point, relative, size};
+use detached_core::panel::{Counts, ThreadMark};
+use gpui_kit::{Bounds, ContentMask, PathBuilder, canvas, fill, point, relative, size};
 
 pub(super) struct TaskDocs;
 impl DocKind for TaskDocs {
@@ -14,7 +13,6 @@ impl DocKind for TaskDocs {
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             repo,
             task,
-            all: false,
         })
         .into()
     }
@@ -36,7 +34,104 @@ struct TaskView {
     repo: String,
     task: String,
     rounds: Interest<Rounds>,
-    all: bool,
+}
+
+fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) {
+    if let Some(finding) = finding {
+        kernel::ui_state::set(&selection_key(repo, task, round), finding, cx);
+        kernel::ui_state::set("panels.mode", 2usize, cx);
+    }
+    let doc = Doc::Panel {
+        repo: repo.into(),
+        task: task.into(),
+        round: round.into(),
+    };
+    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+}
+
+fn fate(task: &kernel::panel::Task, index: usize, finding: &str) -> String {
+    let Some(thread) = task
+        .threads
+        .iter()
+        .find(|t| t.rounds[index].as_ref().and_then(|o| o.finding.as_deref()) == Some(finding))
+    else {
+        return "→ still open".into();
+    };
+    let later = thread.rounds.iter().enumerate().skip(index + 1);
+    let label = |i: usize| task.rounds[i].split('-').next().unwrap_or(&task.rounds[i]);
+    if let Some((i, _)) = later
+        .clone()
+        .find(|(_, o)| o.as_ref().is_some_and(|o| o.mark == ThreadMark::Returned))
+    {
+        return format!("returned in {}", label(i));
+    }
+    if let Some((i, _)) = later
+        .clone()
+        .find(|(_, o)| o.as_ref().is_some_and(|o| o.mark == ThreadMark::Fixed))
+    {
+        return format!("→ fixed {}", label(i));
+    }
+    "→ still open".into()
+}
+
+fn rail(first: bool, last: bool, degraded: bool, major: bool) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, cx| {
+            let t = theme(cx);
+            let x = b.size.width / 2.;
+            let y = theme::graph::HISTORY_ROW / 2.;
+            let mut path = PathBuilder::stroke(theme::graph::RAIL);
+            path.move_to(b.origin + point(x, if first { y } else { gpui_kit::px(0.) }));
+            path.line_to(b.origin + point(x, if last { y } else { b.size.height }));
+            if let Ok(path) = path.build() {
+                window.paint_path(path, t.line);
+            }
+            let dot = Bounds::centered_at(
+                b.origin + point(x, y),
+                size(theme::graph::DOT, theme::graph::DOT),
+            );
+            let color = if major {
+                severity("major", cx)
+            } else {
+                t.success
+            };
+            if degraded {
+                window.paint_quad(fill(dot, t.panel).corner_radii(theme::graph::DOT / 2.));
+            }
+            let mask = degraded.then_some(ContentMask {
+                bounds: Bounds::new(dot.origin, size(dot.size.width / 2., dot.size.height)),
+            });
+            window.with_content_mask(mask, |window| {
+                window.paint_quad(fill(dot, color).corner_radii(theme::graph::DOT / 2.));
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+fn bar(counts: Counts, max: usize) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |b, _, window, cx| {
+            let mut x = b.origin.x;
+            for (n, severity) in [
+                (counts.critical, "critical"),
+                (counts.major, "major"),
+                (counts.minor, "minor"),
+            ] {
+                let width = b.size.width * (n as f32 / max as f32);
+                window.paint_quad(fill(
+                    Bounds::new(point(x, b.origin.y), size(width, b.size.height)),
+                    super::severity(severity, cx),
+                ));
+                x += width;
+            }
+        },
+    )
+    .w_full()
+    .h(GAP)
 }
 
 impl Render for TaskView {
@@ -46,210 +141,251 @@ impl Render for TaskView {
             .test_support()
             .flex()
             .flex_col()
-            .gap(GAP)
+            .min_w_0()
+            .w_full()
             .p(GAP);
         let resource = self.rounds.read(cx);
         content = content.when_some(resource.error.clone(), |d, e| {
             d.child(div().text_color(theme(cx).error).child(e))
         });
-        if let Some(task) = resource
-            .value
-            .as_ref()
-            .and_then(|r| r.tasks.get(&self.task))
+        if let Some(rounds) = &resource.value
+            && let Some(task) = rounds.tasks.get(&self.task)
         {
-            let n = task.rounds.len().max(1);
             let max = task
                 .counts
                 .iter()
-                .flat_map(|c| [c.critical, c.major, c.minor])
+                .map(|c| c.critical + c.major + c.minor)
                 .max()
                 .unwrap_or(1)
-                .max(1) as f32;
-            let counts = task.counts.clone();
-            content = content
-                .child(self.task.clone())
+                .max(1);
+            let header = format!(
+                "{} · {} rounds · majors {} → {}",
+                self.task,
+                task.rounds.len(),
+                task.counts.first().map_or(0, |c| c.major),
+                task.counts.last().map_or(0, |c| c.major)
+            );
+            content = content.child(
+                div()
+                    .id("panel.task.header")
+                    .test_support()
+                    .aria_label(header.clone())
+                    .truncate()
+                    .child(header),
+            );
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            for (i, name) in task.rounds.iter().enumerate().rev() {
+                let Some(run) = rounds
+                    .runs
+                    .iter()
+                    .find(|r| r.task == self.task && &r.round == name)
+                else {
+                    continue;
+                };
+                let counts = task.counts[i];
+                let key = format!("panels.expanded.{}.{}.{}", self.repo, self.task, name);
+                let expanded = kernel::ui_state::get::<bool>(&key, cx).unwrap_or(false);
+                let profile = if !run.profile.is_empty() {
+                    run.profile.clone()
+                } else {
+                    let mut models: Vec<_> = run
+                        .participants
+                        .iter()
+                        .map(|p| {
+                            let model = if p.actual_model.is_empty() {
+                                &p.requested_model
+                            } else {
+                                &p.actual_model
+                            };
+                            if p.effort.is_empty() {
+                                model.clone()
+                            } else {
+                                format!("{model}·{}", p.effort)
+                            }
+                        })
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    models.sort();
+                    models.dedup();
+                    if models.is_empty() {
+                        "model unavailable".into()
+                    } else {
+                        models.join(", ")
+                    }
+                };
+                let time = if run.started_at == 0 {
+                    "time unavailable".into()
+                } else {
+                    crate::util::ago_text(run.started_at / 1000, now)
+                };
+                let counts_text =
+                    format!("{}C {}M {}m", counts.critical, counts.major, counts.minor);
+                let (repo, task_name, round) = (self.repo.clone(), self.task.clone(), name.clone());
+                let (open_repo, open_task, open_round) =
+                    (repo.clone(), task_name.clone(), round.clone());
+                let row = ui::row(
+                    SharedString::from(format!("panel.task.round.{name}")),
+                    expanded,
+                    cx,
+                )
+                .test_support()
+                .aria_label(format!("{name} · {profile} · {counts_text} · {time}"))
+                .h(theme::graph::HISTORY_ROW)
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
                 .child(
                     div()
-                        .id("panel.task.chart")
-                        .test_support()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .flex()
-                                .gap(GAP)
-                                .child(ui::badge("Critical", severity("critical", cx), cx))
-                                .child(ui::badge("Major", severity("major", cx), cx))
-                                .child(ui::badge("Minor", severity("minor", cx), cx)),
-                        )
-                        .child(
-                            canvas(
-                                |_, _, _| {},
-                                move |b, _, window, cx| {
-                                    let width = b.size.width / n as f32;
-                                    for (i, c) in counts.iter().enumerate() {
-                                        for (j, (count, s)) in [
-                                            (c.critical, "critical"),
-                                            (c.major, "major"),
-                                            (c.minor, "minor"),
-                                        ]
-                                        .into_iter()
-                                        .enumerate()
-                                        {
-                                            let height = b.size.height * (count as f32 / max);
-                                            let origin = b.origin
-                                                + point(
-                                                    width * (i as f32 + j as f32 / 4.),
-                                                    b.size.height - height,
-                                                );
-                                            window.paint_quad(fill(
-                                                Bounds::new(origin, size(width / 5., height)),
-                                                severity(s, cx),
-                                            ));
-                                        }
-                                    }
-                                },
-                            )
-                            .w_full()
-                            .h(theme::graph::CHART),
-                        )
-                        .child(div().flex().children(task.rounds.iter().enumerate().map(
-                            |(i, r)| {
-                                div().flex_1().child(format!(
-                                    "{} · C{} M{} m{}",
-                                    r,
-                                    task.counts[i].critical,
-                                    task.counts[i].major,
-                                    task.counts[i].minor
-                                ))
-                            },
-                        ))),
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(format!("{} {name}", if expanded { "▾" } else { "▸" })),
                 )
                 .child(
                     div()
-                        .text_size(text::SMALL)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
                         .text_color(theme(cx).muted)
+                        .child(profile),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("panel.task.bar.{name}")))
+                        .test_support()
+                        .aria_label(counts_text.clone())
+                        .w(relative(0.28))
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(bar(counts, max))
+                        .child(div().truncate().text_size(text::SMALL).child(counts_text)),
+                )
+                .child(
+                    div()
+                        .w(relative(0.12))
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme(cx).muted)
+                        .child(time),
+                )
+                .on_click(cx.listener(
+                    move |_, e: &gpui_kit::ClickEvent, _, cx| {
+                        if e.click_count() > 1 {
+                            open(&repo, &task_name, &round, None, cx);
+                        } else {
+                            kernel::ui_state::set(&key, !expanded, cx);
+                            cx.notify();
+                        }
+                    },
+                ));
+                let mut body = div().flex().flex_col().flex_1().min_w_0().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(row)
                         .child(
-                            "Threads use file and title overlap until P3 supplies fingerprints.",
+                            ui::button(
+                                SharedString::from(format!("panel.task.open.{name}")),
+                                "Open",
+                                cx,
+                            )
+                            .test_support()
+                            .on_click(move |_, _, cx| {
+                                open(&open_repo, &open_task, &open_round, None, cx)
+                            }),
                         ),
                 );
-            content = content.child(
-                div()
-                    .flex()
-                    .gap(GAP)
-                    .child(div().w(theme::graph::COLUMN).child("Threads"))
-                    .child(
-                        div().flex().flex_1().children(
-                            task.rounds
-                                .iter()
-                                .map(|r| div().flex_1().text_size(text::SMALL).child(r.clone())),
-                        ),
-                    ),
-            );
-            for (j, thread) in
-                task.threads
-                    .iter()
-                    .enumerate()
-                    .take(if self.all { usize::MAX } else { 40 })
-            {
-                let present: Vec<_> = thread
-                    .rounds
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, o)| o.is_some())
-                    .map(|(i, _)| i)
-                    .collect();
-                let edges = present
-                    .windows(2)
-                    .map(|p| Edge {
-                        from: ((p[0] as f32 + 0.5) / n as f32, 0.5),
-                        to: ((p[1] as f32 + 0.5) / n as f32, 0.5),
-                        color: theme(cx).muted,
-                    })
-                    .collect();
-                let cells = thread
-                    .rounds
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, o)| o.as_ref().map(|o| (i, o)))
-                    .map(|(i, o)| {
-                        let label = match o.mark {
-                            ThreadMark::New => "new",
-                            ThreadMark::Carried => "carried",
-                            ThreadMark::Fixed => "✓ fixed",
-                            ThreadMark::Returned => "returned",
-                        };
-                        let round = &task.rounds[i];
-                        let doc = Doc::Panel {
-                            repo: self.repo.clone(),
-                            task: self.task.clone(),
-                            round: round.clone(),
-                        };
-                        let key = selection_key(&self.repo, &self.task, round);
-                        let finding = o.finding.clone();
-                        ui::row(
-                            SharedString::from(format!("panel.thread.{j}.{i}")),
-                            false,
-                            cx,
-                        )
-                        .test_support()
-                        .aria_label(format!("{} · {} · {label}", thread.title, round))
-                        .absolute()
-                        .left(relative((i as f32 + 0.25) / n as f32))
-                        .top(GAP)
-                        .h(theme::graph::ROW - GAP * 2.)
-                        .bg(theme(cx).panel)
-                        .text_size(text::SMALL)
-                        .when(finding.is_some(), |r| r.child(ui::dot(theme(cx).accent)))
-                        .child(label)
-                        .on_click(move |_, _, cx| {
-                            if let Some(f) = &finding {
-                                kernel::ui_state::set(&key, f, cx);
-                                kernel::ui_state::set("panels.mode", 2usize, cx);
-                                Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));
-                            }
-                        })
-                    });
+                if expanded {
+                    for f in &run.findings {
+                        let fate = fate(task, i, &f.id);
+                        let (repo, task_name, round, finding) = (
+                            self.repo.clone(),
+                            self.task.clone(),
+                            name.clone(),
+                            f.id.clone(),
+                        );
+                        body = body.child(
+                            ui::row(
+                                SharedString::from(format!("panel.task.finding.{name}.{}", f.id)),
+                                false,
+                                cx,
+                            )
+                            .test_support()
+                            .aria_label(format!("{} · {fate}", f.title))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(severity(&f.severity, cx))
+                                    .child(match f.severity.as_str() {
+                                        "critical" => "◆",
+                                        "major" => "▲",
+                                        _ => "·",
+                                    }),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child(f.title.clone()))
+                            .child(
+                                div()
+                                    .w(relative(0.3))
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(theme(cx).muted)
+                                    .child(fate),
+                            )
+                            .on_click(move |_, _, cx| {
+                                open(&repo, &task_name, &round, Some(&finding), cx)
+                            }),
+                        );
+                    }
+                }
+                if i > 0
+                    && let Some(fix) = &task.fixes[i]
+                {
+                    let label = format!("fix {}  {}", fix.commits.join(", "), fix.stat);
+                    body = body.child(
+                        div()
+                            .id(SharedString::from(format!("panel.task.fix.{name}")))
+                            .test_support()
+                            .aria_label(label.clone())
+                            .min_w_0()
+                            .truncate()
+                            .px(GAP)
+                            .text_size(text::SMALL)
+                            .text_color(theme(cx).muted)
+                            .child(label),
+                    );
+                }
                 content = content.child(
                     div()
                         .flex()
-                        .gap(GAP)
-                        .child(
-                            div()
-                                .w(theme::graph::COLUMN)
-                                .flex_none()
-                                .overflow_hidden()
-                                .text_size(text::SMALL)
-                                .child(thread.title.clone())
-                                .child(div().text_color(theme(cx).muted).child(thread.file.clone()))
-                                .when(thread.born_after_fix, |d| {
-                                    d.child("born after the previous round's fix")
-                                }),
-                        )
+                        .min_w_0()
                         .child(
                             div()
                                 .relative()
-                                .flex_1()
-                                .h(theme::graph::ROW)
-                                .child(graph::edges(edges))
-                                .children(cells),
-                        ),
-                );
-            }
-            if !self.all && task.threads.len() > 40 {
-                content = content.child(
-                    ui::button("panel.task.all", "Show all", cx)
-                        .test_support()
-                        .on_click(cx.listener(|v, _, _, cx| {
-                            v.all = true;
-                            cx.notify();
-                        })),
+                                .w(theme::graph::HISTORY_RAIL)
+                                .flex_none()
+                                .child(rail(
+                                    i + 1 == task.rounds.len(),
+                                    i == 0,
+                                    run.participants.iter().any(|p| p.degraded)
+                                        || !run.warnings.is_empty(),
+                                    counts.critical + counts.major > 0,
+                                )),
+                        )
+                        .child(body),
                 );
             }
         }
         div()
             .id("panel.task.scroll")
             .size_full()
+            .min_w_0()
             .overflow_y_scroll()
             .child(content)
     }

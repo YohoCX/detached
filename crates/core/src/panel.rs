@@ -18,6 +18,7 @@ pub struct Participant {
     pub executor: String,
     pub requested_model: String,
     pub actual_model: String,
+    pub effort: String,
     pub tokens: u64,
     pub raised: usize,
     pub degraded: bool,
@@ -288,10 +289,107 @@ pub fn for_repo(core: &AppState, repo: &str) -> Result<Rounds> {
     list(&root.join(".revmux/tasks"))
 }
 
+#[derive(Clone, Debug)]
+pub struct Fix {
+    pub commits: Vec<String>,
+    pub stat: String,
+}
+
+// The first explicit git diff range in the newer scope is a heuristic for the fix.
+pub fn fix_range(scope: &str) -> Option<String> {
+    let words: Vec<_> = scope
+        .split_whitespace()
+        .map(|s| s.trim_matches(['`', '\'', '"', '(', ')', ',', ';', '.']))
+        .collect();
+    words.windows(3).find_map(|w| {
+        if w[..2] != ["git", "diff"] {
+            return None;
+        }
+        let (a, b) = w[2].split_once("..")?;
+        let valid = |s: &str| {
+            !s.is_empty()
+                && !s.starts_with('-')
+                && !s.starts_with('.')
+                && !s.contains("..")
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_/.^-~".contains(c))
+        };
+        (valid(a) && valid(b)).then(|| w[2].to_string())
+    })
+}
+
+pub fn fix(core: &AppState, repo: &str, scope: &str) -> Option<Fix> {
+    let range = fix_range(scope)?;
+    let env = core.env();
+    let repo = Path::new(repo);
+    let commits = runner::out(
+        &env,
+        repo,
+        &["log", "--format=%h", &range, "--"],
+        Kind::Read,
+    )
+    .ok()?;
+    if commits.trim().is_empty() {
+        return None;
+    }
+    let stat = runner::out(
+        &env,
+        repo,
+        &["diff", "--shortstat", &range, "--"],
+        Kind::Read,
+    )
+    .ok()?;
+    Some(Fix {
+        commits: commits.lines().map(String::from).collect(),
+        stat: stat.trim().into(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git::testutil::Sandbox;
+
+    #[test]
+    fn fix_range_uses_the_first_explicit_diff_and_is_unknown_without_one() {
+        assert_eq!(
+            fix_range("Review `git diff abc123..def456` then git diff def456..HEAD"),
+            Some("abc123..def456".into())
+        );
+        assert_eq!(
+            fix_range("Run: git diff main..HEAD"),
+            Some("main..HEAD".into())
+        );
+        assert_eq!(
+            fix_range("Review `git diff v1.2..HEAD`."),
+            Some("v1.2..HEAD".into())
+        );
+        for scope in [
+            "",
+            "Review the current changes",
+            "git diff HEAD",
+            "git diff a...b",
+            "git diff --output=/tmp/file",
+        ] {
+            assert_eq!(fix_range(scope), None);
+        }
+    }
+
+    #[test]
+    fn fix_resolves_commits_and_stats_and_omits_unknown_ranges() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("fix");
+        sb.commit(&repo, "fix.txt", "before\n", "before");
+        sb.commit(&repo, "fix.txt", "after\nextra\n", "after");
+        let repo = repo.to_str().unwrap();
+        let fix = fix(&sb.state, repo, "git diff HEAD~1..HEAD").unwrap();
+        assert_eq!(fix.commits.len(), 1);
+        assert!(fix.stat.contains("2 insertions(+)"));
+        assert!(fix.stat.contains("1 deletion(-)"));
+        assert!(super::fix(&sb.state, repo, "no range").is_none());
+        assert!(super::fix(&sb.state, repo, "git diff unknown..HEAD").is_none());
+        assert!(super::fix(&sb.state, repo, "git diff HEAD..HEAD").is_none());
+    }
 
     fn fixture(name: &str) -> Run {
         import(

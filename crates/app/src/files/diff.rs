@@ -345,6 +345,10 @@ impl DiffView {
         let repo = Workspace::get(cx).name_of(&d.repo).to_string();
         let zed = cx.listener(|this, _, _, cx| this.zed(cx));
         viewer::header(&d.path, repo, cx)
+            .min_w_0()
+            .flex_wrap()
+            .h_auto()
+            .py(theme::GAP)
             .child(
                 div()
                     .id("diff.pill")
@@ -577,6 +581,26 @@ fn parse(d: &DiffDoc, patch: &Result<FilePatch, String>) -> Loaded {
             }
             Err(e) => Loaded::Text(e.message().to_string()),
         },
+        Ok(FilePatch::Unchanged(text)) if d.orig_path.is_none() && !text.is_empty() => {
+            // The kit's unchanged constructor forces one column even in Split mode.
+            let count = text.lines().count();
+            let mut patch = format!(
+                "--- a/{0}\n+++ b/{0}\n@@ -1,{count} +1,{count} @@\n",
+                d.path
+            );
+            for line in text.lines() {
+                patch.push(' ');
+                patch.push_str(line);
+                patch.push('\n');
+            }
+            match DiffFile::parse(&patch) {
+                Ok(files) => Loaded::Diff(
+                    files.into_iter().map(|f| f.with_language(lang)).collect(),
+                    vec![],
+                ),
+                Err(e) => Loaded::Text(e.message().to_string()),
+            }
+        }
         Ok(FilePatch::Unchanged(text)) => {
             let file = DiffFile::unchanged(d.path.clone(), text).with_language(lang);
             Loaded::Diff(vec![file], vec![])

@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use common::*;
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
 use kernel::doc::Doc;
 
 fn copy_round(repo: &Path, name: &str) {
@@ -30,15 +30,72 @@ fn copy_round(repo: &Path, name: &str) {
     }
 }
 
+fn open_round(app: &mut TestApp, task: &str, round: &str) {
+    wait_until(app, |cx| cx.find(format!("panels.task.{task}")).is_some());
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    app.workspace(|w, cx| {
+        w.show(
+            Doc::Panel {
+                repo,
+                task: task.into(),
+                round: round.into(),
+            },
+            cx,
+        )
+    });
+    settle(app);
+}
+
+fn diff_line(app: &mut VisualTestContext, side: &'static str, line: usize) -> Option<String> {
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        w.find_all("source")
+            .into_iter()
+            .filter(|e| e.path().contains(&ElementId::from((side, line - 1))))
+            .find_map(|e| e.label().map(Into::into))
+    })
+}
+
+fn switch_diff_modes(app: &mut VisualTestContext, line: usize) {
+    app.update(|w, cx| {
+        w.scroll(
+            "panel.findings.detail",
+            ScrollDelta::Pixels(point(px(0.), px(-5000.))),
+            cx,
+        )
+    });
+    settle(app);
+    wait_until(app, |cx| diff_line(cx, "old", line).is_some());
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        let old = w
+            .within(("old", line - 1))
+            .find(("line", line - 1))
+            .bounds();
+        let new = w
+            .within(("new", line - 1))
+            .find(("line", line - 1))
+            .bounds();
+        let pane = w.find("panel.diff").bounds();
+        assert!(new.origin.x > old.origin.x);
+        assert!(new.origin.x < pane.origin.x + pane.size.width);
+    });
+    app.update(|w, cx| w.within("diff.mode").click(1usize, cx));
+    settle(app);
+    assert!(diff_line(app, "old", line).is_none());
+    assert!(diff_line(app, "new", line).is_some());
+    app.update(|w, cx| w.within("diff.mode").click(0usize, cx));
+    wait_until(app, |cx| diff_line(cx, "old", line).is_some());
+}
+
 #[gpui_kit::test]
-fn lists_rounds_and_shows_four_degraded_participants(cx: &mut TestAppContext) {
+fn round_shows_four_degraded_participants(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, |sb| {
         let repo = repo(sb, "reviewed");
         copy_round(&repo, "foundation-8-watcher/02-after-fix");
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "foundation-8-watcher", "02-after-fix");
     wait_until(&mut app, |cx| {
         cx.find(("panel.participant", 3usize)).is_some()
     });
@@ -68,8 +125,7 @@ fn finding_location_opens_a_diff_in_the_run(cx: &mut TestAppContext) {
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
     wait_until(&mut app, |cx| {
         cx.find("panel.location.bugs+impl-2").is_some()
     });
@@ -77,6 +133,7 @@ fn finding_location_opens_a_diff_in_the_run(cx: &mut TestAppContext) {
     wait_until(&mut app, |cx| current_line(cx).contains("changed line 228"));
     assert!(app.find("panel.diff").is_some());
     assert!(app.find("panel.run").is_some());
+    switch_diff_modes(&mut app, 229);
 }
 
 #[gpui_kit::test]
@@ -93,21 +150,25 @@ fn repo_switch_and_refresh_load_the_selected_repos_rounds(cx: &mut TestAppContex
         let repo = cx.workspace(|w, _| w.current().unwrap().to_string());
         cx.update(|_, cx| kernel::panel::rounds(cx, &repo).read(cx).value.is_some())
     });
-    assert!(app.find(("panels.round", 0usize)).is_none());
+    assert!(app.find("panels.task.agent-host-plan").is_none());
     let reviewed = app.sb.path("repos/reviewed").display().to_string();
     app.workspace(|w, cx| w.set_current(Some(reviewed), cx));
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    wait_until(&mut app, |cx| {
+        cx.find("panels.task.agent-host-plan").is_some()
+    });
     assert!(
-        app.find(("panels.round", 0usize))
+        app.find("panels.task.agent-host-plan")
             .unwrap()
             .label()
             .unwrap()
-            .contains("agent-host-plan / 15-after-fix")
+            .contains("agent-host-plan · 1 rounds")
     );
     let repo = app.sb.path("repos/reviewed");
     copy_round(&repo, "foundation-8-watcher/02-after-fix");
     app.click("panels.refresh");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 1usize)).is_some());
+    wait_until(&mut app, |cx| {
+        cx.find("panels.task.foundation-8-watcher").is_some()
+    });
 }
 
 #[gpui_kit::test]
@@ -119,8 +180,7 @@ fn set_aside_findings_are_folded_and_show_their_verdict(cx: &mut TestAppContext)
         fs::write(dir.join("report.json"), r#"{"sources":{},"findings":[],"immaterial":[{"id":"aside","file":"README.md","line":1,"severity":"minor","title":"Wording","body":"Already clear","verdict":"immaterial"}]}"#).unwrap();
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "task", "round");
     wait_until(&mut app, |cx| cx.find("panel.setAside").is_some());
     assert!(app.find("panel.finding.aside").is_none());
     app.click("panel.setAside");
@@ -152,8 +212,7 @@ fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppCon
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
     wait_until(&mut app, |cx| {
         cx.find("panel.finding.bugs+impl-2").is_some()
     });
@@ -175,7 +234,7 @@ fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppCon
     for id in ["panels.stale", "panel.stale"] {
         assert_eq!(app.find(id).unwrap().label(), Some(error.as_str()));
     }
-    assert!(app.find(("panels.round", 0usize)).is_some());
+    assert!(app.find("panels.task.foundation-8-watcher").is_some());
     assert!(app.find("panel.finding.bugs+impl-2").is_some());
 }
 
@@ -204,8 +263,7 @@ fn finding_location_reveals_the_line_in_a_conflict_editor(cx: &mut TestAppContex
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
     wait_until(&mut app, |cx| {
         cx.find("panel.location.bugs+impl-2").is_some()
     });
@@ -220,7 +278,7 @@ fn finding_location_reveals_the_line_in_a_conflict_editor(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn groups_collapse_and_task_threads_open_selected_findings(cx: &mut TestAppContext) {
+fn dock_lists_tasks_and_history_findings_open_selected_findings(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, |sb| {
         let repo = repo(sb, "reviewed");
         copy_round(&repo, "agent-host-plan/15-after-fix");
@@ -231,26 +289,23 @@ fn groups_collapse_and_task_threads_open_selected_findings(cx: &mut TestAppConte
         cx.find("panels.task.agent-host-plan").is_some()
     });
     assert!(
-        app.find(("panels.round", 0usize))
+        app.find("panels.task.agent-host-plan")
             .unwrap()
             .label()
             .unwrap()
-            .contains("16-codex")
+            .contains("2 rounds")
     );
-    app.click("panels.collapse.agent-host-plan");
     assert!(app.find(("panels.round", 0usize)).is_none());
-    assert_eq!(
-        app.update(|_, cx| kernel::ui_state::get::<Vec<String>>("panels.collapsed", cx)),
-        Some(vec!["agent-host-plan".into()])
-    );
-    app.click("panels.collapse.agent-host-plan");
-    assert!(app.find(("panels.round", 1usize)).is_some());
+    assert!(app.find("panels.collapse.agent-host-plan").is_none());
     app.click("panels.task.agent-host-plan");
-    wait_until(&mut app, |cx| cx.find("panel.task.chart").is_some());
+    wait_until(&mut app, |cx| {
+        cx.find("panel.task.round.16-codex").is_some()
+    });
     assert!(
         matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::PanelTask { task, .. }) if task == "agent-host-plan")
     );
-    app.click("panel.thread.1.0");
+    app.click("panel.task.round.15-after-fix");
+    app.click("panel.task.finding.15-after-fix.risk-1");
     wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
     assert!(
         matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::Panel { round, .. }) if round == "15-after-fix")
@@ -272,8 +327,7 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
         copy_round(&repo, "agent-host-plan/15-after-fix");
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "agent-host-plan", "16-codex");
     wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
     app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
     settle(&app);
@@ -287,10 +341,10 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
     assert!(app.find("panel.timeline.lane.fit").is_some());
     assert!(app.find("panel.timeline.lane.merge").is_some());
     assert!(app.find("panel.timeline.lane.verify").is_some());
-    app.click(("panels.round", 1usize));
+    open_round(&mut app, "agent-host-plan", "15-after-fix");
     wait_until(&mut app, |cx| cx.find("panel.timeline").is_some());
     assert!(app.find("panel.findings").is_none());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "agent-host-plan", "16-codex");
     app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
     settle(&app);
     app.click("panel.flow.1.risk-1");
@@ -325,8 +379,7 @@ fn refresh_replaces_a_removed_selection_and_clears_empty_details(cx: &mut TestAp
     };
     let mut app = open_app_with(cx, |sb| write(&repo(sb, "reviewed"), &["first", "second"]));
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "task", "round");
     wait_until(&mut app, |cx| cx.find("panel.finding.second").is_some());
     app.click("panel.finding.second");
     let repo = app.sb.path("repos/reviewed");
@@ -368,8 +421,7 @@ fn flow_shows_verified_findings_without_synthesis(cx: &mut TestAppContext) {
         fs::remove_file(dir.join("stages/2-synthesized.json")).unwrap();
     });
     open_tab(&mut app, "tab.panels");
-    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
-    app.click(("panels.round", 0usize));
+    open_round(&mut app, "agent-host-plan", "16-codex");
     wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
     app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
     settle(&app);
@@ -385,4 +437,194 @@ fn flow_shows_verified_findings_without_synthesis(cx: &mut TestAppContext) {
         app.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)),
         Some("risk-1".into())
     );
+}
+
+#[gpui_kit::test]
+fn unchanged_finding_diff_supports_both_modes(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let text = (1..=300).map(|i| format!("line {i}\n")).collect::<String>();
+        fs::create_dir_all(repo.join("crates/core/src")).unwrap();
+        sb.commit(&repo, "crates/core/src/watch.rs", &text, "watcher");
+        copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+    });
+    open_tab(&mut app, "tab.panels");
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
+    wait_until(&mut app, |cx| {
+        cx.find("panel.location.bugs+impl-2").is_some()
+    });
+    app.click("panel.location.bugs+impl-2");
+    switch_diff_modes(&mut app, 229);
+}
+
+#[gpui_kit::test]
+fn long_findings_stay_in_their_column_and_columns_scroll_independently(cx: &mut TestAppContext) {
+    let title = "A finding title that extends far beyond the list column ".repeat(10);
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let dir = repo.join(".revmux/tasks/task/round");
+        fs::create_dir_all(&dir).unwrap();
+        let findings: Vec<_> = (0..40)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("finding-{i}"), "title": title,
+                    "body": "Detail paragraph.\n\n".repeat(80),
+                    "file": "a/very/long/path/that/exceeds/the/list/column/README.md",
+                    "line": 1, "severity": "major"
+                })
+            })
+            .collect();
+        fs::write(
+            dir.join("report.json"),
+            serde_json::json!({"sources": {}, "findings": findings}).to_string(),
+        )
+        .unwrap();
+    });
+    open_tab(&mut app, "tab.panels");
+    open_round(&mut app, "task", "round");
+    wait_until(&mut app, |cx| cx.find("panel.finding.finding-0").is_some());
+    let row = app.find("panel.finding.finding-0").unwrap();
+    assert!(row.label().unwrap().contains(&title));
+    let list = app.find("panel.findings.list").unwrap().bounds();
+    let detail = app.find("panel.findings.detail").unwrap().bounds();
+    assert!(row.bounds().right() <= list.right());
+    assert!(list.right() <= detail.origin.x);
+    assert!(row.bounds().size.height < px(100.));
+    let before = app.find("panel.diff").unwrap().bounds();
+    let down = ScrollDelta::Pixels(point(px(0.), px(-5000.)));
+    app.update(|w, cx| w.scroll("panel.findings.list", down, cx));
+    settle(&app);
+    assert_eq!(app.find("panel.diff").unwrap().bounds(), before);
+    let row = app.find("panel.finding.finding-39").unwrap().bounds();
+    app.update(|w, cx| w.scroll("panel.findings.detail", down, cx));
+    settle(&app);
+    assert_eq!(app.find("panel.finding.finding-39").unwrap().bounds(), row);
+    assert!(app.find("panel.diff").unwrap().bounds().origin.y < before.origin.y);
+}
+
+#[gpui_kit::test]
+fn task_history_orders_rounds_expands_fates_and_remembers_expansion(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        for round in ["01", "02", "03", "04"] {
+            copy_round(&repo, &format!("thread-history/{round}"));
+        }
+        let scope = repo.join(".revmux/tasks/thread-history/04/input/scope.md");
+        fs::write(scope, "git diff HEAD~1..HEAD").unwrap();
+        sb.commit(&repo, "fix.txt", "fix\n", "fix");
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| {
+        cx.find("panels.task.thread-history").is_some()
+    });
+    app.click("panels.task.thread-history");
+    wait_until(&mut app, |cx| cx.find("panel.task.round.04").is_some());
+    assert_eq!(
+        app.find("panel.task.header").unwrap().label(),
+        Some("thread-history · 4 rounds · majors 1 → 1")
+    );
+    let mut previous = px(-1.);
+    for (round, counts) in [
+        ("04", "1C 1M 1m"),
+        ("03", "1C 0M 1m"),
+        ("02", "0C 1M 1m"),
+        ("01", "0C 1M 0m"),
+    ] {
+        let row = app.find(format!("panel.task.round.{round}")).unwrap();
+        assert!(row.bounds().origin.y > previous);
+        previous = row.bounds().origin.y;
+        assert_eq!(
+            app.find(format!("panel.task.bar.{round}")).unwrap().label(),
+            Some(counts)
+        );
+    }
+    assert!(app.find("panel.task.chart").is_none());
+    assert!(
+        app.find("panel.task.fix.04")
+            .unwrap()
+            .label()
+            .unwrap()
+            .contains("1 insertion(+)")
+    );
+    assert!(app.find("panel.task.fix.03").is_none());
+    for (round, finding, fate) in [
+        ("01", "a", "returned in 04"),
+        ("02", "c", "→ fixed 04"),
+        ("04", "a4", "→ still open"),
+    ] {
+        app.click(format!("panel.task.round.{round}"));
+        assert!(
+            app.find(format!("panel.task.finding.{round}.{finding}"))
+                .unwrap()
+                .label()
+                .unwrap()
+                .ends_with(fate)
+        );
+    }
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    let key = format!("panels.expanded.{repo}.thread-history.01");
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<bool>(&key, cx)),
+        Some(true)
+    );
+    let tab = format!("doc.panel-task.{repo}.thread-history");
+    app.update(|w, cx| w.within(tab).click("tab.close", cx));
+    settle(&app);
+    let config = app.sb.state.config_dir.clone();
+    app.update(|_, cx| kernel::ui_state::init(&config, cx));
+    app.click("panels.task.thread-history");
+    wait_until(&mut app, |cx| cx.find("panel.task.finding.01.a").is_some());
+    app.click("panel.task.round.01");
+    assert!(app.find("panel.task.finding.01.a").is_none());
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<bool>(&key, cx)),
+        Some(false)
+    );
+    app.update(|w, cx| w.double_click("panel.task.round.03", cx));
+    settle(&app);
+    assert!(
+        matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::Panel { round, .. }) if round == "03")
+    );
+    app.click("panels.task.thread-history");
+    app.click("panel.task.open.02");
+    settle(&app);
+    assert!(
+        matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::Panel { round, .. }) if round == "02")
+    );
+}
+
+#[gpui_kit::test]
+fn task_history_truncates_long_row_fields_and_finding_titles(cx: &mut TestAppContext) {
+    let name = "long-round-name-".repeat(10);
+    let profile = "long-profile-".repeat(100);
+    let title = "Long finding title ".repeat(100);
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let dir = repo.join(".revmux/tasks/task").join(&name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("manifest.json"),
+            serde_json::json!({"profile": profile}).to_string(),
+        )
+        .unwrap();
+        fs::write(dir.join("findings.json"), serde_json::json!({"sources": {}, "findings": [{"id": "long", "title": title, "severity": "major"}]}).to_string()).unwrap();
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find("panels.task.task").is_some());
+    app.click("panels.task.task");
+    let id = format!("panel.task.round.{name}");
+    wait_until(&mut app, |cx| cx.find(id.clone()).is_some());
+    let row = app.find(id.clone()).unwrap();
+    assert!(row.label().unwrap().contains(&profile));
+    let bounds = row.bounds();
+    let history = app.find("panel.task").unwrap().bounds();
+    assert!(bounds.right() <= history.right());
+    assert!(bounds.size.height < px(60.));
+    let bar = app.find(format!("panel.task.bar.{name}")).unwrap().bounds();
+    assert!(bar.right() <= bounds.right());
+    app.click(id);
+    let finding = app.find(format!("panel.task.finding.{name}.long")).unwrap();
+    assert!(finding.label().unwrap().contains(&title));
+    assert!(finding.bounds().right() <= history.right());
+    assert!(finding.bounds().size.height < px(60.));
 }

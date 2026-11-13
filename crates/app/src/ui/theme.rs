@@ -541,6 +541,10 @@ mod tests {
 
 pub mod graph {
     use gpui_kit::{Pixels, px};
+    pub const HISTORY_ROW: Pixels = px(40.);
+    pub const HISTORY_RAIL: Pixels = px(20.);
+    pub const RAIL: Pixels = px(2.);
+    pub const DOT: Pixels = px(8.);
     pub const ROW: Pixels = px(64.);
     pub const COLUMN: Pixels = px(210.);
     pub const CHART: Pixels = px(150.);

@@ -1,7 +1,7 @@
 use super::*;
 use crate::files::{Links, Markdown};
 use detached_core::panel::{Finding, Run};
-use gpui_kit::AnyElement;
+use gpui_kit::{AnyElement, component::tooltip::Tooltip};
 
 pub(super) struct PanelDocs;
 impl DocKind for PanelDocs {
@@ -160,6 +160,7 @@ impl RunView {
         let selected = self.selected_data.as_ref();
         let row = |f: &Finding| {
             let finding = f.clone();
+            let title = f.title.clone();
             ui::row(
                 SharedString::from(format!("panel.finding.{}", f.id)),
                 self.selected.as_ref() == Some(&f.id),
@@ -172,15 +173,27 @@ impl RunView {
                 f.verdict.as_deref().unwrap_or("unverified"),
                 f.title
             ))
+            .min_w_0()
+            .w_full()
+            .flex_none()
+            .overflow_hidden()
+            .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
             .flex_col()
             .items_start()
             .p(GAP)
             .child(
                 div()
                     .flex()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
                     .gap(GAP)
-                    .child(ui::badge(f.severity.clone(), severity(&f.severity, cx), cx))
-                    .child(f.title.clone()),
+                    .child(div().flex_none().child(ui::badge(
+                        f.severity.clone(),
+                        severity(&f.severity, cx),
+                        cx,
+                    )))
+                    .child(div().flex_1().min_w_0().truncate().child(f.title.clone())),
             )
             .child(
                 ui::row(
@@ -189,22 +202,143 @@ impl RunView {
                     cx,
                 )
                 .test_support()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
                 .text_color(theme(cx).muted)
-                .child(format!("{}:{}", f.file, f.line)),
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(format!("{}:{}", f.file, f.line)),
+                ),
             )
             .on_click(cx.listener(move |v, _, _, cx| v.select(&finding, cx)))
         };
-        div().id("panel.findings").test_support().flex().gap(GAP).children([
-            ui::pane("panels.findings", ui::Edge::Right, 300., 180., 550.).flex().flex_col().children(["critical", "major", "minor"].into_iter().map(|s| {
-                div().flex().flex_col().when(run.findings.iter().any(|f| f.severity == s), |d| d.child(div().text_color(theme(cx).muted).child(s))).children(run.findings.iter().filter(|f| f.severity == s).map(row))
-            })).when(!run.set_aside.is_empty(), |d| d.child(ui::row("panel.setAside", self.show_aside, cx).test_support().child(format!("Set aside ({})", run.set_aside.len())).on_click(cx.listener(|v, _, _, cx| { v.show_aside = !v.show_aside; cx.notify(); }))))
-                .when(self.show_aside, |d| d.children(run.set_aside.iter().map(row))).into_any_element(),
-            div().flex().flex_col().flex_1().min_w_0().gap(GAP)
-                .when_some(selected, |d, f| d.child(format!("{} · {} · {}", f.severity, f.verdict.as_deref().unwrap_or("unverified"), f.title)).child(div().text_color(theme(cx).muted).child(format!("Sources: {}", f.sources.join(", ")))))
-                .when_some(self.markdown.clone(), |d, m| d.child(m))
-                .when_some(self.diff.clone(), |d, diff| d.child(div().id("panel.diff").test_support().flex().flex_col().h(theme::graph::CHART * 3.).child(div().text_size(text::SMALL).text_color(theme(cx).muted).child("Archive has no pinned revisions. Diff: HEAD → working tree.")).child(diff)))
-                .into_any_element(),
-        ]).into_any_element()
+        let list = div()
+            .id("panel.findings.list")
+            .test_support()
+            .w(theme::graph::CHART * 2.)
+            .flex_none()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .overflow_y_scroll()
+            .children(["critical", "major", "minor"].into_iter().map(|s| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .when(run.findings.iter().any(|f| f.severity == s), |d| {
+                        d.child(div().text_color(theme(cx).muted).child(s))
+                    })
+                    .children(run.findings.iter().filter(|f| f.severity == s).map(row))
+            }))
+            .when(!run.set_aside.is_empty(), |d| {
+                d.child(
+                    ui::row("panel.setAside", self.show_aside, cx)
+                        .test_support()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .truncate()
+                                .child(format!("Set aside ({})", run.set_aside.len())),
+                        )
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.show_aside = !v.show_aside;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(self.show_aside, |d| {
+                d.children(run.set_aside.iter().map(row))
+            });
+        let detail = div()
+            .id("panel.findings.detail")
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .overflow_y_scroll()
+            .gap(GAP)
+            .when_some(selected, |d, f| {
+                d.child(div().flex_none().min_w_0().truncate().child(format!(
+                    "{} · {} · {}",
+                    f.severity,
+                    f.verdict.as_deref().unwrap_or("unverified"),
+                    f.title
+                )))
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme(cx).muted)
+                        .child(format!("Sources: {}", f.sources.join(", "))),
+                )
+            })
+            .when_some(self.markdown.clone(), |d, m| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(m),
+                )
+            })
+            .when_some(self.diff.clone(), |d, diff| {
+                d.child(
+                    div()
+                        .id("panel.diff")
+                        .test_support()
+                        .flex()
+                        .flex_col()
+                        .flex_none()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .h(theme::graph::CHART * 3.)
+                        .child(
+                            div()
+                                .flex_none()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(text::SMALL)
+                                .text_color(theme(cx).muted)
+                                .child(
+                                    "Archive has no pinned revisions. Diff: HEAD → working tree.",
+                                ),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_h_0()
+                                .min_w_0()
+                                .w_full()
+                                .overflow_hidden()
+                                .child(diff),
+                        ),
+                )
+            });
+        div()
+            .id("panel.findings")
+            .test_support()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .gap(GAP)
+            .child(list)
+            .child(detail)
+            .into_any_element()
     }
 }
 
@@ -227,6 +361,10 @@ impl Render for RunView {
             .test_support()
             .flex()
             .flex_col()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
             .gap(GAP);
         if let Some(run) = run {
             if self.selected.is_none()
@@ -265,8 +403,11 @@ impl Render for RunView {
                         .id("panel.header")
                         .test_support()
                         .flex()
+                        .flex_none()
+                        .min_w_0()
+                        .overflow_hidden()
                         .gap(GAP)
-                        .child(format!(
+                        .child(div().flex_1().min_w_0().truncate().child(format!(
                             "{} / {} · {} · {duration} · {tokens} tokens · {}/{} reported",
                             run.task,
                             run.round,
@@ -277,55 +418,69 @@ impl Render for RunView {
                             },
                             run.participants.iter().filter(|p| !p.degraded).count(),
                             run.participants.len()
-                        ))
-                        .child(count_badges(run.counts(), cx)),
+                        )))
+                        .child(div().flex_none().child(count_badges(run.counts(), cx))),
                 )
-                .child(div().flex().flex_wrap().gap(GAP).children(
-                    run.participants.iter().enumerate().map(|(i, p)| {
-                        let label = format!(
-                            "{} · {} · {}{}{}",
-                            p.name,
-                            if p.degraded { "degraded" } else { "done" },
-                            if p.actual_model.is_empty() {
-                                "model unavailable"
-                            } else {
-                                &p.actual_model
-                            },
-                            if p.actual_model != p.requested_model && !p.requested_model.is_empty()
-                            {
-                                format!(" (actual; requested {})", p.requested_model)
-                            } else {
-                                String::new()
-                            },
-                            if p.cause.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" · {}", p.cause)
-                            }
-                        );
-                        div()
-                            .id(("panel.participant", i))
-                            .test_support()
-                            .aria_label(label.clone())
-                            .bg(theme(cx).panel)
-                            .rounded(theme::radius::ITEM)
-                            .p(GAP)
-                            .flex()
-                            .items_center()
-                            .gap(GAP)
-                            .child(ui::dot(if p.degraded {
-                                theme(cx).warning
-                            } else {
-                                theme(cx).success
-                            }))
-                            .child(label)
-                    }),
-                ))
-                .children(
-                    run.warnings
-                        .iter()
-                        .map(|w| div().text_color(theme(cx).warning).child(w.clone())),
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .flex_wrap()
+                        .gap(GAP)
+                        .children(run.participants.iter().enumerate().map(|(i, p)| {
+                            let label = format!(
+                                "{} · {} · {}{}{}",
+                                p.name,
+                                if p.degraded { "degraded" } else { "done" },
+                                if p.actual_model.is_empty() {
+                                    "model unavailable"
+                                } else {
+                                    &p.actual_model
+                                },
+                                if p.actual_model != p.requested_model
+                                    && !p.requested_model.is_empty()
+                                {
+                                    format!(" (actual; requested {})", p.requested_model)
+                                } else {
+                                    String::new()
+                                },
+                                if p.cause.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" · {}", p.cause)
+                                }
+                            );
+                            div()
+                                .id(("panel.participant", i))
+                                .test_support()
+                                .aria_label(label.clone())
+                                .min_w_0()
+                                .max_w_full()
+                                .overflow_hidden()
+                                .bg(theme(cx).panel)
+                                .rounded(theme::radius::ITEM)
+                                .p(GAP)
+                                .flex()
+                                .items_center()
+                                .gap(GAP)
+                                .child(div().flex_none().child(ui::dot(if p.degraded {
+                                    theme(cx).warning
+                                } else {
+                                    theme(cx).success
+                                })))
+                                .child(div().min_w_0().truncate().child(label))
+                        })),
                 )
+                .children(run.warnings.iter().map(|w| {
+                    div()
+                        .flex_none()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme(cx).warning)
+                        .child(w.clone())
+                }))
                 .child(ui::segmented(
                     "panel.modes",
                     &[(0usize, "Flow"), (1, "Timeline"), (2, "Findings")],
@@ -343,8 +498,18 @@ impl Render for RunView {
                     cx,
                 ));
             content = content.child(match self.mode {
-                0 => super::flow::render(&run, cx),
-                1 => super::timeline::render(&run, cx),
+                0 | 1 => div()
+                    .id("panel.scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_y_scroll()
+                    .child(if self.mode == 0 {
+                        super::flow::render(&run, cx)
+                    } else {
+                        super::timeline::render(&run, cx)
+                    })
+                    .into_any_element(),
                 _ => self.findings(&run, cx),
             });
         } else {
@@ -355,12 +520,8 @@ impl Render for RunView {
             .test_support()
             .size_full()
             .p(GAP)
-            .child(
-                div()
-                    .id("panel.scroll")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .child(content),
-            )
+            .min_w_0()
+            .overflow_hidden()
+            .child(content)
     }
 }
