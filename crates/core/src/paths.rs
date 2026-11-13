@@ -2,18 +2,27 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+pub const IDENTIFIER: &str = "com.w-devs.detached";
+
 /// `DETACHED_CONFIG_DIR`, else `com.w-devs.detached` in the OS config dir.
 pub fn config_dir() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("DETACHED_CONFIG_DIR") {
-        return Ok(dir.into());
+    if let Some(dir) = override_dir("DETACHED_CONFIG_DIR")? {
+        return Ok(dir);
     }
     let base = dirs::config_dir().ok_or_else(|| Error::Other("No config directory".into()))?;
     Ok(in_base(&base))
 }
 
+pub(crate) fn override_dir(key: &str) -> Result<Option<PathBuf>> {
+    match std::env::var_os(key) {
+        Some(dir) if dir.is_empty() => Err(Error::Other(format!("{key} cannot be empty"))),
+        dir => Ok(dir.map(PathBuf::from)),
+    }
+}
+
 /// Settings under a former identifier move over once, the newest first.
-fn in_base(base: &Path) -> PathBuf {
-    let dir = base.join("com.w-devs.detached");
+pub(crate) fn in_base(base: &Path) -> PathBuf {
+    let dir = base.join(IDENTIFIER);
     for old in ["dev.wdevs.detached", "dev.wdevs.workbench"] {
         if !dir.exists() {
             let _ = std::fs::rename(base.join(old), &dir);

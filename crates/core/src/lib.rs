@@ -14,6 +14,7 @@ pub mod search;
 pub mod selftest;
 pub mod settings;
 pub mod state;
+pub mod store;
 pub mod trust;
 pub mod types;
 pub mod update;
