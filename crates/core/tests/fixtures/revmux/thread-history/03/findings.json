@@ -1,0 +1,40 @@
+{
+  "sources": {
+    "agents": [
+      {
+        "name": "fit"
+      },
+      {
+        "name": "risk"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "c3",
+      "title": "Refresh leaves stale counts visible",
+      "file": "src/view.rs",
+      "severity": "minor",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "d",
+      "title": "Concurrent writer corrupts output data",
+      "file": "src/write.rs",
+      "severity": "critical",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    }
+  ]
+}

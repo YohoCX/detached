@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+mod graphs;
+pub use graphs::*;
+
 use crate::error::Result;
 use crate::git::runner::{self, Kind};
 use crate::state::AppState;
@@ -21,7 +24,8 @@ pub struct Participant {
     pub cause: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
 pub struct Finding {
     pub id: String,
     pub file: String,
@@ -50,6 +54,10 @@ pub struct Run {
     pub set_aside: Vec<Finding>,
     pub duration_ms: u64,
     pub tokens: u64,
+    pub started_at: i64,
+    pub stages: Stages,
+    pub timeline: Vec<Event>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -62,6 +70,7 @@ struct Sources {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct Manifest {
+    started_at: String,
     profile: String,
     agents: Vec<Participant>,
     duration_ms: u64,
@@ -76,6 +85,8 @@ struct Report {
     pre_existing: Vec<Finding>,
     #[serde(default)]
     immaterial: Vec<Finding>,
+    #[serde(default)]
+    rejected: Vec<Finding>,
     #[serde(default)]
     stats: Manifest,
 }
@@ -108,6 +119,10 @@ pub fn import(path: &Path) -> Result<Run> {
         set_aside: vec![],
         duration_ms: 0,
         tokens: 0,
+        started_at: 0,
+        stages: Stages::default(),
+        timeline: vec![],
+        warnings: vec![],
     };
     let report = match optional(&path.join("findings.json"))? {
         Some(s) => Some(s),
@@ -129,15 +144,23 @@ pub fn import(path: &Path) -> Result<Run> {
             }
         }
         run.findings = report.findings;
-        run.set_aside = report
-            .pre_existing
-            .into_iter()
-            .chain(report.immaterial)
-            .collect();
+        for (findings, verdict) in [
+            (report.pre_existing, "pre_existing"),
+            (report.immaterial, "immaterial"),
+            (report.rejected, "rejected"),
+        ] {
+            run.set_aside.extend(findings.into_iter().map(|mut f| {
+                if f.verdict.as_deref().is_none_or(str::is_empty) {
+                    f.verdict = Some(verdict.into());
+                }
+                f
+            }));
+        }
         run.duration_ms = report.stats.duration_ms;
         run.tokens = report.stats.tokens;
     }
     if let Some(m) = manifest {
+        run.started_at = timestamp(&m.started_at).unwrap_or_default();
         run.profile = m.profile;
         if run.participants.is_empty() {
             run.participants = m.agents;
@@ -161,7 +184,9 @@ pub fn import(path: &Path) -> Result<Run> {
             p.raised = 0;
         }
         for line in events.lines() {
-            let e: Event = serde_json::from_str(line)?;
+            let Ok(e) = serde_json::from_str::<Event>(line) else {
+                continue;
+            };
             if !matches!(
                 e.kind.as_str(),
                 "agent_started" | "agent_done" | "agent_degraded" | "findings"
@@ -201,6 +226,15 @@ pub fn import(path: &Path) -> Result<Run> {
             }
         }
     }
+    read_graphs(path, &mut run, has_report);
+    let (aside, findings): (Vec<_>, Vec<_>) = run.findings.drain(..).partition(|f| {
+        matches!(
+            f.verdict.as_deref(),
+            Some("rejected" | "pre_existing" | "immaterial")
+        )
+    });
+    run.findings = findings;
+    run.set_aside.extend(aside);
     Ok(run)
 }
 

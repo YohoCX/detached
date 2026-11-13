@@ -45,6 +45,10 @@ pub enum Doc {
         task: String,
         round: String,
     },
+    PanelTask {
+        repo: String,
+        task: String,
+    },
     Diff(DiffDoc),
     Mr {
         repo: String,
@@ -71,13 +75,23 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 7] = ["file", "diff", "mr", "job", "chat", "terminal", "panel"];
+    pub const KINDS: [&str; 8] = [
+        "file",
+        "diff",
+        "mr",
+        "job",
+        "chat",
+        "terminal",
+        "panel",
+        "panel-task",
+    ];
 
     /// The name the dock finds this document's behavior by.
     pub fn kind(&self) -> &'static str {
         match self {
             Doc::File(_) => "file",
             Doc::Panel { .. } => "panel",
+            Doc::PanelTask { .. } => "panel-task",
             Doc::Diff(_) => "diff",
             Doc::Mr { .. } => "mr",
             Doc::Job { .. } => "job",

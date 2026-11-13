@@ -1,0 +1,50 @@
+{
+  "profile": "plan-review-codex",
+  "started_at": "2026-11-12T23:10:10.42849+05:00",
+  "duration_ms": 487143,
+  "tokens": 548108,
+  "agents": [
+    {
+      "name": "fit",
+      "lenses": [
+        "impl",
+        "architecture"
+      ],
+      "executor": "codex",
+      "requested_model": "gpt-6.1-sol",
+      "actual_model": "gpt-6.1-sol",
+      "effort": "medium",
+      "tokens": 151937,
+      "raised": 2,
+      "degraded": false
+    },
+    {
+      "name": "risk",
+      "lenses": [
+        "adversarial",
+        "bugs"
+      ],
+      "executor": "codex",
+      "requested_model": "gpt-6.1-sol",
+      "actual_model": "gpt-6.1-sol",
+      "effort": "medium",
+      "tokens": 176521,
+      "raised": 5,
+      "degraded": false
+    },
+    {
+      "name": "scope",
+      "lenses": [
+        "docs",
+        "tests"
+      ],
+      "executor": "codex",
+      "requested_model": "gpt-6.1-sol",
+      "actual_model": "gpt-6.1-sol",
+      "effort": "medium",
+      "tokens": 129163,
+      "raised": 3,
+      "degraded": false
+    }
+  ]
+}

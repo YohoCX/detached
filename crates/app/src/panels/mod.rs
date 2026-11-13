@@ -1,9 +1,14 @@
-use detached_core::panel::{Finding, Rounds};
+mod flow;
+mod round;
+mod task;
+mod timeline;
+
+use detached_core::panel::Rounds;
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder,
 };
 use kernel::doc::{DiffDoc, Doc};
 use kernel::resource::Interest;
@@ -28,19 +33,22 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             shown: None,
         },
     );
-    dock::register_doc(cx, "panel", PanelDocs);
+    dock::register_doc(cx, "panel", round::PanelDocs);
+    dock::register_doc(cx, "panel-task", task::TaskDocs);
     vec![]
 }
 
 struct List {
     repo: Option<String>,
     rounds: Option<Interest<Rounds>>,
+    collapsed: Vec<String>,
     _workspace: Subscription,
 }
 
 impl List {
     fn new(cx: &mut Context<Self>) -> Self {
         let mut list = Self {
+            collapsed: kernel::ui_state::get("panels.collapsed", cx).unwrap_or_default(),
             repo: None,
             rounds: None,
             _workspace: Workspace::observe(cx, |v: &mut Self, cx| {
@@ -81,27 +89,128 @@ impl Render for List {
                 .into()
             });
             if let Some(rounds) = &resource.value {
-                rows.extend(rounds.runs.iter().enumerate().map(|(i, run)| {
-                    let doc = Doc::Panel {
+                let mut tasks: Vec<_> = rounds.runs.iter().map(|r| r.task.clone()).collect();
+                tasks.sort();
+                tasks.dedup();
+                tasks.sort_by_key(|task| {
+                    std::cmp::Reverse(
+                        rounds
+                            .runs
+                            .iter()
+                            .filter(|r| &r.task == task)
+                            .map(|r| (r.started_at, r.round.clone()))
+                            .max(),
+                    )
+                });
+                let mut index = 0usize;
+                for task in tasks {
+                    let mut runs: Vec<_> = rounds.runs.iter().filter(|r| r.task == task).collect();
+                    runs.sort_by(|a, b| (b.started_at, &b.round).cmp(&(a.started_at, &a.round)));
+                    let folded = self.collapsed.contains(&task);
+                    let toggle = task.clone();
+                    let doc = Doc::PanelTask {
                         repo: self.repo.clone().unwrap_or_default(),
-                        task: run.task.clone(),
-                        round: run.round.clone(),
+                        task: task.clone(),
                     };
-                    let label = format!(
-                        "{} / {} · {} findings",
-                        run.task,
-                        run.round,
-                        run.findings.len()
+                    rows.push(
+                        div()
+                            .flex()
+                            .items_center()
+                            .child(
+                                ui::icon_button(
+                                    SharedString::from(format!("panels.collapse.{task}")),
+                                    if folded {
+                                        ui::Icon::Chevron
+                                    } else {
+                                        ui::Icon::Down
+                                    },
+                                    cx,
+                                )
+                                .test_support()
+                                .aria_label("Collapse task")
+                                .on_click(cx.listener(
+                                    move |v, _, _, cx| {
+                                        if v.collapsed.contains(&toggle) {
+                                            v.collapsed.retain(|t| t != &toggle);
+                                        } else {
+                                            v.collapsed.push(toggle.clone());
+                                        }
+                                        kernel::ui_state::set("panels.collapsed", &v.collapsed, cx);
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                ui::row(
+                                    SharedString::from(format!("panels.task.{task}")),
+                                    false,
+                                    cx,
+                                )
+                                .test_support()
+                                .child(format!("{task} ({})", runs.len()))
+                                .on_click(move |_, _, cx| {
+                                    Workspace::global(cx)
+                                        .update(cx, |w, cx| w.show(doc.clone(), cx));
+                                }),
+                            )
+                            .into_any_element(),
                     );
-                    ui::row(("panels.round", i), false, cx)
-                        .test_support()
-                        .aria_label(SharedString::from(label.clone()))
-                        .child(label)
-                        .on_click(move |_, _, cx| {
-                            Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));
-                        })
-                        .into_any_element()
-                }));
+                    for run in runs {
+                        let i = index;
+                        index += 1;
+                        if folded {
+                            continue;
+                        }
+                        let doc = Doc::Panel {
+                            repo: self.repo.clone().unwrap_or_default(),
+                            task: run.task.clone(),
+                            round: run.round.clone(),
+                        };
+                        let counts = run.counts();
+                        let color = if run.participants.iter().any(|p| p.degraded)
+                            || !run.warnings.is_empty()
+                        {
+                            theme(cx).warning
+                        } else if counts.critical + counts.major > 0 {
+                            theme(cx).error
+                        } else {
+                            theme(cx).success
+                        };
+                        let label = format!(
+                            "{} / {} · {} findings",
+                            run.task,
+                            run.round,
+                            run.findings.len()
+                        );
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        rows.push(
+                            ui::row(("panels.round", i), false, cx)
+                                .test_support()
+                                .aria_label(label)
+                                .child(ui::dot(color))
+                                .child(run.round.clone())
+                                .child(
+                                    div()
+                                        .text_size(text::SMALL)
+                                        .text_color(theme(cx).muted)
+                                        .child(if run.started_at == 0 {
+                                            "time unavailable".into()
+                                        } else {
+                                            crate::util::ago_text(run.started_at / 1000, now)
+                                        }),
+                                )
+                                .child(count_badges(counts, cx))
+                                .on_click(move |_, _, cx| {
+                                    Workspace::global(cx)
+                                        .update(cx, |w, cx| w.show(doc.clone(), cx));
+                                })
+                                .into_any_element(),
+                        );
+                    }
+                }
                 rows.extend(rounds.errors.iter().map(|e| {
                     div()
                         .text_color(theme(cx).error)
@@ -117,14 +226,22 @@ impl Render for List {
             .flex_col()
             .size_full()
             .child(
-                ui::row("panels.refresh", false, cx)
-                    .test_support()
-                    .child("Refresh rounds")
-                    .on_click(cx.listener(|v, _, _, cx| {
-                        if let Some(r) = &v.rounds {
-                            r.refresh(cx);
-                        }
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .p(GAP)
+                    .child("Panels")
+                    .child(
+                        ui::icon_button("panels.refresh", ui::Icon::Refresh, cx)
+                            .test_support()
+                            .aria_label("Refresh rounds")
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                if let Some(r) = &v.rounds {
+                                    r.refresh(cx);
+                                }
+                            })),
+                    ),
             )
             .when_some(error, |d, e| {
                 d.child(
@@ -148,279 +265,27 @@ impl Render for List {
     }
 }
 
-struct PanelDocs;
-impl DocKind for PanelDocs {
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
-        let Doc::Panel { repo, task, round } = doc else {
-            unreachable!()
-        };
-        let (repo, task, round) = (repo.clone(), task.clone(), round.clone());
-        cx.new(|cx| RunView {
-            rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
-            repo,
-            task,
-            round,
-            diff: None,
-            show_aside: false,
-        })
-        .into()
-    }
-    fn id(&self, doc: &Doc) -> SharedString {
-        let Doc::Panel { repo, task, round } = doc else {
-            unreachable!()
-        };
-        format!("doc.panel.{repo}.{task}.{round}").into()
-    }
-    fn title(&self, doc: &Doc, _: Option<&AnyView>, _: &App) -> SharedString {
-        let Doc::Panel { task, round, .. } = doc else {
-            unreachable!()
-        };
-        format!("{task} / {round}").into()
-    }
-    fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
-        if let Ok(v) = view.clone().downcast::<RunView>()
-            && let Some(diff) = &v.read(cx).diff
-        {
-            diff.read(cx).raise(cx);
-        }
+fn count_badges(c: detached_core::panel::Counts, cx: &App) -> impl IntoElement {
+    div().flex().gap(GAP).children(
+        [
+            (c.critical, "C", theme(cx).error),
+            (c.major, "M", theme(cx).warning),
+            (c.minor, "m", theme(cx).accent),
+        ]
+        .into_iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, label, color)| ui::badge(format!("{n}{label}"), color, cx)),
+    )
+}
+
+fn severity(s: &str, cx: &App) -> gpui_kit::Hsla {
+    match s {
+        "critical" => theme(cx).error,
+        "major" => theme(cx).warning,
+        _ => theme(cx).accent,
     }
 }
 
-struct RunView {
-    repo: String,
-    task: String,
-    round: String,
-    rounds: Interest<Rounds>,
-    diff: Option<Entity<DiffView>>,
-    show_aside: bool,
-}
-
-impl RunView {
-    fn card(&self, finding: &Finding, aside: bool, cx: &Context<Self>) -> impl IntoElement {
-        let f = finding.clone();
-        let label = format!("{}:{}", f.file, f.line);
-        let verdict = f
-            .verdict
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .unwrap_or("unverified");
-        div()
-            .id(SharedString::from(format!("panel.finding.{}", finding.id)))
-            .test_support()
-            .aria_label(SharedString::from(format!(
-                "{} · {} · {}",
-                finding.severity, verdict, finding.title
-            )))
-            .flex()
-            .flex_col()
-            .gap(GAP)
-            .p(GAP)
-            .border_b_1()
-            .border_color(theme(cx).line)
-            .child(div().child(format!("{} · {} · {}", f.severity, verdict, f.title)))
-            .child(
-                ui::row(
-                    SharedString::from(format!("panel.location.{}", f.id)),
-                    false,
-                    cx,
-                )
-                .test_support()
-                .aria_label(SharedString::from(label.clone()))
-                .child(label)
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    let doc = DiffDoc {
-                        repo: v.repo.clone(),
-                        path: f.file.clone(),
-                        orig_path: None,
-                        left: Side::Head,
-                        right: Side::Worktree,
-                    };
-                    v.diff = Some(cx.new(|cx| {
-                        let mut d = DiffView::new(doc, DiffOptions::default(), cx);
-                        d.reveal_line(f.line, cx);
-                        d
-                    }));
-                    cx.notify();
-                })),
-            )
-            .child(div().whitespace_normal().child(finding.body.clone()))
-            .when(!finding.fix.is_empty(), |d| {
-                d.child(format!("Suggested fix: {}", finding.fix))
-            })
-            .child(
-                div()
-                    .text_size(text::SMALL)
-                    .text_color(theme(cx).muted)
-                    .child(format!(
-                        "Sources: {}{}",
-                        finding.sources.join(", "),
-                        if aside { " · Set aside" } else { "" }
-                    )),
-            )
-    }
-}
-
-impl Render for RunView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let resource = self.rounds.read(cx);
-        let run = resource.value.as_ref().and_then(|r| {
-            r.runs
-                .iter()
-                .find(|r| r.task == self.task && r.round == self.round)
-        });
-        let mut content = div()
-            .id("panel.content")
-            .test_support()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .gap(GAP);
-        if let Some(run) = run {
-            content = content.when_some(resource.error.clone(), |d, e| {
-                d.child(
-                    div()
-                        .id("panel.stale")
-                        .test_support()
-                        .aria_label(e.clone())
-                        .text_color(theme(cx).error)
-                        .child(e),
-                )
-            });
-            content = content
-                .child(div().id("panel.header").test_support().child(format!(
-                    "{} / {} · {} · {} · {} recorded tokens",
-                    run.task,
-                    run.round,
-                    if run.profile.is_empty() {
-                        "revmux"
-                    } else {
-                        &run.profile
-                    },
-                    if run.duration_ms == 0 {
-                        "duration unavailable".into()
-                    } else {
-                        format!("{} s", run.duration_ms / 1000)
-                    },
-                    run.tokens
-                )))
-                .child(
-                    div()
-                        .whitespace_normal()
-                        .text_color(theme(cx).muted)
-                        .child(run.scope.clone()),
-                );
-            let participants = run.participants.iter().enumerate().map(|(i, p)| {
-                let state = if p.degraded { "degraded" } else { "done" };
-                let label = format!(
-                    "{} · {} · {} · {} findings · {} tokens{}",
-                    p.name,
-                    state,
-                    if p.actual_model.is_empty() {
-                        "model unavailable"
-                    } else {
-                        &p.actual_model
-                    },
-                    p.raised,
-                    p.tokens,
-                    if p.cause.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · {}", p.cause)
-                    }
-                );
-                div()
-                    .id(("panel.participant", i))
-                    .test_support()
-                    .aria_label(SharedString::from(label.clone()))
-                    .text_color(if p.degraded {
-                        theme(cx).warning
-                    } else {
-                        theme(cx).fg
-                    })
-                    .child(label)
-                    .when(
-                        p.actual_model != p.requested_model && !p.requested_model.is_empty(),
-                        |d| d.child(format!(" (requested {})", p.requested_model)),
-                    )
-            });
-            let cards = div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .children(run.findings.iter().map(|f| self.card(f, false, cx)))
-                .when(!run.set_aside.is_empty(), |d| {
-                    d.child(
-                        ui::row("panel.setAside", self.show_aside, cx)
-                            .test_support()
-                            .child(format!("Set aside ({})", run.set_aside.len()))
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.show_aside = !v.show_aside;
-                                cx.notify();
-                            })),
-                    )
-                })
-                .when(self.show_aside, |d| {
-                    d.children(run.set_aside.iter().map(|f| self.card(f, true, cx)))
-                });
-            content = content.child(
-                div()
-                    .flex()
-                    .gap(GAP)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(GAP)
-                            .w(px(260.))
-                            .flex_none()
-                            .children(participants),
-                    )
-                    .child(cards),
-            );
-        } else {
-            content = content.child(resource.error.clone().unwrap_or_else(|| {
-                if resource.loading() {
-                    "Loading round…"
-                } else {
-                    "Round is no longer in the archive"
-                }
-                .into()
-            }));
-        }
-        div()
-            .id("panel.run")
-            .test_support()
-            .flex()
-            .size_full()
-            .gap(GAP)
-            .p(GAP)
-            .child(
-                div()
-                    .id("panel.scroll")
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_y_scroll()
-                    .child(content),
-            )
-            .when_some(self.diff.clone(), |d, diff| {
-                d.child(
-                    div()
-                        .id("panel.diff")
-                        .test_support()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .size_full()
-                        .child(
-                            div().text_color(theme(cx).muted).child(
-                                "Archive has no pinned revisions. Diff: HEAD → working tree.",
-                            ),
-                        )
-                        .child(diff),
-                )
-            })
-    }
+fn selection_key(repo: &str, task: &str, round: &str) -> String {
+    format!("panels.selection.{repo}.{task}.{round}")
 }

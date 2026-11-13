@@ -1,0 +1,32 @@
+{"kind": "stage", "stage": "find", "at": "2026-11-12T23:10:10.42849+05:00"}
+{"kind": "agent_started", "agent": "fit", "text": "Review state updated.", "at": "2026-11-12T23:10:10.429364+05:00"}
+{"kind": "agent_state", "agent": "fit", "text": "Review state updated.", "at": "2026-11-12T23:10:10.555918+05:00"}
+{"kind": "agent_state", "agent": "fit", "text": "Review state updated.", "at": "2026-11-12T23:10:10.557479+05:00"}
+{"kind": "agent_state", "agent": "fit", "text": "Review state updated.", "at": "2026-11-12T23:10:10.557497+05:00"}
+{"kind": "agent_started", "agent": "scope", "text": "Review state updated.", "at": "2026-11-12T23:10:22.593644+05:00"}
+{"kind": "agent_started", "agent": "risk", "text": "Review state updated.", "at": "2026-11-12T23:10:22.593663+05:00"}
+{"kind": "agent_state", "agent": "risk", "text": "Review state updated.", "at": "2026-11-12T23:10:22.725179+05:00"}
+{"kind": "agent_state", "agent": "risk", "text": "Review state updated.", "at": "2026-11-12T23:10:22.725271+05:00"}
+{"kind": "agent_state", "agent": "risk", "text": "Review state updated.", "at": "2026-11-12T23:10:22.725281+05:00"}
+{"kind": "agent_state", "agent": "scope", "text": "Review state updated.", "at": "2026-11-12T23:10:22.726019+05:00"}
+{"kind": "agent_state", "agent": "scope", "text": "Review state updated.", "at": "2026-11-12T23:10:22.726076+05:00"}
+{"kind": "agent_state", "agent": "scope", "text": "Review state updated.", "at": "2026-11-12T23:10:22.726086+05:00"}
+{"kind": "findings", "agent": "scope", "at": "2026-11-12T23:13:08.893121+05:00"}
+{"kind": "agent_done", "agent": "scope", "text": "Review completed.", "at": "2026-11-12T23:13:08.893251+05:00"}
+{"kind": "findings", "agent": "fit", "at": "2026-11-12T23:13:42.860539+05:00"}
+{"kind": "agent_done", "agent": "fit", "text": "Review completed.", "at": "2026-11-12T23:13:42.860665+05:00"}
+{"kind": "findings", "agent": "risk", "at": "2026-11-12T23:16:05.56625+05:00"}
+{"kind": "agent_done", "agent": "risk", "text": "Review completed.", "at": "2026-11-12T23:16:05.566299+05:00"}
+{"kind": "stage", "stage": "synthesis", "at": "2026-11-12T23:16:05.566664+05:00"}
+{"kind": "agent_started", "agent": "synthesis", "text": "Review state updated.", "at": "2026-11-12T23:16:05.567092+05:00"}
+{"kind": "agent_state", "agent": "synthesis", "text": "Review state updated.", "at": "2026-11-12T23:16:05.774847+05:00"}
+{"kind": "agent_state", "agent": "synthesis", "text": "Review state updated.", "at": "2026-11-12T23:16:05.774957+05:00"}
+{"kind": "agent_state", "agent": "synthesis", "text": "Review state updated.", "at": "2026-11-12T23:16:05.774972+05:00"}
+{"kind": "findings", "agent": "synthesis", "at": "2026-11-12T23:16:55.36869+05:00"}
+{"kind": "agent_done", "agent": "synthesis", "text": "Review completed.", "at": "2026-11-12T23:16:55.368782+05:00"}
+{"kind": "stage", "stage": "verify", "at": "2026-11-12T23:16:55.369075+05:00"}
+{"kind": "agent_started", "agent": "verify root", "text": "Review state updated.", "at": "2026-11-12T23:16:55.36935+05:00"}
+{"kind": "agent_state", "agent": "verify root", "text": "Review state updated.", "at": "2026-11-12T23:16:55.484515+05:00"}
+{"kind": "agent_state", "agent": "verify root", "text": "Review state updated.", "at": "2026-11-12T23:16:55.484591+05:00"}
+{"kind": "agent_state", "agent": "verify root", "text": "Review state updated.", "at": "2026-11-12T23:16:55.484603+05:00"}
+{"kind": "agent_done", "agent": "verify root", "text": "Review completed.", "at": "2026-11-12T23:18:17.574179+05:00"}

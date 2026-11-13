@@ -1,9 +1,11 @@
-{"kind": "agent_started", "agent": "fit", "text": "impl, architecture"}
-{"kind": "agent_started", "agent": "risk", "text": "adversarial, bugs"}
-{"kind": "agent_started", "agent": "scope", "text": "docs, tests"}
-{"kind": "findings", "agent": "fit", "findings": [{"id": "fit-1", "file": "PLAN-AGENT-HOST.md", "line": 253, "end_line": 297, "severity": "major", "sources": ["fit"], "verdict": "", "title": "Platform requirements are missing", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}]}
-{"kind": "agent_done", "agent": "fit", "text": "1 finding"}
-{"kind": "findings", "agent": "scope", "findings": [{"id": "scope-1", "file": "PLAN-PANELS.md", "line": 120, "end_line": 0, "severity": "major", "sources": ["scope"], "verdict": "", "title": "Checkout filters remain enabled", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}]}
-{"kind": "agent_done", "agent": "scope", "text": "1 finding"}
-{"kind": "agent_degraded", "agent": "risk", "text": "claude run stopped: context canceled"}
-{"kind": "agent_started", "agent": "synthesis", "text": "merging 2 findings"}
+{"kind": "agent_started", "agent": "fit", "text": "impl, architecture", "at": "2026-11-12T17:55:26.863196+05:00"}
+{"kind": "agent_started", "agent": "risk", "text": "adversarial, bugs", "at": "2026-11-12T17:55:29.408479+05:00"}
+{"kind": "agent_started", "agent": "scope", "text": "docs, tests", "at": "2026-11-12T17:55:29.408461+05:00"}
+{"kind": "findings", "agent": "fit", "findings": [{"id": "fit-1", "file": "PLAN-AGENT-HOST.md", "line": 253, "end_line": 297, "severity": "major", "sources": ["fit"], "verdict": "", "title": "Platform requirements are missing", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}], "at": "2026-11-12T18:02:13.625525+05:00"}
+{"kind": "agent_done", "agent": "fit", "text": "1 finding", "at": "2026-11-12T18:02:13.625748+05:00"}
+{"kind": "findings", "agent": "scope", "findings": [{"id": "scope-1", "file": "PLAN-PANELS.md", "line": 120, "end_line": 0, "severity": "major", "sources": ["scope"], "verdict": "", "title": "Checkout filters remain enabled", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}], "at": "2026-11-12T18:02:30.824956+05:00"}
+{"kind": "agent_done", "agent": "scope", "text": "1 finding", "at": "2026-11-12T18:02:30.82514+05:00"}
+{"kind": "agent_degraded", "agent": "risk", "text": "claude run stopped: context canceled", "at": "2026-11-12T18:03:48.912394+05:00"}
+{"kind": "agent_started", "agent": "synthesis", "text": "merging 2 findings", "at": "2026-11-12T18:03:48.91333+05:00"}
+{"kind": "stage", "stage": "find", "at": "2026-11-12T17:55:26.862069+05:00"}
+{"kind": "stage", "stage": "synthesis", "at": "2026-11-12T18:03:48.912967+05:00"}

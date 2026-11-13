@@ -538,3 +538,10 @@ mod tests {
         assert!(pair(&v, &bundled()).is_err());
     }
 }
+
+pub mod graph {
+    use gpui_kit::{Pixels, px};
+    pub const ROW: Pixels = px(64.);
+    pub const COLUMN: Pixels = px(210.);
+    pub const CHART: Pixels = px(150.);
+}

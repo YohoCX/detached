@@ -1,0 +1,32 @@
+{
+  "findings": [
+    {
+      "id": "fit-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 253,
+      "end_line": 297,
+      "severity": "major",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "",
+      "title": "Platform requirements are missing",
+      "body": "The plan leaves this requirement unresolved.",
+      "fix": "Specify the requirement in the plan."
+    },
+    {
+      "id": "scope-1",
+      "file": "PLAN-PANELS.md",
+      "line": 120,
+      "end_line": 0,
+      "severity": "major",
+      "sources": [
+        "scope"
+      ],
+      "verdict": "",
+      "title": "Checkout filters remain enabled",
+      "body": "The plan leaves this requirement unresolved.",
+      "fix": "Specify the requirement in the plan."
+    }
+  ]
+}

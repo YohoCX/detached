@@ -1,0 +1,40 @@
+{
+  "sources": {
+    "agents": [
+      {
+        "name": "fit"
+      },
+      {
+        "name": "risk"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "a2",
+      "title": "Shared export directory exposes review data",
+      "file": "src/export.rs",
+      "severity": "major",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "c",
+      "title": "Refresh leaves stale counts visible",
+      "file": "src/view.rs",
+      "severity": "minor",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    }
+  ]
+}

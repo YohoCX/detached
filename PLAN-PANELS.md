@@ -4,7 +4,7 @@ Groups of agents over one subject, as stage graphs on one engine: review, pre-me
 plan review, dialectic and brainstorm. Ideas come from revmux; the design is ours. It runs on
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
-**Status (2026-11-12): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
+**Status (2026-11-13): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
 follow it. Review rounds 01–16 are fixed in this text. No choice is open.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
@@ -12,7 +12,7 @@ Settled on 2026-11-12:
 - orchestrator mode and trust by workspace or repo (§3, §12): trusted work runs free on its own
   branch; an untrusted subject gets a sandboxed, read-only review and no Fix.
 
-revmux and `.revmux/` stay, and whether panels replace revmux is deferred. Nothing is built.**
+revmux and `.revmux/` stay, and whether panels replace revmux is deferred. P1 imports and their round/task graph UI are built; live panels follow the steps below.**
 
 Owner's decision, [2026-11-12](docs/decisions/2026-11-12-panels.md): the full scope ships. That
 is every mode, mixed models on any role, stats by lens and model, and Fix in a managed worktree,
@@ -414,6 +414,9 @@ transcripts/   pointers to the providers' own transcripts
 ## 13. The progress UI
 
 A run is a document tab, `Doc::Panel`.
+
+- The round tab has Flow, Timeline and Findings; a task tab shows severity per round and finding
+  threads ([owner decision](docs/decisions/2026-11-13-panel-graphs.md)).
 
 Agent text (cards, transcripts, outcomes) renders through the agent Markdown of host §6, which
 never loads a remote image.

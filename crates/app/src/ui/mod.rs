@@ -3,6 +3,7 @@
 
 pub mod appearance;
 pub mod disabled;
+pub mod graph;
 pub mod grip;
 pub mod icon;
 pub mod menu;

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use common::*;
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt;
 use kernel::doc::Doc;
 
 fn copy_round(repo: &Path, name: &str) {
@@ -13,11 +14,15 @@ fn copy_round(repo: &Path, name: &str) {
         .join(name);
     let dest = repo.join(".revmux/tasks").join(name);
     fs::create_dir_all(dest.join("input")).unwrap();
+    fs::create_dir_all(dest.join("stages")).unwrap();
     for name in [
         "manifest.json",
         "findings.json",
         "events.jsonl",
         "input/scope.md",
+        "stages/1-found.json",
+        "stages/2-synthesized.json",
+        "stages/3-verified.json",
     ] {
         if source.join(name).exists() {
             fs::copy(source.join(name), dest.join(name)).unwrap();
@@ -211,5 +216,89 @@ fn finding_location_reveals_the_line_in_a_conflict_editor(cx: &mut TestAppContex
     assert_eq!(
         app.read_from_clipboard().and_then(|c| c.text()).as_deref(),
         Some("line 228")
+    );
+}
+
+#[gpui_kit::test]
+fn groups_collapse_and_task_threads_open_selected_findings(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        copy_round(&repo, "agent-host-plan/15-after-fix");
+        copy_round(&repo, "agent-host-plan/16-codex");
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| {
+        cx.find("panels.task.agent-host-plan").is_some()
+    });
+    assert!(
+        app.find(("panels.round", 0usize))
+            .unwrap()
+            .label()
+            .unwrap()
+            .contains("16-codex")
+    );
+    app.click("panels.collapse.agent-host-plan");
+    assert!(app.find(("panels.round", 0usize)).is_none());
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<Vec<String>>("panels.collapsed", cx)),
+        Some(vec!["agent-host-plan".into()])
+    );
+    app.click("panels.collapse.agent-host-plan");
+    assert!(app.find(("panels.round", 1usize)).is_some());
+    app.click("panels.task.agent-host-plan");
+    wait_until(&mut app, |cx| cx.find("panel.task.chart").is_some());
+    assert!(
+        matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::PanelTask { task, .. }) if task == "agent-host-plan")
+    );
+    app.click("panel.thread.1.0");
+    wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
+    assert!(
+        matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::Panel { round, .. }) if round == "15-after-fix")
+    );
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    let key = format!("panels.selection.{repo}.agent-host-plan.15-after-fix");
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)),
+        Some("risk-1".into())
+    );
+    assert!(app.find("panel.diff").is_some());
+}
+
+#[gpui_kit::test]
+fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        copy_round(&repo, "agent-host-plan/16-codex");
+        copy_round(&repo, "agent-host-plan/15-after-fix");
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    app.click(("panels.round", 0usize));
+    wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
+    app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
+    settle(&app);
+    assert!(app.find("panel.flow").is_some());
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<usize>("panels.mode", cx)),
+        Some(0)
+    );
+    app.update(|w, cx| w.within("panel.modes").click(1usize, cx));
+    settle(&app);
+    assert!(app.find("panel.timeline.lane.fit").is_some());
+    assert!(app.find("panel.timeline.lane.merge").is_some());
+    assert!(app.find("panel.timeline.lane.verify").is_some());
+    app.click(("panels.round", 1usize));
+    wait_until(&mut app, |cx| cx.find("panel.timeline").is_some());
+    assert!(app.find("panel.findings").is_none());
+    app.click(("panels.round", 0usize));
+    app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
+    settle(&app);
+    app.click("panel.flow.1.risk-1");
+    assert!(app.find("panel.findings").is_some());
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    let key = format!("panels.selection.{repo}.agent-host-plan.16-codex");
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)),
+        Some("risk-1".into())
     );
 }

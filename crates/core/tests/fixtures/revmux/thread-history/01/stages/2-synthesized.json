@@ -1,0 +1,31 @@
+{
+  "findings": [
+    {
+      "id": "a",
+      "title": "Shared export directory exposes review data",
+      "file": "src/export.rs",
+      "severity": "major",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "b",
+      "title": "Missing boundary check for long input",
+      "file": "src/input.rs",
+      "severity": "minor",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit",
+        "risk"
+      ],
+      "verdict": ""
+    }
+  ]
+}

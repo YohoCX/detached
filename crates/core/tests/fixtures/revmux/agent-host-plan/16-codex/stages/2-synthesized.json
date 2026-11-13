@@ -1,0 +1,169 @@
+{
+  "sources": {
+    "expected": 3,
+    "reported": 3,
+    "degraded": [],
+    "agents": [
+      {
+        "name": "fit",
+        "lenses": [
+          "impl",
+          "architecture"
+        ],
+        "executor": "codex",
+        "requested_model": "gpt-6.1-sol",
+        "actual_model": "gpt-6.1-sol",
+        "effort": "medium",
+        "tokens": 151937,
+        "raised": 2,
+        "degraded": false
+      },
+      {
+        "name": "risk",
+        "lenses": [
+          "adversarial",
+          "bugs"
+        ],
+        "executor": "codex",
+        "requested_model": "gpt-6.1-sol",
+        "actual_model": "gpt-6.1-sol",
+        "effort": "medium",
+        "tokens": 176521,
+        "raised": 5,
+        "degraded": false
+      },
+      {
+        "name": "scope",
+        "lenses": [
+          "docs",
+          "tests"
+        ],
+        "executor": "codex",
+        "requested_model": "gpt-6.1-sol",
+        "actual_model": "gpt-6.1-sol",
+        "effort": "medium",
+        "tokens": 129163,
+        "raised": 3,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "fit-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 310,
+      "end_line": 311,
+      "severity": "major",
+      "title": "Untrusted participants can still read another instance's exports and temp output",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "fit",
+        "risk"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "risk-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 215,
+      "end_line": 0,
+      "severity": "major",
+      "title": "Host trust parsing follows exported skill symlinks without bounding the read",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "risk"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "risk-2",
+      "file": "PLAN-PANELS.md",
+      "line": 527,
+      "end_line": 0,
+      "severity": "major",
+      "title": "Host diff reads retain the smudge filters disabled for the export",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "risk"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "risk-3",
+      "file": "PLAN-PANELS.md",
+      "line": 292,
+      "end_line": 295,
+      "severity": "major",
+      "title": "Windows retries reuse the worktree before the previous command is stopped",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "risk"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "risk-4",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 372,
+      "end_line": 374,
+      "severity": "major",
+      "title": "Tarring a Windows checkout loses Git symlink modes before WSL receives it",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "risk"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "scope-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 916,
+      "end_line": 0,
+      "severity": "major",
+      "title": "H2 pins the wrong existing config identifier",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "scope"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "scope-2",
+      "file": "PLAN-PANELS.md",
+      "line": 249,
+      "end_line": 0,
+      "severity": "major",
+      "title": "The prompt-injection test passes independently of the brief's protection",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "scope"
+      ],
+      "verdict": ""
+    },
+    {
+      "id": "fit-2",
+      "file": "PLAN-PANELS.md",
+      "line": 224,
+      "end_line": 0,
+      "severity": "minor",
+      "title": "The Windows participant instructions still require the removed bundle transfer",
+      "body": "Trimmed review body.",
+      "fix": "Apply the proposed correction.",
+      "sources": [
+        "fit",
+        "scope"
+      ],
+      "verdict": ""
+    }
+  ],
+  "pre_existing": [],
+  "immaterial": []
+}

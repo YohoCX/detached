@@ -448,6 +448,9 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> String {
                     (at..at, "\\".to_string())
                 }));
             }
+            Node::Html(h) if matches!(links, Links::Agent) => {
+                edits.push((span, h.value.replace('<', "&lt;").replace('>', "&gt;")));
+            }
             Node::Code(c) => edits.extend(fence(text, span, c.lang.as_deref())),
             Node::Image(i) => edits.extend(image_link(links, &i.url, &i.alt, span)),
             Node::ImageReference(r) => {
@@ -590,6 +593,7 @@ fn image_url(links: &Links, url: &str) -> Option<String> {
         u.starts_with("https:") || u.starts_with("data:")
     };
     match links {
+        Links::Agent => None,
         Links::Repo { path, .. } if !has_scheme(url) => Some(repo_path(url, path)),
         Links::Repo { .. } => secure(url).then(|| url.into()),
         Links::Forge {
@@ -848,6 +852,23 @@ mod tests {
         assert_eq!(boxes, [Some(true), Some(false)], "the kit draws these");
         let text = rendered(md, cx);
         assert_eq!(text.trim_end(), "done\ntodo", "the boxes are no text");
+    }
+
+    #[test]
+    fn agent_images_are_links_and_never_load() {
+        for url in [
+            "https://example.invalid/a.png",
+            "http://example.invalid/a.png",
+            "data:image/png;base64,abc",
+            "a.png",
+        ] {
+            assert_eq!(image_url(&Links::Agent, url), None);
+        }
+        let source = "![inline](https://example.invalid/a.png)\n\n![reference][r]\n\n[r]: https://example.invalid/b.png\n\n<img src=\"https://example.invalid/c.png\">";
+        let text = prepare(source, &Links::Agent, true);
+        assert!(!text.contains("!["), "{text}");
+        assert!(!text.contains("<img"), "{text}");
+        assert!(text.contains("https://example.invalid/a.png"));
     }
 
     #[test]

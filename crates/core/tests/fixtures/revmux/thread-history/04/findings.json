@@ -1,0 +1,53 @@
+{
+  "sources": {
+    "agents": [
+      {
+        "name": "fit"
+      },
+      {
+        "name": "risk"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "a4",
+      "title": "Shared export directory exposes review data",
+      "file": "src/export.rs",
+      "severity": "major",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "d4",
+      "title": "Concurrent writer corrupts output data",
+      "file": "src/write.rs",
+      "severity": "critical",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "e",
+      "title": "Missing cleanup on cancellation",
+      "file": "src/export.rs",
+      "severity": "minor",
+      "line": 10,
+      "body": "Trimmed review body.",
+      "fix": "Correct this finding.",
+      "sources": [
+        "fit"
+      ],
+      "verdict": "confirmed"
+    }
+  ]
+}
