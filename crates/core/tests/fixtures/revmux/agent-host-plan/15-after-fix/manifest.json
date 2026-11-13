@@ -1,0 +1,46 @@
+{
+  "profile": "plan-review",
+  "duration_ms": 624146,
+  "tokens": 6977190,
+  "agents": [
+    {
+      "name": "fit",
+      "lenses": [
+        "impl",
+        "architecture"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 2345774,
+      "raised": 8,
+      "degraded": false
+    },
+    {
+      "name": "risk",
+      "lenses": [
+        "adversarial",
+        "bugs"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 1752016,
+      "raised": 10,
+      "degraded": false
+    },
+    {
+      "name": "scope",
+      "lenses": [
+        "docs",
+        "tests"
+      ],
+      "executor": "claude",
+      "requested_model": "opus",
+      "actual_model": "claude-opus-5-5",
+      "tokens": 2168981,
+      "raised": 8,
+      "degraded": false
+    }
+  ]
+}

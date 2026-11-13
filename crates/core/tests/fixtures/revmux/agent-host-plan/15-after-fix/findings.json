@@ -1,0 +1,208 @@
+{
+  "sources": {
+    "degraded": [],
+    "agents": [
+      {
+        "name": "fit",
+        "lenses": [
+          "impl",
+          "architecture"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 2345774,
+        "raised": 8,
+        "degraded": false
+      },
+      {
+        "name": "risk",
+        "lenses": [
+          "adversarial",
+          "bugs"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 1752016,
+        "raised": 10,
+        "degraded": false
+      },
+      {
+        "name": "scope",
+        "lenses": [
+          "docs",
+          "tests"
+        ],
+        "executor": "claude",
+        "requested_model": "opus",
+        "actual_model": "claude-opus-5-5",
+        "tokens": 2168981,
+        "raised": 8,
+        "degraded": false
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "scope-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 292,
+      "end_line": 305,
+      "severity": "major",
+      "title": "The per-instance untrusted root sits in Linux's shared /tmp under a predictable name, with no mode, owner or symlink check before export and startup cleanup",
+      "body": "The untrusted root is `<tmp>/detached-<short hash of the config dir>-<uid>/untrusted/` (§5:292-297). On Linux, `<tmp>` is the shared, sticky `/tmp`. The name is predictable: the uid is public, and the default config dir is `~/.config/com.w-devs.detached`, so its hash is predictable too. The plan never says the root is created 0700, that an existing root's owner is checked, or that a symlink is refused.\n\n- **Passive leak.** With the default umask (022), the run folder, the `checkout-index` export of a possibly private repo and each participant's `CLAUDE_CODE_TMPDIR` output end up 0755/0644. Every local user can read them.\n- **Pre-created root.** Another local user can create the path first. A `create_dir_all` accepts it, and that user can then read the export or swap files in the pinned tree while participants review it.\n- **Symlink cleanup.** If `untrusted/` is a symlink into the owner's `$HOME`, startup cleanup, which \"removes this instance's run folders whose lock is not held\" (§5:301), deletes the owner's directories.\n- **Cross-instance read.** Participants deny their peers by name only, so another instance's root (for example `make smoke` beside the real app) can be read.\n- **tmpfs.** Where `/tmp` is tmpfs (Fedora, Arch, Debian 13), a large repo's export sits in RAM and can fail with ENOSPC.\n\nRound 14 raised the shared-`/tmp` problem. Adding `<uid>` to the name did not close it, and no rejection is stated. P2 tests only that another instance's root is not deleted. macOS (`$TMPDIR` is per-user and 0700) does not show the problem.",
+      "fix": "Create the root with mode 0700 (`mkdir`, not `create_dir_all`), and `lstat` an existing one. Refuse it, both for use and for cleanup, when it is a symlink, owned by another uid, or not 0700. Cleanup removes only entries whose names match the run-id format and never follows symlinks. Better, use a per-user, disk-backed location outside the tiers (`$XDG_STATE_HOME`/`$XDG_CACHE_HOME` sibling, or `$XDG_RUNTIME_DIR`). Add a `#[cfg(unix)]` P2 test: a foreign-owned or non-0700 root makes the run refuse.",
+      "sources": [
+        "scope",
+        "fit",
+        "risk"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "risk-1",
+      "file": "PLAN-PANELS.md",
+      "line": 135,
+      "end_line": 145,
+      "severity": "major",
+      "title": "Sandboxed trusted verifiers have `denyWrite` on the pinned tree, so they cannot build or test, unlike unsandboxed ones, and the ignored-folder build test passes vacuously",
+      "body": "Where the probe passes (macOS, Linux with bwrap), trusted verifiers get `denyWrite` on the pinned tree and the git common dir (§3:135-137). Their cwd is that tree, so `cargo test`, `npm test` and `pytest` cannot write `target/`, `node_modules/.cache`, `.pytest_cache` or `__pycache__`, and they fail with EPERM/EROFS. Where the probe fails (native Windows, Linux without bwrap), the same commands succeed, and round 14/15's state check now ignores the output (§3:144-145).\n\nThe same claim is therefore verified by running tests on Windows but only by reading on the owner's main OS, which can give different verdicts. §7 still sizes the stall rule on a verifier running `cargo test` in one Bash call.\n\nThe new P2 test \"a build into an ignored folder ... do not trip the state check\" (P2:575-576) is not tied to the unsandboxed configuration. On sandboxed CI the build is denied, the tree stays unchanged, and the test passes without exercising the change it was added for. Round 14 raised this half, and neither plan states it or rejects it.",
+      "fix": "Either drop `denyWrite` on the pinned tree for sandboxed trusted verifiers and keep it only on the git common dir, or give them a writable per-verifier build/temp dir (`CARGO_TARGET_DIR` and the like). Otherwise, state in §3 and in the run header that sandboxed verifiers only read, and remove the build premise from §7 for them. Tie the build test to the unsandboxed case.",
+      "sources": [
+        "risk",
+        "fit",
+        "scope"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "scope-2",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 1132,
+      "end_line": 1145,
+      "severity": "major",
+      "title": "H6's managed worktree paths collide between repos with the same basename and fall outside discovery, so \"the sidebar shows managed worktrees\" fails, and no H6 test covers it",
+      "body": "H6 Work 1 places worktrees at `<folder>/worktrees/<repo>/<branch>`, or at `data/worktrees/<repo>/<branch>` when the workspace folder is itself a repo.\n\n- **Name collisions.** `<repo>` is the folder's basename (`discovery.rs:38`). `~/work/api` and `~/oss/api` both map to `data/worktrees/api/<branch>`, so a second worktree for a common branch is refused, or it reuses the other repo's worktree.\n- **Outside discovery.** The sidebar finds linked worktrees only through discovery (`worktree_of`), which walks workspace folders to `DEPTH = 3`. `data/worktrees/` is under no workspace folder, so discovery never sees it. Under `<folder>/worktrees/`, a branch with `/` (`feature/x`) or a nested repo name like `a/api` lands at depth 4, so discovery misses it too.\n\nH6 Work 4 promises \"the sidebar shows managed worktrees\" but gives no mechanism. H6's tests cover neither case and do not test the repo-folder rule that round 14 asked for.",
+      "fix": "Key `data/worktrees/` by a unique repo id (name plus a short hash of its path), and flatten `/` in branch names (to `-`, as `wt` does). Alternatively, list managed worktrees from `git worktree list` instead of discovery. Add H6 tests: a single-repo workspace folder gets its worktree under `data/worktrees/` with a clean `git status`, and a `feature/x` worktree shows in the sidebar in both layouts.",
+      "sources": [
+        "scope",
+        "risk",
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "fit-1",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 318,
+      "end_line": 330,
+      "severity": "major",
+      "title": "In WSL the probe's loopback responder runs on the Windows host, where the distro cannot reach it, so \"WSL ready\" can never pass in NAT mode",
+      "body": "The probe is one turn through the real adapter and the user's `claude`, against \"a small loopback responder that ships in the product\" (§5:319-322), and it is part of \"WSL ready\" (§5:329-330). Under WSL, the adapter and `claude` run inside the distro, while the responder runs in the Windows app.\n\nSpike 0b row 12 measured this setup. The Windows host's `127.0.0.1` cannot be reached from WSL, and the CLI retried until the 150 s timeout. The plan routes only the host's MCP/HTTP tool through the gateway address and its firewall rule (§5:367-373). It never names the responder, and the distro holds no responder of its own.\n\nAs written, every Windows probe hangs and fails, \"WSL ready\" never holds, and every untrusted review on Windows is blocked. The plan never says that P2's Windows CI runs the probe in the WSL job.",
+      "fix": "State that under WSL the responder listens on the gateway address beside the tool server, behind the same `Host` check and covered by the same firewall rule. Order \"WSL ready\" so the firewall check runs before the probe. Add a P2 WSL test: the probe passes in NAT mode.",
+      "sources": [
+        "fit",
+        "risk"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "scope-3",
+      "file": "PLAN-PANELS.md",
+      "line": 134,
+      "end_line": 139,
+      "severity": "minor",
+      "title": "\"No network section, so every host is allowed\" contradicts spike 0b, and the promised network \"P2 check\" is not among P2's tests",
+      "body": "§3 says sandboxed trusted verifiers get \"no `network` section, so every host is allowed\". The next sentence calls the behavior of an unlisted host under `bypassPermissions` \"a P2 check\".\n\nSpike 0b row 3 (`ANSWERS-0b.md:121`) found that without `strictAllowlist`, an unlisted host becomes a `session/request_permission`. §3:133 has the host deny every verifier request. The likely result is therefore the opposite of the claim:\n- sandboxed verifiers on macOS and Linux have no network, so `cargo fetch` and `npm ci` fail and the run fills with denial notes;\n- unsandboxed verifiers on Windows have full network.\n\nP2's test list (PANELS:567-578) has no verifier network test, so the check is never done. Round 14 raised this, and it is still only half closed.",
+      "fix": "Replace \"so every host is allowed\" with wording marking it unverified. Add a P2 real-adapter test: a sandboxed verifier's call to an unlisted host either succeeds without a request or is denied and noted. Then state in §3 which outcome the plan wants.",
+      "sources": [
+        "scope",
+        "fit"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "fit-5",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 326,
+      "end_line": 327,
+      "severity": "minor",
+      "title": "A cached \"sandbox ready\" pass survives a reboot or a `claude` self-update, so verifiers keep `failIfUnavailable: true` after the sandbox is gone",
+      "body": "The probe \"runs once per app version and after any change to the sandbox setup, and its result is cached\", and only a failure is retried (§5:326-327). Two changes escape that rule:\n- the 24.04 alternative, `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, which \"holds until reboot\" (§5:335-336);\n- the user's `claude` updating itself (§2:123-124).\n\nAfter either one, the cached pass is stale. Trusted verifiers are still started with `failIfUnavailable: true` (PANELS §3:135-136), so instead of taking the unsandboxed path with the state check, every attempt fails with `sandbox_required_unavailable`, retries run out, and the gate degrades on every trusted run until the next app version. Untrusted participants fail the same way. \"Any change to the sandbox setup\" is undefined, and no test exercises a stale cached pass. Round 14 named the stale pass.",
+      "fix": "Key the cached result on the `claude` version and the boot ID. Treat a `sandbox_required_unavailable` from any participant or verifier as an invalidation that reruns the probe. Add a P2 test: a cached pass followed by a forced unavailable sandbox reruns the probe, and the verifiers take the unsandboxed path.",
+      "sources": [
+        "fit",
+        "risk",
+        "scope"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "fit-6",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 973,
+      "end_line": 975,
+      "severity": "minor",
+      "title": "H4 and P2 require config, data and cache as three separate temp dirs, but H2/§10 give tests no way to separate them",
+      "body": "H4 Work 6 (973-975) and P2 (PANELS:604-605) run every real-adapter test \"with Detached's config, data and cache tiers as three separate temp dirs\". That is round 14's guard against a missing data-tier deny.\n\n§10 (590-592) and H2's test (906-907) fix the opposite: under `DETACHED_CONFIG_DIR`, or the config dir the test fixtures inject, config is that folder \"with `data/` and `cache/` in it\". `paths::config_dir()` has only that one override. On macOS, data nests under config by design. On Windows, the known folders are not driven by env.\n\nNo step adds a way to set the three tiers separately. A coder must either invent a test-only seam in core or fall back to nested tiers, and nested tiers again mask the data-tier deny behind the config-root deny.",
+      "fix": "In H2 Work 1, have `core::store` take the three roots as one injected value, or add test/smoke-only `DETACHED_DATA_DIR`/`DETACHED_CACHE_DIR` overrides. State this in §10 and test that the three can be set independently. Alternatively, limit the rule to Linux via `XDG_*` under a temp `HOME`.",
+      "sources": [
+        "fit",
+        "scope"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "fit-7",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 363,
+      "end_line": 366,
+      "severity": "minor",
+      "title": "The WSL bundle path names no distro-side receiving repo, carries full history, and its `refs/detached/wsl/*` cleanup is not per instance and has no test",
+      "body": "The subject goes into the distro as a `git bundle` of `refs/detached/wsl/<run>`. The ref is deleted after the run and by startup cleanup (§5:301-303, 363-366).\n\n- **Receiving repo.** An export (`read-tree` + `checkout-index`) needs a git dir that holds the objects. Nothing says where the distro-side repo that receives the bundle lives, whether participants can read it, or that run cleanup removes it. A coder may place it outside `<run>/`, where it is never cleaned and grows with each run.\n- **Full history.** A bundle of a ref carries all history reachable from the subject. Every untrusted Windows run on a large repo copies the whole object store into the distro, against the \"exports are cheap\" premise behind starting over (§5:300).\n- **Cleanup scope.** The ref name has no instance part. A second instance on the same repos (the owner's app beside a dev build) can delete the first instance's live ref. The plan also does not say which repos startup scans.\n- **No test.** P2's tests (599-603, 615-619) check only folders. A leftover ref surviving a crash keeps untrusted objects reachable in the owner's repo.",
+      "fix": "Name the ref per instance (`refs/detached/wsl/<instance hash>/<run>`), and clean only this instance's refs in repos that had a WSL run. State that the bundle is fetched into a bare repo at `<run>/git/` in the distro, which is removed with the folder and denied to participants. Alternatively, stream only the tree instead of a history bundle, or state the cost. Add a P2 test: after a run, and after a crash and restart, `refs/detached/wsl/*` is empty.",
+      "sources": [
+        "fit",
+        "risk",
+        "scope"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "risk-6",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 309,
+      "end_line": 314,
+      "severity": "minor",
+      "title": "A workspace root that contains the untrusted root denies the run's own pinned tree, and the refusal rule does not cover that case",
+      "body": "Every workspace root is in the untrusted participant's `denyRead`, deny wins, and there is no nested allow (§5:290-291, 309-311). The run's folder now lives under `<tmp>` (§5:292-295). A workspace root of `/tmp`, `/`, `/var` or any parent of `$TMPDIR` therefore denies the participants' own pinned tree and `CLAUDE_CODE_TMPDIR`, so they can read nothing.\n\nBriefs say finding nothing is a valid answer, so such a run can end as a clean review, or as a gate that says \"ship\". The refusal covers only `$HOME` and roots that contain the config or data tier. P2's refusal test (606-607) checks only those cases. Round 14 raised this, and it is neither fixed nor rejected.",
+      "fix": "Add \"or contains `<untrusted root>`\" to the refusal condition and to P2's refusal test.",
+      "sources": [
+        "risk",
+        "scope"
+      ],
+      "verdict": "confirmed"
+    },
+    {
+      "id": "risk-5",
+      "file": "PLAN-AGENT-HOST.md",
+      "line": 323,
+      "end_line": 324,
+      "severity": "minor",
+      "title": "The probe inherits an untrusted participant's env, including `CLAUDE_CODE_USE_BEDROCK`/`VERTEX`, so the CLI bypasses the responder",
+      "body": "The probe \"runs with the same options an untrusted participant gets\" and adds only a dummy key and the responder's base URL (§5:323-324). A participant's env carries the manifest's cloud names when they are set: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `ANTHROPIC_VERTEX_PROJECT_ID` (§2:107).\n\nFor a user on a cloud login, the CLI ignores `ANTHROPIC_BASE_URL` and makes a real, billed call. The reply is not the scripted Bash call, so the probe can never pass. Untrusted reviews then never start, and trusted verifiers always run unsandboxed, even on macOS. fit-5 raised the same env half alongside the staleness issue.",
+      "fix": "Say that the probe's env drops every login, cloud and proxy name of the manifest and sets only the dummy key and the base URL, under a temp `CLAUDE_CONFIG_DIR`.",
+      "sources": [
+        "risk"
+      ],
+      "verdict": "confirmed"
+    }
+  ],
+  "pre_existing": [],
+  "immaterial": [],
+  "stats": {
+    "duration_ms": 624146,
+    "tokens": 6977190
+  }
+}

@@ -7,6 +7,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod os;
+pub mod panel;
 pub mod paths;
 pub mod search;
 #[cfg(unix)]

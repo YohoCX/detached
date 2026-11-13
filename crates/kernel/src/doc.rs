@@ -40,6 +40,11 @@ pub struct DiffDoc {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Doc {
     File(Location),
+    Panel {
+        repo: String,
+        task: String,
+        round: String,
+    },
     Diff(DiffDoc),
     Mr {
         repo: String,
@@ -66,12 +71,13 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 6] = ["file", "diff", "mr", "job", "chat", "terminal"];
+    pub const KINDS: [&str; 7] = ["file", "diff", "mr", "job", "chat", "terminal", "panel"];
 
     /// The name the dock finds this document's behavior by.
     pub fn kind(&self) -> &'static str {
         match self {
             Doc::File(_) => "file",
+            Doc::Panel { .. } => "panel",
             Doc::Diff(_) => "diff",
             Doc::Mr { .. } => "mr",
             Doc::Job { .. } => "job",

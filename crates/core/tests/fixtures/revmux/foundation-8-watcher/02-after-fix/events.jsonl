@@ -1,0 +1,8 @@
+{"kind": "agent_started", "agent": "bugs+impl", "text": "bugs, impl", "at": "2026-11-11T18:01:47.026075+05:00"}
+{"kind": "agent_started", "agent": "adversarial", "text": "adversarial", "at": "2026-11-11T18:01:49.432069+05:00"}
+{"kind": "agent_started", "agent": "arch+quality", "text": "architecture, quality", "at": "2026-11-11T18:01:49.43209+05:00"}
+{"kind": "agent_started", "agent": "docs+tests", "text": "docs, tests, comments", "at": "2026-11-11T18:01:49.432114+05:00"}
+{"kind": "agent_degraded", "agent": "docs+tests", "text": "agent docs+tests exited 1", "at": "2026-11-11T20:20:52.8026+05:00"}
+{"kind": "agent_degraded", "agent": "adversarial", "text": "agent adversarial exited 1", "at": "2026-11-11T20:20:52.807694+05:00"}
+{"kind": "agent_degraded", "agent": "bugs+impl", "text": "agent bugs+impl exited 1", "at": "2026-11-11T20:20:52.842947+05:00"}
+{"kind": "agent_degraded", "agent": "arch+quality", "text": "agent arch+quality exited 1", "at": "2026-11-11T20:20:52.843823+05:00"}

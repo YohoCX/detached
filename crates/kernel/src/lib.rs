@@ -9,6 +9,7 @@ pub mod doc;
 pub mod forge;
 pub mod invalidate;
 pub mod nav;
+pub mod panel;
 pub mod repo;
 pub mod resource;
 pub mod settings;

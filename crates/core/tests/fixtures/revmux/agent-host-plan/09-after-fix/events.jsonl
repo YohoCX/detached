@@ -1,0 +1,9 @@
+{"kind": "agent_started", "agent": "fit", "text": "impl, architecture"}
+{"kind": "agent_started", "agent": "risk", "text": "adversarial, bugs"}
+{"kind": "agent_started", "agent": "scope", "text": "docs, tests"}
+{"kind": "findings", "agent": "fit", "findings": [{"id": "fit-1", "file": "PLAN-AGENT-HOST.md", "line": 253, "end_line": 297, "severity": "major", "sources": ["fit"], "verdict": "", "title": "Platform requirements are missing", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}]}
+{"kind": "agent_done", "agent": "fit", "text": "1 finding"}
+{"kind": "findings", "agent": "scope", "findings": [{"id": "scope-1", "file": "PLAN-PANELS.md", "line": 120, "end_line": 0, "severity": "major", "sources": ["scope"], "verdict": "", "title": "Checkout filters remain enabled", "body": "The plan leaves this requirement unresolved.", "fix": "Specify the requirement in the plan."}]}
+{"kind": "agent_done", "agent": "scope", "text": "1 finding"}
+{"kind": "agent_degraded", "agent": "risk", "text": "claude run stopped: context canceled"}
+{"kind": "agent_started", "agent": "synthesis", "text": "merging 2 findings"}
