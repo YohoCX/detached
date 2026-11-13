@@ -1,7 +1,7 @@
-mod flow;
+pub mod flow;
 mod round;
 mod task;
-mod timeline;
+pub mod timeline;
 
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
 use gpui_kit::{

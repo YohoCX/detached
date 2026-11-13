@@ -427,6 +427,14 @@ fn flow_shows_verified_findings_without_synthesis(cx: &mut TestAppContext) {
     settle(&app);
     assert!(app.find("panel.flow.1.risk-1").is_some());
     assert!(app.find("panel.flow.3.risk-1").is_some());
+    app.update(|w, cx| {
+        w.scroll(
+            "panel.flow.1.risk-1",
+            ScrollDelta::Pixels(point(px(-2000.), px(0.))),
+            cx,
+        )
+    });
+    settle(&app);
     app.click("panel.flow.3.risk-1");
     assert!(app.find("panel.findings").is_some());
     let key = format!(
@@ -627,4 +635,127 @@ fn task_history_truncates_long_row_fields_and_finding_titles(cx: &mut TestAppCon
     assert!(finding.label().unwrap().contains(&title));
     assert!(finding.bounds().right() <= history.right());
     assert!(finding.bounds().size.height < px(60.));
+}
+
+#[test]
+fn flow_layout_anchors_edges_in_adjacent_gutters_and_aligns_verdicts() {
+    use detached_app::panels::flow::layout;
+    use detached_core::panel;
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/revmux");
+    for round in ["agent-host-plan/16-codex"] {
+        let run = panel::import(&fixtures.join(round)).unwrap();
+        for synthesis in [true, false] {
+            let mut run = run.clone();
+            if !synthesis {
+                run.stages.merged_available = false;
+                run.stages.merged.clear();
+                run.stages.outcomes.clear();
+                for lineage in &mut run.stages.lineage {
+                    lineage.merged = None;
+                }
+            }
+            for width in [600., 1800.] {
+                let graph = layout(&run, width);
+                assert!(!graph.edges.is_empty(), "{round}: {:?}", run.warnings);
+                assert!(graph.width >= width);
+                for edge in &graph.edges {
+                    let source = &graph.nodes[edge.source];
+                    let target = &graph.nodes[edge.target];
+                    assert_eq!(edge.from, source.rect.right());
+                    assert_eq!(edge.to, target.rect.left());
+                    assert_eq!(target.column, source.column + 1);
+                    assert!((edge.to.0 - edge.from.0 - 64.).abs() < 0.001);
+                    if target.column == 3 {
+                        assert_eq!(source.rect.y, target.rect.y);
+                        assert_eq!(edge.from.1, edge.to.1);
+                    }
+                }
+                let raw: Vec<_> = graph.nodes.iter().filter(|n| n.column == 1).collect();
+                assert!(raw.windows(2).all(|pair| pair[0].agent <= pair[1].agent));
+                for node in graph.nodes.iter().filter(|n| n.column == 0) {
+                    let name = &run.participants[node.agent.unwrap()].name;
+                    let centers: Vec<_> = raw
+                        .iter()
+                        .filter(|n| n.finding.as_ref().unwrap().sources.contains(name))
+                        .map(|n| n.rect.left().1)
+                        .collect();
+                    if let (Some(first), Some(last)) = (centers.first(), centers.last()) {
+                        assert_eq!(node.rect.left().1, (first + last) / 2.);
+                    }
+                }
+                for node in &graph.nodes {
+                    assert!(node.rect.w >= 240.);
+                    assert!(node.rect.y + node.rect.h <= graph.height);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn timeline_layout_shares_stages_and_keeps_marks_inside_lanes() {
+    use detached_app::panels::timeline::layout;
+    use detached_app::ui::theme::graph::{ROW, TIMELINE_MARK};
+    use detached_core::panel::{self, Event};
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/revmux");
+    let mut run = panel::import(&fixtures.join("agent-host-plan/16-codex")).unwrap();
+    let event = |kind: &str, agent: &str, stage: &str, at: &str| Event {
+        kind: kind.into(),
+        agent: agent.into(),
+        stage: stage.into(),
+        at: at.into(),
+        text: "Finding details".into(),
+    };
+    let name = run.participants[0].name.clone();
+    run.timeline = vec![
+        event("stage", "", "find", "2026-11-13T00:00:00Z"),
+        event("findings", &name, "", "2026-11-13T00:00:00Z"),
+        event("stage", "", "synthesis", "2026-11-13T00:01:58Z"),
+        event("stage", "", "verify", "2026-11-13T00:01:59Z"),
+        event("findings", &name, "", "2026-11-13T00:01:59Z"),
+        event("findings", &name, "", "2026-11-13T00:02:00Z"),
+    ];
+    for width in [400., 600., 1800.] {
+        let data = layout(&run, width, |s| s.chars().count() as f32 * 8.);
+        assert_eq!(
+            data.stages
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["find", "synthesis", "verify"]
+        );
+        assert_ne!(data.stages[1].line, data.stages[2].line);
+        assert_eq!(data.stages[0].duration, 118_000);
+        assert!(data.ticks.len() > 1);
+        assert_eq!(data.ticks[0].label, "0");
+        assert!(
+            data.ticks
+                .windows(2)
+                .all(|t| t[0].elapsed < t[1].elapsed && t[0].x < t[1].x)
+        );
+        assert!(
+            data.ticks
+                .iter()
+                .all(|t| t.x >= data.plot_left && t.x <= data.plot_right)
+        );
+        assert!(data.name_width <= 140.);
+        let lane = data.lanes.iter().find(|l| l.name == name).unwrap();
+        assert_eq!(lane.diamonds.len(), 2);
+        assert_eq!(lane.diamonds[1].events.len(), 2);
+        for lane in &data.lanes {
+            for diamond in &lane.diamonds {
+                assert!(diamond.y - TIMELINE_MARK / 2. >= lane.y);
+                assert!(diamond.y + TIMELINE_MARK / 2. <= lane.y + f32::from(ROW));
+                assert!(diamond.x - TIMELINE_MARK / 2. >= data.name_width);
+                assert!(diamond.x + TIMELINE_MARK / 2. < width);
+            }
+        }
+    }
+    run.timeline.truncate(2);
+    run.timeline
+        .push(event("findings", &name, "", "2026-11-13T00:00:10Z"));
+    let short = layout(&run, 600., |s| s.len() as f32 * 8.);
+    assert!(short.ticks.iter().any(|t| t.label.ends_with('s')));
 }

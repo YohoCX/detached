@@ -547,5 +547,13 @@ pub mod graph {
     pub const DOT: Pixels = px(8.);
     pub const ROW: Pixels = px(64.);
     pub const COLUMN: Pixels = px(210.);
+    pub const FLOW_COLUMN: f32 = 240.;
+    pub const FLOW_GUTTER: f32 = 64.;
+    pub const FLOW_HEADER: f32 = 40.;
+    pub const FLOW_CARD: f32 = 56.;
+    pub const TIMELINE_NAME: f32 = 140.;
+    pub const TIMELINE_LINE: f32 = 22.;
+    pub const TIMELINE_MARK: f32 = 14.;
+    pub const TIMELINE_TICK: f32 = 64.;
     pub const CHART: Pixels = px(150.);
 }
