@@ -107,18 +107,13 @@ impl RunView {
     }
 
     pub fn select(&mut self, f: &Finding, cx: &mut Context<Self>) {
-        if self
-            .rounds
-            .read(cx)
-            .value
-            .as_ref()
-            .and_then(|r| {
-                r.runs
-                    .iter()
-                    .find(|r| r.task == self.task && r.round == self.round)
-            })
-            .is_some_and(|r| r.set_aside.iter().any(|a| a.id == f.id))
-        {
+        let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
+            r.runs
+                .iter()
+                .find(|r| r.task == self.task && r.round == self.round)
+        });
+        let range = run.and_then(|r| r.reviewed_range.clone());
+        if run.is_some_and(|r| r.set_aside.iter().any(|a| a.id == f.id)) {
             self.show_aside = true;
         }
         self.selected = Some(f.id.clone());
@@ -141,12 +136,15 @@ impl RunView {
             }
         );
         self.markdown = Some(cx.new(|cx| Markdown::new(body, links, true, cx)));
+        let (left, right) = range.map_or((Side::Head, Side::Worktree), |(a, b)| {
+            (Side::Rev { rev: a }, Side::Rev { rev: b })
+        });
         let doc = DiffDoc {
             repo: self.repo.clone(),
             path: f.file.clone(),
             orig_path: None,
-            left: Side::Head,
-            right: Side::Worktree,
+            left,
+            right,
         };
         self.diff = Some(cx.new(|cx| {
             let mut d = DiffView::new(doc, DiffOptions::default(), cx);
@@ -158,6 +156,10 @@ impl RunView {
 
     fn findings(&self, run: &Run, cx: &Context<Self>) -> AnyElement {
         let selected = self.selected_data.as_ref();
+        let range_note = run.reviewed_range.as_ref().map_or_else(
+            || "Archive has no pinned revisions. Diff: HEAD → working tree.".into(),
+            |(a, b)| format!("Reviewed range: {a}..{b}"),
+        );
         let row = |f: &Finding| {
             let finding = f.clone();
             let title = f.title.clone();
@@ -306,14 +308,15 @@ impl RunView {
                         .h(theme::graph::CHART * 3.)
                         .child(
                             div()
+                                .id("panel.diff.range")
+                                .test_support()
+                                .aria_label(range_note.clone())
                                 .flex_none()
                                 .min_w_0()
                                 .truncate()
                                 .text_size(text::SMALL)
                                 .text_color(theme(cx).muted)
-                                .child(
-                                    "Archive has no pinned revisions. Diff: HEAD → working tree.",
-                                ),
+                                .child(range_note.clone()),
                         )
                         .child(
                             div()

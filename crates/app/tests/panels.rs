@@ -131,8 +131,66 @@ fn finding_location_opens_a_diff_in_the_run(cx: &mut TestAppContext) {
     });
     app.click("panel.location.bugs+impl-2");
     wait_until(&mut app, |cx| current_line(cx).contains("changed line 228"));
+    assert_eq!(
+        app.find("panel.diff.range").unwrap().label(),
+        Some("Archive has no pinned revisions. Diff: HEAD → working tree.")
+    );
+    assert_eq!(
+        app.find("diff.pill").unwrap().label(),
+        Some("HEAD ↔ Working tree")
+    );
     assert!(app.find("panel.diff").is_some());
     assert!(app.find("panel.run").is_some());
+    switch_diff_modes(&mut app, 229);
+}
+
+#[gpui_kit::test]
+fn finding_diff_shows_the_reviewed_commits(cx: &mut TestAppContext) {
+    let mut range = None;
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let text = (1..=300).map(|i| format!("line {i}\n")).collect::<String>();
+        fs::create_dir_all(repo.join("crates/core/src")).unwrap();
+        let a = sb.commit(&repo, "crates/core/src/watch.rs", &text, "before");
+        let b = sb.commit(
+            &repo,
+            "crates/core/src/watch.rs",
+            &text.replace("line 228\n", "reviewed line 228\n"),
+            "reviewed",
+        );
+        sb.commit(&repo, "crates/core/src/watch.rs", &text, "later");
+        fs::write(repo.join("crates/core/src/watch.rs"), "working tree\n").unwrap();
+        copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+        fs::write(
+            repo.join(".revmux/tasks/foundation-8-watcher/03-after-fix-retry/input/scope.md"),
+            format!("git diff {a}..{b}"),
+        )
+        .unwrap();
+        range = Some((a, b));
+    });
+    let (a, b) = range.unwrap();
+    open_tab(&mut app, "tab.panels");
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
+    wait_until(&mut app, |cx| {
+        cx.find("panel.location.bugs+impl-2").is_some()
+    });
+    app.click("panel.location.bugs+impl-2");
+    wait_until(&mut app, |cx| {
+        current_line(cx).contains("reviewed line 228")
+    });
+    assert_eq!(
+        app.find("panel.diff.range").unwrap().label(),
+        Some(format!("Reviewed range: {a}..{b}").as_str())
+    );
+    assert_eq!(
+        app.find("diff.pill").unwrap().label(),
+        Some(format!("{} ↔ {}", &a[..10], &b[..10]).as_str())
+    );
+    assert_eq!(diff_line(&mut app, "old", 228).as_deref(), Some("line 228"));
+    assert_eq!(
+        diff_line(&mut app, "new", 228).as_deref(),
+        Some("reviewed line 228")
+    );
     switch_diff_modes(&mut app, 229);
 }
 
@@ -453,8 +511,15 @@ fn unchanged_finding_diff_supports_both_modes(cx: &mut TestAppContext) {
         let repo = repo(sb, "reviewed");
         let text = (1..=300).map(|i| format!("line {i}\n")).collect::<String>();
         fs::create_dir_all(repo.join("crates/core/src")).unwrap();
-        sb.commit(&repo, "crates/core/src/watch.rs", &text, "watcher");
+        let a = sb.commit(&repo, "crates/core/src/watch.rs", &text, "watcher");
+        let b = sb.commit(&repo, "unrelated", "change", "unrelated");
+        fs::write(repo.join("crates/core/src/watch.rs"), "working tree\n").unwrap();
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+        fs::write(
+            repo.join(".revmux/tasks/foundation-8-watcher/03-after-fix-retry/input/scope.md"),
+            format!("git diff {a}..{b}"),
+        )
+        .unwrap();
     });
     open_tab(&mut app, "tab.panels");
     open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
