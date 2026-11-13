@@ -13,6 +13,7 @@ use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
 use crate::error::{Error, Result};
+use crate::store::Kind;
 use crate::types::RepoInfo;
 
 /// Events this close to the first of a batch join it.
@@ -219,11 +220,17 @@ impl State {
     }
 
     fn detached(&self, p: &Path) -> bool {
-        if p.components().any(|c| c.as_os_str() == ".detached-trash") {
-            return true;
-        }
         self.repos.iter().any(|d| {
-            p.starts_with(d.git.join("detached")) || p.starts_with(d.common.join("detached"))
+            p.starts_with(d.git.join("detached"))
+                || p.starts_with(d.common.join("detached"))
+                || Kind::ALL.iter().any(|kind| {
+                    p.starts_with(
+                        d.work
+                            .join(".detached")
+                            .join(kind.dir())
+                            .join(".detached-trash"),
+                    )
+                })
         })
     }
 
@@ -509,6 +516,58 @@ mod tests {
 
     fn set(names: &[&str], t: &T) -> BTreeSet<String> {
         names.iter().map(|n| t.path(n)).collect()
+    }
+
+    #[test]
+    fn trash_filter_is_limited_to_store_roots() {
+        let sb = Sandbox::new();
+        let root = sb
+            .dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(".detached-trash/project");
+        fs::create_dir_all(&root).unwrap();
+        let repo = root.display().to_string();
+        let git = root.join(".git");
+        let common = root.join("common");
+        let mut state = State {
+            repos: vec![Dirs {
+                repo: repo.clone(),
+                work: root.clone(),
+                refs: common.join("refs"),
+                git: git.clone(),
+                common: common.clone(),
+            }],
+            current: Current::new(&repo, &common),
+            ..Default::default()
+        };
+        for path in [
+            root.join("file"),
+            root.join("tracked/.detached-trash/file"),
+            root.join(".detached/roles/review.md"),
+            git.join("HEAD"),
+            git.join("index"),
+            common.join("refs/heads/main"),
+        ] {
+            let mut batch = Batch::default();
+            state.mark(&path, EventKind::Any, &mut batch);
+            assert!(batch.repos.contains(&repo), "{}", path.display());
+            let mut batch = Batch::default();
+            state.dropped(&path, &mut batch);
+            assert!(batch.repos.contains(&repo), "{}", path.display());
+        }
+        for path in [
+            git.join("detached/trash/random/item"),
+            common.join("detached/local/roles/review.md"),
+            root.join(".detached/roles/.detached-trash/random/item"),
+        ] {
+            let mut batch = Batch::default();
+            assert!(!state.mark(&path, EventKind::Any, &mut batch));
+            state.dropped(&path, &mut batch);
+            assert!(batch.repos.is_empty(), "{}", path.display());
+            assert!(batch.refs.is_empty());
+        }
     }
 
     #[test]
