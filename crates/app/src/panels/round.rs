@@ -87,13 +87,21 @@ impl RunView {
                         .find(|f| f.id == id)
                 })
                 .cloned();
-            if let Some(f) = f
-                && self.selected_data.as_ref() != Some(&f)
-            {
-                let mode = self.mode;
-                self.select(&f, cx);
-                self.mode = mode;
-                kernel::ui_state::set("panels.mode", mode, cx);
+            match f {
+                Some(f) if self.selected_data.as_ref() != Some(&f) => {
+                    let mode = self.mode;
+                    self.select(&f, cx);
+                    self.mode = mode;
+                    kernel::ui_state::set("panels.mode", mode, cx);
+                }
+                None if self.rounds.read(cx).value.is_some() => {
+                    self.selected = None;
+                    self.selected_data = None;
+                    self.markdown = None;
+                    self.diff = None;
+                    kernel::ui_state::set(&key, Option::<String>::None, cx);
+                }
+                _ => {}
             }
         }
     }

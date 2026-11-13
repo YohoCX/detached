@@ -302,3 +302,87 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
         Some("risk-1".into())
     );
 }
+
+#[gpui_kit::test]
+fn refresh_replaces_a_removed_selection_and_clears_empty_details(cx: &mut TestAppContext) {
+    let write = |repo: &Path, ids: &[&str]| {
+        let dir = repo.join(".revmux/tasks/task/round");
+        fs::create_dir_all(&dir).unwrap();
+        let findings: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "title": id, "body": format!("Body {id}"),
+                    "file": "README.md", "line": 1, "severity": "major"
+                })
+            })
+            .collect();
+        fs::write(
+            dir.join("report.json"),
+            serde_json::json!({"sources": {}, "findings": findings}).to_string(),
+        )
+        .unwrap();
+    };
+    let mut app = open_app_with(cx, |sb| write(&repo(sb, "reviewed"), &["first", "second"]));
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    app.click(("panels.round", 0usize));
+    wait_until(&mut app, |cx| cx.find("panel.finding.second").is_some());
+    app.click("panel.finding.second");
+    let repo = app.sb.path("repos/reviewed");
+    let key = format!("panels.selection.{}.task.round", repo.display());
+    let body = |app: &mut gpui_kit::VisualTestContext, value: &str| {
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            gpui_kit::base::test_support::texts(w)
+                .iter()
+                .any(|t| t.text().contains(value))
+        })
+    };
+    wait_until(&mut app, |cx| body(cx, "Body second"));
+    write(&repo, &["first"]);
+    app.click("panels.refresh");
+    wait_until(&mut app, |cx| {
+        cx.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)) == Some("first".into())
+    });
+    wait_until(&mut app, |cx| body(cx, "Body first"));
+    assert!(!body(&mut app, "Body second"));
+    assert!(app.find("panel.diff").is_some());
+    write(&repo, &[]);
+    app.click("panels.refresh");
+    wait_until(&mut app, |cx| cx.find("panel.diff").is_none());
+    assert!(app.find("markdown").is_none());
+    assert!(!body(&mut app, "Body first"));
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)),
+        None
+    );
+}
+
+#[gpui_kit::test]
+fn flow_shows_verified_findings_without_synthesis(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        copy_round(&repo, "agent-host-plan/16-codex");
+        let dir = repo.join(".revmux/tasks/agent-host-plan/16-codex");
+        fs::remove_file(dir.join("stages/2-synthesized.json")).unwrap();
+    });
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find(("panels.round", 0usize)).is_some());
+    app.click(("panels.round", 0usize));
+    wait_until(&mut app, |cx| cx.find("panel.findings").is_some());
+    app.update(|w, cx| w.within("panel.modes").click(0usize, cx));
+    settle(&app);
+    assert!(app.find("panel.flow.1.risk-1").is_some());
+    assert!(app.find("panel.flow.3.risk-1").is_some());
+    app.click("panel.flow.3.risk-1");
+    assert!(app.find("panel.findings").is_some());
+    let key = format!(
+        "panels.selection.{}.agent-host-plan.16-codex",
+        app.sb.path("repos/reviewed").display()
+    );
+    assert_eq!(
+        app.update(|_, cx| kernel::ui_state::get::<String>(&key, cx)),
+        Some("risk-1".into())
+    );
+}

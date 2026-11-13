@@ -139,9 +139,18 @@ pub fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
                 .unwrap_or(theme(cx).muted),
         });
     }
-    if raw.is_empty() && merged.is_empty() {
+    if !run.stages.merged_available {
         for (i, f) in verified.iter().enumerate() {
             nodes.push(node(f, 3, i, f.verdict.as_deref()));
+        }
+        for l in &run.stages.lineage {
+            if let Some(target) = l.verified {
+                edges.push(Edge {
+                    from: at(1, l.raw),
+                    to: at(3, target),
+                    color: theme(cx).muted,
+                });
+            }
         }
     }
     let rejected = verified

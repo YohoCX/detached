@@ -3,7 +3,6 @@ mod round;
 mod task;
 mod timeline;
 
-use detached_core::panel::Rounds;
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -11,6 +10,7 @@ use gpui_kit::{
     prelude::FluentBuilder,
 };
 use kernel::doc::{DiffDoc, Doc};
+use kernel::panel::Rounds;
 use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 

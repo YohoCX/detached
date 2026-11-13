@@ -1,6 +1,6 @@
 use super::*;
 use crate::ui::graph::{self, Edge};
-use detached_core::panel::{self, ThreadMark};
+use detached_core::panel::ThreadMark;
 use gpui_kit::{Bounds, canvas, fill, point, relative, size};
 
 pub(super) struct TaskDocs;
@@ -52,8 +52,11 @@ impl Render for TaskView {
         content = content.when_some(resource.error.clone(), |d, e| {
             d.child(div().text_color(theme(cx).error).child(e))
         });
-        if let Some(rounds) = &resource.value {
-            let task = panel::task(&rounds.runs, &self.task);
+        if let Some(task) = resource
+            .value
+            .as_ref()
+            .and_then(|r| r.tasks.get(&self.task))
+        {
             let n = task.rounds.len().max(1);
             let max = task
                 .counts
@@ -114,7 +117,7 @@ impl Render for TaskView {
                             |(i, r)| {
                                 div().flex_1().child(format!(
                                     "{} · C{} M{} m{}",
-                                    r.round,
+                                    r,
                                     task.counts[i].critical,
                                     task.counts[i].major,
                                     task.counts[i].minor
@@ -130,16 +133,19 @@ impl Render for TaskView {
                             "Threads use file and title overlap until P3 supplies fingerprints.",
                         ),
                 );
-            content =
-                content.child(
-                    div()
-                        .flex()
-                        .gap(GAP)
-                        .child(div().w(theme::graph::COLUMN).child("Threads"))
-                        .child(div().flex().flex_1().children(task.rounds.iter().map(|r| {
-                            div().flex_1().text_size(text::SMALL).child(r.round.clone())
-                        }))),
-                );
+            content = content.child(
+                div()
+                    .flex()
+                    .gap(GAP)
+                    .child(div().w(theme::graph::COLUMN).child("Threads"))
+                    .child(
+                        div().flex().flex_1().children(
+                            task.rounds
+                                .iter()
+                                .map(|r| div().flex_1().text_size(text::SMALL).child(r.clone())),
+                        ),
+                    ),
+            );
             for (j, thread) in
                 task.threads
                     .iter()
@@ -173,13 +179,13 @@ impl Render for TaskView {
                             ThreadMark::Fixed => "✓ fixed",
                             ThreadMark::Returned => "returned",
                         };
-                        let round = task.rounds[i];
+                        let round = &task.rounds[i];
                         let doc = Doc::Panel {
                             repo: self.repo.clone(),
                             task: self.task.clone(),
-                            round: round.round.clone(),
+                            round: round.clone(),
                         };
-                        let key = selection_key(&self.repo, &self.task, &round.round);
+                        let key = selection_key(&self.repo, &self.task, round);
                         let finding = o.finding.clone();
                         ui::row(
                             SharedString::from(format!("panel.thread.{j}.{i}")),
@@ -187,7 +193,7 @@ impl Render for TaskView {
                             cx,
                         )
                         .test_support()
-                        .aria_label(format!("{} · {} · {label}", thread.title, round.round))
+                        .aria_label(format!("{} · {} · {label}", thread.title, round))
                         .absolute()
                         .left(relative((i as f32 + 0.25) / n as f32))
                         .top(GAP)

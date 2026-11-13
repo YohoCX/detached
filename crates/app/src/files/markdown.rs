@@ -427,19 +427,34 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> String {
     let Ok(root) = markdown::to_mdast(text, &ParseOptions::gfm()) else {
         return text.into();
     };
+    let mut code = vec![];
+    visit(&root, &mut |n| {
+        if let Node::Code(_) | Node::InlineCode(_) = n
+            && let Some(p) = n.position()
+        {
+            code.push(p.start.offset..p.end.offset);
+        }
+    });
+    let dropped: Vec<_> = hidden(text, &code).collect();
+    if !dropped.is_empty() {
+        let (mut visible, mut at) = (String::new(), 0);
+        for range in dropped {
+            visible.push_str(&text[at..range.start]);
+            at = range.end;
+        }
+        visible.push_str(&text[at..]);
+        return prepare(&visible, links, breaks);
+    }
     let mut defs = HashMap::new();
     visit(&root, &mut |n| {
         if let Node::Definition(d) = n {
             defs.entry(d.identifier.clone()).or_insert(d.url.clone());
         }
     });
-    let (mut edits, mut code) = (vec![], vec![]);
+    let mut edits = vec![];
     visit(&root, &mut |n| {
         let Some(p) = n.position() else { return };
         let span = p.start.offset..p.end.offset;
-        if let Node::Code(_) | Node::InlineCode(_) = n {
-            code.push(span.clone());
-        }
         match n {
             Node::Text(_) if breaks => {
                 let lines = text[span.clone()].match_indices('\n');
@@ -460,10 +475,8 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> String {
             _ => {}
         }
     });
-    edits.extend(hidden(text, &code).map(|r| (r, String::new())));
     edits.sort_by_key(|e: &(Range<usize>, String)| e.0.start);
     let (mut out, mut at) = (String::with_capacity(text.len()), 0);
-    // An edit inside a dropped element goes with it.
     for (range, with) in edits {
         if range.start < at {
             continue;
@@ -852,6 +865,23 @@ mod tests {
         assert_eq!(boxes, [Some(true), Some(false)], "the kit draws these");
         let text = rendered(md, cx);
         assert_eq!(text.trim_end(), "done\ntodo", "the boxes are no text");
+    }
+
+    #[test]
+    fn agent_drops_hidden_html_before_escaping() {
+        assert_eq!(prepare("<script>hidden</script>", &Links::Agent, false), "");
+        assert_eq!(
+            prepare(
+                "<div>visible<script>hidden</script></div>",
+                &Links::Agent,
+                false
+            ),
+            "&lt;div&gt;visible&lt;/div&gt;"
+        );
+        assert_eq!(
+            prepare("`<script>hidden</script>`", &Links::Agent, false),
+            "`<script>hidden</script>`"
+        );
     }
 
     #[test]

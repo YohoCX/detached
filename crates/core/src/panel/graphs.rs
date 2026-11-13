@@ -20,6 +20,7 @@ pub struct Stages {
 pub struct Lineage {
     pub raw: usize,
     pub merged: Option<usize>,
+    pub verified: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,19 +52,38 @@ pub fn timestamp(s: &str) -> Option<i64> {
         .map(|t| t.timestamp_millis())
 }
 
-fn title_matches(a: &str, b: &str) -> bool {
-    let tokens = |s: &str| -> BTreeSet<String> {
-        s.split(|c: char| !c.is_alphanumeric())
-            .filter(|s| s.len() > 2)
-            .map(str::to_lowercase)
-            .collect()
-    };
-    let (a, b) = (tokens(a), tokens(b));
-    !a.is_empty() && a.intersection(&b).count() * 2 >= a.len().max(b.len())
+fn tokens(title: &str) -> BTreeSet<String> {
+    title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn title_matches(a: &BTreeSet<String>, b: &BTreeSet<String>) -> bool {
+    !a.is_empty() && a.intersection(b).count() * 2 >= a.len().max(b.len())
 }
 
 pub fn same_finding(a: &Finding, b: &Finding) -> bool {
-    !a.file.is_empty() && a.file == b.file && title_matches(&a.title, &b.title)
+    !a.file.is_empty() && a.file == b.file && title_matches(&tokens(&a.title), &tokens(&b.title))
+}
+
+fn matching(raw: &Finding, findings: &[Finding]) -> Option<usize> {
+    findings
+        .iter()
+        .position(|m| !raw.id.is_empty() && m.id == raw.id)
+        .or_else(|| {
+            findings.iter().position(|m| {
+                raw.sources.iter().any(|s| m.sources.contains(s))
+                    && !raw.file.is_empty()
+                    && raw.file == m.file
+                    && (same_finding(raw, m)
+                        || raw.line > 0
+                            && m.line > 0
+                            && raw.line <= m.end_line.max(m.line).saturating_add(5)
+                            && m.line <= raw.end_line.max(raw.line).saturating_add(5))
+            })
+        })
 }
 
 pub(super) fn read_graphs(path: &Path, run: &mut Run, has_report: bool) {
@@ -109,11 +129,9 @@ pub(super) fn read_graphs(path: &Path, run: &mut Run, has_report: bool) {
             Err(e) => run.warnings.push(format!("{name}: {e}")),
         }
     }
-    if !has_report
-        && run.findings.is_empty()
-        && run.set_aside.is_empty()
-        && run.stages.verified_available
-    {
+    if !has_report && run.stages.verified_available {
+        run.findings.clear();
+        run.set_aside.clear();
         for f in &run.stages.verified {
             if matches!(
                 f.verdict.as_deref(),
@@ -152,24 +170,11 @@ pub(super) fn read_graphs(path: &Path, run: &mut Run, has_report: bool) {
         });
     }
     for (i, raw) in run.stages.raw.iter().enumerate() {
-        let merged = run
-            .stages
-            .merged
-            .iter()
-            .position(|m| !raw.id.is_empty() && m.id == raw.id)
-            .or_else(|| {
-                run.stages.merged.iter().position(|m| {
-                    raw.sources.iter().any(|s| m.sources.contains(s))
-                        && !raw.file.is_empty()
-                        && raw.file == m.file
-                        && (same_finding(raw, m)
-                            || raw.line > 0
-                                && m.line > 0
-                                && raw.line <= m.end_line.max(m.line).saturating_add(5)
-                                && m.line <= raw.end_line.max(raw.line).saturating_add(5))
-                })
-            });
-        run.stages.lineage.push(Lineage { raw: i, merged });
+        run.stages.lineage.push(Lineage {
+            raw: i,
+            merged: matching(raw, &run.stages.merged),
+            verified: matching(raw, &run.stages.verified),
+        });
     }
     let dropped = run
         .stages
@@ -274,13 +279,19 @@ pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
     let mut rounds: Vec<_> = runs.iter().filter(|r| r.task == name).collect();
     rounds.sort_by(|a, b| (a.started_at, &a.round).cmp(&(b.started_at, &b.round)));
     let mut threads: Vec<Thread> = vec![];
-    let mut last: Vec<&Finding> = vec![];
+    let mut last: Vec<(&Finding, BTreeSet<String>)> = vec![];
     for (i, run) in rounds.iter().enumerate() {
         for f in &run.findings {
+            let title = tokens(&f.title);
             let index = last
                 .iter()
                 .enumerate()
-                .filter(|(j, old)| same_finding(old, f) && threads[*j].rounds[i].is_none())
+                .filter(|(j, (old, old_title))| {
+                    !f.file.is_empty()
+                        && old.file == f.file
+                        && title_matches(old_title, &title)
+                        && threads[*j].rounds[i].is_none()
+                })
                 .min_by_key(|(j, _)| {
                     i == 0
                         || !threads[*j].rounds[i - 1]
@@ -301,9 +312,9 @@ pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
                         ThreadMark::Returned
                     },
                 });
-                last[j] = f;
+                last[j] = (f, title);
             } else {
-                let born_after_fix = last.iter().enumerate().any(|(j, old)| {
+                let born_after_fix = last.iter().enumerate().any(|(j, (old, _))| {
                     old.file == f.file
                         && i > 0
                         && threads[j].rounds[i - 1]
@@ -321,7 +332,7 @@ pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
                     rounds: cells,
                     born_after_fix,
                 });
-                last.push(f);
+                last.push((f, title));
             }
         }
         if i > 0 {
@@ -505,6 +516,91 @@ mod tests {
             t.threads[0].rounds[3].as_ref().unwrap().finding.as_deref(),
             Some("a4")
         );
+    }
+
+    #[test]
+    fn verification_replaces_events_without_a_report() {
+        let sb = Sandbox::new();
+        let p = sb.path("task/round");
+        fs::create_dir_all(p.join("stages")).unwrap();
+        let finding = |id: &str, verdict: &str| {
+            serde_json::json!({
+                "id": id, "title": "Boundary check for input", "file": "src/input.rs",
+                "line": 10, "sources": ["fit"], "severity": "major",
+                "body": "original", "verdict": verdict
+            })
+        };
+        let raw = vec![
+            finding("confirmed", ""),
+            finding("refined", ""),
+            finding("rejected", ""),
+        ];
+        fs::write(
+            p.join("events.jsonl"),
+            serde_json::json!({
+                "kind": "findings", "agent": "fit", "at": "2026-11-13T00:00:00Z", "findings": raw
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            p.join("stages/1-found.json"),
+            serde_json::json!({"findings": raw}).to_string(),
+        )
+        .unwrap();
+        let mut refined = finding("refined", "refined");
+        refined["body"] = "refined body".into();
+        refined["severity"] = "minor".into();
+        let verified = serde_json::json!({
+            "findings": [finding("confirmed", "confirmed"), refined],
+            "rejected": [finding("rejected", "")],
+            "pre_existing": [finding("existing", "")],
+            "immaterial": [finding("immaterial", "")]
+        });
+        fs::write(p.join("stages/3-verified.json"), verified.to_string()).unwrap();
+        let r = import(&p).unwrap();
+        assert_eq!(
+            r.findings.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+            ["confirmed", "refined"]
+        );
+        assert_eq!(r.findings[1].body, "refined body");
+        assert_eq!(r.findings[1].verdict.as_deref(), Some("refined"));
+        assert_eq!(
+            r.set_aside
+                .iter()
+                .map(|f| (f.id.as_str(), f.verdict.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("rejected", Some("rejected")),
+                ("existing", Some("pre_existing")),
+                ("immaterial", Some("immaterial"))
+            ]
+        );
+        assert_eq!(
+            r.counts(),
+            Counts {
+                critical: 0,
+                major: 1,
+                minor: 1
+            }
+        );
+        assert_eq!(
+            r.stages
+                .lineage
+                .iter()
+                .map(|l| l.verified)
+                .collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(2)]
+        );
+        let runs = [r];
+        let t = task(&runs, "task");
+        assert_eq!(t.counts, [runs[0].counts()]);
+        assert_eq!(t.threads.len(), 2);
+        fs::write(p.join("stages/3-verified.json"), r#"{"findings":[]}"#).unwrap();
+        let r = import(&p).unwrap();
+        assert!(r.findings.is_empty());
+        assert!(r.set_aside.is_empty());
+        assert_eq!(r.counts(), Counts::default());
     }
 
     #[test]
