@@ -29,6 +29,7 @@ pub enum Icon {
     Next,
     External,
     Search,
+    EyeOff,
     Edit,
     Log,
     Pipeline,
@@ -81,6 +82,9 @@ impl Icon {
             Icon::External => svg16!("M9.5 2.5h4v4M13.5 2.5 8 8M11.5 9.5v4h-9v-9h4"),
             Icon::File => svg16!("M3.5 1.5h6l3 3v10h-9zM9.5 1.5v3h3"),
             Icon::Search => svg16!("M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9M13.5 13.5l-3.3-3.3"),
+            Icon::EyeOff => svg16!(
+                "M2 2l12 12M6 3.8A7 7 0 0 1 8 3.5c4 0 6.5 4.5 6.5 4.5a12 12 0 0 1-2 2.5M10 12.2a7 7 0 0 1-2 .3C4 12.5 1.5 8 1.5 8a12 12 0 0 1 2-2.5M6.5 6.5a2.1 2.1 0 0 0 3 3"
+            ),
             Icon::Edit => svg16!("M10.5 3l2.5 2.5L6 12.5H3.5V10zM9 4.5 11.5 7"),
             Icon::Log => svg16!(
                 "M4 2.5v1M4 6.5v3M4 12.5v1M2.5 5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M2.5 11a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M8 5h5.5M8 11h5.5"

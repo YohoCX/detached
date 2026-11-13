@@ -39,6 +39,7 @@ fn each_page_opens_by_its_id(cx: &mut TestAppContext) {
         ("updates", "settings.updates"),
         ("repository", "settings.removed"),
         ("sharing", "settings.sharing"),
+        ("files", "settings.files"),
     ];
     for (id, page) in pages {
         cx.update(|_, cx| settings::open(cx, id));
@@ -65,6 +66,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Appearance",
         "Keymap",
         "Updates",
+        "Files",
         "Modules",
         "Stub",
         "Current repository",
@@ -75,4 +77,34 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
     assert!(cx.find("stub").is_none());
     cx.click("settings.nav.stub");
     assert!(cx.find("stub").unwrap().visible());
+}
+
+#[gpui_kit::test]
+fn hidden_names_round_trip_through_the_files_page(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    cx.update(|_, cx| settings::open(cx, "files"));
+    settle(cx);
+    cx.click("files.hidden.input");
+    cx.input(".claude");
+    cx.click("files.hidden.add");
+    wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_some());
+    let hidden = || {
+        detached_core::settings::Settings::load(&cx.sb.state.config_dir)
+            .block::<detached_core::git::files::TreeSettings>("files")
+            .unwrap()
+            .hidden
+    };
+    assert_eq!(hidden(), [".claude"]);
+    cx.press("escape");
+    cx.update(|_, cx| settings::open(cx, "files"));
+    wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_some());
+    cx.click("files.hidden.remove.0");
+    wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_none());
+    assert!(
+        detached_core::settings::Settings::load(&cx.sb.state.config_dir)
+            .block::<detached_core::git::files::TreeSettings>("files")
+            .unwrap()
+            .hidden
+            .is_empty()
+    );
 }

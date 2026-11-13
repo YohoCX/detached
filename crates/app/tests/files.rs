@@ -1368,3 +1368,119 @@ fn expansion_and_the_selection_outlive_the_tool(cx: &mut TestAppContext) {
     wait_until(cx, |cx| tree(cx).contains(&"notes.txt".to_string()));
     assert_eq!(tree(cx), ["src", "CHANGELOG.md", "notes.txt", "README.md"]);
 }
+
+#[gpui_kit::test]
+fn ignored_entries_have_a_not_indexed_mark(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        let r = sb.repo("app");
+        sb.commit_files(
+            &r,
+            "ignore dot content",
+            [(".gitignore", ".claude/\n.env\n")],
+        );
+        write(
+            &r,
+            [
+                (".claude/cache/note.log", ""),
+                (".claude/note.log", ""),
+                (".env", ""),
+            ],
+        );
+    });
+    open_tree(cx, "app");
+    wait_until(cx, |cx| tree(cx).contains(&".claude".into()));
+    let marked = |cx: &mut VisualTestContext, name: &str| {
+        let i = tree_row(cx, name).0;
+        cx.update(|w, _| {
+            w.within(("tree.row", i))
+                .try_find("tree.not-indexed")
+                .map(|e| e.label().unwrap_or_default().to_string())
+        })
+    };
+    for name in [".claude", ".env"] {
+        assert_eq!(marked(cx, name).as_deref(), Some("Not indexed"));
+    }
+    assert_eq!(marked(cx, "README.md"), None);
+    click_row(cx, ".claude");
+    wait_until(cx, |cx| tree(cx).contains(&"note.log".into()));
+    for name in ["cache", "note.log"] {
+        assert_eq!(marked(cx, name).as_deref(), Some("Not indexed"));
+    }
+    click_row(cx, "cache");
+    wait_until(cx, |cx| {
+        tree(cx).iter().filter(|n| *n == "note.log").count() == 2
+    });
+    let marks = cx.update(|w, _| w.find_all("tree.not-indexed"));
+    assert_eq!(marks.len(), 5);
+}
+
+#[gpui_kit::test]
+fn ignored_dot_folders_expand_lazily_refresh_and_hide_in_every_repo(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        for name in ["app", "lib"] {
+            let r = sb.repo(name);
+            sb.commit_files(&r, "ignore dot content", [(".gitignore", ".claude/\n")]);
+            write(
+                &r,
+                [
+                    (".claude/worktrees/x/target/debug/big", ""),
+                    (".claude/note.log", ""),
+                ],
+            );
+        }
+    });
+    open_tree(cx, "app");
+    wait_until(cx, |cx| tree(cx).contains(&".claude".into()));
+    let folder = tree_row(cx, ".claude").1;
+    assert_eq!(folder.expanded(), Some(false));
+    assert_eq!(folder.description(), Some("ignored"));
+    assert!(!tree(cx).contains(&"worktrees".into()));
+    click_row(cx, ".claude");
+    wait_until(cx, |cx| tree(cx).contains(&"worktrees".into()));
+    assert_eq!(tree_row(cx, ".claude").1.description(), Some("ignored"));
+    assert_eq!(tree_row(cx, "worktrees").1.expanded(), Some(false));
+    click_row(cx, "worktrees");
+    wait_until(cx, |cx| tree(cx).contains(&"x".into()));
+    click_row(cx, "x");
+    wait_until(cx, |cx| tree(cx).contains(&"target".into()));
+    assert_eq!(tree_row(cx, "target").1.expanded(), Some(false));
+    assert!(!tree(cx).contains(&"debug".into()));
+    write(&cx.sb.repo("app"), [(".claude/new.log", "")]);
+    let repo = cx.sb.repo("app").display().to_string();
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
+    wait_until(cx, |cx| tree(cx).contains(&"new.log".into()));
+    write(&cx.sb.repo("app"), [(".gitignore", "")]);
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
+    wait_until(cx, |cx| {
+        tree_row(cx, "note.log").1.description() == Some("untracked")
+    });
+    write(&cx.sb.repo("app"), [(".gitignore", ".claude/\n")]);
+    cx.update(|_, cx| invalidate::status(cx, &repo).detach());
+    wait_until(cx, |cx| {
+        tree_row(cx, ".claude").1.description() == Some("ignored")
+    });
+    let i = tree_row(cx, ".claude").0;
+    cx.update(|w, cx| w.right_click(("tree.row", i), cx));
+    cx.update(|w, cx| {
+        assert!(detached_app::ui::menu::pick(
+            "Hide '.claude' in every repository",
+            w,
+            cx
+        ))
+    });
+    wait_until(cx, |cx| !tree(cx).contains(&".claude".into()));
+    let lib = cx.sb.repo("lib");
+    make_current(cx, &lib);
+    wait_until(cx, |cx| tree(cx).contains(&"feature.txt".into()));
+    assert!(!tree(cx).contains(&".claude".into()));
+    let saved = detached_core::settings::Settings::load(&cx.sb.state.config_dir);
+    assert_eq!(
+        saved
+            .block::<detached_core::git::files::TreeSettings>("files")
+            .unwrap()
+            .hidden,
+        [".claude"]
+    );
+}

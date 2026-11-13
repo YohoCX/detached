@@ -7,15 +7,15 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::str::Chars;
 
-use detached_core::api;
+use detached_core::git::files::{self as git_files, TreeSettings};
 use detached_core::types::FileEntry;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle,
-    Window, div, prelude::FluentBuilder, px, uniform_list,
+    AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::api::{Location, open};
@@ -67,12 +67,6 @@ const NESTING: [(&str, &[&str]); 13] = [
     ("composer.json", &["composer.lock"]),
 ];
 
-/// Expanded directories and nesting parents per repo for the session, shared by every ref.
-#[derive(Default)]
-struct Expanded(HashMap<String, HashSet<String>>);
-
-impl Global for Expanded {}
-
 #[derive(Default)]
 struct Dir {
     path: String,
@@ -80,6 +74,8 @@ struct Dir {
     dirs: Vec<Dir>,
     files: Vec<FileEntry>,
     dirty: bool,
+    ignored: bool,
+    lazy: bool,
 }
 
 #[derive(Clone)]
@@ -87,6 +83,8 @@ struct Row {
     path: String,
     depth: usize,
     dir: bool,
+    ignored: bool,
+    lazy: bool,
     /// The change's; Modified for a directory or nesting parent with changes below.
     status: Option<Status>,
     open: bool,
@@ -104,6 +102,7 @@ pub struct Tree {
     /// The current repo and the ref its tree browses.
     key: Option<(String, Option<String>)>,
     files: Option<Interest<Dir>>,
+    children: HashMap<String, Interest<Dir>>,
     /// The listing before, of the same repo, shown until the current one loads.
     prev: Option<Entity<Resource<Dir>>>,
     _subscriptions: Vec<Subscription>,
@@ -141,6 +140,7 @@ impl Tree {
             sel: None,
             key: None,
             files: None,
+            children: HashMap::new(),
             prev: None,
             _subscriptions: subscriptions,
         };
@@ -163,6 +163,7 @@ impl Tree {
             .is_some_and(|(a, b)| a.0 == b.0);
         let prev = self.files.take().filter(|f| same && f.loaded(cx).is_some());
         self.prev = prev.map(|f| f.resource().clone());
+        self.children.clear();
         self.key = key;
         let at = self.key.as_ref().and_then(|k| k.1.clone());
         self.field.update(cx, |f, cx| {
@@ -191,22 +192,35 @@ impl Tree {
         let nest = ui_state::get("tree.nesting", cx).unwrap_or(true);
         let nesting = &Settings::get(cx).file_nesting;
         let rules = if nest { rules(nesting) } else { vec![] };
-        let none = HashSet::new();
-        let expanded = cx.try_global::<Expanded>().and_then(|e| e.0.get(repo));
-        flatten(root, expanded.unwrap_or(&none), &rules)
+        let expanded: HashSet<String> =
+            ui_state::get(&format!("tree.expanded.{repo}"), cx).unwrap_or_default();
+        let loaded = self
+            .children
+            .iter()
+            .filter_map(|(path, interest)| {
+                let root = interest.loaded(cx)?.value.as_ref()?;
+                Some((path.as_str(), directory(root, path)?))
+            })
+            .collect();
+        let hidden = Settings::get(cx)
+            .block::<TreeSettings>("files")
+            .unwrap_or_default()
+            .matcher();
+        flatten(root, &expanded, &rules, &loaded, &hidden)
     }
 
     fn expand(&self, path: &str, on: bool, cx: &mut Context<Self>) {
         let Some((repo, _)) = &self.key else {
             return;
         };
-        let set = &mut cx.default_global::<Expanded>().0;
-        let set = set.entry(repo.clone()).or_default();
+        let key = format!("tree.expanded.{repo}");
+        let mut set: HashSet<String> = ui_state::get(&key, cx).unwrap_or_default();
         if on {
             set.insert(path.into());
         } else {
             set.remove(path);
         }
+        ui_state::set(&key, set, cx);
         cx.notify();
     }
 
@@ -339,7 +353,12 @@ impl Tree {
             }
             false => chevron.into_any_element(),
         };
-        let tip: SharedString = r.path.clone().into();
+        const NOT_INDEXED: &str = "Not indexed: ignored by git, so quick open and search skip it";
+        let tip: SharedString = if r.ignored {
+            NOT_INDEXED.into()
+        } else {
+            r.path.clone().into()
+        };
         let row = r.clone();
         ui::list_row(("tree.row", i), on, focused, cx)
             .test_support()
@@ -348,6 +367,25 @@ impl Tree {
             .when_some(r.status, |d, s| {
                 d.aria_description(format!("{s:?}").to_lowercase())
                     .text_color(t.status(s))
+            })
+            .when(r.ignored, |d| {
+                d.text_color(t.muted).aria_description("ignored")
+            })
+            .on_aux_click({
+                let name = name.clone();
+                move |e, window, cx| {
+                    if name.starts_with('.') {
+                        let hidden = name.clone();
+                        ui::Menu::default()
+                            .item(
+                                format!("Hide '{name}' in every repository"),
+                                move |_, cx| {
+                                    super::settings::hide(hidden.clone(), cx);
+                                },
+                            )
+                            .show(e.position(), window, cx);
+                    }
+                }
             })
             .aria_selected(on)
             .when(r.dir || r.kids, |d| d.aria_expanded(r.open))
@@ -369,12 +407,38 @@ impl Tree {
                     .truncate()
                     .child(name),
             )
+            .when(r.ignored, |d| {
+                d.child(
+                    div()
+                        .id("tree.not-indexed")
+                        .test_support()
+                        .aria_label("Not indexed")
+                        .flex()
+                        .flex_none()
+                        .text_color(t.muted)
+                        .tooltip(|window, cx| Tooltip::new(NOT_INDEXED).build(window, cx))
+                        .child(Icon::EyeOff.size(px(12.))),
+                )
+            })
             .into_any_element()
     }
 }
 
 impl Render for Tree {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = self.rows(cx);
+        self.children
+            .retain(|path, _| rows.iter().any(|r| r.path == *path && r.lazy && r.open));
+        for row in rows {
+            if row.lazy
+                && row.open
+                && !self.children.contains_key(&row.path)
+                && let Some((repo, None)) = &self.key
+            {
+                let child = children(cx, repo, &row.path);
+                self.children.insert(row.path, Interest::view(child, cx));
+            }
+        }
         let t = theme(cx);
         let note = |text: String, error: bool| {
             let text: SharedString = text.into();
@@ -387,7 +451,11 @@ impl Render for Tree {
                 .child(text)
                 .into_any_element()
         };
-        let failed = self.listed(cx).and_then(|l| l.error.clone());
+        let failed = self.listed(cx).and_then(|l| l.error.clone()).or_else(|| {
+            self.children
+                .values()
+                .find_map(|c| c.read(cx).error.clone())
+        });
         let body = match (&self.key, failed) {
             (None, _) => note("No repository".into(), false),
             (_, Some(e)) => note(e, true),
@@ -466,7 +534,15 @@ fn files(cx: &mut App, repo: &str, rev: Option<String>) -> Entity<Resource<Dir>>
         };
         let load = move |cx: &App| {
             let (core, repo, rev) = (kernel::core(cx).clone(), r.clone(), rev.clone());
-            move || api::list_files(&core, &repo, rev.as_deref()).map(build_tree)
+            move || {
+                git_files::tree(
+                    &core.env(),
+                    std::path::Path::new(&repo),
+                    rev.as_deref(),
+                    &Default::default(),
+                )
+                .map(build_tree)
+            }
         };
         let files = Resource::new(policy, load);
         match worktree {
@@ -476,12 +552,47 @@ fn files(cx: &mut App, repo: &str, rev: Option<String>) -> Entity<Resource<Dir>>
     })
 }
 
+fn children(cx: &mut App, repo: &str, path: &str) -> Entity<Resource<Dir>> {
+    let key = format!("tree.children\0{repo}\0{path}");
+    let (repo, path) = (repo.to_string(), path.to_string());
+    resource::get(cx, key, || {
+        let on = On::Status(repo.clone());
+        Resource::new(
+            Policy {
+                fresh_for: None,
+                poll: None,
+            },
+            move |_: &App| {
+                let (repo, path) = (repo.clone(), path.clone());
+                move || {
+                    git_files::children(std::path::Path::new(&repo), &path, &Default::default())
+                        .map(build_tree)
+                }
+            },
+        )
+        .on(on)
+    })
+}
+
+fn directory<'a>(root: &'a Dir, path: &str) -> Option<&'a Dir> {
+    if root.path == path {
+        return Some(root);
+    }
+    root.dirs.iter().find_map(|d| directory(d, path))
+}
+
 fn build_tree(entries: Vec<FileEntry>) -> Dir {
     let mut root = Dir::default();
     for e in entries {
         let dirty = e.change.is_some();
         let mut d = &mut root;
-        for name in dir_name(&e.path).split('/').filter(|n| !n.is_empty()) {
+        let folder = e.path.ends_with('/');
+        let parent = if folder {
+            e.path.trim_end_matches('/')
+        } else {
+            dir_name(&e.path)
+        };
+        for name in parent.split('/').filter(|n| !n.is_empty()) {
             d.dirty |= dirty;
             // Paths come sorted, so a directory's entries follow each other.
             let i = match d.dirs.iter().rposition(|s| base_name(&s.path) == name) {
@@ -501,7 +612,12 @@ fn build_tree(entries: Vec<FileEntry>) -> Dir {
             d = &mut d.dirs[i];
         }
         d.dirty |= dirty;
-        d.files.push(e);
+        if folder {
+            d.ignored = e.ignored;
+            d.lazy = e.lazy;
+        } else {
+            d.files.push(e);
+        }
     }
     sort(&mut root);
     root
@@ -543,9 +659,15 @@ fn natural(a: &str, b: &str) -> Ordering {
 }
 
 /// Visible rows: directories first, then files; children of expanded rows only.
-fn flatten(root: &Dir, expanded: &HashSet<String>, rules: &[(&str, Vec<&str>)]) -> Vec<Row> {
+fn flatten(
+    root: &Dir,
+    expanded: &HashSet<String>,
+    rules: &[(&str, Vec<&str>)],
+    loaded: &HashMap<&str, &Dir>,
+    hidden: &impl Fn(&str) -> bool,
+) -> Vec<Row> {
     let mut out = vec![];
-    walk(root, 0, expanded, rules, &mut out);
+    walk(root, 0, expanded, rules, loaded, hidden, &mut out);
     out
 }
 
@@ -554,30 +676,49 @@ fn walk(
     depth: usize,
     expanded: &HashSet<String>,
     rules: &[(&str, Vec<&str>)],
+    loaded: &HashMap<&str, &Dir>,
+    hidden: &impl Fn(&str) -> bool,
     out: &mut Vec<Row>,
 ) {
     let row = |path: &str, status, parent: Option<&str>| Row {
         path: path.into(),
         depth: depth + parent.is_some() as usize,
         dir: false,
+        ignored: false,
+        lazy: false,
         status,
         open: expanded.contains(path),
         kids: false,
         parent: parent.map(String::from),
     };
-    for sub in &d.dirs {
+    for sub in d.dirs.iter().filter(|d| !hidden(&d.path)) {
         out.push(Row {
             dir: true,
+            ignored: sub.ignored,
+            lazy: sub.lazy,
             ..row(&sub.path, sub.dirty.then_some(Status::Modified), None)
         });
         if expanded.contains(&sub.path) {
-            walk(sub, depth + 1, expanded, rules, out);
+            walk(
+                if sub.lazy {
+                    loaded.get(sub.path.as_str()).copied().unwrap_or(sub)
+                } else {
+                    sub
+                },
+                depth + 1,
+                expanded,
+                rules,
+                loaded,
+                hidden,
+                out,
+            );
         }
     }
-    let names: Vec<&str> = d.files.iter().map(|f| base_name(&f.path)).collect();
+    let files: Vec<_> = d.files.iter().filter(|f| !hidden(&f.path)).collect();
+    let names: Vec<&str> = files.iter().map(|f| base_name(&f.path)).collect();
     let parent = nesting(&names, rules);
     let mut nested: HashMap<&str, Vec<&FileEntry>> = HashMap::new();
-    for (f, name) in d.files.iter().zip(&names) {
+    for (f, name) in files.iter().zip(&names) {
         if let Some(&p) = parent.get(name) {
             nested.entry(p).or_default().push(f);
         }
@@ -588,7 +729,7 @@ fn walk(
             .map(status_of)
             .or(dirty.then_some(Status::Modified))
     };
-    for (f, name) in d.files.iter().zip(&names) {
+    for (f, name) in files.iter().zip(&names) {
         if parent.contains_key(name) {
             continue;
         }
@@ -598,13 +739,14 @@ fn walk(
         let open = r.open;
         out.push(Row {
             kids: !kids.is_empty(),
+            ignored: f.ignored,
             ..r
         });
         if open {
-            out.extend(
-                kids.iter()
-                    .map(|k| row(&k.path, status(k, false), Some(&f.path))),
-            );
+            out.extend(kids.iter().map(|k| Row {
+                ignored: k.ignored,
+                ..row(&k.path, status(k, false), Some(&f.path))
+            }));
         }
     }
 }
@@ -649,6 +791,8 @@ mod tests {
 
     fn entry(path: &str, change: Option<char>) -> FileEntry {
         FileEntry {
+            ignored: false,
+            lazy: false,
             path: path.into(),
             change: change.map(|worktree| FileChange {
                 path: path.into(),
@@ -675,10 +819,18 @@ mod tests {
         let tree = build_tree(entries.map(|(p, c)| entry(p, c)).into());
         let paths = |rows: &[Row]| rows.iter().map(|r| r.path.clone()).collect::<Vec<_>>();
         assert_eq!(
-            paths(&flatten(&tree, &open(&[]), &[])),
+            paths(&flatten(&tree, &open(&[]), &[], &HashMap::new(), &|_| {
+                false
+            })),
             ["src", "Cargo.toml", "README.md"]
         );
-        let rows = flatten(&tree, &open(&["src", "src/lib"]), &[]);
+        let rows = flatten(
+            &tree,
+            &open(&["src", "src/lib"]),
+            &[],
+            &HashMap::new(),
+            &|_| false,
+        );
         let depths: Vec<_> = rows.iter().map(|r| (r.path.as_str(), r.depth)).collect();
         assert_eq!(
             depths,
@@ -719,7 +871,7 @@ mod tests {
         let user = BTreeMap::from([(".ts".into(), vec![".spec.ts".into(), ".js".into()])]);
         let rules = rules(&user);
         let rows = |paths: &[&str]| {
-            let rows = flatten(&tree, &open(paths), &rules);
+            let rows = flatten(&tree, &open(paths), &rules, &HashMap::new(), &|_| false);
             rows.into_iter()
                 .map(|r| (r.path, r.depth, r.kids, r.status.is_some()))
                 .collect::<Vec<_>>()
@@ -736,7 +888,33 @@ mod tests {
         );
         let names: Vec<_> = rows(&["a.ts"]).into_iter().take(4).map(|r| r.0).collect();
         assert_eq!(names, ["a.ts", "a.js", "a.js.map", "a.spec.ts"]);
-        assert_eq!(flatten(&tree, &open(&[]), &[]).len(), files.len());
+        assert_eq!(
+            flatten(&tree, &open(&[]), &[], &HashMap::new(), &|_| false).len(),
+            files.len()
+        );
+    }
+
+    #[test]
+    fn hidden_names_filter_before_nesting() {
+        let tree = build_tree(vec![
+            entry("a.ts", None),
+            entry("a.spec.ts", None),
+            entry(".claude/a.ts", None),
+        ]);
+        let settings = TreeSettings {
+            hidden: vec!["a.ts".into(), ".claude".into()],
+        };
+        let rows = flatten(
+            &tree,
+            &open(&[".claude"]),
+            &rules(&BTreeMap::new()),
+            &HashMap::new(),
+            &settings.matcher(),
+        );
+        assert_eq!(
+            rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            ["a.spec.ts"]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! File lists for the tree and quick open, and Open in Zed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -88,9 +88,159 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
                         conflicted: false,
                     }),
             };
-            FileEntry { path, change }
+            FileEntry {
+                path,
+                change,
+                ignored: false,
+                lazy: false,
+            }
         })
         .collect())
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TreeSettings {
+    pub hidden: Vec<String>,
+}
+
+impl TreeSettings {
+    pub fn matcher(&self) -> impl Fn(&str) -> bool + use<> {
+        let patterns: Vec<_> = self
+            .hidden
+            .iter()
+            .filter_map(|pattern| {
+                let mut b = ignore::gitignore::GitignoreBuilder::new("");
+                let pattern = if pattern.starts_with(['!', '#']) {
+                    format!("\\{pattern}")
+                } else {
+                    pattern.clone()
+                };
+                b.add_line(None, &pattern).ok()?;
+                b.build().ok()
+            })
+            .collect();
+        move |path| {
+            patterns
+                .iter()
+                .any(|g| path.split('/').any(|n| g.matched(n, false).is_ignore()))
+        }
+    }
+}
+
+pub fn hide(state: &crate::state::AppState, name: String) -> Result<()> {
+    state.update(|s| {
+        let mut settings = s.block::<TreeSettings>("files").unwrap_or_default();
+        if !settings.hidden.contains(&name) {
+            settings.hidden.push(name);
+        }
+        s.other.insert("files".into(), serde_json::json!(settings));
+    })?;
+    Ok(())
+}
+
+pub fn tree(
+    env: &Env,
+    repo: &Path,
+    rev: Option<&str>,
+    settings: &TreeSettings,
+) -> Result<Vec<FileEntry>> {
+    let hidden = settings.matcher();
+    if rev.is_some() {
+        return Ok(list_files(env, repo, rev)?
+            .into_iter()
+            .filter(|e| !hidden(&e.path))
+            .collect());
+    }
+    let mut entries = list_files(env, repo, None)?;
+    let visible: HashSet<_> = walker(repo)
+        .build()
+        .flatten()
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    fn visit(
+        repo: &Path,
+        dir: &Path,
+        dot: bool,
+        visible: &HashSet<PathBuf>,
+        hidden: &impl Fn(&str) -> bool,
+        entries: &mut Vec<FileEntry>,
+    ) -> Result<()> {
+        for e in std::fs::read_dir(dir)? {
+            let e = e?;
+            let path = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name == ".git" {
+                continue;
+            }
+            let relative = slashed(&path.strip_prefix(repo).unwrap().to_string_lossy());
+            if hidden(&relative) {
+                continue;
+            }
+            let dot = dot || name.starts_with('.');
+            let ignored = !visible.contains(&path);
+            if ignored && !dot {
+                continue;
+            }
+            let is_dir = e.file_type()?.is_dir();
+            if is_dir {
+                entries.push(FileEntry {
+                    path: format!("{relative}/"),
+                    change: None,
+                    ignored,
+                    lazy: ignored,
+                });
+                if !ignored {
+                    visit(repo, &path, dot, visible, hidden, entries)?;
+                }
+            } else if ignored {
+                entries.push(FileEntry {
+                    path: relative,
+                    change: None,
+                    ignored: true,
+                    lazy: false,
+                });
+            }
+        }
+        Ok(())
+    }
+    entries.retain(|e| !hidden(&e.path));
+    visit(repo, repo, false, &visible, &hidden, &mut entries)?;
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
+}
+
+/// One level beneath an ignored folder; descendants stay lazy.
+pub fn children(repo: &Path, dir: &str, settings: &TreeSettings) -> Result<Vec<FileEntry>> {
+    if !Path::new(dir)
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(Error::Other("Invalid tree directory".into()));
+    }
+    let hidden = settings.matcher();
+    let mut entries = vec![];
+    for e in std::fs::read_dir(repo.join(dir))? {
+        let e = e?;
+        let name = e.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let path = format!("{dir}/{}", name.to_string_lossy());
+        if hidden(&path) {
+            continue;
+        }
+        let lazy = e.file_type()?.is_dir();
+        entries.push(FileEntry {
+            path: if lazy { format!("{path}/") } else { path },
+            change: None,
+            ignored: true,
+            lazy,
+        });
+    }
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
 }
 
 /// Starts Zed on `<repo>/<path>[:line]` and returns without waiting for it.
@@ -144,6 +294,122 @@ mod tests {
                 ("new/n.rs", Some('?'))
             ]
         );
+    }
+
+    #[test]
+    fn dot_entries_include_ignored_folders_lazily_and_honor_hidden_names() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        sb.commit(
+            &work,
+            ".gitignore",
+            ".claude/worktrees/\n.revmux/tasks/\ntarget/\n*.log\n",
+            "ignore",
+        );
+        for path in [
+            ".claude/worktrees/x/file",
+            ".revmux/tasks/a.json",
+            ".revmux/notes.md",
+            "target/debug/big",
+            "build.log",
+            ".hidden.log",
+            ".revmux/inside.log",
+        ] {
+            let path = work.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        std::fs::create_dir(work.join(".empty")).unwrap();
+        let env = sb.state.env();
+        let entries = tree(&env, &work, None, &Default::default()).unwrap();
+        for path in [".claude/worktrees/", ".revmux/tasks/"] {
+            let e = entries.iter().find(|e| e.path == path).unwrap();
+            assert!(e.ignored && e.lazy);
+        }
+        let notes = entries
+            .iter()
+            .find(|e| e.path == ".revmux/notes.md")
+            .unwrap();
+        assert!(!notes.ignored);
+        assert_eq!(notes.change.as_ref().unwrap().worktree, '?');
+        assert!(entries.iter().any(|e| e.path == ".empty/"));
+        assert!(entries.iter().any(|e| e.path == ".hidden.log" && e.ignored));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.path == ".revmux/inside.log" && e.ignored)
+        );
+        assert!(!entries.iter().any(|e| e.path.starts_with("target")
+            || e.path == "build.log"
+            || e.path.ends_with("a.json")
+            || e.path == ".claude/worktrees/x/file"));
+        let kids = children(&work, ".claude/worktrees", &Default::default()).unwrap();
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].path, ".claude/worktrees/x/");
+        assert!(kids[0].lazy && kids[0].ignored);
+        let hidden = TreeSettings {
+            hidden: vec![".claude".into(), "*.log".into()],
+        };
+        assert!(
+            tree(&env, &work, None, &hidden)
+                .unwrap()
+                .iter()
+                .all(|e| !e.path.starts_with(".claude") && !e.path.ends_with(".log"))
+        );
+        let quick = paths(&env, &work, None).unwrap();
+        assert!(
+            !quick
+                .iter()
+                .any(|p| p.contains("worktrees") || p.contains("tasks") || p.ends_with(".log"))
+        );
+        hide(&sb.state, ".claude".into()).unwrap();
+        hide(&sb.state, ".claude".into()).unwrap();
+        assert_eq!(
+            crate::settings::Settings::load(&sb.state.config_dir)
+                .block::<TreeSettings>("files")
+                .unwrap()
+                .hidden,
+            [".claude"]
+        );
+    }
+
+    #[test]
+    fn dot_entries_work_in_linked_worktrees_and_nested_repositories() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        sb.commit(&work, ".gitignore", ".cache/\n", "ignore");
+        let linked = sb.path("linked");
+        sb.git(
+            &work,
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
+        );
+        sb.git(&linked, &["clone", "-q", work.to_str().unwrap(), "nested"]);
+        for path in [".cache/a", "nested/.cache/a"] {
+            let path = linked.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let entries = tree(&sb.state.env(), &linked, None, &Default::default()).unwrap();
+        for path in [".cache/", "nested/.cache/"] {
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.path == path && e.ignored && e.lazy)
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.path == "nested/f"
+                    && e.change.as_ref().is_some_and(|c| c.worktree == '?'))
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| !e.path.split('/').any(|n| n == ".git"))
+        );
+        let old: FileEntry = serde_json::from_str(r#"{"path":"f","change":null}"#).unwrap();
+        assert!(!old.ignored && !old.lazy);
     }
 
     #[test]

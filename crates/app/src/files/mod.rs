@@ -7,6 +7,7 @@ mod diff;
 mod file;
 mod goto;
 mod markdown;
+mod settings;
 mod tree;
 mod viewer;
 
@@ -22,6 +23,13 @@ use tree::Tree;
 use viewer::ViewerDocs;
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
+    crate::settings::register_page(
+        cx,
+        "files",
+        "Files",
+        crate::settings::Group::App,
+        settings::page,
+    );
     let changes = AppSpec {
         name: "changes",
         id: "tool.Changes",

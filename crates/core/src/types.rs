@@ -261,6 +261,10 @@ pub struct FileDiff {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub lazy: bool,
     pub path: String,
     /// Working tree only: the change, if any.
     pub change: Option<FileChange>,
