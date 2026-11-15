@@ -9,7 +9,8 @@
 //! - `env` says the names in its env; `meta` the `_meta` its session got; `model` its model;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `write <path> <text>` writes a file under the cwd;
-//! - `out-of-usage` fails the prompt as Claude does when extra usage has run out.
+//! - `out-of-usage` fails the prompt as Claude does when extra usage has run out;
+//! - `hold-close` answers the session's close only once the next prompt, of any session, comes.
 //!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
@@ -38,6 +39,7 @@ struct Session {
     meta: Value,
     model: String,
     mode: String,
+    hold_close: bool,
 }
 
 fn main() {
@@ -70,6 +72,7 @@ fn main() {
         .and_then(|e| Some(e.parent()?.file_name()?.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let mut next = 0;
+    let mut held = None;
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
@@ -117,6 +120,7 @@ fn main() {
                     meta: params["_meta"].clone(),
                     model: asked("model").unwrap_or(fallback.into()),
                     mode: asked("mode").unwrap_or("auto".into()),
+                    hold_close: false,
                 };
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
@@ -138,8 +142,10 @@ fn main() {
                     replies.remove(&rid);
                     let _ = turn.join();
                 }
-                sessions.lock().unwrap().remove(sid);
-                reply(json!({}));
+                match sessions.lock().unwrap().remove(sid) {
+                    Some(s) if s.hold_close => held = Some(id.clone()),
+                    _ => reply(json!({})),
+                }
             }
             "session/cancel" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
@@ -148,6 +154,9 @@ fn main() {
                 }
             }
             "session/prompt" => {
+                if let Some(id) = held.take() {
+                    send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+                }
                 let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
                 let text = params["prompt"][0]["text"]
                     .as_str()
@@ -342,6 +351,10 @@ impl Turn<'_> {
                 self.say(&names.join(","));
             }
             "meta" => self.say(&self.session(|s| s.meta.to_string())),
+            "hold-close" => {
+                let mut all = self.sessions.lock().unwrap();
+                all.get_mut(self.sid).unwrap().hold_close = true;
+            }
             "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
             "api" => self.say(&api().map_err(err)?),
             "write" => {

@@ -269,6 +269,27 @@ fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(cx: &mut T
 }
 
 #[gpui::test]
+fn a_load_of_a_closing_session_waits_for_its_close(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let other = open(&f, Kind::Chat, cx);
+    let s = open(&f, Kind::Chat, cx);
+    turn(&s, "hold-close", cx);
+    let id = s.read_with(cx, |s, _| s.id.clone());
+    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let loaded = cx.update(|cx| {
+        s.update(cx, |s, cx| s.end(cx));
+        Session::open(spec, id, cx)
+    });
+    // The fake answers the close only on this prompt.
+    assert_eq!(turn(&other, "say ping", cx), "ping");
+    wait_until(cx, |cx| loaded.read(cx).state != State::Starting);
+    let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
+    loaded.read_with(cx, |s, _| assert_eq!(s.items, replay));
+    assert_eq!(turn(&loaded, "say again", cx), "again");
+    assert!(cx.read(|cx| cx.global::<Sessions>().early.is_empty()));
+}
+
+#[gpui::test]
 fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let (a, b) = (open(&f, Kind::Chat, cx), open(&f, Kind::Untrusted, cx));

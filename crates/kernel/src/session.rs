@@ -4,7 +4,7 @@
 //! One adapter process serves every session of its provider and version; a new version starts
 //! its own while the old one finishes its sessions, and the last session to go closes it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -218,6 +218,7 @@ struct Live {
 struct Open {
     live: Arc<Live>,
     id: String,
+    closing: Closing,
 }
 
 impl Open {
@@ -228,6 +229,7 @@ impl Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
+        self.closing.lock().unwrap().insert(self.key());
         self.live.adapter.close_session(&self.id);
     }
 }
@@ -235,9 +237,15 @@ impl Drop for Open {
 /// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
 type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
 
+/// Sessions whose close is not answered yet; an `Open` may drop off the UI thread.
+type Closing = Arc<Mutex<HashSet<(u64, String)>>>;
+
 struct Sessions {
     tx: mpsc::UnboundedSender<(u64, Event)>,
     adapters: Adapters,
+    closing: Closing,
+    /// Loads of a closing session's id, which start once its `Closed` is handled.
+    waiting: Vec<WeakEntity<Session>>,
     /// Kept after a session ends until its `Closed`, so its late events go.
     by_id: HashMap<(u64, String), WeakEntity<Session>>,
     /// What came for a session before its start returned, as a load's replay.
@@ -251,6 +259,8 @@ pub(crate) fn init(cx: &mut App) {
     cx.set_global(Sessions {
         tx,
         adapters: Default::default(),
+        closing: Default::default(),
+        waiting: vec![],
         by_id: HashMap::new(),
         early: HashMap::new(),
     });
@@ -269,21 +279,28 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
     let sid = match &e {
         Event::Update(s, _) | Event::Ask(s, ..) | Event::Ended(s, _) => s.clone(),
         Event::Closed(s) => {
-            let g = cx.global_mut::<Sessions>();
             let key = (serial, s.clone());
-            g.by_id.remove(&key);
-            g.early.remove(&key);
-            return;
+            let g = cx.global::<Sessions>();
+            g.closing.lock().unwrap().remove(&key);
+            // Only the closed session's entry: a reload may hold the key by now.
+            let on = g.by_id.get(&key).and_then(WeakEntity::upgrade);
+            if on.is_none_or(|s| s.read(cx).open.is_none()) {
+                let g = cx.global_mut::<Sessions>();
+                g.by_id.remove(&key);
+                g.early.remove(&key);
+            }
+            return wake(cx);
         }
         Event::Exited(x) => {
             let g = cx.global_mut::<Sessions>();
             g.early.retain(|k, _| k.0 != serial);
+            g.closing.lock().unwrap().retain(|k| k.0 != serial);
             let on: Vec<_> = g.by_id.extract_if(|k, _| k.0 == serial).collect();
             let said = crashed(x);
             for s in on.into_iter().filter_map(|(_, w)| w.upgrade()) {
                 s.update(cx, |s, cx| s.exited(said.clone(), cx));
             }
-            return;
+            return wake(cx);
         }
     };
     let g = cx.global_mut::<Sessions>();
@@ -293,6 +310,14 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
         // Its entity is gone; a dropped ask answers cancelled.
         Some(None) => {}
         None => g.early.entry(key).or_default().push(e),
+    }
+}
+
+/// Starts the loads that waited for a close; one whose close is still pending waits on.
+fn wake(cx: &mut App) {
+    let waiting = std::mem::take(&mut cx.global_mut::<Sessions>().waiting);
+    for s in waiting.iter().filter_map(WeakEntity::upgrade) {
+        s.update(cx, |s, cx| s.start(cx));
     }
 }
 
@@ -334,19 +359,28 @@ impl Session {
                 _watch: None,
                 _tasks: vec![],
             };
-            s.start(past, cx);
+            s.start(cx);
             s
         })
     }
 
-    fn start(&mut self, past: Option<String>, cx: &mut Context<Self>) {
-        let core = crate::core(cx).clone();
-        let g = cx.global::<Sessions>();
-        let (adapters, tx) = (g.adapters.clone(), g.tx.clone());
+    /// Starts or loads the session; a load of an id still closing waits for its `Closed`, so the
+    /// close's answer cannot follow the load's.
+    fn start(&mut self, cx: &mut Context<Self>) {
+        if self.state != State::Starting {
+            return;
+        }
+        let (core, me, past) = (crate::core(cx).clone(), cx.weak_entity(), self.id.clone());
+        let g = cx.global_mut::<Sessions>();
+        let closing = |id: &String| g.closing.lock().unwrap().iter().any(|k| k.1 == *id);
+        if past.as_ref().is_some_and(closing) {
+            return g.waiting.push(me);
+        }
+        let (adapters, closing, tx) = (g.adapters.clone(), g.closing.clone(), g.tx.clone());
         let spec = self.spec.clone();
         let (changed, mut changes) = mpsc::unbounded();
         let started = blocking::run(cx, move || {
-            let started = start(&core, &spec, past, &adapters, tx);
+            let started = start(&core, &spec, past, &adapters, closing, tx);
             let watched = |mut s: Started| {
                 let tree = Path::new(&spec.repo);
                 let watch = trust::watch(tree, spec.provider.trust, move || {
@@ -768,6 +802,7 @@ fn start(
     spec: &Spec,
     past: Option<String>,
     adapters: &Adapters,
+    closing: Closing,
     tx: mpsc::UnboundedSender<(u64, Event)>,
 ) -> Result<Started> {
     let p = spec.provider;
@@ -846,6 +881,7 @@ fn start(
         open: Open {
             live,
             id: opened.id,
+            closing,
         },
         config: opened.config,
         trust: project.fingerprint,
