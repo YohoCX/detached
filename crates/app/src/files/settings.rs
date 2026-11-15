@@ -93,14 +93,16 @@ impl Render for Page {
                         cx,
                         |this, _, cx| {
                             let name = this.input.read(cx).value().trim().to_string();
-                            if let Err(e) = files::rule(&name) {
-                                this.error = Some(e.to_string());
-                                cx.notify();
-                            } else if !name.is_empty() && !this.settings.hidden.contains(&name) {
+                            this.error = files::rule(&name).err().map(|e| e.to_string());
+                            if this.error.is_none()
+                                && !name.is_empty()
+                                && !this.settings.hidden.contains(&name)
+                            {
                                 let mut settings = this.settings.clone();
                                 settings.hidden.push(name);
                                 this.save(settings, cx);
                             }
+                            cx.notify();
                         },
                     )),
             );

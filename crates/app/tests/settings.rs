@@ -105,6 +105,11 @@ fn hidden_names_round_trip_through_the_files_page(cx: &mut TestAppContext) {
     assert!(error.is_some_and(|e| e.contains("[z-a]")));
     settle(cx);
     assert_eq!(hidden(), [".claude"]);
+    cx.click("files.hidden.input");
+    cx.press("secondary-a");
+    cx.input(".claude");
+    cx.click("files.hidden.add");
+    assert!(cx.find("files.hidden.error").is_none());
     cx.press("escape");
     cx.update(|_, cx| settings::open(cx, "files"));
     wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_some());

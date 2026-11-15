@@ -118,6 +118,9 @@ impl TreeSettings {
 
 /// A hidden name as a gitignore line, where `!` and `#` start a name, not a negation or comment.
 pub fn rule(pattern: &str) -> Result<Gitignore> {
+    if pattern.contains('/') {
+        return Err(Error::Other(format!("'{pattern}': a name, not a path")));
+    }
     let mut b = GitignoreBuilder::new("");
     let line = match pattern.starts_with(['!', '#']) {
         true => format!("\\{pattern}"),
@@ -379,7 +382,7 @@ mod tests {
         assert_eq!(saved.hidden, [".claude", r".config\[old\]\ \*"]);
         let hidden = saved.matcher();
         assert!(hidden(".config[old] *") && !hidden(".configo *") && !hidden(".config[old] x"));
-        assert!(rule("[z-a]").is_err() && rule("!a").is_ok());
+        assert!(rule("[z-a]").is_err() && rule("dist/").is_err() && rule("!a").is_ok());
     }
 
     #[test]
