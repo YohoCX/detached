@@ -927,6 +927,16 @@ The owner checks: the Sharing page on a repo and its linked worktree, which see 
 
 ### Step H3. Adapters: install and update
 
+**Status (2026-11-15): items 1–11 are built: `core::adapters` (the catalog, its URL and key, the
+downloader, the cool-down, side-by-side versions, the CLI check, the logins), `kernel::agents`, the
+Agents page, `adapters/` with the pinned bun builds, `adapters.yml` and `make adapters-sign`. The
+tests pass on macOS; the Windows login test and the workflow have not run. Codex shows once
+`"agents": {"codex": true}` is in settings.json. Left for the owner: `make adapters-sign` once to
+make the key, its public half into `CATALOG_KEY`; an `adapters-claude-agent-acp-0.106.0` tag, then
+`make adapters-sign entry=entry.json` and a push to main; Done when on
+`DETACHED_CONFIG_DIR=$(mktemp -d) cargo run -p detached-app`; SmartScreen and Defender on a
+Windows VM.**
+
 Work:
 1. `adapters.json` with its key, serial, `min_app`/`max_app`, per OS, arch and libc `url`, `size`,
    `sha256`.

@@ -110,7 +110,8 @@ Rules from the first line of code:
   running session, so the session also registers a `ConfigChange` hook blocking project, local and skill
   changes, and the host re-hashes at each turn boundary and after its own pull or switch, ending the
   session until the new list is accepted.
-- UI text says "Claude", never "Claude Code".
+- UI text names the provider "Claude Agent" (or "Claude" for short), never "Claude Code"; a scan test
+  holds it (PLAN-AGENT-HOST H3).
 
 Added 2026-11-09, on the owner's look: the bar under the box shows the agent, the provider or plan
 (`accountInfo`) and what is left of the 5-hour and weekly limits, read on open and after each turn;
