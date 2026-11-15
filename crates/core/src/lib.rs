@@ -10,6 +10,7 @@ pub mod git;
 pub mod os;
 pub mod panel;
 pub mod paths;
+pub mod proc;
 pub mod search;
 #[cfg(unix)]
 pub mod selftest;

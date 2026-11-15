@@ -63,6 +63,13 @@ pub struct Provider {
     pub login: &'static [&'static str],
     /// The vendor's installer as typed in a shell: Unix, then Windows.
     pub installer: Option<[&'static str; 2]>,
+    /// Names the CLI to the adapter.
+    pub cli_var: &'static str,
+    /// Passed from the app's env when set: the login, cloud and proxy variables the provider
+    /// documents.
+    pub env: &'static [&'static str],
+    /// The files a session loads only once their items are trusted, as globs from a tree's root.
+    pub trust: &'static [&'static str],
 }
 
 pub static CLAUDE: Provider = Provider {
@@ -76,6 +83,30 @@ pub static CLAUDE: Provider = Provider {
         "curl -fsSL https://claude.ai/install.sh | bash",
         "irm https://claude.ai/install.ps1 | iex",
     ]),
+    cli_var: "CLAUDE_CODE_EXECUTABLE",
+    env: &[
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "CLOUD_ML_REGION",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+    ],
+    trust: &[
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/skills/*/SKILL.md",
+        ".claude/commands/**",
+        ".claude/agents/**",
+        ".mcp.json",
+    ],
 };
 
 pub static CODEX: Provider = Provider {
@@ -86,6 +117,9 @@ pub static CODEX: Provider = Provider {
     min_cli: Version::new(0, 166, 0),
     login: &["codex", "login"],
     installer: None,
+    cli_var: "CODEX_PATH",
+    env: &["CODEX_HOME"],
+    trust: &[".codex/config.toml", ".agents/skills/*/SKILL.md"],
 };
 
 pub static PROVIDERS: [&Provider; 2] = [&CLAUDE, &CODEX];
