@@ -3,7 +3,9 @@
 Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, managed
 worktrees (`git worktree add`/`remove`), and the chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
-  in `proc`, the sidecar's protocol and trust), blocking Rust, no UI types.
+  in `proc`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
+  with `fake_claude`, the scripted CLI the tests run, the sidecar's protocol and trust), blocking
+  Rust, no UI types.
 - `crates/acp`: the ACP client on `agent-client-protocol`, a blocking API whose async deps stay
   inside, and `fake_acp`, the scripted agent the tests run.
 - `crates/kernel`: the app's live state and its exchange as GPUI entities (`blocking`, `ui_state`,
@@ -19,7 +21,8 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
               # (core, unit tests, UI tests)
 make app      # the client at release speed, on the real config directory (the owner's only)
 make ui-test  # the UI tests only; t=repos runs tests/repos.rs alone
-make agent-test  # the real Claude adapter (built with bun) and your `claude` on a fake Messages API
+make agent-test  # your `claude` on a fake Messages API, through the real Claude adapter (built
+                 # with bun) and through the direct backend
 make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
 make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory
@@ -58,6 +61,9 @@ Keep this list in sync with the Makefile.
 - Core owns `settings.json`: `AppState::update` is its only writer, and the kernel's `Settings` is a
   read-only snapshot that a `blocking::run` reloads when core's revision moved. A module keeps its
   own top-level key, a block (`block`, `set_block`); keys a build does not know survive its saves.
+- Nothing above `core::backend` names a provider's protocol: `core::claude` is private and
+  `crates/acp` exports `backend()` alone, `crates/app` does not depend on `detached-acp`, and a source
+  scan in `core::backend`'s tests fails on a protocol word in the kernel or the app.
 - Platform code goes in `core::os` or behind `cfg` in the one place that needs it.
 - The `e2e` feature of core is test-only: never a normal dependency of `crates/app`.
 

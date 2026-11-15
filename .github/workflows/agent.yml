@@ -1,5 +1,6 @@
 # The agent harness on every OS of PLAN-AGENT-HOST §17 (scripts/agent-ci.sh): H4's tests on the fake
-# ACP agent, then the real Claude adapter and the official `claude` on a scripted fake Messages API.
+# ACP agent and the fake CLI, then the official `claude` on a scripted fake Messages API, through the
+# real Claude adapter and through the direct backend.
 # No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
 # agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/.
 name: Agent
@@ -13,6 +14,9 @@ on:
       - crates/core/src/adapters/**
       - crates/core/src/backend.rs
       - crates/core/src/backend/**
+      - crates/core/src/bin/fake_claude.rs
+      - crates/core/src/claude*
+      - crates/core/src/claude/**
       - crates/core/src/env.rs
       - crates/core/src/git/testutil.rs
       - crates/core/src/os.rs

@@ -1321,6 +1321,21 @@ holds the trait and keeps the wait for an id's `Closed`. The fake Messages API i
 adapter's eight and the split halves in `crates/acp`, and `make agent-test` on macOS with `claude`
 2.1.325: the kernel's eight and the AIR test in `crates/acp`. Part 0 and part b are next.**
 
+**Status (2026-11-16): part b's client is built, history and the WSL place aside.** `core::claude`
+behind `backend::direct()`: the spawn under the `sh` leash with every flag again on `--resume`, the
+asks and their keys, the `ConfigChange` block, the host tools on the control channel, §1's close; the
+seam's remaining types but past sessions; `bin/fake_claude.rs`; Claude's `cli` list in the signed
+catalog with the floor in the manifest, as choice 2 recommends; Foundry's names and
+`CLAUDE_CODE_TMPDIR` in the manifest; `backend = "direct"`, and `CLAUDE_ACP`, the test-only manifest,
+for the fake-ACP tests and the adapter's nine. `kernel::Session` lets a turn go on when every trust
+path that moved is one its backend blocks. In `make check`: the seam's ten on both fakes, ACP's own
+six, and Claude's own but history, `--session` and the WSL argv. `make agent-test` on macOS with
+`claude` 2.1.325: H4's seven on the adapter and on the direct backend, the mid-turn settings block
+and a host tool call on the direct one, the adapter's catalog test and the AIR test. Open in part b:
+items 5 and 9 (history, the list and delete, `--session`), 7 (the WSL place), 11 (`agent-vet.yml`),
+and the real `stop_task`, killed-host and history tests; a resumed Claude session shows no history
+until item 5.
+
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
 - **What runs:** `spikes/claude-direct`, made portable: job objects on Windows, and no `ps`,

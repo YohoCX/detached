@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# CI's agent harness on one OS (.github/workflows/agent.yml): H4's tests on the fake ACP agent, then
-# `claude` from Anthropic's installer and the real-adapter tests of `make agent-test`. `claude` is
+# CI's agent harness on one OS (.github/workflows/agent.yml): H4's tests on the fake ACP agent and the
+# fake CLI, then `claude` from Anthropic's installer and the real tests of `make agent-test`, on the
+# adapter and on the direct backend. `claude` is
 # at the version the adapter's SDK pins. VET=1 runs them on each entry of the committed, signed
 # catalog this app accepts instead, each at its min_cli; LATEST=1 takes the newest `claude`.
 set -euo pipefail
@@ -8,7 +9,7 @@ cd "$(dirname "$0")/.."
 
 cargo test -p detached-acp
 cargo test -p detached-kernel --lib session::
-cargo test -p detached-core --lib -- proc:: trust::
+cargo test -p detached-core --lib -- proc:: trust:: backend:: claude::
 ./scripts/adapter-build.sh claude-agent-acp
 
 # Installs `claude` $1 and puts it first on PATH.
