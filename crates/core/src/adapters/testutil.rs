@@ -67,7 +67,11 @@ impl Fixture {
             Member::file("licenses/LICENSE", b"MIT"),
         ];
         members.extend(extra.iter().cloned());
-        let bytes = archive(&members);
+        self.entry_of(name, version, archive(&members))
+    }
+
+    /// An entry like `entry`'s, served from the archive `bytes`.
+    pub fn entry_of(&self, name: &str, version: &str, bytes: Vec<u8>) -> Entry {
         let path = format!("/{name}-{version}.tar.gz");
         let artifact = Artifact {
             url: format!("{}{path}", self.server.base),

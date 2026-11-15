@@ -60,11 +60,20 @@ fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
 /// Runs the executor, letting real time pass for the core threads, until `done` holds.
 #[cfg(test)]
 fn wait_until(cx: &mut gpui::TestAppContext, done: impl Fn(&App) -> bool) {
+    wait_for(cx, std::time::Duration::from_secs(10), done)
+}
+
+#[cfg(test)]
+fn wait_for(
+    cx: &mut gpui::TestAppContext,
+    limit: std::time::Duration,
+    done: impl Fn(&App) -> bool,
+) {
     use std::time::{Duration, Instant};
     cx.executor().allow_parking();
     let start = Instant::now();
     while !cx.read(&done) {
-        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+        assert!(start.elapsed() < limit, "timed out");
         let tick = cx.executor().timer(Duration::from_millis(10));
         cx.foreground_executor().block_test(tick);
     }

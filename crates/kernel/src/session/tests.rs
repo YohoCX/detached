@@ -9,6 +9,8 @@ use gpui::TestAppContext;
 use super::*;
 use crate::wait_until;
 
+mod real;
+
 struct Fixture {
     dir: tempfile::TempDir,
     repo: String,

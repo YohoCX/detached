@@ -149,6 +149,23 @@ pub struct Adapter {
 impl Adapter {
     /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
     pub fn start(spec: &Spec, on_event: impl Fn(Event) + Send + Sync + 'static) -> Result<Adapter> {
+        Adapter::start_as(spec, true, on_event)
+    }
+
+    /// `start` without JetBrains AIR's declaration, for the test that compares the two.
+    #[cfg(feature = "testutil")]
+    pub fn start_without_air(
+        spec: &Spec,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Result<Adapter> {
+        Adapter::start_as(spec, false, on_event)
+    }
+
+    fn start_as(
+        spec: &Spec,
+        air: bool,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Result<Adapter> {
         let mut proc = Proc::spawn(spec)?;
         let pid = proc.pid();
         let (stdin, stdout) = (proc.stdin.take(), proc.stdout.take());
@@ -251,8 +268,8 @@ impl Adapter {
             asked,
             quit: Some(quit),
         };
-        let air = json!({"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}});
-        let caps = ClientCapabilities::new().meta(air.as_object().cloned());
+        let meta = json!({"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}});
+        let caps = ClientCapabilities::new().meta(meta.as_object().cloned().filter(|_| air));
         let init =
             adapter.call(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps));
         let init = init.map_err(|e| fail(e.to_string()))?;
