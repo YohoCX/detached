@@ -73,7 +73,8 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   - **Calls on a backend:**
     - `caps`, below;
     - `open(Spec)` and `resume(Spec, id)`: a session and its one stream of `Event`;
-    - `past(place, folder)` and `delete(place, id)`, with no session open.
+    - `past(place, folder)` and `delete(place, id)`, with no session open;
+    - `probe(place)`: whether an untrusted participant's Bash call runs sandboxed there (§5).
   - **Calls on a session:** `prompt` (text, files, images), `cancel`, `set` (model, effort or
     mode), `stop_task(id)`, `close`. An ask is answered through its own `Reply`.
   - **`Spec` says what a session wants, never how:**
@@ -82,9 +83,11 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       is trusted;
     - model, effort, mode;
     - plugin folders (§11), the host tools' handler (§7);
-    - an isolated kind's denied reads and temp dir (§5).
+    - an isolated kind's denied reads and temp dir (§5);
+    - a run's MCP config file, by its path (PLAN-PANELS §3).
   - **Events:**
-    - `Opened`: the id, the models with each one's effort levels and whether it takes `auto`, the
+    - `Opened`: the id, the agent's version (the CLI's on Claude, the adapter's on ACP), the
+      models with each one's effort levels and whether it takes `auto`, the
       modes, the `/` commands, the account and its pool, and on a resume whether its history
       could be read;
     - `Update`: user text, text, a thought, a `Tool`, the running tasks, usage with its parts and
@@ -93,7 +96,8 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       choices. The answers: allow, reject, cancel, or the questions' answers;
     - `Ended`: a `Turn`, or a failure with its text and, where the host acts on it, its cause
       (out of extra usage, with the pool);
-    - `Closed`, and `Exited` with the code and the end of stderr.
+    - `Closed`, also for an exit the backend asked for, and `Exited` with the code and the end of
+      stderr.
   - **`Tool` carries what the feed shows**, filled by the backend: title, kind, status, an edit's
     line counts, the end of the output, and the raw input. The host shows the raw input and never
     reads a field of it.
@@ -102,9 +106,9 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   - **A resume waits for the same id's `Closed`**, in the kernel: two processes never hold one
     session.
   - **`Caps`** says which optional pieces a backend has (the context breakdown, plan limits, a
-    per-task stop, questions, past sessions, delete, a WSL place) and which trust paths it blocks
-    (§4). The UI hides or states the rest (§2). A session whose CLI lacks a request loses that
-    piece in an update.
+    per-task stop, questions, past sessions, delete, a WSL place, the probe) and which trust
+    paths it blocks (§4). The UI hides or states the rest (§2). A session whose CLI lacks a
+    request loses that piece in an update.
   - **Each backend renders `Spec`.** These names exist only inside it:
 
     | `Spec` | Claude | ACP |
@@ -115,15 +119,21 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     | host tools | `sdkMcpServers` in `initialize` | `mcpServers`, the session's URL (§7) |
     | a new id, a resume | `--session-id`, `--resume` | `session/new`, `session/load` |
     | place | `wsl.exe -d <distro> --` and `WSLENV` | this machine only |
+    | MCP config file | `--mcp-config <path>` | the file's servers in `mcpServers` |
+    | the probe | an untrusted participant's flags; the env without the login, cloud and proxy names, with a dummy key and the responder's `ANTHROPIC_BASE_URL` | none |
   - **Who adds what.**
     - H4c part a moves `acp`'s types of today (`Event`, `Update`, `Tool`, `Ask`, `Reply`, `Turn`,
       `Config`) and the kernel's `Spec` and `Kind`, and adds `Caps`, the rule key and the
-      failure's cause.
+      failure's cause. The version moves onto `Opened`: `kernel::Session` reads it from the
+      adapter's `initialize` today.
     - Part b adds the rest, each with Claude filling it: models, commands, questions and their
       answers, tasks, usage parts, limits, the account, past sessions, the place. They take
       `core::agent`'s shapes of today (`Model`, `SlashCommand`, `Question`, `Task`, `Part`,
       `Limit`, `Past`), which it re-exports until it goes.
     - ACP fills what it has at H13b and lacks the rest. H11 adds nothing to the seam.
+    - P2 adds the MCP config file and `probe`, each with Claude filling it and a fake-CLI test of
+      its argv and env. The responder, the dummy key and the names left out stay inside
+      `core::claude`; the kernel keeps the probe's cache.
   - **Nothing above the seam can name a protocol**: not `kernel::Session`, the chat, panels, host
     tools, trust or the Agents page. Three checks, none a lint an `#[allow]` lifts:
     - **rustc:** `core::claude` is a private module of core, and `crates/acp` exports `backend()`
@@ -206,7 +216,7 @@ What every provider must do; the host holds each row:
 
 | Row | How |
 | --- | --- |
-| Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; Claude's CLI is spawned with it, and an ACP adapter passes its whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
+| Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; Claude's CLI is spawned with it, and an ACP adapter passes its whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_RESOURCE`, `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; Foundry's five are not in the built list and join it at H4c part b; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
 | Dies with the host, no orphan | §1: Claude's close, its leash and its job; an adapter's shutdown |
 | Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one |
 | "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
@@ -231,7 +241,9 @@ own `claude` → Anthropic.
     an older CLI may ignore the sandbox, `strictMcpConfig` or `settingSources`.
 - **Login.**
   - The user runs `claude /login` (or `claude auth login`) in a Detached terminal tab.
-  - Any login type is accepted: subscription, API key, cloud.
+  - Any login type is accepted: subscription, API key, cloud (Bedrock, Vertex, Foundry). A cloud
+    login is switched on by env names alone, so each one's names are in the manifest's list
+    (above).
   - Detached never reads the saved login, passes a token, or sits between the CLI and Anthropic.
     It removes or restricts none of the CLI's login methods.
 - **The interface is Anthropic's own and promised nowhere** (the decision's risks).
@@ -297,7 +309,9 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - **No warning for a `claude` newer than the latest vetting ran on:** it would show for most
     users on most days.
   - **Vetting of an ACP entry** runs on each catalog bump and weekly against the provider's latest
-    CLI, with the same issue and the same hand-signed block.
+    CLI, with the same issue and the same hand-signed block. H13b builds it, for Codex's entry:
+    the built one covers `claude-agent-acp` entries alone and goes at H4c's gate, and no ACP
+    entry is published in between.
   - **Compatibility:** `min_app` and `max_app` per entry, since every app version reads the same
     catalog.
   - **Artifacts:** per OS, arch and libc, a `url`, `size` and `sha256`.
@@ -353,10 +367,12 @@ a session loads none of it.
     `initialize` and answers `block` for `project_settings`, `local_settings` and `skills`, as the
     sidecar does. The CLI keeps what it loaded and the turn goes on. The tree's acceptance is
     stale, and the feed says so.
-  - **The block carries the running turn, no further.** The next turn's start check (§6) finds
-    the stale acceptance and ends the session unsent, as today's chat does: the chat goes on in a
-    new session without the project's settings until the owner accepts. So a change made between
-    turns ends the session at the next prompt, whichever path it is.
+  - **The block carries the running turn, no further.** The turn's end re-hash (§6) finds the
+    moved fingerprint and ends the session there, as `kernel::Session` does today for any path:
+    the chat goes on in a new session without the project's settings until the owner accepts. No
+    prompt is lost to it.
+  - **A change made between turns** ends the session unsent at the next turn's start check (§6),
+    whichever path it is, as today's chat does.
   - **What the CLI does not report still ends the session:** `.claude/commands/**`,
     `.claude/agents/**` and `.mcp.json` have no `ConfigChange` source. So the built rule splits by
     path, not by provider: a backend names the trust paths it blocks (§1), and ACP names none.
@@ -476,10 +492,13 @@ a session loads none of it.
       responder that ships in the product, not test code, modeled on the spike's `fake.rs`. Its one
       reply asks for one Bash call. No model call is made. Under WSL the responder listens on the
       gateway address, behind the firewall rule below.
+    - It is the backend's `probe` (§1), so the responder and every env name below stay inside
+      `core::claude`; the kernel asks and keeps the cache.
     - It runs with the same options an untrusted participant gets. Its env is built from the
       allowlist, as every participant's is: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
-      `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the proxy variables
-      are left out before it sets its own dummy key and the responder's base URL.
+      `CLAUDE_CODE_USE_FOUNDRY` and Foundry's other four names (§2), `ANTHROPIC_BASE_URL`,
+      `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the proxy variables are left out before it
+      sets its own dummy key and the responder's base URL.
     - It passes only if that call ran sandboxed: its write to the cwd is denied.
     - Its result is cached under a key of the app version, `claude --version`, the boot id (or
       uptime) and the sandbox setup. A failure is retried before the next untrusted run. If a
@@ -578,6 +597,8 @@ a session loads none of it.
   - Start, awaited: trust, snapshot, the prompt.
   - End, also awaited: end snapshot, changed files, trust re-hash, one `Changes` item that holds
     restore progress. Snapshot and restore stay core calls.
+  - The end's re-hash ends the session on a moved fingerprint, a change its backend blocked
+    mid-turn included (§4).
 - **Watching.** A session's trees join the watcher's list while it lives.
 - **Activity** shows a running turn as a job; Stop is its cancel.
 - **A new Claude session** gets its id from the host through `--session-id`, before its first
@@ -1326,20 +1347,53 @@ owner says go.
 Work:
 1. `core::backend` (§1): the trait; `Spec` and `Kind`, from the kernel; `acp`'s session types;
    `Caps`, the rule key and the failure's cause.
-2. `crates/acp` implements it. The adapter registry and the rendering of `Spec` (`configOptions`,
-   `_meta`) move inside, and `backend()` is its one export. Its own eight tests in
-   `tests/fake.rs` name `Adapter`, so they become unit tests in the crate.
+2. `crates/acp` implements it. The adapter registry, its demux by session id (the kernel's
+   `dispatch` and `Sessions.early`) and the rendering of `Spec` (`configOptions`, `_meta`) move
+   inside, and `backend()` is its one export. The kernel keeps the wait for an id's `Closed`. Its
+   own eight tests in `tests/fake.rs` name `Adapter`, so they become unit tests in the crate.
 3. `kernel::Session` holds a backend, made by the constructor its manifest names. Its
    always-rules keep keys (§5).
 4. §1's three checks: the one export, the test on `crates/app/Cargo.toml`, the source scan.
 5. `testutil::api`, the fake Messages API, moves to core's `testutil`: both backends' tests use
    it.
+6. `make agent-test` and `scripts/agent-ci.sh` run `cargo test -p detached-acp -- --ignored`
+   beside the kernel's real set, for the AIR test below. `agent.yml`'s paths gain
+   `crates/core/src/backend*` and core's `testutil`.
 
 Tests:
-- the sixteen of `crates/kernel/src/session/tests.rs` pass on the fake ACP agent, asserting what
-  they assert today. One that reaches into what moved (the registry's serial, `_meta`) moves into
-  `crates/acp` with it;
-- the scan fails on a planted word and passes on the tree.
+- **The sixteen of `crates/kernel/src/session/tests.rs`** stay in the kernel, on the fake ACP
+  agent through the seam's calls and events alone. Twelve assert what they assert today. The
+  other four name what moved:
+  - `a_reload_waits_for_a_load_ended_or_dropped_while_it_started` and
+    `a_load_of_a_closing_session_waits_for_its_close` lose their last line,
+    `Sessions.early.is_empty()`, and keep the rest. The line moves into `crates/acp`: after a
+    session's close the backend holds no event for its id;
+  - `a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_anew` builds a
+    `Started` on a dead adapter by hand and compares serials. It splits:
+    - in `crates/acp`: an `open` answered after its adapter exited gives a stream that ends
+      `Exited` with code 3 and the stderr, and the next `open` runs on a new adapter, another
+      pid;
+    - in the kernel: a session whose stream ends `Exited` before `Opened` ends
+      `End::Crashed` with "code 3" in its cause, and the next session opens and runs a turn. The
+      fake dies at `session/new` for it;
+  - `an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly` calls `dispatch` with
+    a serial and an `acp::Exit`. It splits:
+    - in `crates/acp`: one adapter's exit reaches the streams of its own sessions and no other
+      adapter's, and an exit after a shutdown the backend asked for arrives as `Closed`, never
+      `Exited`, whatever its code and stderr;
+    - in the kernel: a session whose adapter exits 1 with stderr after such a shutdown ends
+      `End::Closed` with no `Item::Note`, and a session on another adapter stays `Idle`.
+- `an_old_adapter_keeps_its_sessions_while_a_new_version_starts` reads each version from
+  `Opened`, and the `_meta` test reads what the fake reports back in a turn, as today.
+- **The AIR test** (`the_air_declaration_changes_tool_output_and_nothing_else_seen`, one of the
+  adapter's nine) calls `Adapter::start_without_air` and `Options`. It becomes an ignored unit
+  test in `crates/acp` with its assertions whole, run by item 6. So the nine are eight in the
+  kernel and one in `crates/acp` until the gate.
+- **`crates/acp`'s unit tests find `fake_acp` through `testutil::fake()`**: `CARGO_BIN_EXE_fake_acp`
+  is set for integration tests alone. The module compiles under `cfg(test)` as well as under its
+  feature, so `cargo test -p detached-acp` runs them with no flag.
+- **The scan** fails on a planted word and passes on the tree. It skips `tests.rs` files beside
+  `tests` folders: the `_meta` test holds `settingSources`.
 
 **Part b. Claude's backend.** Sizes are estimates: the client 500 to 700 lines, the fake CLI about
 400, the reader 300 to 400 with its fixtures, the WSL place about 150, the real-login run about
@@ -1348,6 +1402,7 @@ Tests:
 Work:
 1. `core::claude`, private to core behind `core::backend::direct()`:
    - the spawn, `Spec` rendered as §1's table has it, all of it again on `--resume`;
+   - `CLAUDE.env` gains Foundry's five names (§2);
    - the read loop on loose JSON, `initialize`, the asks with their keys (§5);
    - the mapping `sidecars/claude/sidecar.ts`'s `feed` and `on` do today, into the seam's types.
      Its `detail` cut fills the title and nothing else;
@@ -1402,6 +1457,14 @@ Work:
     from the sidecar to `core::claude`.
 13. CLAUDE.md's crate lines, its Rust rule and `make agent-login` (§16). `make agent-test` keeps
     the adapter build until the gate and runs both real sets.
+14. `agent.yml` and `scripts/agent-ci.sh` follow the direct client, or a push that changes it alone
+    runs no real `claude` on any OS:
+    - the workflow's paths gain `crates/core/src/claude*` and `crates/core/src/bin/fake_claude.rs`
+      (part a added the seam's and `testutil`'s);
+    - the script's core filter, `proc:: trust::` today, gains `backend::` and `claude::`: the
+      reader on its fixtures, the close and the leash against the fake's child, the WSL argv, the
+      blocked `claude`;
+    - the Windows job's second run in the product's WSL shape (below).
 
 Tests:
 - in `make check`:
@@ -1418,7 +1481,8 @@ Tests:
     - `a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not`, on a trust path
       the backend does not block;
     - `a_trust_change_before_the_prompt_went_out_ends_the_session_unsent`;
-  - **ACP's own six**, on the fake ACP agent alone:
+  - **ACP's own six**, on the fake ACP agent alone, the first two in the kernel and in
+    `crates/acp` as part a split them:
     - `a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_anew`;
     - `an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly`;
     - `an_adapter_crash_ends_every_session_on_it_with_its_cause`;
@@ -1428,8 +1492,8 @@ Tests:
     - `the_adapter_gets_only_allowed_names_and_reaches_the_api_through_them`;
   - **Claude's own**, on the fake CLI, the first three from its reported argv and env:
     - the env holds only allowlisted and manifest names under a parent env full of others, a
-      `GITHUB_TOKEN` and an env-store value among them, and the CLI reaches the API through
-      `ANTHROPIC_BASE_URL`;
+      `GITHUB_TOKEN` and an env-store value among them, a set `CLAUDE_CODE_USE_FOUNDRY` passes,
+      and the CLI reaches the API through `ANTHROPIC_BASE_URL`;
     - a chat in an untrusted repo gets `--setting-sources user`, in a trusted one
       `user,project,local`; a verifier `user` and `--strict-mcp-config`; an untrusted participant
       `""` and `--strict-mcp-config`. No spawn goes without the flag;
@@ -1446,7 +1510,8 @@ Tests:
       host leaves none (both against the fake's own-group child);
     - a model missing from `initialize.models` is refused by the host;
     - a settings change mid-turn is blocked: the turn goes on, the acceptance is stale, and the
-      next prompt ends the session unsent. A changed command ends it at once;
+      session ends on trust when the turn does. The same change between turns ends it unsent at
+      the next prompt. A changed command ends it at once;
     - history, the list and delete on part 0's fixtures: the long path, the subagent, the
       compaction, the `archived` tag; a file of unknown lines shows "history unavailable";
     - a blocked `claude` and one below the floor, from a locally signed catalog;
@@ -1469,7 +1534,7 @@ Tests:
 **The gate.** In order:
 1. part 0 is answered;
 2. the tests above pass on every OS of §17 and in the product's WSL shape, with the adapter's
-   nine still green beside them;
+   nine still green beside them, eight in the kernel and the AIR test in `crates/acp`;
 3. the owner has run real turns on his own login through `kernel::Session`, with
    `make agent-login`: a tool call and an ask, a turn in `auto`, and the limits, the account and
    its pool printed. Part 0 row 9 saw these from the spike's driver; this sees them through the
@@ -1478,6 +1543,19 @@ Tests:
    `adapters.yml`, Claude's Install button, the AIR declaration and its test, the catalog-entry
    test for Claude, the adapter's nine, the adapter build in `make agent-test` and
    `scripts/agent-ci.sh`, and the adapter in CLAUDE.md's `make agent-test` line.
+   - **CI with it:** `agent.yml` loses the adapter's paths (`adapters/claude-agent-acp/**`,
+     `scripts/adapter-build.sh`) and its bun install; `agent-ci.sh` loses the
+     `-p detached-acp -- --ignored` run and its vetting over `claude-agent-acp` entries (§3).
+   - **H3's install, update, cool-down and rollback tests move to Codex's adapter**, every
+     assertion kept: they are the only tests of what stays for Codex.
+     - `the_agents_page_installs_updates_and_rolls_back_claudes_adapter`
+       (`crates/app/tests/agents.rs`) clicks Codex's row, with `"agents": {"codex": true}` in
+       the test's settings and a `codex-acp` entry in its catalog. Its "Codex stays off" line
+       moves to a start without the setting, and it gains "Claude's row has no Install".
+     - `core::adapters`' and `kernel::agents`' tests take `CODEX.adapter` and `CODEX.id` as
+       their fixture.
+     - None of them moves to part b's test-only manifest, which is Claude's and the session
+       tests' alone.
 
 Done when the chat still runs on the sidecar, a headless Claude session passes the harness on
 every OS of §17 with no adapter, and H4's fake-ACP tests still pass for the seam's second backend.
@@ -1580,7 +1658,8 @@ Tests:
   - the `AskUserQuestion` ask;
   - the `.env` deny;
   - an `allow` with no rule for "Always allow";
-  - a settings change mid-turn keeps the turn, and a changed command ends the chat at once;
+  - a settings change mid-turn keeps the turn and ends the session after it, and a changed
+    command ends the chat at once;
   - the context breakdown;
   - the `min_cli` warning, and the message for a `claude` the client cannot talk to (§2);
   - the label (§2);

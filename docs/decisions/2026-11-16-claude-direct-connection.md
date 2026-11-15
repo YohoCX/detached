@@ -171,7 +171,7 @@ sent.
 | Choices 4 and 5 read as settled | open in PA §1, H3 and H12, in the 2026-11-12 line and above |
 | Vetting at a release tag before 0.6.0 | PA §3: that leg starts at 0.6.0, on the tag's own tests |
 | The adapter build left `make agent-test` before the gate | it goes at the gate's step 4, with CLAUDE.md's line; a test-only manifest keeps the adapter's nine on ACP |
-| H11 missed the chat test §4 inverts | PA §4: the block carries the running turn only, and the next prompt ends the session as today, so that test keeps its assertions |
+| H11 missed the chat test §4 inverts | PA §4: the block carries the running turn only, and the next prompt ends the session as today, so that test keeps its assertions. Later the same day: on `kernel::Session` the turn's end re-hash ends it first; the next prompt ends it only for a change made between turns |
 | "Last vetted" was undefined, and a pinned install may update itself | PA §3: the floor is the vetted version; part 0 row 11 |
 | The terms reason overclaimed, and a quote was cut | "Why" above; D's clause dropped |
 | ANSWERS-0c kept reversed "Then" lines | a superseded line under each of five; part 0 writes `ANSWERS-H4c.md` |

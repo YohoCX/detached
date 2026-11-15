@@ -174,7 +174,7 @@ Every brief says that finding nothing is a valid answer.
     - The repo's MCP servers (from `.mcp.json` and the CLI's per-project entries for the repo's
       path, never the login) go into a 0600 config file in `data/private/<run>/`, which the CLI
       reads by path: the session's `Spec` names the file, and Claude's backend passes
-      `--mcp-config <path>`. Inline servers would put their `env` and `headers` into argv. If the
+      `--mcp-config <path>` (host §1; P2 adds both). Inline servers would put their `env` and `headers` into argv. If the
       CLI cannot take the path, the repo's local MCP servers are left out and the header says so.
     - The host copies `.claude/settings.local.json`, which is gitignored.
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
@@ -528,7 +528,8 @@ Work:
 3. The scheduler: stages, the cap, chat priority, attempts, offline, sleep, back-off.
    - Host §5's shared root/lock: one untrusted run per user across instances, waiters create no
      output; unlock after shutdown/cleanup. Clean crash leftovers under lock; never boot WSL to clean.
-   - The "sandbox ready" probe (host §5) and the Ubuntu 24.04 CI setup (host H4).
+   - The "sandbox ready" probe, a call on the backend (host §1, §5), and the Ubuntu 24.04 CI
+     setup (host H4).
 4. §3's permissions; reviewer `diff`, `log`, `search`: raw revisions, no filters/textconv/external
    diff; read scope and trust scans (host §4, §7).
 5. On Windows:
