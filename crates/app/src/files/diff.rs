@@ -583,15 +583,18 @@ fn parse(d: &DiffDoc, patch: &Result<FilePatch, String>) -> Loaded {
         },
         Ok(FilePatch::Unchanged(text)) if d.orig_path.is_none() && !text.is_empty() => {
             // The kit's unchanged constructor forces one column even in Split mode.
-            let count = text.lines().count();
+            let lines: Vec<_> = text.split_inclusive('\n').collect();
+            let count = lines.len();
             let mut patch = format!(
                 "--- a/{0}\n+++ b/{0}\n@@ -1,{count} +1,{count} @@\n",
                 d.path
             );
-            for line in text.lines() {
+            for line in lines {
                 patch.push(' ');
                 patch.push_str(line);
-                patch.push('\n');
+            }
+            if !text.ends_with('\n') {
+                patch.push_str("\n\\ No newline at end of file\n");
             }
             match DiffFile::parse(&patch) {
                 Ok(files) => Loaded::Diff(

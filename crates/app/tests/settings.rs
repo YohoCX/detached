@@ -88,23 +88,27 @@ fn hidden_names_round_trip_through_the_files_page(cx: &mut TestAppContext) {
     cx.input(".claude");
     cx.click("files.hidden.add");
     wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_some());
+    let dir = cx.sb.state.config_dir.clone();
     let hidden = || {
-        detached_core::settings::Settings::load(&cx.sb.state.config_dir)
+        detached_core::settings::Settings::load(&dir)
             .block::<detached_core::git::files::TreeSettings>("files")
             .unwrap()
             .hidden
     };
+    assert_eq!(hidden(), [".claude"]);
+    cx.click("files.hidden.input");
+    cx.input("[z-a]");
+    cx.click("files.hidden.add");
+    let error = cx
+        .find("files.hidden.error")
+        .and_then(|e| e.label().map(String::from));
+    assert!(error.is_some_and(|e| e.contains("[z-a]")));
+    settle(cx);
     assert_eq!(hidden(), [".claude"]);
     cx.press("escape");
     cx.update(|_, cx| settings::open(cx, "files"));
     wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_some());
     cx.click("files.hidden.remove.0");
     wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_none());
-    assert!(
-        detached_core::settings::Settings::load(&cx.sb.state.config_dir)
-            .block::<detached_core::git::files::TreeSettings>("files")
-            .unwrap()
-            .hidden
-            .is_empty()
-    );
+    assert!(hidden().is_empty());
 }

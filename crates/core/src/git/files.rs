@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::env::{self, Env};
 use crate::error::{Error, Result};
@@ -106,33 +107,40 @@ pub struct TreeSettings {
 
 impl TreeSettings {
     pub fn matcher(&self) -> impl Fn(&str) -> bool + use<> {
-        let patterns: Vec<_> = self
-            .hidden
-            .iter()
-            .filter_map(|pattern| {
-                let mut b = ignore::gitignore::GitignoreBuilder::new("");
-                let pattern = if pattern.starts_with(['!', '#']) {
-                    format!("\\{pattern}")
-                } else {
-                    pattern.clone()
-                };
-                b.add_line(None, &pattern).ok()?;
-                b.build().ok()
-            })
-            .collect();
+        let rules: Vec<_> = self.hidden.iter().filter_map(|p| rule(p).ok()).collect();
         move |path| {
-            patterns
+            rules
                 .iter()
                 .any(|g| path.split('/').any(|n| g.matched(n, false).is_ignore()))
         }
     }
 }
 
-pub fn hide(state: &crate::state::AppState, name: String) -> Result<()> {
+/// A hidden name as a gitignore line, where `!` and `#` start a name, not a negation or comment.
+pub fn rule(pattern: &str) -> Result<Gitignore> {
+    let mut b = GitignoreBuilder::new("");
+    let line = match pattern.starts_with(['!', '#']) {
+        true => format!("\\{pattern}"),
+        false => pattern.to_string(),
+    };
+    let invalid = |e: ignore::Error| Error::Other(e.to_string());
+    b.add_line(None, &line).map_err(invalid)?;
+    b.build().map_err(invalid)
+}
+
+/// Hides the file or folder named `name` in every repository.
+pub fn hide(state: &crate::state::AppState, name: &str) -> Result<()> {
+    let mut pattern = String::new();
+    for c in name.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[' | ']' | '{' | '}' | ' ') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
     state.update(|s| {
         let mut settings = s.block::<TreeSettings>("files").unwrap_or_default();
-        if !settings.hidden.contains(&name) {
-            settings.hidden.push(name);
+        if !settings.hidden.contains(&pattern) {
+            settings.hidden.push(pattern);
         }
         s.other.insert("files".into(), serde_json::json!(settings));
     })?;
@@ -362,15 +370,16 @@ mod tests {
                 .iter()
                 .any(|p| p.contains("worktrees") || p.contains("tasks") || p.ends_with(".log"))
         );
-        hide(&sb.state, ".claude".into()).unwrap();
-        hide(&sb.state, ".claude".into()).unwrap();
-        assert_eq!(
-            crate::settings::Settings::load(&sb.state.config_dir)
-                .block::<TreeSettings>("files")
-                .unwrap()
-                .hidden,
-            [".claude"]
-        );
+        for name in [".claude", ".claude", ".config[old] *"] {
+            hide(&sb.state, name).unwrap();
+        }
+        let saved = crate::settings::Settings::load(&sb.state.config_dir)
+            .block::<TreeSettings>("files")
+            .unwrap();
+        assert_eq!(saved.hidden, [".claude", r".config\[old\]\ \*"]);
+        let hidden = saved.matcher();
+        assert!(hidden(".config[old] *") && !hidden(".configo *") && !hidden(".config[old] x"));
+        assert!(rule("[z-a]").is_err() && rule("!a").is_ok());
     }
 
     #[test]

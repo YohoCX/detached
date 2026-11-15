@@ -2,7 +2,7 @@ use crate::ui::{
     self,
     page::{button, labeled, row, section},
 };
-use detached_core::git::files::TreeSettings;
+use detached_core::git::files::{self, TreeSettings};
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
@@ -28,7 +28,7 @@ pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
 
 pub fn hide(name: String, cx: &mut App) {
     let core = kernel::core(cx).clone();
-    let done = blocking::run(cx, move || detached_core::git::files::hide(&core, name));
+    let done = blocking::run(cx, move || files::hide(&core, &name));
     cx.spawn(async move |cx| {
         if let Err(e) = done.await {
             cx.update(|cx| {
@@ -93,7 +93,10 @@ impl Render for Page {
                         cx,
                         |this, _, cx| {
                             let name = this.input.read(cx).value().trim().to_string();
-                            if !name.is_empty() && !this.settings.hidden.contains(&name) {
+                            if let Err(e) = files::rule(&name) {
+                                this.error = Some(e.to_string());
+                                cx.notify();
+                            } else if !name.is_empty() && !this.settings.hidden.contains(&name) {
                                 let mut settings = this.settings.clone();
                                 settings.hidden.push(name);
                                 this.save(settings, cx);

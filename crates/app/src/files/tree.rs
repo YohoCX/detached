@@ -92,6 +92,8 @@ struct Row {
     kids: bool,
     /// The file it nests under.
     parent: Option<String>,
+    /// Why its folder's listing failed; the row stands in for the folder's children.
+    error: Option<SharedString>,
 }
 
 pub struct Tree {
@@ -198,8 +200,12 @@ impl Tree {
             .children
             .iter()
             .filter_map(|(path, interest)| {
-                let root = interest.loaded(cx)?.value.as_ref()?;
-                Some((path.as_str(), directory(root, path)?))
+                let r = interest.loaded(cx)?;
+                let dir = match &r.error {
+                    Some(e) => Err(e.as_str()),
+                    None => Ok(directory(r.value.as_ref()?, path)?),
+                };
+                Some((path.as_str(), dir))
             })
             .collect();
         let hidden = Settings::get(cx)
@@ -229,7 +235,7 @@ impl Tree {
         self.sel = Some(r.path.clone());
         if r.dir {
             self.expand(&r.path, !r.open, cx);
-        } else if let Some((repo, rev)) = self.key.clone() {
+        } else if let Some((repo, rev)) = self.key.clone().filter(|_| r.error.is_none()) {
             let path = r.path.clone();
             open(
                 cx,
@@ -332,6 +338,17 @@ impl Tree {
     fn row(&self, i: usize, r: &Row, focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let on = self.sel.as_ref() == Some(&r.path);
+        if let Some(e) = &r.error {
+            return ui::list_row(("tree.error", i), on, focused, cx)
+                .test_support()
+                .aria_label(e.clone())
+                .h(px(24.))
+                .pl(px(24. + 16. * r.depth as f32))
+                .pr(px(8.))
+                .text_color(t.error)
+                .child(div().min_w_0().truncate().child(e.clone()))
+                .into_any_element();
+        }
         let name = base_name(&r.path).to_string();
         let chevron = div()
             .flex()
@@ -451,11 +468,7 @@ impl Render for Tree {
                 .child(text)
                 .into_any_element()
         };
-        let failed = self.listed(cx).and_then(|l| l.error.clone()).or_else(|| {
-            self.children
-                .values()
-                .find_map(|c| c.read(cx).error.clone())
-        });
+        let failed = self.listed(cx).and_then(|l| l.error.clone());
         let body = match (&self.key, failed) {
             (None, _) => note("No repository".into(), false),
             (_, Some(e)) => note(e, true),
@@ -663,7 +676,7 @@ fn flatten(
     root: &Dir,
     expanded: &HashSet<String>,
     rules: &[(&str, Vec<&str>)],
-    loaded: &HashMap<&str, &Dir>,
+    loaded: &HashMap<&str, Result<&Dir, &str>>,
     hidden: &impl Fn(&str) -> bool,
 ) -> Vec<Row> {
     let mut out = vec![];
@@ -676,7 +689,7 @@ fn walk(
     depth: usize,
     expanded: &HashSet<String>,
     rules: &[(&str, Vec<&str>)],
-    loaded: &HashMap<&str, &Dir>,
+    loaded: &HashMap<&str, Result<&Dir, &str>>,
     hidden: &impl Fn(&str) -> bool,
     out: &mut Vec<Row>,
 ) {
@@ -690,6 +703,7 @@ fn walk(
         open: expanded.contains(path),
         kids: false,
         parent: parent.map(String::from),
+        error: None,
     };
     for sub in d.dirs.iter().filter(|d| !hidden(&d.path)) {
         out.push(Row {
@@ -698,21 +712,22 @@ fn walk(
             lazy: sub.lazy,
             ..row(&sub.path, sub.dirty.then_some(Status::Modified), None)
         });
-        if expanded.contains(&sub.path) {
-            walk(
-                if sub.lazy {
-                    loaded.get(sub.path.as_str()).copied().unwrap_or(sub)
-                } else {
-                    sub
-                },
-                depth + 1,
-                expanded,
-                rules,
-                loaded,
-                hidden,
-                out,
-            );
+        if !expanded.contains(&sub.path) {
+            continue;
         }
+        let dir = match loaded.get(sub.path.as_str()) {
+            Some(&Ok(d)) if sub.lazy => d,
+            Some(&Err(e)) if sub.lazy => {
+                out.push(Row {
+                    depth: depth + 1,
+                    error: Some(e.to_string().into()),
+                    ..row(&format!("{}/", sub.path), None, None)
+                });
+                continue;
+            }
+            _ => sub,
+        };
+        walk(dir, depth + 1, expanded, rules, loaded, hidden, out);
     }
     let files: Vec<_> = d.files.iter().filter(|f| !hidden(&f.path)).collect();
     let names: Vec<&str> = files.iter().map(|f| base_name(&f.path)).collect();
@@ -914,6 +929,27 @@ mod tests {
         assert_eq!(
             rows.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
             ["a.spec.ts"]
+        );
+    }
+
+    #[test]
+    fn a_failed_folder_load_stays_under_its_folder() {
+        let mut folder = entry(".cache/", None);
+        folder.lazy = true;
+        let tree = build_tree(vec![folder, entry("README.md", None)]);
+        let loaded = HashMap::from([(".cache", Err("Permission denied"))]);
+        let rows = flatten(&tree, &open(&[".cache"]), &[], &loaded, &|_| false);
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|r| (r.path.as_str(), r.depth, r.error.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (".cache", 0, None),
+                (".cache/", 1, Some("Permission denied")),
+                ("README.md", 0, None)
+            ]
         );
     }
 

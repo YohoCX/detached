@@ -166,6 +166,25 @@ fn unified_is_remembered_and_a_forced_side_by_side_ignores_it(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn an_unchanged_file_side_by_side_copies_its_own_line_endings(cx: &mut TestAppContext) {
+    let crlf = "one\r\ntwo";
+    let app = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        sb.commit_files(&sb.repo("app"), "crlf", [("crlf.txt", crlf)]);
+    });
+    let forced = DiffOptions {
+        side_by_side: Some(true),
+        ..DiffOptions::default()
+    };
+    let doc = diff(app, "crlf.txt", None);
+    let cx = mount(app, doc, forced);
+    wait_until(cx, |cx| text(cx, "new", 2).is_some());
+    cx.click("diff-body");
+    cx.press("secondary-a");
+    assert_eq!(cursor(cx), crlf);
+}
+
+#[gpui_kit::test]
 fn a_long_line_keeps_both_sides_of_side_by_side_on_screen(cx: &mut TestAppContext) {
     let app = &mut open_app_with(cx, layout);
     let long = format!("line 5 {}", "long ".repeat(200));
