@@ -5,8 +5,9 @@
 (Yes: for now a connection of its own for Claude Code, and it uses the same standard interfaces as
 any other AI agent in the client.)
 
-This is option A of the proposal of 2026-11-15. That proposal was this file's first text, at commit
-80149a6: one file per decision, so it was rewritten here, not kept beside it. The evidence is
+This is option A of the proposal of 2026-11-15. The proposal was this file's first text, as
+`2026-11-15-claude-direct-cli.md` at commit 80149a6: one file per decision, so it was renamed and
+rewritten, not kept beside this one. The evidence is
 [spikes/claude-direct/ANSWERS-0c.md](../../spikes/claude-direct/ANSWERS-0c.md).
 
 ## What was decided
@@ -159,5 +160,6 @@ Until 1 to 3 are answered the plan is written to the recommendations and marks e
   hash, the host answering every ask, §5's isolation, the fake Messages API as the test harness.
 - **Also for the owner:** today's chat sends no system prompt beyond one line. On the direct
   backend it gets the CLI's own default, as `claude` in a terminal does (PLAN-AGENT-HOST §13).
-- **Plan:** [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §1 to §7, §13, §17 (H3, H4c, H5, H11,
-  H12, H13); [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §7, §10, P2.
+- **Plan:** [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §1 to §7, §11, §13, §14, §16 and §17
+  (H3, H4c, H5, H8, H11, H12, H13); [PLAN-PANELS.md](../../PLAN-PANELS.md) §1, §3, §4, §7, §8,
+  §10, P2.
