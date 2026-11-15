@@ -178,8 +178,8 @@ impl Agents {
         .detach();
     }
 
-    /// Fetches the catalog, then updates each installed adapter that has a version out of its
-    /// cool-down.
+    /// Fetches the catalog, then updates each listed provider's installed adapter that has a version
+    /// out of its cool-down. It never runs a CLI: one that hangs would leave `checking` stuck.
     pub fn check(&mut self, cx: &mut Context<Self>) {
         if self.checking {
             return;
@@ -192,18 +192,23 @@ impl Agents {
             let fetched = adapters::fetch(&url, &key, &core.data_dir);
             let catalog = fetched.as_ref().ok().cloned();
             let stored = catalog.or_else(|| adapters::stored(&core.data_dir));
-            (fetched.err(), stored, scan(&core))
+            let config: Config = core.get_settings().block(BLOCK).unwrap_or_default();
+            let installed = PROVIDERS.map(|p| adapters::installed(&core.data_dir, p.adapter));
+            (fetched.err(), stored, config, installed)
         });
         cx.spawn(async move |this, cx| {
-            let (error, catalog, scan) = done.await;
+            let (error, catalog, config, installed) = done.await;
             this.update(cx, |a, cx| {
                 a.checking = false;
                 a.error = error.map(|e| e.to_string());
                 a.catalog = catalog.or(a.catalog.take());
-                a.apply(scan);
+                a.config = config;
+                for (row, installed) in a.rows.iter_mut().zip(installed) {
+                    row.installed = installed;
+                }
                 let today = adapters::today();
                 let due: Vec<_> = (a.rows.iter())
-                    .filter(|r| !r.busy())
+                    .filter(|r| !r.busy() && a.config.shows(r.provider))
                     .filter_map(|r| {
                         let catalog = a.catalog.as_ref()?;
                         let e = catalog.auto(r.provider.adapter, &a.app, &r.installed, today)?;
@@ -336,16 +341,16 @@ impl Agents {
 #[cfg(test)]
 mod tests {
     use detached_core::adapters::testutil::Fixture;
-    use detached_core::adapters::{CLAUDE, Config};
+    use detached_core::adapters::{CLAUDE, CODEX, Config};
     use gpui::TestAppContext;
 
     use super::*;
     use crate::wait_until;
 
-    fn version(cx: &mut TestAppContext) -> Option<String> {
+    fn version(id: &str, cx: &mut TestAppContext) -> Option<String> {
         cx.read(|cx| {
             let a = Agents::global(cx).read(cx);
-            let current = a.row(CLAUDE.id)?.installed.current.as_ref();
+            let current = a.row(id)?.installed.current.as_ref();
             current.map(|v| v.to_string())
         })
     }
@@ -363,30 +368,38 @@ mod tests {
     fn a_check_installs_no_first_adapter_and_updates_one_past_its_cool_down(
         cx: &mut TestAppContext,
     ) {
-        let _dir = crate::boot(cx);
+        let dir = crate::boot(cx);
         let f = Fixture::new();
-        let missing = Config {
-            cli: [(CLAUDE.id.into(), "/nowhere/claude".into())].into(),
+        let cli = dir.path().join("claude");
+        std::fs::write(&cli, "").unwrap();
+        let config = Config {
+            cli: [(CLAUDE.id.into(), cli.to_string_lossy().into())].into(),
             codex: false,
         };
-        cx.read(|cx| crate::core(cx).set_block(BLOCK, missing))
+        cx.read(|cx| crate::core(cx).set_block(BLOCK, config))
             .unwrap();
         let agents = cx.read(Agents::global);
         agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
-        f.publish(1, &[f.entry(CLAUDE.adapter, "0.1.0")]);
+        let first = [CLAUDE.adapter, CODEX.adapter].map(|n| f.entry(n, "0.1.0"));
+        f.publish(1, &first);
         check(cx);
-        assert_eq!(version(cx), None);
+        assert_eq!(version(CLAUDE.id, cx), None);
         cx.read(|cx| assert!(Agents::global(cx).read(cx).error.is_none()));
-        agents.update(cx, |a, cx| a.install(CLAUDE.id, cx));
+        agents.update(cx, |a, cx| {
+            a.install(CLAUDE.id, cx);
+            a.install(CODEX.id, cx);
+        });
         wait_until(cx, |cx| {
             let a = Agents::global(cx).read(cx);
-            a.row(CLAUDE.id).unwrap().installed.current.is_some()
+            a.rows.iter().all(|r| r.installed.current.is_some())
         });
         let mut fresh = f.entry(CLAUDE.adapter, "0.3.0");
         fresh.published = adapters::today();
-        f.publish(2, &[f.entry(CLAUDE.adapter, "0.2.0"), fresh]);
+        let codex = f.entry(CODEX.adapter, "0.2.0");
+        f.publish(2, &[f.entry(CLAUDE.adapter, "0.2.0"), fresh, codex]);
         check(cx);
-        assert_eq!(version(cx).as_deref(), Some("0.2.0"));
+        assert_eq!(version(CLAUDE.id, cx).as_deref(), Some("0.2.0"));
+        assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.1.0"));
         cx.read(|cx| {
             let a = Agents::global(cx).read(cx);
             assert_eq!(a.offer(CLAUDE.id).unwrap().version.to_string(), "0.3.0");

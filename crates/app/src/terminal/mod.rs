@@ -66,19 +66,18 @@ impl Terminals {
     }
 
     /// A shell in the current repo, or home without one.
-    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<Session>> {
         let cwd = Workspace::get(cx)
             .current()
             .map(PathBuf::from)
             .or_else(std::env::home_dir);
-        let Some(session) = self.start(cwd.unwrap_or_default(), window, cx) else {
-            return;
-        };
+        let session = self.start(cwd.unwrap_or_default(), window, cx)?;
         self.sessions.push(session.clone());
         self.active = self.sessions.len() - 1;
         let focus = session.read(cx).focus.clone();
         window.focus(&focus, cx);
         cx.notify();
+        Some(session)
     }
 
     /// A shell in `cwd` for a tab of its own, as one restored after a restart.
@@ -175,8 +174,7 @@ impl Terminals {
 /// Types `line` into a new shell of the Terminal app and shows it.
 pub fn run(line: &str, window: &mut Window, cx: &mut App) {
     Terminals::global(cx).update(cx, |t, cx| {
-        t.open(window, cx);
-        if let Some(s) = t.active() {
+        if let Some(s) = t.open(window, cx) {
             s.read(cx).write(format!("{line}\r").into_bytes());
         }
     });
@@ -225,7 +223,9 @@ fn shown(window: &mut Window, cx: &mut App) {
             let focus = s.read(cx).focus.clone();
             window.focus(&focus, cx)
         }
-        None => t.open(window, cx),
+        None => {
+            t.open(window, cx);
+        }
     });
 }
 
@@ -370,7 +370,9 @@ impl Render for Panel {
                             .test_support()
                             .aria_label("New Terminal")
                             .on_click(move |_, window, cx| {
-                                terminals.update(cx, |t, cx| t.open(window, cx))
+                                terminals.update(cx, |t, cx| {
+                                    t.open(window, cx);
+                                })
                             }),
                     ),
             )
