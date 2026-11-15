@@ -1,0 +1,39 @@
+# The catalog's vetting (PLAN-AGENT-HOST §3): agent.yml on the signed catalog's newest entry, on
+# each catalog bump against its min_cli, and weekly against the newest `claude`. A weekly failure
+# opens an issue for the owner, who decides on blocked_cli; nothing is published from here.
+name: Agent vetting
+
+on:
+  push:
+    branches: [main]
+    paths: [adapters/adapters.json, adapters/adapters.json.minisig]
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  vet:
+    uses: ./.github/workflows/agent.yml
+    with:
+      vet: true
+      latest: ${{ github.event_name == 'schedule' }}
+
+  issue:
+    needs: vet
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="The weekly adapter vetting failed"
+          body="$RUN failed on the newest claude. If that claude breaks the adapter, add its version to the entry's blocked_cli, then \`make adapters-sign\` and push."
+          open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" -R "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

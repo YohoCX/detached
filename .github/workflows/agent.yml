@@ -1,0 +1,105 @@
+# The agent harness on every OS of PLAN-AGENT-HOST §17 (scripts/agent-ci.sh): H4's tests on the fake
+# ACP agent, then the real Claude adapter and the official `claude` on a scripted fake Messages API.
+# No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
+# agent-vet.yml calls it with `vet` to run the signed catalog's entry instead of a build from adapters/.
+name: Agent
+
+on:
+  push:
+    paths:
+      - adapters/claude-agent-acp/**
+      - crates/acp/**
+      - crates/core/src/proc.rs
+      - crates/core/src/trust.rs
+      - crates/core/src/adapters.rs
+      - crates/kernel/src/session.rs
+      - crates/kernel/src/session/**
+      - scripts/adapter-build.sh
+      - scripts/agent-ci.sh
+      - .github/workflows/agent.yml
+  workflow_dispatch:
+    inputs:
+      vet:
+        description: The signed catalog's newest entry in place of a build
+        type: boolean
+        default: false
+      latest:
+        description: The newest claude in place of the entry's min_cli
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      vet:
+        type: boolean
+        default: false
+      latest:
+        type: boolean
+        default: false
+
+env:
+  VET: ${{ inputs.vet && '1' || '' }}
+  LATEST: ${{ inputs.latest && '1' || '' }}
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: npm install -g bun@1.4.4
+
+      # GPUI's libraries for the kernel's tests, and the CLI sandbox's bubblewrap and socat.
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libzstd-dev libvulkan1 bubblewrap socat
+      # 24.04 refuses bwrap's user namespaces until it has a profile of its own.
+      - name: bwrap's AppArmor profile
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n  include if exists <local/bwrap>\n}\n' \
+            | sudo tee /etc/apparmor.d/bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          bwrap --ro-bind / / true
+      - name: GNU make
+        if: runner.os == 'Windows'
+        run: command -v make || choco install make --no-progress -y
+      - run: echo "RUST_TEST_THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      - run: ./scripts/agent-ci.sh
+
+  # The Linux sandbox inside WSL2 on the Windows runner, built there, in WSL's own filesystem.
+  wsl2:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          additional-packages: >-
+            build-essential pkg-config git perl curl ca-certificates unzip jq make python3
+            bubblewrap socat libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
+            libzstd-dev libvulkan1
+      - shell: wsl-bash {0}
+        run: |
+          set -eu
+          mkdir -p ~/detached
+          tar -C "$(wslpath '${{ github.workspace }}')" --exclude=./target -cf - . | tar -C ~/detached -xf -
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4
+          export PATH=$HOME/.cargo/bin:$HOME/.bun/bin:$PATH RUST_TEST_THREADS=$(nproc)
+          cd ~/detached
+          VET='${{ env.VET }}' LATEST='${{ env.LATEST }}' ./scripts/agent-ci.sh
