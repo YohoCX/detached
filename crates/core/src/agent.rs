@@ -173,6 +173,8 @@ pub struct Past {
     /// "archived" once archived.
     #[serde(default)]
     pub tag: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Past {
