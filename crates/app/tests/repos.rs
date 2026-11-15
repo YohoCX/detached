@@ -293,14 +293,14 @@ fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestApp
     wait_until(cx, |cx| {
         cx.settings(|s| s.workspaces[0].excluded_repos == [lib.as_str()])
     });
-    assert!(!paths(cx).contains(&lib));
+    wait_until(cx, |cx| !paths(cx).contains(&lib));
 
     let id = row(cx, &solo).id;
     click_in(cx, &id, "remove");
     wait_until(cx, |cx| {
         cx.settings(|s| s.workspaces[0].folders == [ws.as_str()])
     });
-    assert!(!paths(cx).contains(&solo));
+    wait_until(cx, |cx| !paths(cx).contains(&solo));
 
     let api = path(cx.sb.repo("group/api"));
     let id = row(cx, &api).id;
