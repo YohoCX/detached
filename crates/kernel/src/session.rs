@@ -1,39 +1,27 @@
-//! Agent sessions over ACP, headless: start or load, prompt, stream, cancel and end, with each
-//! turn's snapshots and trust checks and the host's answers to permissions. A view draws `items`.
-//!
-//! One adapter process serves every session of its provider and version; a new version starts
-//! its own while the old one finishes its sessions, and the last session to go closes it.
+//! Agent sessions on their provider's backend, headless: start or resume, prompt, stream, cancel
+//! and end, with each turn's snapshots and trust checks and the host's answers to permissions. A
+//! view draws `items`.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::path::Path;
 use std::time::Instant;
 
-use detached_acp::{self as acp, Adapter, Event, Options, StopReason, Update};
-use detached_core::adapters::{self, BLOCK, Cli, Provider};
+use detached_core::adapters::Provider;
 use detached_core::api;
+use detached_core::backend::{
+    self, Backend, Cause, Config, Event, Events, Exit, Failure, Spec, StopReason, Tool, Turn,
+    Update,
+};
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
-use detached_core::proc;
 use detached_core::state::AppState;
 use detached_core::trust;
 use detached_core::types::{FileChange, Side};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
-use serde_json::{Value, json};
 
 use crate::blocking::{self, FRAME};
-
-/// Claude's `.env` deny, the sidecar's: it stops literal paths only, so it is a mitigation.
-const DENIED: &[&str] = &[
-    "Read(//**/.env*)",
-    "Bash(cat *.env*)",
-    "Bash(less *.env*)",
-    "Bash(head *.env*)",
-    "Bash(tail *.env*)",
-];
 
 pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past the plan's limits \
     this session drew from extra usage, and that has run out. Claude in a terminal tab (`claude`) \
@@ -41,75 +29,6 @@ pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past t
 
 const TRUST_CHANGED: &str = "The repo's agent settings changed, so the session ended. A new one \
     loads them only once you trust them.";
-
-/// What a session may load of the repo's and the user's settings and MCP servers.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Kind {
-    /// The chat, and a trusted subject's finders: the repo's settings once trusted, the user's
-    /// MCP servers.
-    Chat,
-    /// A trusted subject's verifier: the user's settings, the host's MCP servers alone.
-    Verifier,
-    /// An untrusted subject's participant: no settings, the host's MCP servers alone.
-    Untrusted,
-}
-
-#[derive(Clone)]
-pub struct Spec {
-    pub provider: &'static Provider,
-    /// The cwd: a repo's worktree.
-    pub repo: String,
-    pub kind: Kind,
-    pub mode: String,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-}
-
-impl Spec {
-    /// A chat-like session in the provider's asking mode.
-    pub fn new(provider: &'static Provider, repo: &str, kind: Kind) -> Spec {
-        Spec {
-            provider,
-            repo: repo.into(),
-            kind,
-            mode: "default".into(),
-            model: None,
-            effort: None,
-        }
-    }
-
-    /// Mode, model and effort, which `configOptions` set before the session starts.
-    fn config(&self) -> Vec<(String, String)> {
-        let set = [
-            ("mode", Some(&self.mode)),
-            ("model", self.model.as_ref()),
-            ("effort", self.effort.as_ref()),
-        ];
-        let set = set
-            .into_iter()
-            .filter_map(|(k, v)| Some((k.to_string(), v?.clone())));
-        set.collect()
-    }
-
-    /// `_meta`, sent whole on every new and load: a closed session loads with the defaults
-    /// otherwise.
-    fn meta(&self, trusted: bool) -> Value {
-        if self.provider.id != adapters::CLAUDE.id {
-            return Value::Null;
-        }
-        let (sources, strict) = match self.kind {
-            Kind::Chat if trusted => (&["user", "project", "local"][..], false),
-            Kind::Chat => (&["user"][..], false),
-            Kind::Verifier => (&["user"][..], true),
-            Kind::Untrusted => (&[][..], true),
-        };
-        let mut options = json!({"settingSources": sources, "disallowedTools": DENIED});
-        if strict {
-            options["strictMcpConfig"] = json!(true);
-        }
-        json!({"claudeCode": {"options": options}})
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
@@ -124,7 +43,7 @@ pub enum State {
 pub enum End {
     /// By the host.
     Closed,
-    /// Its adapter exited: what it said.
+    /// Its agent exited: what it said.
     Crashed(String),
     /// A trust item of its tree changed.
     Trust,
@@ -160,9 +79,9 @@ pub enum Item {
     User(String),
     Text(String),
     Thought(String),
-    Tool(acp::Tool),
+    Tool(Tool),
     Ask {
-        tool: acp::Tool,
+        tool: Tool,
         answer: Answer,
     },
     /// What a turn changed in the worktree, between two snapshots.
@@ -184,20 +103,22 @@ pub struct Session {
     pub spec: Spec,
     pub state: State,
     pub items: Vec<Item>,
-    /// The agent's id, which a load takes.
+    /// The agent's id, which a resume takes.
     pub id: Option<String>,
-    pub config: Vec<acp::Config>,
+    pub config: Vec<Config>,
     /// Context fill: used and size. None until reported, never a guessed zero.
     pub usage: Option<(u64, u64)>,
     pub cost: Option<f64>,
-    /// The adapter's version.
+    /// The agent's version, from `Opened`.
     pub version: Option<String>,
-    open: Option<Open>,
+    /// Dropped, it closes on its backend.
+    open: Option<Box<dyn backend::Session>>,
     /// The trust files' fingerprint the session started on.
     trust: String,
-    /// "Always allow" answers, kept by the host: a tool's kind and title.
-    rules: Vec<(Option<String>, Option<String>)>,
-    replies: HashMap<usize, acp::Reply>,
+    /// "Always allow" answers, kept by the host: the asks' keys.
+    rules: Vec<String>,
+    /// Waiting asks by item, with their keys.
+    replies: HashMap<usize, (backend::Reply, Option<String>)>,
     /// When the running turn began, and the worktree's tree then.
     turn: Option<(Instant, Option<String>)>,
     /// Set while a running turn is cancelled to end the session.
@@ -208,64 +129,17 @@ pub struct Session {
     _tasks: Vec<Task<()>>,
 }
 
-/// An adapter process; its serial tells its events from a later one's on the same executable.
-struct Live {
-    adapter: Adapter,
-    serial: u64,
-}
-
-/// A session opened on an adapter; dropped, it closes there.
-struct Open {
-    live: Arc<Live>,
-    id: String,
-    closing: Closing,
-}
-
-impl Open {
-    fn key(&self) -> (u64, String) {
-        (self.live.serial, self.id.clone())
-    }
-}
-
-impl Drop for Open {
-    fn drop(&mut self) {
-        let mut c = self.closing.lock().unwrap();
-        if !c.dead.contains_key(&self.live.serial) {
-            c.keys.insert(self.key());
-        }
-        drop(c);
-        self.live.adapter.close_session(&self.id);
-    }
-}
-
-/// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
-type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
-
-/// Sessions whose close is not answered yet, and adapters that exited, with what they said: they
-/// answer none.
-type Closing = Arc<Mutex<Closes>>;
-
-#[derive(Default)]
-struct Closes {
-    keys: HashSet<(u64, String)>,
-    dead: HashMap<u64, Option<String>>,
-}
-
-/// Work for the UI thread: adapters' events, and starts' results after the events sent before them.
+/// Work for the UI thread: backends' events, and starts' results after the events sent before them.
 type Job = Box<dyn FnOnce(&mut App) + Send>;
 
 struct Sessions {
     tx: mpsc::UnboundedSender<Job>,
-    adapters: Adapters,
-    closing: Closing,
-    /// Ids whose load has not returned: one ended meanwhile closes only then.
+    /// Ids open on a backend, from `Opened` to `Closed` or `Exited`: two never hold one session.
+    open: HashSet<String>,
+    /// Ids whose resume has not returned: one ended meanwhile closes only then.
     loading: HashSet<String>,
-    /// Loads of an id still loading or closing, which start once that is over.
+    /// Resumes of an id still loading or open, which start once that is over.
     waiting: Vec<WeakEntity<Session>>,
-    /// Kept after a session ends until its `Closed`, so its late events go.
-    by_id: HashMap<(u64, String), WeakEntity<Session>>,
-    /// What came for a session before its start returned, as a load's replay.
-    early: HashMap<(u64, String), Vec<Event>>,
 }
 
 impl Global for Sessions {}
@@ -274,12 +148,9 @@ pub(crate) fn init(cx: &mut App) {
     let (tx, mut rx) = mpsc::unbounded::<Job>();
     cx.set_global(Sessions {
         tx,
-        adapters: Default::default(),
-        closing: Default::default(),
+        open: HashSet::new(),
         loading: HashSet::new(),
         waiting: vec![],
-        by_id: HashMap::new(),
-        early: HashMap::new(),
     });
     cx.spawn(async move |cx| {
         while let Some(first) = rx.next().await {
@@ -292,48 +163,43 @@ pub(crate) fn init(cx: &mut App) {
     .detach();
 }
 
-fn dispatch(cx: &mut App, serial: u64, e: Event) {
-    let sid = match &e {
-        Event::Update(s, _) | Event::Ask(s, ..) | Event::Ended(s, _) => s.clone(),
-        Event::Closed(s) => {
-            let key = (serial, s.clone());
-            let g = cx.global::<Sessions>();
-            g.closing.lock().unwrap().keys.remove(&key);
-            // Only the closed session's entry: a reload may hold the key by now.
-            let on = g.by_id.get(&key).and_then(WeakEntity::upgrade);
-            if on.is_none_or(|s| s.read(cx).open.is_none()) {
-                let g = cx.global_mut::<Sessions>();
-                g.by_id.remove(&key);
-                g.early.remove(&key);
-            }
-            return wake(cx);
+/// A session's stream, as jobs for its entity; `id` is a resume's until `Opened` says it.
+fn events(
+    me: WeakEntity<Session>,
+    mut id: Option<String>,
+    tx: mpsc::UnboundedSender<Job>,
+) -> Events {
+    Box::new(move |e| {
+        if let Event::Opened(o) = &e {
+            id = Some(o.id.clone());
         }
-        Event::Exited(x) => {
-            let said = crashed(x);
-            let g = cx.global_mut::<Sessions>();
-            g.early.retain(|k, _| k.0 != serial);
-            let mut c = g.closing.lock().unwrap();
-            c.dead.insert(serial, said.clone());
-            c.keys.retain(|k| k.0 != serial);
-            drop(c);
-            let on: Vec<_> = g.by_id.extract_if(|k, _| k.0 == serial).collect();
-            for s in on.into_iter().filter_map(|(_, w)| w.upgrade()) {
-                s.update(cx, |s, cx| s.exited(said.clone(), cx));
-            }
-            return wake(cx);
-        }
+        let (me, id) = (me.clone(), id.clone());
+        let _ = tx.unbounded_send(Box::new(move |cx| deliver(cx, &me, id, e)));
+    })
+}
+
+/// Hands `e` to its session, even a gone one's id leaving `open` on its `Closed` or `Exited`.
+fn deliver(cx: &mut App, me: &WeakEntity<Session>, id: Option<String>, e: Event) {
+    let open = match &e {
+        Event::Opened(_) => Some(true),
+        Event::Closed | Event::Exited(_) => Some(false),
+        _ => None,
     };
-    let g = cx.global_mut::<Sessions>();
-    let key = (serial, sid);
-    match g.by_id.get(&key).map(WeakEntity::upgrade) {
-        Some(Some(s)) => s.update(cx, |s, cx| s.on(e, cx)),
-        // Its entity is gone; a dropped ask answers cancelled.
-        Some(None) => {}
-        None => g.early.entry(key).or_default().push(e),
+    if let (Some(open), Some(id)) = (open, id) {
+        let ids = &mut cx.global_mut::<Sessions>().open;
+        _ = if open {
+            ids.insert(id)
+        } else {
+            ids.remove(&id)
+        };
+    }
+    me.update(cx, |s, cx| s.on(e, cx)).ok();
+    if open == Some(false) {
+        wake(cx);
     }
 }
 
-/// Starts the loads that waited; one whose id is still loading or closing waits on.
+/// Starts the resumes that waited; one whose id is still loading or open waits on.
 fn wake(cx: &mut App) {
     let waiting = std::mem::take(&mut cx.global_mut::<Sessions>().waiting);
     for s in waiting.iter().filter_map(WeakEntity::upgrade) {
@@ -341,23 +207,21 @@ fn wake(cx: &mut App) {
     }
 }
 
-/// The cause an adapter's exit gives its sessions; None when the host closed it.
-fn crashed(x: &acp::Exit) -> Option<String> {
+/// The cause an agent's exit gives its session.
+fn crashed(x: &Exit) -> String {
     let code = x.code.map_or("a signal".into(), |c| format!("code {c}"));
     let last = x.stderr.trim().lines().last().unwrap_or_default();
-    (!x.asked).then(|| format!("The agent's adapter exited with {code}. {last}"))
+    format!("The agent exited with {code}. {last}")
 }
 
 struct Started {
-    open: Open,
-    config: Vec<acp::Config>,
+    session: Box<dyn backend::Session>,
     trust: String,
-    warn: Option<String>,
     watch: Option<(trust::Watch, mpsc::UnboundedReceiver<()>)>,
 }
 
 impl Session {
-    /// Starts a session, or loads the past session `past`.
+    /// Starts a session, or resumes the past session `past`.
     pub fn open(spec: Spec, past: Option<String>, cx: &mut App) -> Entity<Session> {
         cx.new(|cx| {
             let mut s = Session {
@@ -384,24 +248,23 @@ impl Session {
         })
     }
 
-    /// Starts or loads the session; a load of an id still loading or closing waits for that to
-    /// end, so no earlier close can follow its load.
+    /// Starts or resumes the session; a resume of an id still loading or open waits for that to
+    /// end, so no earlier close can follow it.
     fn start(&mut self, cx: &mut Context<Self>) {
         if self.state != State::Starting {
             return;
         }
         let (core, me, past) = (crate::core(cx).clone(), cx.weak_entity(), self.id.clone());
         let g = cx.global_mut::<Sessions>();
-        if let Some(id) = &past {
-            let closing = g.closing.lock().unwrap().keys.iter().any(|k| k.1 == *id);
-            if closing || !g.loading.insert(id.clone()) {
-                return g.waiting.push(me);
-            }
+        if let Some(id) = &past
+            && (g.open.contains(id) || !g.loading.insert(id.clone()))
+        {
+            return g.waiting.push(me);
         }
-        let (adapters, closing, tx) = (g.adapters.clone(), g.closing.clone(), g.tx.clone());
-        let spec = self.spec.clone();
+        let (tx, spec) = (g.tx.clone(), self.spec.clone());
         blocking::run(cx, move || {
-            let started = start(&core, &spec, past.clone(), &adapters, closing, tx.clone());
+            let events = events(me.clone(), past.clone(), tx.clone());
+            let started = start(&core, spec.clone(), past.as_deref(), events);
             let started = started.map(|mut s| {
                 let (changed, changes) = mpsc::unbounded();
                 let tree = Path::new(&spec.repo);
@@ -423,17 +286,8 @@ impl Session {
         .detach();
     }
 
-    /// Takes the started session in, unless it ended or its adapter exited meanwhile: dropped, it
-    /// closes.
+    /// Takes the started session in, unless it ended meanwhile: dropped, it closes.
     fn started(&mut self, started: Result<Started>, cx: &mut Context<Self>) {
-        let g = cx.global_mut::<Sessions>();
-        let early = match &started {
-            Ok(s) => g.early.remove(&s.open.key()),
-            Err(_) => {
-                g.early.retain(|k, _| Some(&k.1) != self.id.as_ref());
-                None
-            }
-        };
         if self.state != State::Starting {
             return;
         }
@@ -445,20 +299,11 @@ impl Session {
                 return cx.notify();
             }
         };
-        let serial = s.open.live.serial;
-        let dead = s.open.closing.lock().unwrap().dead.get(&serial).cloned();
-        if let Some(said) = dead {
-            return self.exited(said, cx);
+        (self.open, self.trust) = (Some(s.session), s.trust);
+        // Its `Opened` may come before this or after.
+        if self.version.is_some() {
+            self.state = State::Idle;
         }
-        let me = cx.weak_entity();
-        cx.global_mut::<Sessions>().by_id.insert(s.open.key(), me);
-        self.id = Some(s.open.id.clone());
-        self.config = s.config;
-        self.version = Some(s.open.live.adapter.info().version.clone());
-        self.items.extend(s.warn.map(Item::Note));
-        (self.open, self.trust) = (Some(s.open), s.trust);
-        self.state = State::Idle;
-        early.into_iter().flatten().for_each(|e| self.on(e, cx));
         cx.notify();
         let Some((watch, mut changes)) = s.watch else {
             return;
@@ -519,9 +364,9 @@ impl Session {
         let Some(o) = self.open.as_ref().filter(|_| self.state == State::Running) else {
             return;
         };
-        let sent = o.live.adapter.prompt(&o.id, text);
+        let sent = o.prompt(text);
         if sent.is_ok() && self.cancelled {
-            o.live.adapter.cancel(&o.id);
+            o.cancel();
         }
         match sent {
             Ok(()) => {
@@ -542,29 +387,29 @@ impl Session {
             return;
         };
         if self.turn.is_some() {
-            o.live.adapter.cancel(&o.id);
+            o.cancel();
         }
         self.cancelled = true;
         self.drop_replies();
     }
 
-    /// Answers the permission request at `item`; `Always` also allows its tool from now on,
-    /// without the adapter hearing more than `allow_once`.
+    /// Answers the permission request at `item`; `Always` also allows its key from now on,
+    /// without the agent hearing more than an allow.
     pub fn answer(&mut self, item: usize, answer: Answer, cx: &mut Context<Self>) {
-        let Some(reply) = self.replies.remove(&item) else {
+        let Some((reply, key)) = self.replies.remove(&item) else {
             return;
         };
-        let Some(Item::Ask { tool, answer: a }) = self.items.get_mut(item) else {
+        let Some(Item::Ask { answer: a, .. }) = self.items.get_mut(item) else {
             return;
         };
         *a = answer;
         if answer == Answer::Always {
-            self.rules.push((tool.kind.clone(), tool.title.clone()));
+            self.rules.extend(key);
         }
         reply.send(match answer {
-            Answer::Once | Answer::Always => acp::Answer::Allow,
-            Answer::Rejected => acp::Answer::Reject,
-            Answer::Waiting | Answer::Gone => acp::Answer::Cancel,
+            Answer::Once | Answer::Always => backend::Answer::Allow,
+            Answer::Rejected => backend::Answer::Reject,
+            Answer::Waiting | Answer::Gone => backend::Answer::Cancel,
         });
         cx.notify();
     }
@@ -585,22 +430,11 @@ impl Session {
         if let Some(o) = self.open.take()
             && self.turn.is_some()
         {
-            o.live.adapter.cancel(&o.id);
+            o.cancel();
         }
         (self._watch, self.turn, self.ending) = (None, None, None);
         self.state = State::Ended(end);
         cx.notify();
-    }
-
-    fn exited(&mut self, said: Option<String>, cx: &mut Context<Self>) {
-        if matches!(self.state, State::Ended(_)) {
-            return;
-        }
-        let end = said.map_or(End::Closed, End::Crashed);
-        if let End::Crashed(e) = &end {
-            self.note(e.clone());
-        }
-        self.close(end, cx);
     }
 
     /// A trust file changed: a different fingerprint cancels the turn and ends the session.
@@ -621,24 +455,37 @@ impl Session {
             return;
         }
         match e {
-            Event::Update(_, u) => self.update(u),
-            Event::Ask(_, ask, reply) => {
-                let rule = (ask.tool.kind.clone(), ask.tool.title.clone());
+            Event::Opened(o) => {
+                self.id = Some(o.id);
+                self.version = Some(o.version);
+                self.config = o.config;
+                self.items.extend(o.note.map(Item::Note));
+                if self.open.is_some() {
+                    self.state = State::Idle;
+                }
+            }
+            Event::Update(u) => self.update(u),
+            Event::Ask(ask, reply) => {
+                let backend::Ask { tool, key, .. } = *ask;
                 // A dropped reply answers `cancelled`.
                 let answer = if self.cancelled {
                     Answer::Gone
-                } else if self.rules.contains(&rule) {
-                    reply.send(acp::Answer::Allow);
+                } else if key.as_ref().is_some_and(|k| self.rules.contains(k)) {
+                    reply.send(backend::Answer::Allow);
                     Answer::Always
                 } else {
-                    self.replies.insert(self.items.len(), reply);
+                    self.replies.insert(self.items.len(), (reply, key));
                     Answer::Waiting
                 };
-                let tool = ask.tool;
                 self.items.push(Item::Ask { tool, answer });
             }
-            Event::Ended(_, r) => self.turn_ended(r, cx),
-            Event::Closed(_) | Event::Exited(_) => {}
+            Event::Ended(r) => self.turn_ended(r, cx),
+            Event::Closed => self.close(End::Closed, cx),
+            Event::Exited(x) => {
+                let said = crashed(&x);
+                self.note(said.clone());
+                self.close(End::Crashed(said), cx);
+            }
         }
         cx.notify();
     }
@@ -683,17 +530,17 @@ impl Session {
     }
 
     /// The turn's end: its snapshot, what it changed and the trust re-hash, then idle again.
-    fn turn_ended(&mut self, r: std::result::Result<acp::Turn, String>, cx: &mut Context<Self>) {
+    fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
         self.drop_replies();
         let (began, start) = self.turn.take().unwrap_or((Instant::now(), None));
         let stop = match r {
             Ok(t) => Some(t.stop),
-            Err(e) if e.contains("out of extra usage") => {
+            Err(f) if f.cause == Some(Cause::OutOfExtraUsage) => {
                 self.note(OUT_OF_EXTRA_USAGE.into());
                 None
             }
-            Err(e) => {
-                self.note(format!("The turn failed: {e}"));
+            Err(f) => {
+                self.note(format!("The turn failed: {}", f.text));
                 None
             }
         };
@@ -831,100 +678,27 @@ fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
     Some(p.fingerprint)
 }
 
-/// Finds the CLI and the adapter, then starts or loads the session on the adapter of its version,
-/// started here unless it runs already.
-fn start(
-    core: &AppState,
-    spec: &Spec,
-    past: Option<String>,
-    adapters: &Adapters,
-    closing: Closing,
-    tx: mpsc::UnboundedSender<Job>,
-) -> Result<Started> {
-    let p = spec.provider;
-    let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
-    let env = core.env();
-    let missing =
-        |what: &str| Error::Other(format!("{} has no {what}: see the Agents page", p.name));
-    let version = adapters::installed(&core.data_dir, p.adapter).current;
-    let version = version.ok_or_else(|| missing("adapter installed"))?;
-    let setting = config.cli.get(p.id).map(String::as_str);
-    let cli = adapters::find_cli(p, setting, &env).ok_or_else(|| missing("CLI"))?;
-    let catalog = adapters::stored(&core.data_dir);
-    let entry = catalog.as_ref().and_then(|c| c.entry(p.adapter, &version));
-    let has = adapters::cli_version(&cli, &env)?;
-    let warn = match adapters::check_cli(p, entry, &has) {
-        Cli::Ok => None,
-        Cli::Old(need) => {
-            let e = format!(
-                "{} needs {} {need} or newer; this one is {has}",
-                p.name, p.cli
-            );
-            return Err(Error::Other(e));
-        }
-        Cli::Blocked if spec.kind != Kind::Chat => {
-            let e = format!("{} {has} is blocked for {}: update it", p.cli, p.name);
-            return Err(Error::Other(e));
-        }
-        Cli::Blocked => Some(format!(
-            "{} {has} has known problems with {}: update it",
-            p.cli, p.name
-        )),
-    };
-    let project = trust::project(&env, Path::new(&spec.repo))?;
-    let trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
-    let exe = adapters::exe(&core.data_dir, p.adapter, &version);
-    let live = {
-        let slot = adapters
-            .lock()
-            .unwrap()
-            .entry(exe.clone())
-            .or_default()
-            .clone();
-        let mut slot = slot.lock().unwrap();
-        let dead = |l: &Arc<Live>| closing.lock().unwrap().dead.contains_key(&l.serial);
-        match slot.upgrade().filter(|l| !dead(l)) {
-            Some(live) => live,
-            None => {
-                static SERIAL: AtomicU64 = AtomicU64::new(0);
-                let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-                let mut env_vars = proc::env(p.env, proc::parent(&env));
-                env_vars.push((p.cli_var.into(), cli.into()));
-                let proc_spec = proc::Spec {
-                    program: exe,
-                    args: vec![],
-                    cwd: std::env::temp_dir(),
-                    env: env_vars,
-                };
-                let adapter = Adapter::start(&proc_spec, move |e| {
-                    let _ = tx.unbounded_send(Box::new(move |cx| dispatch(cx, serial, e)));
-                })?;
-                let live = Arc::new(Live { adapter, serial });
-                *slot = Arc::downgrade(&live);
-                live
-            }
-        }
-    };
-    let options = Options {
-        cwd: spec.repo.clone().into(),
-        config: spec.config(),
-        meta: spec.meta(trusted),
-    };
-    let opened = match past {
-        Some(id) => live.adapter.load_session(&id, &options)?,
-        None => live.adapter.new_session(&options)?,
+/// Starts or resumes the session on its provider's backend, with its trust as it is now.
+fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) -> Result<Started> {
+    let project = trust::project(&core.env(), Path::new(&spec.repo))?;
+    spec.trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
+    let b = backend(spec.provider);
+    let session = match past {
+        Some(id) => b.resume(core, &spec, id, events)?,
+        None => b.open(core, &spec, events)?,
     };
     Ok(Started {
-        open: Open {
-            live,
-            id: opened.id,
-            closing,
-        },
-        config: opened.config,
+        session,
         trust: project.fingerprint,
-        warn,
         watch: None,
     })
+}
+
+/// The backend the provider's manifest names.
+fn backend(p: &Provider) -> &'static dyn Backend {
+    match p.backend {
+        backend::Name::Acp => detached_acp::backend(),
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,289 @@
+//! The seam between a session and the protocol its provider speaks: one trait and a session's
+//! types, in a session's terms. No flag, field or frame of a protocol is named here.
+
+use serde_json::Value;
+
+use crate::adapters::Provider;
+use crate::error::Result;
+use crate::state::AppState;
+
+/// The backend a provider's manifest names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Name {
+    Acp,
+}
+
+/// A backend: it opens sessions, each with its one stream of events.
+pub trait Backend: Send + Sync {
+    fn caps(&self) -> Caps;
+    /// Opens a new session; its events go to `events`, `Opened` first.
+    fn open(&self, core: &AppState, spec: &Spec, events: Events) -> Result<Box<dyn Session>>;
+    /// Opens the past session `id`; its history comes as the updates after `Opened`.
+    fn resume(
+        &self,
+        core: &AppState,
+        spec: &Spec,
+        id: &str,
+        events: Events,
+    ) -> Result<Box<dyn Session>>;
+}
+
+/// A session open on its backend; dropped, it closes there and `Closed` follows.
+pub trait Session: Send {
+    /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
+    fn prompt(&self, text: &str) -> Result<()>;
+    /// Ends the running turn and its foreground command.
+    fn cancel(&self);
+}
+
+/// A session's stream: called in the order the agent sent each event, from a backend's thread.
+pub type Events = Box<dyn FnMut(Event) + Send>;
+
+/// The optional pieces a backend has, and the trust paths it blocks mid-turn; the UI hides or states
+/// what is missing.
+#[derive(Clone, Debug, Default)]
+pub struct Caps {
+    pub context: bool,
+    pub limits: bool,
+    pub stop_task: bool,
+    pub questions: bool,
+    pub past: bool,
+    pub delete: bool,
+    pub wsl: bool,
+    pub probe: bool,
+    pub blocks: &'static [&'static str],
+}
+
+/// What a session may load of the repo's and the user's settings and MCP servers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Kind {
+    /// The chat, and a trusted subject's finders: the repo's settings once trusted, the user's
+    /// MCP servers.
+    Chat,
+    /// A trusted subject's verifier: the user's settings, the host's MCP servers alone.
+    Verifier,
+    /// An untrusted subject's participant: no settings, the host's MCP servers alone.
+    Untrusted,
+}
+
+/// What a session wants, never how a protocol says it.
+#[derive(Clone)]
+pub struct Spec {
+    pub provider: &'static Provider,
+    /// The cwd: a repo's worktree.
+    pub repo: String,
+    pub kind: Kind,
+    /// Whether the repo's trust items are trusted; the kernel sets it at each open.
+    pub trusted: bool,
+    pub mode: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl Spec {
+    /// A chat-like session in the provider's asking mode.
+    pub fn new(provider: &'static Provider, repo: &str, kind: Kind) -> Spec {
+        Spec {
+            provider,
+            repo: repo.into(),
+            kind,
+            trusted: false,
+            mode: "default".into(),
+            model: None,
+            effort: None,
+        }
+    }
+}
+
+pub enum Event {
+    Opened(Opened),
+    Update(Update),
+    Ask(Box<Ask>, Reply),
+    /// A prompt's answer: the turn ended.
+    Ended(std::result::Result<Turn, Failure>),
+    /// Closed, also by an exit the backend asked for: nothing more comes.
+    Closed,
+    /// The agent's process exited on its own: nothing more comes.
+    Exited(Exit),
+}
+
+#[derive(Clone, Debug)]
+pub struct Opened {
+    pub id: String,
+    /// The agent's.
+    pub version: String,
+    pub config: Vec<Config>,
+    /// What the user should know of this open, such as a CLI with known problems.
+    pub note: Option<String>,
+}
+
+/// A select config option and its current value: `mode`, `model`, `effort`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub id: String,
+    pub value: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Update {
+    User(String),
+    Text(String),
+    Thought(String),
+    /// A tool call, or what changed of one, by `id`.
+    Tool(Box<Tool>),
+    /// Context fill, and the turn's cost in USD when known.
+    Usage {
+        used: u64,
+        size: u64,
+        cost: Option<f64>,
+    },
+    Config(Vec<Config>),
+    Mode(String),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tool {
+    pub id: String,
+    pub title: Option<String>,
+    pub kind: Option<String>,
+    /// `pending`, `in_progress`, `completed` or `failed`.
+    pub status: Option<String>,
+    /// Shown, never read by the host.
+    pub input: Option<Value>,
+    pub output: Option<Value>,
+}
+
+/// A permission request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ask {
+    pub tool: Tool,
+    /// What an "Always" rule matches, built by the backend from the whole call; None takes no rule.
+    pub key: Option<String>,
+    /// The options' names.
+    pub options: Vec<String>,
+}
+
+/// The host's answer: "Always" stays a host rule, so the agent hears `Allow`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Answer {
+    Allow,
+    Reject,
+    Cancel,
+}
+
+/// Answers an ask once; dropped, it answers `Cancel`.
+pub struct Reply(Option<Box<dyn FnOnce(Answer) + Send>>);
+
+impl Reply {
+    pub fn new(f: impl FnOnce(Answer) + Send + 'static) -> Reply {
+        Reply(Some(Box::new(f)))
+    }
+
+    pub fn send(mut self, answer: Answer) {
+        if let Some(f) = self.0.take() {
+            f(answer);
+        }
+    }
+}
+
+impl Drop for Reply {
+    fn drop(&mut self) {
+        if let Some(f) = self.0.take() {
+            f(Answer::Cancel);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    MaxTurnRequests,
+    Refusal,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Turn {
+    pub stop: StopReason,
+    /// Input and output tokens, when the agent says.
+    pub tokens: Option<(u64, u64)>,
+}
+
+/// A turn that failed: what the agent said, and the cause where the host acts on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    pub text: String,
+    pub cause: Option<Cause>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Cause {
+    OutOfExtraUsage,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Exit {
+    pub code: Option<i32>,
+    /// The end of its stderr.
+    pub stderr: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    const WORDS: &[&str] = &[
+        "control_request",
+        "can_use_tool",
+        "stream-json",
+        "sdkMcpServers",
+        "settingSources",
+        "_meta",
+        "configOptions",
+    ];
+
+    fn crates() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    }
+
+    /// The protocol words in the files under `dir`, tests aside.
+    fn leaks(dir: &Path) -> Vec<String> {
+        let mut found = vec![];
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = e.path();
+            if e.file_name() == "tests" || e.file_name() == "tests.rs" {
+                continue;
+            }
+            if path.is_dir() {
+                found.extend(leaks(&path));
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let words = WORDS.iter().filter(|w| text.contains(*w));
+            found.extend(words.map(|w| format!("{}: {w}", path.display())));
+        }
+        found
+    }
+
+    #[test]
+    fn no_protocol_word_is_named_above_the_seam() {
+        for dir in ["kernel/src", "app/src"] {
+            assert_eq!(leaks(&crates().join(dir)), Vec::<String>::new());
+        }
+        let planted = tempfile::tempdir().unwrap();
+        let tests = planted.path().join("tests");
+        std::fs::create_dir(&tests).unwrap();
+        std::fs::write(tests.join("real.rs"), "_meta").unwrap();
+        std::fs::write(planted.path().join("tests.rs"), "_meta").unwrap();
+        std::fs::write(planted.path().join("view.rs"), "// settingSources").unwrap();
+        assert_eq!(leaks(planted.path()).len(), 1);
+    }
+
+    #[test]
+    fn the_app_does_not_depend_on_the_acp_crate() {
+        let toml = std::fs::read_to_string(crates().join("app/Cargo.toml")).unwrap();
+        assert!(!toml.contains("detached-acp") && !toml.contains("../acp"));
+    }
+}

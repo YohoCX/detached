@@ -1,168 +1,348 @@
-//! The ACP client: one adapter process per `Adapter`, behind a blocking API over
-//! `agent-client-protocol`. Its connection runs on a thread of its own under `block_on`; no async
-//! type leaves this crate.
+//! Core's backend for ACP providers: one adapter process per provider and version, behind a
+//! blocking API over `agent-client-protocol`. Each connection runs on a thread of its own under
+//! `block_on`; no async type and no protocol name leaves this crate, only `backend()`.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc as std_mpsc};
+use std::sync::{Arc, LazyLock, Mutex, Weak, mpsc as std_mpsc};
 use std::thread;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
+use detached_core::adapters::{self, BLOCK, CLAUDE, Cli};
+use detached_core::backend::{
+    self, Answer, Ask, Backend, Caps, Cause, Config, Events, Exit, Failure, Kind, Opened, Reply,
+    Spec, StopReason, Tool, Turn, Update,
+};
 use detached_core::error::{Error, Result};
-use detached_core::proc::{GRACE, Proc, Spec};
+use detached_core::proc::{self, GRACE, Proc};
+use detached_core::state::AppState;
 use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
-pub use agent_client_protocol::v1::schema::StopReason;
-
-#[cfg(feature = "testutil")]
+#[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 
-/// What `initialize` said of the adapter.
-#[derive(Clone, Debug, Default)]
-pub struct Info {
-    pub name: String,
-    pub version: String,
+/// Claude's `.env` deny, the sidecar's: it stops literal paths only, so it is a mitigation.
+const DENIED: &[&str] = &[
+    "Read(//**/.env*)",
+    "Bash(cat *.env*)",
+    "Bash(less *.env*)",
+    "Bash(head *.env*)",
+    "Bash(tail *.env*)",
+];
+
+/// The backend of every ACP provider; its adapters serve the sessions of the whole process.
+pub fn backend() -> &'static dyn Backend {
+    static ACP: LazyLock<Acp> = LazyLock::new(Acp::default);
+    &*ACP
+}
+
+#[derive(Default)]
+struct Acp {
+    /// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
+    adapters: Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>,
+}
+
+impl Backend for Acp {
+    fn caps(&self) -> Caps {
+        Caps::default()
+    }
+
+    fn open(
+        &self,
+        core: &AppState,
+        spec: &Spec,
+        events: Events,
+    ) -> Result<Box<dyn backend::Session>> {
+        Ok(Box::new(self.start(core, spec, None, events)?))
+    }
+
+    fn resume(
+        &self,
+        core: &AppState,
+        spec: &Spec,
+        id: &str,
+        events: Events,
+    ) -> Result<Box<dyn backend::Session>> {
+        Ok(Box::new(self.start(core, spec, Some(id), events)?))
+    }
+}
+
+impl Acp {
+    /// Finds the CLI and the adapter, then starts or loads the session on the adapter of its
+    /// version, started here unless it runs already.
+    fn start(
+        &self,
+        core: &AppState,
+        spec: &Spec,
+        resume: Option<&str>,
+        events: Events,
+    ) -> Result<Open> {
+        let p = spec.provider;
+        let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
+        let env = core.env();
+        let missing =
+            |what: &str| Error::Other(format!("{} has no {what}: see the Agents page", p.name));
+        let version = adapters::installed(&core.data_dir, p.adapter).current;
+        let version = version.ok_or_else(|| missing("adapter installed"))?;
+        let setting = config.cli.get(p.id).map(String::as_str);
+        let cli = adapters::find_cli(p, setting, &env).ok_or_else(|| missing("CLI"))?;
+        let catalog = adapters::stored(&core.data_dir);
+        let entry = catalog.as_ref().and_then(|c| c.entry(p.adapter, &version));
+        let has = adapters::cli_version(&cli, &env)?;
+        let note = match adapters::check_cli(p, entry, &has) {
+            Cli::Ok => None,
+            Cli::Old(need) => {
+                let e = format!(
+                    "{} needs {} {need} or newer; this one is {has}",
+                    p.name, p.cli
+                );
+                return Err(Error::Other(e));
+            }
+            Cli::Blocked if spec.kind != Kind::Chat => {
+                let e = format!("{} {has} is blocked for {}: update it", p.cli, p.name);
+                return Err(Error::Other(e));
+            }
+            Cli::Blocked => Some(format!(
+                "{} {has} has known problems with {}: update it",
+                p.cli, p.name
+            )),
+        };
+        let mut vars = proc::env(p.env, proc::parent(&env));
+        vars.push((p.cli_var.into(), cli.into()));
+        let live = self.live(proc::Spec {
+            program: adapters::exe(&core.data_dir, p.adapter, &version),
+            args: vec![],
+            cwd: std::env::temp_dir(),
+            env: vars,
+        })?;
+        let options = Options {
+            cwd: spec.repo.clone().into(),
+            config: config_of(spec),
+            meta: meta(spec),
+        };
+        let opened = match resume {
+            Some(id) => live.adapter.load_session(id, &options),
+            None => live.adapter.new_session(&options),
+        };
+        let opened = match opened {
+            Ok(o) => Some(Opened { note, ..o }),
+            // Its exit ends the stream.
+            Err(_) if live.adapter.gone() => None,
+            Err(e) => {
+                if let Some(id) = resume {
+                    live.demux.lock().unwrap().early.remove(id);
+                }
+                return Err(e);
+            }
+        };
+        let id = opened.as_ref().map(|o| o.id.as_str()).or(resume);
+        let id = id.unwrap_or_default().to_string();
+        live.demux.lock().unwrap().open(opened, events);
+        Ok(Open { live, id })
+    }
+
+    /// The adapter running `spec`'s program, or a new one.
+    fn live(&self, spec: proc::Spec) -> Result<Arc<Live>> {
+        let slot = (self.adapters.lock().unwrap().entry(spec.program.clone()))
+            .or_default()
+            .clone();
+        let mut slot = slot.lock().unwrap();
+        if let Some(live) = slot.upgrade().filter(|l| !l.adapter.gone()) {
+            return Ok(live);
+        }
+        let demux: Arc<Mutex<Demux>> = Default::default();
+        let to = demux.clone();
+        let adapter = Adapter::start(&spec, move |e| to.lock().unwrap().got(e))?;
+        let live = Arc::new(Live { adapter, demux });
+        *slot = Arc::downgrade(&live);
+        Ok(live)
+    }
+}
+
+/// `configOptions`, set before the session starts: mode, model, effort.
+fn config_of(spec: &Spec) -> Vec<(String, String)> {
+    let set = [
+        ("mode", Some(&spec.mode)),
+        ("model", spec.model.as_ref()),
+        ("effort", spec.effort.as_ref()),
+    ];
+    let set = set
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.to_string(), v?.clone())));
+    set.collect()
+}
+
+/// `_meta`, sent whole on every new and load: a closed session loads with the defaults otherwise.
+fn meta(spec: &Spec) -> Value {
+    if spec.provider.id != CLAUDE.id {
+        return Value::Null;
+    }
+    let (sources, strict) = match spec.kind {
+        Kind::Chat if spec.trusted => (&["user", "project", "local"][..], false),
+        Kind::Chat => (&["user"][..], false),
+        Kind::Verifier => (&["user"][..], true),
+        Kind::Untrusted => (&[][..], true),
+    };
+    let mut options = json!({"settingSources": sources, "disallowedTools": DENIED});
+    if strict {
+        options["strictMcpConfig"] = json!(true);
+    }
+    json!({"claudeCode": {"options": options}})
+}
+
+/// An adapter and its sessions' streams; the last session to go closes it.
+struct Live {
+    adapter: Adapter,
+    demux: Arc<Mutex<Demux>>,
+}
+
+/// The adapter's events, each to its session's stream.
+#[derive(Default)]
+struct Demux {
+    /// By session id, once its open was answered.
+    sinks: HashMap<String, Events>,
+    /// What came for an id before its open was answered: a load's replay.
+    early: HashMap<String, Vec<backend::Event>>,
+    /// Opens the adapter died under, which its exit ends.
+    orphans: Vec<Events>,
+    /// The adapter's exit, and whether the host asked for it.
+    exit: Option<(Exit, bool)>,
+}
+
+impl Demux {
+    fn got(&mut self, e: Event) {
+        let (id, e) = match e {
+            Event::Update(id, u) => (id, backend::Event::Update(u)),
+            Event::Ask(id, ask, reply) => (id, backend::Event::Ask(ask, reply)),
+            Event::Ended(id, r) => (id, backend::Event::Ended(r)),
+            Event::Closed(id) => {
+                self.early.remove(&id);
+                if let Some(mut sink) = self.sinks.remove(&id) {
+                    sink(backend::Event::Closed);
+                }
+                return;
+            }
+            Event::Exited(x, asked) => {
+                let sinks = self.sinks.drain().map(|(_, s)| s);
+                for mut sink in sinks.chain(self.orphans.drain(..)) {
+                    sink(gone(&x, asked));
+                }
+                self.early.clear();
+                self.exit = Some((x, asked));
+                return;
+            }
+        };
+        match self.sinks.get_mut(&id) {
+            Some(sink) => sink(e),
+            None => self.early.entry(id).or_default().push(e),
+        }
+    }
+
+    /// Takes in a session whose open was answered, or None for one its adapter died under.
+    fn open(&mut self, opened: Option<Opened>, mut sink: Events) {
+        if let Some((x, asked)) = &self.exit {
+            return sink(gone(x, *asked));
+        }
+        let Some(o) = opened else {
+            return self.orphans.push(sink);
+        };
+        let id = o.id.clone();
+        sink(backend::Event::Opened(o));
+        self.early
+            .remove(&id)
+            .into_iter()
+            .flatten()
+            .for_each(&mut sink);
+        self.sinks.insert(id, sink);
+    }
+}
+
+fn gone(x: &Exit, asked: bool) -> backend::Event {
+    match asked {
+        true => backend::Event::Closed,
+        false => backend::Event::Exited(x.clone()),
+    }
+}
+
+/// A session open on an adapter; dropped, it closes there.
+struct Open {
+    live: Arc<Live>,
+    id: String,
+}
+
+impl backend::Session for Open {
+    fn prompt(&self, text: &str) -> Result<()> {
+        self.live.adapter.prompt(&self.id, text)
+    }
+
+    fn cancel(&self) {
+        self.live.adapter.cancel(&self.id);
+    }
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        self.live.adapter.close_session(&self.id);
+    }
 }
 
 /// What `session/new` and `session/load` send besides the session's id.
 #[derive(Clone, Debug, Default)]
-pub struct Options {
-    pub cwd: PathBuf,
+struct Options {
+    cwd: PathBuf,
     /// `configOptions`, set before the session starts: mode, model, effort.
-    pub config: Vec<(String, String)>,
+    config: Vec<(String, String)>,
     /// `_meta`, sent whole on every new and load.
-    pub meta: Value,
-}
-
-/// A select config option and its current value.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Config {
-    pub id: String,
-    pub value: String,
-    pub values: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Opened {
-    pub id: String,
-    pub config: Vec<Config>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Update {
-    User(String),
-    Text(String),
-    Thought(String),
-    /// A tool call, or what changed of one, by `id`.
-    Tool(Box<Tool>),
-    /// Context fill, and the turn's cost in USD when known.
-    Usage {
-        used: u64,
-        size: u64,
-        cost: Option<f64>,
-    },
-    Config(Vec<Config>),
-    Mode(String),
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Tool {
-    pub id: String,
-    pub title: Option<String>,
-    pub kind: Option<String>,
-    /// `pending`, `in_progress`, `completed` or `failed`.
-    pub status: Option<String>,
-    pub input: Option<Value>,
-    pub output: Option<Value>,
-}
-
-/// A permission request: the tool's kind, title, raw input and the options' names.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Ask {
-    pub tool: Tool,
-    pub options: Vec<String>,
-}
-
-/// The host's answer. "Always" stays a host rule: the adapter only ever hears `allow_once`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Answer {
-    Allow,
-    Reject,
-    Cancel,
-}
-
-/// Answers a request once; dropped, it answers `Cancel`.
-pub struct Reply(oneshot::Sender<Answer>);
-
-impl Reply {
-    pub fn send(self, answer: Answer) {
-        let _ = self.0.send(answer);
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Turn {
-    pub stop: StopReason,
-    /// Input and output tokens, when the adapter says.
-    pub tokens: Option<(u64, u64)>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Exit {
-    pub code: Option<i32>,
-    /// The end of its stderr.
-    pub stderr: String,
-    /// It went because the host closed it; its code means nothing then.
-    pub asked: bool,
+    meta: Value,
 }
 
 /// What the adapter sends, by session id, in the order it sent it.
-pub enum Event {
+enum Event {
     Update(String, Update),
     Ask(String, Box<Ask>, Reply),
     /// A prompt's answer: the turn ended.
-    Ended(String, std::result::Result<Turn, String>),
+    Ended(String, std::result::Result<Turn, Failure>),
     /// The session's close was answered: nothing more comes for it.
     Closed(String),
-    /// The adapter exited; every session on it has ended.
-    Exited(Exit),
+    /// The adapter exited, every session on it with it; `true` when the host closed it, so its code
+    /// means nothing.
+    Exited(Exit, bool),
 }
 
 /// One adapter process and its connection. Dropping it closes stdin; the process then gets
 /// `GRACE` to exit before a kill.
-pub struct Adapter {
+struct Adapter {
     cx: ConnectionTo<Agent>,
-    info: Info,
+    /// What `initialize` said.
+    version: String,
+    #[cfg(test)]
     pid: u32,
     on_event: Arc<dyn Fn(Event) + Send + Sync>,
+    /// Its stdout ended: it answers nothing more.
+    eof: Arc<AtomicBool>,
     asked: Arc<AtomicBool>,
     quit: Option<oneshot::Sender<()>>,
 }
 
 impl Adapter {
     /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
-    pub fn start(spec: &Spec, on_event: impl Fn(Event) + Send + Sync + 'static) -> Result<Adapter> {
+    fn start(
+        spec: &proc::Spec,
+        on_event: impl Fn(Event) + Send + Sync + 'static,
+    ) -> Result<Adapter> {
         Adapter::start_as(spec, true, on_event)
     }
 
-    /// `start` without JetBrains AIR's declaration, for the test that compares the two.
-    #[cfg(feature = "testutil")]
-    pub fn start_without_air(
-        spec: &Spec,
-        on_event: impl Fn(Event) + Send + Sync + 'static,
-    ) -> Result<Adapter> {
-        Adapter::start_as(spec, false, on_event)
-    }
-
     fn start_as(
-        spec: &Spec,
+        spec: &proc::Spec,
         air: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Adapter> {
@@ -181,12 +361,16 @@ impl Adapter {
             }
         });
         let (incoming, read) = futures::channel::mpsc::unbounded();
+        let eof = Arc::new(AtomicBool::new(false));
+        let ended = eof.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if incoming.unbounded_send(line).is_err() {
-                    return;
+                    break;
                 }
             }
+            // Before `incoming` drops: a request the end fails sees it.
+            ended.store(true, Ordering::SeqCst);
         });
         let outgoing = futures::sink::unfold(out, async |out, line: String| {
             out.send(line).map_err(std::io::Error::other)?;
@@ -218,18 +402,15 @@ impl Adapter {
                     .on_receive_request(
                         async move |r: RequestPermissionRequest, responder, cx| {
                             let (tx, rx) = oneshot::channel();
+                            let tool =
+                                tool(r.tool_call.tool_call_id.to_string(), r.tool_call.fields);
                             let ask = Ask {
-                                tool: tool(
-                                    r.tool_call.tool_call_id.to_string(),
-                                    r.tool_call.fields,
-                                ),
+                                key: key(&tool),
+                                tool,
                                 options: r.options.iter().map(|o| o.name.clone()).collect(),
                             };
-                            on_ask(Event::Ask(
-                                r.session_id.to_string(),
-                                Box::new(ask),
-                                Reply(tx),
-                            ));
+                            let reply = Reply::new(move |a| _ = tx.send(a));
+                            on_ask(Event::Ask(r.session_id.to_string(), Box::new(ask), reply));
                             let options = r.options;
                             cx.spawn(async move {
                                 let answer = rx.await.unwrap_or(Answer::Cancel);
@@ -252,76 +433,72 @@ impl Adapter {
                     proc.kill();
                     proc.wait(GRACE)
                 });
-                on_exit(Event::Exited(Exit {
+                let exit = Exit {
                     code: status.and_then(|s| s.code()),
                     stderr: proc.stderr(),
-                    asked: closing.load(Ordering::SeqCst),
-                }));
+                };
+                on_exit(Event::Exited(exit, closing.load(Ordering::SeqCst)));
             })?;
         let fail = |e: String| Error::Other(format!("The adapter did not start: {e}"));
         let cx = connected.recv().map_err(|e| fail(e.to_string()))?;
         let mut adapter = Adapter {
             cx,
-            info: Info::default(),
+            version: String::new(),
+            #[cfg(test)]
             pid,
             on_event,
+            eof,
             asked,
             quit: Some(quit),
         };
+        // JetBrains AIR's declaration: the adapter's stop of a background task needs it.
         let meta = json!({"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}});
         let caps = ClientCapabilities::new().meta(meta.as_object().cloned().filter(|_| air));
         let init =
             adapter.call(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps));
         let init = init.map_err(|e| fail(e.to_string()))?;
-        let agent = init
-            .agent_info
-            .unwrap_or_else(|| Implementation::new("", ""));
-        adapter.info = Info {
-            name: agent.name,
-            version: agent.version,
-        };
+        adapter.version = init.agent_info.map(|a| a.version).unwrap_or_default();
         Ok(adapter)
     }
 
-    pub fn info(&self) -> &Info {
-        &self.info
-    }
-
-    pub fn pid(&self) -> u32 {
-        self.pid
+    fn gone(&self) -> bool {
+        self.eof.load(Ordering::SeqCst)
     }
 
     fn call<R: agent_client_protocol::JsonRpcRequest>(&self, req: R) -> Result<R::Response> {
         block_on(self.cx.send_request(req).block_task()).map_err(|e| Error::Other(e.to_string()))
     }
 
-    pub fn new_session(&self, o: &Options) -> Result<Opened> {
+    fn new_session(&self, o: &Options) -> Result<Opened> {
         let r = self.call(
             NewSessionRequest::new(&o.cwd)
                 .config_options(initial(&o.config))
                 .meta(o.meta.as_object().cloned()),
         )?;
-        Ok(Opened {
-            id: r.session_id.to_string(),
-            config: configs(r.config_options.unwrap_or_default()),
-        })
+        Ok(self.opened(r.session_id.to_string(), r.config_options))
     }
 
     /// Loads a past session; a closed one is made anew from `o`, so it is sent whole.
-    pub fn load_session(&self, id: &str, o: &Options) -> Result<Opened> {
+    fn load_session(&self, id: &str, o: &Options) -> Result<Opened> {
         let r = self.call(
             LoadSessionRequest::new(id.to_string(), &o.cwd)
                 .config_options(initial(&o.config))
                 .meta(o.meta.as_object().cloned()),
         )?;
-        Ok(Opened {
-            id: id.into(),
-            config: configs(r.config_options.unwrap_or_default()),
-        })
+        Ok(self.opened(id.into(), r.config_options))
+    }
+
+    fn opened(&self, id: String, config: Option<Vec<SessionConfigOption>>) -> Opened {
+        Opened {
+            id,
+            version: self.version.clone(),
+            config: configs(config.unwrap_or_default()),
+            note: None,
+        }
     }
 
     /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
-    pub fn prompt(&self, session: &str, text: &str) -> Result<()> {
+    fn prompt(&self, session: &str, text: &str) -> Result<()> {
         let id = session.to_string();
         let blocks = vec![ContentBlock::Text(TextContent::new(text))];
         let ended = self.on_event.clone();
@@ -329,24 +506,24 @@ impl Adapter {
             .send_request(PromptRequest::new(session.to_string(), blocks))
             .on_receiving_result(async move |r| {
                 let turn = r.map(|r| Turn {
-                    stop: r.stop_reason,
+                    stop: stop(r.stop_reason),
                     tokens: r.usage.map(|u| (u.input_tokens, u.output_tokens)),
                 });
-                ended(Event::Ended(id, turn.map_err(|e| e.to_string())));
+                ended(Event::Ended(id, turn.map_err(|e| failure(e.to_string()))));
                 Ok(())
             })
             .map_err(|e| Error::Other(e.to_string()))
     }
 
     /// Ends the session's turn and its foreground command.
-    pub fn cancel(&self, session: &str) {
+    fn cancel(&self, session: &str) {
         let _ = self
             .cx
             .send_notification(CancelNotification::new(session.to_string()));
     }
 
     /// Ends the session's CLI, which frees its memory; `Event::Closed` follows.
-    pub fn close_session(&self, session: &str) {
+    fn close_session(&self, session: &str) {
         let (id, closed) = (session.to_string(), self.on_event.clone());
         let _ = self
             .cx
@@ -393,6 +570,31 @@ fn configs(options: Vec<SessionConfigOption>) -> Vec<Config> {
         _ => None,
     };
     options.into_iter().filter_map(select).collect()
+}
+
+fn stop(s: agent_client_protocol::v1::schema::StopReason) -> StopReason {
+    use agent_client_protocol::v1::schema::StopReason as S;
+    match s {
+        S::MaxTokens => StopReason::MaxTokens,
+        S::MaxTurnRequests => StopReason::MaxTurnRequests,
+        S::Refusal => StopReason::Refusal,
+        S::Cancelled => StopReason::Cancelled,
+        _ => StopReason::EndTurn,
+    }
+}
+
+fn failure(text: String) -> Failure {
+    let cause = text.contains("out of extra usage");
+    Failure {
+        cause: cause.then_some(Cause::OutOfExtraUsage),
+        text,
+    }
+}
+
+/// An ask's rule key: its kind, title and whole raw input; an ask without raw input takes none.
+fn key(t: &Tool) -> Option<String> {
+    let input = t.input.as_ref()?;
+    Some(json!([t.kind, t.title, input]).to_string())
 }
 
 /// A JSON enum value's name.
@@ -459,3 +661,6 @@ fn outcome(options: &[PermissionOption], answer: Answer) -> RequestPermissionOut
         None => RequestPermissionOutcome::Cancelled,
     }
 }
+
+#[cfg(test)]
+mod tests;

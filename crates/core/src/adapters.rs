@@ -16,6 +16,7 @@ pub use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::backend;
 use crate::env::{Env, which};
 use crate::error::{Error, Result};
 use crate::state::Cancel;
@@ -55,6 +56,7 @@ impl Config {
 pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
+    pub backend: backend::Name,
     pub adapter: &'static str,
     pub cli: &'static str,
     /// A floor; the catalog entry in use may raise it.
@@ -75,6 +77,7 @@ pub struct Provider {
 pub static CLAUDE: Provider = Provider {
     id: "claude",
     name: "Claude Agent",
+    backend: backend::Name::Acp,
     adapter: "claude-agent-acp",
     cli: "claude",
     min_cli: Version::new(2, 1, 322),
@@ -112,6 +115,7 @@ pub static CLAUDE: Provider = Provider {
 pub static CODEX: Provider = Provider {
     id: "codex",
     name: "Codex",
+    backend: backend::Name::Acp,
     adapter: "codex-acp",
     cli: "codex",
     min_cli: Version::new(0, 166, 0),

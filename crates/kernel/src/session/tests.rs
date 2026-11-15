@@ -3,9 +3,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use detached_core::adapters::{CLAUDE, Config, Installed, Version};
+use detached_acp::testutil::install;
+use detached_core::adapters::{self, BLOCK, CLAUDE, Config};
+use detached_core::backend::Kind;
 use detached_core::git::testutil::Sandbox;
+use detached_core::proc;
 use gpui::TestAppContext;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::{wait_for, wait_until};
@@ -94,25 +98,6 @@ fn boot_on(
     });
     let repo = repo.display().to_string();
     Fixture { dir, repo, core }
-}
-
-/// `fake_acp` as Claude's adapter at `version`, the current one; the one before is kept.
-fn install(core: &AppState, version: &str) {
-    let v = Version::parse(version).unwrap();
-    let exe = adapters::exe(&core.data_dir, CLAUDE.adapter, &v);
-    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(detached_acp::testutil::fake(), &exe).unwrap();
-    let folder = core.data_dir.join("adapters").join(CLAUDE.adapter);
-    let before = adapters::installed(&core.data_dir, CLAUDE.adapter).current;
-    let kept = Installed {
-        current: Some(v),
-        previous: before,
-    };
-    std::fs::write(
-        folder.join("installed.json"),
-        serde_json::to_vec(&kept).unwrap(),
-    )
-    .unwrap();
 }
 
 fn open(f: &Fixture, kind: Kind, cx: &mut TestAppContext) -> Entity<Session> {
@@ -261,7 +246,6 @@ fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(cx: &mut TestAppC
             assert_eq!(state(&first, cx), State::Ended(End::Closed));
         }
     }
-    assert!(cx.read(|cx| cx.global::<Sessions>().early.is_empty()));
 }
 
 #[gpui::test]
@@ -269,37 +253,17 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     cx: &mut TestAppContext,
 ) {
     let f = boot(cx, &[]);
-    let s = open(&f, Kind::Chat, cx);
-    let live = s.read_with(cx, |s, _| s.open.as_ref().unwrap().live.clone());
-    s.update(cx, |s, cx| s.prompt("die".into(), cx));
+    let mut spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    // The fake exits with code 3 at `session/new` for this model.
+    spec.model = Some("die".into());
+    let s = cx.update(|cx| Session::open(spec, None, cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
-    // What a start on that adapter brings back after its `Exited` was handled.
-    let closing = cx.read(|cx| cx.global::<Sessions>().closing.clone());
-    let (id, config, trust) = ("late".into(), vec![], String::new());
-    let late = Ok(Started {
-        open: Open {
-            live: live.clone(),
-            id,
-            closing,
-        },
-        config,
-        trust,
-        warn: None,
-        watch: None,
-    });
-    let late = cx.update(|cx| {
-        let s = Session::open(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
-        s.update(cx, |s, cx| s.started(late, cx));
-        s
-    });
-    let State::Ended(End::Crashed(why)) = state(&late, cx) else {
-        panic!("{:?}", state(&late, cx));
+    let State::Ended(End::Crashed(why)) = state(&s, cx) else {
+        panic!("{:?}", state(&s, cx));
     };
     assert!(why.contains("code 3"), "{why}");
-    // `live` pins the dead adapter, as a start still on it would.
+    assert_eq!(s.read_with(cx, |s, _| s.version.clone()), None);
     let next = open(&f, Kind::Chat, cx);
-    let serial = next.read_with(cx, |s, _| s.open.as_ref().unwrap().live.serial);
-    assert_ne!(serial, live.serial);
     assert_eq!(turn(&next, "say anew", cx), "anew");
 }
 
@@ -307,22 +271,19 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
 fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
-    let serial = s.read_with(cx, |s, _| s.open.as_ref().unwrap().live.serial);
-    let exit = |asked| {
-        let stderr = "Error: write EPIPE".into();
-        Event::Exited(acp::Exit {
-            code: Some(1),
-            stderr,
-            asked,
-        })
-    };
-    cx.update(|cx| dispatch(cx, u64::MAX, exit(false)));
-    assert_eq!(state(&s, cx), State::Idle);
-    cx.update(|cx| dispatch(cx, serial, exit(true)));
+    install(&f.core, "2.0.0");
+    let other = open(&f, Kind::Chat, cx);
+    let version =
+        |s: &Entity<Session>, cx: &TestAppContext| s.read_with(cx, |s, _| s.version.clone());
+    assert_ne!(version(&s, cx), version(&other, cx));
+    // What the backend makes of an exit it asked for, whatever its code and stderr.
+    let id = s.read_with(cx, |s, _| s.id.clone());
+    cx.update(|cx| deliver(cx, &s.downgrade(), id, Event::Closed));
     s.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Closed));
         assert!(!s.items.iter().any(|i| matches!(i, Item::Note(_))));
     });
+    assert_eq!(state(&other, cx), State::Idle);
 }
 
 #[gpui::test]
@@ -388,7 +349,6 @@ fn a_load_of_a_closing_session_waits_for_its_close(cx: &mut TestAppContext) {
     let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
     loaded.read_with(cx, |s, _| assert_eq!(s.items, replay));
     assert_eq!(turn(&loaded, "say again", cx), "again");
-    assert!(cx.read(|cx| cx.global::<Sessions>().early.is_empty()));
 }
 
 #[gpui::test]

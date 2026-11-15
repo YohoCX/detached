@@ -2,6 +2,8 @@ pub mod accounts;
 pub mod adapters;
 pub mod agent;
 pub mod api;
+// A backend's protocol stays in a private module of its crate; only its constructor leaves it.
+pub mod backend;
 pub mod crash;
 pub mod env;
 pub mod error;

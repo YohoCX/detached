@@ -14,7 +14,7 @@
 //!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
-//! first. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//! first. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -110,6 +110,10 @@ fn main() {
                     let o = all.into_iter().find(|o| o["configId"] == k)?;
                     o["value"].as_str().map(String::from)
                 };
+                if method == "session/new" && asked("model").as_deref() == Some("die") {
+                    eprintln!("fake_acp: died at session/new");
+                    std::process::exit(3);
+                }
                 let fallback = if method == "session/load" {
                     "fallback-opus"
                 } else {

@@ -2,10 +2,10 @@
 //! `make agent-test`, where a missing adapter or CLI fails. Each test runs on `boot_on`'s
 //! sandbox, with its own HOME and CLAUDE_CONFIG_DIR and Detached's three tiers apart.
 
-use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::Command;
 
-use detached_core::adapters::{CATALOG_KEY, Catalog};
+use detached_core::adapters::{CATALOG_KEY, Catalog, Installed, Version};
 use detached_core::env::Env;
 use detached_core::testutil::api::Api;
 
@@ -138,7 +138,7 @@ fn run(s: &Entity<Session>, prompt: &str, cx: &mut TestAppContext) {
     }
 }
 
-fn tool(s: &Entity<Session>, id: &str, cx: &App) -> Option<acp::Tool> {
+fn tool(s: &Entity<Session>, id: &str, cx: &App) -> Option<Tool> {
     s.read(cx).items.iter().find_map(|i| match i {
         Item::Tool(t) if t.id == id => Some(t.clone()),
         _ => None,
@@ -301,96 +301,6 @@ fn the_env_deny_refuses_read_and_cat(cx: &mut TestAppContext) {
         results.iter().all(|r| !r.contains("fixture-not")),
         "{results:?}"
     );
-}
-
-/// A turn on an adapter started with or without AIR's declaration, every ask allowed once: what
-/// it sent besides tool calls, and each tool call as its updates left it.
-fn air_turn(f: &Fixture, air: bool) -> (Vec<String>, BTreeMap<String, acp::Tool>) {
-    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
-    let env = f.core.env();
-    let mut vars = proc::env(CLAUDE.env, proc::parent(&env));
-    vars.push((CLAUDE.cli_var.into(), claude().into()));
-    let version = adapters::installed(&f.core.data_dir, CLAUDE.adapter).current;
-    let program = adapters::exe(&f.core.data_dir, CLAUDE.adapter, &version.unwrap());
-    let spec_proc = proc::Spec {
-        program,
-        args: vec![],
-        cwd: std::env::temp_dir(),
-        env: vars,
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let on = move |e| _ = tx.send(e);
-    let adapter = match air {
-        true => Adapter::start(&spec_proc, on),
-        false => Adapter::start_without_air(&spec_proc, on),
-    }
-    .unwrap();
-    let options = Options {
-        cwd: f.repo.clone().into(),
-        config: spec.config(),
-        meta: spec.meta(true),
-    };
-    let opened = adapter.new_session(&options).unwrap();
-    let (mut said, mut tools) = (vec![format!("{:?}", opened.config)], BTreeMap::new());
-    adapter.prompt(&opened.id, "go").unwrap();
-    let mut merge = |t: acp::Tool| {
-        let was: &mut acp::Tool = tools.entry(t.id.clone()).or_default();
-        was.id = t.id;
-        was.title = t.title.or(was.title.take());
-        was.kind = t.kind.or(was.kind.take());
-        was.status = t.status.or(was.status.take());
-        was.input = t.input.or(was.input.take());
-        was.output = t.output.or(was.output.take());
-    };
-    loop {
-        match rx.recv_timeout(START).expect("the turn ended") {
-            Event::Update(_, Update::Tool(t)) => merge(*t),
-            Event::Update(_, u) => said.push(format!("{u:?}")),
-            Event::Ask(_, ask, reply) => {
-                reply.send(acp::Answer::Allow);
-                let bare = [ask.tool.kind.is_none(), ask.tool.status.is_none()];
-                assert_eq!(bare, [air, air], "{:?}", ask.tool);
-                let tool = acp::Tool {
-                    kind: None,
-                    status: None,
-                    ..ask.tool
-                };
-                said.push(format!("ask {tool:?} {:?}", ask.options));
-            }
-            Event::Ended(_, end) => {
-                said.push(format!("{end:?}"));
-                break;
-            }
-            Event::Closed(_) | Event::Exited(_) => {}
-        }
-    }
-    (said, tools)
-}
-
-/// The check fired: with AIR the adapter keeps tool output out of `rawOutput` (a command's goes
-/// to `_meta.terminal_output`, a read's text nowhere) and gives an ask's tool no kind or status, so
-/// this pins those differences and no other.
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn the_air_declaration_changes_tool_output_and_nothing_else_seen(cx: &mut TestAppContext) {
-    let script = json!([
-        [bash("echo in front")],
-        [{"tool": "Bash", "input": {"command": "perl -e 'sleep 1'", "description": "behind",
-            "run_in_background": true}}],
-        [{"tool": "Read", "input": {"file_path": "README.md"}}],
-        text("read it"),
-    ]);
-    let (f, _api) = boot(cx, script);
-    let (said, tools) = air_turn(&f, true);
-    let (said_without, tools_without) = air_turn(&f, false);
-    assert_eq!(said, said_without);
-    assert_eq!(tools.len(), 3, "{tools:?}");
-    assert_eq!(tools_without.len(), 3, "{tools_without:?}");
-    for (id, mut t) in tools_without {
-        assert!(t.output.is_some(), "{t:?}");
-        t.output = None;
-        assert_eq!(tools[&id], t);
-    }
 }
 
 #[gpui::test]
