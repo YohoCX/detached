@@ -11,6 +11,8 @@ on:
       - crates/acp/**
       - crates/core/src/adapters.rs
       - crates/core/src/adapters/**
+      - crates/core/src/backend.rs
+      - crates/core/src/backend/**
       - crates/core/src/env.rs
       - crates/core/src/git/testutil.rs
       - crates/core/src/os.rs

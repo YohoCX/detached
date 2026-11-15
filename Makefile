@@ -24,6 +24,7 @@ ui-test:
 agent-test:
 	./scripts/adapter-build.sh claude-agent-acp
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
+	cargo test -p detached-acp -- --ignored
 
 # In a new worktree: its build starts from the worktree that built last.
 warm:

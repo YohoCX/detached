@@ -28,7 +28,10 @@ cli() {
   echo "claude $have"
   [ "$1" = latest ] || [ "${have%% *}" = "$1" ] || { echo "::error::claude is $have, not $1."; exit 1; }
 }
-real() { cargo test -p detached-kernel --lib session::tests::real -- --ignored; }
+real() {
+  cargo test -p detached-kernel --lib session::tests::real -- --ignored
+  cargo test -p detached-acp -- --ignored
+}
 
 if [ "${VET:-}" != 1 ]; then
   version=$(jq -r .claudeCodeVersion adapters/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/package.json)
