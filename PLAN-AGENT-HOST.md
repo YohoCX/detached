@@ -1319,7 +1319,13 @@ holds the trait and keeps the wait for an id's `Closed`. The fake Messages API i
 `testutil::api`. In `core::backend`'s tests, the source scan and the test on `crates/app/Cargo.toml`;
 `core::claude` joins private in part b. The sixteen session tests pass in the kernel, the
 adapter's eight and the split halves in `crates/acp`, and `make agent-test` on macOS with `claude`
-2.1.325: the kernel's eight and the AIR test in `crates/acp`. Part 0 and part b are next.**
+2.1.325: the kernel's eight and the AIR test in `crates/acp`. Of part b, the reader is built:
+`core::claude::history`, crate-private, with §6's path rule (its hash checked against part 0's long
+cwd), the list (title, tag, model, from a transcript's head and tail as the SDK reads them),
+history as updates and delete, tested on part 0's macOS fixtures; the seam's `past` and `delete`
+take the `Spec`, whose folder and place they need, and default to "none" for ACP. So is item 9's
+`detached --session` with `make agent-login`, tested on the fake ACP agent. Part 0 and the rest
+of part b are next.**
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
