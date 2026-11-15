@@ -18,6 +18,8 @@ rewritten, not kept beside this one. The evidence is
 - **Behind the standard interface.** One backend seam, `core::backend`. `kernel::Session`, the
   chat, panels and their participants, host tools, permissions, trust, the Agents page and the
   tests see a session, never a protocol. No flag, `_meta` or frame name crosses the seam.
+  PLAN-AGENT-HOST §1 has its calls, events and types, and the three checks that hold it: a
+  private module, a crate dependency, a source scan.
 - **ACP stays** the backend of Codex and of later providers.
 - **"For now."** A provider's manifest names its backend. Moving Claude to ACP, or to anything
   else, is that line and a backend; nothing above the seam changes.
@@ -46,14 +48,18 @@ rewritten, not kept beside this one. The evidence is
     the binary unmodified, no login method removed, and each user on their own login and bill;
   - "Developers building products or services that interact with Claude's capabilities, including
     those using the Agent SDK, should use API key authentication";
-  - plan limits "assume ordinary, individual usage";
+  - plan limits "assume ordinary, individual usage of Claude Code and the Agent SDK";
   - the Claude Code name may be said "in plain text", never as part of a product or feature name.
 
-  The page does not tell the SDK from the CLI's own interface. Its carve-out is for the unmodified
-  binary on the user's own login, and it names the SDK on the API-key side. So the direct
-  connection is nearer the text than the adapter was, and the 2026-11-12 reading "only the public
-  SDK" goes.
-- **What the text does not settle** goes to Anthropic now, not at H12:
+  The page does not tell the SDK from the CLI's own interface.
+  - Its carve-out is for the unmodified binary on the user's own login. The adapter path met
+    both conditions too.
+  - The developer sentence names SDK products as its example, and its class is any product on
+    Claude's capabilities: the direct connection is in it as well.
+  - So the text does not rank the two paths, and the letter's first question settles it. The
+    2026-11-12 reading "only the public SDK" goes, on the carve-out's wording.
+- **What the text does not settle** is Anthropic's to say; choice 5 recommends asking now, not at
+  H12:
   - whether a desktop client that runs the user's installed CLI is covered by the carve-out;
   - whether panels' parallel sessions are "ordinary, individual usage";
   - the label.
@@ -71,7 +77,8 @@ rewritten, not kept beside this one. The evidence is
     messages not at all.
 - **A break reaches users before its fix.** The user's `claude` updates itself most days, and the
   fix is an app release. Between the two, Claude in Detached is down on that version. What is left
-  then: `claude` in a terminal tab, and the installer's command for the last vetted version.
+  then: `claude` in a terminal tab, and the installer's command for the floor, the one version
+  every day's vetting passes on (PLAN-AGENT-HOST §3), if part 0 finds that such an install stays.
 - **The transcript format** is undocumented.
 - **Unproven** off macOS and on a real login. Part 0 of H4c runs both before the client is written.
 
@@ -82,7 +89,7 @@ rewritten, not kept beside this one. The evidence is
   if part 0 fails.
 - **C, the adapter without AIR:** no background stop, which today's chat has.
 - **D, our own sidecar on the Agent SDK:** a JavaScript process and a 100 MB download per user for
-  a client of a few hundred lines, on the SDK the terms page puts on API keys.
+  a client of a few hundred lines.
 - **Claude-specific calls above the seam:** the owner's condition excludes them.
 
 ## What the owner still decides
@@ -119,7 +126,9 @@ rewritten, not kept beside this one. The evidence is
      with no code change.
    - If the interface is refused: Claude moves back behind the seam to ACP with option B's patch.
 
-Until 1 to 3 are answered the plan is written to the recommendations and marks each as open.
+Until the owner answers, the plans are written to the five recommendations and mark each as open
+where it lands: PLAN-AGENT-HOST §6, §3, §2, §1 with H3, and H12. The letter is drafted, not
+sent.
 
 ## What the review of the proposal found
 
@@ -130,9 +139,9 @@ Until 1 to 3 are answered the plan is written to the recommendations and marks e
 | "The frames used are the oldest" is wrong; `get_usage` is experimental under A too | "The risks" above; PA §13's limits row; H4c part 0 row 9 |
 | "§4's window closes" rests on one experiment and one of six trust paths | PA §4: settings and skills are blocked, commands, agents and `.mcp.json` still end the session; part 0 row 5 runs it mid-turn; the prompt's sentence stays until then |
 | The WSL firewall rule does not go: the probe's responder needs it | PA §5: that gain is withdrawn; the rule stays, for the probe alone |
-| The fake CLI is not optional | H4c part b: `fake_claude`, with H4's session tests on both fakes in `make check` |
-| Terms: the page unread, the ask after the deletion, no fallback for the interface | read, "Why" above; the letter goes now; choice 5; H12 |
-| The "newer than last vetted" warning would always show | dropped; PA §3: vetting daily, at the floor and the latest, through the released client and main's |
+| The fake CLI is not optional | H4c part b: `fake_claude`, with the seam's ten of H4's sixteen session tests on both fakes in `make check`, and Claude's own beside ACP's own six |
+| Terms: the page unread, the ask after the deletion, no fallback for the interface | read, "Why" above; choice 5 recommends the letter now; H12 |
+| The "newer than last vetted" warning would always show | dropped; PA §3: vetting daily, at the floor and the latest, through main's client and, from 0.6.0, the released one |
 | The first evidence off macOS came after the client | H4c part 0 comes first |
 | History is the largest piece, unspiked and unsized | choice 1; PA §6; part 0 row 8; sized in H4c; the gate tests history, list and delete |
 | `tool_progress` is in no kept capture | PP §7: the stall rule rests on a tool call without its result; part 0 row 6 keeps the frames |
@@ -141,10 +150,31 @@ Until 1 to 3 are answered the plan is written to the recommendations and marks e
 | The built close orphans a CLI's command | PA §1: Claude's close, with signals to the group; part 0 row 3 |
 | Option B's run checked two of AIR's switches | does not apply: B is rejected and the declaration goes; the archive-on-delete is in "Why" |
 | D's evidence was misattributed | does not apply: D is rejected. Its point stands: the SDK had every OS, A has macOS, hence part 0 |
-| No leash or transcript reader in the WSL distro | PA §5 "What the distro holds"; part 0 row 4; transcripts through `wsl.exe` (PA §6, PP §10) |
-| No turn on a real login through the direct client | part 0 row 9 and H4c's owner check |
+| No leash or transcript reader in the WSL distro | PA §5 "What the distro holds"; part 0 row 4; H4c part b's WSL place: the session, the leash and the reader through `wsl.exe` (PA §6, PP §10) |
+| No turn on a real login through the direct client | part 0 row 9 on the spike's driver; H4c's `make agent-login` through `kernel::Session`, the gate's step 3 |
 | No baseline off macOS; the WSL2 job is not the product's topology | part 0: `agent.yml` first as the baseline, and a Windows host with the CLI in the distro |
 | The transcript path rule is incomplete; A sized by the driver alone | PA §6: truncated at 200 characters with a hash; H4c's sizes |
+
+## What the review of the plans found
+
+`.revmux/tasks/spike-0c/02-plans`, 14 findings, none refused.
+
+| Finding | Answer |
+| --- | --- |
+| The clippy guard cannot be built, and misses `crates/app` | PA §1: `core::claude` private, `crates/acp` exporting its constructor alone, a test on the app's `Cargo.toml`, a source scan; the kernel's `forbid` untouched |
+| No way to `kernel::Session` on a real login | H4c part b: `detached --session` and `make agent-login`; the gate's step 3, the owner's check, H5 and H8 use it |
+| The env and setting-sources checks on Claude's backend were left to "wherever" | H4c's tests: the seam's ten on both fakes, ACP's own six, Claude's own from `fake_claude`'s reported argv and env; PP §4 line 10 |
+| The WSL shape had no work item | H4c part b's WSL place, a `Spec` field; its argv test in `make check`, the real set again in the Windows job; PP P2 uses it |
+| The seam's surface could not carry §2, §6, §13 | PA §1: the calls, the events, `Caps`, each backend's rendering of `Spec`, and which part adds each type |
+| An always-rule matched the title's 200-character cut | PA §5: a rule is the ask's key, built from the whole call; H4c's and H11's tests; §13 states it is narrower than today |
+| Seventeen session tests are sixteen | named, in three groups |
+| Choices 4 and 5 read as settled | open in PA §1, H3 and H12, in the 2026-11-12 line and above |
+| Vetting at a release tag before 0.6.0 | PA §3: that leg starts at 0.6.0, on the tag's own tests |
+| The adapter build left `make agent-test` before the gate | it goes at the gate's step 4, with CLAUDE.md's line; a test-only manifest keeps the adapter's nine on ACP |
+| H11 missed the chat test §4 inverts | PA §4: the block carries the running turn only, and the next prompt ends the session as today, so that test keeps its assertions |
+| "Last vetted" was undefined, and a pinned install may update itself | PA §3: the floor is the vetted version; part 0 row 11 |
+| The terms reason overclaimed, and a quote was cut | "Why" above; D's clause dropped |
+| ANSWERS-0c kept reversed "Then" lines | a superseded line under each of five; part 0 writes `ANSWERS-H4c.md` |
 
 ## What this changes
 
@@ -156,6 +186,7 @@ Until 1 to 3 are answered the plan is written to the recommendations and marks e
     `kernel::Session`, on Claude's direct backend;
   - [2026-11-12, panels by trust](2026-11-12-panels-by-trust-and-wsl.md): the gateway address and
     firewall rule serve the probe, not the host's tools.
+- **The spike's answers:** five "Then" lines of ANSWERS-0c.md carry a superseded line.
 - **Unchanged:** the user's own `claude`, its login in a terminal tab and never read, trust by
   hash, the host answering every ask, §5's isolation, the fake Messages API as the test harness.
 - **Also for the owner:** today's chat sends no system prompt beyond one line. On the direct

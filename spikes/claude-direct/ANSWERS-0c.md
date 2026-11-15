@@ -4,6 +4,8 @@
 the Agent SDK does, with no ACP adapter? The thirteen rows, in order, then what else was found.
 The options were compared in the proposal of 2026-11-15 (commit 80149a6); the owner's decision is
 [docs/decisions/2026-11-16-claude-direct-connection.md](../../docs/decisions/2026-11-16-claude-direct-connection.md).
+This file is the macOS spike's record. Five of its "Then" lines carry a superseded line; H4c part
+0's answers on every OS go into `ANSWERS-H4c.md` beside it.
 
 **Short answer: yes.** Every row worked on macOS against `claude` 2.1.325. Two rows need work the
 adapter does today: history comes from the transcript file (row 6), and a killed host needs a leash
@@ -107,6 +109,9 @@ system/session_state_changed idle
 **Then:** every event the sidecar emits today comes from these messages, and its `feed` and `on`
 (70 lines of `sidecars/claude/sidecar.ts`) are the mapping to port. PLAN-PANELS §7's "a tool call
 in progress" has `tool_progress` as its signal.
+
+**Superseded (2026-11-16):** `tool_progress` is in no kept capture. PLAN-PANELS §7's rule rests on
+a tool call the host has seen without its result, and on no frame.
 
 ## 3. Permissions
 
@@ -274,6 +279,10 @@ and in the repo; five sets of flags. Then the sidecar's deny rules. Then a hook 
 - §13's "ConfigChange block: lost" comes back: an agent's edit to its own settings is blocked and
   the turn goes on, as today, and §4's window closes.
 
+**Superseded (2026-11-16):** the window is not shown closed. This row blocked one change to one
+source, made between turns. PLAN-AGENT-HOST §4 blocks settings and skills, ends the session on a
+changed command, agent file or `.mcp.json`, and keeps the prompt's sentence until H4c part 0 row 5.
+
 ## 9. Host tools
 
 **Ran:** `tools`: `initialize` with `sdkMcpServers: ["detached-host"]`, `--strict-mcp-config`, and
@@ -297,6 +306,9 @@ mcp__detached-host__*` and without.
 - §7's HTTP listener, single-use secret, peer check and `Host` check are not needed for Claude,
   nor under WSL the gateway listener and the firewall rule.
 - The `--mcp-config` way works too (H0b row 6) and puts the URL in argv.
+
+**Superseded (2026-11-16):** under WSL the gateway listener and the firewall rule stay, for the
+"sandbox ready" probe's responder (PLAN-AGENT-HOST §5).
 
 ## 10. Process hygiene
 
@@ -366,12 +378,19 @@ closed; the host killed with SIGKILL, bare and under a leash; a signal to the CL
 **Then:**
 - The frames used here are the oldest, and none of them left in the versions compared; their
   shapes were compared only between 0.3.319 and 0.3.322. Nothing promises either.
+
+  **Superseded (2026-11-16):** only the core is the oldest. `stop_task`, `apply_flag_settings` and
+  `get_context_usage` are 7 months old, `background_tasks` 4, `get_task_output` 1, and `get_usage`
+  is experimental (the decision's risks).
 - **`min_cli`:** going by the SDK's bundles, 2.1.300 has every request used here, and the floor of
   2.1.322 covers it. No CLI older than 2.1.325 was run.
 - **Weekly vetting** runs the rows of this spike through the host's own client against the latest
   `claude`: the handshake, a turn's message kinds, ask, allow and deny, `interrupt`, `stop_task`,
   resume with `--model`, the sources, the `.env` deny, a host tool call, a transcript read, a
   killed host. A version failing one goes to `blocked_cli`.
+
+  **Superseded (2026-11-16):** vetting is daily, at the floor and the latest `claude`. A failure
+  opens an issue, and the owner decides on `blocked_cli` (PLAN-AGENT-HOST §3).
 - The host reads frames as loose JSON, ignores what it does not know, and treats
   `unsupported_request` as "this CLI lacks it".
 
