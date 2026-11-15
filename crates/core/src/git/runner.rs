@@ -15,7 +15,7 @@ use crate::state::Cancel;
 
 const READ_LIMIT: Duration = Duration::from_secs(30);
 const SILENCE: Duration = Duration::from_secs(120);
-const DRAIN: Duration = Duration::from_secs(1);
+pub(crate) const DRAIN: Duration = Duration::from_secs(1);
 const TICK: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1144,8 +1144,8 @@ does. Like `wt new`, Create fetches first (a failure only warns), checks out the
 else tracks `origin/<branch>`, else branches from `origin/<base>`. The recipe is the item
 `worktree.toml` of the Recipes kind: `base`, `copies`, `install`, `teardown`; the commands run
 through `sh -c` (`cmd /C` on Windows) in the new tree, with output as the op's progress. A failed
-install keeps the worktree; Remove anyway also passes a failed or unaccepted teardown, which then
-does not run. The Worktrees page in Settings creates and removes; Worktrees… in a repo's menu opens
+install keeps the worktree; Remove anyway, offered once a Remove is refused and then confirmed,
+also passes a failed or unaccepted teardown, which then does not run; a locked worktree stays. The Worktrees page in Settings creates and removes; Worktrees… in a repo's menu opens
 it. Left for the owner: the DHP recipe against `wt new`, and the copies' ACL on Windows.**
 
 Work:

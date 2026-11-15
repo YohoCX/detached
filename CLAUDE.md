@@ -1,7 +1,7 @@
 # Detached
 
-Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, and the
-chat's turn snapshots (private refs) and restores:
+Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, managed
+worktrees (`git worktree add`/`remove`), and the chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, the agent's protocol and trust),
   blocking Rust, no UI types.
 - `crates/kernel`: the app's live state and its exchange as GPUI entities (`blocking`, `ui_state`,

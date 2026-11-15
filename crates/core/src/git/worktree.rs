@@ -7,15 +7,15 @@ use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::git::runner::{Kind, Opts, out, run};
+use crate::git::runner::{DRAIN, Kind, Opts, out, run};
 use crate::git::{arg, locked, pull};
 use crate::os;
 use crate::state::{AppState, Cancel};
@@ -150,6 +150,7 @@ pub fn recipe(state: &AppState, repo: &Path) -> Result<Recipe> {
 /// Checks out `branch` in a new worktree below `main`'s root with hooks off, then copies the
 /// recipe's files from `repo` and runs its install there. A local branch is checked out, else
 /// origin's is tracked, else it starts from the recipe's base. A failed install keeps the worktree.
+/// The fetch before it runs `repo`'s own hooks, as Fetch does.
 pub fn create(
     state: &AppState,
     repo: &Path,
@@ -234,8 +235,8 @@ pub fn create(
 }
 
 /// Runs the recipe's teardown in the linked worktree `path`, then removes it with hooks off, and
-/// the folders it leaves empty below its `worktrees` root; the branch stays. Changes in it or a
-/// teardown that fails or is not accepted stop it unless `force`.
+/// the folders it leaves empty below its `worktrees` root; the branch stays. Changes or submodules
+/// in it, or a teardown that fails or is not accepted, stop it unless `force`; a lock always does.
 pub fn remove(
     state: &AppState,
     repo: &Path,
@@ -252,16 +253,30 @@ pub fn remove(
         "--git-common-dir",
     ];
     let dirs = out(&env, path, &dirs, Kind::Read)?;
-    let mut dirs = dirs.lines();
-    if dirs.next() == dirs.next() {
+    let mut dirs = dirs.lines().map(Path::new);
+    let (Some(git), Some(common)) = (dirs.next(), dirs.next()) else {
+        return Err(Error::Other(format!(
+            "{} is not a worktree",
+            path.display()
+        )));
+    };
+    if git == common {
         return Err(Error::Other(format!(
             "{} is a main checkout",
             path.display()
         )));
     }
-    if !force && !out(&env, path, &["status", "--porcelain"], Kind::Read)?.is_empty() {
+    if git.join("locked").exists() {
         return Err(Error::Other(format!(
-            "{} has changes; Remove anyway discards them",
+            "{} is locked; git worktree unlock frees it",
+            path.display()
+        )));
+    }
+    let status = ["status", "--porcelain", "--ignore-submodules=none"];
+    if !force && (git.join("modules").is_dir() || !out(&env, path, &status, Kind::Read)?.is_empty())
+    {
+        return Err(Error::Other(format!(
+            "{} has changes or submodules; Remove anyway discards them",
             path.display()
         )));
     }
@@ -279,7 +294,8 @@ pub fn remove(
     let mut args = vec!["worktree", "remove"];
     args.extend(force.then_some("--force"));
     args.push(&to);
-    locked(state, repo, || hookless(&env, repo, &args))?;
+    // From the shared git dir: Windows cannot delete a folder that is git's cwd.
+    locked(state, repo, || hookless(&env, common, &args))?;
     let above = path.ancestors().skip(1);
     if let Some(root) = above
         .clone()
@@ -307,20 +323,29 @@ fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
 /// Copies each of `copies` that `from` has into `to`, readable by the owner only; a file the new
 /// worktree already has is kept.
 fn copy(from: &Path, to: &Path, copies: &[String]) -> Result<()> {
-    let inside =
-        |p: &Path, root: &Path| Ok::<_, Error>(p.canonicalize()?.starts_with(root.canonicalize()?));
     for rel in copies {
         let (source, dest) = (from.join(rel), to.join(rel));
         let Ok(meta) = fs::symlink_metadata(&source) else {
             continue;
         };
-        if !meta.is_file() || !inside(&source, from)? {
+        if !meta.is_file() || !source.canonicalize()?.starts_with(from.canonicalize()?) {
             return Err(Error::Other(format!("Copy {rel} is not a regular file")));
         }
-        let parent = dest.parent().unwrap();
-        fs::create_dir_all(parent)?;
-        if !inside(parent, to)? {
-            return Err(Error::Other(format!("Copy {rel} leaves the worktree")));
+        // The new branch may have a symlink where the checkout has a folder.
+        let mut dir = to.to_path_buf();
+        for part in Path::new(rel)
+            .parent()
+            .into_iter()
+            .flat_map(Path::components)
+        {
+            dir.push(part);
+            match fs::symlink_metadata(&dir) {
+                Ok(m) if !m.is_dir() => {
+                    return Err(Error::Other(format!("Copy {rel} leaves the worktree")));
+                }
+                Ok(_) => {}
+                Err(_) => fs::create_dir(&dir)?,
+            }
         }
         let mut file = match os::create_private(&dest) {
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -346,27 +371,34 @@ fn shell(env: &Env, dir: &Path, script: &str, cancel: &Cancel, progress: Progres
     let mut child = cmd.spawn()?;
     drop(cmd);
     let (tx, rx) = mpsc::channel();
+    // Reads to the end even when no one listens, so a background job never gets a broken pipe.
     std::thread::spawn(move || {
-        for line in BufReader::new(read).lines().map_while(|l| l.ok()) {
-            if tx.send(line).is_err() {
-                break;
-            }
+        let (mut read, mut buf) = (BufReader::new(read), vec![]);
+        while read.read_until(b'\n', &mut buf).is_ok_and(|n| n > 0) {
+            let line = String::from_utf8_lossy(&buf);
+            let _ = tx.send(line.trim_end_matches(['\r', '\n']).to_string());
+            buf.clear();
         }
     });
+    let poll = Duration::from_millis(50);
     let mut tail = VecDeque::new();
-    let mut exit = None;
+    let mut exit: Option<(_, Instant)> = None;
     let status = loop {
-        let line = rx.recv_timeout(Duration::from_millis(50));
-        if let Ok(line) = &line {
-            progress(line);
-            tail.push_back(line.clone());
-            if tail.len() > 20 {
-                tail.pop_front();
+        let line = rx.recv_timeout(poll);
+        match &line {
+            Ok(line) => {
+                progress(line);
+                tail.push_back(line.clone());
+                if tail.len() > 20 {
+                    tail.pop_front();
+                }
             }
+            Err(RecvTimeoutError::Disconnected) if exit.is_none() => std::thread::sleep(poll),
+            Err(_) => {}
         }
         // After the exit, a background job may still hold the pipe: read until it goes quiet.
         match exit {
-            Some(status) if line.is_err() => break status,
+            Some((status, at)) if line.is_err() || at.elapsed() >= DRAIN => break status,
             Some(_) => continue,
             None => {}
         }
@@ -375,7 +407,7 @@ fn shell(env: &Env, dir: &Path, script: &str, cancel: &Cancel, progress: Progres
             let _ = child.wait();
             return Err(Error::Cancelled);
         }
-        exit = child.try_wait()?;
+        exit = child.try_wait()?.map(|s| (s, Instant::now()));
     };
     if status.success() {
         return Ok(());
@@ -460,10 +492,81 @@ mod tests {
         assert!(!sb.path("worktrees/repo").exists());
         assert!(sb.path("worktrees").exists());
         assert_eq!(sb.git(&repo, &["branch", "--list", "feat/x"]), "feat/x");
+        fs::remove_file(&torn).unwrap();
         assert!(
             rm(&sb, &repo, &repo, true).is_err(),
             "a main checkout stays"
         );
+        assert!(!torn.exists(), "its teardown does not run");
+    }
+
+    #[test]
+    fn install_output_that_is_not_utf8_is_read_to_the_end() {
+        let (sb, repo) = sandbox();
+        fs::write(repo.join("bad.log"), b"caf\xe9\n").unwrap();
+        let cat = if cfg!(windows) { "type" } else { "cat" };
+        let install = format!("{cat} bad.log && echo after");
+        set_recipe(
+            &sb,
+            &repo,
+            &format!("copies = [\"bad.log\"]\ninstall = \"{install}\"\n"),
+        );
+        let lines = std::sync::Mutex::new(vec![]);
+        let folder = repo.parent().unwrap();
+        let progress = |l: &str| lines.lock().unwrap().push(l.trim().to_string());
+        let cancel = Cancel::default();
+        create(&sb.state, &repo, &repo, folder, "feat", &cancel, &progress).unwrap();
+        let lines = lines.into_inner().unwrap();
+        assert!(lines.contains(&"caf\u{fffd}".to_string()), "{lines:?}");
+        assert_eq!(lines.last().map(String::as_str), Some("after"));
+    }
+
+    #[test]
+    fn a_locked_or_submodule_worktree_is_refused_before_its_teardown() {
+        let (sb, repo) = sandbox();
+        let torn = sb.path("torn");
+        let teardown = format!("teardown = 'echo down> \"{}\"'\n", torn.display());
+        set_recipe(&sb, &repo, &teardown);
+        let path = new(&sb, &repo, "feat").unwrap();
+        sb.git(&repo, &["worktree", "lock", &path.display().to_string()]);
+        let error = rm(&sb, &repo, &path, true).unwrap_err().to_string();
+        assert!(error.contains("is locked"), "{error}");
+        sb.git(&repo, &["worktree", "unlock", &path.display().to_string()]);
+        let git = sb.git(&path, &["rev-parse", "--path-format=absolute", "--git-dir"]);
+        fs::create_dir(Path::new(&git).join("modules")).unwrap();
+        let error = rm(&sb, &repo, &path, false).unwrap_err().to_string();
+        assert!(error.contains("submodules"), "{error}");
+        assert!(!torn.exists());
+        rm(&sb, &path, &path, true).unwrap();
+        assert!(torn.exists());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_copy_under_a_symlink_of_the_new_branch_makes_nothing_outside() {
+        let (sb, repo) = sandbox();
+        let outside = sb.path("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(sb.path("target"), outside.display().to_string()).unwrap();
+        let blob = sb.git(
+            &repo,
+            &[
+                "hash-object",
+                "-w",
+                &sb.path("target").display().to_string(),
+            ],
+        );
+        sb.git(&repo, &["checkout", "-qb", "feat"]);
+        let entry = format!("120000,{blob},cfg");
+        sb.git(&repo, &["update-index", "--add", "--cacheinfo", &entry]);
+        sb.git(&repo, &["commit", "-qm", "link"]);
+        sb.git(&repo, &["checkout", "-q", "-"]);
+        fs::create_dir_all(repo.join("cfg/sub")).unwrap();
+        fs::write(repo.join("cfg/sub/.env"), "KEY=1\n").unwrap();
+        set_recipe(&sb, &repo, "copies = [\"cfg/sub/.env\"]\n");
+        let error = new(&sb, &repo, "feat").unwrap_err().to_string();
+        assert!(error.contains("leaves the worktree"), "{error}");
+        assert!(!outside.join("sub").exists());
     }
 
     #[test]

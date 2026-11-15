@@ -72,7 +72,18 @@ fn the_worktrees_page_creates_a_worktree_with_its_recipe_and_removes_it(cx: &mut
 
     cx.update(|_, cx| settings::open(cx, "worktrees"));
     wait_until(cx, |cx| cx.find("worktrees.remove.0").is_some());
+    assert!(cx.find("worktrees.force.0").is_none());
+    fs::write(tree.join("draft.txt"), "wip").unwrap();
     cx.click("worktrees.remove.0");
+    wait_until(cx, |cx| cx.find("worktrees.force.0").is_some());
+    let error = cx
+        .find("worktrees.error")
+        .and_then(|e| e.label().map(String::from));
+    assert!(error.unwrap_or_default().contains("has changes"));
+    cx.click("worktrees.force.0");
+    wait_until(cx, |cx| cx.find("worktrees.confirm.0").is_some());
+    assert!(tree.join("draft.txt").exists());
+    cx.click("worktrees.confirm.0");
     wait_until(cx, |cx| cx.find("worktrees.tree.0").is_none());
     assert!(!tree.exists());
     let branches = cx.sb.git(Path::new(&main), &["branch", "--list", "feat"]);

@@ -6,7 +6,7 @@ use detached_core::store::Kind;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Subscription, Window, div,
+    Styled, Subscription, Window, div,
 };
 use kernel::activity::Activity;
 use kernel::invalidate;
@@ -28,6 +28,8 @@ pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
             branch: cx.new(|cx| InputState::new(window, cx).placeholder("Branch")),
             busy: false,
             error: None,
+            refused: None,
+            confirm: None,
             _workspace: Workspace::observe(cx, |this: &mut Page, cx| this.follow(cx)),
         };
         page.follow(cx);
@@ -42,6 +44,10 @@ struct Page {
     branch: Entity<InputState>,
     busy: bool,
     error: Option<String>,
+    /// The worktree a plain Remove refused, which then offers Remove anyway.
+    refused: Option<String>,
+    /// The worktree whose Remove anyway waits for its confirm.
+    confirm: Option<String>,
     _workspace: Subscription,
 }
 
@@ -53,15 +59,18 @@ impl Page {
         if self.repo != repo {
             self.repo = repo.clone();
             self.error = None;
+            (self.refused, self.confirm) = (None, None);
             self.sharing = repo.map(|r| Interest::view(kernel::sharing::get(cx, &r), cx));
         }
         cx.notify();
     }
 
-    /// Runs `f` as an op on the current repo; what it returns goes to the status message.
+    /// Runs `f` as an op on the current repo; what it returns goes to the status message, and a
+    /// failure marks `refused` as refused.
     fn run(
         &mut self,
         label: &'static str,
+        refused: Option<String>,
         f: impl FnOnce(&AppState, u64, Progress) -> Result<String> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
@@ -70,6 +79,7 @@ impl Page {
         };
         self.busy = true;
         self.error = None;
+        (self.refused, self.confirm) = (None, None);
         let done = Activity::global(cx).update(cx, |a, cx| a.run_op(&repo, label, f, cx));
         cx.spawn(async move |this, cx| {
             let result = done.await;
@@ -77,7 +87,11 @@ impl Page {
                 this.busy = false;
                 match result {
                     Ok(said) => Activity::global(cx).update(cx, |a, cx| a.say(said, false, cx)),
-                    Err(e) => this.error = Some(e.to_string()),
+                    Err(e) if this.repo.as_ref() == Some(&repo) => {
+                        this.error = Some(e.to_string());
+                        this.refused = refused;
+                    }
+                    Err(_) => {}
                 }
                 invalidate::rescan(cx);
                 cx.notify();
@@ -110,6 +124,7 @@ impl Page {
         }
         self.run(
             "New worktree",
+            None,
             move |core, id, p| {
                 let path = api::create_worktree(core, &repo, &main, &folder, &branch, id, p)?;
                 Ok(format!("Created {path}"))
@@ -122,8 +137,10 @@ impl Page {
         let Some(repo) = self.repo.clone() else {
             return;
         };
+        let refused = (!force).then(|| path.clone());
         self.run(
             "Remove worktree",
+            refused,
             move |core, id, p| {
                 api::remove_worktree(core, &repo, &path, force, id, p)?;
                 Ok(format!("Removed {path}; its branch stays"))
@@ -192,15 +209,47 @@ impl Render for Page {
             let status = Repo::get(cx, &path).and_then(|r| r.status());
             let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
             let id = |what| SharedString::from(format!("worktrees.{what}.{i}"));
-            let line = row()
-                .child(button(id("remove"), "Remove", !self.busy, cx, {
-                    let path = path.clone();
-                    move |this, _, cx| this.remove(path.clone(), false, cx)
-                }))
-                .child(button(id("force"), "Remove anyway", !self.busy, cx, {
-                    let path = path.clone();
-                    move |this, _, cx| this.remove(path.clone(), true, cx)
-                }));
+            let mut line = row();
+            if self.confirm.as_ref() == Some(&path) {
+                let p = path.clone();
+                line = line
+                    .child(
+                        button(
+                            id("confirm"),
+                            "Discard changes and remove",
+                            true,
+                            cx,
+                            move |this, _, cx| this.remove(p.clone(), true, cx),
+                        )
+                        .text_color(ui::theme(cx).error),
+                    )
+                    .child(button(id("cancel"), "Cancel", true, cx, |this, _, cx| {
+                        this.confirm = None;
+                        cx.notify();
+                    }));
+            } else {
+                let p = path.clone();
+                line = line.child(button(
+                    id("remove"),
+                    "Remove",
+                    !self.busy,
+                    cx,
+                    move |this, _, cx| this.remove(p.clone(), false, cx),
+                ));
+                if self.refused.as_ref() == Some(&path) {
+                    let p = path.clone();
+                    line = line.child(button(
+                        id("force"),
+                        "Remove anyway",
+                        !self.busy,
+                        cx,
+                        move |this, _, cx| {
+                            this.confirm = Some(p.clone());
+                            cx.notify();
+                        },
+                    ));
+                }
+            }
             let text = format!("{name} · {branch}");
             page = page.child(
                 div()
