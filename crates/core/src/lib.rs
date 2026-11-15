@@ -17,6 +17,10 @@ pub mod selftest;
 pub mod settings;
 pub mod state;
 pub mod store;
+#[cfg(any(test, feature = "testutil"))]
+pub mod testutil {
+    pub mod api;
+}
 pub mod trust;
 pub mod types;
 pub mod update;

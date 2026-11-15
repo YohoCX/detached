@@ -15,6 +15,7 @@ on:
       - crates/core/src/git/testutil.rs
       - crates/core/src/os.rs
       - crates/core/src/proc.rs
+      - crates/core/src/testutil/**
       - crates/core/src/trust.rs
       - crates/core/src/update.rs
       - crates/core/src/update/**

@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 use std::process::Command;
 
-use detached_acp::testutil::api::Api;
 use detached_core::adapters::{CATALOG_KEY, Catalog};
 use detached_core::env::Env;
+use detached_core::testutil::api::Api;
 
 use super::*;
 
