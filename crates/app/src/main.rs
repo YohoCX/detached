@@ -56,6 +56,7 @@ fn main() {
             cx.spawn(async |cx| cx.update(|cx| cx.quit())).detach();
         } else {
             kernel::update::start(cx);
+            kernel::agents::start(cx);
         }
         cx.activate(true);
     });

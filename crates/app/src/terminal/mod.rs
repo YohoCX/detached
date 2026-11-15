@@ -172,6 +172,17 @@ impl Terminals {
     }
 }
 
+/// Types `line` into a new shell of the Terminal app and shows it.
+pub fn run(line: &str, window: &mut Window, cx: &mut App) {
+    Terminals::global(cx).update(cx, |t, cx| {
+        t.open(window, cx);
+        if let Some(s) = t.active() {
+            s.read(cx).write(format!("{line}\r").into_bytes());
+        }
+    });
+    dock::open("terminal", window, cx);
+}
+
 /// The titles of the shells, in the Terminal app and in tabs of their own.
 pub fn live(cx: &App) -> Vec<String> {
     let Some(t) = cx.try_global::<Global_>() else {

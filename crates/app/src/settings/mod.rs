@@ -1,5 +1,6 @@
 //! The Settings layer: a modal over the window with the pages features register, listed by group.
 
+mod agents;
 mod api;
 mod sharing;
 mod updates;
@@ -35,9 +36,13 @@ impl Global for Pages {}
 /// Asks for the layer at a page, opening it if needed.
 struct Open(&'static str);
 
+struct Close;
+
 struct Opener;
 
 impl EventEmitter<Open> for Opener {}
+
+impl EventEmitter<Close> for Opener {}
 
 struct GlobalOpener(Entity<Opener>);
 
@@ -56,6 +61,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     );
     register_page(cx, "keymap", "Keymap", Group::App, keymap::page);
     register_page(cx, "updates", "Updates", Group::App, updates::page);
+    register_page(cx, "agents", "Agents", Group::App, agents::page);
     register_page(cx, "sharing", "Sharing", Group::Repo, sharing::page);
     vec![]
 }
@@ -80,9 +86,14 @@ fn layer(window: &mut Window, cx: &mut App) -> AnyView {
                 cx.notify();
             },
         );
+        let _close = cx.subscribe(&opener, |host: &mut Host, _, _: &Close, cx| {
+            host.dialog = None;
+            cx.notify();
+        });
         Host {
             dialog: None,
             _open,
+            _close,
         }
     })
     .into()
@@ -91,6 +102,7 @@ fn layer(window: &mut Window, cx: &mut App) -> AnyView {
 struct Host {
     dialog: Option<(Entity<Dialog>, Subscription)>,
     _open: Subscription,
+    _close: Subscription,
 }
 
 impl Render for Host {
@@ -186,7 +198,7 @@ impl Dialog {
     }
 }
 
-fn close(cx: &Context<Dialog>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<> {
+fn dismiss(cx: &Context<Dialog>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + use<> {
     let this = cx.weak_entity();
     move |_, _, cx| {
         this.update(cx, |_, cx| cx.emit(DismissEvent)).ok();
@@ -217,7 +229,7 @@ impl Render for Dialog {
             .child(
                 ui::titled(ui::icon_button("settings.close", Icon::Close, cx), "Close")
                     .test_support()
-                    .on_click(close(cx)),
+                    .on_click(dismiss(cx)),
             );
         let shown = self.pages.iter().find(|p| p.0.id == self.page);
         let page = div()
@@ -244,7 +256,7 @@ impl Render for Dialog {
             .size_full()
             .occlude()
             .bg(t.scrim)
-            .on_click(close(cx));
+            .on_click(dismiss(cx));
         let dialog = ui::glass(div(), cx)
             .id("settings")
             .test_support()

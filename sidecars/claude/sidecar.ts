@@ -1,4 +1,4 @@
-// Between Detached and Claude Code: the host's JSON lines on stdin and stdout, the Agent SDK on the other side.
+// Between Detached and the user's `claude`: the host's JSON lines on stdin and stdout, the Agent SDK on the other side.
 import { deleteSession, getSessionMessages, listSessions, query, tagSession } from "@anthropic-ai/claude-agent-sdk";
 import { createInterface } from "node:readline";
 
@@ -210,7 +210,7 @@ const commands = (all: any[]) =>
 async function init(m: any) {
   emit({ type: "ready", session_id: m.session_id, model: m.model, mode: m.permissionMode, effort: m.effort ?? null });
   if (oldCli(m.claude_code_version)) {
-    emit({ type: "error", message: `Claude Code ${m.claude_code_version} is older than ${MIN_CLI.join(".")}; please update it` });
+    emit({ type: "error", message: `claude ${m.claude_code_version} is older than ${MIN_CLI.join(".")}; please update it` });
   }
   if (told) return;
   told = true;

@@ -2,7 +2,7 @@
 
 use gpui_kit::{AnyView, App, Window};
 
-use super::{GlobalOpener, Open, Page, Pages};
+use super::{Close, GlobalOpener, Open, Page, Pages};
 
 /// Where a page is listed, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -45,5 +45,12 @@ pub fn register_page(
 pub fn open(cx: &mut App, id: &'static str) {
     if let Some(o) = cx.try_global::<GlobalOpener>() {
         o.0.clone().update(cx, |_, cx| cx.emit(Open(id)));
+    }
+}
+
+/// Closes Settings, as for a page that hands over to a terminal.
+pub fn close(cx: &mut App) {
+    if let Some(o) = cx.try_global::<GlobalOpener>() {
+        o.0.clone().update(cx, |_, cx| cx.emit(Close));
     }
 }
