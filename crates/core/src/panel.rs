@@ -50,6 +50,7 @@ pub struct Run {
     pub round: String,
     pub profile: String,
     pub scope: String,
+    pub reviewed_range: Option<(String, String)>,
     pub participants: Vec<Participant>,
     pub findings: Vec<Finding>,
     pub set_aside: Vec<Finding>,
@@ -115,6 +116,7 @@ pub fn import(path: &Path) -> Result<Run> {
         round: name(path),
         profile: String::new(),
         scope: optional(&path.join("input/scope.md"))?.unwrap_or_default(),
+        reviewed_range: None,
         participants: vec![],
         findings: vec![],
         set_aside: vec![],
@@ -286,7 +288,11 @@ pub fn for_repo(core: &AppState, repo: &str) -> Result<Rounds> {
         Kind::Read,
     )?;
     let root = PathBuf::from(root.trim());
-    list(&root.join(".revmux/tasks"))
+    let mut rounds = list(&root.join(".revmux/tasks"))?;
+    for run in &mut rounds.runs {
+        run.reviewed_range = reviewed_range(core, &root, &run.scope, run.started_at);
+    }
+    Ok(rounds)
 }
 
 #[derive(Clone, Debug)]
@@ -305,7 +311,7 @@ pub fn fix_range(scope: &str) -> Option<String> {
         if w[..2] != ["git", "diff"] {
             return None;
         }
-        let (a, b) = w[2].split_once("..")?;
+        let (a, b) = w[2].split_once("...").or_else(|| w[2].split_once(".."))?;
         let valid = |s: &str| {
             !s.is_empty()
                 && !s.starts_with('-')
@@ -318,6 +324,72 @@ pub fn fix_range(scope: &str) -> Option<String> {
     })
 }
 
+fn reviewed_range(
+    core: &AppState,
+    repo: &Path,
+    scope: &str,
+    started_at: i64,
+) -> Option<(String, String)> {
+    let range = fix_range(scope)?;
+    let triple = range.contains("...");
+    let (a, b) = range.split_once(if triple { "..." } else { ".." })?;
+    let words: Vec<_> = scope
+        .split_whitespace()
+        .map(|s| s.trim_matches(['`', '\'', '"', ':', ',', ';', '.']))
+        .collect();
+    let branch = words
+        .windows(2)
+        .find(|w| w[0].eq_ignore_ascii_case("branch"))
+        .map_or("HEAD", |w| w[1]);
+    let env = core.env();
+    let resolve = |rev: &str| {
+        let rev = if let Some(suffix) = rev
+            .strip_prefix("HEAD")
+            .filter(|s| s.is_empty() || s.starts_with(['~', '^']))
+        {
+            if started_at == 0 {
+                return None;
+            }
+            let head = runner::out(
+                &env,
+                repo,
+                &[
+                    "rev-list",
+                    "-1",
+                    &format!("--before=@{}", started_at / 1000),
+                    branch,
+                    "--",
+                ],
+                Kind::Read,
+            )
+            .ok()?;
+            if head.trim().is_empty() {
+                return None;
+            }
+            format!("{}{suffix}", head.trim())
+        } else {
+            rev.into()
+        };
+        let rev = runner::out(
+            &env,
+            repo,
+            &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+            Kind::Read,
+        )
+        .ok()?;
+        let rev = rev.trim();
+        (!rev.is_empty()).then(|| rev.to_string())
+    };
+    let (mut a, b) = (resolve(a)?, resolve(b)?);
+    if triple {
+        a = runner::out(&env, repo, &["merge-base", &a, &b], Kind::Read)
+            .ok()?
+            .trim()
+            .into();
+    }
+    Some((a, b))
+}
+
 pub fn fix(core: &AppState, repo: &str, scope: &str) -> Option<Fix> {
     let range = fix_range(scope)?;
     let env = core.env();
@@ -325,7 +397,8 @@ pub fn fix(core: &AppState, repo: &str, scope: &str) -> Option<Fix> {
     let commits = runner::out(
         &env,
         repo,
-        &["log", "--format=%h", &range, "--"],
+        // `diff a...b` is merge-base..b, whose commits are `log a..b`, not `log a...b`.
+        &["log", "--format=%h", &range.replace("...", ".."), "--"],
         Kind::Read,
     )
     .ok()?;
@@ -364,15 +437,80 @@ mod tests {
             fix_range("Review `git diff v1.2..HEAD`."),
             Some("v1.2..HEAD".into())
         );
+        assert_eq!(fix_range("git diff a...b"), Some("a...b".into()));
         for scope in [
             "",
             "Review the current changes",
             "git diff HEAD",
-            "git diff a...b",
             "git diff --output=/tmp/file",
         ] {
             assert_eq!(fix_range(scope), None);
         }
+    }
+
+    #[test]
+    fn reviewed_ranges_resolve_commits_and_merge_bases() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("range");
+        let base = sb.git(&repo, &["rev-parse", "HEAD"]);
+        let a = sb.commit(&repo, "a", "a", "a");
+        sb.git(&repo, &["checkout", "-qb", "other", &base]);
+        let b = sb.commit(&repo, "b", "b", "b");
+        for (scope, expected) in [
+            (format!("git diff {a}..{b}"), (a.clone(), b.clone())),
+            (format!("git diff {a}...{b}"), (base, b.clone())),
+        ] {
+            assert_eq!(reviewed_range(&sb.state, &repo, &scope, 0), Some(expected));
+        }
+        for scope in ["no range", "git diff missing..HEAD", "git diff main..HEAD"] {
+            assert!(reviewed_range(&sb.state, &repo, scope, 0).is_none());
+        }
+    }
+
+    #[test]
+    fn reviewed_head_is_pinned_by_round_time_and_scope_branch() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("range");
+        let dated_commit = |date: &str| {
+            let mut env = sb.state.env();
+            env.vars.push(("GIT_COMMITTER_DATE".into(), date.into()));
+            runner::out(
+                &env,
+                &repo,
+                &["commit", "--allow-empty", "-qm", "dated", "--date", date],
+                Kind::Write,
+            )
+            .unwrap();
+            sb.git(&repo, &["rev-parse", "HEAD"])
+        };
+        let a = dated_commit("2020-01-01T00:00:00Z");
+        let b = dated_commit("2020-01-02T00:00:00Z");
+        let start = timestamp("2020-01-02T12:00:00Z").unwrap();
+        dated_commit("2020-01-03T00:00:00Z");
+        let scope = format!("git diff {a}..HEAD");
+        assert_eq!(
+            reviewed_range(&sb.state, &repo, &scope, start),
+            Some((a.clone(), b.clone()))
+        );
+        assert_eq!(
+            reviewed_range(&sb.state, &repo, "git diff HEAD~1..HEAD", start),
+            Some((a.clone(), b.clone()))
+        );
+        sb.git(&repo, &["checkout", "-qb", "other", &a]);
+        assert_eq!(
+            reviewed_range(&sb.state, &repo, &format!("Branch `main`\n{scope}"), start),
+            Some((a.clone(), b))
+        );
+        let dir = repo.join(".revmux/tasks/task/round/input");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("scope.md"), scope).unwrap();
+        fs::write(
+            dir.parent().unwrap().join("manifest.json"),
+            r#"{"started_at":"2020-01-02T12:00:00Z"}"#,
+        )
+        .unwrap();
+        let rounds = for_repo(&sb.state, repo.to_str().unwrap()).unwrap();
+        assert_eq!(rounds.runs[0].reviewed_range, Some((a.clone(), a)));
     }
 
     #[test]
@@ -389,6 +527,15 @@ mod tests {
         assert!(super::fix(&sb.state, repo, "no range").is_none());
         assert!(super::fix(&sb.state, repo, "git diff unknown..HEAD").is_none());
         assert!(super::fix(&sb.state, repo, "git diff HEAD..HEAD").is_none());
+        let path = Path::new(repo);
+        sb.git(path, &["checkout", "-qb", "side", "HEAD~1"]);
+        sb.commit(path, "side.txt", "side\n", "side");
+        let fix = super::fix(&sb.state, repo, "git diff side...main").unwrap();
+        assert_eq!(
+            fix.commits,
+            [sb.git(path, &["rev-parse", "--short", "main"])]
+        );
+        assert!(fix.stat.contains("2 insertions(+)"));
     }
 
     fn fixture(name: &str) -> Run {
