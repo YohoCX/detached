@@ -195,15 +195,15 @@ fn left(id: &str, child: i32) -> bool {
     alive(child) || pgrep.is_ok_and(|o| !o.stdout.is_empty())
 }
 
-/// A session whose turn runs a child in a group of its own and then ignores `interrupt` and EOF:
-/// the session, its id and the child's pid.
+/// A session whose turn runs a child by `step` and then ignores `interrupt` and EOF: the session,
+/// its id and the child's pid.
 #[cfg(unix)]
-fn busy(run: &Run) -> (Open, String, i32) {
+fn busy(run: &Run, step: &str) -> (Open, String, i32) {
     let s = open(run, &chat(run)).unwrap();
     let Ok(Event::Opened(o)) = s.1.recv() else {
         panic!("not opened");
     };
-    s.0.prompt("spawn;hang").unwrap();
+    s.0.prompt(&format!("{step};hang")).unwrap();
     let two = |said: &str, _: &Event| said.split_whitespace().count() == 2 && said.ends_with(' ');
     let (said, _) = until(&s.1, two);
     let pid = said.trim().strip_prefix("child ").unwrap().parse().unwrap();
@@ -214,7 +214,7 @@ fn busy(run: &Run) -> (Open, String, i32) {
 #[test]
 fn a_close_with_a_command_in_front_leaves_nothing_and_signals_term_before_kill() {
     let run = boot();
-    let ((s, rx), id, child) = busy(&run);
+    let ((s, rx), id, child) = busy(&run, "spawn");
     let began = Instant::now();
     drop(s);
     let (_, events) = until(&rx, |_, e| matches!(e, Event::Closed | Event::Exited(_)));
@@ -230,11 +230,27 @@ fn a_close_with_a_command_in_front_leaves_nothing_and_signals_term_before_kill()
 
 #[cfg(unix)]
 #[test]
+fn a_close_kills_a_command_deaf_to_term_once_the_grace_is_over() {
+    let run = boot();
+    let ((s, rx), id, child) = busy(&run, "deaf");
+    let began = Instant::now();
+    drop(s);
+    let (_, events) = until(&rx, |_, e| matches!(e, Event::Closed | Event::Exited(_)));
+    assert!(matches!(events.last(), Some(Event::Closed)));
+    // The CLI ended on SIGTERM, not on a SIGKILL, which would have taken its command too.
+    assert!(alive(child) && began.elapsed() < Duration::from_secs(2) + GRACE);
+    eventually("the command is killed", || !left(&id, child));
+    let took = began.elapsed();
+    assert!(took >= Duration::from_secs(2) + GRACE, "{took:?}");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_killed_host_leaves_nothing() {
     const HOST: &str = "DETACHED_TEST_HOST";
     if std::env::var_os(HOST).is_some() {
         let run = boot();
-        let (_s, id, child) = busy(&run);
+        let (_s, id, child) = busy(&run, "spawn");
         println!("child {child} {id}");
         loop {
             thread::park();
@@ -262,4 +278,14 @@ fn a_killed_host_leaves_nothing() {
     eventually("the session ends with the host", || {
         !left(id, child.parse().unwrap())
     });
+}
+
+#[test]
+fn a_rule_key_does_not_hang_on_the_order_of_the_input_s_fields() {
+    let input: Value =
+        serde_json::from_str(r#"{"b": {"d": 1, "c": [{"f": 2, "e": 3}]}, "a": 0}"#).unwrap();
+    assert_eq!(
+        canonical(json!(["Probe", input])),
+        r#"["Probe",{"a":0,"b":{"c":[{"e":3,"f":2}],"d":1}}]"#
+    );
 }

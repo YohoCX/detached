@@ -21,10 +21,7 @@ pub mod settings;
 pub mod state;
 pub mod store;
 #[cfg(any(test, feature = "testutil"))]
-pub mod testutil {
-    pub mod api;
-    pub mod claude;
-}
+pub mod testutil;
 pub mod trust;
 pub mod types;
 pub mod update;

@@ -154,19 +154,28 @@ impl Proc {
         *guard
     }
 
-    /// Kills its process group, unless it has exited.
+    /// Whether anything of its group runs; on Windows the job ends the rest once it has exited.
+    pub fn running(&self) -> bool {
+        #[cfg(unix)]
+        // SAFETY: signal 0 only checks that the group has a process.
+        return unsafe { libc::killpg(self.pid as i32, 0) == 0 };
+        #[cfg(windows)]
+        return self.exit.0.lock().unwrap().is_none();
+    }
+
+    /// Kills what runs of its process group.
     pub fn kill(&self) {
         self.signal(false);
     }
 
-    /// Asks its process group to end, unless it has exited; on Windows it kills.
+    /// Asks what runs of its process group to end; on Windows it kills.
     pub fn term(&self) {
         self.signal(true);
     }
 
+    // A group with a process keeps its id from reuse, so only a gone one is left alone.
     fn signal(&self, term: bool) {
-        let exited = self.exit.0.lock().unwrap();
-        if exited.is_none() {
+        if self.running() {
             crate::os::kill(self.pid, term);
         }
     }

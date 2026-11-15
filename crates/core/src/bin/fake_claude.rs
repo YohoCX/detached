@@ -8,6 +8,7 @@
 //! - `noise` sends frames and a request nobody knows; `lack <request>` answers that request
 //!   `unsupported_request` from then on;
 //! - `spawn` starts a child in a process group of its own, which only this CLI's SIGTERM ends;
+//!   `deaf` one in this CLI's group that ignores SIGTERM;
 //! - `env` says the names in its env, `argv` its arguments, `model` its model and mode;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
@@ -81,12 +82,16 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version") => return println!("{VERSION} (Claude Code)"),
-        Some("--sleep") => loop {
-            std::thread::park();
-        },
-        Some("--child") => loop {
-            std::thread::park();
-        },
+        Some(mode @ ("--sleep" | "--child" | "--deaf")) => {
+            #[cfg(unix)]
+            if mode == "--deaf" {
+                // SAFETY: ignoring a signal touches no memory.
+                unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+            }
+            loop {
+                std::thread::park();
+            }
+        }
         _ => {}
     }
     let mut s = Shared {
@@ -475,6 +480,14 @@ impl Turn<'_> {
                 let child = cmd.spawn().map_err(err)?;
                 #[cfg(unix)]
                 term::CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
+                self.say(&format!("child {} ", child.id()));
+            }
+            "deaf" => {
+                let child = (me().arg("--deaf").stdin(Stdio::null()))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(err)?;
                 self.say(&format!("child {} ", child.id()));
             }
             "env" => {

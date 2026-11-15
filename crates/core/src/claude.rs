@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -469,8 +469,8 @@ impl Client {
         self.update(Update::Config(config));
     }
 
-    /// §1's close: `interrupt`, `stop_task` for each task, stdin closed, SIGTERM to the group after
-    /// 2 s and SIGKILL 5 s later, never first.
+    /// §1's close: `interrupt`, `stop_task` for each task, stdin closed, SIGTERM to what is left of
+    /// the group after 2 s and SIGKILL 5 s later, never first.
     fn close(&self) {
         let st = self.state.lock().unwrap();
         let (busy, tasks) = (st.busy, st.tasks.clone());
@@ -480,12 +480,13 @@ impl Client {
         }
         tasks.iter().for_each(|t| self.stop(t));
         self.out.lock().unwrap().take();
-        if self.proc.wait(Duration::from_secs(2)).is_none() {
-            self.proc.term();
-            if self.proc.wait(GRACE).is_none() {
-                self.proc.kill();
-            }
+        self.proc.wait(Duration::from_secs(2));
+        self.proc.term();
+        let until = Instant::now() + GRACE;
+        while self.proc.running() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(50));
         }
+        self.proc.kill();
     }
 
     fn read(self: Arc<Self>, stdout: std::process::ChildStdout) {
@@ -713,7 +714,7 @@ impl Client {
         let key = match name.as_str() {
             "AskUserQuestion" => None,
             "Bash" => Some(json!([name, input["command"]]).to_string()),
-            _ => Some(json!([name, input]).to_string()),
+            _ => Some(canonical(json!([name, input]))),
         };
         let ask = Ask {
             tool: tool(&id, &name, &input),
@@ -748,6 +749,12 @@ impl Client {
 
 fn text(v: &Value) -> String {
     v.as_str().unwrap_or_default().into()
+}
+
+/// `v` with its keys sorted: the app's serde_json keeps them in the CLI's order.
+fn canonical(mut v: Value) -> String {
+    v.sort_all_objects();
+    v.to_string()
 }
 
 fn list<T>(v: &Value, f: fn(&Value) -> T) -> Vec<T> {
