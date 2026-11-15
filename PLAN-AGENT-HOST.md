@@ -900,6 +900,10 @@ seven write decisions; each goes to `docs/decisions/`.
 
 ### Step H2. Storage, scopes and the toggle
 
+**Status (2026-11-15): items 1–5 are built. Share and Make local rename the source into
+`<git common dir>/detached/trash`, pruned after seven days; when that rename fails, as across
+filesystems, the source stays and the move reports a copy. Waiting for the owner's check.**
+
 Work:
 1. `core::store`: the tiers per OS.
 2. `<git common dir>/detached/` and the watcher's filter.

@@ -285,11 +285,6 @@ impl RepoStore {
     }
 
     pub fn write(&self, state: &AppState, kind: Kind, name: &str, files: &Files) -> Result<()> {
-        if name == ".detached-trash" {
-            return Err(Error::Other(
-                "The item name .detached-trash is reserved for trash".into(),
-            ));
-        }
         let lock = state.locks.get(&self.local);
         let _guard = lock.lock().unwrap();
         let scope = self.defaults()?.get(&kind).copied().unwrap_or(Scope::Local);
@@ -317,14 +312,7 @@ impl RepoStore {
         let to = self.path(state, item.kind, scope, &item.name)?;
         remember(state, &to, &item.hash)?;
         fs::create_dir_all(to.parent().unwrap())?;
-        copy_move(
-            &item.path,
-            &to,
-            &files,
-            &self.local.join("trash"),
-            &self.repo.join(".git/detached/trash"),
-        )?;
-        Ok(())
+        copy_move(&item.path, &to, &files, &self.local.join("trash"))
     }
 }
 
@@ -346,7 +334,7 @@ fn trash_dir(root: &Path) -> Result<tempfile::TempDir> {
     Ok(tempfile::tempdir_in(root)?)
 }
 
-fn copy_move(from: &Path, to: &Path, files: &Files, trash: &Path, nearby: &Path) -> Result<()> {
+fn copy_move(from: &Path, to: &Path, files: &Files, trash: &Path) -> Result<()> {
     let trash = trash_dir(trash)?;
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
@@ -360,29 +348,15 @@ fn copy_move(from: &Path, to: &Path, files: &Files, trash: &Path, nearby: &Path)
         fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
     }
     publish(&stage, to)?;
-    let saved = trash.path().join(from.file_name().unwrap());
-    match fs::rename(from, &saved) {
-        Ok(()) => {
-            let _ = trash.keep();
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            if let Ok(nearby) = trash_dir(nearby)
-                && fs::rename(from, nearby.path().join(from.file_name().unwrap())).is_ok()
-            {
-                let _ = nearby.keep();
-                return Ok(());
-            }
-            // A separate git directory or a mount can leave no nearby trash on this device.
-            create(&saved, files)?;
-            let _ = trash.keep();
-            if from.is_dir() {
-                fs::remove_dir_all(from)?;
-            } else {
-                fs::remove_file(from)?;
-            }
-        }
-        Err(e) => return Err(e.into()),
-    }
+    // A copy would miss writes made after the snapshot, so a failed rename keeps the source.
+    fs::rename(from, trash.path().join(from.file_name().unwrap())).map_err(|e| {
+        Error::Other(format!(
+            "Copied to {}; the original stays at {} ({e})",
+            to.display(),
+            from.display()
+        ))
+    })?;
+    let _ = trash.keep();
     Ok(())
 }
 
@@ -420,11 +394,13 @@ fn writable(scope: Scope) -> Result<()> {
 }
 
 fn component(path: &Path) -> Result<()> {
-    if path.components().count() != 1
-        || !matches!(path.components().next(), Some(Component::Normal(_)))
-        || path.as_os_str().is_empty()
-    {
+    if path.file_name() != Some(path.as_os_str()) {
         return Err(Error::Other("An item needs a single filename".into()));
+    }
+    if path == Path::new(".detached-trash") {
+        return Err(Error::Other(
+            "The item name .detached-trash is reserved for trash".into(),
+        ));
     }
     Ok(())
 }
@@ -839,16 +815,15 @@ mod tests {
         let (sb, store) = setup();
         for scope in [Scope::Local, Scope::Shared] {
             store.set_default(&sb.state, Kind::Roles, scope).unwrap();
-            let error = store
-                .write(&sb.state, Kind::Roles, ".detached-trash", &file("bad"))
-                .unwrap_err();
-            assert!(error.to_string().contains(".detached-trash is reserved"));
-            assert!(
-                !store
-                    .path(&sb.state, Kind::Roles, scope, ".detached-trash")
-                    .unwrap()
-                    .exists()
-            );
+            for name in [".detached-trash", ".detached-trash/"] {
+                assert!(
+                    store
+                        .write(&sb.state, Kind::Roles, name, &file("bad"))
+                        .is_err()
+                );
+            }
+            let dir = store.path(&sb.state, Kind::Roles, scope, "probe").unwrap();
+            assert!(!dir.parent().unwrap().join(".detached-trash").exists());
         }
     }
 
@@ -934,14 +909,7 @@ mod tests {
                 from.clone()
             };
             let mut handle = fs::OpenOptions::new().append(true).open(source).unwrap();
-            copy_move(
-                &from,
-                &to,
-                &files,
-                &root.join(".git/detached/trash"),
-                &root.join(".git/detached/trash"),
-            )
-            .unwrap();
+            copy_move(&from, &to, &files, &root.join(".git/detached/trash")).unwrap();
             handle.write_all(b" edited").unwrap();
             assert!(!from.exists());
             assert_eq!(read(&to).unwrap(), files);
@@ -984,14 +952,7 @@ mod tests {
         }
         let from = root.join("source");
         create(&from, &file("first")).unwrap();
-        copy_move(
-            &from,
-            &root.join("destination"),
-            &file("first"),
-            &trash,
-            &trash,
-        )
-        .unwrap();
+        copy_move(&from, &root.join("destination"), &file("first"), &trash).unwrap();
         assert!(!trash.join("old").exists());
         assert!(trash.join("new/item").exists());
     }
@@ -1005,28 +966,36 @@ mod tests {
         let files = [("SKILL.md".into(), b"first".to_vec())].into();
         create(&from, &files).unwrap();
         let broken = [("a".into(), vec![]), ("a/b".into(), vec![])].into();
-        assert!(
-            copy_move(
-                &from,
-                &to,
-                &broken,
-                &root.join(".git/detached/trash"),
-                &root.join(".git/detached/trash")
-            )
-            .is_err()
-        );
+        let trash = root.join(".git/detached/trash");
+        assert!(copy_move(&from, &to, &broken, &trash).is_err());
         assert!(!to.exists());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         assert_eq!(read(&from).unwrap(), files);
-        copy_move(
-            &from,
-            &to,
-            &files,
-            &root.join(".git/detached/trash"),
-            &root.join(".git/detached/trash"),
-        )
-        .unwrap();
+        copy_move(&from, &to, &files, &trash).unwrap();
         assert_eq!(read(&to).unwrap(), files);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_source_the_trash_cannot_take_stays_and_the_move_reports_a_copy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sb = Sandbox::new();
+        let root = sb.dir.path().canonicalize().unwrap();
+        let from = root.join("shared/check");
+        let to = root.join("local/check");
+        let files: Files = [("SKILL.md".into(), b"first".to_vec())].into();
+        create(&from, &files).unwrap();
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        // A source folder that refuses the rename stands in for a trash on another filesystem.
+        let folder = from.parent().unwrap();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555)).unwrap();
+        let error = copy_move(&from, &to, &files, &root.join("trash")).unwrap_err();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(error.to_string().contains("the original stays"), "{error}");
+        assert_eq!(read(&from).unwrap(), files);
+        assert_eq!(read(&to).unwrap(), files);
+        assert_eq!(fs::read_dir(root.join("trash")).unwrap().count(), 0);
     }
 
     #[test]
