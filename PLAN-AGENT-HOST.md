@@ -1,7 +1,8 @@
 # Detached — agent host plan
 
 Agents as first-class participants of the client:
-- every provider through ACP, with adapters the client installs and updates;
+- every provider behind one backend interface: Claude Code on a direct connection to the user's
+  `claude`, the others through ACP adapters the client installs and updates;
 - sessions owned by the kernel;
 - host tools instead of pasted text;
 - defined processes with an env store, and messages between agents;
@@ -16,8 +17,15 @@ their answers change are rewritten. Review rounds 01–16 are fixed; H1 is next.
 No choice is open (§14).
 Codex stays off until H13a. Nothing is built.**
 
+**Status (2026-11-16): Claude takes a direct connection behind the backend seam
+([decision](docs/decisions/2026-11-16-claude-direct-connection.md)). §1 to §7, §11, §13, §14 and
+§16 and steps H3, H4c, H5, H8, H11, H12 and H13 follow it. H4c is next, its part 0 first. Three of the
+decision's choices are open and marked where they land: the history source (§6), where Claude's
+`min_cli` lives (§3) and the label (§2). H2, H3, H4 and H6 carry their own status.**
+
 Owner's decisions are in [docs/decisions/](docs/decisions/):
-- ACP for every provider (2026-11-09);
+- ACP for every provider (2026-11-09), for Claude replaced on 2026-11-16;
+- Claude's direct connection behind the standard interface (2026-11-16);
 - processes and the env store, and agents messaging each other (2026-11-10);
 - for 2026-11-12:
   - ACP before release;
@@ -43,16 +51,37 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
 ## 1. Crates
 
 ```
-core    proc (spawn with pipes or a PTY, env built from nothing, groups, job objects), host (the
-        HTTP tool server, the owner socket), secrets, docs, store, trust, snapshot (as today)
-acp     new: the ACP client on `agent-client-protocol` 5.2.0; a blocking API out,
-        `futures::executor::block_on` inside; depends on core
-kernel  Session, Proc, Inbox, Panel, the host tools' dispatch; draws nothing
+core    proc (spawn with pipes or a PTY, env built from nothing, groups, job objects), backend (the
+        seam: one trait and a session's types), claude (the direct client: the user's `claude` over
+        stream-json, its leash, its transcripts), host (the tools' MCP handler, the owner socket),
+        secrets, docs, store, trust, snapshot (as today)
+acp     the ACP client on `agent-client-protocol` 5.2.0, core's backend for ACP providers; a
+        blocking API out, `futures::executor::block_on` inside; depends on core
+kernel  Session on a backend, Proc, Inbox, Panel, the host tools' dispatch; draws nothing
 app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pages; the binary
 ```
 
 `app → kernel → acp → core`.
 
+- **One seam** ([decision](docs/decisions/2026-11-16-claude-direct-connection.md)).
+  `core::backend` holds the trait and a session's types: `Event`, `Update`, `Tool`, `Ask`, `Reply`,
+  `Turn`, `Config`, which are `acp`'s today.
+  - **In:** start or resume from a `Spec`, prompt, cancel, answer, set an option, stop a task,
+    close. **Out:** one stream of `Event`.
+  - **`Spec` says what a session wants**: sources, tools, sandbox, an MCP file, plugin folders,
+    model, effort, mode. Each backend renders it: Claude as flags and `initialize` fields, ACP as
+    `configOptions` and `_meta`.
+  - **Nothing above the seam names a protocol**: not `kernel::Session`, the chat, panels, host
+    tools, trust or the Agents page. `crates/kernel/clippy.toml` bans `acp`'s and `core::claude`'s
+    items outside the one place that picks a backend.
+  - **A backend says what it lacks** (the context breakdown, plan limits, a per-task stop, past
+    sessions) and which trust paths it blocks (§4); the UI hides or states the rest (§2).
+  - **A manifest names its backend** (§2). Moving Claude to ACP or to anything else is that line
+    and a backend.
+- **Claude is one CLI per session**, spawned by core in its own process group, on Windows in its
+  own job held for the session's life. No adapter stands beside it, and a CLI's exit ends its own
+  session only. `core::agent`, the sidecar's protocol, still goes at §13's end condition.
+- **The rest of this section is for ACP providers**, Codex today, except where it names Claude.
 - **Core keeps "no async runtime"** (CLAUDE.md). The crate's async dependencies stay in
   `crates/acp`: `futures` and `async-io` (137 crates in the spike, with `AcpAgent`). We connect
   over `ByteStreams` and turn off `async-process`; H4 records the tree. No async type leaves
@@ -61,41 +90,52 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   fields such as `PromptResponse.usage` silently.
 - **Core spawns each adapter itself.** `AcpAgent` can only add env vars, and its drop SIGKILLs the
   process group, which orphans a running Bash command. On Windows it kills only the direct child.
-- **One adapter process per provider and version**, with two exceptions:
-  - on native Windows each panel participant attempt gets its own adapter and job (PLAN-PANELS §7);
-  - a WSL participant's adapter runs in Detached's distro (§5).
+- **One adapter process per provider and version**, with one exception: on native Windows each
+  panel participant attempt gets its own adapter and job (PLAN-PANELS §7).
 
-  H4's registry is keyed so these fit. The sessions on one adapter share a crash domain: for Claude
-  outside those exceptions, that is the owner's chat and every panel participant. An adapter's exit
-  ends each of its sessions with that cause (H4), and panels count it as a failed attempt, never as
-  offline (PLAN-PANELS §7).
-- **Shutdown** closes stdin and waits 5 s before any signal; a killed app gives EOF by itself.
-  - Claude's adapter exits in 20–40 ms, Codex's in 2 s.
+  H4's registry is keyed so this fits. The sessions on one adapter share a crash domain. An
+  adapter's exit ends each of its sessions with that cause (H4), and panels count it as a failed
+  attempt, never as offline (PLAN-PANELS §7).
+- **Shutdown of an adapter** closes stdin and waits 5 s before any signal; a killed app gives EOF
+  by itself.
+  - Codex's adapter exits in 2 s.
   - An exit with code 1 on `EPIPE` at shutdown is normal.
+- **Closing a Claude session** is not that: stdin EOF leaves a busy CLI running, and SIGKILL to
+  its group orphans its command, which runs in a group of its own (spike 0c row 10).
+  - The order: `interrupt`, `stop_task` for each task that runs, stdin closed, SIGTERM after 2 s,
+    SIGKILL 5 s later and never first. SIGTERM is the CLI's clean exit: it stops its commands.
+  - Signals go to the session's group, so the leash and the CLI both get them.
+  - On Windows: stdin closed, then the session's job closes.
+- **A killed host.** EOF does not end a busy CLI, so Claude's CLI runs under a leash on macOS and
+  Linux: a process in the session's group that runs the CLI on its inherited pipes and sends
+  SIGTERM to the group once its parent is gone. On Windows the job does it. Which executable the
+  leash is, and what holds inside the WSL distro, are H4c part 0's rows.
 - **The Windows job object is required.** Each adapter runs in a job with `KILL_ON_JOB_CLOSE`, and
-  the host closes the job as soon as the adapter has exited. On Windows, `session/cancel` leaves
-  the foreground command running, and Git Bash's tree outlives `claude.exe` when stdin closes;
-  closing the job ends everything in 0.5 s (H0b row 1).
+  the host closes the job as soon as the adapter has exited; a Claude CLI's job is closed when its
+  session ends. Through the adapter, a cancel on Windows left the foreground command running, and
+  Git Bash's tree outlived `claude.exe` when stdin closed; closing the job ended everything in
+  0.5 s (H0b row 1). The CLI's own `interrupt` on Windows is H4c part 0's row.
 - **PTYs.** `portable-pty` moves from `app::terminal` to `core::proc` in H9; the emulator stays in
   `app`.
 
 ## 2. Providers
 
-A provider is an adapter and a manifest, built in for Claude and Codex.
+A provider is a manifest and a backend (§1), built in for Claude and Codex.
 
 ```toml
 [provider.claude]
-adapter = "claude-agent-acp"           # installed per §3
-name    = "Claude Agent"               # never "Claude Code"
+backend = "direct"                     # core::claude; no adapter, nothing to install
+name    = "Claude Agent"               # open: the decision recommends "Claude Code" (Name, below)
 cli     = "claude"                     # the user's own, found on PATH or set in Settings
-min_cli = "2.1.322"                    # a floor; the catalog entry in use may raise it (§3)
-login   = ["claude", "/login"]         # run in a terminal tab; or ACP's authMethods
+min_cli = "2.1.322"                    # a floor; the signed catalog's `cli` list may raise it (§3)
+login   = ["claude", "/login"]         # run in a terminal tab
 trust   = [".claude/settings.json", ".claude/settings.local.json", ".claude/skills/*/SKILL.md",
            ".claude/commands/**", ".claude/agents/**", ".mcp.json"]
-env     = ["CLAUDE_CODE_EXECUTABLE", …]   # plus the login, cloud and proxy names below
+env     = […]                          # the login, cloud and proxy names below
 
 [provider.codex]
-adapter = "codex-acp"
+backend = "acp"
+adapter = "codex-acp"                  # installed per §3
 login   = ["codex", "login"]
 trust   = [".codex/config.toml", ".agents/skills/*/SKILL.md"]
 env     = ["CODEX_HOME", "CODEX_PATH"]
@@ -105,47 +145,62 @@ What every provider must do; the host holds each row:
 
 | Row | How |
 | --- | --- |
-| Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; the adapters pass their whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
-| Dies with the host, no orphan | §1's shutdown |
-| Stop ends the turn and its foreground command | `session/cancel` (on Windows the foreground command runs on until the adapter goes; a TECHDEBT row). Background tasks: `_session/async_task/stop`, which works only when the client declares `_meta.jetbrains.air` with `asyncTasks`. We declare it; H4 checks what else the declaration changes, and drops it with stopTask parity if it changes anything else |
-| "Always allow" writes no file | the host keeps always-rules and sends only `allow_once` (§5) |
-| Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]` |
+| Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; Claude's CLI is spawned with it, and an ACP adapter passes its whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
+| Dies with the host, no orphan | §1: Claude's close, its leash and its job; an adapter's shutdown |
+| Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one |
+| "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
+| Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]`. Claude: `--setting-sources` on every spawn, `""` for none; with no flag the CLI loads everything |
 | MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
-| Model, effort, mode as asked | `configOptions` on `session/new` and on every `session/load`, so the session starts in them. Without them a load falls back to `~/.claude/settings.json` (about 60× the cost), and the CLI starts in `auto` with `--allow-dangerously-skip-permissions`; `_meta…permissionMode` is ignored. Later switches use `set_config_option`. Every `session/load` also re-sends the session's whole `_meta.claudeCode.options` (§6) |
-| Questions reach the host | the client declares `elicitation.form` |
-| Usage is reported | `usage_update`, `config_option_update`, `current_mode_update`; missing means unknown, never zero |
+| Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `configOptions` on `session/new` and every `session/load`, `set_config_option` after |
+| Questions reach the host | Claude: an ask for `AskUserQuestion`, answered in `updatedInput.answers`. ACP: the client declares `elicitation.form` |
+| Usage is reported | Claude: `result`'s usage and cost, `get_context_usage`, `get_usage`. ACP: `usage_update`, `config_option_update`, `current_mode_update`. Missing means unknown, never zero |
 
 Optional, hidden when missing: past sessions, models, efforts, modes.
 
-**Claude** ([decision](docs/decisions/2026-11-12-claude-own-cli.md)) runs as Detached →
-`claude-agent-acp` (the Agent SDK) → the user's own `claude` → Anthropic, as OpenCode's built-in
-provider does.
+**Claude** (decisions of [2026-11-12](docs/decisions/2026-11-12-claude-own-cli.md) and
+[2026-11-16](docs/decisions/2026-11-16-claude-direct-connection.md)) runs as Detached → the user's
+own `claude` → Anthropic.
 - **The CLI is the user's.**
   - It is installed by Anthropic's official installer, which the Agents page runs or links to, and
     it updates itself. Detached never ships or downloads a Claude CLI.
-  - The adapter gets it through `CLAUDE_CODE_EXECUTABLE`; the spike verified that.
+  - Core spawns it unmodified, from PATH or the Settings path, with `--input-format stream-json
+    --output-format stream-json --permission-prompt-tool=stdio`, and sets no
+    `CLAUDE_CODE_ENTRYPOINT`.
   - `min_cli` is checked before every session, and an isolated participant refuses below it, since
     an older CLI may ignore the sandbox, `strictMcpConfig` or `settingSources`.
 - **Login.**
   - The user runs `claude /login` (or `claude auth login`) in a Detached terminal tab.
   - Any login type is accepted: subscription, API key, cloud.
   - Detached never reads the saved login, passes a token, or sits between the CLI and Anthropic.
-    It uses the public SDK only, through the adapter.
-- **Name.** The UI says "Claude Agent", never "Claude Code", per the SDK's branding guidelines.
+    It removes or restricts none of the CLI's login methods.
+- **The interface is Anthropic's own and promised nowhere** (the decision's risks).
+  - The client reads loose JSON and ignores a frame or field it does not know.
+  - `unsupported_request` means "this CLI lacks it": that capability goes, the session stays.
+  - Vetting runs daily (§3). A break still reaches users before its fix, which is an app release;
+    until then the chat says that this `claude` is not supported yet, and names `claude` in a
+    terminal tab and the installer's command for the last vetted version.
+- **Name. Open** (the decision's choice 3). "Claude Agent" was the SDK's branding rule, and the SDK
+  is gone.
+  - Recommended: "Claude Code" in plain text, as the name of what the user installed and what
+    runs, with no logo. No feature of ours carries the name.
+  - The label is one constant; until the owner decides, the built one stays.
 - **Cost.**
   - A subscription session shows its cost as $0 and its plan limits.
   - The pool a session draws from is shown when the CLI reports it, so a returning separate "Agent
     SDK credit" pool is visible.
   - "Extra usage" and "out of extra usage" errors get a clear message naming the pool and the
     fallback.
-- **The documented fallback** that stays on plan limits whatever the SDK's terms is the official
+- **The documented fallback** that stays on plan limits whatever the terms become is the official
   `claude` in a Detached terminal tab.
 
 ## 3. Adapters: install and update
 
 Node-free, from the Settings "Agents" page; built in step H3.
 
-- **Install.** One Install button per provider; nothing installs at start.
+- **Claude has no adapter**: nothing to install, download or update. Its row on the Agents page is
+  the CLI check and the login. What follows is for ACP providers, Codex today, except the catalog's
+  `cli` list and the vetting.
+- **Install.** One Install button per ACP provider; nothing installs at start.
   - Files go under `data/adapters/<name>/<version>/`: in data, since the OS may purge a cache.
   - The login command comes from the manifest (or ACP's advertised auth methods) and runs in a
     terminal tab.
@@ -155,17 +210,26 @@ Node-free, from the Settings "Agents" page; built in step H3.
     `adapters` release. So the catalog exists from H3 on and moves independently of app releases.
     Tests use a locally signed catalog.
   - **Freshness:** a monotonic `serial`; an older catalog is refused.
-  - **`min_cli`** comes from each entry, never below the manifest's floor, with an optional
+  - **`min_cli`** comes from each ACP entry, never below the manifest's floor, with an optional
     `blocked_cli` list. The client reads them from the entry it runs, so a bump raises the floor
     for installed apps.
+  - **Claude's `min_cli` and `blocked_cli`. Open** (the decision's choice 2). Recommended: a `cli`
+    list of its own in the same signed file, read by every app version, under the same key, serial
+    and fetch. The floor is the oldest `claude` the vetting passes on.
   - **Signing stays off CI.** The catalog's minisign key lives on the owner's machine, and
     `make adapters-sign` signs the file there. `adapters.yml` only uploads a catalog that is
     already signed and committed, so no secret and no model credential is ever in CI.
-  - **Weekly vetting** (H4) runs the latest `claude` against each entry. A failure opens an issue
-    for the owner; nothing is published by itself. The owner decides whether to add that version
-    to `blocked_cli`, signs and pushes.
+  - **Vetting of `claude`** (H4c) runs daily, since the CLI releases most days: the floor and the
+    latest `claude`, through Claude's backend at the latest release tag and at main, on every OS
+    of §17. A failure opens an issue for the owner; nothing is published by itself. The owner
+    decides whether to add that version to `blocked_cli`, signs and pushes.
   - **A `claude` in `blocked_cli`:** the chat warns and still runs; isolated participants refuse
-    to start; the Agents page names the version and the fix (update `claude`).
+    to start; the Agents page names the version, the last vetted one and the installer's command
+    for it.
+  - **No warning for a `claude` newer than the last vetted:** it would show for most users on most
+    days.
+  - **Vetting of an ACP entry** runs on each catalog bump and weekly against the provider's latest
+    CLI, with the same issue and the same hand-signed block.
   - **Compatibility:** `min_app` and `max_app` per entry, since every app version reads the same
     catalog.
   - **Artifacts:** per OS, arch and libc, a `url`, `size` and `sha256`.
@@ -173,13 +237,10 @@ Node-free, from the Settings "Agents" page; built in step H3.
     default). A manual install may take it at once.
 - **Download.** Size and sha256 are checked before extract. Extraction refuses any entry that
   leaves its folder (path traversal). The folder is installed by an atomic rename.
-- **Both adapters are our own `bun build --compile`**, pinned by lockfile, with their license
-  files shipped.
-  - **Claude's** (`--omit optional`, so the SDK's bundled CLI stays out) is 92 MB on macOS and
-    112 MB on Linux. It ran sessions, turns, cancel and load against the user's `claude` (H0b row
-    9).
-  - **Codex's** is 91 MB. There is no native upstream: `agentclientprotocol/codex-acp` ships no
-    assets, and Zed's Rust one stopped at 0.16.0. It runs the user's `codex` through `CODEX_PATH`.
+- **Codex's adapter is our own `bun build --compile`**, pinned by lockfile, with its license
+  files shipped: 91 MB. There is no native upstream: `agentclientprotocol/codex-acp` ships no
+  assets, and Zed's Rust one stopped at 0.16.0. It runs the user's `codex` through `CODEX_PATH`.
+  - Claude's build (`adapters/claude-agent-acp`, 92 to 112 MB) goes at H4c's gate.
 - **Install type does not matter.** Every `claude` of one version is the same file, whatever
   installed it, so only `min_cli` is checked.
 - **No "latest from npm".**
@@ -187,13 +248,11 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - A new version starts its own adapter process.
   - Running sessions finish on the old one.
   - The previous version is kept for rollback; older ones are removed.
-- **CI vetting** on each catalog bump, with no model calls and no secrets in CI (the owner's
-  rule):
-  - download and verify;
-  - install `claude` with the official installer;
-  - run the real CLI through the adapter against the scripted fake Messages API (§17) on macOS,
-    Linux and Windows: a turn, cancel, load, and the sandbox.
-  - Codex's `session/new` runs on a placeholder API-key login, which reaches no server.
+- **CI vetting**, with no model calls and no secrets in CI (the owner's rule):
+  - `claude`: installed with the official installer and run through Claude's backend against the
+    scripted fake Messages API (§17) on every OS of §17: H4c's real tests.
+  - an ACP entry, on each catalog bump: download and verify; Codex's `session/new` runs on a
+    placeholder API-key login, which reaches no server.
 - **Windows**: SmartScreen and Defender on a downloaded, never-run executable is an owner check
   in H3.
 
@@ -221,22 +280,34 @@ a session loads none of it.
   `config.toml` is skipped silently, so the host's server is `detached-host-<id>`.
 - **Mid-session.** The watcher's list grows by the trust paths of every live session's tree. A
   change to a trust item re-hashes; on a difference the host cancels the turn and ends the session
-  until accepted.
-  - **The SDK's `ConfigChange` block cannot pass through the adapter.** A trusted repo therefore
-    keeps a window between a write and the next tool call in which a new hook can fire, and the
-    trust prompt says so.
-  - **Regression, stated in §13.** Today an agent's own edit to `.claude/settings.json` is blocked
-    and the turn goes on; here it ends the session. Instruction files and docs never do.
+  until accepted, unless the session's backend blocks that path:
+  - **Claude blocks what the CLI reports.** A session registers the `ConfigChange` callback at
+    `initialize` and answers `block` for `project_settings`, `local_settings` and `skills`, as the
+    sidecar does. The CLI keeps what it loaded and the turn goes on. The tree's acceptance is
+    stale: the feed says so, and the next start asks.
+  - **What the CLI does not report still ends the session:** `.claude/commands/**`,
+    `.claude/agents/**` and `.mcp.json` have no `ConfigChange` source. So the built rule splits by
+    path, not by provider: a backend names the trust paths it blocks (§1), and ACP names none.
+  - **Unproven until H4c part 0.** Spike 0c blocked one change to the project's settings, made by
+    the test between turns. An agent's own write followed at once by a tool call, a `PreToolUse`
+    hook and the other two sources run there. A source whose block comes too late ends the
+    session like a command does, and until that row is answered the trust prompt keeps its
+    sentence about a window in which a new hook can fire.
+  - **Regression, stated in §13.** Today a changed command or agent file reloads and the turn
+    goes on; here it ends the session. Instruction files and docs never do.
 
 ## 5. Permissions and read-only
 
-- **The host answers every `session/request_permission`.**
-  - "Always allow" stores a host-side rule and sends `allow_once`, so no adapter ever writes
-    `.claude/settings.local.json`.
+- **The host answers every ask**: `can_use_tool` on Claude, `session/request_permission` on ACP.
+  - "Always allow" stores a host-side rule and allows this one call: `allow` with no
+    `updatedPermissions` on Claude, `allow_once` on ACP. So nothing ever writes
+    `.claude/settings.local.json`; the CLI's own suggestion handed back unchanged would (spike 0c
+    row 3).
   - Requests carry the tool's kind, title, raw input and options.
 - **What asks** (Claude, `default`): host MCP tools ask; `Read` and commands Claude Code classes as
   read-only (`git diff`, `rg` in the cwd) do not. The host's tools are pre-allowed through
-  `allowedTools` (`mcp__detached-host-<id>__*`), as H0b confirmed.
+  `allowedTools`: `mcp__detached-host__*` on Claude (spike 0c row 9), `mcp__detached-host-<id>__*`
+  on ACP (H0b).
 - **`.env` in the chat.** Claude denies `Read(//**/.env*)` and the matching Bash patterns through
   `disallowedTools`, as the sidecar does.
   - The rules also stop Bash commands on literal paths (`cat`, `grep`, `sed`, `cp` of `.env`).
@@ -256,7 +327,10 @@ a session loads none of it.
 - **An untrusted subject gets a sandboxed, read-only review**
   ([decision](docs/decisions/2026-11-12-untrusted-read-only.md)). Participants have no write, no
   egress from tools, and no cross-read. H0b tested this on macOS, Ubuntu 22.04 and 24.04, and WSL2.
-  - **Claude:**
+  - **Claude**, the options as flags (`--tools`, `--settings` for the sandbox, `--setting-sources
+    ""`, `--strict-mcp-config`): spike 0c ran them on macOS, H0b the same options through the SDK
+    on every OS, and H4c part 0 the flags there. A `Read(..)` rule's absolute path starts with two
+    slashes; with one the rule does not hold.
     - `tools: [Read, Grep, Glob, Bash]`, plus the host tools;
     - `sandbox {enabled, failIfUnavailable, autoAllowBashIfSandboxed: true,
       allowUnsandboxedCommands: false, filesystem.denyWrite: [cwd], filesystem.denyRead: [..],
@@ -288,7 +362,7 @@ a session loads none of it.
       its own login itself, unsandboxed, so the login works with them, as it does with the
       Keychain denied on macOS;
     - **the whole config, data and cache tiers**, by static roots, so a run started later is
-      covered too, since a session's list is fixed at `session/new`. That covers the session
+      covered too, since a session's list is fixed at its start. That covers the session
       index, secret-bearing per-run files (`data/private/<run>/`: a trusted run's 0600 MCP config
       and its copied `settings.local.json`, which the `claude` process reads by path, unsandboxed),
       trusted runs' trees, and anything added later, with no nested allow;
@@ -316,10 +390,10 @@ a session loads none of it.
     Threat line 4's test seeds a target in each class.
   - **"Sandbox ready"** is a probe, not a package check, built in P2, the first step that needs
     the sandbox; it is unverified until P2 runs it.
-    - It is one turn through the real adapter and the user's `claude` against a small loopback
+    - It is one turn of the user's `claude` through Claude's backend against a small loopback
       responder that ships in the product, not test code, modeled on the spike's `fake.rs`. Its one
       reply asks for one Bash call. No model call is made. Under WSL the responder listens on the
-      gateway address, behind the same firewall rule as the MCP listener.
+      gateway address, behind the firewall rule below.
     - It runs with the same options an untrusted participant gets. Its env is built from the
       allowlist, as every participant's is: `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
       `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the proxy variables
@@ -357,19 +431,25 @@ a session loads none of it.
       - Without automount, no Windows path (run records, `%USERPROFILE%\.ssh`, the data tier, a
         checkout's `.env`) is under `/mnt` to read. `/mnt` is in the denied reads as well.
     - **What the distro holds.**
-      - The Linux adapter artifact, installed by H3's downloader through `wsl.exe`.
+      - No adapter, and no binary of ours unless H4c part 0's leash row needs one.
       - The user's `claude` from the official installer, checked against `min_cli` there, and its
         login run in a `wsl.exe -d detached` terminal tab.
       - `bubblewrap`, `socat` and `git`.
       - Each participant's `CLAUDE_CODE_TMPDIR`.
-    - **The adapter** starts with `wsl.exe -d detached -- env CLAUDE_CODE_EXECUTABLE=… <adapter>`
-      over stdio, the variables passed through `WSLENV`.
+    - **The CLI** starts with `wsl.exe -d detached -- <leash> claude …` over stdio, the variables
+      passed through `WSLENV`. The Windows job ends `wsl.exe`, not the Linux processes, and EOF
+      does not end a busy CLI, so the leash runs inside the distro (§1; H4c part 0).
+    - **Its transcripts** are in the distro's filesystem; the host reads and removes them through
+      `wsl.exe` (§6).
     - **The pinned tree** is a tar stream built from raw Git trees and blobs (PLAN-PANELS §3),
       sent through `wsl.exe` to `tar -x` in the distro. Git modes supply symlinks and executable
       bits; no Windows checkout, mount, bundle or ref is needed.
-    - **Reaching the host tool.** In NAT mode WSL cannot reach the host's `127.0.0.1`. The host
-      also listens on the WSL gateway address (from `ip route` in the distro), with the same
-      secret binding; the `Host` check accepts that address.
+    - **Reaching the host.** Claude's host tools ride the session's own pipes (§7), so nothing
+      listens for them. The probe's responder still has to be reached, and in NAT mode WSL cannot
+      reach the host's `127.0.0.1`. So the responder listens on the WSL gateway address (from
+      `ip route` in the distro) and accepts that address as `Host`. The listener and the rule
+      below stay for the probe alone; moving the responder into the distro would drop both, and
+      needs a Linux binary there.
       - Binding that one address, which keeps the port off the LAN, is unverified; P2 tests it.
       - An inbound firewall rule for it comes from a one-time elevated step: Detached asks on the
         first untrusted WSL run and runs `netsh advfirewall firewall add rule …` through a UAC
@@ -378,7 +458,6 @@ a session loads none of it.
         cannot run them.
     - **"WSL ready"** means:
       - the distro exists with interop and automount off;
-      - the adapter is installed;
       - `claude` meets `min_cli` and is logged in;
       - `bubblewrap`, `socat` and `git` are there;
       - the firewall rule exists;
@@ -397,8 +476,8 @@ a session loads none of it.
     written.
 - **A woken turn (§9)** runs with the host's always-rules suspended and in the provider's asking
   mode. Before sending the wake prompt, the host sets `mode` to the asking mode (Claude's
-  `default`) through `session/set_config_option`, which spike 0 saw work live. It sets the previous
-  mode back when that turn ends.
+  `default`) through the backend's mode switch: `set_permission_mode` on Claude (spike 0c row 7),
+  `session/set_config_option` on ACP (spike 0). It sets the previous mode back when that turn ends.
 
 ## 6. Sessions
 
@@ -419,47 +498,60 @@ a session loads none of it.
     restore progress. Snapshot and restore stay core calls.
 - **Watching.** A session's trees join the watcher's list while it lives.
 - **Activity** shows a running turn as a job; Stop is its cancel.
-- **Resume** is `session/load` with the session's `configOptions` and its whole
-  `_meta.claudeCode.options` (§2): about 0.45 s, history replayed, all of it re-sent to the model
-  with a cold cache. A load of a closed session creates it anew from the load's own `_meta`, so
-  without them the isolation (`tools`, `sandbox`, `settingSources`, `strictMcpConfig`,
-  `disallowedTools`, `allowedTools`, `env`) would fall back to the defaults.
-- **Memory.** A live Claude session is a `claude` CLI of 250–320 MB beside its adapter of about
-  140 MB; five took 1.5–1.7 GB. `session/close` ends that CLI within 3 s and frees about 235 MB,
-  so headless sessions close as soon as they report.
+- **A new Claude session** gets its id from the host through `--session-id`, before its first
+  prompt.
+- **Resume** on Claude is a new CLI on `--resume <id>` with every flag of the session's `Spec`
+  again: `initialize` answers in 0.19 s, the earlier messages are re-sent to the model with a cold
+  cache, and **nothing is replayed to the host**. Without the flags the isolation (`tools`,
+  `sandbox`, `settingSources`, `strictMcpConfig`, `disallowedTools`, `allowedTools`, `env`) and
+  the model would fall back to the defaults.
+  - On ACP it is `session/load` with the session's `configOptions` and its whole `_meta`, for the
+    same reason; there the adapter replays the history.
+- **History, the list and delete on Claude. Open** (the decision's choice 1). Recommended: the
+  CLI's transcripts, through a reader of ours.
+  - **The path** is `<config dir>/projects/<cwd, each non-alphanumeric as ->/<id>.jsonl`, the
+    folder name cut at 200 characters with a hash after it, as the SDK does. A session started in
+    a worktree is found by searching every project.
+  - **The reader** takes the `user` and `assistant` chain through `parentUuid` from the last leaf,
+    skips sidechains and every line type it does not know, starts at a compaction boundary, and
+    reads titles and an `archived` tag today's chat wrote. A file it cannot read shows "history
+    unavailable"; the session still resumes.
+  - **Delete** removes `<id>.jsonl` and the `<id>/` folder of subagent transcripts.
+  - **A WSL participant's** files are read and removed through `wsl.exe`: the reader takes bytes,
+    not a path.
+  - **The other choice**, the host's own log of what it streamed: no reader; delete still needs
+    the path; only Detached's sessions have history; and §10's "an index, not copies" changes.
+- **Memory.** A live Claude session is one `claude` CLI of 220–320 MB with nothing beside it.
+  Closing the session ends it, so headless sessions close as soon as they report. Five at once is
+  H4c part 0's row.
 - **Past sessions** are `Resource<Vec<PastSession>>` per provider and folder. Codex's list also
   holds the Codex CLI's and VS Code's sessions; those are hidden.
-- **Archive** is a flag in the host's index, since ACP offers it only to clients declaring
-  JetBrains AIR's `sessionIndex`.
+- **Archive** is a flag in the host's index, for every backend.
 
 ## 7. Host tools
 
 Agents get Detached's data and a closed list of actions as tools.
 
-- **Transport.** Streamable HTTP on `127.0.0.1` inside the app. Each session has a path with a
-  random secret, passed in `session/new`'s `mcpServers`.
-  - **On Claude the URL is in argv.** The SDK passes `--mcp-config <json>` to the `claude` CLI, so
-    `ps -ww` or `/proc/<pid>/cmdline` shows it.
-  - **So the secret is single-use.** The CLI first sends `server/discover`, which the host
-    answers without binding. Then exactly one `initialize` binds the path to the
-    `Mcp-Session-Id` it returns, and later requests without that id are refused.
-  - **Who may bind.** The URL is in argv from spawn, so a same-user process could race the CLI's
-    `initialize`.
-    - On the host's own OS, the binding peer must own the TCP connection, found in the OS's socket
-      table, and be a direct child of the session's adapter running the user's `claude`. A
-      session's Bash is never a direct child.
-    - A second `initialize` on a bound path revokes the binding and ends the session, failing
-      closed.
-    - Under WSL the peer is in the VM. There, an isolated participant's Bash has no network
-      (`strictAllowlist`), so only the CLI can connect.
-  - **What H0b saw.** A second client's `initialize` and `tools/list` from `ps`'s URL were refused,
-    while the session's own calls went on. Over three turns the CLI sent no second `initialize`.
-  - **Every `session/load` passes a new secret**, since a load starts a new CLI.
-  - **Untested:** a reconnect after a long idle or a server error. A refused reconnect fails the
-    session's tools; a panel attempt then resumes with a new secret, and a chat offers the same.
-  - Codex gets its servers as thread config over JSON-RPC, not in argv.
-  - Every request must carry `Host: 127.0.0.1:<port>` (or the WSL gateway's address, §5) and no
-    `Origin` header, so a browser's DNS rebinding is refused.
+- **One handler, a transport per backend.** The tools are an MCP handler in `core::host`: a
+  JSON-RPC message in, an answer out. The backend carries the messages.
+  - **Claude: the session's own pipes.** `initialize` names `sdkMcpServers: ["detached-host"]`.
+    The CLI sends each MCP message as an `mcp_message` request on its control channel, and the
+    backend answers from its read loop (spike 0c row 9).
+    - No listener, no secret and nothing in argv; the session is the identity.
+    - `--strict-mcp-config` drops the user's servers and keeps this one.
+  - **ACP providers: Streamable HTTP on `127.0.0.1`** inside the app, built with Codex in H13a.
+    Each session has a path with a random secret, passed in `session/new`'s `mcpServers`; Codex
+    gets it as thread config over JSON-RPC, not in argv.
+    - **The secret is single-use.** One `initialize` binds the path to the `Mcp-Session-Id` it
+      returns; later requests without that id are refused, and a second `initialize` on a bound
+      path ends the session, failing closed.
+    - **Every `session/load` passes a new secret.**
+    - **Untested:** a reconnect after a long idle or a server error. A refused reconnect fails the
+      session's tools; a panel attempt then resumes with a new secret, and a chat offers the same.
+    - Every request must carry `Host: 127.0.0.1:<port>` and no `Origin` header, so a browser's DNS
+      rebinding is refused.
+    - The argv race and its peer check were for Claude's URL through the adapter (H0b row 6);
+      they go with it.
 - **Two tools**, `detached_read` and `detached_act`, both pre-allowed (§5). Every agent and
   participant gets them in addition to its shell. A refused tool made the
   agent answer in prose, so a refusal is a failure the host sees.
@@ -481,9 +573,9 @@ Agents get Detached's data and a closed list of actions as tools.
   - `watch` (H10).
 
   There are no repo writes and no arbitrary commands.
-- **Identity.** A session's secret maps to a participant, which has its capabilities and a read
-  scope. The executor applies the scope to every field, since the sandbox cannot stop what the host
-  answers.
+- **Identity.** A session, by its control channel or its HTTP secret, maps to a participant, which
+  has its capabilities and a read scope. The executor applies the scope to every field, since the
+  sandbox cannot stop what the host answers.
   - **A chat session** reads the workspace.
   - **A panel participant** reads only its run's subject repo and its own findings; in `verify`,
     only the one finding it was given.
@@ -621,8 +713,8 @@ Later steps add to the SDL:
   - `<repo>/.detached/skills` (shared) and `<git common dir>/detached/local/skills`.
 
   Repo skills are trust items.
-- **Claude** gets the folders it does not read itself as a local plugin:
-  `_meta.claudeCode.options.plugins: [{type: "local", path}]`. The plugin folder is per session in
+- **Claude** gets the folders it does not read itself as a local plugin, through `--plugin-dir`
+  (not run in spike 0c; H4c part 0 runs it). The plugin folder is per session in
   `cache/plugins/<id>/`, with the skills copied in, not linked, for Windows.
 - **Codex** reads `<dir>/.agents/skills` and `CODEX_HOME`'s. Other skills come through
   `detached_read skills`, on request. No directory is added to a Codex session for skills: added
@@ -652,29 +744,32 @@ Later steps add to the SDL:
   adds a feed line, "docs may need: `docs/x.md` Flow", whose button asks the session to update it.
   A repo with no index gets an offer of a session that writes one.
 
-## 13. The chat on ACP
+## 13. The chat on `kernel::Session`
 
-| Today on the sidecar | On ACP | Gap and what the host does |
+On Claude's direct backend. Codex's column comes with H13b.
+
+| Today on the sidecar | On the direct backend | Gap and what the host does |
 | --- | --- | --- |
-| Streaming, `/` commands, `@` files | updates, `available_commands_update` | none |
-| Model, effort, mode, `auto` re-armed | `configOptions` at start and load, `set_config_option` after | no per-model metadata: the host re-reads options after a switch and re-arms `auto` when offered |
-| History, resume, list, delete | `session/load`, `list`, `delete` | `configOptions` on every load; Codex's delete archives, the UI says so |
-| Archive | — | a flag in the host's index |
-| Stop with `stopTask` | `session/cancel`, `_session/async_task/stop` | stopTask parity kept by declaring JetBrains AIR's `asyncTasks` (§2); on Windows, Stop leaves the foreground command running until the adapter goes (TECHDEBT) |
+| Streaming, `/` commands, `@` files | `stream_event` and `assistant` messages, `initialize.commands`, `commands_changed` | none |
+| Model, effort, mode, `auto` re-armed | flags at spawn and resume; `set_model`, `apply_flag_settings`, `set_permission_mode` | none: `supportsAutoMode` and the effort levels per model come with `initialize.models`, as today |
+| History, resume, list, delete | `--resume`; the transcripts through our reader (§6, open) | the CLI replays nothing, and the format is undocumented: a file the reader cannot take shows "history unavailable" |
+| Archive | — | a flag in the host's index; an `archived` tag today's chat wrote is read |
+| Stop with `stopTask` | `interrupt`, then `stop_task` per task | none on macOS; the other OSes are H4c part 0's rows. On Windows a command may run on until its session's job closes (TECHDEBT) |
 | The `.env` deny | `Read(..)` and Bash rules | literal paths only: a mitigation, stated (§5) |
-| Approval cards, questions | `request_permission`, elicitation | `elicitation.form` declared |
-| Context ring | `usage_update {used, size}` | **the breakdown by category is dropped** |
-| Plan limits in the bar | `_claude/rateLimit` warnings, `/usage` as markdown | `/usage` sent to a utility session (it answers without the model), parsed against the pinned adapter with a test; unknown when the parse fails; Codex unknown |
-| Account and plan | `_auth/status_update` | the pool a session draws from, when reported (§2) |
-| The name | "Claude" | "Claude Agent" |
-| Untrusted repo | `settingSources: ["user"]` | none |
-| `ConfigChange` block | — | **lost**: a trusted repo keeps a window, and an agent editing its own `.claude/settings.json` ends its session (§4) |
-| Env allowlist, EOF as kill, `.env` deny, always-rules in the session | §1, §2, §5 | none |
-| Extra folders, host tools | new | none |
+| Approval cards, questions | `can_use_tool`, the `AskUserQuestion` ask | none |
+| Context ring | `get_context_usage` | none: the breakdown by category stays |
+| Plan limits in the bar | `get_usage`, `rate_limit_event` | the experimental call today's sidecar uses, now parsed by the host (TECHDEBT). Unverified on a subscription until H4c part 0's owner row; unknown, never zero, when absent |
+| Account and plan | `initialize.account`, `get_usage` | the pool a session draws from, when reported (§2) |
+| The name | "Claude" | open (§2) |
+| System prompt | the CLI's own default | **a change**: today's chat sends one line, since the SDK's default is empty; here it gets what `claude` in a terminal has |
+| Untrusted repo | `--setting-sources user` | none; the repo's `CLAUDE.md` is not sent under it |
+| `ConfigChange` block | the hook callback | settings and skills are blocked as today. **A changed command, agent file or `.mcp.json` ends the session** (§4) |
+| Env allowlist, the kill on close, `.env` deny, always-rules in the session | §1, §2, §5 | EOF is not a kill for the CLI: §1's close and leash |
+| Extra folders, host tools | `--add-dir`; the control channel (§7) | none; `--add-dir` is H4c part 0's row |
 
 The chat leaves the sidecar at H11. The sidecar, `core::agent` and `bin/fake_sidecar.rs` go when
-every row holds and the owner has used the ACP chat daily for at least 5 working days without going
-back.
+every row holds and the owner has used the chat on `kernel::Session` daily for at least 5 working
+days without going back.
 
 ## 14. Order and the owner's choices
 
@@ -687,10 +782,11 @@ back.
 | H2 | Storage tiers, scopes, the toggle | H1 | a Sharing page |
 | H3 | Adapters: install and update | H2 | the Agents page |
 | H4 | `crates/acp`, providers, `Session` headless, the fake ACP agent | H3 | — |
-| H5 | Host tools and the owner socket | H4 | — |
+| H4c | The backend seam and Claude's direct backend, its evidence on every OS first | H4 | — |
+| H5 | Host tools and the owner socket | H4c | — |
 | H8 | Skills | H5 | a Skills page |
-| H11 | The chat on ACP; the sidecar goes at its end condition | H5, H8 | the chat on ACP |
-| P2 | Panels on ACP: review and gate, live | P1, H11 | live panels |
+| H11 | The chat on `kernel::Session`; the sidecar goes at its end condition | H5, H8 | the chat on the session |
+| P2 | Panels, live: review and gate | P1, H11 | live panels |
 | P3 | Dispositions, rounds, the loop | P2 | Fix/Dismiss/Defer |
 | H6 | Managed worktrees and recipes | H2 | worktrees from the client |
 | P4 | Fix in a worktree | P3, H6 | fixes as diffs |
@@ -715,6 +811,13 @@ The owner's choices, settled on 2026-11-12
 4. **Windows panels**: isolation by trust, an untrusted subject through WSL2 (PLAN-PANELS §3).
 5. **Orchestrator mode and trust by workspace or repo**: trusted work runs free on its own branch;
    an untrusted subject gets a sandboxed, read-only review and no Fix (§5, PLAN-PANELS §3, §12).
+
+Settled on 2026-11-16 ([decision](docs/decisions/2026-11-16-claude-direct-connection.md)):
+
+6. **Claude's direct connection behind the standard interface** (§1, H4c). Where choice 2 says
+   ACP, the chat moves to `kernel::Session` on Claude's direct backend. Its open choices: the
+   history source, where Claude's `min_cli` lives, the label, the ACP stack while Codex is off, and
+   the letter to Anthropic with the Commercial Terms.
 
 ## 15. What the first drafts' review asked
 
@@ -755,8 +858,9 @@ settings, ops and invalidation findings.
 
     Defer writes nothing: it copies a drafted row.
   - **Crates:** `crates/acp` (async deps confined, no async type out) at H4; `core`'s
-    "the agent's protocol" becomes "proc, host, secrets, docs, store" at H4; `crates/app` ships
-    `detached-cli` beside `detached` (H5).
+    "the agent's protocol" becomes "proc, the agent backend seam, Claude's direct client, host,
+    secrets, docs, store" at H4c, with a Rust rule: nothing above `core::backend` names a
+    provider's protocol. `crates/app` ships `detached-cli` beside `detached` (H5).
   - **The read tool:** `schema.graphql` is its contract; a field comes with its resolver (H5).
   - **Docs:** `docs/INDEX.md`, module docs, `covers:` (H7). **Storage:** scopes (H2).
   - **Commands:** `make adapters-sign` (H3), `make agent-test` (H4); `make sidecar` goes with
@@ -766,10 +870,12 @@ settings, ops and invalidation findings.
   - the second slice's tools (H5);
   - step 4's terminal env (H9);
   - the public-build rule: it goes, per the 2026-11-12 decision (H12).
-  - "UI text says Claude" becomes "Claude Agent" (H3).
+  - "UI text says Claude" becomes the label the owner chooses (§2).
 - **PLAN-NATIVE:** the chat's contract and the Layout's agent lines.
 - **docs/BACKLOG.md:** the env store and `detached-cli env run` (H9).
 - **README:** what a user installs (H12).
+- **docs/decisions:** 2026-11-09 and three of 2026-11-12 carry a "superseded in part" line
+  pointing at 2026-11-16.
 
 ## 17. Execution and acceptance
 
@@ -778,13 +884,16 @@ settings, ops and invalidation findings.
 PLAN-FOUNDATION §12's gate, with these changes:
 - Branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`.
 - **revmux stays.** From P3 on, a step also runs through the panels' gate for comparison.
-- **Real-adapter tests need no credentials.** The owner's rule is no model calls and no secrets in
+- **Real-agent tests need no credentials.** The owner's rule is no model calls and no secrets in
   CI.
-  - They drive the real adapter and the user's real `claude` against a scripted fake Messages
+  - They drive the user's real `claude` through Claude's backend against a scripted fake Messages
     API: the spike's `src/fake.rs`, pointed at by `ANTHROPIC_BASE_URL`. The CLI runs the scripted
-    tool calls with its real permissions and sandbox.
+    tool calls with its real permissions and sandbox. Through H4 they ran through the real
+    adapter; H4c ports them.
   - They run in CI on macOS, Ubuntu 22.04 and 24.04, Windows, and WSL2 inside the Windows job
-    (GitHub's runner has it), from H4 on, beside the fake ACP agent.
+    (GitHub's runner has it), from H4 on, beside the fake ACP agent and, from H4c, the fake CLI.
+    From H4c the Windows job also runs the product's WSL shape: a Windows host, `wsl.exe`, the CLI
+    in the distro.
   - Codex runs on a placeholder API-key login; its live rows are H13a's.
   - The rows that cannot hold on an OS are in PLAN-PANELS §4.
 
@@ -937,20 +1046,28 @@ make the key, its public half into `CATALOG_KEY`; an `adapters-claude-agent-acp-
 `DETACHED_CONFIG_DIR=$(mktemp -d) cargo run -p detached-app`; SmartScreen and Defender on a
 Windows VM.**
 
+**Status (2026-11-16): under Claude's direct connection, item 5's bun build
+(`adapters/claude-agent-acp`), its job in `adapters.yml` and Claude's Install button go at H4c's
+gate. The
+catalog, the downloader, the cool-down and the versions stay, for Codex; the CLI check, the logins
+and the Agents page stay as built. The owner's `adapters-claude-agent-acp-0.106.0` tag is no longer
+needed; the key and a first signed catalog still are, for the `cli` list (§3, open).**
+
 Work:
 1. `adapters.json` with its key, serial, `min_app`/`max_app`, per OS, arch and libc `url`, `size`,
    `sha256`.
 2. The downloader: verify, a path-traversal guard, atomic rename.
 3. The cool-down.
 4. Side-by-side versions with rollback.
-5. Claude: the bun build of `claude-agent-acp`; the user's `claude` found or installed through
-   Anthropic's installer; the `min_cli` check as a function; the login in a terminal tab.
-6. The "Claude Agent" name.
+5. Claude: the user's `claude` found or installed through Anthropic's installer; the `min_cli`
+   check as a function; the login in a terminal tab. The bun build of `claude-agent-acp` was built
+   here and goes at H4c's gate.
+6. The provider's label, one constant (§2, open).
 7. Login from the manifest.
 8. The Codex build per §3 (installed only when the owner enables Codex).
 9. The Agents page.
-10. `adapters.yml` publishes the signed catalog (§3). Each bump raises the entry's `min_cli` when
-    the pinned SDK's `claudeCodeVersion` moves.
+10. `adapters.yml` publishes the signed catalog (§3). Claude's `min_cli` no longer follows the
+    pinned SDK's `claudeCodeVersion`: it is the oldest `claude` H4c's vetting passes on.
 11. `make adapters-sign`, and the one-time setup of the catalog's minisign key on the owner's
     machine, outside the repo.
 
@@ -970,10 +1087,13 @@ Tests:
     the host fails and is recorded.
   - macOS keeps the login in the Keychain (`Claude Code-credentials`): a source scan fails the
     build if that service name appears outside tests;
-- the UI never says "Claude Code".
+- the UI names the provider only through the one constant, shows no Anthropic logo, and no
+  feature of ours has Claude or Anthropic in its name. Until the owner chooses the label, the built
+  test stands: the UI never says "Claude Code".
 
-Done when a clean temp config installs Claude's adapter from the published catalog and the login
-runs.
+Done when a clean temp config finds or installs the user's `claude`, checks it against the
+published catalog's `min_cli` and the login runs; and, once the owner enables Codex, installs
+Codex's adapter from that catalog.
 
 The owner checks: install, update, rollback; SmartScreen and Defender on a Windows VM.
 
@@ -1013,6 +1133,10 @@ the project's `CLAUDE.md` (not an item, §4), and the project's `permissions.all
 even under `["project"]`. Left: the workflows have not run (they run once pushed); the Windows,
 Linux and WSL2 rows are unproven until then. Vetting does not cover the sandbox, which no session
 enables yet.**
+
+**Status (2026-11-16): the AIR question is settled by Claude's direct connection (H4c). The
+declaration, its test and Claude's path through the adapter go at H4c's gate, not before; until
+then this step's tests stay as they are, and `agent.yml`'s first runs are H4c part 0's baseline.**
 
 Work:
 1. `core::proc` and `crates/acp` per §1.
@@ -1078,10 +1202,126 @@ OS of §17.
 
 The owner checks: a headless session in a temp repo; kills the app mid-turn and finds no process.
 
+### Step H4c. The backend seam and Claude's direct backend
+
+[Decision](docs/decisions/2026-11-16-claude-direct-connection.md). Three parts in order; nothing of
+Claude's adapter path is removed before the gate at the end.
+
+**Part 0. Evidence before the client**, as the spike-0b rule has it
+([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
+- **What runs:** `spikes/claude-direct`, made portable: job objects on Windows, and no `ps`,
+  `kill` or `uuidgen`.
+- **Where:** a workflow on macOS, Ubuntu 22.04 and 24.04, Windows, WSL2 inside the distro, and the
+  product's WSL shape (a Windows host, `wsl.exe`, the CLI in the distro); at `min_cli` and at the
+  latest `claude`. The answers go into `spikes/claude-direct/ANSWERS-0c.md`.
+- **The baseline first:** `agent.yml` on the same OSes. H4's nine adapter tests have never run off
+  macOS, and a red row has to be told from a fault of the harness or the OS.
+
+| # | Row | If | Then |
+| --- | --- | --- | --- |
+| 1 | Spike 0c's rows 1 to 9 on each OS, the isolation flags among them | a row fails on an OS and cannot be worked around | Claude stays on ACP on every OS, with option B's patch; part a still lands; the owner decides |
+| 2 | Stop: `interrupt` ends a foreground command and `stop_task` a background one | Windows leaves either running | the session's job ends it at close; §2's Stop row and TECHDEBT say which |
+| 3 | §1's close, with a command in front of a turn and behind one, the leash in the group | a command outlives it | the order changes until none does |
+| 4 | A killed host: the leash as fixed `sh` lines on macOS and Linux; the job on Windows; in the product's WSL shape, what a killed host and a killed `wsl.exe` leave in the distro | `sh` cannot do it | the leash is the `detached` binary re-run and, in the distro, a static helper shipped in the Windows package |
+| 5 | The `ConfigChange` block mid-turn: an agent's own write adds a `PreToolUse` hook to `.claude/settings.json`, then a tool call at once; the same for `settings.local.json` and a skill; what the CLI reloads of commands, agents and `.mcp.json` | the hook runs before the block, for a source | that source ends the session, as a command does (§4, §13) |
+| 6 | A 3-minute foreground Bash call inside a turn: every frame between its `tool_use` and its result, kept in `out/` | no frame for 2 minutes | nothing: the stall rule rests on the tool call without its result (PLAN-PANELS §7) |
+| 7 | Five sessions at once: memory and errors | an error, or more than under ACP's 1.7 GB | PLAN-PANELS §8's cap changes |
+| 8 | Transcripts kept as fixtures: a subagent, a compaction, a title, a tag, a cwd past 200 characters, a session started in a worktree | they differ from §6's rules | §6 follows what was seen, or the owner takes the host's log |
+| 9 | On the owner's machine, never CI: real turns on a subscription login: `get_usage`'s limits, `rate_limit_event`, `account`, the `auto` classifier | the limits are absent or unusable | the bar shows them as unknown, and §13 says so |
+| 10 | What spike 0c did not show: a subagent's frames, compaction, `--plugin-dir`, `--add-dir`, an image in a prompt, an MCP elicitation | one cannot be done on this interface | §13 states the loss before the client is written |
+
+Part 0 is done when every row is answered on every OS, its Then-edits are in the plans, and the
+owner says go.
+
+**Part a. The seam.** No behavior changes; Claude still runs through the adapter.
+
+Work:
+1. `core::backend`: the trait, a session's types and `Spec` (§1).
+2. `crates/acp` implements it, with its adapter registry inside.
+3. `kernel::Session` holds a backend, picked by the manifest; `crates/kernel/clippy.toml`'s ban.
+4. `testutil::api`, the fake Messages API, moves to core's `testutil`: both backends' tests use
+   it.
+
+Tests: H4's seventeen session tests on the fake ACP agent pass with no assertion changed.
+
+**Part b. Claude's backend.** Sizes are estimates: the client 500 to 700 lines, the fake CLI about
+400, the reader 300 to 400 with its fixtures, the leash a dozen.
+
+Work:
+1. `core::claude`:
+   - the spawn, with the flags from `Spec`, all of them again on `--resume`;
+   - the read loop on loose JSON, `initialize`, the asks;
+   - the mapping `sidecars/claude/sidecar.ts`'s `feed` and `on` do today;
+   - the requests of §2's rows and of §13;
+   - the `ConfigChange` callback (§4);
+   - `sdkMcpServers` and `mcp_message` handed to a handler, which H5 fills.
+2. Tolerance: an unknown frame or field is ignored; `unsupported_request` drops that capability
+   and keeps the session; the host never writes a line that is not JSON, since the CLI exits on
+   one.
+3. §1's close, the leash, the job held for the session's life.
+4. History, the list and delete, per the owner's choice (§6).
+5. Claude's `min_cli` and `blocked_cli`, per the owner's choice (§3).
+6. `bin/fake_claude.rs`, a scripted CLI on the same frames, which:
+   - streams, asks, stalls and dies mid-turn;
+   - exits 1 on a flag it does not know;
+   - answers `unsupported_request` for a named request, and sends frames nobody knows;
+   - offers a rule with an ask, and records any `updatedPermissions` it gets back;
+   - reports another model after `--resume` without `--model`;
+   - stays busy through stdin EOF;
+   - spawns a child in its own process group that outlives a group SIGKILL and ends with the
+     fake's SIGTERM.
+7. `agent-vet.yml`: daily, the floor and the latest `claude`, at the latest release tag and at
+   main (§3).
+8. docs/TECHDEBT.md: the Windows Stop row as part 0 found it; the experimental limits call moves
+   from the sidecar to `core::claude`.
+9. CLAUDE.md's crate lines and its Rust rule (§16); `make agent-test` without the adapter build.
+
+Tests:
+- in `make check`, on the fake CLI:
+  - H4's seventeen session tests run on both fakes, wherever the behavior is the seam's;
+  - "Always" sends no `updatedPermissions`, and no file appears in the repo;
+  - an unknown frame and an `unsupported_request` leave the session running, without that
+    capability;
+  - a CLI gone mid-turn ends its own session and no other;
+  - a close with a command in front leaves no process and never sends SIGKILL first; a killed
+    host leaves none (both against the fake's own-group child);
+  - a resume passes every flag again, and runs on its model;
+  - a model missing from `initialize.models` is refused by the host;
+  - a blocked settings change keeps the session and makes the acceptance stale; a changed command
+    ends it;
+  - history, the list and delete on part 0's fixtures: the long path, the subagent, the
+    compaction, the `archived` tag; a file of unknown lines shows "history unavailable";
+  - a blocked `claude` and one below the floor, from a locally signed catalog.
+- under `make agent-test`, on the real `claude` and the fake Messages API, on every OS of §17 and
+  in the product's WSL shape:
+  - H4's seven that are not the adapter's own, ported: the first tool call asks under `default`;
+    a resume comes back on its model; an untrusted chat closed and resumed keeps the user's
+    settings and the `.env` deny; the `.env` deny refuses `Read` and `cat .env`; a cancel
+    mid-command ends the turn and the command; a CLI gone mid-command leaves no process; a
+    3-minute command shows a tool call in progress the whole time;
+  - new: `stop_task` ends a background command; the `ConfigChange` block mid-turn; a killed host
+    leaves no process; an `mcp_message` round trip with no listener open and nothing in argv; a
+    real session's history, list entry and delete.
+
+**The gate.** In order:
+1. part 0 is answered;
+2. the tests above pass on every OS of §17, with the adapter's nine still green beside them;
+3. the owner has run real turns on his own login through `kernel::Session`;
+4. then, in its own commit, Claude's adapter path goes: `adapters/claude-agent-acp`, its job in
+   `adapters.yml`, Claude's Install button, the AIR declaration and its test, the catalog-entry
+   test for Claude, and the adapter build in `make agent-test` and `scripts/agent-ci.sh`.
+
+Done when the chat still runs on the sidecar, a headless Claude session passes the harness on
+every OS of §17 with no adapter, and H4's fake-ACP tests still pass for the seam's second backend.
+
+The owner checks: a headless session in a temp repo on his login; kills the app mid-command and
+finds no process; a past session's history, and its delete.
+
 ### Step H5. Host tools and the owner socket
 
 Work:
-1. `core::host`: HTTP, single-use secrets, the Host and Origin check.
+1. `core::host`: the tools' MCP handler, and Claude's transport on the session's control channel
+   (§7). The HTTP listener, its single-use secrets and the Host and Origin check are H13a's.
 2. Participants and capabilities.
 3. §7's SDL with its resolvers.
 4. The two-phase executor.
@@ -1094,15 +1334,12 @@ Tests:
 - depth, size and the unsupported syntax are refused by name;
 - `mrs` on a repo with no forge view loads within the wait, or is `null` with its error, never
   `[]`;
-- a secret read from `ps -ww` is refused from another process;
-- the racer wins on purpose: the fake agent's child holds its `initialize` until a test client
-  that read the URL from `ps` has sent one. The racer is refused, the path stays unbound, and then
-  the child binds. This fails with the peer check removed;
-- a second `initialize` on a bound path ends the session;
+- a Claude session opens no listener, and no argv of any process it spawns names the tools or a
+  secret (`ps -ww`);
+- a tool call asks without `--allowedTools` and does not with it, and the model gets the answer;
 - the read scope, on the fields H5 has: an identity scoped to one repo reads no other repo, no
   `sessions`, and no MR outside its repo (the findings and verifier scopes are P2's tests);
 - a session built with the untrusted flag has `strictMcpConfig` and only the host's server;
-- a request with an `Origin` header or another `Host` is refused;
 - an act without the capability is refused;
 - a turn that ends without `done` is recorded;
 - packaging: each OS's package from `make build` contains `detached-cli`, and
@@ -1112,7 +1349,7 @@ Tests:
 - `detached-cli q` from a session's Bash is refused, also double-forked or after `setsid`, and from
   a Detached terminal tab it answers.
 
-Done when a fake agent reports findings and a real adapter reads a repo's status.
+Done when a fake agent reports findings and a real `claude` reads a repo's status.
 
 The owner checks: asks a headless session (H4's debug action) for a repo's status; runs
 `detached-cli q` in a terminal tab.
@@ -1120,7 +1357,7 @@ The owner checks: asks a headless session (H4's debug action) for a repo's statu
 ### Step H8. Skills
 
 Work: the folder list; repo skills with Share and Make local and hash acceptance (§10); Claude's
-per-session plugin; `skills` in the SDL; the Skills page.
+per-session plugin through `--plugin-dir` (§11); `skills` in the SDL; the Skills page.
 
 Tests:
 - `~/.agents/skills` is read when present;
@@ -1134,48 +1371,53 @@ H13a has passed).
 
 The owner checks: the same, through H4's headless debug action. The in-chat check is H11's.
 
-### Step H11. The chat on ACP
+### Step H11. The chat on `kernel::Session`
 
 Work:
 1. The chat view on `kernel::Session`.
-2. `tests/chat.rs` on the fake ACP agent.
-3. §13's rows; the `/usage` parse; the `min_cli` warning.
+2. `tests/chat.rs` on the fake CLI (H4c).
+3. §13's rows; the limits from `get_usage`; the `min_cli` warning.
 4. The agent mode of `Markdown` (§6): no network image loads from agent text, whatever the scheme
    or syntax. `web_image` gains an injectable fetcher, `ImageFetch`, which the tests replace with a
    recording stub.
 
 Tests:
 - **All 36 tests of `crates/app/tests/chat.rs`, and `dock.rs`'s
-  `a_running_chat_moves_to_another_zone_with_its_turn_going_on`, move to the fake ACP agent.**
+  `a_running_chat_moves_to_another_zone_with_its_turn_going_on`, move to the fake CLI.**
   These change in what they assert:
-  - `without_a_sidecar_it_says_how_to_get_one`: no adapter installed points to the Agents page;
-  - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from the `/usage`
-    parse, and unknown when it fails;
-  - `a_model_without_auto_is_marked_and_the_mode_drop_reported`: `configOptions` and the re-arm;
+  - `without_a_sidecar_it_says_how_to_get_one`: no `claude`, or one below `min_cli`, points to the
+    Agents page;
+  - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from `get_usage`,
+    and unknown when it has none or the CLI lacks the request;
+  - `a_model_without_auto_is_marked_and_the_mode_drop_reported`: `initialize.models` and the
+    re-arm;
   - `a_permission_prompt_is_answered_or_goes_with_a_stop`: "Always" records a host rule, the agent
-    receives `allow_once`, and the repeated request is answered without a prompt. The Stop half
-    moves to a request the rule does not cover;
-  - `the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar`: ending one closes its
-    session, and the shared adapter lives on;
+    receives an `allow` with no rule, and the repeated request is answered without a prompt. The
+    Stop half moves to a request the rule does not cover;
+  - `the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar`: ending one ends its own
+    CLI, and the other's runs on;
   - `an_active_chat_archives_or_deletes_its_conversation_and_ends` and
-    `a_past_chat_archives_unarchives_and_deletes_after_a_confirm`: archive is the host index's flag.
+    `a_past_chat_archives_unarchives_and_deletes_after_a_confirm`: archive is the host index's
+    flag, and delete removes the transcript.
 
-  No assertion is dropped. The context breakdown had no test.
+  No assertion is dropped. The context breakdown had no test and gets one.
 - **One test per §13 row not covered above:**
   - an agent reply with `http:` and `https:` images, inline `![](u)`, reference `![][r]` and a raw
     `<img src>`, shows a link for each, and the fetch stub records no request;
   - `auto` re-armed after a model switch;
-  - async stop through the AIR declaration;
-  - `elicitation.form`;
+  - a background command stopped through `stop_task`;
+  - the `AskUserQuestion` ask;
   - the `.env` deny;
-  - `allow_once` for "Always allow";
-  - the `min_cli` warning;
-  - the "Claude Agent" name;
+  - an `allow` with no rule for "Always allow";
+  - a blocked settings change keeps the chat, and a changed command ends it;
+  - the context breakdown;
+  - the `min_cli` warning, and the message for a `claude` the client cannot talk to (§2);
+  - the label (§2);
   - Codex's delete as archive, when Codex is enabled.
 
-Done when the chat runs on ACP with every §13 row holding. That is what P2 needs.
+Done when the chat runs on `kernel::Session` with every §13 row holding. That is what P2 needs.
 
-The owner checks: daily use of the ACP chat; a personal skill reaching it (H8).
+The owner checks: daily use of that chat; a personal skill reaching it (H8).
 
 Follow-up, which P2 does not wait for: the sidecar, `core::agent` and `bin/fake_sidecar.rs` are
 removed at §13's end condition, in their own commit, after a grep of `crates/app/tests` for
@@ -1270,7 +1512,14 @@ The owner checks: the same.
 When the owner enables Codex. Until H13a passes, Codex rows stay off: no Codex chat, no Codex
 participant, and line 4 of PLAN-PANELS §4 does not hold for Codex.
 
-**H13a** (needs H5): `spikes/acp/0b/codex-live.sh`'s rows as headless tests on the owner's login:
+**H13a** (needs H5): the ACP backend's first live provider. It builds §7's HTTP transport for
+H5's handler, with its tests:
+- a second `initialize` on a bound path ends the session, and a request without the bound id is
+  refused;
+- a request with an `Origin` header or another `Host` is refused;
+- no secret appears in any argv.
+
+Then `spikes/acp/0b/codex-live.sh`'s rows as headless tests on the owner's login:
 - the deny profile through the adapter: write, egress, cross-read;
 - `turn/interrupt` mid-command;
 - an HTTP MCP call to the host;
@@ -1289,15 +1538,29 @@ Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with eve
 
 - **Personal builds** use the subscription login now
   ([decision](docs/decisions/2026-11-12-claude-own-cli.md)).
-- **Before the public release** the owner asks Anthropic for the same permission, citing the
-  OpenCode precedent.
-- **If refused,** public builds take an API key or another login through the same `claude`, with no
-  code change: the CLI owns the login.
+- **The letter to Anthropic goes now**, not here
+  ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), choice 5). It asks three
+  things: whether a desktop client running the user's own unmodified `claude` on the user's own
+  login is covered; whether panels' parallel sessions are "ordinary, individual usage"; and the
+  label.
+- **Before the public release:**
+  - the owner accepts Anthropic's Commercial Terms, which the terms page asks of a product that
+    runs Claude Code, unless the answer says they do not apply;
+  - README says in plain text that Detached runs the user's installed Claude Code, with no logo
+    and no claim of a partnership;
+  - the label is what the owner chose (§2).
+- **If the subscription login is refused,** public builds take an API key or another login through
+  the same `claude`, with no code change: the CLI owns the login.
+- **If the interface is refused,** Claude moves behind the seam to ACP, with option B's patch: a
+  manifest line, the adapter's build back from git, and H4's tests.
+- **If panels' parallel sessions are refused on a subscription,** panels ask for an API key or a
+  cloud login, and the chat keeps the subscription.
 
 ### The agent host is done when
 
 - every step passed its gate and §13's rows hold;
 - no provider can write a repo's settings, read another session's tools, or start a defined
   process without its grant;
-- `sidecars/claude` and `core::agent` are gone;
+- `sidecars/claude`, `core::agent` and Claude's adapter path are gone;
+- nothing above `core::backend` names a provider's protocol;
 - CLAUDE.md, PLAN-EXTENSIBLE and PLAN-NATIVE say what the code does (§16).
