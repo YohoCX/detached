@@ -28,7 +28,8 @@ const NOISE: &[&str] = &[
     "[Request interrupted",
 ];
 
-/// The project folder the CLI keeps `cwd`'s transcripts in.
+/// The project folder the CLI keeps `cwd`'s transcripts in; `cwd` as the CLI sees it, its symlinks
+/// resolved.
 pub(crate) fn folder(cwd: &str) -> String {
     let units: Vec<u16> = cwd.encode_utf16().collect();
     let ascii = |u: u16| u8::try_from(u).ok().filter(u8::is_ascii_alphanumeric);
