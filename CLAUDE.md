@@ -2,10 +2,12 @@
 
 Multi-repo git client, native on GPUI. It writes to a repo only through switch, stash, pull, managed
 worktrees (`git worktree add`/`remove`), and the chat's turn snapshots (private refs) and restores:
-- `crates/core`: the backend (git, forge, accounts, search, settings, the agent's protocol and trust),
-  blocking Rust, no UI types.
+- `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
+  in `proc`, the sidecar's protocol and trust), blocking Rust, no UI types.
+- `crates/acp`: the ACP client on `agent-client-protocol`, a blocking API whose async deps stay
+  inside, and `fake_acp`, the scripted agent the tests run.
 - `crates/kernel`: the app's live state and its exchange as GPUI entities (`blocking`, `ui_state`,
-  `Activity`, `Doc`, the `Settings` snapshot), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
+  `Activity`, `Doc`, `Session`, the `Settings` snapshot), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
 - `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
 - `sidecars/claude`: the chat's process on the Agent SDK, in TypeScript, kept out of the release packages.

@@ -979,6 +979,24 @@ The owner checks: install, update, rollback; SmartScreen and Defender on a Windo
 
 ### Step H4. ACP, providers and the headless session
 
+**Status (2026-11-15): part a, everything on the fake, is built: `core::proc` (an env from the
+allowlist and the manifest's names, the adapter in its own process group, on Windows in a job
+closed once it exits), the manifests' `env`, `trust` and CLI variable, `core::trust::watch`,
+`crates/acp`, `bin/fake_acp.rs` and `kernel::Session` (start, load, prompt, stream, cancel, end;
+§6's sequences with the turn's changes and restore; §5's host-kept always rules and the `.env`
+deny; the AIR declaration). `crates/acp` has the crate's tree of 63 crates on `futures` alone: no
+`async-io`, `async-process` or `blocking`, since its `Lines` transport runs over two plain threads
+in place of `ByteStreams`. Adapters are keyed by their executable, so by provider and version; the
+own-adapter exceptions of §1 add to that key. A session watches its own tree's trust files rather
+than growing `core::watch`'s list. The tests pass on macOS; the job module is compiled for Windows
+only on its own, and no test has run on Linux or Windows. Not built yet: the questions row
+(`elicitation.form` is declared once the chat's view takes questions, H11), the running turn as
+an Activity job and past sessions, which wait for a view. H4b owes Work 6 (the real-adapter
+harness on the scripted fake Messages API, the CI matrix, `make agent-test`, the 3-minute Bash
+call, the catalog's CI vetting) and the tests "on the real adapter", the check that AIR's
+declaration changes nothing but async stop among them; it drives `kernel::Session` as part a
+does, with the real adapter installed in place of `fake_acp`.**
+
 Work:
 1. `core::proc` and `crates/acp` per §1.
 2. Manifests and §2's rows.

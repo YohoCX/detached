@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| On Windows, Stop leaves the turn's foreground command running until the session's adapter goes | `kernel::session`, `core::proc` | `session/cancel` ends the turn, but Claude Code on Windows does not kill its command (spike 0b row 1); closing the adapter's job, once it has exited, ends what is left within 0.5 s. |
 | The test that the host never opens a login runs its FIFOs on Unix only (`#[cfg(unix)]`) | `crates/core` `adapters` tests | A FIFO shows any open of `~/.claude/.credentials.json`, `~/.claude.json` or `~/.codex/auth.json`. Windows has its own `#[cfg(windows)]` test that holds those files with no sharing, so a host open fails the flow; it was written without a Windows machine and has not run yet. |
 | adapters.yml has never run | `.github/workflows/adapters.yml` | The bun builds per platform, the entry, the catalog's checks and both releases wait for the owner's first `adapters-*` tag and signed catalog. The `darwin-x64` build is cross-compiled on an arm64 runner. |
 | A crash in C code leaves no crash report | `core::crash`, `main` | The panic hook catches Rust panics only: a signal such as SIGSEGV in libghostty-vt or a tree-sitter grammar ends the app without a report in `crashes/`. On macOS the system's crash report (Console, Crash Reports) has it. |
