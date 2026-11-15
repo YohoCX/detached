@@ -7,6 +7,9 @@ use detached_core::state::AppState;
 use gpui_kit::App;
 use kernel::ui_state;
 
+#[cfg(debug_assertions)]
+mod session_cli;
+
 fn main() {
     if let Ok(dir) = detached_core::paths::config_dir() {
         let default = std::panic::take_hook();
@@ -27,6 +30,10 @@ fn main() {
         Ok(s) => Arc::new(s),
         Err(e) => fail(e),
     };
+    #[cfg(debug_assertions)]
+    if let Some(i) = args.iter().position(|a| a == "--session") {
+        session_cli::run(core, &args[i + 1..]);
+    }
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);

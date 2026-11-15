@@ -73,7 +73,8 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   - **Calls on a backend:**
     - `caps`, below;
     - `open(Spec)` and `resume(Spec, id)`: a session and its one stream of `Event`;
-    - `past(place, folder)` and `delete(place, id)`, with no session open;
+    - `past(Spec)` and `delete(Spec, id)`, with no session open: the `Spec` gives the folder and
+      the place;
     - `probe(place)`: whether an untrusted participant's Bash call runs sandboxed there (§5).
   - **Calls on a session:** `prompt` (text, files, images), `cancel`, `set` (model, effort or
     mode), `stop_task(id)`, `close`. An ask is answered through its own `Reply`.
@@ -91,7 +92,9 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       modes, the `/` commands, the account and its pool, and on a resume whether its history
       could be read;
     - `Update`: user text, text, a thought, a `Tool`, the running tasks, usage with its parts and
-      the turn's cost, the plan's limits, a changed model, effort, mode or command list;
+      the turn's cost, the plan's limits, a changed model, effort, mode or command list. User
+      text, text and a thought come in chunks, each going on with the feed's last item of its
+      kind; a `Break` ends a message, so the next chunk starts a new item;
     - `Ask` with its `Reply`: a tool call with its rule key (§5), or questions with their
       choices. The answers: allow, reject, cancel, or the questions' answers;
     - `Ended`: a `Turn`, or a failure with its text and, where the host acts on it, its cause
@@ -102,7 +105,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     line counts, the end of the output, and the raw input. The host shows the raw input and never
     reads a field of it.
   - **A resumed session's stream starts with its history**, as updates: ACP's replay, Claude's
-    reader (§6). So the kernel fills its feed one way.
+    reader (§6), which ends each message with a `Break`. So the kernel fills its feed one way.
   - **A resume waits for the same id's `Closed`**, in the kernel: two processes never hold one
     session.
   - **`Caps`** says which optional pieces a backend has (the context breakdown, plan limits, a
@@ -1319,7 +1322,16 @@ holds the trait and keeps the wait for an id's `Closed`. The fake Messages API i
 `testutil::api`. In `core::backend`'s tests, the source scan and the test on `crates/app/Cargo.toml`;
 `core::claude` joins private in part b. The sixteen session tests pass in the kernel, the
 adapter's eight and the split halves in `crates/acp`, and `make agent-test` on macOS with `claude`
-2.1.325: the kernel's eight and the AIR test in `crates/acp`. Part 0 and part b are next.**
+2.1.325: the kernel's eight and the AIR test in `crates/acp`. Of part b, the reader is built:
+`core::claude::history`, crate-private, with §6's path rule (its hash checked against part 0's long
+cwd), the list (title, tag, model, from a transcript's head and tail as the SDK reads them),
+history as updates and delete, tested on part 0's macOS fixtures; the seam's `past` and `delete`
+take the `Spec`, whose folder and place they need, and default to "none" for ACP. Each message of
+the history ends with the seam's `Break`, and a parallel call's result off the chain is read too.
+Item 9's `detached --session` is built with `make agent-login`, tested on the fake ACP agent: it
+prints usage and cost after a turn, and the limits, account and pool join it with item 2's types.
+ACP's replay sends no `Break` yet, so adjacent messages of one kind join there. Part 0 and the
+rest of part b are next.**
 
 **Status (2026-11-16): part b's client is built, history and the WSL place aside.** `core::claude`
 behind `backend::direct()`: the spawn under the `sh` leash with every flag again on `--resume`, the
@@ -1428,7 +1440,8 @@ Work:
    - `CLAUDE.env` gains Foundry's five names (§2);
    - the read loop on loose JSON, `initialize`, the asks with their keys (§5);
    - the mapping `sidecars/claude/sidecar.ts`'s `feed` and `on` do today, into the seam's types.
-     Its `detail` cut fills the title and nothing else;
+     Its `detail` cut fills the title and nothing else. Text and thoughts go out as chunks, and a
+     `Break` after each `assistant` message, as the reader ends its messages;
    - the requests of §2's rows and of §13;
    - the `ConfigChange` callback (§4);
    - `sdkMcpServers` and `mcp_message` handed to a handler, which H5 fills.

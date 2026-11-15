@@ -7,8 +7,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::adapters::Provider;
-pub use crate::agent::{Choice, Limit, Model, Part, Question, SlashCommand, Task};
-use crate::error::Result;
+pub use crate::agent::{Choice, Limit, Model, Part, Past, Question, SlashCommand, Task};
+use crate::error::{Error, Result};
 use crate::state::AppState;
 
 /// The backend a provider's manifest names.
@@ -36,6 +36,14 @@ pub trait Backend: Send + Sync {
         id: &str,
         events: Events,
     ) -> Result<Box<dyn Session>>;
+    /// The past sessions in the spec's folder, newest first.
+    fn past(&self, _core: &AppState, _spec: &Spec) -> Result<Vec<Past>> {
+        Err(Error::Other("This agent lists no past sessions.".into()))
+    }
+    /// Removes the past session `id`.
+    fn delete(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<()> {
+        Err(Error::Other("This agent deletes no past sessions.".into()))
+    }
 }
 
 /// A session open on its backend; dropped, it closes there and `Closed` follows.
@@ -163,9 +171,12 @@ pub struct Config {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Update {
+    /// User text, text and a thought come in chunks, each going on with the last item of its kind.
     User(String),
     Text(String),
     Thought(String),
+    /// A message ended: the next chunk starts a new item.
+    Break,
     /// A tool call, or what changed of one, by `id`.
     Tool(Box<Tool>),
     /// Context fill by part, and the turn's cost in USD when known.

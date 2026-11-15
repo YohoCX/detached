@@ -23,6 +23,7 @@ use crate::error::{Error, Result};
 use crate::proc::{self, GRACE, Proc};
 use crate::state::AppState;
 
+mod history;
 #[cfg(test)]
 mod tests;
 

@@ -256,6 +256,40 @@ fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestA
     assert!(!Path::new(&f.repo).join("a.txt").exists());
 }
 
+#[gpui::test]
+fn chunks_go_on_with_their_message_and_a_break_starts_the_next(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    let (text, user) = (
+        |t: &str| Update::Text(t.into()),
+        |t: &str| Update::User(t.into()),
+    );
+    let updates = [
+        user("A"),
+        Update::Break,
+        user("B"),
+        Update::Break,
+        text("main "),
+        text("done"),
+        Update::Break,
+        Update::Usage {
+            used: 1,
+            size: 2,
+            cost: None,
+            parts: vec![],
+        },
+        text("done"),
+    ];
+    s.update(cx, |s, _| updates.into_iter().for_each(|u| s.update(u)));
+    let items = [
+        Item::User("A".into()),
+        Item::User("B".into()),
+        Item::Text("main done".into()),
+        Item::Text("done".into()),
+    ];
+    s.read_with(cx, |s, _| assert_eq!(s.items, items));
+}
+
 /// The first ask from item `from` on.
 fn asked(s: &Entity<Session>, from: usize, cx: &App) -> Option<(usize, Answer)> {
     s.read(cx)
