@@ -45,6 +45,11 @@ fn main() {
         Some("--sleep") => loop {
             std::thread::park();
         },
+        // As a CLI for the host's version check.
+        Some("--version") => {
+            println!("2.1.400 (Claude Code)");
+            return;
+        }
         // A background child: lives until its stdin, the agent's, closes.
         Some("--child") => {
             let _ = std::io::stdin().read_to_end(&mut vec![]);

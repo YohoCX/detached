@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+detached-acp.workspace = true
 detached-core.workspace = true
 futures = "0.3"
 # GPUI alone: the kit's crates stay out, and clippy.toml keeps the drawing parts out.
@@ -16,6 +17,7 @@ serde_json.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+detached-acp = { workspace = true, features = ["testutil"] }
 detached-core = { workspace = true, features = ["testutil", "e2e"] }
 detached-forge-fake = { path = "../forge-fake" }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, features = ["test-support"] }

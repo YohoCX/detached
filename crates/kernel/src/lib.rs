@@ -13,6 +13,7 @@ pub mod nav;
 pub mod panel;
 pub mod repo;
 pub mod resource;
+pub mod session;
 pub mod settings;
 pub mod sharing;
 pub mod ui_state;
@@ -35,6 +36,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     settings::init(cx);
     update::init(cx);
     agents::init(cx);
+    session::init(cx);
     invalidate::init(cx);
     workspace::init(cx);
 }

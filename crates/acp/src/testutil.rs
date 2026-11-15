@@ -9,8 +9,14 @@ pub fn fake() -> PathBuf {
     static FAKE: OnceLock<PathBuf> = OnceLock::new();
     let build = || {
         let args = ["build", "-p", "detached-acp", "--bin", "fake_acp"];
+        // A target dir of its own: the features of the crates under test would rebuild it each time.
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
         let out = Command::new(env!("CARGO"))
             .args(args)
+            .arg("--target-dir")
+            .arg(target.join("fake"))
             .arg("--message-format=json-render-diagnostics")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
