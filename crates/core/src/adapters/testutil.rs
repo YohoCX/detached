@@ -6,8 +6,12 @@ use std::path::{Path, PathBuf};
 use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 
-use super::{Artifact, CLAUDE, Entry, target};
+use super::{Artifact, CLAUDE, CliRule, Entry, Provider, claude, target};
+use crate::backend::Name;
 use crate::update::testutil::{Server, keys};
+
+/// Claude's manifest on the ACP backend and its adapter, for the fake ACP agent's tests.
+pub static CLAUDE_ACP: Provider = claude(Name::Acp);
 
 pub type Signer = Box<dyn Fn(&[u8]) -> String>;
 
@@ -47,7 +51,17 @@ impl Fixture {
     }
 
     pub fn publish_signed_by(&self, sign: &Signer, serial: u64, entries: &[Entry]) {
-        let json = serde_json::json!({"serial": serial, "adapters": entries}).to_string();
+        self.publish_all(sign, serial, entries, &[]);
+    }
+
+    /// Serves a catalog with `cli` rules beside its entries.
+    pub fn publish_cli(&self, serial: u64, cli: &[CliRule]) {
+        self.publish_all(&self.sign, serial, &[], cli);
+    }
+
+    fn publish_all(&self, sign: &Signer, serial: u64, entries: &[Entry], cli: &[CliRule]) {
+        let json = serde_json::json!({"serial": serial, "adapters": entries, "cli": cli});
+        let json = json.to_string();
         self.server
             .put("/adapters.json.minisig", sign(json.as_bytes()));
         self.server.put("/adapters.json", json);

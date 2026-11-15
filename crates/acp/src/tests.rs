@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use detached_core::adapters::testutil::CLAUDE_ACP;
 use detached_core::backend::Session as _;
 use detached_core::env::Env;
 use detached_core::git::testutil::Sandbox;
@@ -257,7 +258,7 @@ fn sandbox() -> Sandbox {
 fn open(acp: &Acp, sb: &Sandbox, past: Option<&str>) -> (Open, Receiver<backend::Event>) {
     let (tx, rx) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let spec = Spec::new(&CLAUDE, &repo, Kind::Chat);
+    let spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
     let open = acp.start(&sb.state, &spec, past, Box::new(move |e| _ = tx.send(e)));
     (open.unwrap(), rx)
 }
@@ -317,9 +318,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     let (tx, late) = mpsc::channel();
     let opened = Opened {
         id: "late".into(),
-        version: String::new(),
-        config: vec![],
-        note: None,
+        ..Opened::default()
     };
     let mut demux = s.live.demux.lock().unwrap();
     demux.open(Some(opened), Box::new(move |e| _ = tx.send(e)));
@@ -452,7 +451,7 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
     let (tx, rx) = mpsc::channel();
     let adapter = Adapter::start_as(&spec_proc, air, move |e| _ = tx.send(e)).unwrap();
     let repo = sb.path("repo").display().to_string();
-    let mut spec = Spec::new(&CLAUDE, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
     spec.trusted = true;
     let options = Options {
         cwd: repo.into(),

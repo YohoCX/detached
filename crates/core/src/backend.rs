@@ -1,9 +1,13 @@
 //! The seam between a session and the protocol its provider speaks: one trait and a session's
 //! types, in a session's terms. No flag, field or frame of a protocol is named here.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use crate::adapters::Provider;
+pub use crate::agent::{Choice, Limit, Model, Part, Question, SlashCommand, Task};
 use crate::error::Result;
 use crate::state::AppState;
 
@@ -11,6 +15,12 @@ use crate::state::AppState;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Name {
     Acp,
+    Direct,
+}
+
+/// Claude's backend: the user's own `claude`, one per session.
+pub fn direct() -> &'static dyn Backend {
+    crate::claude::backend()
 }
 
 /// A backend: it opens sessions, each with its one stream of events.
@@ -34,7 +44,21 @@ pub trait Session: Send {
     fn prompt(&self, text: &str) -> Result<()>;
     /// Ends the running turn and its foreground command.
     fn cancel(&self);
+    /// Switches the model, effort or mode; a model the agent does not offer is refused.
+    fn set(&self, setting: Setting) -> Result<()>;
+    /// Stops a running task.
+    fn stop_task(&self, id: &str);
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Setting {
+    Model(String),
+    Effort(String),
+    Mode(String),
+}
+
+/// The host's tools: an MCP request in, its response out.
+pub type Tools = Arc<dyn Fn(Value) -> Value + Send + Sync>;
 
 /// A session's stream: called in the order the agent sent each event, from a backend's thread.
 pub type Events = Box<dyn FnMut(Event) + Send>;
@@ -78,6 +102,7 @@ pub struct Spec {
     pub mode: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub tools: Option<Tools>,
 }
 
 impl Spec {
@@ -91,6 +116,7 @@ impl Spec {
             mode: "default".into(),
             model: None,
             effort: None,
+            tools: None,
         }
     }
 }
@@ -107,7 +133,7 @@ pub enum Event {
     Exited(Exit),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Opened {
     pub id: String,
     /// The agent's.
@@ -115,6 +141,16 @@ pub struct Opened {
     pub config: Vec<Config>,
     /// What the user should know of this open, such as a CLI with known problems.
     pub note: Option<String>,
+    pub models: Vec<Model>,
+    pub commands: Vec<SlashCommand>,
+    pub account: Option<Account>,
+}
+
+/// Who the session runs as and what it draws from: "Claude Max", "Anthropic API", "Amazon Bedrock".
+#[derive(Clone, Debug, PartialEq)]
+pub struct Account {
+    pub plan: String,
+    pub email: Option<String>,
 }
 
 /// A select config option and its current value: `mode`, `model`, `effort`.
@@ -132,14 +168,30 @@ pub enum Update {
     Thought(String),
     /// A tool call, or what changed of one, by `id`.
     Tool(Box<Tool>),
-    /// Context fill, and the turn's cost in USD when known.
+    /// Context fill by part, and the turn's cost in USD when known.
     Usage {
         used: u64,
         size: u64,
         cost: Option<f64>,
+        parts: Vec<Part>,
     },
     Config(Vec<Config>),
     Mode(String),
+    Commands(Vec<SlashCommand>),
+    /// The tasks running now.
+    Tasks(Vec<Task>),
+    /// The plan's limits.
+    Limits(Vec<Limit>),
+    /// The agent lacks this piece: it is gone for the session.
+    Lacks(Piece),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Piece {
+    Context,
+    Limits,
+    StopTask,
+    Effort,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -152,6 +204,8 @@ pub struct Tool {
     /// Shown, never read by the host.
     pub input: Option<Value>,
     pub output: Option<Value>,
+    /// An edit's lines added and removed.
+    pub lines: Option<(usize, usize)>,
 }
 
 /// A permission request.
@@ -162,14 +216,18 @@ pub struct Ask {
     pub key: Option<String>,
     /// The options' names.
     pub options: Vec<String>,
+    /// Questions for the user, answered by `Answer::Answers`.
+    pub questions: Vec<Question>,
 }
 
 /// The host's answer: "Always" stays a host rule, so the agent hears `Allow`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
     Allow,
     Reject,
     Cancel,
+    /// Each question's picked labels.
+    Answers(BTreeMap<String, String>),
 }
 
 /// Answers an ask once; dropped, it answers `Cancel`.

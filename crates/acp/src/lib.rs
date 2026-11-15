@@ -16,7 +16,7 @@ use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_re
 use detached_core::adapters::{self, BLOCK, CLAUDE, Cli};
 use detached_core::backend::{
     self, Answer, Ask, Backend, Caps, Cause, Config, Events, Exit, Failure, Kind, Opened, Reply,
-    Spec, StopReason, Tool, Turn, Update,
+    Setting, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
@@ -286,6 +286,14 @@ impl backend::Session for Open {
     fn cancel(&self) {
         self.live.adapter.cancel(&self.id);
     }
+
+    fn set(&self, _: Setting) -> Result<()> {
+        Err(Error::Other(
+            "This agent switches nothing mid-session yet".into(),
+        ))
+    }
+
+    fn stop_task(&self, _: &str) {}
 }
 
 impl Drop for Open {
@@ -408,6 +416,7 @@ impl Adapter {
                                 key: key(&tool),
                                 tool,
                                 options: r.options.iter().map(|o| o.name.clone()).collect(),
+                                questions: vec![],
                             };
                             let reply = Reply::new(move |a| _ = tx.send(a));
                             on_ask(Event::Ask(r.session_id.to_string(), Box::new(ask), reply));
@@ -493,7 +502,7 @@ impl Adapter {
             id,
             version: self.version.clone(),
             config: configs(config.unwrap_or_default()),
-            note: None,
+            ..Opened::default()
         }
     }
 
@@ -610,6 +619,7 @@ fn tool(id: String, f: ToolCallUpdateFields) -> Tool {
         status: f.status.and_then(name),
         input: f.raw_input,
         output: f.raw_output,
+        lines: None,
     }
 }
 
@@ -632,6 +642,7 @@ fn update(u: SessionUpdate) -> Option<Update> {
             status: name(t.status),
             input: t.raw_input,
             output: t.raw_output,
+            lines: None,
         })),
         SessionUpdate::ToolCallUpdate(t) => {
             Update::Tool(Box::new(tool(t.tool_call_id.to_string(), t.fields)))
@@ -640,6 +651,7 @@ fn update(u: SessionUpdate) -> Option<Update> {
             used: u.used,
             size: u.size,
             cost: u.cost.map(|c| c.amount),
+            parts: vec![],
         },
         SessionUpdate::ConfigOptionUpdate(c) => Update::Config(configs(c.config_options)),
         SessionUpdate::CurrentModeUpdate(m) => Update::Mode(m.current_mode_id.to_string()),
@@ -650,7 +662,7 @@ fn update(u: SessionUpdate) -> Option<Update> {
 /// The option for `answer`: `allow_once` or `reject_once`, never an `_always`.
 fn outcome(options: &[PermissionOption], answer: Answer) -> RequestPermissionOutcome {
     let kind = match answer {
-        Answer::Allow => PermissionOptionKind::AllowOnce,
+        Answer::Allow | Answer::Answers(_) => PermissionOptionKind::AllowOnce,
         Answer::Reject => PermissionOptionKind::RejectOnce,
         Answer::Cancel => return RequestPermissionOutcome::Cancelled,
     };

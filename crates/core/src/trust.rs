@@ -252,7 +252,7 @@ pub fn watch(
 }
 
 /// Whether `glob` may name `rel` or a file under it, ignoring case where the file system does.
-fn names(glob: &str, rel: &Path) -> bool {
+pub fn names(glob: &str, rel: &Path) -> bool {
     let same = |c: &OsStr, p: &str| match cfg!(any(target_os = "macos", windows)) {
         true => c.eq_ignore_ascii_case(p),
         false => c == p,

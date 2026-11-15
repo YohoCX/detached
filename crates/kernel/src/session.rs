@@ -2,15 +2,15 @@
 //! and end, with each turn's snapshots and trust checks and the host's answers to permissions. A
 //! view draws `items`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, Backend, Cause, Config, Event, Events, Exit, Failure, Spec, StopReason, Tool, Turn,
-    Update,
+    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
+    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
@@ -29,6 +29,9 @@ pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past t
 
 const TRUST_CHANGED: &str = "The repo's agent settings changed, so the session ended. A new one \
     loads them only once you trust them.";
+
+pub const TRUST_STALE: &str = "The repo's agent settings changed mid-turn. The agent keeps the ones \
+    it started with, and the session ends with this turn.";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
@@ -83,6 +86,8 @@ pub enum Item {
     Ask {
         tool: Tool,
         answer: Answer,
+        /// Questions for the user, answered by `answer_questions`.
+        questions: Vec<Question>,
     },
     /// What a turn changed in the worktree, between two snapshots.
     Changes {
@@ -111,10 +116,23 @@ pub struct Session {
     pub cost: Option<f64>,
     /// The agent's version, from `Opened`.
     pub version: Option<String>,
+    pub models: Vec<Model>,
+    pub commands: Vec<SlashCommand>,
+    pub account: Option<Account>,
+    /// The tasks running now.
+    pub tasks: Vec<backend::Task>,
+    /// The context's parts, as last reported.
+    pub parts: Vec<Part>,
+    /// The plan's limits; None until reported.
+    pub limits: Option<Vec<Limit>>,
+    /// What this session's agent turned out to lack.
+    pub lacks: Vec<Piece>,
     /// Dropped, it closes on its backend.
     open: Option<Box<dyn backend::Session>>,
     /// The trust files' fingerprint the session started on.
     trust: String,
+    /// The trust paths its backend keeps from loading mid-turn.
+    blocks: &'static [&'static str],
     /// "Always allow" answers, kept by the host: the asks' keys.
     rules: Vec<String>,
     /// Waiting asks by item, with their keys.
@@ -233,8 +251,16 @@ impl Session {
                 usage: None,
                 cost: None,
                 version: None,
+                models: vec![],
+                commands: vec![],
+                account: None,
+                tasks: vec![],
+                parts: vec![],
+                limits: None,
+                lacks: vec![],
                 open: None,
                 trust: String::new(),
+                blocks: backend(spec.provider).caps().blocks,
                 rules: vec![],
                 replies: HashMap::new(),
                 turn: None,
@@ -414,6 +440,38 @@ impl Session {
         cx.notify();
     }
 
+    /// Answers the questions of the ask at `item`, each with its picked labels.
+    pub fn answer_questions(
+        &mut self,
+        item: usize,
+        answers: BTreeMap<String, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((reply, _)) = self.replies.remove(&item) else {
+            return;
+        };
+        if let Some(Item::Ask { answer, .. }) = self.items.get_mut(item) {
+            *answer = Answer::Once;
+        }
+        reply.send(backend::Answer::Answers(answers));
+        cx.notify();
+    }
+
+    /// Switches the model, effort or mode; its new value comes as a config update.
+    pub fn set(&mut self, setting: Setting) -> Result<()> {
+        let o = self
+            .open
+            .as_ref()
+            .ok_or(Error::Other("The session is not open".into()))?;
+        o.set(setting)
+    }
+
+    pub fn stop_task(&self, id: &str) {
+        if let Some(o) = &self.open {
+            o.stop_task(id);
+        }
+    }
+
     /// Ends the session and the CLI it ran on.
     pub fn end(&mut self, cx: &mut Context<Self>) {
         self.close(End::Closed, cx);
@@ -437,9 +495,18 @@ impl Session {
         cx.notify();
     }
 
-    /// A trust file changed: a different fingerprint cancels the turn and ends the session.
+    /// A trust file changed: a different fingerprint cancels the turn and ends the session, unless
+    /// the backend blocks every path that moved; then the turn goes on and its end re-hash ends it.
     fn recheck(&mut self, found: Option<String>, cx: &mut Context<Self>) {
-        if !found.is_some_and(|f| f != self.trust) {
+        let Some(found) = found.filter(|f| *f != self.trust) else {
+            return;
+        };
+        if blocked(self.blocks, &self.trust, &found) {
+            let note = Item::Note(TRUST_STALE.into());
+            if self.state == State::Running && !self.items.contains(&note) {
+                self.items.push(note);
+                cx.notify();
+            }
             return;
         }
         if self.state == State::Running {
@@ -459,6 +526,7 @@ impl Session {
                 self.id = Some(o.id);
                 self.version = Some(o.version);
                 self.config = o.config;
+                (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
                 self.items.extend(o.note.map(Item::Note));
                 if self.open.is_some() {
                     self.state = State::Idle;
@@ -466,7 +534,12 @@ impl Session {
             }
             Event::Update(u) => self.update(u),
             Event::Ask(ask, reply) => {
-                let backend::Ask { tool, key, .. } = *ask;
+                let backend::Ask {
+                    tool,
+                    key,
+                    questions,
+                    ..
+                } = *ask;
                 // A dropped reply answers `cancelled`.
                 let answer = if self.cancelled {
                     Answer::Gone
@@ -477,7 +550,11 @@ impl Session {
                     self.replies.insert(self.items.len(), (reply, key));
                     Answer::Waiting
                 };
-                self.items.push(Item::Ask { tool, answer });
+                self.items.push(Item::Ask {
+                    tool,
+                    answer,
+                    questions,
+                });
             }
             Event::Ended(r) => self.turn_ended(r, cx),
             Event::Closed => self.close(End::Closed, cx),
@@ -512,14 +589,27 @@ impl Session {
                         was.status = t.status.or(was.status.take());
                         was.input = t.input.or(was.input.take());
                         was.output = t.output.or(was.output.take());
+                        was.lines = t.lines.or(was.lines.take());
                     }
                     None => items.push(Item::Tool(*t)),
                 }
             }
-            (Update::Usage { used, size, cost }, _) => {
-                self.usage = Some((used, size));
+            (
+                Update::Usage {
+                    used,
+                    size,
+                    cost,
+                    parts,
+                },
+                _,
+            ) => {
+                (self.usage, self.parts) = (Some((used, size)), parts);
                 self.cost = cost.or(self.cost);
             }
+            (Update::Commands(c), _) => self.commands = c,
+            (Update::Tasks(t), _) => self.tasks = t,
+            (Update::Limits(l), _) => self.limits = Some(l),
+            (Update::Lacks(p), _) => self.lacks.push(p),
             (Update::Config(c), _) => self.config = c,
             (Update::Mode(m), _) => {
                 if let Some(c) = self.config.iter_mut().find(|c| c.id == "mode") {
@@ -694,10 +784,19 @@ fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) ->
     })
 }
 
+/// Whether every trust file that differs between two fingerprints is one `blocks` names.
+fn blocked(blocks: &[&str], was: &str, now: &str) -> bool {
+    let (was, now): (HashSet<&str>, HashSet<&str>) = (was.lines().collect(), now.lines().collect());
+    let file = |l: &str| l.split_once(' ').map_or(l, |(_, f)| f).to_string();
+    let mut moved = was.symmetric_difference(&now).map(|l| file(l));
+    moved.all(|f| blocks.iter().any(|g| trust::names(g, Path::new(&f))))
+}
+
 /// The backend the provider's manifest names.
 fn backend(p: &Provider) -> &'static dyn Backend {
     match p.backend {
         backend::Name::Acp => detached_acp::backend(),
+        backend::Name::Direct => backend::direct(),
     }
 }
 

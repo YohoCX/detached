@@ -8,7 +8,8 @@ license.workspace = true
 [features]
 # Plain http to localhost counts as https, for the fake forges. Test builds only.
 e2e = []
-# `git::testutil::Sandbox` and `testutil::api`, the fake Messages API, for other crates' tests.
+# `git::testutil::Sandbox`, `testutil::api`, the fake Messages API, and `testutil::claude`, the fake
+# CLI, for other crates' tests.
 testutil = ["dep:minisign"]
 
 [dependencies]

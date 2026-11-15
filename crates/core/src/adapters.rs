@@ -74,43 +74,53 @@ pub struct Provider {
     pub trust: &'static [&'static str],
 }
 
-pub static CLAUDE: Provider = Provider {
-    id: "claude",
-    name: "Claude Agent",
-    backend: backend::Name::Acp,
-    adapter: "claude-agent-acp",
-    cli: "claude",
-    min_cli: Version::new(2, 1, 322),
-    login: &["claude", "/login"],
-    installer: Some([
-        "curl -fsSL https://claude.ai/install.sh | bash",
-        "irm https://claude.ai/install.ps1 | iex",
-    ]),
-    cli_var: "CLAUDE_CODE_EXECUTABLE",
-    env: &[
-        "CLAUDE_CONFIG_DIR",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-        "AWS_PROFILE",
-        "AWS_REGION",
-        "CLOUD_ML_REGION",
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "NODE_EXTRA_CA_CERTS",
-    ],
-    trust: &[
-        ".claude/settings.json",
-        ".claude/settings.local.json",
-        ".claude/skills/*/SKILL.md",
-        ".claude/commands/**",
-        ".claude/agents/**",
-        ".mcp.json",
-    ],
-};
+pub static CLAUDE: Provider = claude(backend::Name::Direct);
+
+/// Claude's manifest on `backend`; the adapter's fields serve the ACP one until it goes.
+pub(crate) const fn claude(backend: backend::Name) -> Provider {
+    Provider {
+        id: "claude",
+        name: "Claude Agent",
+        backend,
+        adapter: "claude-agent-acp",
+        cli: "claude",
+        min_cli: Version::new(2, 1, 322),
+        login: &["claude", "/login"],
+        installer: Some([
+            "curl -fsSL https://claude.ai/install.sh | bash",
+            "irm https://claude.ai/install.ps1 | iex",
+        ]),
+        cli_var: "CLAUDE_CODE_EXECUTABLE",
+        env: &[
+            "CLAUDE_CONFIG_DIR",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "AWS_PROFILE",
+            "AWS_REGION",
+            "CLOUD_ML_REGION",
+            "ANTHROPIC_VERTEX_PROJECT_ID",
+            "CLAUDE_CODE_USE_FOUNDRY",
+            "ANTHROPIC_FOUNDRY_RESOURCE",
+            "ANTHROPIC_FOUNDRY_BASE_URL",
+            "ANTHROPIC_FOUNDRY_API_KEY",
+            "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "NODE_EXTRA_CA_CERTS",
+        ],
+        trust: &[
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".claude/skills/*/SKILL.md",
+            ".claude/commands/**",
+            ".claude/agents/**",
+            ".mcp.json",
+        ],
+    }
+}
 
 pub static CODEX: Provider = Provider {
     id: "codex",
@@ -133,6 +143,19 @@ pub struct Catalog {
     /// Rises with every signing; an older catalog is refused.
     pub serial: u64,
     pub adapters: Vec<Entry>,
+    /// The CLIs the host drives without an adapter, Claude's.
+    #[serde(default)]
+    pub cli: Vec<CliRule>,
+}
+
+/// A directly driven CLI's floor and its blocked versions.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct CliRule {
+    pub name: String,
+    #[serde(default)]
+    pub min_cli: Option<Version>,
+    #[serde(default)]
+    pub blocked_cli: Vec<Version>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -432,12 +455,33 @@ pub enum Cli {
 
 /// Checks the CLI's `version` against `entry`, the catalog's entry of the adapter in use.
 pub fn check_cli(provider: &Provider, entry: Option<&Entry>, version: &Version) -> Cli {
-    let raised = entry.and_then(|e| e.min_cli.clone());
-    let need = raised.filter(|v| *v > provider.min_cli);
-    let need = need.unwrap_or_else(|| provider.min_cli.clone());
-    if *version < need {
+    let blocked = entry.map_or(&[][..], |e| &e.blocked_cli);
+    check(
+        provider,
+        entry.and_then(|e| e.min_cli.as_ref()),
+        blocked,
+        version,
+    )
+}
+
+/// Checks a CLI the host drives itself against the catalog's `cli` list.
+pub fn check_own_cli(provider: &Provider, catalog: Option<&Catalog>, version: &Version) -> Cli {
+    let rule = catalog.and_then(|c| c.cli.iter().find(|r| r.name == provider.cli));
+    let blocked = rule.map_or(&[][..], |r| &r.blocked_cli);
+    check(
+        provider,
+        rule.and_then(|r| r.min_cli.as_ref()),
+        blocked,
+        version,
+    )
+}
+
+fn check(provider: &Provider, raised: Option<&Version>, blocked: &[Version], v: &Version) -> Cli {
+    let need = raised.filter(|r| **r > provider.min_cli);
+    let need = need.unwrap_or(&provider.min_cli).clone();
+    if *v < need {
         Cli::Old(need)
-    } else if entry.is_some_and(|e| e.blocked_cli.contains(version)) {
+    } else if blocked.contains(v) {
         Cli::Blocked
     } else {
         Cli::Ok
@@ -648,6 +692,7 @@ mod tests {
         let mut new = f.entry("claude-agent-acp", "0.2.0");
         new.published = day("2026-11-14");
         let catalog = Catalog {
+            cli: vec![],
             serial: 1,
             adapters: vec![f.entry("claude-agent-acp", "0.1.0"), new],
         };
@@ -676,6 +721,7 @@ mod tests {
             e
         };
         let catalog = Catalog {
+            cli: vec![],
             serial: 1,
             adapters: vec![
                 with("0.4.0", "0.6.0", None),
@@ -692,6 +738,7 @@ mod tests {
         other.artifacts =
             HashMap::from([("plan9-mips".into(), other.artifacts[&target()].clone())]);
         let catalog = Catalog {
+            cli: vec![],
             serial: 1,
             adapters: vec![other],
         };
@@ -719,6 +766,7 @@ mod tests {
         assert_eq!(installed(d.path(), name), kept);
         assert!(exe(d.path(), name, kept.current.as_ref().unwrap()).is_file());
         let catalog = Catalog {
+            cli: vec![],
             serial: 1,
             adapters: vec![one.clone(), two.clone()],
         };

@@ -156,9 +156,18 @@ impl Proc {
 
     /// Kills its process group, unless it has exited.
     pub fn kill(&self) {
+        self.signal(false);
+    }
+
+    /// Asks its process group to end, unless it has exited; on Windows it kills.
+    pub fn term(&self) {
+        self.signal(true);
+    }
+
+    fn signal(&self, term: bool) {
         let exited = self.exit.0.lock().unwrap();
         if exited.is_none() {
-            crate::os::kill(self.pid, false);
+            crate::os::kill(self.pid, term);
         }
     }
 

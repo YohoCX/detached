@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use detached_core::adapters::{self, Catalog, Cli, Config, Entry, Installed, PROVIDERS, Provider};
 use detached_core::adapters::{BLOCK, Version};
+use detached_core::backend::Name;
 use detached_core::error::{Error, Result};
 use detached_core::state::{AppState, Cancel};
 use detached_core::update::Progress;
@@ -61,11 +62,10 @@ impl Row {
     /// What the CLI's version allows, once one is found.
     pub fn verdict(&self, catalog: Option<&Catalog>) -> Option<Cli> {
         let version = self.cli.as_ref()?.1.as_ref()?;
-        Some(adapters::check_cli(
-            self.provider,
-            self.entry(catalog),
-            version,
-        ))
+        Some(match self.provider.backend {
+            Name::Direct => adapters::check_own_cli(self.provider, catalog, version),
+            Name::Acp => adapters::check_cli(self.provider, self.entry(catalog), version),
+        })
     }
 }
 
