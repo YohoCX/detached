@@ -119,6 +119,8 @@ rewritten, not kept beside this one. The evidence is
 4. **Whether the ACP stack ships while Codex is off.** Recommended: **yes, compiled in, with no
    feature flag.** It is built and in `make check`, and a seam with one implementation stops being
    one. The cost is 63 crates and the downloader in a build where nothing uses them yet.
+   **Decided by the owner on 2026-11-16, as recommended:** "собирай кодекс есть" (build it, Codex
+   is there).
 5. **The letter to Anthropic and the Commercial Terms.** Recommended: **send the letter now**, and
    accept the Commercial Terms before the public release unless the answer says they do not apply.
    Only the owner can do either.

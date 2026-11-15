@@ -19,10 +19,10 @@ Codex stays off until H13a. Nothing is built.**
 
 **Status (2026-11-16): Claude takes a direct connection behind the backend seam
 ([decision](docs/decisions/2026-11-16-claude-direct-connection.md)). §1 to §7, §11, §13, §14 and
-§16 and steps H3, H4c, H5, H8, H11, H12 and H13 follow it. H4c is next, its part 0 first. Five of
+§16 and steps H3, H4c, H5, H8, H11, H12 and H13 follow it. H4c is next, its part 0 first. Four of
 the decision's choices are open and marked where they land: the history source (§6), where
-Claude's `min_cli` lives (§3), the label (§2), the ACP stack while Codex is off (§1, H3) and the
-letter with the Commercial Terms (H12). H2, H3, H4 and H6 carry their own status.**
+Claude's `min_cli` lives (§3), the label (§2) and the letter with the Commercial Terms (H12); the
+ACP stack ships while Codex is off (§1, H3). H2, H3, H4 and H6 carry their own status.**
 
 Owner's decisions are in [docs/decisions/](docs/decisions/):
 - ACP for every provider (2026-11-09), for Claude replaced on 2026-11-16;
@@ -145,10 +145,8 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       `_meta`, `configOptions`) in `crates/kernel/src` or `crates/app/src` outside tests.
   - **A manifest names its backend** (§2). Moving Claude to ACP or to anything else is that line
     and a backend.
-- **The ACP stack while Codex is off. Open** (the decision's choice 4). Recommended, and what this
-  plan is written to: compiled in, with no feature flag, since a seam with one implementation
-  stops being one. The other choice: a feature that is off until H13a, which takes 63 crates and
-  the downloader out of the build.
+- **The ACP stack while Codex is off: compiled in, with no feature flag** (the decision's choice 4,
+  settled by the owner on 2026-11-16), since a seam with one implementation stops being one.
 - **Claude is one CLI per session**, spawned by core in its own process group, on Windows in its
   own job held for the session's life. No adapter stands beside it, and a CLI's exit ends its own
   session only. `core::agent`, the sidecar's protocol, still goes at §13's end condition.
@@ -920,8 +918,8 @@ Settled on 2026-11-16 ([decision](docs/decisions/2026-11-16-claude-direct-connec
 
 6. **Claude's direct connection behind the standard interface** (§1, H4c). Where choice 2 says
    ACP, the chat moves to `kernel::Session` on Claude's direct backend. Its open choices: the
-   history source, where Claude's `min_cli` lives, the label, the ACP stack while Codex is off, and
-   the letter to Anthropic with the Commercial Terms.
+   history source, where Claude's `min_cli` lives, the label, and the letter to Anthropic with the
+   Commercial Terms. The ACP stack ships while Codex is off.
 
 ## 15. What the first drafts' review asked
 
@@ -1154,7 +1152,7 @@ Windows VM.**
 **Status (2026-11-16): under Claude's direct connection, item 5's bun build
 (`adapters/claude-agent-acp`), its job in `adapters.yml` and Claude's Install button go at H4c's
 gate. The catalog, the downloader, the cool-down and the versions stay, for Codex, compiled in
-while Codex is off: the decision's choice 4, open, written here to its recommendation (§1). The
+while Codex is off: the decision's choice 4, settled so by the owner (§1). The
 CLI check, the logins and the Agents page stay as built. The owner's
 `adapters-claude-agent-acp-0.106.0` tag is no longer needed; the key and a first signed catalog
 still are, for the `cli` list (§3, open).**
@@ -1312,6 +1310,16 @@ The owner checks: a headless session in a temp repo; kills the app mid-turn and 
 
 [Decision](docs/decisions/2026-11-16-claude-direct-connection.md). Three parts in order; nothing of
 Claude's adapter path is removed before the gate at the end.
+
+**Status (2026-11-16): part a is built. `core::backend` holds the trait, `Spec` and `Kind`, the
+session's events and types, `Caps`, an ask's rule key, a failure's cause and the version on
+`Opened`; the manifest names its backend. `crates/acp` exports `backend()` alone, with the
+adapter registry, the demux by session id and the rendering of `Spec` inside; `kernel::Session`
+holds the trait and keeps the wait for an id's `Closed`. The fake Messages API is core's
+`testutil::api`. In `core::backend`'s tests, the source scan and the test on `crates/app/Cargo.toml`;
+`core::claude` joins private in part b. The sixteen session tests pass in the kernel, the
+adapter's eight and the split halves in `crates/acp`, and `make agent-test` on macOS with `claude`
+2.1.325: the kernel's eight and the AIR test in `crates/acp`. Part 0 and part b are next.**
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
