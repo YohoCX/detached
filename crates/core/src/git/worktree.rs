@@ -272,7 +272,12 @@ pub fn remove(
             path.display()
         )));
     }
-    let status = ["status", "--porcelain", "--ignore-submodules=none"];
+    let status = [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ];
     if !force && (git.join("modules").is_dir() || !out(&env, path, &status, Kind::Read)?.is_empty())
     {
         return Err(Error::Other(format!(
@@ -635,6 +640,7 @@ mod tests {
     #[test]
     fn a_dirty_worktree_is_not_removed_without_force() {
         let (sb, repo) = sandbox();
+        sb.git(&repo, &["config", "status.showUntrackedFiles", "no"]);
         let path = new(&sb, &repo, "feat").unwrap();
         fs::write(path.join("draft.txt"), "wip").unwrap();
         let error = rm(&sb, &repo, &path, false).unwrap_err().to_string();
