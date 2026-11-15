@@ -28,6 +28,8 @@ adapter does today: history comes from the transcript file (row 6), and a killed
   path. No model call, no login, nothing of `~/.claude`.
 - Two full runs agreed on everything but ids and a few milliseconds. The numbers are the second
   run's.
+- **Since 2026-11-16** the spike is H4c part 0's and portable: row 10's `hygiene` and the Rust
+  `leash` gave way to `close`, `killed` and the `sh` leash ([ANSWERS-H4c.md](ANSWERS-H4c.md)).
 
 | # | Row | Result |
 | --- | --- | --- |
