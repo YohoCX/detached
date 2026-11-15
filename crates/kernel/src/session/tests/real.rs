@@ -1,6 +1,6 @@
-//! The real adapter and the user's `claude` on the scripted fake Messages API, run by
-//! `make agent-test`, where a missing adapter or CLI fails. Each test runs on `boot_on`'s
-//! sandbox, with its own HOME and CLAUDE_CONFIG_DIR and Detached's three tiers apart.
+//! The user's `claude` on the scripted fake Messages API, through the real adapter and through the
+//! direct backend, run by `make agent-test`, where a missing adapter or CLI fails. Each test runs on
+//! `boot_on`'s sandbox, with its own HOME and CLAUDE_CONFIG_DIR and Detached's three tiers apart.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,6 +13,42 @@ use detached_core::testutil::api::Api;
 use super::*;
 
 const SECRET: &str = "SECRET=fixture-not-for-agents";
+
+/// The two ways to the real `claude`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Real {
+    Adapter,
+    Direct,
+}
+
+/// Each named body as `<name>::adapter` and `<name>::direct`.
+macro_rules! both {
+    ($($name:ident),* $(,)?) => {$(
+        mod $name {
+            #[gpui::test]
+            #[ignore = "make agent-test"]
+            fn adapter(cx: &mut gpui::TestAppContext) {
+                super::$name(super::Real::Adapter, cx)
+            }
+
+            #[gpui::test]
+            #[ignore = "make agent-test"]
+            fn direct(cx: &mut gpui::TestAppContext) {
+                super::$name(super::Real::Direct, cx)
+            }
+        }
+    )*};
+}
+
+both!(
+    the_first_tool_call_asks_under_default,
+    a_load_comes_back_on_the_model_it_had,
+    an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_deny,
+    the_env_deny_refuses_read_and_cat,
+    a_cancel_mid_command_ends_the_turn_and_the_command,
+    a_session_gone_mid_command_leaves_no_process,
+    a_three_minute_command_reports_in_progress_before_it_ends,
+);
 
 impl Fixture {
     fn write(&self, path: &str, text: &str) {
@@ -80,14 +116,18 @@ fn install(core: &AppState) {
     std::fs::write(file, serde_json::to_vec(&installed).unwrap()).unwrap();
 }
 
-/// The kernel with the real adapter and `claude`, and the fake API on `script`.
-fn boot(cx: &mut TestAppContext, script: Value) -> (Fixture, Api) {
-    boot_with(cx, script, install)
+/// The kernel on `real`'s way to `claude`, and the fake API on `script`.
+fn boot(cx: &mut TestAppContext, real: Real, script: Value) -> (Fixture, Api) {
+    match real {
+        Real::Adapter => boot_with(cx, script, &CLAUDE_ACP, install),
+        Real::Direct => boot_with(cx, script, &CLAUDE, |_| {}),
+    }
 }
 
 fn boot_with(
     cx: &mut TestAppContext,
     script: Value,
+    provider: &'static Provider,
     install: impl FnOnce(&AppState),
 ) -> (Fixture, Api) {
     let api = Api::serve(script);
@@ -98,10 +138,7 @@ fn boot_with(
         ("HTTPS_PROXY", "http://127.0.0.1:9"),
         ("NO_PROXY", "127.0.0.1,localhost"),
     ];
-    (
-        super::boot_on(cx, &claude(), &vars, &CLAUDE_ACP, install),
-        api,
-    )
+    (super::boot_on(cx, &claude(), &vars, provider, install), api)
 }
 
 fn waiting(s: &Entity<Session>, cx: &App) -> Option<usize> {
@@ -148,6 +185,11 @@ fn text(text: &str) -> Value {
 
 /// Whether a process whose command line holds `marker` runs.
 fn running(marker: &str) -> bool {
+    !commands(marker).is_empty()
+}
+
+/// The command lines that hold `marker`.
+fn commands(marker: &str) -> Vec<String> {
     let out = match cfg!(windows) {
         true => Command::new("powershell")
             .args(["-NoProfile", "-Command"])
@@ -158,16 +200,22 @@ fn running(marker: &str) -> bool {
             .output(),
     };
     let out = String::from_utf8_lossy(&out.unwrap().stdout).into_owned();
-    out.lines()
-        .any(|l| l.contains(marker) && !l.contains("Get-CimInstance"))
+    let lines = out
+        .lines()
+        .filter(|l| l.contains(marker) && !l.contains("Get-CimInstance"));
+    lines.map(String::from).collect()
 }
 
 /// A chat whose turn runs `perl -e 'sleep 600' <marker>`, once that command runs.
-fn mid_command(name: &str, cx: &mut TestAppContext) -> (Fixture, Api, String, Entity<Session>) {
-    let marker = format!("detached-mark-{}-{name}", std::process::id());
+fn mid_command(
+    real: Real,
+    name: &str,
+    cx: &mut TestAppContext,
+) -> (Fixture, Api, String, Entity<Session>) {
+    let marker = format!("detached-mark-{}-{name}-{real:?}", std::process::id());
     let command = format!("perl -e 'sleep 600' {marker}");
-    let (f, api) = boot(cx, json!([[bash(&command)], text("stopped")]));
-    let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+    let (f, api) = boot(cx, real, json!([[bash(&command)], text("stopped")]));
+    let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| waiting(&s, cx).is_some());
     let at = cx.read(|cx| waiting(&s, cx)).unwrap();
@@ -176,11 +224,13 @@ fn mid_command(name: &str, cx: &mut TestAppContext) -> (Fixture, Api, String, En
     (f, api, marker, s)
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn the_first_tool_call_asks_under_default(cx: &mut TestAppContext) {
-    let (f, _api) = boot(cx, json!([[bash("echo made > made.txt")], text("made")]));
-    let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+fn the_first_tool_call_asks_under_default(real: Real, cx: &mut TestAppContext) {
+    let (f, _api) = boot(
+        cx,
+        real,
+        json!([[bash("echo made > made.txt")], text("made")]),
+    );
+    let s = open(&f, Kind::Chat, cx);
     assert_eq!(
         s.read_with(cx, |s, _| s.option("mode").map(String::from)),
         Some("default".into())
@@ -194,13 +244,11 @@ fn the_first_tool_call_asks_under_default(cx: &mut TestAppContext) {
     assert!(Path::new(&f.repo).join("made.txt").exists());
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn a_load_comes_back_on_the_model_it_had(cx: &mut TestAppContext) {
-    let (f, api) = boot(cx, json!([text("one"), text("two")]));
-    // A load without configOptions falls back to these settings.
+fn a_load_comes_back_on_the_model_it_had(real: Real, cx: &mut TestAppContext) {
+    let (f, api) = boot(cx, real, json!([text("one"), text("two")]));
+    // A load without its model falls back to these settings.
     std::fs::write(f.claude_dir().join("settings.json"), r#"{"model": "opus"}"#).unwrap();
-    let mut spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let mut spec = f.spec(Kind::Chat);
     spec.model = Some("sonnet".into());
     let s = open_spec(spec.clone(), None, cx);
     run(&s, "first", cx);
@@ -228,9 +276,8 @@ fn hook(file: &str) -> String {
     json!({"hooks": {"UserPromptSubmit": [{"hooks": [command]}]}}).to_string()
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
 fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_deny(
+    real: Real,
     cx: &mut TestAppContext,
 ) {
     let script = json!([
@@ -240,7 +287,7 @@ fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_den
         text("second"),
         text("trusted"),
     ]);
-    let (f, api) = boot(cx, script);
+    let (f, api) = boot(cx, real, script);
     f.write(".claude/settings.json", &hook("project-hooked"));
     f.write(".env", SECRET);
     std::fs::write(f.claude_dir().join("settings.json"), hook("user-hooked")).unwrap();
@@ -250,7 +297,7 @@ fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_den
         _ = std::fs::remove_file(repo.join("user-hooked"));
         hooked
     };
-    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let spec = f.spec(Kind::Chat);
     let s = open_spec(spec.clone(), None, cx);
     run(&s, "first", cx);
     assert_eq!(hooked(), [true, false]);
@@ -273,19 +320,17 @@ fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_den
     assert_eq!(hooked(), [true, true]);
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn the_env_deny_refuses_read_and_cat(cx: &mut TestAppContext) {
+fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
     let script = json!([
         [{"tool": "Read", "input": {"file_path": ".env"}}],
         [{"tool": "Read", "input": {"file_path": "sub/.env.local"}}],
         [bash("cat .env")],
         text("tried"),
     ]);
-    let (f, api) = boot(cx, script);
+    let (f, api) = boot(cx, real, script);
     f.write(".env", SECRET);
     f.write("sub/.env.local", SECRET);
-    let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+    let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     let results = api.results();
     assert_eq!(results.len(), 3, "{results:?}");
@@ -295,10 +340,8 @@ fn the_env_deny_refuses_read_and_cat(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command("cancel", cx);
+fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestAppContext) {
+    let (_f, _api, marker, s) = mid_command(real, "cancel", cx);
     s.update(cx, |s, _| s.cancel());
     wait_for(cx, START, |cx| s.read(cx).state == State::Idle);
     s.read_with(cx, |s, _| {
@@ -307,28 +350,28 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
         };
         assert_eq!(*stop, Some(StopReason::Cancelled));
     });
-    // On Windows the command runs on until the adapter goes (docs/TECHDEBT.md).
+    // On Windows the command runs on until the adapter or the CLI goes (docs/TECHDEBT.md).
     if cfg!(windows) {
         drop(s);
     }
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn an_adapter_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command("gone", cx);
-    // The last session on the adapter goes, so its stdin closes; on Windows its job then closes.
+fn a_session_gone_mid_command_leaves_no_process(real: Real, cx: &mut TestAppContext) {
+    let (_f, _api, marker, s) = mid_command(real, "gone", cx);
+    // The adapter's last session or the CLI's own goes, which ends it; on Windows its job then closes.
     drop(s);
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
 /// PLAN-PANELS §7's stall rule counts a tool call in progress as activity.
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn a_three_minute_command_reports_in_progress_before_it_ends(cx: &mut TestAppContext) {
-    let (f, _api) = boot(cx, json!([[bash("perl -e 'sleep 180'")], text("slept")]));
-    let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+fn a_three_minute_command_reports_in_progress_before_it_ends(real: Real, cx: &mut TestAppContext) {
+    let (f, _api) = boot(
+        cx,
+        real,
+        json!([[bash("perl -e 'sleep 180'")], text("slept")]),
+    );
+    let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| waiting(&s, cx).is_some());
     let at = cx.read(|cx| waiting(&s, cx)).unwrap();
@@ -358,11 +401,69 @@ fn an_entry_of_a_signed_catalog_installs_and_runs_a_turn(cx: &mut TestAppContext
     let mut entry = catalog.entry_of(CLAUDE.adapter, &pinned(), archive);
     entry.min_cli = Some(CLAUDE.min_cli.clone());
     catalog.publish(1, &[entry]);
-    let (f, _api) = boot_with(cx, json!([text("vetted")]), |core| {
+    let (f, _api) = boot_with(cx, json!([text("vetted")]), &CLAUDE_ACP, |core| {
         from_catalog(&core.data_dir, &catalog.url(), &catalog.key, None)
     });
-    let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+    let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     assert_eq!(said(&s, 0, cx), "vetted");
     assert_eq!(s.read_with(cx, |s, _| s.version.clone()), Some(pinned()));
+}
+
+/// PLAN-AGENT-HOST §4: the CLI keeps the settings it loaded, and the session ends with the turn.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_settings_hook_written_mid_turn_never_runs_and_the_session_ends_with_its_turn(
+    cx: &mut TestAppContext,
+) {
+    let command = json!({"type": "command", "command": "echo hooked > pre-settings"});
+    let hook = json!({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [command]}]}});
+    let write = format!("mkdir -p .claude && printf '%s' '{hook}' > .claude/settings.json");
+    let script = json!([
+        [bash(&write)],
+        [bash("echo after > after.txt")],
+        text("done")
+    ]);
+    let (f, _api) = boot(cx, Real::Direct, script);
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "go", cx);
+    wait_for(cx, START, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    assert_eq!(state(&s, cx), State::Ended(End::Trust));
+    assert!(Path::new(&f.repo).join("after.txt").exists());
+    assert!(!Path::new(&f.repo).join("pre-settings").exists());
+}
+
+/// The host's tools ride the session's own pipes: no listener, nothing in argv.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_host_tool_call_needs_no_listener_and_puts_nothing_in_argv(cx: &mut TestAppContext) {
+    let call =
+        json!({"tool": "mcp__detached-host__detached_read", "input": {"query": "{ workspace }"}});
+    let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
+    let mut spec = f.spec(Kind::Chat);
+    spec.tools = Some(Arc::new(|m: Value| {
+        let result = match m["method"].as_str() {
+            Some("initialize") => json!({"protocolVersion": m["params"]["protocolVersion"],
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "detached-host", "version": "0"}}),
+            Some("tools/list") => json!({"tools": [{"name": "detached_read",
+                "description": "Reads Detached's data.",
+                "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}}]}),
+            Some("tools/call") => json!({"content": [{"type": "text", "text": "host answered"}]}),
+            _ => json!({}),
+        };
+        json!({"jsonrpc": "2.0", "id": m.get("id").cloned().unwrap_or(json!(0)), "result": result})
+    }));
+    let s = open_spec(spec, None, cx);
+    let id = s.read_with(cx, |s, _| s.id.clone()).unwrap();
+    assert!(running(&id));
+    s.update(cx, |s, cx| s.prompt("go".into(), cx));
+    wait_for(cx, START, |cx| s.read(cx).state != State::Running);
+    assert!(cx.read(|cx| waiting(&s, cx)).is_none());
+    let results = api.results();
+    assert!(
+        results.iter().any(|r| r.contains("host answered")),
+        "{results:?}"
+    );
+    let argv = commands(&id);
+    assert!(argv.iter().all(|l| !l.contains("http")), "{argv:?}");
 }
