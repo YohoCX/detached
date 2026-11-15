@@ -68,7 +68,10 @@ pub fn button<T: 'static>(
 }
 
 /// Text that tests read by `id`.
-pub fn labeled(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
+pub fn labeled(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+) -> ObservedElement<Stateful<Div>> {
     let text = text.into();
     div()
         .id(id)
