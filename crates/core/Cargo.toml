@@ -34,6 +34,7 @@ tar = { version = "0.4.44", default-features = false }
 open = { version = "5.4", features = ["shellexecute-on-windows"] }
 minisign-verify = "0.3"
 semver = { version = "1", features = ["serde"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 # Signs the test feed in `update::testutil`.
 minisign = { version = "0.10", optional = true }
 

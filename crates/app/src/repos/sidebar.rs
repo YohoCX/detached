@@ -844,6 +844,13 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
         .item("Compare with Base Branch", compare)
         .item("Branches…", branches(Intent::Checkout))
         .item("New Branch…", branches(Intent::New))
+        .item("Worktrees…", {
+            let r = repo.to_string();
+            move |_: &mut Window, cx: &mut App| {
+                select_repo(&r, cx);
+                crate::settings::open(cx, "worktrees");
+            }
+        })
         .separator()
         .item(format!("Open in {FILE_MANAGER}"), open_folder(repo))
         .item("Open in Zed", zed)

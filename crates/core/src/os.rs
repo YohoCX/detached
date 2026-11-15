@@ -69,6 +69,52 @@ pub fn open_path(path: &Path) -> Result<()> {
     Ok(open::that_detached(path)?)
 }
 
+/// `script` for the system's shell: `sh -c`, or `cmd /C` on Windows.
+pub fn shell(script: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(script);
+        cmd
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        // cmd parses its own line; Rust's quoting would reach it as literal quotes.
+        cmd.arg("/C").raw_arg(script);
+        cmd
+    }
+}
+
+/// Creates a new file only its owner can read: mode 0600, or on Windows an ACL of the user alone.
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let file = open.open(path)?;
+    #[cfg(windows)]
+    {
+        let user = std::env::var("USERNAME").map_err(std::io::Error::other)?;
+        let grant = format!("{user}:F");
+        let acl = group(Command::new("icacls").arg(path).args([
+            "/inheritance:r",
+            "/grant:r",
+            grant.as_str(),
+        ]))
+        .output()?;
+        if !acl.status.success() {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(std::io::Error::other(
+                String::from_utf8_lossy(&acl.stdout).trim().to_string(),
+            ));
+        }
+    }
+    Ok(file)
+}
+
 /// A terminal shell's processes, the shell and what it starts, for the memory they use.
 pub struct Session {
     #[cfg(unix)]
