@@ -2,14 +2,17 @@
 //!
 //! An SDK session shows no trust dialog, so a repo's hooks would run unasked.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, mpsc};
 
+use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde_json::Value;
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::git::runner::{Kind, out};
 
 const FILE: &str = "agent-trust.json";
@@ -188,6 +191,61 @@ fn front(file: &str, text: &str, items: &mut Vec<String>) {
     }
 }
 
+/// Watches a tree's trust files while it lives.
+pub struct Watch(#[allow(dead_code)] Arc<Mutex<RecommendedWatcher>>);
+
+/// Calls `changed` on its own thread whenever a file under `tree` that `globs` (a provider's
+/// `trust`) may name changes: their top folders are watched, and the root for those not there yet.
+pub fn watch(tree: &Path, globs: &[&str], changed: impl Fn() + Send + 'static) -> Result<Watch> {
+    let root = tree.canonicalize()?;
+    let tops: BTreeSet<OsString> = globs
+        .iter()
+        .filter_map(|g| Some(Path::new(g).components().next()?.as_os_str().to_owned()))
+        .collect();
+    let (tx, rx) = mpsc::channel();
+    let fail = |e: notify::Error| Error::Other(e.to_string());
+    let watcher = Arc::new(Mutex::new(
+        notify::recommended_watcher(move |e| _ = tx.send(e)).map_err(fail)?,
+    ));
+    let mut watched = HashSet::new();
+    let base = root.clone();
+    let add = move |w: &mut RecommendedWatcher, top: &OsStr, watched: &mut HashSet<OsString>| {
+        let dir = base.join(top);
+        if !watched.contains(top) && dir.is_dir() && w.watch(&dir, RecursiveMode::Recursive).is_ok()
+        {
+            watched.insert(top.to_owned());
+        }
+    };
+    {
+        let mut w = watcher.lock().unwrap();
+        w.watch(&root, RecursiveMode::NonRecursive).map_err(fail)?;
+        for top in &tops {
+            add(&mut w, top, &mut watched);
+        }
+    }
+    let weak = Arc::downgrade(&watcher);
+    std::thread::spawn(move || {
+        for event in rx.into_iter().flatten() {
+            let top = |p: &PathBuf| {
+                let c = p.strip_prefix(&root).ok()?.components().next()?;
+                Some(c.as_os_str().to_owned())
+            };
+            let hit: Vec<OsString> = (event.paths.iter().filter_map(top))
+                .filter(|t| tops.contains(t))
+                .collect();
+            if hit.is_empty() {
+                continue;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            for top in &hit {
+                add(&mut w.lock().unwrap(), top, &mut watched);
+            }
+            changed();
+        }
+    });
+    Ok(Watch(watcher))
+}
+
 fn keys(v: &Value) -> String {
     let k: Vec<_> = v
         .as_object()
@@ -293,5 +351,20 @@ mod tests {
             r#"{"hooks":{"Stop":[{"hooks":[{"command":"b"}]}]}}"#,
         );
         assert!(!trusted(&config, &repo, &project(&env, &r).unwrap()));
+    }
+
+    #[test]
+    fn the_watch_sees_a_trust_file_in_a_folder_made_after_it_started() {
+        let sb = Sandbox::new();
+        let r = sb.path("r");
+        fs::create_dir_all(&r).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let _watch = watch(&r, crate::adapters::CLAUDE.trust, move || _ = tx.send(())).unwrap();
+        let wait = || rx.recv_timeout(std::time::Duration::from_secs(10));
+        write(&r, ".claude/settings.json", "{}");
+        wait().expect("the new .claude folder");
+        while rx.try_recv().is_ok() {}
+        write(&r, ".claude/commands/go.md", "---\n---\n");
+        wait().expect("a file in it");
     }
 }
