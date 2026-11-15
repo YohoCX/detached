@@ -312,19 +312,16 @@ impl RepoStore {
         let to = self.path(state, item.kind, scope, &item.name)?;
         remember(state, &to, &item.hash)?;
         fs::create_dir_all(to.parent().unwrap())?;
-        copy_move(&item.path, &to, &files)?;
-        Ok(())
+        copy_move(&item.path, &to, &files, &self.local.join("trash"))
     }
 }
 
-fn copy_move(from: &Path, to: &Path, files: &Files) -> Result<()> {
-    let trash = from.parent().unwrap().join(".detached-trash");
-    no_links(&trash)?;
-    fs::create_dir_all(&trash)?;
-    fs::write(trash.join(".gitignore"), "*\n")?;
-    for entry in fs::read_dir(&trash)? {
+fn trash_dir(root: &Path) -> Result<tempfile::TempDir> {
+    no_links(root)?;
+    fs::create_dir_all(root)?;
+    for entry in fs::read_dir(root)? {
         let entry = entry?;
-        let meta = entry.metadata()?;
+        let meta = fs::symlink_metadata(entry.path())?;
         if meta.is_dir()
             && meta
                 .modified()?
@@ -334,6 +331,11 @@ fn copy_move(from: &Path, to: &Path, files: &Files) -> Result<()> {
             fs::remove_dir_all(entry.path())?;
         }
     }
+    Ok(tempfile::tempdir_in(root)?)
+}
+
+fn copy_move(from: &Path, to: &Path, files: &Files, trash: &Path) -> Result<()> {
+    let trash = trash_dir(trash)?;
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
     create(&stage, files)?;
@@ -346,8 +348,14 @@ fn copy_move(from: &Path, to: &Path, files: &Files) -> Result<()> {
         fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
     }
     publish(&stage, to)?;
-    let trash = tempfile::tempdir_in(trash)?;
-    fs::rename(from, trash.path().join(from.file_name().unwrap()))?;
+    // A copy would miss writes made after the snapshot, so a failed rename keeps the source.
+    fs::rename(from, trash.path().join(from.file_name().unwrap())).map_err(|e| {
+        Error::Other(format!(
+            "Copied to {}; the original stays at {} ({e})",
+            to.display(),
+            from.display()
+        ))
+    })?;
     let _ = trash.keep();
     Ok(())
 }
@@ -386,11 +394,13 @@ fn writable(scope: Scope) -> Result<()> {
 }
 
 fn component(path: &Path) -> Result<()> {
-    if path.components().count() != 1
-        || !matches!(path.components().next(), Some(Component::Normal(_)))
-        || path.as_os_str().is_empty()
-    {
+    if path.file_name() != Some(path.as_os_str()) {
         return Err(Error::Other("An item needs a single filename".into()));
+    }
+    if path == Path::new(".detached-trash") {
+        return Err(Error::Other(
+            "The item name .detached-trash is reserved for trash".into(),
+        ));
     }
     Ok(())
 }
@@ -777,6 +787,16 @@ mod tests {
                 .contains("D .detached/skills/check/SKILL.md")
         );
         assert_eq!(store.list(&sb.state, Kind::Skills).unwrap().len(), 1);
+        let saved: Vec<_> = fs::read_dir(store.local.join("trash"))
+            .unwrap()
+            .map(|e| e.unwrap().path().join("check"))
+            .collect();
+        assert_eq!(saved.len(), 2);
+        for path in saved {
+            assert_eq!(read(&path).unwrap(), files);
+        }
+        assert!(!store.shared.join("skills/.detached-trash").exists());
+        assert!(!store.local.join("local/skills/.detached-trash").exists());
         assert!(
             !sb.git(
                 &store.repo,
@@ -788,6 +808,23 @@ mod tests {
             store.load(&sb.state, Kind::Skills, "check", None).unwrap(),
             Some(files)
         );
+    }
+
+    #[test]
+    fn writes_reject_the_reserved_trash_name_in_both_scopes() {
+        let (sb, store) = setup();
+        for scope in [Scope::Local, Scope::Shared] {
+            store.set_default(&sb.state, Kind::Roles, scope).unwrap();
+            for name in [".detached-trash", ".detached-trash/"] {
+                assert!(
+                    store
+                        .write(&sb.state, Kind::Roles, name, &file("bad"))
+                        .is_err()
+                );
+            }
+            let dir = store.path(&sb.state, Kind::Roles, scope, "probe").unwrap();
+            assert!(!dir.parent().unwrap().join(".detached-trash").exists());
+        }
     }
 
     #[test]
@@ -872,11 +909,11 @@ mod tests {
                 from.clone()
             };
             let mut handle = fs::OpenOptions::new().append(true).open(source).unwrap();
-            copy_move(&from, &to, &files).unwrap();
+            copy_move(&from, &to, &files, &root.join(".git/detached/trash")).unwrap();
             handle.write_all(b" edited").unwrap();
             assert!(!from.exists());
             assert_eq!(read(&to).unwrap(), files);
-            let trash = fs::read_dir(root.join(".detached-trash"))
+            let trash = fs::read_dir(root.join(".git/detached/trash"))
                 .unwrap()
                 .map(|entry| entry.unwrap().path().join(&name))
                 .find(|path| path.exists())
@@ -896,7 +933,7 @@ mod tests {
 
         let sb = Sandbox::new();
         let root = sb.dir.path().canonicalize().unwrap();
-        let trash = root.join(".detached-trash");
+        let trash = root.join(".git/detached/trash");
         for (name, days) in [("old", 8), ("new", 6)] {
             let entry = trash.join(name);
             put(&entry.join("item"), "keep");
@@ -915,7 +952,7 @@ mod tests {
         }
         let from = root.join("source");
         create(&from, &file("first")).unwrap();
-        copy_move(&from, &root.join("destination"), &file("first")).unwrap();
+        copy_move(&from, &root.join("destination"), &file("first"), &trash).unwrap();
         assert!(!trash.join("old").exists());
         assert!(trash.join("new/item").exists());
     }
@@ -929,12 +966,36 @@ mod tests {
         let files = [("SKILL.md".into(), b"first".to_vec())].into();
         create(&from, &files).unwrap();
         let broken = [("a".into(), vec![]), ("a/b".into(), vec![])].into();
-        assert!(copy_move(&from, &to, &broken).is_err());
+        let trash = root.join(".git/detached/trash");
+        assert!(copy_move(&from, &to, &broken, &trash).is_err());
         assert!(!to.exists());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         assert_eq!(read(&from).unwrap(), files);
-        copy_move(&from, &to, &files).unwrap();
+        copy_move(&from, &to, &files, &trash).unwrap();
         assert_eq!(read(&to).unwrap(), files);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_source_the_trash_cannot_take_stays_and_the_move_reports_a_copy() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sb = Sandbox::new();
+        let root = sb.dir.path().canonicalize().unwrap();
+        let from = root.join("shared/check");
+        let to = root.join("local/check");
+        let files: Files = [("SKILL.md".into(), b"first".to_vec())].into();
+        create(&from, &files).unwrap();
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        // A source folder that refuses the rename stands in for a trash on another filesystem.
+        let folder = from.parent().unwrap();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555)).unwrap();
+        let error = copy_move(&from, &to, &files, &root.join("trash")).unwrap_err();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(error.to_string().contains("the original stays"), "{error}");
+        assert_eq!(read(&from).unwrap(), files);
+        assert_eq!(read(&to).unwrap(), files);
+        assert_eq!(fs::read_dir(root.join("trash")).unwrap().count(), 0);
     }
 
     #[test]
@@ -1073,6 +1134,21 @@ mod tests {
         let (sb, store) = setup();
         let outside = sb.path("outside");
         put(&outside.join("reviewer.md"), "outside");
+        put(&store.shared.join("modes/review.md"), "review");
+        let legacy = store.shared.join("modes/.detached-trash");
+        fs::create_dir_all(&legacy).unwrap();
+        symlink(outside.join("reviewer.md"), legacy.join(".gitignore")).unwrap();
+        let item = store.list(&sb.state, Kind::Modes).unwrap().remove(0);
+        store.accept(&sb.state, &item).unwrap();
+        store.move_item(&sb.state, &item).unwrap();
+        assert_eq!(fs::read(outside.join("reviewer.md")).unwrap(), b"outside");
+        assert!(
+            fs::symlink_metadata(legacy.join(".gitignore"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
         fs::create_dir_all(&store.shared).unwrap();
         symlink(&outside, store.shared.join("roles")).unwrap();
         assert!(store.list(&sb.state, Kind::Roles).is_err());
