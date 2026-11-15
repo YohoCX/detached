@@ -353,6 +353,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestA
     // On Windows the command runs on until the adapter or the CLI goes (docs/TECHDEBT.md).
     if cfg!(windows) {
         drop(s);
+        cx.update(|_| {});
     }
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
@@ -361,6 +362,8 @@ fn a_session_gone_mid_command_leaves_no_process(real: Real, cx: &mut TestAppCont
     let (_f, _api, marker, s) = mid_command(real, "gone", cx);
     // The adapter's last session or the CLI's own goes, which ends it; on Windows its job then closes.
     drop(s);
+    // Releases it: nothing else may flush the entity's drop meanwhile.
+    cx.update(|_| {});
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 

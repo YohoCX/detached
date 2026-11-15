@@ -128,6 +128,7 @@ fn boot_on(
     let at = |p: &str| dir.path().join(p).display().to_string();
     let dirs = [
         ("CLAUDE_CONFIG_DIR", at("claude-config")),
+        ("CLAUDE_CODE_TMPDIR", at("claude-tmp")),
         ("USERPROFILE", at("home")),
         ("APPDATA", at("home/AppData/Roaming")),
         ("LOCALAPPDATA", at("home/AppData/Local")),
@@ -144,7 +145,11 @@ fn boot_on(
             env.vars.push((k.to_string(), String::new()));
         }
     }
-    for d in [&repo, &dir.path().join("claude-config")] {
+    for d in [
+        &repo,
+        &dir.path().join("claude-config"),
+        &dir.path().join("claude-tmp"),
+    ] {
         std::fs::create_dir_all(d).unwrap();
     }
     let sb = Sandbox { dir, state };

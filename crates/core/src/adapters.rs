@@ -93,6 +93,7 @@ pub(crate) const fn claude(backend: backend::Name) -> Provider {
         cli_var: "CLAUDE_CODE_EXECUTABLE",
         env: &[
             "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_TMPDIR",
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_BASE_URL",
