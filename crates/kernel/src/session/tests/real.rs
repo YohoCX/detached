@@ -306,7 +306,8 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
     });
     // On Windows the command runs on until the adapter goes (docs/TECHDEBT.md).
     if cfg!(windows) {
-        drop(s);
+        assert!(running(&marker));
+        cx.update(|_| drop(s));
     }
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
@@ -316,7 +317,8 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
 fn an_adapter_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
     let (_f, _api, marker, s) = mid_command("gone", cx);
     // The last session on the adapter goes, so its stdin closes; on Windows its job then closes.
-    drop(s);
+    // Released in an update: a dropped handle alone waits for the next one.
+    cx.update(|_| drop(s));
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
