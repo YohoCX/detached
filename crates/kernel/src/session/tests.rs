@@ -1,15 +1,19 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use detached_core::adapters::{CLAUDE, Config, Installed, Version};
 use detached_core::git::testutil::Sandbox;
 use gpui::TestAppContext;
 
 use super::*;
-use crate::wait_until;
+use crate::{wait_for, wait_until};
 
 mod real;
+
+/// A real adapter and `claude` may take this long to start or answer.
+const START: Duration = Duration::from_secs(60);
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -18,31 +22,72 @@ struct Fixture {
 }
 
 /// The kernel on a sandbox with a repo, `fake_acp` installed as Claude's adapter at 1.0.0 and as
-/// its CLI, and the agent's own config in the sandbox; `vars` join core's env first.
+/// its CLI.
 fn boot(cx: &mut TestAppContext, vars: &[(&str, &str)]) -> Fixture {
+    boot_on(cx, &detached_acp::testutil::fake(), vars, |core| {
+        install(core, "1.0.0")
+    })
+}
+
+/// Names an agent gets from the machine rather than from whoever runs the tests.
+const OS: &[&str] = &[
+    "PATH",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+];
+
+/// The kernel on a sandbox with a repo, `cli` as Claude's CLI and `install` run on core. `vars`
+/// join core's env first; every other name an agent may get, except the `OS` ones, is a sandbox
+/// folder or empty, so nothing of the caller's own env reaches it.
+fn boot_on(
+    cx: &mut TestAppContext,
+    cli: &Path,
+    vars: &[(&str, &str)],
+    install: impl FnOnce(&AppState),
+) -> Fixture {
     let Sandbox { dir, mut state } = Sandbox::new();
     let repo = dir.path().join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
+    let at = |p: &str| dir.path().join(p).display().to_string();
+    let dirs = [
+        ("CLAUDE_CONFIG_DIR", at("claude-config")),
+        ("USERPROFILE", at("home")),
+        ("APPDATA", at("home/AppData/Roaming")),
+        ("LOCALAPPDATA", at("home/AppData/Local")),
+        ("XDG_CONFIG_HOME", at("home/.config")),
+        ("XDG_DATA_HOME", at("home/.local/share")),
+        ("XDG_CACHE_HOME", at("home/.cache")),
+    ];
     let env = state.env.get_mut().unwrap();
-    let claude = dir.path().join("claude-config").display().to_string();
-    env.vars.push(("CLAUDE_CONFIG_DIR".into(), claude));
     env.vars
         .extend(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env.vars.extend(dirs.map(|(k, v)| (k.to_string(), v)));
+    for k in proc::ALLOWED.iter().chain(CLAUDE.env) {
+        if !OS.contains(k) && !env.vars.iter().any(|(n, _)| n == k) {
+            env.vars.push((k.to_string(), String::new()));
+        }
+    }
+    for d in [&repo, &dir.path().join("claude-config")] {
+        std::fs::create_dir_all(d).unwrap();
+    }
     let sb = Sandbox { dir, state };
     sb.git(&repo, &["init", "-q"]);
     sb.commit(&repo, "README.md", "hi\n", "init");
     let Sandbox { dir, state } = sb;
     let config = Config {
-        cli: [(
-            CLAUDE.id.into(),
-            detached_acp::testutil::fake().display().to_string(),
-        )]
-        .into(),
+        cli: [(CLAUDE.id.into(), cli.display().to_string())].into(),
         codex: false,
     };
     state.set_block(BLOCK, config).unwrap();
     let core = Arc::new(state);
-    install(&core, "1.0.0");
+    install(&core);
     cx.update(|cx| crate::init(core.clone(), cx));
     wait_until(cx, |cx| {
         crate::settings::loaded(cx) && !crate::invalidate::rescanning(cx)
@@ -77,8 +122,9 @@ fn open(f: &Fixture, kind: Kind, cx: &mut TestAppContext) -> Entity<Session> {
 
 fn open_spec(spec: Spec, past: Option<String>, cx: &mut TestAppContext) -> Entity<Session> {
     let s = cx.update(|cx| Session::open(spec, past, cx));
-    wait_until(cx, |cx| s.read(cx).state != State::Starting);
-    assert_eq!(s.read_with(cx, |s, _| s.state.clone()), State::Idle);
+    wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
+    let items = s.read_with(cx, |s, _| format!("{:?}", s.items));
+    assert_eq!(state(&s, cx), State::Idle, "{items}");
     s
 }
 
@@ -465,9 +511,7 @@ fn the_adapter_gets_only_allowed_names_and_reaches_the_api_through_them(cx: &mut
     assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
     assert!(names.contains(&"ANTHROPIC_BASE_URL") && names.contains(&"CLAUDE_CONFIG_DIR"));
     assert_eq!(turn(&s, "api", cx), "HTTP/1.1 200 OK");
-    let head = request
-        .recv_timeout(std::time::Duration::from_secs(10))
-        .unwrap();
+    let head = request.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(
         head.starts_with("POST /v1/messages") && head.contains("x-api-key: sk-ant-dummy"),
         "{head}"

@@ -1,4 +1,4 @@
-# The catalog's vetting (PLAN-AGENT-HOST §3): agent.yml on the signed catalog's newest entry, on
+# The catalog's vetting (PLAN-AGENT-HOST §3): agent.yml on each signed catalog entry, on
 # each catalog bump against its min_cli, and weekly against the newest `claude`. A weekly failure
 # opens an issue for the owner, who decides on blocked_cli; nothing is published from here.
 name: Agent vetting

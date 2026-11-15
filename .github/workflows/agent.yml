@@ -1,7 +1,7 @@
 # The agent harness on every OS of PLAN-AGENT-HOST §17 (scripts/agent-ci.sh): H4's tests on the fake
 # ACP agent, then the real Claude adapter and the official `claude` on a scripted fake Messages API.
 # No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
-# agent-vet.yml calls it with `vet` to run the signed catalog's entry instead of a build from adapters/.
+# agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/.
 name: Agent
 
 on:
@@ -9,18 +9,26 @@ on:
     paths:
       - adapters/claude-agent-acp/**
       - crates/acp/**
+      - crates/core/src/adapters.rs
+      - crates/core/src/adapters/**
+      - crates/core/src/env.rs
+      - crates/core/src/git/testutil.rs
+      - crates/core/src/os.rs
       - crates/core/src/proc.rs
       - crates/core/src/trust.rs
-      - crates/core/src/adapters.rs
+      - crates/core/src/update.rs
+      - crates/core/src/update/**
+      - crates/kernel/src/lib.rs
       - crates/kernel/src/session.rs
       - crates/kernel/src/session/**
+      - Cargo.lock
       - scripts/adapter-build.sh
       - scripts/agent-ci.sh
       - .github/workflows/agent.yml
   workflow_dispatch:
     inputs:
       vet:
-        description: The signed catalog's newest entry in place of a build
+        description: Each signed catalog entry in place of a build
         type: boolean
         default: false
       latest:
@@ -72,9 +80,6 @@ jobs:
             | sudo tee /etc/apparmor.d/bwrap
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
           bwrap --ro-bind / / true
-      - name: GNU make
-        if: runner.os == 'Windows'
-        run: command -v make || choco install make --no-progress -y
       - run: echo "RUST_TEST_THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
 
       - run: ./scripts/agent-ci.sh

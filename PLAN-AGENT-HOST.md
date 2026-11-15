@@ -996,20 +996,23 @@ Part b is built: `detached_acp::testutil::api`, the spike's scripted Messages AP
 `kernel::session`'s real-adapter tests, which `make agent-test` runs on the bun build of
 `scripts/adapter-build.sh` (shared with `adapters.yml`) or, under `DETACHED_AGENT_CATALOG`, on a
 signed catalog's entry installed through core; `agent.yml` on §17's OSes and WSL2, and
-`agent-vet.yml` for each catalog bump and weekly. Every test has a temp HOME and
-`CLAUDE_CONFIG_DIR`, core's three tiers apart and all HTTPS to a dead proxy. On macOS with
-`claude` 2.1.325, all eight pass (188 s): the first tool call asks under `default` (without
+`agent-vet.yml`, on each catalog bump and weekly, over every entry this app accepts. Every test
+has a temp HOME and `CLAUDE_CONFIG_DIR`, core's three tiers apart, every other allowed name a
+sandbox folder or empty (the OS's own aside) and all HTTPS to a dead proxy. On macOS with
+`claude` 2.1.325, all nine pass (185 s): the first tool call asks under `default` (without
 `mode` the CLI starts in `auto`), a load keeps its model, an untrusted chat closed and loaded runs
-the user's hook and not the project's and keeps the `.env` deny, which refuses `Read` and
-`cat .env`, an adapter gone mid-command leaves no process (on every OS, on Windows through the
-job), a 3-minute command reports `in_progress` within a minute, and a locally signed catalog's
-entry installs and runs. The AIR check fired: an AIR client gets no `rawOutput`, so a
-command's output goes only to `_meta.terminal_output` and a read's text nowhere, and an ask's tool
-carries no kind; the test pins that difference. §2 says to drop the declaration with stopTask
+the user's hook and not the project's, which the repo once trusted runs, and keeps the `.env`
+deny, which refuses `Read` and `cat .env`, a cancel mid-command ends the turn and the command (on
+Windows once the adapter goes), an adapter gone mid-command leaves no process (on every OS, on
+Windows through the job), a 3-minute command reports `in_progress` within a minute, and a locally
+signed catalog's entry installs and runs. The AIR check fired: an AIR client gets no
+`rawOutput`, so a command's output goes only to `_meta.terminal_output` and a read's text
+nowhere, and an ask's tool carries no kind or status; the test pins those differences. §2 says to drop the declaration with stopTask
 parity, which nothing gives yet without it: the owner decides. Also seen: `["user"]` still loads
 the project's `CLAUDE.md` (not an item, §4), and the project's `permissions.allow` was not applied
 even under `["project"]`. Left: the workflows have not run (they run once pushed); the Windows,
-Linux and WSL2 rows are unproven until then.**
+Linux and WSL2 rows are unproven until then. Vetting does not cover the sandbox, which no session
+enables yet.**
 
 Work:
 1. `core::proc` and `crates/acp` per §1.
