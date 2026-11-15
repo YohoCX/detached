@@ -1,16 +1,19 @@
-//! Spike 0c: the user's `claude` driven over stream-json with no adapter, on the scripted fake
-//! Messages API. `cargo run -- <row>|all`; a session's wire goes to out/<name>.jsonl, its stderr
-//! beside it. Unix only.
+//! Spikes 0c and H4c part 0: the user's `claude` driven over stream-json with no adapter, on the
+//! scripted fake Messages API. `cargo run -- <row>|all|wsl`; a session's wire goes to
+//! out/<name>.jsonl, its stderr beside it. macOS, Linux and Windows; `wsl` runs the CLI in a WSL
+//! distro from a Windows host.
 
 #[allow(dead_code)]
 #[path = "../../../crates/acp/src/testutil/api.rs"]
 mod api;
+mod h4c;
+mod os;
 mod rows;
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::process::{CommandExt, parent_id};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
@@ -19,6 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use api::Api;
+use os::{Group, procs};
 use serde_json::{Value, json};
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -34,8 +38,11 @@ const BASE: &[&str] = &[
 ];
 /// A chat in an untrusted repo.
 const CHAT: &[&str] = &["--permission-mode", "default", "--setting-sources", "user"];
-
-static SPAWNED: Mutex<Vec<u32>> = Mutex::new(vec![]);
+/// The leash as fixed `sh` lines: the CLI on the leash's own stdin, SIGTERM once the host is gone.
+/// A background job's stdin is /dev/null unless redirected, hence fd 3.
+const LEASH: &str = "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; while kill -0 $! 2>/dev/null; do \
+    kill -0 $PPID 2>/dev/null || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; \
+    done; wait $!";
 
 /// What this run's sandboxes and markers carry: the pid of the process whose rows they are.
 fn tag() -> String {
@@ -50,9 +57,64 @@ fn out() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("out")
 }
 
+/// The WSL distro the CLI runs in, on a Windows host.
+fn wsl() -> Option<String> {
+    std::env::var("SPIKE_WSL").ok().filter(|d| !d.is_empty())
+}
+
+/// `SPIKE_CLAUDE`, else the first `claude` on PATH; in WSL, the distro's `SPIKE_WSL_CLAUDE`.
 fn claude() -> String {
-    let which = Command::new("which").arg("claude").output().unwrap();
-    String::from_utf8(which.stdout).unwrap().trim().into()
+    if wsl().is_some() {
+        return std::env::var("SPIKE_WSL_CLAUDE").unwrap_or("/root/.local/bin/claude".into());
+    }
+    if let Ok(c) = std::env::var("SPIKE_CLAUDE") {
+        return c;
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let names = ["claude", "claude.exe"];
+    let found = std::env::split_paths(&path).flat_map(|d| names.map(|n| d.join(n)));
+    let found = found
+        .into_iter()
+        .find(|p| p.is_file())
+        .expect("claude on PATH");
+    found.display().to_string()
+}
+
+/// A random v4 UUID from std's randomly keyed hasher.
+fn uuid() -> String {
+    use std::hash::{BuildHasher, RandomState};
+    let x = format!(
+        "{:016x}{:016x}",
+        RandomState::new().hash_one(1),
+        RandomState::new().hash_one(2)
+    );
+    format!(
+        "{}-{}-4{}-a{}-{}",
+        &x[..8],
+        &x[8..12],
+        &x[13..16],
+        &x[17..20],
+        &x[20..]
+    )
+}
+
+/// A listener on `ip` that relays to `to`: a WSL guest in NAT mode reaches the host only through
+/// its gateway address, and the fake API listens on loopback.
+fn relay(to: &str, ip: &str) -> String {
+    let listener = TcpListener::bind((ip, 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let to = to.trim_start_matches("http://").to_string();
+    thread::spawn(move || {
+        for a in listener.incoming().map_while(Result::ok) {
+            let Ok(b) = TcpStream::connect(&to) else {
+                continue;
+            };
+            let (mut a2, mut b2) = (a.try_clone().unwrap(), b.try_clone().unwrap());
+            thread::spawn(move || std::io::copy(&mut a2, &mut b2));
+            thread::spawn(move || std::io::copy(&mut &b, &mut &a));
+        }
+    });
+    url
 }
 
 /// A session's sandbox: its own HOME, CLAUDE_CONFIG_DIR and repo, and the fake API on its script.
@@ -60,12 +122,16 @@ struct Run {
     name: String,
     dir: PathBuf,
     api: Api,
+    /// The fake API's address as the CLI reaches it.
+    url: String,
     /// More env for the CLI.
     vars: Vec<(String, String)>,
     /// More fields for `initialize`.
     init: Value,
-    /// Whether `claude` runs under `leash`.
+    /// Whether `claude` runs under the leash; it always does in WSL.
     leash: bool,
+    /// `SPIKE_CLAUDE` for this run alone.
+    cli: Option<String>,
 }
 
 impl Run {
@@ -75,14 +141,47 @@ impl Run {
             fs::create_dir_all(dir.join(d)).unwrap();
         }
         fs::create_dir_all(out()).unwrap();
+        let api = Api::serve(script);
+        let mut url = api.url.clone();
+        if let Some(distro) = wsl() {
+            let at = |d: &str| format!("{}/{d}", Run::linux(name));
+            let dirs = ["home", "cfg", "repo", "tmp"].map(at);
+            let mut mkdir = Command::new("wsl.exe");
+            mkdir.args(["-d", &distro, "-e", "mkdir", "-p"]).args(dirs);
+            assert!(mkdir.status().unwrap().success(), "mkdir in {distro}");
+            url = relay(
+                &url,
+                &std::env::var("SPIKE_WSL_HOST").expect("SPIKE_WSL_HOST"),
+            );
+        }
         Run {
             name: name.into(),
             dir,
-            api: Api::serve(script),
+            api,
+            url,
             vars: vec![],
             init: json!({}),
             leash: false,
+            cli: None,
         }
+    }
+
+    /// The sandbox's folder inside the distro.
+    fn linux(name: &str) -> String {
+        format!("/tmp/claude-direct-{}/{name}", tag())
+    }
+
+    /// `path` of the sandbox as the CLI sees it.
+    fn at(&self, path: &str) -> String {
+        match wsl() {
+            Some(_) => format!("{}/{path}", Run::linux(&self.name)),
+            None => self.dir.join(path).display().to_string(),
+        }
+    }
+
+    /// What every process of this session holds in its env, and nothing else does.
+    fn needle(&self) -> String {
+        self.at("cfg")
     }
 
     fn repo(&self) -> PathBuf {
@@ -99,21 +198,39 @@ impl Run {
         self.dir.join(path).exists()
     }
 
-    /// `program` in the repo with the whole env: nothing inherited but PATH, all HTTPS to a dead
-    /// proxy.
+    /// `program` in the repo with the whole env: nothing inherited but PATH (and what Windows
+    /// itself needs), all HTTPS to a dead proxy.
     fn command(&self, program: &str) -> Command {
-        let at = |p: &str| self.dir.join(p).display().to_string();
-        let vars = [
+        let mut vars = vec![
             ("PATH", std::env::var("PATH").unwrap()),
-            ("HOME", at("home")),
-            ("CLAUDE_CONFIG_DIR", at("cfg")),
+            ("HOME", self.at("home")),
+            ("CLAUDE_CONFIG_DIR", self.at("cfg")),
             // Else every session of the user shares /tmp/claude-<uid>.
-            ("CLAUDE_CODE_TMPDIR", at("tmp")),
-            ("ANTHROPIC_BASE_URL", self.api.url.clone()),
+            ("CLAUDE_CODE_TMPDIR", self.at("tmp")),
+            ("ANTHROPIC_BASE_URL", self.url.clone()),
             ("ANTHROPIC_API_KEY", "sk-ant-placeholder".into()),
             ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
             ("NO_PROXY", "127.0.0.1,localhost".into()),
         ];
+        if cfg!(windows) {
+            for k in os::WINDOWS {
+                vars.extend(std::env::var(k).ok().map(|v| (*k, v)));
+            }
+            let home = self.dir.join("home");
+            vars.push(("USERPROFILE", home.display().to_string()));
+            vars.push((
+                "APPDATA",
+                home.join("AppData/Roaming").display().to_string(),
+            ));
+            vars.push((
+                "LOCALAPPDATA",
+                home.join("AppData/Local").display().to_string(),
+            ));
+        }
+        if wsl().is_some() {
+            let names: Vec<_> = vars[1..8].iter().map(|(k, _)| format!("{k}/u")).collect();
+            vars.push(("WSLENV", names.join(":")));
+        }
         let mut c = Command::new(program);
         c.current_dir(self.repo()).env_clear().envs(vars);
         c.envs(self.vars.iter().map(|(k, v)| (k, v)));
@@ -122,14 +239,22 @@ impl Run {
 
     /// `claude` with `args`, not yet initialized.
     fn cli(&self, args: &[&str]) -> Cli {
-        let me = std::env::current_exe().unwrap();
-        let mut command = match self.leash {
-            true => self.command(me.to_str().unwrap()),
-            false => self.command(&claude()),
+        let claude = self.cli.clone().unwrap_or_else(claude);
+        let leash = ["-c", LEASH, "leash", &claude];
+        let mut command = match wsl() {
+            Some(distro) => {
+                let mut c = self.command("wsl.exe");
+                c.args(["-d", &distro, "--cd", &self.at("repo"), "-e", "sh"]);
+                c.args(leash);
+                c
+            }
+            None if self.leash => {
+                let mut c = self.command("sh");
+                c.args(leash);
+                c
+            }
+            None => self.command(&claude),
         };
-        if self.leash {
-            command.args(["leash", &claude()]);
-        }
         command.args(BASE).args(args);
         self.spawn(command)
     }
@@ -143,54 +268,67 @@ impl Run {
         cli
     }
 
-    /// `command` in its own process group, as `core::proc` spawns an adapter, on pipes of JSON
-    /// lines.
+    /// `command` in its own process group, or job on Windows, as `core::proc` spawns an adapter,
+    /// on pipes of JSON lines.
     fn spawn(&self, mut command: Command) -> Cli {
         let log = out().join(format!("{}.jsonl", self.name));
         let log = File::options().create(true).append(true).open(log);
         let log = Arc::new(Mutex::new(log.unwrap()));
         let stderr = File::create(out().join(format!("{}.stderr", self.name))).unwrap();
         writeln!(log.lock().unwrap(), "# {command:?}").unwrap();
-        let mut child = command
-            .process_group(0)
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(stderr)
-            .spawn()
-            .unwrap();
-        SPAWNED.lock().unwrap().push(child.id());
+            .stderr(stderr);
+        let (mut child, group) = Group::spawn(&mut command).unwrap();
         let (tx, rx) = channel();
         let (stdout, lines) = (child.stdout.take().unwrap(), log.clone());
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 writeln!(lines.lock().unwrap(), "< {line}").unwrap();
                 if let Ok(v) = serde_json::from_str(&line) {
-                    let _ = tx.send(v);
+                    let _ = tx.send((Instant::now(), v));
                 }
             }
         });
         Cli {
             stdin: child.stdin.take(),
             child,
+            group,
             rx,
             held: VecDeque::new(),
             log,
             ids: 0,
             mcp: vec![],
+            config: vec![],
+            elicited: vec![],
         }
     }
 }
 
 struct Cli {
     child: Child,
+    group: Group,
     stdin: Option<ChildStdin>,
-    rx: Receiver<Value>,
+    rx: Receiver<(Instant, Value)>,
     /// Read while a response was awaited.
-    held: VecDeque<Value>,
+    held: VecDeque<(Instant, Value)>,
     log: Arc<Mutex<File>>,
     ids: u32,
     /// The MCP methods the CLI called on the host's server.
     mcp: Vec<String>,
+    /// The `ConfigChange` callbacks, each answered `block`, and when.
+    config: Vec<(Instant, Value)>,
+    /// The elicitations an MCP server asked the host, each accepted.
+    elicited: Vec<Value>,
+}
+
+impl Drop for Cli {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            self.group.term();
+        }
+    }
 }
 
 impl Cli {
@@ -199,22 +337,49 @@ impl Cli {
         writeln!(self.stdin.as_mut().unwrap(), "{v}").unwrap();
     }
 
-    /// The next message off the pipe; the host's MCP server answers its own on the way.
-    fn next(&mut self, what: &str) -> Value {
+    /// The next message off the pipe and when it came.
+    fn timed(&mut self, what: &str) -> (Instant, Value) {
+        self.timed_in(what, WAIT)
+    }
+
+    fn timed_in(&mut self, what: &str, wait: Duration) -> (Instant, Value) {
+        self.poll(wait)
+            .unwrap_or_else(|| panic!("waiting for {what}: timed out"))
+    }
+
+    /// The next message within `wait` and when it came; the host answers its MCP server's
+    /// messages, `ConfigChange` and elicitations on the way.
+    fn poll(&mut self, wait: Duration) -> Option<(Instant, Value)> {
+        let until = Instant::now() + wait;
         loop {
-            let v = self.rx.recv_timeout(WAIT);
-            let v = v.unwrap_or_else(|e| panic!("waiting for {what}: {e}"));
-            if v["request"]["subtype"] != "mcp_message" {
-                return v;
-            }
-            let answer = rows::mcp(&v["request"]["message"], &mut self.mcp);
-            self.answer(&v, json!({ "mcp_response": answer }));
+            let left = until.saturating_duration_since(Instant::now());
+            let (at, v) = self.rx.recv_timeout(left).ok()?;
+            let request = &v["request"];
+            let answer = match request["subtype"].as_str() {
+                Some("mcp_message") => {
+                    json!({ "mcp_response": rows::mcp(&request["message"], &mut self.mcp) })
+                }
+                Some("hook_callback") if request["input"]["hook_event_name"] == "ConfigChange" => {
+                    self.config.push((at, request["input"].clone()));
+                    json!({"decision": "block", "reason": "Detached reviews changed settings"})
+                }
+                Some("elicitation") => {
+                    self.elicited.push(request.clone());
+                    json!({"action": "accept", "content": {"name": "Detached"}})
+                }
+                _ => return Some((at, v)),
+            };
+            self.answer(&v, answer);
         }
+    }
+
+    fn next(&mut self, what: &str) -> Value {
+        self.timed(what).1
     }
 
     fn read(&mut self, what: &str) -> Value {
         match self.held.pop_front() {
-            Some(v) => v,
+            Some((_, v)) => v,
             None => self.next(what),
         }
     }
@@ -234,11 +399,11 @@ impl Cli {
         let what = frame.to_string();
         self.send(frame);
         loop {
-            let v = self.next(&what);
+            let (at, v) = self.timed(&what);
             if is(&v) {
                 return v;
             }
-            self.held.push_back(v);
+            self.held.push_back((at, v));
         }
     }
 
@@ -263,7 +428,12 @@ impl Cli {
     }
 
     fn user(&mut self, text: &str) {
-        let message = json!({"role": "user", "content": text});
+        self.say(json!(text));
+    }
+
+    /// A prompt of `content`: a string or blocks.
+    fn say(&mut self, content: Value) {
+        let message = json!({"role": "user", "content": content});
         self.send(json!({"type": "user", "message": message, "parent_tool_use_id": null}));
     }
 
@@ -320,10 +490,9 @@ impl Cli {
     fn drain(&mut self, time: Duration) -> Vec<String> {
         let (began, mut kinds) = (Instant::now(), vec![]);
         while let Some(left) = time.checked_sub(began.elapsed()) {
-            let next = self.held.pop_front().map(Ok);
-            match next.unwrap_or_else(|| self.rx.recv_timeout(left)) {
-                Ok(v) => kinds.push(kind(&v)),
-                Err(_) => break,
+            match self.held.pop_front().or_else(|| self.poll(left)) {
+                Some((_, v)) => kinds.push(kind(&v)),
+                None => break,
             }
         }
         kinds
@@ -370,22 +539,9 @@ fn keys(v: &Value) -> Vec<&String> {
     v.as_object().into_iter().flat_map(|o| o.keys()).collect()
 }
 
-fn ps(args: &[&str]) -> String {
-    let out = Command::new("ps").args(args).output().unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().into()
-}
-
-/// The processes whose command line holds `marker`, as "pid pgid command".
+/// The processes whose command line holds `marker`, as "pid command".
 fn running(marker: &str) -> Vec<String> {
-    let all = ps(&["-ww", "-A", "-o", "pid=,pgid=,command="]);
-    let with = all.lines().filter(|l| l.contains(marker));
-    with.map(|l| l.trim().to_string()).collect()
-}
-
-/// A zombie is gone: only its parent has not asked yet.
-fn alive(pid: u32) -> bool {
-    let stat = ps(&["-o", "stat=", "-p", &pid.to_string()]);
-    !stat.is_empty() && !stat.starts_with('Z')
+    procs(marker)
 }
 
 /// How long `is` took to hold, within 15 s.
@@ -395,7 +551,7 @@ fn within(is: impl Fn() -> bool) -> Option<Duration> {
         if is() {
             return Some(began.elapsed());
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(50));
     }
     None
 }
@@ -404,51 +560,46 @@ fn gone(marker: &str) -> Option<Duration> {
     within(|| running(marker).is_empty())
 }
 
-fn exited(pid: u32) -> Option<Duration> {
-    within(|| !alive(pid))
-}
-
-fn signal(sig: &str, pid: &str) {
-    Command::new("kill").args([sig, pid]).status().unwrap();
-}
-
-/// Runs `claude` on this process's own pipes and ends it once the host is gone: SIGTERM, on
-/// which the CLI stops its commands, then SIGKILL.
-fn leash(args: &[String]) {
-    let host = parent_id();
-    let mut child = Command::new(&args[0]).args(&args[1..]).spawn().unwrap();
-    while child.try_wait().unwrap().is_none() {
-        if parent_id() != host {
-            signal("-TERM", &child.id().to_string());
-            thread::sleep(Duration::from_secs(5));
-            let _ = child.kill();
-        }
-        thread::sleep(Duration::from_millis(100));
+/// Runs `row`, and goes on to the next one when it panics.
+fn guarded(name: &str, row: fn()) {
+    println!("\n## {name}");
+    if std::panic::catch_unwind(row).is_err() {
+        println!("{name}: the row panicked (stderr has why)");
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |n: usize| args.get(n).map_or("", String::as_str);
-    let row = rows::ALL.iter().find(|(name, _)| *name == arg(0));
+    let rows = rows::ALL
+        .iter()
+        .chain(h4c::ALL)
+        .chain(h4c::ALONE)
+        .chain(rows::LOCAL);
+    let row = rows.clone().find(|(name, _)| *name == arg(0));
     match (arg(0), row) {
-        ("leash", _) => return leash(&args[1..]),
-        ("host", _) => return rows::host(arg(1), arg(2) == "true", arg(3) == "true"),
+        ("host", _) => return h4c::host(arg(1), arg(2) == "true", arg(3) == "true"),
+        ("elicit", _) => return h4c::elicit(),
+        ("owner-login", _) => return h4c::owner_login(),
         ("all", _) => {
-            for (name, row) in rows::ALL {
-                println!("\n## {name}");
-                row();
+            for (name, row) in rows::ALL.iter().chain(h4c::ALL) {
+                guarded(name, *row);
             }
         }
-        (_, Some((_, row))) => row(),
+        ("wsl", _) => {
+            for (name, row) in h4c::WSL {
+                guarded(name, *row);
+            }
+        }
+        (_, Some((name, row))) => guarded(name, *row),
         _ => {
-            let names: Vec<_> = rows::ALL.iter().map(|(name, _)| *name).collect();
-            return eprintln!("rows: all {}", names.join(" "));
+            let names: Vec<_> = rows.map(|(name, _)| *name).collect();
+            return eprintln!("rows: all wsl owner-login {}", names.join(" "));
         }
     }
-    let mut left = running(&format!("detached-0c-{}", tag()));
-    let spawned = SPAWNED.lock().unwrap();
-    left.extend(spawned.iter().filter(|p| alive(**p)).map(u32::to_string));
-    println!("processes left: {left:?}");
+    let mut left = procs(&format!("claude-direct-{}", tag()));
+    left.extend(procs(&format!("detached-0c-{}", tag())));
+    println!("\nprocesses left: {left:?}");
+    os::reap(&left);
     let _ = fs::remove_dir_all(root());
 }
