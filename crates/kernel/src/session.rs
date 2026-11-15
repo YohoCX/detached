@@ -228,9 +228,7 @@ impl Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
-        let (live, id) = (self.live.clone(), std::mem::take(&mut self.id));
-        // Drop has no App to reach the pool with.
-        std::thread::spawn(move || live.adapter.close_session(&id));
+        self.live.adapter.close_session(&self.id);
     }
 }
 
@@ -240,6 +238,7 @@ type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
 struct Sessions {
     tx: mpsc::UnboundedSender<(u64, Event)>,
     adapters: Adapters,
+    /// Kept after a session ends until its `Closed`, so its late events go.
     by_id: HashMap<(u64, String), WeakEntity<Session>>,
     /// What came for a session before its start returned, as a load's replay.
     early: HashMap<(u64, String), Vec<Event>>,
@@ -269,6 +268,13 @@ pub(crate) fn init(cx: &mut App) {
 fn dispatch(cx: &mut App, serial: u64, e: Event) {
     let sid = match &e {
         Event::Update(s, _) | Event::Ask(s, ..) | Event::Ended(s, _) => s.clone(),
+        Event::Closed(s) => {
+            let g = cx.global_mut::<Sessions>();
+            let key = (serial, s.clone());
+            g.by_id.remove(&key);
+            g.early.remove(&key);
+            return;
+        }
         Event::Exited(x) => {
             let g = cx.global_mut::<Sessions>();
             g.early.retain(|k, _| k.0 != serial);
@@ -284,7 +290,7 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
     let key = (serial, sid);
     match g.by_id.get(&key).map(WeakEntity::upgrade) {
         Some(Some(s)) => s.update(cx, |s, cx| s.on(e, cx)),
-        // Its entity is gone, and with it the session.
+        // Its entity is gone; a dropped ask answers cancelled.
         Some(None) => {}
         None => g.early.entry(key).or_default().push(e),
     }
@@ -437,6 +443,9 @@ impl Session {
         let Some(tree) = ready else {
             return self.close(End::Trust, cx);
         };
+        if let Some(end) = self.ending.take() {
+            return self.close(end, cx);
+        }
         let Some(o) = self.open.as_ref().filter(|_| self.state == State::Running) else {
             return;
         };
@@ -503,13 +512,10 @@ impl Session {
             self.note(TRUST_CHANGED.into());
         }
         self.drop_replies();
-        if let Some(o) = self.open.take() {
-            if self.turn.is_some() {
-                o.live.adapter.cancel(&o.id);
-            }
-            let g = cx.global_mut::<Sessions>();
-            g.by_id.remove(&o.key());
-            g.early.remove(&o.key());
+        if let Some(o) = self.open.take()
+            && self.turn.is_some()
+        {
+            o.live.adapter.cancel(&o.id);
         }
         (self._watch, self.turn, self.ending) = (None, None, None);
         self.state = State::Ended(end);
@@ -562,7 +568,7 @@ impl Session {
                 self.items.push(Item::Ask { tool, answer });
             }
             Event::Ended(_, r) => self.turn_ended(r, cx),
-            Event::Exited(_) => {}
+            Event::Closed(_) | Event::Exited(_) => {}
         }
         cx.notify();
     }

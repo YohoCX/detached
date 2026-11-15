@@ -129,6 +129,8 @@ pub enum Event {
     Ask(String, Box<Ask>, Reply),
     /// A prompt's answer: the turn ended.
     Ended(String, std::result::Result<Turn, String>),
+    /// The session's close was answered: nothing more comes for it.
+    Closed(String),
     /// The adapter exited; every session on it has ended.
     Exited(Exit),
 }
@@ -326,10 +328,16 @@ impl Adapter {
             .send_notification(CancelNotification::new(session.to_string()));
     }
 
-    /// Ends the session's CLI, which frees its memory.
-    pub fn close_session(&self, session: &str) -> Result<()> {
-        self.call(CloseSessionRequest::new(session.to_string()))
-            .map(|_| ())
+    /// Ends the session's CLI, which frees its memory; `Event::Closed` follows.
+    pub fn close_session(&self, session: &str) {
+        let (id, closed) = (session.to_string(), self.on_event.clone());
+        let _ = self
+            .cx
+            .send_request(CloseSessionRequest::new(session.to_string()))
+            .on_receiving_result(async move |_| {
+                closed(Event::Closed(id));
+                Ok(())
+            });
     }
 }
 

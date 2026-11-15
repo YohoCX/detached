@@ -243,6 +243,32 @@ fn a_load_runs_on_the_session_s_model(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let other = open(&f, Kind::Chat, cx);
+    let tool: fn(&Item) -> bool = |i| matches!(i, Item::Tool(_));
+    let ask = |i: &Item| matches!(i, Item::Ask { .. });
+    for (step, at, dropped) in [("stall", tool, false), ("ask", ask, true)] {
+        let s = open(&f, Kind::Chat, cx);
+        s.update(cx, |s, cx| s.prompt(step.into(), cx));
+        wait_until(cx, |cx| s.read(cx).items.iter().any(at));
+        let id = s.read_with(cx, |s, _| s.id.clone());
+        if dropped {
+            drop(s);
+            // Releases it, which sends its close before the load below.
+            cx.update(|_| {});
+        } else {
+            s.update(cx, |s, cx| s.end(cx));
+        }
+        let loaded = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), id, cx);
+        let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
+        loaded.read_with(cx, |s, _| assert_eq!(s.items, replay));
+        assert_eq!(turn(&loaded, "say again", cx), "again");
+    }
+    assert_eq!(turn(&other, "say still here", cx), "still here");
+}
+
+#[gpui::test]
 fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let (a, b) = (open(&f, Kind::Chat, cx), open(&f, Kind::Untrusted, cx));
@@ -405,9 +431,31 @@ fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mu
     assert_eq!(state(&s, cx), State::Idle);
     let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
     s.update(cx, |s, cx| {
-        s.prompt(format!("write .claude/settings.json {hook};ask"), cx)
+        s.prompt(format!("write .claude/settings.json {hook};stall"), cx)
     });
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
-    assert_eq!(state(&s, cx), State::Ended(End::Trust));
-    assert_eq!(cx.read(|cx| asked(&s, cx)).unwrap().1, Answer::Gone);
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.state, State::Ended(End::Trust));
+        let stop = s.items.iter().rev().find_map(|i| match i {
+            Item::End { stop, .. } => Some(*stop),
+            _ => None,
+        });
+        assert_eq!(stop, Some(Some(StopReason::Cancelled)), "{:?}", s.items);
+    });
+}
+
+#[gpui::test]
+fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    s.update(cx, |s, cx| {
+        s.prompt("say not sent".into(), cx);
+        s.recheck(Some("moved".into()), cx);
+    });
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.state, State::Ended(End::Trust));
+        let sent = |i: &Item| matches!(i, Item::Text(_) | Item::End { .. });
+        assert!(!s.items.iter().any(sent), "{:?}", s.items);
+    });
 }

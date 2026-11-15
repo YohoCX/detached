@@ -251,13 +251,17 @@ pub fn watch(
     Ok(Watch(watcher))
 }
 
-/// Whether `glob` may name `rel` or a file under it.
+/// Whether `glob` may name `rel` or a file under it, ignoring case where the file system does.
 fn names(glob: &str, rel: &Path) -> bool {
+    let same = |c: &OsStr, p: &str| match cfg!(any(target_os = "macos", windows)) {
+        true => c.eq_ignore_ascii_case(p),
+        false => c == p,
+    };
     let mut parts = glob.split('/');
     for c in rel.components() {
         match parts.next() {
             Some("**") => return true,
-            Some(p) if p == "*" || c.as_os_str() == OsStr::new(p) => {}
+            Some(p) if p == "*" || same(c.as_os_str(), p) => {}
             _ => return false,
         }
     }
@@ -410,5 +414,7 @@ mod tests {
         ] {
             assert!(!named(rel), "{rel}");
         }
+        let folded = named(".Claude/SETTINGS.local.json");
+        assert_eq!(folded, cfg!(any(target_os = "macos", windows)));
     }
 }

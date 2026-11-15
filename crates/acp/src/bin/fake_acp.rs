@@ -11,14 +11,16 @@
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `out-of-usage` fails the prompt as Claude does when extra usage has run out.
 //!
-//! Its version is its folder's name. A load reports `fallback-opus` as the model unless
-//! `configOptions` name one; on stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
+//! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
+//! first. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use serde_json::{Value, json};
 
@@ -60,8 +62,9 @@ fn main() {
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
     let sessions: Arc<Mutex<HashMap<String, Session>>> = Default::default();
     // Responses to the requests this agent sent, by id.
-    let replies: Arc<Mutex<HashMap<u64, Sender<Value>>>> = Default::default();
-    let cancels: Arc<Mutex<HashMap<String, Sender<()>>>> = Default::default();
+    let mut replies: HashMap<u64, Sender<Value>> = HashMap::new();
+    // By session: its last turn's cancel, permission request id and thread.
+    let mut turns: HashMap<String, (Sender<()>, u64, JoinHandle<()>)> = HashMap::new();
     let version = std::env::current_exe()
         .ok()
         .and_then(|e| Some(e.parent()?.file_name()?.to_string_lossy().into_owned()))
@@ -74,7 +77,7 @@ fn main() {
         };
         let (id, method, params) = (msg["id"].clone(), msg["method"].as_str(), &msg["params"]);
         let Some(method) = method else {
-            if let Some(tx) = id.as_u64().and_then(|i| replies.lock().unwrap().remove(&i)) {
+            if let Some(tx) = id.as_u64().and_then(|i| replies.remove(&i)) {
                 let _ = tx.send(msg["result"].clone());
             }
             continue;
@@ -120,18 +123,28 @@ fn main() {
                 if method == "session/new" {
                     reply(json!({"sessionId": sid, "configOptions": config}));
                 } else {
+                    for (kind, text) in [("user", "earlier"), ("agent", "replayed")] {
+                        let chunk = json!({"sessionUpdate": format!("{kind}_message_chunk"),
+                            "content": {"type": "text", "text": text}});
+                        update(&out, &sid, chunk);
+                    }
                     reply(json!({"configOptions": config}));
                 }
             }
             "session/close" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
+                if let Some((cancel, rid, turn)) = turns.remove(sid) {
+                    let _ = cancel.send(());
+                    replies.remove(&rid);
+                    let _ = turn.join();
+                }
                 sessions.lock().unwrap().remove(sid);
                 reply(json!({}));
             }
             "session/cancel" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
-                if let Some(tx) = cancels.lock().unwrap().remove(sid) {
-                    let _ = tx.send(());
+                if let Some((cancel, ..)) = turns.get(sid) {
+                    let _ = cancel.send(());
                 }
             }
             "session/prompt" => {
@@ -140,17 +153,18 @@ fn main() {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let (tx, cancelled) = mpsc::channel();
-                cancels.lock().unwrap().insert(sid.clone(), tx);
-                let (out, sessions, replies) = (out.clone(), sessions.clone(), replies.clone());
+                let (cancel, cancelled) = mpsc::channel();
+                let (answered, answer) = mpsc::channel();
                 let rid = next_request(&mut next);
-                std::thread::spawn(move || {
+                replies.insert(rid, answered);
+                let (out, sessions, key) = (out.clone(), sessions.clone(), sid.clone());
+                let turn = std::thread::spawn(move || {
                     let turn = Turn {
                         out: &out,
                         sid: &sid,
                         sessions: &sessions,
-                        replies: &replies,
                         cancelled,
+                        answer,
                         rid,
                     };
                     let result = text.split(';').try_for_each(|step| turn.step(step.trim()));
@@ -165,6 +179,7 @@ fn main() {
                     response["id"] = id;
                     send(&out, response);
                 });
+                turns.insert(key, (cancel, rid, turn));
             }
             _ => {
                 if !id.is_null() {
@@ -218,18 +233,22 @@ struct Turn<'a> {
     out: &'a Out,
     sid: &'a str,
     sessions: &'a Mutex<HashMap<String, Session>>,
-    replies: &'a Mutex<HashMap<u64, Sender<Value>>>,
     cancelled: Receiver<()>,
+    answer: Receiver<Value>,
     rid: u64,
 }
 
+fn update(out: &Out, sid: &str, update: Value) {
+    let p = json!({"sessionId": sid, "update": update});
+    send(
+        out,
+        json!({"jsonrpc": "2.0", "method": "session/update", "params": p}),
+    );
+}
+
 impl Turn<'_> {
-    fn update(&self, update: Value) {
-        let p = json!({"sessionId": self.sid, "update": update});
-        send(
-            self.out,
-            json!({"jsonrpc": "2.0", "method": "session/update", "params": p}),
-        );
+    fn update(&self, u: Value) {
+        update(self.out, self.sid, u);
     }
 
     fn say(&self, text: &str) {
@@ -283,14 +302,12 @@ impl Turn<'_> {
                     {"optionId": "allow_once", "name": "Allow", "kind": "allow_once"},
                     {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
                 ]);
-                let (tx, rx) = mpsc::channel();
-                self.replies.lock().unwrap().insert(self.rid, tx);
                 let p = json!({"sessionId": self.sid, "toolCall": tool, "options": options});
                 send(
                     self.out,
                     json!({"jsonrpc": "2.0", "id": self.rid, "method": "session/request_permission", "params": p}),
                 );
-                let r = rx.recv().map_err(err)?;
+                let r = self.answer.recv().map_err(err)?;
                 let picked = match r["outcome"]["outcome"].as_str() {
                     Some("selected") => {
                         r["outcome"]["optionId"].as_str().unwrap_or("?").to_string()
