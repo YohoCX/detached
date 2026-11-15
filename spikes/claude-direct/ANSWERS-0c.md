@@ -2,8 +2,8 @@
 
 2026-11-15. The owner's question: can Rust talk to the user's `claude` directly over stream-json, as
 the Agent SDK does, with no ACP adapter? The thirteen rows, in order, then what else was found.
-The options and a recommendation are in
-[docs/decisions/2026-11-15-claude-direct-cli.md](../../docs/decisions/2026-11-15-claude-direct-cli.md).
+The options were compared in the proposal of 2026-11-15 (commit 80149a6); the owner's decision is
+[docs/decisions/2026-11-16-claude-direct-connection.md](../../docs/decisions/2026-11-16-claude-direct-connection.md).
 
 **Short answer: yes.** Every row worked on macOS against `claude` 2.1.325. Two rows need work the
 adapter does today: history comes from the transcript file (row 6), and a killed host needs a leash

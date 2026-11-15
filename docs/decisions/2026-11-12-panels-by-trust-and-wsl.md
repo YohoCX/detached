@@ -7,6 +7,10 @@ Amended by [orchestrator mode](2026-11-12-orchestrator-mode.md) and
 repo, trusted work runs free on its own branch, and an untrusted subject gets a read-only review.
 Where they differ, those decisions hold.
 
+**Superseded in part by [2026-11-16](2026-11-16-claude-direct-connection.md):** under F, Claude's
+host tools ride the session's own pipes; the gateway address and its firewall rule stay for the
+"sandbox ready" probe's responder alone.
+
 - **The shell everywhere.** Every agent and panel participant keeps its terminal access on every
   OS. Host tools (diff, log, search, `detached_read`) are offered in addition, never instead.
 - **E, by trust.**

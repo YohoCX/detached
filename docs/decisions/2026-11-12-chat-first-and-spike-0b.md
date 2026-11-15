@@ -2,6 +2,10 @@
 
 Decided by the owner on 2026-11-12.
 
+**Superseded in part by [2026-11-16](2026-11-16-claude-direct-connection.md):** the chat moves to
+`kernel::Session` on Claude's direct backend, not to ACP; the order and the spike-first rule
+stand, and the new step H4c follows that rule.
+
 - **The chat first.** The chat moves to ACP right after the host tools (H5), with skills (H8)
   before it, and before any live panel step (P2); P1 only imports archived rounds. The owner lives
   on ACP while panels are built. The sidecar still goes only when every parity row holds and the

@@ -2,6 +2,10 @@
 
 Decided by the owner on 2026-11-09: "I'd like one template for providers."
 
+**Superseded in part by [2026-11-16](2026-11-16-claude-direct-connection.md):** Claude connects
+directly, behind the one backend interface every provider has; ACP stays for Codex and later
+providers.
+
 - Every provider runs as an ACP (Agent Client Protocol) adapter behind one host contract: Claude
   through `@agentclientprotocol/claude-agent-acp`, Codex through `codex-acp`, others as adapters
   appear. The Rust side speaks ACP; `core::agent`'s private protocol and `sidecars/claude` go.

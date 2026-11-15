@@ -2,6 +2,11 @@
 
 Decided by the owner on 2026-11-12.
 
+**Superseded in part by [2026-11-16](2026-11-16-claude-direct-connection.md):** the chain is
+Detached → the user's own `claude` → Anthropic, with no adapter and no SDK. "Only the public SDK"
+becomes "only the unmodified binary, on the user's own login", per the terms page as read that
+day. The name is open there, and the ask to Anthropic goes now, not before the release.
+
 - **The chain.** Detached → `claude-agent-acp` (the Agent SDK) → the user's own `claude` →
   Anthropic.
   - The CLI comes from Anthropic's official installer and updates itself. Detached never ships or
