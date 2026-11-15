@@ -125,6 +125,8 @@ pub struct Session {
     ending: Option<End>,
     /// The running turn was cancelled; a cancel asked before its prompt went out follows it.
     cancelled: bool,
+    /// Items before this are whole: the last `Break` came after them.
+    whole: usize,
     _watch: Option<trust::Watch>,
     _tasks: Vec<Task<()>>,
 }
@@ -240,6 +242,7 @@ impl Session {
                 turn: None,
                 ending: None,
                 cancelled: false,
+                whole: 0,
                 _watch: None,
                 _tasks: vec![],
             };
@@ -492,13 +495,15 @@ impl Session {
 
     fn update(&mut self, u: Update) {
         let items = &mut self.items;
-        match (u, items.last_mut()) {
+        let open = items.len() > self.whole;
+        match (u, items.last_mut().filter(|_| open)) {
             (Update::User(t), Some(Item::User(was)))
             | (Update::Text(t), Some(Item::Text(was)))
             | (Update::Thought(t), Some(Item::Thought(was))) => was.push_str(&t),
             (Update::User(t), _) => items.push(Item::User(t)),
             (Update::Text(t), _) => items.push(Item::Text(t)),
             (Update::Thought(t), _) => items.push(Item::Thought(t)),
+            (Update::Break, _) => self.whole = items.len(),
             (Update::Tool(t), _) => {
                 let known = items.iter_mut().rev().find_map(|i| match i {
                     Item::Tool(was) if was.id == t.id => Some(was),

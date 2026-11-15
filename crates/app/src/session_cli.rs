@@ -35,13 +35,27 @@ pub fn run(core: Arc<AppState>, args: &[String]) -> ! {
     };
     let mut run = Run::default();
     let mut rest = rest.iter();
+    let id = |a: Option<&String>| match a {
+        Some(id) if !id.starts_with("--") => Some(id.clone()),
+        _ => exit(USAGE, 2),
+    };
     while let Some(a) = rest.next() {
         match a.as_str() {
             "--past" => run.past = true,
-            "--resume" => run.resume = rest.next().cloned(),
-            "--delete" => run.delete = rest.next().cloned(),
+            "--resume" => run.resume = id(rest.next()),
+            "--delete" => run.delete = id(rest.next()),
+            // A mistyped flag would go to the real login as a prompt.
+            f if f.starts_with("--") => exit(USAGE, 2),
             _ => run.prompt = Some(a.clone()),
         }
+    }
+    if [run.past, run.resume.is_some(), run.delete.is_some()]
+        .iter()
+        .filter(|&&b| b)
+        .count()
+        > 1
+    {
+        exit(USAGE, 2)
     }
     let repo = std::path::absolute(repo).map_or(repo.clone(), |p| p.display().to_string());
     let spec = Spec::new(&CLAUDE, &repo, Kind::Chat);

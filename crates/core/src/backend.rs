@@ -136,9 +136,12 @@ pub struct Config {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Update {
+    /// User text, text and a thought come in chunks, each going on with the last item of its kind.
     User(String),
     Text(String),
     Thought(String),
+    /// A message ended: the next chunk starts a new item.
+    Break,
     /// A tool call, or what changed of one, by `id`.
     Tool(Box<Tool>),
     /// Context fill, and the turn's cost in USD when known.

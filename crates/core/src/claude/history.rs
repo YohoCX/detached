@@ -3,7 +3,7 @@
 //! can be read through `wsl.exe`.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -162,9 +162,9 @@ fn ends(path: &Path) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// A session's history as a resume's first updates: the chain of messages from the last one back
-/// to the start or the last compaction, sidechains and lines of unknown types aside. None when the
-/// transcript holds no message.
+/// A session's history as a resume's first updates, each message ended by a `Break`: the chain of
+/// messages from the last one back to the start or the last compaction, sidechains and lines of
+/// unknown types aside. None when the transcript holds no message.
 pub(crate) fn history(bytes: &[u8]) -> Option<Vec<Update>> {
     let lines: Vec<Value> = lines(bytes).collect();
     let by_id: HashMap<&str, &Value> = lines
@@ -179,16 +179,30 @@ pub(crate) fn history(bytes: &[u8]) -> Option<Vec<Update>> {
     let chain = std::iter::successors(Some(leaf), |l| {
         by_id.get(l["parentUuid"].as_str()?).copied()
     });
-    let mut chain: Vec<&Value> = chain.take(lines.len()).collect();
-    chain.reverse();
+    let chain: Vec<&Value> = chain.take(lines.len()).collect();
+    let ids: HashSet<&str> = chain.iter().filter_map(|l| l["uuid"].as_str()).collect();
+    let chain: HashSet<*const Value> = chain.into_iter().map(|l| l as *const _).collect();
+    // Parallel calls chain their tool_use lines, and each result hangs off its own: only the last
+    // result is on the chain.
+    let kept = |l: &&Value| {
+        let mut blocks = l["message"]["content"].as_array().into_iter().flatten();
+        chain.contains(&(*l as *const _))
+            || l["parentUuid"].as_str().is_some_and(|p| ids.contains(p))
+                && blocks.any(|b| b["type"] == "tool_result")
+    };
     let mut names = HashMap::new();
     let mut out = vec![];
-    let shown = chain
-        .into_iter()
+    let shown = lines
+        .iter()
+        .filter(kept)
         .filter(message)
         .filter(|l| l["isMeta"] != true && l["isCompactSummary"] != true);
     for l in shown {
+        let from = out.len();
         updates(l, &mut names, &mut out);
+        if out.len() > from {
+            out.push(Update::Break);
+        }
     }
     Some(out)
 }

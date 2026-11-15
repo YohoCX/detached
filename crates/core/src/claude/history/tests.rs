@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use serde_json::json;
 use tempfile::TempDir;
 
 use super::*;
@@ -80,6 +81,11 @@ fn a_subagent_shows_as_its_tool_call_and_its_sidechain_is_skipped() {
 
     let h = read(dir.path(), SUBAGENT).unwrap();
     assert_eq!(texts(&h), ["user: go", "text: main done", "text: done"]);
+    // The notification between the two is noise: a break alone keeps them apart.
+    let main = h
+        .iter()
+        .position(|u| *u == Update::Text("main done".into()));
+    assert_eq!(h[main.unwrap() + 1], Update::Break);
     let tools: Vec<&Tool> = h
         .iter()
         .filter_map(|u| match u {
@@ -103,12 +109,46 @@ fn a_compacted_session_starts_at_its_boundary() {
     let h = read(dir.path(), COMPACTION).unwrap();
     assert_eq!(
         h,
-        [Update::User("after".into()), Update::Text("one".into())]
+        [
+            Update::User("after".into()),
+            Update::Break,
+            Update::Text("one".into()),
+            Update::Break
+        ]
     );
 }
 
 #[test]
-fn the_list_reads_a_custom_title_the_archived_tag_and_the_model() {
+fn each_of_parallel_calls_has_its_result_though_one_alone_is_on_the_chain() {
+    let call = |id: &str| json!({"type": "tool_use", "id": id, "name": "Bash", "input": {}});
+    let result = |id: &str| json!({"type": "tool_result", "tool_use_id": id, "content": id});
+    let line = |kind: &str, uuid: &str, parent: Option<&str>, content: Value| {
+        let message = json!({ "content": content });
+        json!({"type": kind, "uuid": uuid, "parentUuid": parent, "message": message})
+    };
+    let lines = [
+        line("user", "u", None, json!("go")),
+        line("assistant", "a1", Some("u"), json!([call("t1")])),
+        line("assistant", "a2", Some("a1"), json!([call("t2")])),
+        line("user", "r1", Some("a1"), json!([result("t1")])),
+        line("user", "r2", Some("a2"), json!([result("t2")])),
+        line("assistant", "a3", Some("r2"), json!("both")),
+    ];
+    let bytes: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    let h = history(bytes.as_bytes()).unwrap();
+    let outputs: Vec<_> = h
+        .iter()
+        .filter_map(|u| match u {
+            Update::Tool(t) => t.output.as_ref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outputs, ["t1", "t2"]);
+    assert_eq!(texts(&h), ["user: go", "text: both"]);
+}
+
+#[test]
+fn the_list_reads_a_side_file_s_title_the_archived_tag_and_the_model() {
     let cwd = "/tmp/h4c/transcripts-titled/repo";
     let dir = laid("titled", cwd);
     // A request blob between the head and the tail the list reads.
@@ -119,6 +159,12 @@ fn the_list_reads_a_custom_title_the_archived_tag_and_the_model() {
         "{{\"type\":\"api-request-blob\",\"message\":\"{}\"}}\n",
         "x".repeat(300_000)
     );
+    // The title only in the side file.
+    let tail: String = tail
+        .lines()
+        .filter(|l| !l.contains("\"custom-title\""))
+        .map(|l| format!("{l}\n"))
+        .collect();
     fs::write(&file, format!("{head}{blob}{tail}")).unwrap();
 
     let past = past(dir.path(), cwd);

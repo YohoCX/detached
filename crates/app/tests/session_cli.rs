@@ -9,6 +9,9 @@ use detached_core::adapters::{self, BLOCK, CLAUDE, Config, Installed, Version};
 use detached_core::git::testutil::Sandbox;
 use serde_json::Value;
 
+const USAGE: &str =
+    "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]";
+
 /// `fake_acp`, built as its own crate's tests build it: the app does not depend on that crate.
 fn fake_acp() -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")
@@ -102,8 +105,7 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_and_resumes_with_its_history
         "> ask; say done",
         "[ask] edit Write notes.txt: y once, a always, n reject",
         "picked allow_once",
-        "done",
-        "[end] Some(EndTurn)",
+        "done\n[end] Some(EndTurn)",
         "[usage] ",
         "[ended] Closed",
     ] {
@@ -123,7 +125,7 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_and_resumes_with_its_history
     let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s:?} in {out}"));
     assert!(at(&format!("[session] {id}")) < at("> earlier"));
     assert!(at("> earlier") < at("replayed") && at("replayed") < at("> say again"));
-    assert!(at("> say again") < at("again\n[end]"));
+    assert!(out[at("> say again")..].contains("\nagain\n[end]"), "{out}");
 
     let (out, code) = session(&sb, &["--past"], "");
     assert_eq!(
@@ -135,4 +137,18 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_and_resumes_with_its_history
         (out.trim(), code),
         ("This agent deletes no past sessions.", 1)
     );
+}
+
+#[test]
+fn a_missing_id_a_mistyped_flag_or_two_actions_print_the_usage_and_open_nothing() {
+    let sb = sandbox();
+    for args in [
+        &["--resume"][..],
+        &["--delete", "--past"],
+        &["--pats"],
+        &["--past", "--delete", "x"],
+    ] {
+        let (out, code) = session(&sb, args, "");
+        assert_eq!((out.trim(), code), (USAGE, 2), "{args:?}");
+    }
 }
