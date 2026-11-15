@@ -1138,6 +1138,16 @@ removed at §13's end condition, in their own commit, after a grep of `crates/ap
 
 ### Step H6. Managed worktrees and recipes
 
+**Status (2026-11-15): items 1–4 are built, with every test below. `core::git::worktree` adds and
+removes with `core.hooksPath` at an empty folder; a branch keeps its slashes as folders, as `wt`
+does. Like `wt new`, Create fetches first (a failure only warns), checks out the local branch,
+else tracks `origin/<branch>`, else branches from `origin/<base>`. The recipe is the item
+`worktree.toml` of the Recipes kind: `base`, `copies`, `install`, `teardown`; the commands run
+through `sh -c` (`cmd /C` on Windows) in the new tree, with output as the op's progress. A failed
+install keeps the worktree; Remove anyway also passes a failed or unaccepted teardown, which then
+does not run. The Worktrees page in Settings creates and removes; Worktrees… in a repo's menu opens
+it. Left for the owner: the DHP recipe against `wt new`, and the copies' ACL on Windows.**
+
 Work:
 1. Worktrees under `<folder>/worktrees/<repo>/<branch>` for a workspace folder that holds repos,
    as `wt` does, or `data/worktrees/<repo>-<short hash of the repo path>/<branch>` when the folder
