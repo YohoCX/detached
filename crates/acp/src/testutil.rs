@@ -1,8 +1,11 @@
-//! `fake()`: `fake_acp` for the tests of crates that cannot name another crate's binary.
+//! `fake()`: `fake_acp` for the tests of crates that cannot name another crate's binary; `api`: the
+//! scripted Messages API the real adapter's tests run `claude` against.
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
+
+pub mod api;
 
 /// Builds `fake_acp` once, with the cargo that builds this crate, and returns its executable.
 pub fn fake() -> PathBuf {
