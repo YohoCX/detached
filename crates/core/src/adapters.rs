@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, NaiveDate};
-use semver::Version;
+pub use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -44,6 +44,12 @@ pub struct Config {
     /// Codex is listed, and its adapter installs, only once this is on.
     #[serde(default)]
     pub codex: bool,
+}
+
+impl Config {
+    pub fn shows(&self, provider: &Provider) -> bool {
+        provider.id != CODEX.id || self.codex
+    }
 }
 
 pub struct Provider {

@@ -3,6 +3,7 @@
 #![forbid(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod activity;
+pub mod agents;
 pub mod blocking;
 pub mod crash;
 pub mod doc;
@@ -33,6 +34,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     crash::check(cx).detach();
     settings::init(cx);
     update::init(cx);
+    agents::init(cx);
     invalidate::init(cx);
     workspace::init(cx);
 }
