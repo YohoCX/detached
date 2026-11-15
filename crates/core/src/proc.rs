@@ -2,7 +2,7 @@
 //! and on Windows in a job that ends whatever they left once they have exited.
 
 use std::ffi::OsString;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
@@ -97,7 +97,7 @@ impl Proc {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = cmd.spawn()?;
+        let mut child = unbusy(|| cmd.spawn())?;
         #[cfg(windows)]
         let job = match job::Job::new(&child) {
             Ok(job) => job,
@@ -184,6 +184,20 @@ impl Proc {
     pub fn stderr(&self) -> String {
         String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned()
     }
+}
+
+/// `spawn` again while the program is busy: on Linux a file just written stays busy for exec
+/// while another thread's fork still holds its write fd.
+fn unbusy<T>(mut spawn: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    for ms in [10, 40, 160, 640] {
+        match spawn() {
+            Err(e) if e.kind() == io::ErrorKind::ExecutableFileBusy => {
+                thread::sleep(Duration::from_millis(ms))
+            }
+            r => return r,
+        }
+    }
+    spawn()
 }
 
 /// A status for a wait that failed, which only an invariant breach causes.
@@ -277,5 +291,28 @@ mod tests {
         assert_eq!(get("PATH").unwrap(), "/login/bin");
         assert_eq!(get("HOME").unwrap(), "/sandbox/home");
         assert_eq!(get("DETACHED_NEVER_SET_ANYWHERE"), None);
+    }
+
+    #[test]
+    fn a_busy_program_is_spawned_again_and_another_error_is_not() {
+        let mut calls = 0;
+        let busy = unbusy(|| {
+            calls += 1;
+            match calls {
+                1 | 2 => Err(io::ErrorKind::ExecutableFileBusy.into()),
+                _ => Ok(calls),
+            }
+        });
+        assert_eq!(busy.unwrap(), 3);
+
+        let mut calls = 0;
+        let missing = unbusy(|| -> io::Result<()> {
+            calls += 1;
+            Err(io::ErrorKind::NotFound.into())
+        });
+        assert_eq!(
+            (missing.unwrap_err().kind(), calls),
+            (io::ErrorKind::NotFound, 1)
+        );
     }
 }
