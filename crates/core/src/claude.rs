@@ -677,9 +677,10 @@ impl Client {
     /// The CLI's own control requests: an ask, a hook, the host's tools; others it gets an error.
     fn asked(self: &Arc<Self>, v: &Value) {
         let (rid, r) = (&v["request_id"], &v["request"]);
-        match r["subtype"].as_str().unwrap_or_default() {
-            "can_use_tool" => self.ask(rid.clone(), r),
-            "hook_callback" => {
+        let tools = self.tools.as_ref().filter(|_| r["server_name"] == SERVER);
+        match (r["subtype"].as_str().unwrap_or_default(), tools) {
+            ("can_use_tool", _) => self.ask(rid.clone(), r),
+            ("hook_callback", _) => {
                 let i = &r["input"];
                 let block = i["hook_event_name"] == "ConfigChange"
                     && BLOCKED.contains(&i["source"].as_str().unwrap_or_default());
@@ -690,8 +691,7 @@ impl Client {
                 };
                 self.respond(rid, answer);
             }
-            "mcp_message" if self.tools.is_some() && r["server_name"] == SERVER => {
-                let tools = self.tools.clone().unwrap();
+            ("mcp_message", Some(tools)) => {
                 self.respond(rid, json!({"mcp_response": tools(r["message"].clone())}));
             }
             _ => {
