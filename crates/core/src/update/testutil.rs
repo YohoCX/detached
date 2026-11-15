@@ -112,6 +112,11 @@ impl Server {
         ]);
     }
 
+    /// Serves `body` at `path`, beside what is there.
+    pub fn put(&self, path: &str, body: impl Into<Vec<u8>>) {
+        self.files.lock().unwrap().insert(path.into(), body.into());
+    }
+
     /// Bodies end with the connection, with no length.
     pub fn without_length(&self) {
         self.length.store(false, Ordering::Relaxed);

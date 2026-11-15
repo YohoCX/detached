@@ -513,7 +513,7 @@ fn remember(state: &AppState, path: &Path, hash: &str) -> Result<()> {
     Ok(())
 }
 
-fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
     std::io::Write::write_all(&mut tmp, bytes)?;
     tmp.persist(path).map_err(|e| e.error)?;

@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod adapters;
 pub mod agent;
 pub mod api;
 pub mod crash;

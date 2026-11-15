@@ -14,7 +14,7 @@ testutil = ["dep:minisign"]
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 sha2 = "0.10"
 tempfile.workspace = true
 base64 = "0.23"
@@ -29,6 +29,8 @@ grep-matcher = "0.1.9"
 nucleo-matcher = "0.3.1"
 imara-diff = "0.2"
 dirs = "7"
+flate2 = "1.1"
+tar = { version = "0.4.44", default-features = false }
 open = { version = "5.4", features = ["shellexecute-on-windows"] }
 minisign-verify = "0.3"
 semver = { version = "1", features = ["serde"] }

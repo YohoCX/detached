@@ -47,7 +47,7 @@ pub fn check(base: &str, current: &str, key: &str) -> Result<Option<Release>> {
 
 /// This machine's key in `latest.json`'s platforms: an Apple silicon Mac takes its own build even
 /// when this one runs under Rosetta.
-fn platform() -> String {
+pub(crate) fn platform() -> String {
     #[cfg(target_os = "macos")]
     if apple_silicon() {
         return "macos-aarch64".into();
@@ -142,11 +142,11 @@ fn release(json: &[u8], platform: &str, current: &str) -> Result<Option<Release>
         }))
 }
 
-fn fail(url: &str, e: &dyn std::fmt::Display) -> Error {
+pub(crate) fn fail(url: &str, e: &dyn std::fmt::Display) -> Error {
     Error::Other(format!("{url}: {e}"))
 }
 
-fn call(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
+pub(crate) fn call(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(600)))
         .timeout_per_read(Some(Duration::from_secs(30)));
@@ -156,7 +156,7 @@ fn call(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
         .map_err(|e| fail(url, &e))
 }
 
-fn get(url: &str) -> Result<Vec<u8>> {
+pub(crate) fn get(url: &str) -> Result<Vec<u8>> {
     let mut data = vec![];
     call(url)?
         .body_mut()
@@ -177,7 +177,7 @@ fn bad(e: minisign_verify::Error) -> Error {
     Error::Other(format!("signature: {e}"))
 }
 
-fn verify(data: &[u8], signature: &str, key: &str) -> Result<()> {
+pub(crate) fn verify(data: &[u8], signature: &str, key: &str) -> Result<()> {
     let (key, signature) = keys(signature, key)?;
     key.verify(data, &signature, false).map_err(bad)
 }
