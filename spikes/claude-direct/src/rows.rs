@@ -6,7 +6,6 @@ use super::*;
 
 pub const ALL: &[(&str, fn())] = &[
     ("handshake", handshake),
-    ("sdk", sdk),
     ("turn", turn),
     ("permissions", permissions),
     ("cancel", cancel),
@@ -16,37 +15,38 @@ pub const ALL: &[(&str, fn())] = &[
     ("sources", sources),
     ("tools", tools),
     ("isolated", isolated),
-    ("hygiene", hygiene),
     ("stability", stability),
-    ("adapter", adapter),
 ];
 
-fn bash(command: &str) -> Value {
+/// What runs only beside this repo's bun installs of the sidecar and the adapter.
+pub const LOCAL: &[(&str, fn())] = &[("sdk", sdk), ("adapter", adapter)];
+
+pub fn bash(command: &str) -> Value {
     json!({"tool": "Bash", "input": {"command": command, "description": "a scripted command"}})
 }
 
-fn behind(command: &str) -> Value {
+pub fn behind(command: &str) -> Value {
     json!({"tool": "Bash", "input": {"command": command, "description": "behind",
         "run_in_background": true}})
 }
 
-fn tool(name: &str, input: Value) -> Value {
+pub fn tool(name: &str, input: Value) -> Value {
     json!([{"tool": name, "input": input}])
 }
 
-fn text(text: &str) -> Value {
+pub fn text(text: &str) -> Value {
     json!([{ "text": text }])
 }
 
-fn mark(name: &str) -> String {
+pub fn mark(name: &str) -> String {
     format!("detached-0c-{}-{name}", tag())
 }
 
-fn sleep(marker: &str, secs: u32) -> String {
+pub fn sleep(marker: &str, secs: u32) -> String {
     format!("echo first-line; perl -e 'sleep {secs}' {marker}")
 }
 
-fn wait_running(marker: &str) {
+pub fn wait_running(marker: &str) {
     let began = Instant::now();
     while running(marker).is_empty() {
         assert!(began.elapsed() < WAIT, "{marker} never ran");
@@ -55,7 +55,7 @@ fn wait_running(marker: &str) {
 }
 
 /// The tool results the model got, a line each.
-fn results(run: &Run) {
+pub fn results(run: &Run) {
     for r in run.api.results() {
         println!("  result: {}", r.replace('\n', " "));
     }
@@ -88,7 +88,7 @@ fn system(api: &Api) -> String {
 
 /// A session whose command sleeps `secs`: in front of a running turn, or behind an ended one.
 /// With it come the command's marker and, behind, its task's id.
-fn busy(
+pub fn busy(
     name: &str,
     front: bool,
     secs: u32,
@@ -120,7 +120,7 @@ fn busy(
 }
 
 /// Row 1: the handshake as this host does it, and a session's memory.
-fn handshake() {
+pub fn handshake() {
     let run = Run::new("handshake", json!([]));
     let began = Instant::now();
     let mut cli = run.cli(CHAT);
@@ -154,8 +154,8 @@ fn handshake() {
     let system = system(&run.api);
     let start: String = system.chars().take(230).collect();
     println!("system prompt: {} bytes, starts {start}", system.len());
-    let rss = ps(&["-o", "rss=", "-p", &cli.child.id().to_string()]);
-    println!("rss after a turn: {rss} KB; exit {:?}", cli.close());
+    let mb = os::memory(&run.needle());
+    println!("memory after a turn: {mb} MB; exit {:?}", cli.close());
 }
 
 /// Rows 1 and 11: what the Agent SDK of the sidecar and of the adapter passes and writes, through
@@ -190,7 +190,7 @@ fn sdk() {
 }
 
 /// Row 2: a turn with a tool call, partial messages, the session's states and usage.
-fn turn() {
+pub fn turn() {
     let steps = json!([[{"text": "I will run it."}, bash("echo made > made.txt")], text("ok")]);
     let mut run = Run::new("turn", steps);
     // The SDK sets it: the CLI then reports running, requires_action and idle.
@@ -433,8 +433,7 @@ fn resume() {
         "resume",
         json!([text("one"), text("two"), text("three"), text("four")]),
     );
-    let id = Command::new("uuidgen").output().unwrap().stdout;
-    let id = String::from_utf8(id).unwrap().trim().to_lowercase();
+    let id = uuid();
     let mut cli = run.session(&[CHAT, &["--model", "sonnet", "--session-id", &id]].concat());
     let (_, r) = cli.turn("first", allow);
     println!(
@@ -616,7 +615,6 @@ fn sources() {
     results(&run);
     cli.close();
 
-    let reason = "Detached loads changed project settings after you review them";
     for block in [true, false] {
         let mut run = Run::new(
             &format!("sources-config-change-{block}"),
@@ -634,14 +632,9 @@ fn sources() {
         ]);
         cli.turn("first", allow);
         run.write("repo/.claude/settings.json", &hook("late-hooked"));
-        if block {
-            let v = cli.until("hook_callback", |v| {
-                v["request"]["subtype"] == "hook_callback"
-            });
-            println!("hook_callback: {}", v["request"]);
-            cli.answer(&v, json!({"decision": "block", "reason": reason}));
-        } else {
-            thread::sleep(Duration::from_secs(3));
+        let _ = cli.drain(Duration::from_secs(3));
+        for (_, input) in &cli.config {
+            println!("hook_callback, answered block: {input}");
         }
         cli.turn("second", allow);
         let ran = run.exists("repo/late-hooked");
@@ -700,10 +693,8 @@ fn tools() {
         let (asks, _) = cli.rest(allow);
         println!("  asked {asks:?}; MCP methods {:?}", cli.mcp);
         results(&run);
-        println!(
-            "  ps: {}",
-            ps(&["-ww", "-o", "command=", "-p", &cli.child.id().to_string()])
-        );
+        let argv = procs(&run.needle()).join(" | ");
+        println!("  the URL or a secret in argv: {}", argv.contains("http"));
         cli.close();
     }
 }
@@ -720,8 +711,15 @@ fn isolated() {
     ]);
     let run = Run::new("isolated", script);
     run.write("secret/key", "SECRET=fixture-not-for-agents");
-    let repo = run.repo().canonicalize().unwrap();
-    let secret = run.dir.join("secret").canonicalize().unwrap();
+    // As the CLI sees them: on Windows `canonicalize` adds `\\?\` and expands 8.3 names.
+    let real = |p: PathBuf| {
+        if cfg!(unix) {
+            p.canonicalize().unwrap()
+        } else {
+            p
+        }
+    };
+    let (repo, secret) = (real(run.repo()), real(run.dir.join("secret")));
     let sandbox = json!({"enabled": true, "failIfUnavailable": true, "autoAllowBashIfSandboxed": true,
         "allowUnsandboxedCommands": false, "network": {"strictAllowlist": true},
         "filesystem": {"denyWrite": [repo], "denyRead": [secret]}});
@@ -750,98 +748,6 @@ fn isolated() {
     let made = ["made.txt", "w.txt"].map(|f| run.exists(&format!("repo/{f}")));
     println!("made.txt and w.txt exist: {made:?}");
     cli.close();
-}
-
-/// The host that row 10 kills: a busy session, then nothing.
-pub fn host(name: &str, front: bool, leash: bool) {
-    let (_run, _cli, marker, _) = busy(name, front, 600, |r| r.leash = leash);
-    println!("{marker}");
-    thread::sleep(Duration::from_secs(600));
-}
-
-/// The CLI of the session whose command holds `marker`: the command's shell is its child.
-fn cli_of(marker: &str) -> u32 {
-    let shell = running(marker).into_iter().find(|l| l.contains("sh -c"));
-    let pid = shell
-        .unwrap()
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_string();
-    ps(&["-o", "ppid=", "-p", &pid]).parse().unwrap()
-}
-
-/// Row 10: stdin EOF, a killed host and a killed group, with a command in front and behind.
-fn hygiene() {
-    for (name, front, secs) in [
-        ("eof-front", true, 600),
-        ("eof-behind", false, 600),
-        ("eof-short", true, 8),
-    ] {
-        let (run, mut cli, marker, _) = busy(name, front, secs, |_| {});
-        let (pid, began) = (cli.child.id(), Instant::now());
-        drop(cli.stdin.take());
-        let left = exited(pid).map(|_| began.elapsed());
-        let runs = !running(&marker).is_empty();
-        println!("{name}: stdin closed: the CLI exited in {left:?}, the command runs: {runs}");
-        if left.is_some() {
-            println!("  {:?}", cli.child.wait());
-            results(&run);
-            continue;
-        }
-        let began = Instant::now();
-        signal("-TERM", &pid.to_string());
-        let (command, cli_left) = (gone(&marker), exited(pid).map(|_| began.elapsed()));
-        println!("  SIGTERM: the command gone in {command:?}, the CLI in {cli_left:?}");
-        let _ = cli.child.wait();
-    }
-
-    for (name, front, leash) in [
-        ("killed-front", true, false),
-        ("killed-behind", false, false),
-        ("killed-front-leash", true, true),
-        ("killed-behind-leash", false, true),
-    ] {
-        let mut host = Command::new(std::env::current_exe().unwrap());
-        host.args(["host", name, &front.to_string(), &leash.to_string()]);
-        host.env("SPIKE_TAG", tag());
-        let mut host = host.stdout(Stdio::piped()).spawn().unwrap();
-        let mut marker = String::new();
-        let mut stdout = BufReader::new(host.stdout.take().unwrap());
-        stdout.read_line(&mut marker).unwrap();
-        let pid = cli_of(marker.trim());
-        signal("-KILL", &host.id().to_string());
-        host.wait().unwrap();
-        let began = Instant::now();
-        let command = gone(marker.trim()).map(|_| began.elapsed());
-        let cli = exited(pid).map(|_| began.elapsed());
-        println!("{name}: the host killed: the command gone in {command:?}, the CLI in {cli:?}");
-        if alive(pid) {
-            signal("-TERM", &pid.to_string());
-            println!("  cleaned up with SIGTERM: {:?}", exited(pid));
-        }
-    }
-
-    for sig in ["-TERM", "-KILL"] {
-        let (_run, mut cli, marker, _) = busy(&format!("group{sig}"), true, 600, |_| {});
-        let pid = cli.child.id();
-        signal(sig, &format!("-{pid}"));
-        let (left, command) = (exited(pid), gone(&marker));
-        println!(
-            "{sig} to the CLI's group: the CLI exited in {left:?}, the command gone in {command:?}"
-        );
-        for l in running(&marker) {
-            signal("-KILL", l.split_whitespace().next().unwrap());
-        }
-        let _ = cli.child.wait();
-    }
-
-    let stderr = fs::read_to_string(out().join("eof-short.stderr")).unwrap();
-    println!("stderr of a session that ran a turn: {stderr:?}");
-    let run = Run::new("bad-flag", json!([]));
-    let status = run.cli(&["--no-such-flag"]).child.wait().unwrap();
-    let stderr = fs::read_to_string(out().join("bad-flag.stderr")).unwrap();
-    println!("a flag the CLI does not know: {status}, stderr {stderr:?}");
 }
 
 /// Row 11: what the CLI does with requests, fields, types and lines it does not know.
@@ -890,11 +796,11 @@ fn adapter() {
         let run = Run::new(name, script);
         run.write("repo/README.md", "hi\n");
         let copy = run.dir.join("node_modules");
-        Command::new("cp")
-            .arg("-Rc")
+        let cp = Command::new("cp")
+            .arg("-R")
             .args([&modules, &copy])
-            .status()
-            .unwrap();
+            .status();
+        assert!(cp.unwrap().success());
         let dist = copy.join("@agentclientprotocol/claude-agent-acp/dist");
         if patched {
             let source = fs::read_to_string(dist.join("air-extension.js")).unwrap();
@@ -956,9 +862,7 @@ fn adapter() {
         println!(
             "  async_task_spawned {task}; _session/async_task/stop: {stop}; the command gone: {gone}"
         );
-        for l in running(&marker) {
-            signal("-KILL", l.split_whitespace().next().unwrap());
-        }
+        os::reap(&running(&marker));
         acp.close();
     }
 }
