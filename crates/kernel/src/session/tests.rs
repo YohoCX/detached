@@ -191,14 +191,68 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
 }
 
 #[gpui::test]
-fn a_session_ended_while_it_starts_stays_ended(cx: &mut TestAppContext) {
+fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
-    let s = cx.update(|cx| Session::open(spec, None, cx));
-    s.update(cx, |s, cx| s.end(cx));
-    wait_until(cx, |cx| s.read(cx)._tasks.iter().all(|t| t.is_ready()));
-    assert_eq!(state(&s, cx), State::Ended(End::Closed));
-    assert!(cx.read(|cx| cx.global::<Sessions>().by_id.is_empty()));
+    for (id, dropped) in [("past-ended", false), ("past-dropped", true)] {
+        let id = Some(id.to_string());
+        let (first, again) = cx.update(|cx| {
+            let first = Session::open(spec.clone(), id.clone(), cx);
+            if !dropped {
+                first.update(cx, |s, cx| s.end(cx));
+            }
+            let again = Session::open(spec.clone(), id.clone(), cx);
+            ((!dropped).then_some(first), again)
+        });
+        assert_eq!(cx.read(|cx| cx.global::<Sessions>().waiting.len()), 1);
+        wait_until(cx, |cx| again.read(cx).state != State::Starting);
+        let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
+        again.read_with(cx, |s, _| assert_eq!(s.items, replay));
+        assert_eq!(turn(&again, "say again", cx), "again");
+        if let Some(first) = first {
+            assert_eq!(state(&first, cx), State::Ended(End::Closed));
+        }
+    }
+    assert!(cx.read(|cx| cx.global::<Sessions>().early.is_empty()));
+}
+
+#[gpui::test]
+fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_anew(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    let live = s.read_with(cx, |s, _| s.open.as_ref().unwrap().live.clone());
+    s.update(cx, |s, cx| s.prompt("die".into(), cx));
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    // What a start on that adapter brings back after its `Exited` was handled.
+    let closing = cx.read(|cx| cx.global::<Sessions>().closing.clone());
+    let (id, config, trust) = ("late".into(), vec![], String::new());
+    let late = Ok(Started {
+        open: Open {
+            live: live.clone(),
+            id,
+            closing,
+        },
+        config,
+        trust,
+        warn: None,
+        watch: None,
+    });
+    let late = cx.update(|cx| {
+        let s = Session::open(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
+        s.update(cx, |s, cx| s.started(late, cx));
+        s
+    });
+    let State::Ended(End::Crashed(why)) = state(&late, cx) else {
+        panic!("{:?}", state(&late, cx));
+    };
+    assert!(why.contains("code 3"), "{why}");
+    // `live` pins the dead adapter, as a start still on it would.
+    let next = open(&f, Kind::Chat, cx);
+    let serial = next.read_with(cx, |s, _| s.open.as_ref().unwrap().live.serial);
+    assert_ne!(serial, live.serial);
+    assert_eq!(turn(&next, "say anew", cx), "anew");
 }
 
 #[gpui::test]

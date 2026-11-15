@@ -230,7 +230,7 @@ impl Open {
 impl Drop for Open {
     fn drop(&mut self) {
         let mut c = self.closing.lock().unwrap();
-        if !c.dead.contains(&self.live.serial) {
+        if !c.dead.contains_key(&self.live.serial) {
             c.keys.insert(self.key());
         }
         drop(c);
@@ -241,21 +241,26 @@ impl Drop for Open {
 /// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
 type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
 
-/// Sessions whose close is not answered yet, and adapters that exited and will answer none; an
-/// `Open` may drop off the UI thread, after its adapter's exit.
+/// Sessions whose close is not answered yet, and adapters that exited, with what they said: they
+/// answer none.
 type Closing = Arc<Mutex<Closes>>;
 
 #[derive(Default)]
 struct Closes {
     keys: HashSet<(u64, String)>,
-    dead: HashSet<u64>,
+    dead: HashMap<u64, Option<String>>,
 }
 
+/// Work for the UI thread: adapters' events, and starts' results after the events sent before them.
+type Job = Box<dyn FnOnce(&mut App) + Send>;
+
 struct Sessions {
-    tx: mpsc::UnboundedSender<(u64, Event)>,
+    tx: mpsc::UnboundedSender<Job>,
     adapters: Adapters,
     closing: Closing,
-    /// Loads of a closing session's id, which start once its `Closed` is handled.
+    /// Ids whose load has not returned: one ended meanwhile closes only then.
+    loading: HashSet<String>,
+    /// Loads of an id still loading or closing, which start once that is over.
     waiting: Vec<WeakEntity<Session>>,
     /// Kept after a session ends until its `Closed`, so its late events go.
     by_id: HashMap<(u64, String), WeakEntity<Session>>,
@@ -266,11 +271,12 @@ struct Sessions {
 impl Global for Sessions {}
 
 pub(crate) fn init(cx: &mut App) {
-    let (tx, mut rx) = mpsc::unbounded::<(u64, Event)>();
+    let (tx, mut rx) = mpsc::unbounded::<Job>();
     cx.set_global(Sessions {
         tx,
         adapters: Default::default(),
         closing: Default::default(),
+        loading: HashSet::new(),
         waiting: vec![],
         by_id: HashMap::new(),
         early: HashMap::new(),
@@ -279,7 +285,7 @@ pub(crate) fn init(cx: &mut App) {
         while let Some(first) = rx.next().await {
             let mut batch = vec![first];
             batch.extend(std::iter::from_fn(|| rx.try_recv().ok()));
-            cx.update(|cx| batch.into_iter().for_each(|(n, e)| dispatch(cx, n, e)));
+            cx.update(|cx| batch.into_iter().for_each(|job| job(cx)));
             cx.background_executor().timer(FRAME).await;
         }
     })
@@ -303,14 +309,14 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
             return wake(cx);
         }
         Event::Exited(x) => {
+            let said = crashed(x);
             let g = cx.global_mut::<Sessions>();
             g.early.retain(|k, _| k.0 != serial);
             let mut c = g.closing.lock().unwrap();
-            c.dead.insert(serial);
+            c.dead.insert(serial, said.clone());
             c.keys.retain(|k| k.0 != serial);
             drop(c);
             let on: Vec<_> = g.by_id.extract_if(|k, _| k.0 == serial).collect();
-            let said = crashed(x);
             for s in on.into_iter().filter_map(|(_, w)| w.upgrade()) {
                 s.update(cx, |s, cx| s.exited(said.clone(), cx));
             }
@@ -327,7 +333,7 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
     }
 }
 
-/// Starts the loads that waited for a close; one whose close is still pending waits on.
+/// Starts the loads that waited; one whose id is still loading or closing waits on.
 fn wake(cx: &mut App) {
     let waiting = std::mem::take(&mut cx.global_mut::<Sessions>().waiting);
     for s in waiting.iter().filter_map(WeakEntity::upgrade) {
@@ -347,7 +353,7 @@ struct Started {
     config: Vec<acp::Config>,
     trust: String,
     warn: Option<String>,
-    watch: Option<trust::Watch>,
+    watch: Option<(trust::Watch, mpsc::UnboundedReceiver<()>)>,
 }
 
 impl Session {
@@ -378,55 +384,48 @@ impl Session {
         })
     }
 
-    /// Starts or loads the session; a load of an id still closing waits for its `Closed`, so the
-    /// close's answer cannot follow the load's.
+    /// Starts or loads the session; a load of an id still loading or closing waits for that to
+    /// end, so no earlier close can follow its load.
     fn start(&mut self, cx: &mut Context<Self>) {
         if self.state != State::Starting {
             return;
         }
         let (core, me, past) = (crate::core(cx).clone(), cx.weak_entity(), self.id.clone());
         let g = cx.global_mut::<Sessions>();
-        let closing = |id: &String| g.closing.lock().unwrap().keys.iter().any(|k| k.1 == *id);
-        if past.as_ref().is_some_and(closing) {
-            return g.waiting.push(me);
+        if let Some(id) = &past {
+            let closing = g.closing.lock().unwrap().keys.iter().any(|k| k.1 == *id);
+            if closing || !g.loading.insert(id.clone()) {
+                return g.waiting.push(me);
+            }
         }
         let (adapters, closing, tx) = (g.adapters.clone(), g.closing.clone(), g.tx.clone());
         let spec = self.spec.clone();
-        let (changed, mut changes) = mpsc::unbounded();
-        let started = blocking::run(cx, move || {
-            let started = start(&core, &spec, past, &adapters, closing, tx);
-            let watched = |mut s: Started| {
+        blocking::run(cx, move || {
+            let started = start(&core, &spec, past.clone(), &adapters, closing, tx.clone());
+            let started = started.map(|mut s| {
+                let (changed, changes) = mpsc::unbounded();
                 let tree = Path::new(&spec.repo);
                 let watch = trust::watch(tree, spec.provider.trust, move || {
                     let _ = changed.unbounded_send(());
                 });
-                s.watch = watch.ok();
+                s.watch = watch.ok().map(|w| (w, changes));
                 s
-            };
-            started.map(watched)
-        });
-        // One recheck at a time, for every change that came while one ran.
-        self.task(cx, async move |this, cx| {
-            let started = started.await;
-            let mut watching = this
-                .update(cx, |s, cx| s.started(started, cx))
-                .unwrap_or(false);
-            while watching && changes.next().await.is_some() {
-                while changes.try_recv().is_ok() {}
-                let Ok(found) = this.update(cx, |s, cx| {
-                    let (core, repo) = (crate::core(cx).clone(), s.spec.repo.clone());
-                    blocking::run(cx, move || fingerprint(&core, &repo))
-                }) else {
-                    return;
-                };
-                let found = found.await;
-                watching = this.update(cx, |s, cx| s.recheck(found, cx)).is_ok();
-            }
-        });
+            });
+            let _ = tx.unbounded_send(Box::new(move |cx| {
+                // A gone session drops `started` here, which sends its close before the id is free.
+                me.update(cx, |s, cx| s.started(started, cx)).ok();
+                if let Some(id) = past {
+                    cx.global_mut::<Sessions>().loading.remove(&id);
+                    wake(cx);
+                }
+            }));
+        })
+        .detach();
     }
 
-    /// Takes the started session in, unless it ended meanwhile: dropped, it closes.
-    fn started(&mut self, started: Result<Started>, cx: &mut Context<Self>) -> bool {
+    /// Takes the started session in, unless it ended or its adapter exited meanwhile: dropped, it
+    /// closes.
+    fn started(&mut self, started: Result<Started>, cx: &mut Context<Self>) {
         let g = cx.global_mut::<Sessions>();
         let early = match &started {
             Ok(s) => g.early.remove(&s.open.key()),
@@ -436,28 +435,51 @@ impl Session {
             }
         };
         if self.state != State::Starting {
-            return false;
+            return;
         }
         let s = match started {
             Ok(s) => s,
             Err(e) => {
                 self.state = State::Ended(End::Failed(e.to_string()));
                 self.items.push(Item::Note(e.to_string()));
-                cx.notify();
-                return false;
+                return cx.notify();
             }
         };
+        let serial = s.open.live.serial;
+        let dead = s.open.closing.lock().unwrap().dead.get(&serial).cloned();
+        if let Some(said) = dead {
+            return self.exited(said, cx);
+        }
         let me = cx.weak_entity();
         cx.global_mut::<Sessions>().by_id.insert(s.open.key(), me);
         self.id = Some(s.open.id.clone());
         self.config = s.config;
         self.version = Some(s.open.live.adapter.info().version.clone());
         self.items.extend(s.warn.map(Item::Note));
-        (self.open, self.trust, self._watch) = (Some(s.open), s.trust, s.watch);
+        (self.open, self.trust) = (Some(s.open), s.trust);
         self.state = State::Idle;
         early.into_iter().flatten().for_each(|e| self.on(e, cx));
         cx.notify();
-        true
+        let Some((watch, mut changes)) = s.watch else {
+            return;
+        };
+        self._watch = Some(watch);
+        // One recheck at a time, for every change that came while one ran.
+        self.task(cx, async move |this, cx| {
+            while changes.next().await.is_some() {
+                while changes.try_recv().is_ok() {}
+                let Ok(found) = this.update(cx, |s, cx| {
+                    let (core, repo) = (crate::core(cx).clone(), s.spec.repo.clone());
+                    blocking::run(cx, move || fingerprint(&core, &repo))
+                }) else {
+                    return;
+                };
+                let found = found.await;
+                if this.update(cx, |s, cx| s.recheck(found, cx)).is_err() {
+                    return;
+                }
+            }
+        });
     }
 
     /// The config option's current value: `model`, `mode`, `effort`.
@@ -817,7 +839,7 @@ fn start(
     past: Option<String>,
     adapters: &Adapters,
     closing: Closing,
-    tx: mpsc::UnboundedSender<(u64, Event)>,
+    tx: mpsc::UnboundedSender<Job>,
 ) -> Result<Started> {
     let p = spec.provider;
     let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
@@ -860,7 +882,8 @@ fn start(
             .or_default()
             .clone();
         let mut slot = slot.lock().unwrap();
-        match slot.upgrade() {
+        let dead = |l: &Arc<Live>| closing.lock().unwrap().dead.contains_key(&l.serial);
+        match slot.upgrade().filter(|l| !dead(l)) {
             Some(live) => live,
             None => {
                 static SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -874,7 +897,7 @@ fn start(
                     env: env_vars,
                 };
                 let adapter = Adapter::start(&proc_spec, move |e| {
-                    let _ = tx.unbounded_send((serial, e));
+                    let _ = tx.unbounded_send(Box::new(move |cx| dispatch(cx, serial, e)));
                 })?;
                 let live = Arc::new(Live { adapter, serial });
                 *slot = Arc::downgrade(&live);
