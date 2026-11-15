@@ -14,6 +14,11 @@ Settled on 2026-11-12:
 
 revmux and `.revmux/` stay, and whether panels replace revmux is deferred. P1 imports and their round/task graph UI are built; live panels follow the steps below.**
 
+**Status (2026-11-16): a Claude participant is a session on the host's direct backend, not an ACP
+session ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), host §1 and H4c). §1,
+§3's two Claude-specific places, §4's line 7, §7, §8's sources, §10 and P2 follow it; nothing else
+changes.**
+
 Owner's decision, [2026-11-12](docs/decisions/2026-11-12-panels.md): the full scope ships. That
 is every mode, mixed models on any role, stats by lens and model, and Fix in a managed worktree,
 with a good progress UI.
@@ -37,7 +42,7 @@ What our archive showed, from 21 revmux rounds of 2026-11-09 to 11-12:
   - a question.
 - **The brief** is assembled from the client's state, not written by hand.
 - **Mode**: a stage graph and a roster (§2).
-- **Participant**: one ACP session with a role, a provider and a model.
+- **Participant**: one session (`kernel::Session`, host §6) with a role, a provider and a model.
 - **Run**: one execution. Runs of one subject form a task with rounds.
 - **Record**: an append-only event log per run (§10).
 
@@ -168,9 +173,9 @@ Every brief says that finding nothing is a valid answer.
   - **The chat's configuration in its worktree:**
     - The repo's MCP servers (from `.mcp.json` and the CLI's per-project entries for the repo's
       path, never the login) go into a 0600 config file in `data/private/<run>/`, which the CLI
-      reads by path through `_meta.claudeCode.options.extraArgs` (`--mcp-config <path>`).
-      `mcpServers` would put their `env` and `headers` into argv. If the CLI cannot take the path,
-      the repo's local MCP servers are left out and the header says so.
+      reads by path: the session's `Spec` names the file, and Claude's backend passes
+      `--mcp-config <path>`. Inline servers would put their `env` and `headers` into argv. If the
+      CLI cannot take the path, the repo's local MCP servers are left out and the header says so.
     - The host copies `.claude/settings.local.json`, which is gitignored.
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
   nothing writes and nothing commits. This is the isolation spike 0b verified (host §5):
@@ -209,10 +214,12 @@ Every brief says that finding nothing is a valid answer.
     (bubblewrap) works as on Linux (host §5):
     - Detached's own distro, with interop and automount off, so no Windows binary runs and no
       Windows path is mounted;
-    - the adapter and the user's `claude` installed and logged in inside it;
+    - the user's `claude` installed and logged in inside it, run under the leash there (host §1,
+      §5); no adapter;
     - the raw-object tar stream extracted in the distro's own filesystem (host §5);
-    - the host's HTTP tool reached on the WSL gateway address, behind a firewall rule from a
-      one-time elevated step.
+    - the host's tools on the session's own pipes (host §7); the WSL gateway address, behind a
+      firewall rule from a one-time elevated step, serves the "sandbox ready" probe's responder
+      alone (host §5).
 
     The start screen checks "WSL ready" (host §5) and offers each fix. H0b saw lines 2–4 hold in
     WSL2 for paths inside the distro; Windows-side paths and interop are P2's tests.
@@ -237,7 +244,7 @@ line has a test. Where a line does not hold, the run says so, and the UI shows i
 | 4 | No cross-read: other participants' trees and output, run records, transcripts, home secrets, the main checkout's `.env*` | P2: reading each fails through `Read`, through a link to it in the tree, through Bash and through `detached_read` (the read scope), on the same systems, at `min_cli`, with a seeded target in each secret class of host §5 and WSL's targets seeded on the Windows side; Codex with its deny profile | Codex until H13a; Windows without WSL, after the consent |
 | 5 | The brief labels subject text (diff, thread, issue) as data | P5: capture the brief; hostile text stays in a JSON-quoted data field below fixed instructions, including forged delimiters; removing the quoting or label fails the test | model obedience is unverified; the brief and UI call this a mitigation |
 | 6 | A finding's text never instructs a writer | P4: the Fix brief holds the finding as quoted data, and the owner sees and edits it before start | as line 5 |
-| 7 | Host tools cannot be used by another process | host H5: a secret from `ps -ww` is refused; a second `initialize` is refused | — |
+| 7 | Host tools cannot be used by another process | host H5: a Claude session's tools ride its own pipes, so no listener is open and no argv names them. Host H13a, for an ACP provider's HTTP transport: a second `initialize` and a request without the bound id are refused | — |
 | 8 | A subject whose trust files differ from the accepted set is untrusted until accepted | P2 and P4: a branch that changes `.claude/settings.json` in a trusted workspace asks before it runs unsandboxed | — |
 | 9 | Nothing reaches the subject's remote or the owner's tree on its own | P4: merge is a fast-forward on the owner's button, refused when dirty or not a fast-forward, with hooks off; nothing pushes | — |
 | 10 | The env store's secrets never reach a participant | host H4: a participant's env has allowlisted names only | — |
@@ -276,16 +283,22 @@ done           { nothing_found: bool, note? }
 - **A participant** that stalls or dies is retried.
   - **Stalled** means no update for 2 minutes outside a tool call. A tool call in progress counts as
     activity up to its own limit of 20 minutes (both are settings), since `cargo test` can sit in
-    one Bash call. H4's harness tests that the adapter sends an `in_progress` `tool_call` during a
-    long command (host H4).
-  - **Before any retry** send `session/cancel` and `session/close` and revoke the secret.
+    one Bash call.
+    - **In progress** is the session's own state: a tool call the host has seen and no result for
+      it yet. It needs no frame from the agent while the command runs.
+    - Claude's `tool_progress` (every 30 s in spike 0c, in no kept capture) is a sign of life and
+      nothing the rule rests on. Host H4c part 0 keeps what the CLI sends during a 3-minute
+      foreground command, and H4c's ported test pins that such a command shows as in progress
+      throughout.
+  - **Before any retry** cancel and close the session (host §1's close) and drop its identity.
     On native Windows, close the attempt's job and await an empty job before worktree reuse;
-    failure stops the participant. Retry with a fresh adapter and job.
-  - The retry resumes with `session/load`, a new host secret, the session's `configOptions` and its
-    whole `_meta.claudeCode.options`, so the isolation is re-applied (host §6).
-  - If the load fails, the participant restarts with its brief and its findings so far.
+    failure stops the participant. Retry with a fresh process and job.
+  - The retry resumes the session with its whole `Spec` again, so the isolation is re-applied
+    (host §6).
+  - If the resume fails, the participant restarts with its brief and its findings so far.
   - After 3 attempts it is degraded.
-- **An adapter's exit** fails one attempt for each of its participants.
+- **An agent process's exit** fails an attempt: a Claude CLI's for its own participant, an ACP
+  adapter's for each of its participants.
 - **Offline** is only when the host's own reachability probe fails. A failure while the probe
   succeeds is a failed attempt, so a stage with one participant cannot cycle.
   - While offline the run pauses, spends no attempt, and re-probes every 30 s.
@@ -295,11 +308,12 @@ done           { nothing_found: bool, note? }
   provider's participants pause until then.
   - Otherwise they back off 5, 15 and 30 minutes, then ask the owner.
   - A limit never counts as a failed attempt.
-  - The first real limit error per adapter goes into the fake agent's fixtures.
-- **Cancel** sends `session/cancel` to each participant, then closes the sessions, never killing a
-  process group (host §1). The run is recorded as cancelled with what it had.
-  - Native Windows uses one adapter and job per participant attempt, closed on retry, completion
-    or cancel; wait for the process tree to end before reusing or removing its worktree.
+  - The first real limit error per provider goes into its fake agent's fixtures.
+- **Cancel** cancels each participant, then closes the sessions, never with SIGKILL to a process
+  group first (host §1). The run is recorded as cancelled with what it had.
+  - Native Windows uses one agent process and job per participant attempt, closed on retry,
+    completion or cancel; wait for the process tree to end before reusing or removing its
+    worktree. A Claude session is that shape on every OS.
 - **Partial results** are stated: "3 of 4 reported". A degraded run never reads as clean.
 
 ## 8. Cost
@@ -310,10 +324,10 @@ brings back a separate Agent SDK credit pool (host §2).
 - **Estimate before start** from earlier runs of the mode and roster on subjects of similar size:
   tokens, plus USD on Claude, and the pool the runs drew from when the CLI reported it. Starting
   needs a click.
-  - Limits come from the host's `/usage` parse, or show as unknown.
-  - `_claude/rateLimit` warnings show live.
-- **Live**: tokens per participant from `usage_update` and each turn's `usage`; Claude's cost per
-  turn. A resume re-sends the whole history with a cold cache, and the estimate counts it.
+  - Limits come from the session (host §13: `get_usage` on Claude), or show as unknown.
+  - Rate-limit warnings show live.
+- **Live**: tokens per participant from each turn's usage, as the session reports it; Claude's
+  cost per turn. A resume re-sends the whole history with a cold cache, and the estimate counts it.
 - **Budget**, optional per run: on reaching it the run pauses and asks.
 - **Out of extra usage**: an "extra usage" or "out of extra usage" error pauses the run's Claude
   participants with a message naming the pool. It never counts as a failed attempt.
@@ -362,18 +376,19 @@ single repo.
 ```
 events.jsonl   the truth, append-only
 brief/         each participant's assembled brief
-transcripts/   pointers to the providers' own transcripts
+transcripts/   pointers to the providers' own transcripts (a WSL participant's is in the distro)
 ```
 
 - **Event kinds:**
-  - `run_started`: subject SHAs, mode, prompt hashes, requested and actual models, adapter
-    versions, schema version;
+  - `run_started`: subject SHAs, mode, prompt hashes, requested and actual models, CLI and
+    adapter versions, schema version;
   - `stage`, `participant_started`, `activity`, `tool_call`, `finding`, `verdict`;
   - `attempt` with its cause, `paused`, `resumed`, `disposition`, `run_ended`.
 - **State is derived** by replaying the log, so an interrupted trusted run is resumed or closed,
   never stuck; an interrupted untrusted run starts over (host §5). The record explains a run; it
   does not promise to reproduce it.
-- **The schema is fixed in P2** against real ACP events. P1's import maps revmux archives into an
+- **The schema is fixed in P2** against a session's real events (host §1's seam), whatever the
+  backend. P1's import maps revmux archives into an
   in-memory model only.
 
 ## 11. Dispositions and stats
@@ -496,7 +511,7 @@ Done when the fixtures pass.
 
 The owner checks: every round under `.revmux/tasks/` imports and reads faster than revmux's JSON.
 
-### Step P2. Panels on ACP: review and gate
+### Step P2. Panels, live: review and gate
 
 Work:
 1. The event schema and the record.
@@ -518,9 +533,9 @@ Work:
    diff; read scope and trust scans (host §4, §7).
 5. On Windows:
    - Detached's distro and its "WSL ready" checks (host §5);
-   - the linux adapter installed into it;
-   - the one-time elevated firewall step;
-   - an adapter and job per native participant attempt, awaited before worktree reuse.
+   - the leash there (host H4c), and a participant's transcript read through `wsl.exe`;
+   - the one-time elevated firewall step, for the probe's responder;
+   - an agent process and job per native participant attempt, awaited before worktree reuse.
 6. The tools' handlers and the quote check.
 7. Mixed models and corroboration, across Claude models until H13b.
 8. The estimate and the budget.
@@ -528,8 +543,8 @@ Work:
 10. The live UI of §13.
 11. `panels` and `Finding` in the host's SDL.
 
-Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messages API, host
-§17):
+Tests (the fake CLI and the fake ACP agent, GPUI's clock, and the real `claude` against the fake
+Messages API, host §17):
 - every threat-model line marked P2 (§4), on each OS where it holds, Windows in WSL2 included;
   where it does not, the UI line appears;
 - trust, on local and remote-branch subjects (the MR cases are P5's):
@@ -557,7 +572,7 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   - Discard deletes after a confirm;
   - a branch named `detached-run` makes the run refuse to start;
   - a verifier gets none;
-- trusted verifiers, on the real adapter against the fake Messages API, each with Bash and with no
+- trusted verifiers, on the real `claude` against the fake Messages API, each with Bash and with no
   repo hook or MCP server loaded:
   - where the "sandbox ready" probe passes, two run in parallel, and one's write to the pinned tree
     and a `git branch` both fail, with no permission prompt;
@@ -572,7 +587,7 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   - a cached probe pass that is wrong: `failIfUnavailable` fails the verifier, the host re-runs
     the probe and takes the fallback;
   - a permission request from a verifier is denied by the host and noted in the run;
-- orchestrator mode, on the real adapter against the fake Messages API:
+- orchestrator mode, on the real `claude` against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
     with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
     servers among the tools offered;
@@ -581,7 +596,7 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   read a seeded secret of any class, write the tree, or reach the network;
 - the read scope: a participant's query for another participant's findings returns nothing, and a
   verifier sees only its finding;
-- on the real adapter against the fake Messages API, a 3-minute command does not trip the stall;
+- on the real `claude` against the fake Messages API, a 3-minute command does not trip the stall;
   a retried participant's old session reports nothing;
 - no MCP server's `env` or `headers` value appears in any spawned process's argv (`ps -ww`);
 - a `claude` below `min_cli` refuses a sandboxed participant;
@@ -590,12 +605,13 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json` and `~/.config/glab-cli`;
   a store not on the list is readable; a real turn still logs in;
 - the workspace deny: a repo's `.env` under a workspace root, and a worktree and an `.env` created
-  under it after `session/new`, all fail to read;
+  under it after the session started, all fail to read;
 - an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
   finder worktree, both made after it started;
 - different config/temp overrides share one root/lock: a second instance waits without output,
-  including after `session/new`; reverse their roles and repeat. After exit or crash, the next run
-  can read no predecessor export/temp output; cleanup skips a held lock and never boots WSL;
+  including after its session started; reverse their roles and repeat. After exit or crash, the
+  next run can read no predecessor export/temp output; cleanup skips a held lock and never boots
+  WSL;
 - the untrusted export is not a worktree: `git worktree list` in the repo does not name it;
 - an untrusted participant cannot read the config, data or cache tier, each a separate temp dir in
   the test;
@@ -619,13 +635,15 @@ Tests (fake ACP agent, GPUI's clock, and the real adapter against the fake Messa
     under `/mnt/c` all fail;
   - Windows `core.symlinks=false`: WSL preserves executable bits and links; source/config links
     resolve their committed targets;
-  - the host tool is reached on the gateway address bound alone;
-  - a missing firewall rule, adapter, login or package shows "WSL not ready" with its fix;
+  - the probe's responder is reached on the gateway address bound alone, and a host tool call
+    works with no listener;
+  - a missing firewall rule, login or package shows "WSL not ready" with its fix;
+  - the Windows host killed mid-command leaves no CLI and no command in the distro;
 - without WSL, an untrusted subject on Windows waits for the install or the consent;
 - a stalled participant retries, then degrades;
 - a one-participant stage that keeps failing degrades and never goes offline;
 - offline only when the probe fails;
-- an adapter exit fails one attempt each;
+- a CLI's exit fails its own participant's attempt, and no other's;
 - a sleep gap does not trip stalls;
 - `end_turn` without `done` fails;
 - a resumed participant runs on its own model;
@@ -707,7 +725,7 @@ Tests, on the forge fake:
 - a fetched MR head is removed with its run;
 - the six answers render.
 
-Done when an MR on the forge fake gets six answers and a plan gets edits, from real adapters.
+Done when an MR on the forge fake gets six answers and a plan gets edits, from real agents.
 
 The owner checks: triages a real MR; reviews these plans.
 
