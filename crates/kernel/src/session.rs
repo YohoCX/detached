@@ -694,6 +694,18 @@ fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) ->
     })
 }
 
+/// The past sessions in the spec's folder, newest first.
+pub fn past(spec: Spec, cx: &App) -> Task<Result<Vec<backend::Past>>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || backend(spec.provider).past(&core, &spec))
+}
+
+/// Removes the past session `id` of the spec's provider.
+pub fn delete(spec: Spec, id: String, cx: &App) -> Task<Result<()>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || backend(spec.provider).delete(&core, &spec, &id))
+}
+
 /// The backend the provider's manifest names.
 fn backend(p: &Provider) -> &'static dyn Backend {
     match p.backend {

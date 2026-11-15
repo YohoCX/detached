@@ -4,7 +4,8 @@
 use serde_json::Value;
 
 use crate::adapters::Provider;
-use crate::error::Result;
+pub use crate::agent::Past;
+use crate::error::{Error, Result};
 use crate::state::AppState;
 
 /// The backend a provider's manifest names.
@@ -26,6 +27,14 @@ pub trait Backend: Send + Sync {
         id: &str,
         events: Events,
     ) -> Result<Box<dyn Session>>;
+    /// The past sessions in the spec's folder, newest first.
+    fn past(&self, _core: &AppState, _spec: &Spec) -> Result<Vec<Past>> {
+        Err(Error::Other("This agent lists no past sessions.".into()))
+    }
+    /// Removes the past session `id`.
+    fn delete(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<()> {
+        Err(Error::Other("This agent deletes no past sessions.".into()))
+    }
 }
 
 /// A session open on its backend; dropped, it closes there and `Closed` follows.
