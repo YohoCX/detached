@@ -149,15 +149,27 @@ fn a_turn_streams_lists_what_it_changed_and_goes_back(cx: &mut TestAppContext) {
     assert!(!Path::new(&f.repo).join("a.txt").exists());
 }
 
+fn asked(s: &Entity<Session>, cx: &App) -> Option<(usize, Answer)> {
+    s.read(cx)
+        .items
+        .iter()
+        .enumerate()
+        .find_map(|(at, i)| match i {
+            Item::Ask { answer, .. } => Some((at, *answer)),
+            _ => None,
+        })
+}
+
 #[gpui::test]
-fn cancel_ends_the_turn(cx: &mut TestAppContext) {
+fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
+    cx: &mut TestAppContext,
+) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
-    s.update(cx, |s, cx| s.prompt("stall".into(), cx));
-    wait_until(cx, |cx| {
-        s.read(cx).items.iter().any(|i| matches!(i, Item::Tool(_)))
+    s.update(cx, |s, cx| {
+        s.prompt("stall".into(), cx);
+        s.cancel();
     });
-    s.update(cx, |s, _| s.cancel());
     wait_until(cx, |cx| s.read(cx).state == State::Idle);
     s.read_with(cx, |s, _| {
         let Some(Item::End { stop, .. }) = s.items.last() else {
@@ -169,12 +181,50 @@ fn cancel_ends_the_turn(cx: &mut TestAppContext) {
         };
         assert_eq!(t.status.as_deref(), Some("failed"));
     });
+    let from = s.read_with(cx, |s, _| s.items.len());
+    s.update(cx, |s, cx| s.prompt("ask".into(), cx));
+    wait_until(cx, |cx| asked(&s, cx).is_some());
+    s.update(cx, |s, _| s.cancel());
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    assert_eq!(cx.read(|cx| asked(&s, cx)).unwrap().1, Answer::Gone);
+    assert_eq!(said(&s, from, cx), "picked cancelled");
 }
 
 #[gpui::test]
-fn a_load_runs_on_the_session_s_model_and_an_ended_session_says_nothing_of_its_exit(
-    cx: &mut TestAppContext,
-) {
+fn a_session_ended_while_it_starts_stays_ended(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let s = cx.update(|cx| Session::open(spec, None, cx));
+    s.update(cx, |s, cx| s.end(cx));
+    wait_until(cx, |cx| s.read(cx)._tasks.iter().all(|t| t.is_ready()));
+    assert_eq!(state(&s, cx), State::Ended(End::Closed));
+    assert!(cx.read(|cx| cx.global::<Sessions>().by_id.is_empty()));
+}
+
+#[gpui::test]
+fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    let serial = s.read_with(cx, |s, _| s.open.as_ref().unwrap().live.serial);
+    let exit = |asked| {
+        let stderr = "Error: write EPIPE".into();
+        Event::Exited(acp::Exit {
+            code: Some(1),
+            stderr,
+            asked,
+        })
+    };
+    cx.update(|cx| dispatch(cx, u64::MAX, exit(false)));
+    assert_eq!(state(&s, cx), State::Idle);
+    cx.update(|cx| dispatch(cx, serial, exit(true)));
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.state, State::Ended(End::Closed));
+        assert!(!s.items.iter().any(|i| matches!(i, Item::Note(_))));
+    });
+}
+
+#[gpui::test]
+fn a_load_runs_on_the_session_s_model(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let mut spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
     spec.model = Some("haiku".into());
@@ -190,10 +240,6 @@ fn a_load_runs_on_the_session_s_model_and_an_ended_session_says_nothing_of_its_e
         Some("haiku".into())
     );
     assert_eq!(turn(&loaded, "model", cx), "haiku default");
-    let notes = s.read_with(cx, |s, _| {
-        s.items.iter().any(|i| matches!(i, Item::Note(_)))
-    });
-    assert!(!notes, "a closed adapter's EPIPE exit stays quiet");
 }
 
 #[gpui::test]
@@ -222,20 +268,9 @@ fn always_allow_stays_a_host_rule(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| s.prompt("ask".into(), cx));
-    let asked = |cx: &App| {
-        let items = &s.read(cx).items;
-        items.iter().position(|i| {
-            matches!(
-                i,
-                Item::Ask {
-                    answer: Answer::Waiting,
-                    ..
-                }
-            )
-        })
-    };
-    wait_until(cx, |cx| asked(cx).is_some());
-    let at = cx.read(asked).unwrap();
+    wait_until(cx, |cx| asked(&s, cx).is_some());
+    let (at, answer) = cx.read(|cx| asked(&s, cx)).unwrap();
+    assert_eq!(answer, Answer::Waiting);
     s.update(cx, |s, cx| s.answer(at, Answer::Always, cx));
     wait_until(cx, |cx| s.read(cx).state == State::Idle);
     assert_eq!(said(&s, at, cx), "picked allow_once");
@@ -370,20 +405,9 @@ fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mu
     assert_eq!(state(&s, cx), State::Idle);
     let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
     s.update(cx, |s, cx| {
-        s.prompt(format!("write .claude/settings.json {hook};stall"), cx)
+        s.prompt(format!("write .claude/settings.json {hook};ask"), cx)
     });
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
-    s.read_with(cx, |s, _| {
-        assert_eq!(s.state, State::Ended(End::Trust));
-        let cancelled = |i: &Item| {
-            matches!(
-                i,
-                Item::End {
-                    stop: Some(StopReason::Cancelled),
-                    ..
-                }
-            )
-        };
-        assert!(s.items.iter().any(cancelled), "{:?}", s.items);
-    });
+    assert_eq!(state(&s, cx), State::Ended(End::Trust));
+    assert_eq!(cx.read(|cx| asked(&s, cx)).unwrap().1, Answer::Gone);
 }

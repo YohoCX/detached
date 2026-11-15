@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
@@ -139,7 +140,7 @@ pub enum Answer {
     /// By the user, or by a rule the user set.
     Always,
     Rejected,
-    /// The turn ended first.
+    /// The turn ended or was cancelled first.
     Gone,
 }
 
@@ -191,7 +192,7 @@ pub struct Session {
     pub cost: Option<f64>,
     /// The adapter's version.
     pub version: Option<String>,
-    live: Option<Arc<Live>>,
+    open: Option<Open>,
     /// The trust files' fingerprint the session started on.
     trust: String,
     /// "Always allow" answers, kept by the host: a tool's kind and title.
@@ -201,31 +202,53 @@ pub struct Session {
     turn: Option<(Instant, Option<String>)>,
     /// Set while a running turn is cancelled to end the session.
     ending: Option<End>,
-    checks: u64,
+    /// The running turn was cancelled; a cancel asked before its prompt went out follows it.
+    cancelled: bool,
     _watch: Option<trust::Watch>,
     _tasks: Vec<Task<()>>,
 }
 
-/// An adapter process and the key it is registered under.
+/// An adapter process; its serial tells its events from a later one's on the same executable.
 struct Live {
     adapter: Adapter,
-    exe: PathBuf,
+    serial: u64,
 }
 
-type Adapters = Arc<Mutex<HashMap<PathBuf, Weak<Live>>>>;
+/// A session opened on an adapter; dropped, it closes there.
+struct Open {
+    live: Arc<Live>,
+    id: String,
+}
+
+impl Open {
+    fn key(&self) -> (u64, String) {
+        (self.live.serial, self.id.clone())
+    }
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        let (live, id) = (self.live.clone(), std::mem::take(&mut self.id));
+        // Drop has no App to reach the pool with.
+        std::thread::spawn(move || live.adapter.close_session(&id));
+    }
+}
+
+/// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
+type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
 
 struct Sessions {
-    tx: mpsc::UnboundedSender<(PathBuf, Event)>,
+    tx: mpsc::UnboundedSender<(u64, Event)>,
     adapters: Adapters,
-    by_id: HashMap<(PathBuf, String), WeakEntity<Session>>,
+    by_id: HashMap<(u64, String), WeakEntity<Session>>,
     /// What came for a session before its start returned, as a load's replay.
-    early: HashMap<(PathBuf, String), Vec<Event>>,
+    early: HashMap<(u64, String), Vec<Event>>,
 }
 
 impl Global for Sessions {}
 
 pub(crate) fn init(cx: &mut App) {
-    let (tx, mut rx) = mpsc::unbounded::<(PathBuf, Event)>();
+    let (tx, mut rx) = mpsc::unbounded::<(u64, Event)>();
     cx.set_global(Sessions {
         tx,
         adapters: Default::default(),
@@ -236,31 +259,33 @@ pub(crate) fn init(cx: &mut App) {
         while let Some(first) = rx.next().await {
             let mut batch = vec![first];
             batch.extend(std::iter::from_fn(|| rx.try_recv().ok()));
-            cx.update(|cx| batch.into_iter().for_each(|(exe, e)| dispatch(cx, exe, e)));
+            cx.update(|cx| batch.into_iter().for_each(|(n, e)| dispatch(cx, n, e)));
             cx.background_executor().timer(FRAME).await;
         }
     })
     .detach();
 }
 
-fn dispatch(cx: &mut App, exe: PathBuf, e: Event) {
+fn dispatch(cx: &mut App, serial: u64, e: Event) {
     let sid = match &e {
         Event::Update(s, _) | Event::Ask(s, ..) | Event::Ended(s, _) => s.clone(),
         Event::Exited(x) => {
-            let all = &mut cx.global_mut::<Sessions>().by_id;
-            let on: Vec<_> = all.keys().filter(|k| k.0 == exe).cloned().collect();
-            let on: Vec<_> = on.into_iter().filter_map(|k| all.remove(&k)).collect();
+            let g = cx.global_mut::<Sessions>();
+            g.early.retain(|k, _| k.0 != serial);
+            let on: Vec<_> = g.by_id.extract_if(|k, _| k.0 == serial).collect();
             let said = crashed(x);
-            for s in on.into_iter().filter_map(|w| w.upgrade()) {
+            for s in on.into_iter().filter_map(|(_, w)| w.upgrade()) {
                 s.update(cx, |s, cx| s.exited(said.clone(), cx));
             }
             return;
         }
     };
     let g = cx.global_mut::<Sessions>();
-    let key = (exe, sid);
-    match g.by_id.get(&key).and_then(WeakEntity::upgrade) {
-        Some(s) => s.update(cx, |s, cx| s.on(e, cx)),
+    let key = (serial, sid);
+    match g.by_id.get(&key).map(WeakEntity::upgrade) {
+        Some(Some(s)) => s.update(cx, |s, cx| s.on(e, cx)),
+        // Its entity is gone, and with it the session.
+        Some(None) => {}
         None => g.early.entry(key).or_default().push(e),
     }
 }
@@ -273,8 +298,8 @@ fn crashed(x: &acp::Exit) -> Option<String> {
 }
 
 struct Started {
-    live: Arc<Live>,
-    opened: acp::Opened,
+    open: Open,
+    config: Vec<acp::Config>,
     trust: String,
     warn: Option<String>,
     watch: Option<trust::Watch>,
@@ -293,13 +318,13 @@ impl Session {
                 usage: None,
                 cost: None,
                 version: None,
-                live: None,
+                open: None,
                 trust: String::new(),
                 rules: vec![],
                 replies: HashMap::new(),
                 turn: None,
                 ending: None,
-                checks: 0,
+                cancelled: false,
                 _watch: None,
                 _tasks: vec![],
             };
@@ -326,19 +351,39 @@ impl Session {
             };
             started.map(watched)
         });
+        // One recheck at a time, for every change that came while one ran.
         self.task(cx, async move |this, cx| {
             let started = started.await;
-            let ok = this
+            let mut watching = this
                 .update(cx, |s, cx| s.started(started, cx))
                 .unwrap_or(false);
-            let mut watching = ok;
             while watching && changes.next().await.is_some() {
-                watching = this.update(cx, |s, cx| s.recheck(cx)).is_ok();
+                while changes.try_recv().is_ok() {}
+                let Ok(found) = this.update(cx, |s, cx| {
+                    let (core, repo) = (crate::core(cx).clone(), s.spec.repo.clone());
+                    blocking::run(cx, move || fingerprint(&core, &repo))
+                }) else {
+                    return;
+                };
+                let found = found.await;
+                watching = this.update(cx, |s, cx| s.recheck(found, cx)).is_ok();
             }
         });
     }
 
+    /// Takes the started session in, unless it ended meanwhile: dropped, it closes.
     fn started(&mut self, started: Result<Started>, cx: &mut Context<Self>) -> bool {
+        let g = cx.global_mut::<Sessions>();
+        let early = match &started {
+            Ok(s) => g.early.remove(&s.open.key()),
+            Err(_) => {
+                g.early.retain(|k, _| Some(&k.1) != self.id.as_ref());
+                None
+            }
+        };
+        if self.state != State::Starting {
+            return false;
+        }
         let s = match started {
             Ok(s) => s,
             Err(e) => {
@@ -348,18 +393,15 @@ impl Session {
                 return false;
             }
         };
-        let key = (s.live.exe.clone(), s.opened.id.clone());
         let me = cx.weak_entity();
-        let g = cx.global_mut::<Sessions>();
-        g.by_id.insert(key.clone(), me);
-        let early = g.early.remove(&key).unwrap_or_default();
-        self.id = Some(s.opened.id);
-        self.config = s.opened.config;
-        self.version = Some(s.live.adapter.info().version.clone());
+        cx.global_mut::<Sessions>().by_id.insert(s.open.key(), me);
+        self.id = Some(s.open.id.clone());
+        self.config = s.config;
+        self.version = Some(s.open.live.adapter.info().version.clone());
         self.items.extend(s.warn.map(Item::Note));
-        (self.live, self.trust, self._watch) = (Some(s.live), s.trust, s.watch);
+        (self.open, self.trust, self._watch) = (Some(s.open), s.trust, s.watch);
         self.state = State::Idle;
-        early.into_iter().for_each(|e| self.on(e, cx));
+        early.into_iter().flatten().for_each(|e| self.on(e, cx));
         cx.notify();
         true
     }
@@ -372,53 +414,59 @@ impl Session {
 
     /// Starts a turn: the trust check and the worktree's snapshot first, then the prompt.
     pub fn prompt(&mut self, text: String, cx: &mut Context<Self>) {
-        let (Some(live), Some(id)) = (self.live.clone(), self.id.clone()) else {
-            return;
-        };
-        if self.state != State::Idle {
+        if self.open.is_none() || self.state != State::Idle {
             return;
         }
         self.items.push(Item::User(text.clone()));
-        self.state = State::Running;
+        (self.state, self.cancelled) = (State::Running, false);
         let core = crate::core(cx).clone();
         let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
         let ready = blocking::run(cx, move || {
-            if fingerprint(&core, &repo).is_some_and(|f| f != trust) {
-                return Err(None::<String>);
-            }
-            let tree = api::snapshot(&core, &repo).map_err(|e| e.to_string());
-            live.adapter
-                .prompt(&id, &text)
-                .map_err(|e| Some(e.to_string()))?;
-            Ok(tree)
+            let moved = fingerprint(&core, &repo).is_some_and(|f| f != trust);
+            (!moved).then(|| api::snapshot(&core, &repo))
         });
         self.task(cx, async move |this, cx| {
             let ready = ready.await;
-            this.update(cx, |s, cx| {
-                match ready {
-                    Ok(tree) => {
-                        let tree =
-                            tree.map_err(|e| s.note(format!("No snapshot for this turn: {e}")));
-                        s.turn = Some((Instant::now(), tree.ok()));
-                    }
-                    Err(None) => s.close(End::Trust, cx),
-                    Err(Some(e)) => {
-                        s.state = State::Idle;
-                        s.note(format!("The prompt did not reach the agent: {e}"));
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
+            this.update(cx, |s, cx| s.send(ready, &text, cx)).ok();
         });
         cx.notify();
     }
 
-    /// Ends the running turn and its foreground command.
-    pub fn cancel(&self) {
-        if let (Some(live), Some(id), State::Running) = (&self.live, &self.id, &self.state) {
-            live.adapter.cancel(id);
+    /// Sends the prompt once the turn's snapshot is taken; None when the trust files moved.
+    fn send(&mut self, ready: Option<Result<String>>, text: &str, cx: &mut Context<Self>) {
+        let Some(tree) = ready else {
+            return self.close(End::Trust, cx);
+        };
+        let Some(o) = self.open.as_ref().filter(|_| self.state == State::Running) else {
+            return;
+        };
+        let sent = o.live.adapter.prompt(&o.id, text);
+        if sent.is_ok() && self.cancelled {
+            o.live.adapter.cancel(&o.id);
         }
+        match sent {
+            Ok(()) => {
+                let tree = tree.map_err(|e| self.note(format!("No snapshot for this turn: {e}")));
+                self.turn = Some((Instant::now(), tree.ok()));
+            }
+            Err(e) => {
+                self.state = State::Idle;
+                self.note(format!("The prompt did not reach the agent: {e}"));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Ends the running turn and its foreground command, and answers its asks `cancelled`.
+    pub fn cancel(&mut self) {
+        let (Some(o), State::Running) = (&self.open, &self.state) else {
+            return;
+        };
+        if self.turn.is_some() {
+            o.live.adapter.cancel(&o.id);
+        }
+        self.cancelled = true;
+        self.drop_replies();
     }
 
     /// Answers the permission request at `item`; `Always` also allows its tool from now on,
@@ -455,11 +503,13 @@ impl Session {
             self.note(TRUST_CHANGED.into());
         }
         self.drop_replies();
-        if let (Some(live), Some(id)) = (self.live.take(), self.id.clone()) {
-            if self.state == State::Running {
-                live.adapter.cancel(&id);
+        if let Some(o) = self.open.take() {
+            if self.turn.is_some() {
+                o.live.adapter.cancel(&o.id);
             }
-            blocking::run(cx, move || live.adapter.close_session(&id)).detach();
+            let g = cx.global_mut::<Sessions>();
+            g.by_id.remove(&o.key());
+            g.early.remove(&o.key());
         }
         (self._watch, self.turn, self.ending) = (None, None, None);
         self.state = State::Ended(end);
@@ -470,7 +520,6 @@ impl Session {
         if matches!(self.state, State::Ended(_)) {
             return;
         }
-        self.live = None;
         let end = said.map_or(End::Closed, End::Crashed);
         if let End::Crashed(e) = &end {
             self.note(e.clone());
@@ -479,25 +528,16 @@ impl Session {
     }
 
     /// A trust file changed: a different fingerprint cancels the turn and ends the session.
-    fn recheck(&mut self, cx: &mut Context<Self>) {
-        self.checks += 1;
-        let n = self.checks;
-        let core = crate::core(cx).clone();
-        let repo = self.spec.repo.clone();
-        let found = blocking::run(cx, move || fingerprint(&core, &repo));
-        self.task(cx, async move |this, cx| {
-            let found = found.await;
-            this.update(cx, |s, cx| {
-                let changed = n == s.checks && found.is_some_and(|f| f != s.trust);
-                if changed && s.state == State::Running {
-                    s.ending = Some(End::Trust);
-                    s.cancel();
-                } else if changed {
-                    s.close(End::Trust, cx);
-                }
-            })
-            .ok();
-        });
+    fn recheck(&mut self, found: Option<String>, cx: &mut Context<Self>) {
+        if !found.is_some_and(|f| f != self.trust) {
+            return;
+        }
+        if self.state == State::Running {
+            self.ending = Some(End::Trust);
+            self.cancel();
+        } else {
+            self.close(End::Trust, cx);
+        }
     }
 
     fn on(&mut self, e: Event, cx: &mut Context<Self>) {
@@ -508,8 +548,10 @@ impl Session {
             Event::Update(_, u) => self.update(u),
             Event::Ask(_, ask, reply) => {
                 let rule = (ask.tool.kind.clone(), ask.tool.title.clone());
-                let always = self.rules.contains(&rule);
-                let answer = if always {
+                // A dropped reply answers `cancelled`.
+                let answer = if self.cancelled {
+                    Answer::Gone
+                } else if self.rules.contains(&rule) {
                     reply.send(acp::Answer::Allow);
                     Answer::Always
                 } else {
@@ -720,7 +762,7 @@ fn start(
     spec: &Spec,
     past: Option<String>,
     adapters: &Adapters,
-    tx: mpsc::UnboundedSender<(PathBuf, Event)>,
+    tx: mpsc::UnboundedSender<(u64, Event)>,
 ) -> Result<Started> {
     let p = spec.provider;
     let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
@@ -756,28 +798,31 @@ fn start(
     let trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
     let exe = adapters::exe(&core.data_dir, p.adapter, &version);
     let live = {
-        let mut all = adapters.lock().unwrap();
-        all.retain(|_, w| w.strong_count() > 0);
-        match all.get(&exe).and_then(Weak::upgrade) {
+        let slot = adapters
+            .lock()
+            .unwrap()
+            .entry(exe.clone())
+            .or_default()
+            .clone();
+        let mut slot = slot.lock().unwrap();
+        match slot.upgrade() {
             Some(live) => live,
             None => {
+                static SERIAL: AtomicU64 = AtomicU64::new(0);
+                let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
                 let mut env_vars = proc::env(p.env, proc::parent(&env));
                 env_vars.push((p.cli_var.into(), cli.into()));
                 let proc_spec = proc::Spec {
-                    program: exe.clone(),
+                    program: exe,
                     args: vec![],
                     cwd: std::env::temp_dir(),
                     env: env_vars,
                 };
-                let from = exe.clone();
                 let adapter = Adapter::start(&proc_spec, move |e| {
-                    let _ = tx.unbounded_send((from.clone(), e));
+                    let _ = tx.unbounded_send((serial, e));
                 })?;
-                let live = Arc::new(Live {
-                    adapter,
-                    exe: exe.clone(),
-                });
-                all.insert(exe, Arc::downgrade(&live));
+                let live = Arc::new(Live { adapter, serial });
+                *slot = Arc::downgrade(&live);
                 live
             }
         }
@@ -792,8 +837,11 @@ fn start(
         None => live.adapter.new_session(&options)?,
     };
     Ok(Started {
-        live,
-        opened,
+        open: Open {
+            live,
+            id: opened.id,
+        },
+        config: opened.config,
         trust: project.fingerprint,
         warn,
         watch: None,

@@ -2,8 +2,8 @@
 //!
 //! An SDK session shows no trust dialog, so a repo's hooks would run unasked.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
@@ -195,13 +195,24 @@ fn front(file: &str, text: &str, items: &mut Vec<String>) {
 pub struct Watch(#[allow(dead_code)] Arc<Mutex<RecommendedWatcher>>);
 
 /// Calls `changed` on its own thread whenever a file under `tree` that `globs` (a provider's
-/// `trust`) may name changes: their top folders are watched, and the root for those not there yet.
-pub fn watch(tree: &Path, globs: &[&str], changed: impl Fn() + Send + 'static) -> Result<Watch> {
+/// `trust`) may name changes. Each glob's fixed folder is watched, recursively when the glob goes
+/// below it, and that folder's parents, so one made later is seen.
+pub fn watch(
+    tree: &Path,
+    globs: &'static [&'static str],
+    changed: impl Fn() + Send + 'static,
+) -> Result<Watch> {
     let root = tree.canonicalize()?;
-    let tops: BTreeSet<OsString> = globs
-        .iter()
-        .filter_map(|g| Some(Path::new(g).components().next()?.as_os_str().to_owned()))
-        .collect();
+    let mut dirs: BTreeMap<PathBuf, bool> = BTreeMap::new();
+    for g in globs {
+        let parts: Vec<&str> = g.split('/').collect();
+        let fixed = parts.iter().take_while(|p| !p.contains('*')).count();
+        let dir: PathBuf = parts[..fixed.min(parts.len() - 1)].iter().collect();
+        for up in dir.ancestors().skip(1) {
+            dirs.entry(up.into()).or_default();
+        }
+        *dirs.entry(dir).or_default() |= fixed < parts.len();
+    }
     let (tx, rx) = mpsc::channel();
     let fail = |e: notify::Error| Error::Other(e.to_string());
     let watcher = Arc::new(Mutex::new(
@@ -209,41 +220,48 @@ pub fn watch(tree: &Path, globs: &[&str], changed: impl Fn() + Send + 'static) -
     ));
     let mut watched = HashSet::new();
     let base = root.clone();
-    let add = move |w: &mut RecommendedWatcher, top: &OsStr, watched: &mut HashSet<OsString>| {
-        let dir = base.join(top);
-        if !watched.contains(top) && dir.is_dir() && w.watch(&dir, RecursiveMode::Recursive).is_ok()
-        {
-            watched.insert(top.to_owned());
+    let add = move |w: &mut RecommendedWatcher, watched: &mut HashSet<PathBuf>| {
+        for (dir, deep) in &dirs {
+            let mode = match deep {
+                true => RecursiveMode::Recursive,
+                false => RecursiveMode::NonRecursive,
+            };
+            let path = base.join(dir);
+            if !watched.contains(dir) && path.is_dir() && w.watch(&path, mode).is_ok() {
+                watched.insert(dir.clone());
+            }
         }
     };
-    {
-        let mut w = watcher.lock().unwrap();
-        w.watch(&root, RecursiveMode::NonRecursive).map_err(fail)?;
-        for top in &tops {
-            add(&mut w, top, &mut watched);
-        }
-    }
+    add(&mut watcher.lock().unwrap(), &mut watched);
     let weak = Arc::downgrade(&watcher);
     std::thread::spawn(move || {
         for event in rx.into_iter().flatten() {
-            let top = |p: &PathBuf| {
-                let c = p.strip_prefix(&root).ok()?.components().next()?;
-                Some(c.as_os_str().to_owned())
+            let named = |p: &PathBuf| {
+                let rel = p.strip_prefix(&root);
+                rel.is_ok_and(|rel| globs.iter().any(|g| names(g, rel)))
             };
-            let hit: Vec<OsString> = (event.paths.iter().filter_map(top))
-                .filter(|t| tops.contains(t))
-                .collect();
-            if hit.is_empty() {
+            if !event.paths.iter().any(named) {
                 continue;
             }
             let Some(w) = weak.upgrade() else { return };
-            for top in &hit {
-                add(&mut w.lock().unwrap(), top, &mut watched);
-            }
+            add(&mut w.lock().unwrap(), &mut watched);
             changed();
         }
     });
     Ok(Watch(watcher))
+}
+
+/// Whether `glob` may name `rel` or a file under it.
+fn names(glob: &str, rel: &Path) -> bool {
+    let mut parts = glob.split('/');
+    for c in rel.components() {
+        match parts.next() {
+            Some("**") => return true,
+            Some(p) if p == "*" || c.as_os_str() == OsStr::new(p) => {}
+            _ => return false,
+        }
+    }
+    rel.parent().is_some()
 }
 
 fn keys(v: &Value) -> String {
@@ -366,5 +384,31 @@ mod tests {
         while rx.try_recv().is_ok() {}
         write(&r, ".claude/commands/go.md", "---\n---\n");
         wait().expect("a file in it");
+    }
+
+    #[test]
+    fn the_watch_names_trust_files_and_their_folders_alone() {
+        let named = |rel: &str| {
+            let rel = Path::new(rel);
+            crate::adapters::CLAUDE.trust.iter().any(|g| names(g, rel))
+        };
+        for rel in [
+            ".claude",
+            ".claude/settings.json",
+            ".claude/skills/x",
+            ".claude/skills/x/SKILL.md",
+            ".claude/commands/a/b.md",
+            ".mcp.json",
+        ] {
+            assert!(named(rel), "{rel}");
+        }
+        for rel in [
+            "",
+            ".claude/worktrees/w/target/a.o",
+            ".claude/skills/x/y/SKILL.md",
+            "src/a.rs",
+        ] {
+            assert!(!named(rel), "{rel}");
+        }
     }
 }

@@ -123,18 +123,6 @@ fn main() {
                     reply(json!({"configOptions": config}));
                 }
             }
-            "session/set_config_option" => {
-                let sid = params["sessionId"].as_str().unwrap_or_default();
-                let mut all = sessions.lock().unwrap();
-                let Some(s) = all.get_mut(sid) else { continue };
-                let value = params["value"].as_str().unwrap_or_default().to_string();
-                match params["configId"].as_str() {
-                    Some("model") => s.model = value,
-                    Some("mode") => s.mode = value,
-                    _ => {}
-                }
-                reply(json!({"configOptions": config(s)}));
-            }
             "session/close" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
                 sessions.lock().unwrap().remove(sid);

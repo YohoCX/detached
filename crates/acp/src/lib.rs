@@ -29,7 +29,6 @@ pub mod testutil;
 pub struct Info {
     pub name: String,
     pub version: String,
-    pub load: bool,
 }
 
 /// What `session/new` and `session/load` send besides the session's id.
@@ -261,7 +260,6 @@ impl Adapter {
         adapter.info = Info {
             name: agent.name,
             version: agent.version,
-            load: init.agent_capabilities.load_session,
         };
         Ok(adapter)
     }
@@ -326,16 +324,6 @@ impl Adapter {
         let _ = self
             .cx
             .send_notification(CancelNotification::new(session.to_string()));
-    }
-
-    /// Sets one config option; returns them all as they are now.
-    pub fn set_config(&self, session: &str, id: &str, value: &str) -> Result<Vec<Config>> {
-        let r = self.call(SetSessionConfigOptionRequest::new(
-            session.to_string(),
-            id.to_string(),
-            SessionConfigValueId::new(value),
-        ))?;
-        Ok(configs(r.config_options))
     }
 
     /// Ends the session's CLI, which frees its memory.
