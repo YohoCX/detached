@@ -513,6 +513,12 @@ mod tests {
     }
 
     #[test]
+    fn the_committed_catalog_parses() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../adapters/adapters.json");
+        serde_json::from_slice::<Catalog>(&fs::read(path).unwrap()).unwrap();
+    }
+
+    #[test]
     fn a_bad_signature_or_an_older_serial_is_refused_and_the_stored_catalog_stays() {
         let f = Fixture::new();
         let d = data();

@@ -1,0 +1,150 @@
+# Agent adapters (PLAN-AGENT-HOST §3).
+# - An adapters-<name>-<version> tag builds that adapter with bun per platform into a release of its
+#   own, with the entry.json that `make adapters-sign entry=entry.json` adds to the catalog.
+# - A push of adapters/adapters.json to main, or a manual run, checks the signed catalog and
+#   publishes it to the rolling `adapters` release, the URL core's CATALOG_URL names.
+# Signing stays on the owner's machine, so no secret is used here. Neither release is marked latest:
+# the app's updater reads the latest release.
+name: Adapters
+
+on:
+  push:
+    branches: [main]
+    paths: [adapters/adapters.json, adapters/adapters.json.minisig]
+    tags: ['adapters-*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: startsWith(github.ref, 'refs/tags/adapters-')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: macos-aarch64, bun: bun-darwin-arm64 }
+          - { os: macos-latest, target: macos-x86_64, bun: bun-darwin-x64 }
+          - { os: ubuntu-22.04, target: linux-x86_64-gnu, bun: bun-linux-x64 }
+          - { os: windows-latest, target: windows-x86_64, bun: bun-windows-x64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      COPYFILE_DISABLE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: npm install -g bun@1.4.4
+      - name: Build
+        run: |
+          tag=${GITHUB_REF_NAME#adapters-}; name=${tag%-*}; version=${tag##*-}
+          cd "adapters/$name"
+          grep -q "\"@agentclientprotocol/$name\":\"$version\"" package.json \
+            || { echo "::error::adapters/$name/package.json does not pin $version."; exit 1; }
+          # --omit optional keeps the SDK's bundled Claude CLI out: the user's own `claude` runs.
+          bun install --frozen-lockfile --omit optional
+          exe=$name; [ "$RUNNER_OS" = Windows ] && exe=$name.exe
+          mkdir -p out/licenses
+          bun build --compile --target=${{ matrix.bun }} \
+            "node_modules/@agentclientprotocol/$name/dist/index.js" --outfile "out/$exe"
+          for pkg in node_modules/*/ node_modules/@*/*/; do
+            for f in "$pkg"LICEN[CS]E* "$pkg"COPYING*; do
+              [ -f "$f" ] || continue
+              mkdir -p "out/licenses/${pkg#node_modules/}"
+              cp "$f" "out/licenses/${pkg#node_modules/}"
+            done
+          done
+          size=$(wc -c < "out/$exe")
+          [ "$size" -lt 157286400 ] || { echo "::error::$exe is $size bytes: is a CLI bundled?"; exit 1; }
+          if find out -name claude -o -name claude.exe -o -name codex -o -name codex.exe | grep -q .; then
+            echo "::error::A provider's CLI is in the build."; exit 1
+          fi
+          (cd out && tar -czf "../$name-$version-${{ matrix.target }}.tar.gz" -- *)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: adapters/*/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: out
+          merge-multiple: true
+      - run: npm install -g bun@1.4.4
+      # min_cli follows the SDK's claudeCodeVersion; the client never goes below its own floor.
+      - name: Entry
+        run: |
+          tag=${GITHUB_REF_NAME#adapters-}; name=${tag%-*}; version=${tag##*-}
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          app=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          min_cli=null
+          if [ "$name" = claude-agent-acp ]; then
+            (cd "adapters/$name" && bun install --frozen-lockfile --omit optional --ignore-scripts > /dev/null)
+            min_cli=$(jq '.claudeCodeVersion' "adapters/$name/node_modules/@anthropic-ai/claude-agent-sdk/package.json")
+          fi
+          artifacts='{}'
+          for f in out/*.tar.gz; do
+            file=${f#out/}; target=${file#"$name-$version-"}; target=${target%.tar.gz}
+            artifacts=$(jq --arg t "$target" --arg url "$base/$file" --argjson size "$(wc -c < "$f")" \
+              --arg sha "$(sha256sum "$f" | cut -d' ' -f1)" \
+              '. + {($t): {url: $url, size: $size, sha256: $sha}}' <<< "$artifacts")
+          done
+          jq -n --arg name "$name" --arg version "$version" --arg published "$(date -u +%F)" \
+            --arg app "$app" --argjson min_cli "$min_cli" --argjson artifacts "$artifacts" \
+            '{name: $name, version: $version, published: $published, min_app: $app,
+              min_cli: $min_cli, blocked_cli: [], artifacts: $artifacts}' > out/entry.json
+          cat out/entry.json
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --latest=false \
+            --title "Adapter ${GITHUB_REF_NAME#adapters-}" \
+            --notes "Add it to the catalog with \`make adapters-sign entry=entry.json\`." \
+            out/*.tar.gz out/entry.json
+
+  publish:
+    if: "!startsWith(github.ref, 'refs/tags/')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check
+        run: |
+          catalog=adapters/adapters.json
+          if [ ! -f "$catalog.minisig" ]; then
+            echo "::notice::$catalog is not signed yet; nothing to publish."
+            echo "unsigned=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          key=$(sed -n 's/^pub const CATALOG_KEY: &str = "\(.*\)";$/\1/p' crates/core/src/adapters.rs)
+          [ -n "$key" ] || { echo "::error::Set CATALOG_KEY in crates/core/src/adapters.rs."; exit 1; }
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          minisign -V -q -P "$key" -m "$catalog"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/adapters/adapters.json"
+          if published=$(curl -fsSL "$url"); then
+            old=$(jq .serial <<< "$published")
+            [ "$(jq .serial "$catalog")" -ge "$old" ] || { echo "::error::The serial is below the published $old."; exit 1; }
+          fi
+          jq -r '.adapters[].artifacts[] | "\(.url) \(.size) \(.sha256)"' "$catalog" |
+            while read -r u size sha; do
+              curl -fsSL -o "$RUNNER_TEMP/a" "$u"
+              [ "$(wc -c < "$RUNNER_TEMP/a")" = "$size" ] && [ "$(sha256sum "$RUNNER_TEMP/a" | cut -d' ' -f1)" = "$sha" ] \
+                || { echo "::error::$u does not match its size or sha256."; exit 1; }
+            done
+      - name: Publish
+        if: env.unsigned != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view adapters > /dev/null 2>&1 || gh release create adapters --prerelease --latest=false \
+            --title "Adapters catalog" --notes "The signed adapters.json that Detached reads."
+          gh release upload adapters adapters/adapters.json adapters/adapters.json.minisig --clobber

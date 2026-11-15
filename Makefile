@@ -1,4 +1,4 @@
-.PHONY: check app ui-test warm ramdisk smoke sidecar e2e-app fmt build sign-setup release
+.PHONY: check app ui-test warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
 
 # The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
 # runs first without it, so the linker's temp files stay off it.
@@ -49,6 +49,11 @@ sign-setup:
 # Bundled app's backend self-test, launched through LaunchServices like Finder does.
 e2e-app:
 	./scripts/e2e-app.sh
+
+# Signs adapters/adapters.json with the catalog's key, made outside the repo on first use;
+# entry=<entry.json> from an adapters-* release adds that entry first.
+adapters-sign:
+	./scripts/adapters-sign.sh $(entry)
 
 # Tags v<version from Cargo.toml>; CI builds every platform and publishes the release.
 release:
