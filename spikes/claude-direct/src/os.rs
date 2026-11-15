@@ -25,7 +25,9 @@ pub const WINDOWS: &[&str] = &[
 
 fn system() -> System {
     let mut s = System::new().unwrap();
+    // On Linux sysinfo lists each thread as a process unless told not to.
     let what = ProcessRefreshKind::nothing()
+        .without_tasks()
         .with_cmd(UpdateKind::Always)
         .with_environ(UpdateKind::Always)
         .with_memory();
