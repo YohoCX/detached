@@ -98,7 +98,10 @@ fn boot_with(
         ("HTTPS_PROXY", "http://127.0.0.1:9"),
         ("NO_PROXY", "127.0.0.1,localhost"),
     ];
-    (super::boot_on(cx, &claude(), &vars, install), api)
+    (
+        super::boot_on(cx, &claude(), &vars, &CLAUDE_ACP, install),
+        api,
+    )
 }
 
 fn waiting(s: &Entity<Session>, cx: &App) -> Option<usize> {

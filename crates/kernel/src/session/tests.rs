@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use detached_acp::testutil::install;
+use detached_core::adapters::testutil::CLAUDE_ACP;
 use detached_core::adapters::{self, BLOCK, CLAUDE, Config};
 use detached_core::backend::Kind;
 use detached_core::git::testutil::Sandbox;
@@ -14,7 +15,45 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{wait_for, wait_until};
 
+mod claude;
 mod real;
+
+/// The fakes the seam's tests run on, each through the same body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fake {
+    Acp,
+    Claude,
+}
+
+/// Each named body as `<name>::acp` and `<name>::claude`.
+macro_rules! both {
+    ($($name:ident),* $(,)?) => {$(
+        mod $name {
+            #[gpui::test]
+            fn acp(cx: &mut gpui::TestAppContext) {
+                super::$name(super::Fake::Acp, cx)
+            }
+
+            #[gpui::test]
+            fn claude(cx: &mut gpui::TestAppContext) {
+                super::$name(super::Fake::Claude, cx)
+            }
+        }
+    )*};
+}
+
+both!(
+    a_turn_streams_lists_what_it_changed_and_goes_back,
+    cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks,
+    a_load_runs_on_the_session_s_model,
+    a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone,
+    a_load_of_a_closing_session_waits_for_its_close,
+    a_reload_waits_for_a_load_ended_or_dropped_while_it_started,
+    always_allow_stays_a_host_rule,
+    out_of_extra_usage_names_the_pool_and_the_fallback,
+    a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not,
+    a_trust_change_before_the_prompt_went_out_ends_the_session_unsent,
+);
 
 /// A real adapter and `claude` may take this long to start or answer.
 const START: Duration = Duration::from_secs(60);
@@ -23,14 +62,40 @@ struct Fixture {
     dir: tempfile::TempDir,
     repo: String,
     core: Arc<AppState>,
+    provider: &'static Provider,
+}
+
+impl Fixture {
+    fn spec(&self, kind: Kind) -> Spec {
+        Spec::new(self.provider, &self.repo, kind)
+    }
 }
 
 /// The kernel on a sandbox with a repo, `fake_acp` installed as Claude's adapter at 1.0.0 and as
-/// its CLI.
+/// its CLI, on the ACP manifest.
 fn boot(cx: &mut TestAppContext, vars: &[(&str, &str)]) -> Fixture {
-    boot_on(cx, &detached_acp::testutil::fake(), vars, |core| {
-        install(core, "1.0.0")
-    })
+    let fake = detached_acp::testutil::fake();
+    boot_on(cx, &fake, vars, &CLAUDE_ACP, |core| install(core, "1.0.0"))
+}
+
+/// The kernel on `fake`: the fake ACP agent, or `fake_claude` as Claude's own CLI.
+fn boot_fake(cx: &mut TestAppContext, fake: Fake) -> Fixture {
+    match fake {
+        Fake::Acp => boot(cx, &[]),
+        Fake::Claude => {
+            let cli = detached_core::testutil::claude::fake();
+            boot_on(cx, &cli, &[], &CLAUDE, |_| {})
+        }
+    }
+}
+
+/// What a resumed session shows of its past: the ACP fake's replay; Claude's history is read from
+/// its transcript, which this stage does not yet.
+fn replay(fake: Fake) -> Vec<Item> {
+    match fake {
+        Fake::Acp => vec![Item::User("earlier".into()), Item::Text("replayed".into())],
+        Fake::Claude => vec![],
+    }
 }
 
 /// Names an agent gets from the machine rather than from whoever runs the tests.
@@ -48,13 +113,14 @@ const OS: &[&str] = &[
     "PATHEXT",
 ];
 
-/// The kernel on a sandbox with a repo, `cli` as Claude's CLI and `install` run on core. `vars`
-/// join core's env first; every other name an agent may get, except the `OS` ones, is a sandbox
-/// folder or empty, so nothing of the caller's own env reaches it.
+/// The kernel on a sandbox with a repo, `cli` as Claude's CLI on `provider`'s manifest and
+/// `install` run on core. `vars` join core's env first; every other name an agent may get, except
+/// the `OS` ones, is a sandbox folder or empty, so nothing of the caller's own env reaches it.
 fn boot_on(
     cx: &mut TestAppContext,
     cli: &Path,
     vars: &[(&str, &str)],
+    provider: &'static Provider,
     install: impl FnOnce(&AppState),
 ) -> Fixture {
     let Sandbox { dir, mut state } = Sandbox::new();
@@ -97,12 +163,16 @@ fn boot_on(
         crate::settings::loaded(cx) && !crate::invalidate::rescanning(cx)
     });
     let repo = repo.display().to_string();
-    Fixture { dir, repo, core }
+    Fixture {
+        dir,
+        repo,
+        core,
+        provider,
+    }
 }
 
 fn open(f: &Fixture, kind: Kind, cx: &mut TestAppContext) -> Entity<Session> {
-    let spec = Spec::new(&CLAUDE, &f.repo, kind);
-    open_spec(spec, None, cx)
+    open_spec(f.spec(kind), None, cx)
 }
 
 fn open_spec(spec: Spec, past: Option<String>, cx: &mut TestAppContext) -> Entity<Session> {
@@ -135,9 +205,8 @@ fn state(s: &Entity<Session>, cx: &mut TestAppContext) -> State {
     s.read_with(cx, |s, _| s.state.clone())
 }
 
-#[gpui::test]
-fn a_turn_streams_lists_what_it_changed_and_goes_back(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     assert_eq!(
         turn(&s, "write a.txt made;say all done here", cx),
@@ -195,11 +264,11 @@ fn asked(s: &Entity<Session>, from: usize, cx: &App) -> Option<(usize, Answer)> 
         })
 }
 
-#[gpui::test]
 fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
+    fake: Fake,
     cx: &mut TestAppContext,
 ) {
-    let f = boot(cx, &[]);
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| {
         s.prompt("stall".into(), cx);
@@ -222,13 +291,19 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
     s.update(cx, |s, _| s.cancel());
     wait_until(cx, |cx| s.read(cx).state == State::Idle);
     assert_eq!(cx.read(|cx| asked(&s, from, cx)).unwrap().1, Answer::Gone);
-    assert_eq!(said(&s, from, cx), "picked cancelled");
+    let picked = match fake {
+        Fake::Acp => "picked cancelled",
+        Fake::Claude => "picked deny",
+    };
+    assert_eq!(said(&s, from, cx), picked);
 }
 
-#[gpui::test]
-fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
-    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(
+    fake: Fake,
+    cx: &mut TestAppContext,
+) {
+    let f = boot_fake(cx, fake);
+    let spec = f.spec(Kind::Chat);
     for (id, dropped) in [("past-ended", false), ("past-dropped", true)] {
         let id = Some(id.to_string());
         let (first, again) = cx.update(|cx| {
@@ -241,8 +316,7 @@ fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(cx: &mut TestAppC
         });
         assert_eq!(cx.read(|cx| cx.global::<Sessions>().waiting.len()), 1);
         wait_until(cx, |cx| again.read(cx).state != State::Starting);
-        let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
-        again.read_with(cx, |s, _| assert_eq!(s.items, replay));
+        again.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
         assert_eq!(turn(&again, "say again", cx), "again");
         if let Some(first) = first {
             assert_eq!(state(&first, cx), State::Ended(End::Closed));
@@ -255,7 +329,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     cx: &mut TestAppContext,
 ) {
     let f = boot(cx, &[]);
-    let mut spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let mut spec = f.spec(Kind::Chat);
     // The fake exits with code 3 at `session/new` for this model.
     spec.model = Some("die".into());
     let s = cx.update(|cx| Session::open(spec, None, cx));
@@ -292,17 +366,16 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut 
     });
 }
 
-#[gpui::test]
-fn a_load_runs_on_the_session_s_model(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
-    let mut spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+fn a_load_runs_on_the_session_s_model(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
+    let mut spec = f.spec(Kind::Chat);
     spec.model = Some("haiku".into());
     let s = open_spec(spec.clone(), None, cx);
     assert_eq!(turn(&s, "model", cx), "haiku default");
     let id = s.read_with(cx, |s, _| s.id.clone());
     s.update(cx, |s, cx| s.end(cx));
     assert_eq!(state(&s, cx), State::Ended(End::Closed));
-    // Without configOptions the fake would load on fallback-opus.
+    // Without the model asked again either fake would load on fallback-opus.
     let loaded = open_spec(spec, id, cx);
     assert_eq!(
         loaded.read_with(cx, |s, _| s.option("model").map(String::from)),
@@ -311,9 +384,11 @@ fn a_load_runs_on_the_session_s_model(cx: &mut TestAppContext) {
     assert_eq!(turn(&loaded, "model", cx), "haiku default");
 }
 
-#[gpui::test]
-fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(
+    fake: Fake,
+    cx: &mut TestAppContext,
+) {
+    let f = boot_fake(cx, fake);
     let other = open(&f, Kind::Chat, cx);
     let tool: fn(&Item) -> bool = |i| matches!(i, Item::Tool(_));
     let ask = |i: &Item| matches!(i, Item::Ask { .. });
@@ -329,31 +404,32 @@ fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(cx: &mut T
         } else {
             s.update(cx, |s, cx| s.end(cx));
         }
-        let loaded = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), id, cx);
-        let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
-        loaded.read_with(cx, |s, _| assert_eq!(s.items, replay));
+        let loaded = open_spec(f.spec(Kind::Chat), id, cx);
+        loaded.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
         assert_eq!(turn(&loaded, "say again", cx), "again");
     }
     assert_eq!(turn(&other, "say still here", cx), "still here");
 }
 
-#[gpui::test]
-fn a_load_of_a_closing_session_waits_for_its_close(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn a_load_of_a_closing_session_waits_for_its_close(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
     let other = open(&f, Kind::Chat, cx);
     let s = open(&f, Kind::Chat, cx);
-    turn(&s, "hold-close", cx);
+    // ACP's answers the close only on the next prompt; Claude's CLI stays until its SIGTERM.
+    let hold = match fake {
+        Fake::Acp => "hold-close",
+        Fake::Claude => "hold",
+    };
+    turn(&s, hold, cx);
     let id = s.read_with(cx, |s, _| s.id.clone());
-    let spec = Spec::new(&CLAUDE, &f.repo, Kind::Chat);
+    let spec = f.spec(Kind::Chat);
     let loaded = cx.update(|cx| {
         s.update(cx, |s, cx| s.end(cx));
         Session::open(spec, id, cx)
     });
-    // The fake answers the close only on this prompt.
     assert_eq!(turn(&other, "say ping", cx), "ping");
     wait_until(cx, |cx| loaded.read(cx).state != State::Starting);
-    let replay = [Item::User("earlier".into()), Item::Text("replayed".into())];
-    loaded.read_with(cx, |s, _| assert_eq!(s.items, replay));
+    loaded.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
     assert_eq!(turn(&loaded, "say again", cx), "again");
 }
 
@@ -378,13 +454,12 @@ fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppCont
         );
     }
     // A dead adapter answers no close, so the load must not wait for one.
-    let loaded = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), id, cx);
+    let loaded = open_spec(f.spec(Kind::Chat), id, cx);
     assert_eq!(turn(&loaded, "say back", cx), "back");
 }
 
-#[gpui::test]
-fn always_allow_stays_a_host_rule(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn always_allow_stays_a_host_rule(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     // Answers a waiting ask `Always`: what the ask got first, and what the adapter heard.
     let ask = |prompt: &str, cx: &mut TestAppContext| {
@@ -398,14 +473,22 @@ fn always_allow_stays_a_host_rule(cx: &mut TestAppContext) {
         wait_until(cx, |cx| s.read(cx).state == State::Idle);
         (answer, said(&s, from, cx))
     };
-    let once = "picked allow_once".to_string();
-    assert_eq!(ask("ask", cx), (Answer::Waiting, once.clone()));
-    assert_eq!(ask("ask", cx), (Answer::Always, once));
-    // The same kind and title on another input.
-    assert_eq!(ask("ask other.txt", cx).0, Answer::Waiting);
-    // An ask without raw input takes no rule.
-    assert_eq!(ask("ask -", cx).0, Answer::Waiting);
-    assert_eq!(ask("ask -", cx).0, Answer::Waiting);
+    let (once, other) = match fake {
+        Fake::Acp => ("picked allow_once", "ask other.txt"),
+        Fake::Claude => (
+            "picked allow",
+            r#"ask Write {"file_path": "other.txt", "content": "n"}"#,
+        ),
+    };
+    assert_eq!(ask("ask", cx), (Answer::Waiting, once.to_string()));
+    assert_eq!(ask("ask", cx), (Answer::Always, once.to_string()));
+    // The same tool and title on another input.
+    assert_eq!(ask(other, cx).0, Answer::Waiting);
+    if fake == Fake::Acp {
+        // An ask without raw input takes no rule.
+        assert_eq!(ask("ask -", cx).0, Answer::Waiting);
+        assert_eq!(ask("ask -", cx).0, Answer::Waiting);
+    }
 }
 
 #[gpui::test]
@@ -494,9 +577,8 @@ fn an_old_adapter_keeps_its_sessions_while_a_new_version_starts(cx: &mut TestApp
     drop(f.dir);
 }
 
-#[gpui::test]
-fn out_of_extra_usage_names_the_pool_and_the_fallback(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn out_of_extra_usage_names_the_pool_and_the_fallback(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     turn(&s, "out-of-usage", cx);
     s.read_with(cx, |s, _| {
@@ -509,16 +591,21 @@ fn out_of_extra_usage_names_the_pool_and_the_fallback(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
-fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+/// On a trust path the backend does not block: Claude's blocks its settings, not a command.
+fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(
+    fake: Fake,
+    cx: &mut TestAppContext,
+) {
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     assert_eq!(turn(&s, "write CLAUDE.md Be terse.;say noted", cx), "noted");
     assert_eq!(state(&s, cx), State::Idle);
     let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
-    s.update(cx, |s, cx| {
-        s.prompt(format!("write .claude/settings.json {hook};stall"), cx)
-    });
+    let write = match fake {
+        Fake::Acp => format!("write .claude/settings.json {hook}"),
+        Fake::Claude => "write .claude/commands/hi.md Say hi.".into(),
+    };
+    s.update(cx, |s, cx| s.prompt(format!("{write};stall"), cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     s.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Trust));
@@ -530,9 +617,11 @@ fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mu
     });
 }
 
-#[gpui::test]
-fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(cx: &mut TestAppContext) {
-    let f = boot(cx, &[]);
+fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(
+    fake: Fake,
+    cx: &mut TestAppContext,
+) {
+    let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| {
         s.prompt("say not sent".into(), cx);
