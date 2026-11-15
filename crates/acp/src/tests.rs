@@ -421,10 +421,15 @@ fn claude_env(dir: &Path, api: &str) -> Vec<(String, OsString)> {
     env
 }
 
-/// A turn on Claude's real adapter, as `make agent-test` builds it, started with or without AIR's
-/// declaration, every ask allowed once: what it sent besides tool calls, and each tool call as its
-/// updates left it.
-fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String, Tool>) {
+/// Claude's real adapter: under CI's vetting (`DETACHED_AGENT_CATALOG`) the catalog's entry
+/// `DETACHED_AGENT_ENTRY` installed in `data`, else the bun build `make agent-test` makes.
+fn real_adapter(data: &Path) -> PathBuf {
+    if let Ok(url) = std::env::var("DETACHED_AGENT_CATALOG") {
+        let version = std::env::var("DETACHED_AGENT_ENTRY").ok();
+        testutil::from_catalog(data, &url, adapters::CATALOG_KEY, version.as_deref());
+        let current = adapters::installed(data, CLAUDE.adapter).current.unwrap();
+        return adapters::exe(data, CLAUDE.adapter, &current);
+    }
     let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters");
     let exe = format!("{}{}", CLAUDE.adapter, std::env::consts::EXE_SUFFIX);
     let program = build.join(CLAUDE.adapter).join("out").join(exe);
@@ -432,8 +437,14 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
         program.is_file(),
         "no bun build of the adapter: run `make agent-test`"
     );
+    program
+}
+
+/// A turn on Claude's real adapter, started with or without AIR's declaration, every ask allowed
+/// once: what it sent besides tool calls, and each tool call as its updates left it.
+fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String, Tool>) {
     let spec_proc = proc::Spec {
-        program,
+        program: real_adapter(&sb.state.data_dir),
         args: vec![],
         cwd: std::env::temp_dir(),
         env: claude_env(sb.dir.path(), api),

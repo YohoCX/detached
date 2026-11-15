@@ -5,7 +5,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use detached_core::adapters::{CATALOG_KEY, Catalog, Installed, Version};
+use detached_acp::testutil::from_catalog;
+use detached_core::adapters::{CATALOG_KEY, Installed, Version};
 use detached_core::env::Env;
 use detached_core::testutil::api::Api;
 
@@ -77,18 +78,6 @@ fn install(core: &AppState) {
         .join(CLAUDE.adapter)
         .join("installed.json");
     std::fs::write(file, serde_json::to_vec(&installed).unwrap()).unwrap();
-}
-
-/// Fetches the catalog and installs its entry `version`, or the newest for this app.
-fn from_catalog(data: &Path, url: &str, key: &str, version: Option<&str>) {
-    let catalog: Catalog = adapters::fetch(url, key, data).unwrap();
-    let entries = catalog.entries(CLAUDE.adapter, &adapters::app_version());
-    let entry = match version {
-        Some(v) => entries.into_iter().find(|e| e.version.to_string() == v),
-        None => entries.into_iter().max_by(|a, b| a.version.cmp(&b.version)),
-    };
-    let entry = entry.expect("the catalog has no such entry of Claude's adapter for this app");
-    adapters::install(data, entry, &Default::default(), &|_| {}).unwrap();
 }
 
 /// The kernel with the real adapter and `claude`, and the fake API on `script`.

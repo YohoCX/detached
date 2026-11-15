@@ -3,7 +3,8 @@
 //! - `say <text>` streams the text in three chunks with a usage update; `prose` answers without a tool;
 //! - `stall` runs a foreground command until `session/cancel`, which kills it;
 //! - `die` exits with code 3 mid-turn;
-//! - `ask` asks permission for a tool and says the option it got;
+//! - `ask [<path>|-]` asks permission to write the path (notes.txt), its title always the same and
+//!   `-` without raw input, and says the option it got;
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
 //! - `env` says the names in its env; `meta` the `_meta` its session got; `model` its model;
@@ -304,8 +305,12 @@ impl Turn<'_> {
                 std::process::exit(3);
             }
             "ask" => {
-                let tool = json!({"toolCallId": "t-ask", "title": "Write notes.txt", "kind": "edit",
-                    "rawInput": {"file_path": "notes.txt"}});
+                let mut tool =
+                    json!({"toolCallId": "t-ask", "title": "Write notes.txt", "kind": "edit"});
+                if rest != "-" {
+                    let path = if rest.is_empty() { "notes.txt" } else { rest };
+                    tool["rawInput"] = json!({"file_path": path});
+                }
                 self.update(
                     json!({"sessionUpdate": "tool_call", "status": "pending", "toolCallId": "t-ask",
                     "title": "Write notes.txt", "kind": "edit"}),

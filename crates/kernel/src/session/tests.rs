@@ -182,11 +182,13 @@ fn a_turn_streams_lists_what_it_changed_and_goes_back(cx: &mut TestAppContext) {
     assert!(!Path::new(&f.repo).join("a.txt").exists());
 }
 
-fn asked(s: &Entity<Session>, cx: &App) -> Option<(usize, Answer)> {
+/// The first ask from item `from` on.
+fn asked(s: &Entity<Session>, from: usize, cx: &App) -> Option<(usize, Answer)> {
     s.read(cx)
         .items
         .iter()
         .enumerate()
+        .skip(from)
         .find_map(|(at, i)| match i {
             Item::Ask { answer, .. } => Some((at, *answer)),
             _ => None,
@@ -216,10 +218,10 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
     });
     let from = s.read_with(cx, |s, _| s.items.len());
     s.update(cx, |s, cx| s.prompt("ask".into(), cx));
-    wait_until(cx, |cx| asked(&s, cx).is_some());
+    wait_until(cx, |cx| asked(&s, from, cx).is_some());
     s.update(cx, |s, _| s.cancel());
     wait_until(cx, |cx| s.read(cx).state == State::Idle);
-    assert_eq!(cx.read(|cx| asked(&s, cx)).unwrap().1, Answer::Gone);
+    assert_eq!(cx.read(|cx| asked(&s, from, cx)).unwrap().1, Answer::Gone);
     assert_eq!(said(&s, from, cx), "picked cancelled");
 }
 
@@ -276,14 +278,18 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut 
     let version =
         |s: &Entity<Session>, cx: &TestAppContext| s.read_with(cx, |s, _| s.version.clone());
     assert_ne!(version(&s, cx), version(&other, cx));
+    s.update(cx, |s, cx| s.prompt("die".into(), cx));
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    assert!(matches!(state(&s, cx), State::Ended(End::Crashed(_))));
+    assert_eq!(state(&other, cx), State::Idle);
+    assert_eq!(turn(&other, "say still here", cx), "still here");
     // What the backend makes of an exit it asked for, whatever its code and stderr.
-    let id = s.read_with(cx, |s, _| s.id.clone());
-    cx.update(|cx| deliver(cx, &s.downgrade(), id, Event::Closed));
-    s.read_with(cx, |s, _| {
+    let id = other.read_with(cx, |s, _| s.id.clone());
+    cx.update(|cx| deliver(cx, &other.downgrade(), id, Event::Closed));
+    other.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Closed));
         assert!(!s.items.iter().any(|i| matches!(i, Item::Note(_))));
     });
-    assert_eq!(state(&other, cx), State::Idle);
 }
 
 #[gpui::test]
@@ -380,31 +386,26 @@ fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppCont
 fn always_allow_stays_a_host_rule(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
-    s.update(cx, |s, cx| s.prompt("ask".into(), cx));
-    wait_until(cx, |cx| asked(&s, cx).is_some());
-    let (at, answer) = cx.read(|cx| asked(&s, cx)).unwrap();
-    assert_eq!(answer, Answer::Waiting);
-    s.update(cx, |s, cx| s.answer(at, Answer::Always, cx));
-    wait_until(cx, |cx| s.read(cx).state == State::Idle);
-    assert_eq!(said(&s, at, cx), "picked allow_once");
-    let from = s.read_with(cx, |s, _| s.items.len());
-    assert_eq!(turn(&s, "ask", cx), "picked allow_once");
-    s.read_with(cx, |s, _| {
-        let ask = s.items[from..]
-            .iter()
-            .find(|i| matches!(i, Item::Ask { .. }));
-        assert!(
-            matches!(
-                ask,
-                Some(Item::Ask {
-                    answer: Answer::Always,
-                    ..
-                })
-            ),
-            "{:?}",
-            s.items
-        );
-    });
+    // Answers a waiting ask `Always`: what the ask got first, and what the adapter heard.
+    let ask = |prompt: &str, cx: &mut TestAppContext| {
+        let from = s.read_with(cx, |s, _| s.items.len());
+        s.update(cx, |s, cx| s.prompt(prompt.into(), cx));
+        wait_until(cx, |cx| asked(&s, from, cx).is_some());
+        let (at, answer) = cx.read(|cx| asked(&s, from, cx)).unwrap();
+        if answer == Answer::Waiting {
+            s.update(cx, |s, cx| s.answer(at, Answer::Always, cx));
+        }
+        wait_until(cx, |cx| s.read(cx).state == State::Idle);
+        (answer, said(&s, from, cx))
+    };
+    let once = "picked allow_once".to_string();
+    assert_eq!(ask("ask", cx), (Answer::Waiting, once.clone()));
+    assert_eq!(ask("ask", cx), (Answer::Always, once));
+    // The same kind and title on another input.
+    assert_eq!(ask("ask other.txt", cx).0, Answer::Waiting);
+    // An ask without raw input takes no rule.
+    assert_eq!(ask("ask -", cx).0, Answer::Waiting);
+    assert_eq!(ask("ask -", cx).0, Answer::Waiting);
 }
 
 #[gpui::test]
