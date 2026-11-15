@@ -229,7 +229,11 @@ impl Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
-        self.closing.lock().unwrap().insert(self.key());
+        let mut c = self.closing.lock().unwrap();
+        if !c.dead.contains(&self.live.serial) {
+            c.keys.insert(self.key());
+        }
+        drop(c);
         self.live.adapter.close_session(&self.id);
     }
 }
@@ -237,8 +241,15 @@ impl Drop for Open {
 /// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
 type Adapters = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>>;
 
-/// Sessions whose close is not answered yet; an `Open` may drop off the UI thread.
-type Closing = Arc<Mutex<HashSet<(u64, String)>>>;
+/// Sessions whose close is not answered yet, and adapters that exited and will answer none; an
+/// `Open` may drop off the UI thread, after its adapter's exit.
+type Closing = Arc<Mutex<Closes>>;
+
+#[derive(Default)]
+struct Closes {
+    keys: HashSet<(u64, String)>,
+    dead: HashSet<u64>,
+}
 
 struct Sessions {
     tx: mpsc::UnboundedSender<(u64, Event)>,
@@ -281,7 +292,7 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
         Event::Closed(s) => {
             let key = (serial, s.clone());
             let g = cx.global::<Sessions>();
-            g.closing.lock().unwrap().remove(&key);
+            g.closing.lock().unwrap().keys.remove(&key);
             // Only the closed session's entry: a reload may hold the key by now.
             let on = g.by_id.get(&key).and_then(WeakEntity::upgrade);
             if on.is_none_or(|s| s.read(cx).open.is_none()) {
@@ -294,7 +305,10 @@ fn dispatch(cx: &mut App, serial: u64, e: Event) {
         Event::Exited(x) => {
             let g = cx.global_mut::<Sessions>();
             g.early.retain(|k, _| k.0 != serial);
-            g.closing.lock().unwrap().retain(|k| k.0 != serial);
+            let mut c = g.closing.lock().unwrap();
+            c.dead.insert(serial);
+            c.keys.retain(|k| k.0 != serial);
+            drop(c);
             let on: Vec<_> = g.by_id.extract_if(|k, _| k.0 == serial).collect();
             let said = crashed(x);
             for s in on.into_iter().filter_map(|(_, w)| w.upgrade()) {
@@ -372,7 +386,7 @@ impl Session {
         }
         let (core, me, past) = (crate::core(cx).clone(), cx.weak_entity(), self.id.clone());
         let g = cx.global_mut::<Sessions>();
-        let closing = |id: &String| g.closing.lock().unwrap().iter().any(|k| k.1 == *id);
+        let closing = |id: &String| g.closing.lock().unwrap().keys.iter().any(|k| k.1 == *id);
         if past.as_ref().is_some_and(closing) {
             return g.waiting.push(me);
         }

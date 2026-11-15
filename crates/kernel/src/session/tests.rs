@@ -293,6 +293,7 @@ fn a_load_of_a_closing_session_waits_for_its_close(cx: &mut TestAppContext) {
 fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let (a, b) = (open(&f, Kind::Chat, cx), open(&f, Kind::Untrusted, cx));
+    let id = a.read_with(cx, |s, _| s.id.clone());
     a.update(cx, |s, cx| s.prompt("die".into(), cx));
     wait_until(cx, |cx| {
         [&a, &b]
@@ -308,6 +309,9 @@ fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppCont
             "{why}"
         );
     }
+    // A dead adapter answers no close, so the load must not wait for one.
+    let loaded = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), id, cx);
+    assert_eq!(turn(&loaded, "say back", cx), "back");
 }
 
 #[gpui::test]
