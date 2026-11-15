@@ -4,7 +4,7 @@
 //! distro from a Windows host.
 
 #[allow(dead_code)]
-#[path = "../../../crates/acp/src/testutil/api.rs"]
+#[path = "../../../crates/core/src/testutil/api.rs"]
 mod api;
 mod h4c;
 mod os;

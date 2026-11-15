@@ -702,6 +702,11 @@ fn tools() {
 /// An untrusted participant's options (PLAN-AGENT-HOST §5) as flags: its tools, no settings, no
 /// MCP server but the host's, the sandbox through --settings.
 fn isolated() {
+    // The sandbox has no native Windows build; §5 runs isolated participants in WSL2, covered by that leg.
+    if cfg!(windows) {
+        println!("isolated: not applicable on native Windows");
+        return;
+    }
     let script = json!([
         [bash("echo made > made.txt")],
         [bash("cat ../secret/key")],
@@ -711,14 +716,7 @@ fn isolated() {
     ]);
     let run = Run::new("isolated", script);
     run.write("secret/key", "SECRET=fixture-not-for-agents");
-    // As the CLI sees them: on Windows `canonicalize` adds `\\?\` and expands 8.3 names.
-    let real = |p: PathBuf| {
-        if cfg!(unix) {
-            p.canonicalize().unwrap()
-        } else {
-            p
-        }
-    };
+    let real = |p: PathBuf| p.canonicalize().unwrap();
     let (repo, secret) = (real(run.repo()), real(run.dir.join("secret")));
     let sandbox = json!({"enabled": true, "failIfUnavailable": true, "autoAllowBashIfSandboxed": true,
         "allowUnsandboxedCommands": false, "network": {"strictAllowlist": true},

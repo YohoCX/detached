@@ -9,6 +9,7 @@ on:
     paths:
       - spikes/claude-direct/**
       - '!spikes/claude-direct/**/*.md'
+      - crates/core/src/testutil/api.rs
       - .github/workflows/h4c-evidence.yml
   workflow_dispatch:
 

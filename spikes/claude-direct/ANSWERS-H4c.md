@@ -77,6 +77,7 @@ What differs from spike 0c, all on 2.1.325:
 - `apply_flag_settings` and `set_max_thinking_tokens` answer `null`; the effort still changed.
 - `set_permission_mode` `plan` and `auto` answer their mode. An invalid mode's error lists
   `acceptEdits, auto, bypassPermissions, default, dontAsk, plan`.
+- `isolated` does not run on native Windows: the sandbox has no build there, and §5 puts isolated participants in WSL2, whose leg runs it.
 - `isolated`: the write and the read of the denied folder failed with "operation not permitted",
   `Read` was denied, `Write` is "No such tool", nothing asked.
 
