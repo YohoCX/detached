@@ -39,6 +39,7 @@ fn each_page_opens_by_its_id(cx: &mut TestAppContext) {
         ("updates", "settings.updates"),
         ("repository", "settings.removed"),
         ("sharing", "settings.sharing"),
+        ("worktrees", "settings.worktrees"),
         ("files", "settings.files"),
     ];
     for (id, page) in pages {
@@ -72,6 +73,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Current repository",
         "Repository",
         "Sharing",
+        "Worktrees",
     ];
     assert_eq!(nav(cx), groups);
     assert!(cx.find("stub").is_none());
