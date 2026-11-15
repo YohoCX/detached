@@ -991,11 +991,25 @@ own-adapter exceptions of §1 add to that key. A session watches its own tree's 
 than growing `core::watch`'s list. The tests pass on macOS; the job module is compiled for Windows
 only on its own, and no test has run on Linux or Windows. Not built yet: the questions row
 (`elicitation.form` is declared once the chat's view takes questions, H11), the running turn as
-an Activity job and past sessions, which wait for a view. H4b owes Work 6 (the real-adapter
-harness on the scripted fake Messages API, the CI matrix, `make agent-test`, the 3-minute Bash
-call, the catalog's CI vetting) and the tests "on the real adapter", the check that AIR's
-declaration changes nothing but async stop among them; it drives `kernel::Session` as part a
-does, with the real adapter installed in place of `fake_acp`.**
+an Activity job and past sessions, which wait for a view.
+Part b is built: `detached_acp::testutil::api`, the spike's scripted Messages API;
+`kernel::session`'s real-adapter tests, which `make agent-test` runs on the bun build of
+`scripts/adapter-build.sh` (shared with `adapters.yml`) or, under `DETACHED_AGENT_CATALOG`, on a
+signed catalog's entry installed through core; `agent.yml` on §17's OSes and WSL2, and
+`agent-vet.yml` for each catalog bump and weekly. Every test has a temp HOME and
+`CLAUDE_CONFIG_DIR`, core's three tiers apart and all HTTPS to a dead proxy. On macOS with
+`claude` 2.1.325, all eight pass (188 s): the first tool call asks under `default` (without
+`mode` the CLI starts in `auto`), a load keeps its model, an untrusted chat closed and loaded runs
+the user's hook and not the project's and keeps the `.env` deny, which refuses `Read` and
+`cat .env`, an adapter gone mid-command leaves no process (on every OS, on Windows through the
+job), a 3-minute command reports `in_progress` within a minute, and a locally signed catalog's
+entry installs and runs. The AIR check fired: an AIR client gets no `rawOutput`, so a
+command's output goes only to `_meta.terminal_output` and a read's text nowhere, and an ask's tool
+carries no kind; the test pins that difference. §2 says to drop the declaration with stopTask
+parity, which nothing gives yet without it: the owner decides. Also seen: `["user"]` still loads
+the project's `CLAUDE.md` (not an item, §4), and the project's `permissions.allow` was not applied
+even under `["project"]`. Left: the workflows have not run (they run once pushed); the Windows,
+Linux and WSL2 rows are unproven until then.**
 
 Work:
 1. `core::proc` and `crates/acp` per §1.
