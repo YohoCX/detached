@@ -37,28 +37,10 @@ jobs:
       - name: Build
         run: |
           tag=${GITHUB_REF_NAME#adapters-}; name=${tag%-*}; version=${tag##*-}
-          cd "adapters/$name"
-          grep -q "\"@agentclientprotocol/$name\":\"$version\"" package.json \
+          grep -q "\"@agentclientprotocol/$name\":\"$version\"" "adapters/$name/package.json" \
             || { echo "::error::adapters/$name/package.json does not pin $version."; exit 1; }
-          # --omit optional keeps the SDK's bundled Claude CLI out: the user's own `claude` runs.
-          bun install --frozen-lockfile --omit optional
-          exe=$name; [ "$RUNNER_OS" = Windows ] && exe=$name.exe
-          mkdir -p out/licenses
-          bun build --compile --target=${{ matrix.bun }} \
-            "node_modules/@agentclientprotocol/$name/dist/index.js" --outfile "out/$exe"
-          for pkg in node_modules/*/ node_modules/@*/*/; do
-            for f in "$pkg"LICEN[CS]E* "$pkg"COPYING*; do
-              [ -f "$f" ] || continue
-              mkdir -p "out/licenses/${pkg#node_modules/}"
-              cp "$f" "out/licenses/${pkg#node_modules/}"
-            done
-          done
-          size=$(wc -c < "out/$exe")
-          [ "$size" -lt 157286400 ] || { echo "::error::$exe is $size bytes: is a CLI bundled?"; exit 1; }
-          if find out -name claude -o -name claude.exe -o -name codex -o -name codex.exe | grep -q .; then
-            echo "::error::A provider's CLI is in the build."; exit 1
-          fi
-          (cd out && tar -czf "../$name-$version-${{ matrix.target }}.tar.gz" -- *)
+          ./scripts/adapter-build.sh "$name" ${{ matrix.bun }}
+          mv "adapters/$name/out.tar.gz" "adapters/$name/$name-$version-${{ matrix.target }}.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
