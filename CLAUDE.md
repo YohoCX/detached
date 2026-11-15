@@ -20,6 +20,8 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
 make app      # the client at release speed, on the real config directory (the owner's only)
 make ui-test  # the UI tests only; t=repos runs tests/repos.rs alone
 make agent-test  # the real Claude adapter (built with bun) and your `claude` on a fake Messages API
+make agent-login # the owner's, never an agent's: `detached --session` on his own `claude` and login,
+                 # a temp repo and config directory; prompt=, args="--past|--resume <id>|--delete <id>"
 make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
 make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory

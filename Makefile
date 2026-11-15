@@ -1,4 +1,4 @@
-.PHONY: check app ui-test agent-test warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
+.PHONY: check app ui-test agent-test agent-login warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
 
 # The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
 # runs first without it, so the linker's temp files stay off it.
@@ -25,6 +25,16 @@ agent-test:
 	./scripts/adapter-build.sh claude-agent-acp
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
 	cargo test -p detached-acp -- --ignored
+
+# The owner's, never CI's or an agent's: `detached --session` on his own `claude` and login, in a
+# temp repo and config directory kept between runs; prompt=<text> (else stdin), args=--past,
+# --resume <id> or --delete <id>.
+LOGIN = $(patsubst %/,%,$(or $(TMPDIR),/tmp))/detached-agent-login
+agent-login:
+	test -d "$(LOGIN)/repo" || (git init -q "$(LOGIN)/repo" && \
+		git -C "$(LOGIN)/repo" -c user.name=d -c user.email=d@d commit -q --allow-empty -m init)
+	DETACHED_CONFIG_DIR="$(LOGIN)/config" cargo run -p detached-app -- \
+		--session "$(LOGIN)/repo" $(args) $(if $(prompt),"$(prompt)")
 
 # In a new worktree: its build starts from the worktree that built last.
 warm:
