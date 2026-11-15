@@ -132,8 +132,11 @@ jobs:
           additional-packages: git perl curl ca-certificates bubblewrap socat
       - shell: wsl-bash {0}
         run: |
+          set -eu
           curl -fsSL https://claude.ai/install.sh | bash -s '${{ matrix.cli }}'
-          ~/.local/bin/claude --version
+          have=$(~/.local/bin/claude --version)
+          echo "claude $have"
+          [ '${{ matrix.cli }}' = latest ] || [ "${have%% *}" = '${{ matrix.cli }}' ] || { echo "::error::claude is $have, not ${{ matrix.cli }}."; exit 1; }
       - run: cargo build --manifest-path spikes/claude-direct/Cargo.toml
       # In NAT mode the distro reaches the host only on its gateway address, through this rule.
       - shell: pwsh

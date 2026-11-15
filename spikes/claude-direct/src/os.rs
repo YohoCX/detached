@@ -52,19 +52,21 @@ pub fn procs(needle: &str) -> Vec<String> {
         format!("{} {}", p.pid(), cmd.join(" "))
     };
     let mut all: Vec<String> = with.map(line).collect();
-    all.extend(distro(needle));
+    all.extend(distro(needle, "echo \"wsl:${f#/proc/} $c\""));
     all
 }
 
-/// The distro's processes holding `needle`. It is passed in two halves, so this query's own
-/// command line does not hold it.
-fn distro(needle: &str) -> Vec<String> {
+/// `each` for every process of the distro holding `needle`, as lines. The needle is passed in two
+/// halves, so this query's own command line does not hold it.
+fn distro(needle: &str, each: &str) -> Vec<String> {
     let Some(d) = super::wsl() else { return vec![] };
-    let script = "for f in /proc/[0-9]*; do c=$(tr '\\0' ' ' < $f/cmdline 2>/dev/null); \
-        case \"$c $(tr '\\0' ' ' < $f/environ 2>/dev/null)\" in *\"$1$2\"*) echo \"wsl:${f#/proc/} $c\";; esac; done";
+    let script = format!(
+        "for f in /proc/[0-9]*; do c=$(tr '\\0' ' ' < $f/cmdline 2>/dev/null); \
+        case \"$c $(tr '\\0' ' ' < $f/environ 2>/dev/null)\" in *\"$1$2\"*) {each};; esac; done"
+    );
     let (a, b) = needle.split_at(3);
     let out = Command::new("wsl.exe")
-        .args(["-d", &d, "-e", "sh", "-c", script, "sh", a, b])
+        .args(["-d", &d, "-e", "sh", "-c", &script, "sh", a, b])
         .output();
     let out = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
     out.unwrap_or_default()
@@ -73,11 +75,15 @@ fn distro(needle: &str) -> Vec<String> {
         .collect()
 }
 
-/// The resident memory of every process holding `needle`, in MB.
+/// The resident memory of every process holding `needle`, the distro's too, in MB.
 pub fn memory(needle: &str) -> u64 {
     let s = system();
     let with = s.processes().values().filter(|p| holds(p, needle));
-    with.map(|p| p.memory()).sum::<u64>() / 1_000_000
+    let rss = "sed -n 's/^VmRSS: *\\([0-9]*\\).*/\\1/p' $f/status 2>/dev/null";
+    let kb = distro(needle, rss)
+        .into_iter()
+        .filter_map(|l| l.parse::<u64>().ok());
+    (with.map(|p| p.memory()).sum::<u64>() + kb.sum::<u64>() * 1024) / 1_000_000
 }
 
 /// Kills what `procs` listed.

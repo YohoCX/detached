@@ -4,12 +4,11 @@
 decision is [docs/decisions/2026-11-16-claude-direct-connection.md](../../docs/decisions/2026-11-16-claude-direct-connection.md);
 [ANSWERS-0c.md](ANSWERS-0c.md) stays the macOS spike's record.
 
-**Status.** The macOS column is filled, on the installed `claude` 2.1.325 alone. Every other column
-waits for `.github/workflows/h4c-evidence.yml`, which no one has pushed yet. **No row hit its If on
-macOS.** Row 11 did not run here, and row 9 is the owner's.
+**Status.** The macOS column is filled, on the installed `claude` 2.1.325, and row 11 on the floor it
+installs. Every other column waits for `.github/workflows/h4c-evidence.yml`, which no one has pushed
+yet. **No row hit its If on macOS.** Row 9 is the owner's.
 
-**Versions.** macOS 27 arm64, `claude` 2.1.325. The floor, 2.1.322, did not run here: the auto-mode
-classifier of this session refused to download and run Anthropic's installer, even into a temp
+**Versions.** macOS 27 arm64, `claude` 2.1.325; row 11 installed the floor, 2.1.322, into its temp
 HOME. CI runs every row at the floor and at the latest `claude`.
 
 **How it runs.**
@@ -26,7 +25,7 @@ HOME. CI runs every row at the floor and at the latest `claude`.
   - a session runs in its own process group on Unix, and in a job with `KILL_ON_JOB_CLOSE` on
     Windows;
   - signals go through `libc`, and a UUID comes from std's random hasher;
-  - in the WSL shape, the distro's processes are read from its `/proc`.
+  - in the WSL shape, the distro's processes and their memory are read from its `/proc`.
 - **The leash is fixed `sh` lines** (`LEASH` in `src/main.rs`): the CLI runs on the leash's own
   stdin, and gets SIGTERM, then SIGKILL 5 s later, once the leash's parent is gone. Spike 0c's
   Rust leash and its `hygiene` row are gone; rows 3 and 4 replace them.
@@ -56,7 +55,7 @@ HOME. CI runs every row at the floor and at the latest `claude`.
 | 8 | Transcripts | §6's rules hold; fixtures kept | not hit |
 | 9 | A real login | the owner's | the owner's |
 | 10 | What 0c did not show | all six work | not hit |
-| 11 | The floor installed | not run here | pending CI |
+| 11 | The floor installed | a session keeps it; an interactive start updates it but under `DISABLE_AUTOUPDATER` or `DISABLE_UPDATES` | not hit |
 
 The OS columns below: Ubuntu 22.04 and 24.04, Windows and WSL2 run each row; the WSL shape runs
 rows 1 (handshake and turn), 2, 3 and 4.
@@ -104,6 +103,9 @@ If a command outlives it, then the order changes until none does.
 | Ran | `close`: the session under the `sh` leash, a 600 s command in front and, in another session, behind; then `interrupt`, `stop_task` for the task, stdin closed, SIGTERM to the group after 2 s, SIGKILL 5 s later | pending CI | pending CI | pending CI (no leash; the job at the SIGTERM step) | pending CI | pending CI |
 | Happened | both ended at "stdin closed", in 0.65 s and 0.67 s; the command was gone; no process of the session was left; no signal was needed | | | | | |
 | If | not hit | | | | | |
+
+What is left is read before the session's job closes, so the Windows column tells the CLI's own exit
+from the job's.
 
 ## 4. A killed host
 
@@ -262,23 +264,23 @@ remedy.
 
 | | macOS | Ubuntu 22.04 | Ubuntu 24.04 | Windows | WSL2 | WSL shape |
 | --- | --- | --- | --- | --- | --- | --- |
-| Ran | not run here: this session's classifier refused the installer | pending CI | pending CI | pending CI (no interactive start) | pending CI | |
-| Happened | | | | | | |
-| If | pending CI | | | | | |
+| Ran | `floor` at 2.1.322 | pending CI | pending CI | pending CI (no interactive start) | pending CI | |
+| Happened | the installer's `.claude.json` has `installMethod: "native"`, `autoUpdates: false`, `autoUpdatesProtectedForNative: true`; a stream-json session and 30 s idle kept 2.1.322; 45 s interactive: none and `autoUpdates: false` went to 2.1.325, `DISABLE_AUTOUPDATER=1` and `DISABLE_UPDATES=1` kept 2.1.322, `autoUpdatesChannel: "stable"` went down to 2.1.311 | | | | | |
+| If | not hit: either env var keeps it | | | | | |
 
 **What `floor` does** (`SPIKE_FLOOR`, by default 2.1.322):
 - It installs that version with the installer's own command into the run's temp HOME, then prints
   `--version` and the launcher's link.
 - It runs a stream-json session and 30 s of idle, and prints the version again.
-- On Unix it starts `claude` interactively for 45 s under `script`, onboarding and trust already
-  accepted, once per updater setting. After each it prints the version, and installs the floor
+- On Unix it starts `claude` interactively for 45 s under `script`, once per updater setting, with
+  onboarding and trust merged into the installer's `.claude.json`, whose updater keys stay. After each it prints the version, and installs the floor
   again if the version moved.
 - The settings: none, `DISABLE_AUTOUPDATER=1`, `DISABLE_UPDATES=1`, `autoUpdates: false` in
   `.claude.json`, and `autoUpdatesChannel: "stable"`.
 - HTTPS stays on the dead proxy but for `claude.ai`, `downloads.claude.ai` and
   `storage.googleapis.com`, so the updater can reach its own hosts and nothing else.
 
-**Read from 2.1.325's bundle, not run:**
+**Read from 2.1.325's bundle**; macOS saw the first:
 - The updater stops for `DISABLE_UPDATES` or `DISABLE_AUTOUPDATER`, or for `autoUpdates: false`
   in the global config. The last one is ignored for a native install that has
   `autoUpdatesProtectedForNative`.

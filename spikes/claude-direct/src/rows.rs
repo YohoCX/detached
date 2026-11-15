@@ -711,8 +711,15 @@ fn isolated() {
     ]);
     let run = Run::new("isolated", script);
     run.write("secret/key", "SECRET=fixture-not-for-agents");
-    let repo = run.repo().canonicalize().unwrap();
-    let secret = run.dir.join("secret").canonicalize().unwrap();
+    // As the CLI sees them: on Windows `canonicalize` adds `\\?\` and expands 8.3 names.
+    let real = |p: PathBuf| {
+        if cfg!(unix) {
+            p.canonicalize().unwrap()
+        } else {
+            p
+        }
+    };
+    let (repo, secret) = (real(run.repo()), real(run.dir.join("secret")));
     let sandbox = json!({"enabled": true, "failIfUnavailable": true, "autoAllowBashIfSandboxed": true,
         "allowUnsandboxedCommands": false, "network": {"strictAllowlist": true},
         "filesystem": {"denyWrite": [repo], "denyRead": [secret]}});

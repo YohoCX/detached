@@ -76,7 +76,7 @@ fn waited(child: &mut Child, secs: u64) -> bool {
 
 /// §1's close: `interrupt`, `stop_task` for each task, stdin closed, then SIGTERM to the group
 /// after 2 s and SIGKILL 5 s later; on Windows the job closes at the first. What ended it.
-fn shut(mut cli: Cli, tasks: &[Value]) -> &'static str {
+fn shut(cli: &mut Cli, tasks: &[Value]) -> &'static str {
     cli.request(json!({"subtype": "interrupt"}));
     for task in tasks.iter().filter(|t| !t.is_null()) {
         cli.request(json!({"subtype": "stop_task", "task_id": task}));
@@ -118,7 +118,8 @@ fn stop() {
         if ended.is_none() {
             println!("  still running: {:?}", running(&marker));
         }
-        let how = shut(cli, &[task]);
+        let how = shut(&mut cli, &[task]);
+        drop(cli);
         println!(
             "  the close ({how}): the command gone {:?}",
             gone(&marker).is_some()
@@ -130,12 +131,14 @@ fn stop() {
 fn close() {
     for front in [true, false] {
         let name = if front { "close-front" } else { "close-behind" };
-        let (run, cli, marker, task) = busy(name, front, 600, |r| r.leash = cfg!(unix));
+        let (run, mut cli, marker, task) = busy(name, front, 600, |r| r.leash = cfg!(unix));
         let began = Instant::now();
-        let how = shut(cli, &[task]);
+        let how = shut(&mut cli, &[task]);
         let took = began.elapsed();
+        // Before the drop: on Windows dropping the session closes its job.
         let command = gone(&marker).map(|_| began.elapsed());
         let left = procs(&run.needle());
+        drop(cli);
         println!(
             "{name}: ended by {how} in {took:?}; the command gone in {command:?}; the session's processes left: {left:?}"
         );
@@ -560,11 +563,17 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The project folder §6's rule names for `cwd`, before its 200-character cut.
-fn sanitized(cwd: &Path) -> String {
-    let cwd = cwd.display().to_string();
+fn sanitized(cwd: &str) -> String {
     cwd.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
+}
+
+/// A turn, and the cwd its `system/init` reports: on Windows not `canonicalize`'s form.
+fn turn_cwd(cli: &mut Cli) -> String {
+    let cwd = cli.begin("first")["cwd"].as_str().unwrap().to_string();
+    cli.result();
+    cwd
 }
 
 /// Rows 8 and 10: transcripts kept as fixtures, and the frames of a subagent and a compaction.
@@ -677,14 +686,14 @@ fn transcripts() {
     ]);
     git(&["-C", "main", "worktree", "add", "-q", "../repo"]);
     let (mut cli, id) = session(&run);
-    cli.turn("first", allow);
+    let cwd = turn_cwd(&mut cli);
     cli.close();
     let projects = run.dir.join("cfg/projects");
     let files: Vec<_> = walk(&projects)
         .into_iter()
         .map(|f| f.strip_prefix(&projects).unwrap().display().to_string())
         .collect();
-    let main = sanitized(&run.dir.join("main").canonicalize().unwrap());
+    let main = sanitized(&format!("{}main", cwd.strip_suffix("repo").unwrap()));
     println!("worktree: under projects/ {files:?}; the main checkout's folder would be {main}");
     keep("worktree", &run, &id);
 
@@ -694,13 +703,12 @@ fn transcripts() {
         json!([text("one")]),
     );
     let (mut cli, id) = session(&run);
-    cli.turn("first", allow);
+    let cwd = turn_cwd(&mut cli);
     cli.close();
-    let cwd = run.repo().canonicalize().unwrap();
     let rule = sanitized(&cwd);
     println!(
         "long cwd: {} chars; the rule's folder before its cut: {} chars",
-        cwd.display().to_string().len(),
+        cwd.len(),
         rule.len()
     );
     if let Some((_, folder)) = transcript(&run, &id) {
@@ -906,9 +914,22 @@ fn floor() {
     #[cfg(unix)]
     {
         let cwd = run.repo().canonicalize().unwrap().display().to_string();
-        let config = json!({"hasCompletedOnboarding": true, "theme": "dark",
-            "customApiKeyResponses": {"approved": ["sk-ant-placeholder"]},
-            "projects": {cwd: {"hasTrustDialogAccepted": true}}});
+        // The installer's own keys stay: `installMethod` decides whether `autoUpdates` counts.
+        let read = |f: &str| fs::read_to_string(run.dir.join(f)).ok();
+        let read = |f| read(f).and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        let mut config = read("cfg/.claude.json").unwrap_or(json!({}));
+        let installed = [
+            "installMethod",
+            "autoUpdates",
+            "autoUpdatesProtectedForNative",
+        ];
+        let installed = installed.map(|k| format!("{k} {}", config[k]));
+        println!("  the installer's .claude.json: {}", installed.join(", "));
+        config["hasCompletedOnboarding"] = json!(true);
+        config["theme"] = json!("dark");
+        config["customApiKeyResponses"]["approved"] = json!(["sk-ant-placeholder"]);
+        config["projects"][&cwd]["hasTrustDialogAccepted"] = json!(true);
+        let user = read("cfg/settings.json").unwrap_or(json!({}));
         for (case, env, settings) in [
             ("none", None, None),
             ("DISABLE_AUTOUPDATER=1", Some("DISABLE_AUTOUPDATER"), None),
@@ -924,8 +945,7 @@ fn floor() {
                 Some(("cfg/settings.json", "stable")),
             ),
         ] {
-            let mut config = config.clone();
-            let mut user = json!({});
+            let (mut config, mut user) = (config.clone(), user.clone());
             match settings {
                 Some((_, "autoUpdates")) => config["autoUpdates"] = json!(false),
                 Some(_) => user["autoUpdatesChannel"] = json!("stable"),

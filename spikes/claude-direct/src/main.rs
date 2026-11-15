@@ -212,6 +212,11 @@ impl Run {
             ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
             ("NO_PROXY", "127.0.0.1,localhost".into()),
         ];
+        vars.extend(self.vars.iter().map(|(k, v)| (k.as_str(), v.clone())));
+        if wsl().is_some() {
+            let names: Vec<_> = vars[1..].iter().map(|(k, _)| format!("{k}/u")).collect();
+            vars.push(("WSLENV", names.join(":")));
+        }
         if cfg!(windows) {
             for k in os::WINDOWS {
                 vars.extend(std::env::var(k).ok().map(|v| (*k, v)));
@@ -227,13 +232,8 @@ impl Run {
                 home.join("AppData/Local").display().to_string(),
             ));
         }
-        if wsl().is_some() {
-            let names: Vec<_> = vars[1..8].iter().map(|(k, _)| format!("{k}/u")).collect();
-            vars.push(("WSLENV", names.join(":")));
-        }
         let mut c = Command::new(program);
         c.current_dir(self.repo()).env_clear().envs(vars);
-        c.envs(self.vars.iter().map(|(k, v)| (k, v)));
         c
     }
 
@@ -560,12 +560,14 @@ fn gone(marker: &str) -> Option<Duration> {
     within(|| running(marker).is_empty())
 }
 
-/// Runs `row`, and goes on to the next one when it panics.
-fn guarded(name: &str, row: fn()) {
+/// Runs `row`, and goes on to the next one when it panics; false if it did.
+fn guarded(name: &str, row: fn()) -> bool {
     println!("\n## {name}");
-    if std::panic::catch_unwind(row).is_err() {
+    let ok = std::panic::catch_unwind(row).is_ok();
+    if !ok {
         println!("{name}: the row panicked (stderr has why)");
     }
+    ok
 }
 
 fn main() {
@@ -577,29 +579,64 @@ fn main() {
         .chain(h4c::ALONE)
         .chain(rows::LOCAL);
     let row = rows.clone().find(|(name, _)| *name == arg(0));
-    match (arg(0), row) {
+    let chosen: Vec<_> = match (arg(0), row) {
         ("host", _) => return h4c::host(arg(1), arg(2) == "true", arg(3) == "true"),
         ("elicit", _) => return h4c::elicit(),
         ("owner-login", _) => return h4c::owner_login(),
-        ("all", _) => {
-            for (name, row) in rows::ALL.iter().chain(h4c::ALL) {
-                guarded(name, *row);
-            }
-        }
-        ("wsl", _) => {
-            for (name, row) in h4c::WSL {
-                guarded(name, *row);
-            }
-        }
-        (_, Some((name, row))) => guarded(name, *row),
+        ("all", _) => rows::ALL.iter().chain(h4c::ALL).collect(),
+        ("wsl", _) => h4c::WSL.iter().collect(),
+        (_, Some(row)) => vec![row],
         _ => {
             let names: Vec<_> = rows.map(|(name, _)| *name).collect();
-            return eprintln!("rows: all wsl owner-login {}", names.join(" "));
+            eprintln!("rows: all wsl owner-login {}", names.join(" "));
+            std::process::exit(2);
         }
-    }
+    };
+    let failed = chosen
+        .iter()
+        .filter(|(name, row)| !guarded(name, *row))
+        .count();
     let mut left = procs(&format!("claude-direct-{}", tag()));
     left.extend(procs(&format!("detached-0c-{}", tag())));
     println!("\nprocesses left: {left:?}");
     os::reap(&left);
     let _ = fs::remove_dir_all(root());
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wslenv_forwards_a_runs_own_vars() {
+        // SAFETY: the crate's one test; nothing else reads the env meanwhile.
+        unsafe { std::env::set_var("SPIKE_WSL", "Ubuntu") };
+        let run = Run {
+            name: "t".into(),
+            dir: root(),
+            api: Api::serve(json!([])),
+            url: String::new(),
+            vars: vec![("EXTRA".into(), "1".into())],
+            init: json!({}),
+            leash: false,
+            cli: None,
+        };
+        let c = run.command("wsl.exe");
+        let wslenv = c
+            .get_envs()
+            .find(|(k, _)| *k == "WSLENV")
+            .and_then(|(_, v)| v);
+        let names = wslenv.unwrap().to_string_lossy().into_owned();
+        assert!(
+            names.contains("HOME/u") && names.contains("EXTRA/u"),
+            "{names}"
+        );
+        assert!(
+            !names.contains("PATH") && !names.contains("SystemRoot"),
+            "{names}"
+        );
+    }
 }

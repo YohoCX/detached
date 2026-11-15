@@ -22,4 +22,9 @@ echo "claude $have"
 
 cargo build
 mkdir -p out
-for row in ${ROWS:-all}; do ./target/debug/claude-direct-spike "$row"; done 2>&1 | tee out/answers.txt
+# Every row runs; the job fails if any did.
+{
+  status=0
+  for row in ${ROWS:-all}; do ./target/debug/claude-direct-spike "$row" || status=1; done
+  exit "$status"
+} 2>&1 | tee out/answers.txt
