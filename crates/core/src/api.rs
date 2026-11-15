@@ -7,7 +7,9 @@ use std::path::Path;
 use crate::error::Result;
 use crate::git::patch::{self, FilePatch};
 use crate::git::snapshot::{self, Restore};
-use crate::git::{branches, checkout as smart, diff, files, log as logs, pull as pulls, remotes};
+use crate::git::{
+    branches, checkout as smart, diff, files, log as logs, pull as pulls, remotes, worktree,
+};
 use crate::search::{find, quick};
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -151,6 +153,37 @@ pub fn delete_remote_branch(
 
 pub fn prune(s: &AppState, repo: &str, op_id: u64, progress: Progress) -> Result<()> {
     s.op(op_id, |c| branches::prune(s, Path::new(repo), c, progress))
+}
+
+/// Returns the new worktree's path.
+pub fn create_worktree(
+    s: &AppState,
+    repo: &str,
+    main: &str,
+    folder: &str,
+    branch: &str,
+    op_id: u64,
+    progress: Progress,
+) -> Result<String> {
+    let (repo, main, folder) = (Path::new(repo), Path::new(main), Path::new(folder));
+    let path = s.op(op_id, |c| {
+        worktree::create(s, repo, main, folder, branch, c, progress)
+    })?;
+    Ok(path.display().to_string())
+}
+
+pub fn remove_worktree(
+    s: &AppState,
+    repo: &str,
+    path: &str,
+    force: bool,
+    op_id: u64,
+    progress: Progress,
+) -> Result<()> {
+    let (repo, path) = (Path::new(repo), Path::new(path));
+    s.op(op_id, |c| {
+        worktree::remove(s, repo, path, force, c, progress)
+    })
 }
 
 pub fn fetch(s: &AppState, repo: &str, op_id: u64, progress: Progress) -> Result<()> {

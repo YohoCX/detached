@@ -15,6 +15,7 @@ pub mod snapshot;
 pub mod status;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
+pub mod worktree;
 
 use std::path::Path;
 

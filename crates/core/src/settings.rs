@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::git::discovery;
+use crate::git::{discovery, worktree};
 use crate::state::AppState;
 use crate::types::{EnvInfo, RepoInfo};
 
@@ -136,7 +136,11 @@ impl AppState {
         s.workspaces
             .iter()
             .filter(|w| w.active)
-            .flat_map(|w| discovery::discover(&w.folders, &w.excluded_repos))
+            .flat_map(|w| {
+                let mut repos = discovery::discover(&w.folders, &w.excluded_repos);
+                worktree::add_linked(self, &mut repos, &w.excluded_repos);
+                repos
+            })
             .filter(|r| seen.insert(r.path.clone()))
             .collect()
     }
