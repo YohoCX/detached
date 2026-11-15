@@ -145,7 +145,7 @@ fn finding_location_opens_a_diff_in_the_run(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn finding_diff_shows_the_reviewed_commits(cx: &mut TestAppContext) {
+fn finding_diff_shows_the_reviewed_commits_once_they_resolve(cx: &mut TestAppContext) {
     let mut range = None;
     let mut app = open_app_with(cx, |sb| {
         let repo = repo(sb, "reviewed");
@@ -163,7 +163,7 @@ fn finding_diff_shows_the_reviewed_commits(cx: &mut TestAppContext) {
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
         fs::write(
             repo.join(".revmux/tasks/foundation-8-watcher/03-after-fix-retry/input/scope.md"),
-            format!("git diff {a}..{b}"),
+            "git diff reviewed-a..reviewed-b",
         )
         .unwrap();
         range = Some((a, b));
@@ -175,6 +175,15 @@ fn finding_diff_shows_the_reviewed_commits(cx: &mut TestAppContext) {
         cx.find("panel.location.bugs+impl-2").is_some()
     });
     app.click("panel.location.bugs+impl-2");
+    wait_until(&mut app, |cx| {
+        cx.find("diff.pill")
+            .and_then(|e| e.label().map(String::from))
+            == Some("HEAD ↔ Working tree".into())
+    });
+    let repo = app.sb.path("repos/reviewed");
+    app.sb.git(&repo, &["tag", "reviewed-a", &a]);
+    app.sb.git(&repo, &["tag", "reviewed-b", &b]);
+    app.click("panels.refresh");
     wait_until(&mut app, |cx| {
         current_line(cx).contains("reviewed line 228")
     });

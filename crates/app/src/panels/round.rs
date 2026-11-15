@@ -20,6 +20,7 @@ impl DocKind for PanelDocs {
             show_aside: false,
             selected: None,
             selected_data: None,
+            range: None,
             markdown: None,
         })
         .into()
@@ -60,6 +61,7 @@ pub(super) struct RunView {
     pub mode: usize,
     selected: Option<String>,
     selected_data: Option<Finding>,
+    range: Option<(String, String)>,
     markdown: Option<Entity<Markdown>>,
 }
 
@@ -68,16 +70,13 @@ impl RunView {
         let key = selection_key(&self.repo, &self.task, &self.round);
         let id: Option<String> = kernel::ui_state::get(&key, cx);
         if let Some(id) = id {
-            let f = self
-                .rounds
-                .read(cx)
-                .value
-                .as_ref()
-                .and_then(|r| {
-                    r.runs
-                        .iter()
-                        .find(|r| r.task == self.task && r.round == self.round)
-                })
+            let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
+                r.runs
+                    .iter()
+                    .find(|r| r.task == self.task && r.round == self.round)
+            });
+            let range = run.and_then(|r| r.reviewed_range.clone());
+            let f = run
                 .and_then(|r| {
                     r.findings
                         .iter()
@@ -88,7 +87,7 @@ impl RunView {
                 })
                 .cloned();
             match f {
-                Some(f) if self.selected_data.as_ref() != Some(&f) => {
+                Some(f) if self.selected_data.as_ref() != Some(&f) || self.range != range => {
                     let mode = self.mode;
                     self.select(&f, cx);
                     self.mode = mode;
@@ -136,6 +135,7 @@ impl RunView {
             }
         );
         self.markdown = Some(cx.new(|cx| Markdown::new(body, links, true, cx)));
+        self.range = range.clone();
         let (left, right) = range.map_or((Side::Head, Side::Worktree), |(a, b)| {
             (Side::Rev { rev: a }, Side::Rev { rev: b })
         });

@@ -397,7 +397,8 @@ pub fn fix(core: &AppState, repo: &str, scope: &str) -> Option<Fix> {
     let commits = runner::out(
         &env,
         repo,
-        &["log", "--format=%h", &range, "--"],
+        // `diff a...b` is merge-base..b, whose commits are `log a..b`, not `log a...b`.
+        &["log", "--format=%h", &range.replace("...", ".."), "--"],
         Kind::Read,
     )
     .ok()?;
@@ -526,6 +527,15 @@ mod tests {
         assert!(super::fix(&sb.state, repo, "no range").is_none());
         assert!(super::fix(&sb.state, repo, "git diff unknown..HEAD").is_none());
         assert!(super::fix(&sb.state, repo, "git diff HEAD..HEAD").is_none());
+        let path = Path::new(repo);
+        sb.git(path, &["checkout", "-qb", "side", "HEAD~1"]);
+        sb.commit(path, "side.txt", "side\n", "side");
+        let fix = super::fix(&sb.state, repo, "git diff side...main").unwrap();
+        assert_eq!(
+            fix.commits,
+            [sb.git(path, &["rev-parse", "--short", "main"])]
+        );
+        assert!(fix.stat.contains("2 insertions(+)"));
     }
 
     fn fixture(name: &str) -> Run {
