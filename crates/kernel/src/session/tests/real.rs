@@ -171,8 +171,8 @@ fn running(marker: &str) -> bool {
 }
 
 /// A chat whose turn runs `perl -e 'sleep 600' <marker>`, once that command runs.
-fn mid_command(cx: &mut TestAppContext) -> (Fixture, Api, String, Entity<Session>) {
-    let marker = format!("detached-mark-{}", std::process::id());
+fn mid_command(name: &str, cx: &mut TestAppContext) -> (Fixture, Api, String, Entity<Session>) {
+    let marker = format!("detached-mark-{}-{name}", std::process::id());
     let command = format!("perl -e 'sleep 600' {marker}");
     let (f, api) = boot(cx, json!([[bash(&command)], text("stopped")]));
     let s = open_spec(Spec::new(&CLAUDE, &f.repo, Kind::Chat), None, cx);
@@ -396,7 +396,7 @@ fn the_air_declaration_changes_tool_output_and_nothing_else_seen(cx: &mut TestAp
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command(cx);
+    let (_f, _api, marker, s) = mid_command("cancel", cx);
     s.update(cx, |s, _| s.cancel());
     wait_for(cx, START, |cx| s.read(cx).state == State::Idle);
     s.read_with(cx, |s, _| {
@@ -415,7 +415,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn an_adapter_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command(cx);
+    let (_f, _api, marker, s) = mid_command("gone", cx);
     // The last session on the adapter goes, so its stdin closes; on Windows its job then closes.
     drop(s);
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
