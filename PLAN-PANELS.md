@@ -16,8 +16,8 @@ revmux and `.revmux/` stay, and whether panels replace revmux is deferred. P1 im
 
 **Status (2026-11-16): a Claude participant is a session on the host's direct backend, not an ACP
 session ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), host §1 and H4c). §1,
-§3's two Claude-specific places, §4's line 7, §7, §8's sources, §10 and P2 follow it; nothing else
-changes.**
+§3's two Claude-specific places, §4's lines 7 and 10, §7, §8's sources, §10 and P2 follow it;
+nothing else changes.**
 
 Owner's decision, [2026-11-12](docs/decisions/2026-11-12-panels.md): the full scope ships. That
 is every mode, mixed models on any role, stats by lens and model, and Fix in a managed worktree,
@@ -247,7 +247,7 @@ line has a test. Where a line does not hold, the run says so, and the UI shows i
 | 7 | Host tools cannot be used by another process | host H5: a Claude session's tools ride its own pipes, so no listener is open and no argv names them. Host H13a, for an ACP provider's HTTP transport: a second `initialize` and a request without the bound id are refused | — |
 | 8 | A subject whose trust files differ from the accepted set is untrusted until accepted | P2 and P4: a branch that changes `.claude/settings.json` in a trusted workspace asks before it runs unsandboxed | — |
 | 9 | Nothing reaches the subject's remote or the owner's tree on its own | P4: merge is a fast-forward on the owner's button, refused when dirty or not a fast-forward, with hooks off; nothing pushes | — |
-| 10 | The env store's secrets never reach a participant | host H4: a participant's env has allowlisted names only | — |
+| 10 | The env store's secrets never reach a participant | host H4c: the spawned `claude`'s env has allowlisted and manifest names only, from the fake CLI's own report; host H4 has the same for an ACP adapter | — |
 | 11 | A run cannot burn without bound | P2: the budget pauses; attempts stop at 3; the cap holds | — |
 | 12 | Sessions share no temp dir | P2: a participant cannot read or write another session's file in `/tmp/claude-<uid>` or its peers' `CLAUDE_CODE_TMPDIR` | Windows without WSL, after the consent |
 | 13 | No agent writes or commits on an untrusted subject | P4: an untrusted subject's card offers no Fix, only "mark the repo trusted" or "fix it yourself" | — |
@@ -533,7 +533,8 @@ Work:
    diff; read scope and trust scans (host §4, §7).
 5. On Windows:
    - Detached's distro and its "WSL ready" checks (host §5);
-   - the leash there (host H4c), and a participant's transcript read through `wsl.exe`;
+   - a participant's session through `wsl.exe`, its leash and its transcript reader are host
+     H4c's WSL place, tested there on CI's stock distro; P2 points it at Detached's distro;
    - the one-time elevated firewall step, for the probe's responder;
    - an agent process and job per native participant attempt, awaited before worktree reuse.
 6. The tools' handlers and the quote check.
