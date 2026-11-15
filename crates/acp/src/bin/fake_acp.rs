@@ -1,0 +1,380 @@
+//! A scripted ACP agent for the tests. A prompt is steps split by `;`, each a verb and its
+//! arguments:
+//! - `say <text>` streams the text in three chunks with a usage update; `prose` answers without a tool;
+//! - `stall` runs a foreground command until `session/cancel`, which kills it;
+//! - `die` exits with code 3 mid-turn;
+//! - `ask` asks permission for a tool and says the option it got;
+//! - `malformed` sends updates whose arguments do not parse, then goes on;
+//! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
+//! - `env` says the names in its env; `meta` the `_meta` its session got; `model` its model;
+//! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
+//! - `write <path> <text>` writes a file under the cwd;
+//! - `out-of-usage` fails the prompt as Claude does when extra usage has run out.
+//!
+//! Its version is its folder's name. A load reports `fallback-opus` as the model unless
+//! `configOptions` name one; on stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+
+use std::collections::HashMap;
+use std::io::{BufRead, Read, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+
+use serde_json::{Value, json};
+
+type Out = Arc<Mutex<std::io::Stdout>>;
+
+fn send(out: &Out, v: Value) {
+    let mut o = out.lock().unwrap();
+    let _ = writeln!(o, "{v}");
+    let _ = o.flush();
+}
+
+#[derive(Default)]
+struct Session {
+    cwd: String,
+    meta: Value,
+    model: String,
+    mode: String,
+}
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        // A command that runs until killed.
+        Some("--sleep") => loop {
+            std::thread::park();
+        },
+        // A background child: lives until its stdin, the agent's, closes.
+        Some("--child") => {
+            let _ = std::io::stdin().read_to_end(&mut vec![]);
+            return;
+        }
+        _ => {}
+    }
+    let out: Out = Arc::new(Mutex::new(std::io::stdout()));
+    let sessions: Arc<Mutex<HashMap<String, Session>>> = Default::default();
+    // Responses to the requests this agent sent, by id.
+    let replies: Arc<Mutex<HashMap<u64, Sender<Value>>>> = Default::default();
+    let cancels: Arc<Mutex<HashMap<String, Sender<()>>>> = Default::default();
+    let version = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.file_name()?.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let mut next = 0;
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let (id, method, params) = (msg["id"].clone(), msg["method"].as_str(), &msg["params"]);
+        let Some(method) = method else {
+            if let Some(tx) = id.as_u64().and_then(|i| replies.lock().unwrap().remove(&i)) {
+                let _ = tx.send(msg["result"].clone());
+            }
+            continue;
+        };
+        let reply =
+            |result: Value| send(&out, json!({"jsonrpc": "2.0", "id": id, "result": result}));
+        match method {
+            "initialize" => reply(json!({
+                "protocolVersion": 1,
+                "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"close": {}}},
+                "agentInfo": {"name": "fake_acp", "version": version},
+                "authMethods": [],
+            })),
+            "session/new" | "session/load" => {
+                let sid = match params["sessionId"].as_str() {
+                    Some(s) => s.to_string(),
+                    None => {
+                        next += 1;
+                        format!("fake-{}-{next}", std::process::id())
+                    }
+                };
+                let asked = |k: &str| {
+                    let all = params["configOptions"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    let o = all.into_iter().find(|o| o["configId"] == k)?;
+                    o["value"].as_str().map(String::from)
+                };
+                let fallback = if method == "session/load" {
+                    "fallback-opus"
+                } else {
+                    "default"
+                };
+                let s = Session {
+                    cwd: params["cwd"].as_str().unwrap_or_default().into(),
+                    meta: params["_meta"].clone(),
+                    model: asked("model").unwrap_or(fallback.into()),
+                    mode: asked("mode").unwrap_or("auto".into()),
+                };
+                let config = config(&s);
+                sessions.lock().unwrap().insert(sid.clone(), s);
+                if method == "session/new" {
+                    reply(json!({"sessionId": sid, "configOptions": config}));
+                } else {
+                    reply(json!({"configOptions": config}));
+                }
+            }
+            "session/set_config_option" => {
+                let sid = params["sessionId"].as_str().unwrap_or_default();
+                let mut all = sessions.lock().unwrap();
+                let Some(s) = all.get_mut(sid) else { continue };
+                let value = params["value"].as_str().unwrap_or_default().to_string();
+                match params["configId"].as_str() {
+                    Some("model") => s.model = value,
+                    Some("mode") => s.mode = value,
+                    _ => {}
+                }
+                reply(json!({"configOptions": config(s)}));
+            }
+            "session/close" => {
+                let sid = params["sessionId"].as_str().unwrap_or_default();
+                sessions.lock().unwrap().remove(sid);
+                reply(json!({}));
+            }
+            "session/cancel" => {
+                let sid = params["sessionId"].as_str().unwrap_or_default();
+                if let Some(tx) = cancels.lock().unwrap().remove(sid) {
+                    let _ = tx.send(());
+                }
+            }
+            "session/prompt" => {
+                let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
+                let text = params["prompt"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let (tx, cancelled) = mpsc::channel();
+                cancels.lock().unwrap().insert(sid.clone(), tx);
+                let (out, sessions, replies) = (out.clone(), sessions.clone(), replies.clone());
+                let rid = next_request(&mut next);
+                std::thread::spawn(move || {
+                    let turn = Turn {
+                        out: &out,
+                        sid: &sid,
+                        sessions: &sessions,
+                        replies: &replies,
+                        cancelled,
+                        rid,
+                    };
+                    let result = text.split(';').try_for_each(|step| turn.step(step.trim()));
+                    let response = match result {
+                        Ok(()) => json!({"result": {"stopReason": "end_turn",
+                            "usage": {"totalTokens": 110, "inputTokens": 100, "outputTokens": 10}}}),
+                        Err(Stop::Cancelled) => json!({"result": {"stopReason": "cancelled"}}),
+                        Err(Stop::Error(e)) => json!({"error": {"code": -32603, "message": e}}),
+                    };
+                    let mut response = response;
+                    response["jsonrpc"] = json!("2.0");
+                    response["id"] = id;
+                    send(&out, response);
+                });
+            }
+            _ => {
+                if !id.is_null() {
+                    send(
+                        &out,
+                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unknown"}}),
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("Error: write EPIPE");
+    std::process::exit(1);
+}
+
+fn next_request(next: &mut u64) -> u64 {
+    *next += 1;
+    1000 + *next
+}
+
+fn config(s: &Session) -> Value {
+    let select = |id: &str, value: &str, values: &[&str]| {
+        let options: Vec<Value> = values
+            .iter()
+            .map(|v| json!({"value": v, "name": v}))
+            .collect();
+        json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
+    };
+    json!([
+        select(
+            "mode",
+            &s.mode,
+            &[
+                "auto",
+                "default",
+                "acceptEdits",
+                "plan",
+                "bypassPermissions"
+            ]
+        ),
+        select("model", &s.model, &["default", "haiku", "fallback-opus"]),
+    ])
+}
+
+enum Stop {
+    Cancelled,
+    Error(String),
+}
+
+struct Turn<'a> {
+    out: &'a Out,
+    sid: &'a str,
+    sessions: &'a Mutex<HashMap<String, Session>>,
+    replies: &'a Mutex<HashMap<u64, Sender<Value>>>,
+    cancelled: Receiver<()>,
+    rid: u64,
+}
+
+impl Turn<'_> {
+    fn update(&self, update: Value) {
+        let p = json!({"sessionId": self.sid, "update": update});
+        send(
+            self.out,
+            json!({"jsonrpc": "2.0", "method": "session/update", "params": p}),
+        );
+    }
+
+    fn say(&self, text: &str) {
+        self.update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}));
+    }
+
+    fn session<T>(&self, f: impl FnOnce(&Session) -> T) -> T {
+        f(&self.sessions.lock().unwrap()[self.sid])
+    }
+
+    fn step(&self, step: &str) -> Result<(), Stop> {
+        let (verb, rest) = step.split_once(' ').unwrap_or((step, ""));
+        match verb {
+            "say" => {
+                let words: Vec<&str> = rest.split_inclusive(' ').collect();
+                for chunk in words.chunks(words.len().div_ceil(3).max(1)) {
+                    self.say(&chunk.concat());
+                }
+                self.update(
+                    json!({"sessionUpdate": "usage_update", "used": 1200, "size": 200000,
+                    "cost": {"amount": 0.01, "currency": "USD"}}),
+                );
+            }
+            "prose" => self.say("No tool is needed for that."),
+            "stall" => {
+                let mut child = me()
+                    .arg("--sleep")
+                    .stdin(Stdio::null())
+                    .spawn()
+                    .map_err(err)?;
+                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t-stall", "title": "Bash",
+                    "kind": "execute", "status": "in_progress", "rawInput": {"command": "sleep", "pid": child.id()}}));
+                let _ = self.cancelled.recv();
+                end(&mut child);
+                self.update(json!({"sessionUpdate": "tool_call_update", "toolCallId": "t-stall", "status": "failed"}));
+                return Err(Stop::Cancelled);
+            }
+            "die" => {
+                eprintln!("fake_acp: died mid-turn");
+                std::process::exit(3);
+            }
+            "ask" => {
+                let tool = json!({"toolCallId": "t-ask", "title": "Write notes.txt", "kind": "edit",
+                    "rawInput": {"file_path": "notes.txt"}});
+                self.update(
+                    json!({"sessionUpdate": "tool_call", "status": "pending", "toolCallId": "t-ask",
+                    "title": "Write notes.txt", "kind": "edit"}),
+                );
+                let options = json!([
+                    {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
+                    {"optionId": "allow_once", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
+                ]);
+                let (tx, rx) = mpsc::channel();
+                self.replies.lock().unwrap().insert(self.rid, tx);
+                let p = json!({"sessionId": self.sid, "toolCall": tool, "options": options});
+                send(
+                    self.out,
+                    json!({"jsonrpc": "2.0", "id": self.rid, "method": "session/request_permission", "params": p}),
+                );
+                let r = rx.recv().map_err(err)?;
+                let picked = match r["outcome"]["outcome"].as_str() {
+                    Some("selected") => {
+                        r["outcome"]["optionId"].as_str().unwrap_or("?").to_string()
+                    }
+                    other => other.unwrap_or("?").to_string(),
+                };
+                self.say(&format!("picked {picked}"));
+            }
+            "malformed" => {
+                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": 7, "title": ["not", "text"]}));
+                self.update(json!({"sessionUpdate": "no_such_update", "x": 1}));
+                let p = json!({"sessionId": 42, "update": "garbage"});
+                send(
+                    self.out,
+                    json!({"jsonrpc": "2.0", "method": "session/update", "params": p}),
+                );
+                self.say("still here");
+            }
+            "spawn" => {
+                let mut cmd = me();
+                cmd.arg("--child").stdin(Stdio::inherit());
+                #[cfg(unix)]
+                std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+                let child = cmd.spawn().map_err(err)?;
+                self.say(&format!("child {}", child.id()));
+            }
+            "env" => {
+                let mut names: Vec<String> = std::env::vars_os()
+                    .map(|(k, _)| k.to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                self.say(&names.join(","));
+            }
+            "meta" => self.say(&self.session(|s| s.meta.to_string())),
+            "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
+            "api" => self.say(&api().map_err(err)?),
+            "write" => {
+                let (path, text) = rest.split_once(' ').unwrap_or((rest, ""));
+                let path = self.session(|s| std::path::Path::new(&s.cwd).join(path));
+                std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
+                std::fs::write(path, text).map_err(err)?;
+            }
+            "out-of-usage" => {
+                return Err(Stop::Error(
+                    "You're out of extra usage · resets 5pm (Europe/Berlin)".into(),
+                ));
+            }
+            _ => return Err(Stop::Error(format!("unknown step {step}"))),
+        }
+        Ok(())
+    }
+}
+
+fn me() -> Command {
+    Command::new(std::env::current_exe().unwrap())
+}
+
+fn end(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn err(e: impl std::fmt::Display) -> Stop {
+    Stop::Error(e.to_string())
+}
+
+/// One request to the Messages API the env names, by hand: the fake has no HTTP client.
+fn api() -> std::io::Result<String> {
+    let base = std::env::var("ANTHROPIC_BASE_URL").map_err(std::io::Error::other)?;
+    let key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    let host = base.trim_start_matches("http://").trim_end_matches('/');
+    let mut s = std::net::TcpStream::connect(host)?;
+    write!(
+        s,
+        "POST /v1/messages HTTP/1.1\r\nHost: {host}\r\nx-api-key: {key}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+    )?;
+    let mut reply = String::new();
+    s.read_to_string(&mut reply)?;
+    Ok(reply.lines().next().unwrap_or_default().to_string())
+}

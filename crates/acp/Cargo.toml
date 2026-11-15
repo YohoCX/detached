@@ -1,0 +1,22 @@
+[package]
+name = "detached-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# `testutil::fake()`, the scripted agent built for other crates' tests.
+testutil = []
+
+[dependencies]
+detached-core.workspace = true
+# The fields of the unstable features read here would vanish from the typed values without them.
+agent-client-protocol = { version = "=5.2.0", features = ["unstable_session_options", "unstable_end_turn_token_usage"] }
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
