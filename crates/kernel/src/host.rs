@@ -35,6 +35,16 @@ pub struct Identity {
     /// None reads the workspace.
     pub subject: Option<Subject>,
     pub can: &'static [&'static str],
+    /// A panel participant's own corner of its run.
+    pub panel: Option<Scope>,
+}
+
+/// What a participant reads of its run: its own findings, and in verify the one it judges.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scope {
+    pub run: String,
+    pub participant: String,
+    pub finding: Option<String>,
 }
 
 /// A review's subject: its repo, and its MR if it is one.
@@ -50,6 +60,7 @@ impl Identity {
         Identity {
             subject: None,
             can: &[],
+            panel: None,
         }
     }
 
@@ -59,6 +70,16 @@ impl Identity {
         Identity {
             subject: Some(Subject { repo, mr }),
             can: REPORTS,
+            panel: None,
+        }
+    }
+
+    /// A panel participant's: its subject's repo, its corner of the run, the actions of its stage.
+    pub fn participant(repo: &str, scope: Scope, can: &'static [&'static str]) -> Identity {
+        Identity {
+            panel: Some(scope),
+            can,
+            ..Identity::subject(repo, None)
         }
     }
 
@@ -71,9 +92,15 @@ impl Identity {
     }
 
     pub fn may(&self, act: &Act) -> std::result::Result<(), String> {
-        match self.can.contains(&act.name()) {
-            true => Ok(()),
-            false => Err(format!("This session cannot {}.", act.name())),
+        if !self.can.contains(&act.name()) {
+            return Err(format!("This session cannot {}.", act.name()));
+        }
+        let mine = self.panel.as_ref().and_then(|p| p.finding.as_deref());
+        match (act, mine) {
+            (Act::ReportVerdict(v), Some(f)) if v.finding != f => {
+                Err(format!("This session judges finding {f} alone."))
+            }
+            _ => Ok(()),
         }
     }
 }

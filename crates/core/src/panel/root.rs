@@ -149,6 +149,37 @@ mod tests {
     }
 
     #[test]
+    fn the_deny_list_has_each_class_and_a_folder_holding_home_or_a_tier_refuses() {
+        let sb = crate::git::testutil::Sandbox::new();
+        let ws = sb.path("ws");
+        fs::create_dir_all(ws.join("r")).unwrap();
+        sb.git(&ws.join("r"), &["init", "-q"]);
+        sb.state
+            .add_folder("Default".into(), ws.display().to_string())
+            .unwrap();
+        let all = denied(&sb.state).unwrap();
+        let home = sb.path("home");
+        for p in [
+            home.join(".ssh"),
+            home.join(".claude.json"),
+            home.join(".config/glab-cli"),
+            ws.clone(),
+        ] {
+            assert!(all.contains(&p), "{p:?}");
+        }
+        assert!(all.contains(&sb.state.data_dir) && all.contains(&ws.join("r")));
+        for folder in [home, sb.dir.path().to_path_buf()] {
+            sb.state
+                .add_folder("Default".into(), folder.display().to_string())
+                .unwrap();
+            assert!(denied(&sb.state).is_err(), "{folder:?}");
+            sb.state
+                .remove_folder("Default".into(), folder.display().to_string())
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn one_lock_at_a_time_and_cleaning_skips_a_held_one() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("d/untrusted");
@@ -164,8 +195,78 @@ mod tests {
             "a held lock keeps what its run made"
         );
         drop(held);
-        clean_if_free(&root).unwrap();
+        // Another test's child may hold a copy of the lock until its exec.
+        let l = lock(&root, &|| false).unwrap();
+        clean(&l, &root).unwrap();
         assert!(!root.join("old-run").exists());
         assert!(root.join("lock").exists());
     }
+}
+
+/// Secret stores and other sessions' data under the home dir, which untrusted participants never
+/// read; the rest of the home stays readable for toolchains.
+const HOME: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".config/gh",
+    ".git-credentials",
+    ".config/git/credentials",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".docker/config.json",
+    ".kube",
+    ".gnupg",
+    ".config/gcloud",
+    "Library/Keychains",
+    ".claude/.credentials.json",
+    ".claude.json",
+    ".codex/auth.json",
+    ".config/glab-cli",
+    ".claude/projects",
+    ".codex/sessions",
+];
+
+/// What an untrusted participant may not read: the enumerated secret classes, the tiers, the CLI's
+/// shared temp dir, every workspace folder and repo the app knows with its run records. A folder
+/// that is the home dir or holds a tier or the untrusted root refuses the run.
+pub fn denied(core: &crate::state::AppState) -> Result<Vec<PathBuf>> {
+    let env = core.env();
+    let get = |k: &str| {
+        let v = env.vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.into());
+        v.or_else(|| std::env::var_os(k))
+    };
+    let home = crate::claude::home(&get).ok_or_else(|| Error::Other("No home dir".into()))?;
+    let mut all: Vec<PathBuf> = HOME.iter().map(|p| home.join(p)).collect();
+    if let Some(dir) = crate::claude::config_dir(&get, false) {
+        all.extend([dir.join(".credentials.json"), dir.join("projects")]);
+    }
+    let tmp = if cfg!(target_os = "macos") {
+        "/private/tmp"
+    } else {
+        "/tmp"
+    };
+    all.push(PathBuf::from(format!("{tmp}/claude-{}", uid())));
+    let tiers = [&core.config_dir, &core.data_dir, &core.cache_dir];
+    all.extend(tiers.iter().map(|t| t.to_path_buf()));
+    let settings = core.get_settings();
+    let folders = settings
+        .workspaces
+        .iter()
+        .flat_map(|w| w.folders.iter().map(PathBuf::from));
+    for f in folders {
+        let holds = |p: &Path| p.starts_with(&f);
+        if f == home || tiers.iter().any(|t| holds(t)) || holds(&root()) {
+            return Err(Error::Other(format!(
+                "The workspace folder {} holds your home, Detached's data or the untrusted root, \
+                 which an untrusted run would read: narrow it to the folders that hold repos",
+                f.display()
+            )));
+        }
+        all.push(f);
+    }
+    all.extend(core.list_repos().into_iter().map(|r| PathBuf::from(r.path)));
+    Ok(all)
 }

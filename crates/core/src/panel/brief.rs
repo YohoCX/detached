@@ -127,6 +127,12 @@ pub fn quote(
     }
 }
 
+/// A prompt's hash, as the record keeps it.
+pub fn hash(text: &str) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(text.as_bytes()))[..16].to_string()
+}
+
 /// Fails on a SHA that is not a full object id, so no ref name reaches git as one.
 pub fn sha(s: &str) -> Result<&str> {
     match s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()) {

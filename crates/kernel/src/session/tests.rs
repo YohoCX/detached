@@ -57,17 +57,17 @@ both!(
 /// A real adapter and `claude` may take this long to start or answer.
 const START: Duration = Duration::from_secs(60);
 
-struct Fixture {
-    dir: tempfile::TempDir,
-    repo: String,
-    core: Arc<AppState>,
+pub(crate) struct Fixture {
+    pub dir: tempfile::TempDir,
+    pub repo: String,
+    pub core: Arc<AppState>,
     provider: &'static Provider,
     wsl: Option<String>,
 }
 
 impl Fixture {
     /// Lists the repo in the workspace, its status loaded.
-    fn list(&self, cx: &mut TestAppContext) {
+    pub fn list(&self, cx: &mut TestAppContext) {
         self.core
             .add_folder("Default".into(), self.repo.clone())
             .unwrap();
@@ -144,7 +144,7 @@ const OS: &[&str] = &[
 /// The kernel on a sandbox with a repo, `cli` as Claude's CLI on `provider`'s manifest and
 /// `install` run on core. `vars` join core's env first; every other name an agent may get, except
 /// the `OS` ones, is a sandbox folder or empty, so nothing of the caller's own env reaches it.
-fn boot_on(
+pub(crate) fn boot_on(
     cx: &mut TestAppContext,
     cli: &Path,
     vars: &[(&str, &str)],

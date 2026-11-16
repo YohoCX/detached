@@ -133,10 +133,23 @@ pub enum Item {
     Act(Act),
 }
 
+/// A panel participant's place: whom its tools answer as, and the repo whose acceptance of its
+/// tree's trust files counts; None never loads them. It takes no snapshots.
+#[derive(Clone, Debug)]
+pub struct Seat {
+    pub who: Identity,
+    pub accept: Option<String>,
+}
+
 pub struct Session {
     pub spec: Spec,
     /// Whom its host tools answer as.
     pub who: Identity,
+    pub seat: Option<Seat>,
+    /// Input and output tokens of its turns.
+    pub tokens: u64,
+    /// How the last turn failed, if it did.
+    pub failure: Option<Failure>,
     pub state: State,
     pub items: Vec<Item>,
     /// The agent's id, which a resume takes.
@@ -327,15 +340,30 @@ struct Started {
 
 impl Session {
     /// Starts a session, or resumes the past session `past`, with its kind's host tools.
-    pub fn open(mut spec: Spec, past: Option<String>, cx: &mut App) -> Entity<Session> {
+    pub fn open(spec: Spec, past: Option<String>, cx: &mut App) -> Entity<Session> {
+        Session::open_as(spec, past, None, cx)
+    }
+
+    /// `open` for a panel participant in its seat.
+    pub fn open_as(
+        mut spec: Spec,
+        past: Option<String>,
+        seat: Option<Seat>,
+        cx: &mut App,
+    ) -> Entity<Session> {
         let s = cx.new(|cx| {
-            let who = Identity::of(spec.kind, &spec.repo);
+            let who = seat
+                .as_ref()
+                .map_or_else(|| Identity::of(spec.kind, &spec.repo), |s| s.who.clone());
             let tx = cx.global::<Sessions>().tx.clone();
             spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
             let (changed, changes) = mpsc::unbounded();
             let mut s = Session {
                 spec: spec.clone(),
                 who,
+                seat,
+                tokens: 0,
+                failure: None,
                 state: State::Starting,
                 items: vec![],
                 id: past.clone(),
@@ -392,10 +420,18 @@ impl Session {
             return g.waiting.push(me);
         }
         let (tx, spec, changed) = (g.tx.clone(), self.spec.clone(), self.changed.clone());
+        let accept = match &self.seat {
+            None => Some(spec.repo.clone()),
+            Some(s) => s.accept.clone(),
+        };
         blocking::run(cx, move || {
             let events = events(me.clone(), past.clone(), tx.clone());
-            let started = start(&core, spec.clone(), past.as_deref(), events);
+            let watched = accept.is_some();
+            let started = start(&core, spec.clone(), past.as_deref(), events, accept);
             let started = started.map(|mut s| {
+                if !watched {
+                    return s;
+                }
                 let tree = Path::new(&spec.repo);
                 let watch = trust::watch(tree, spec.provider.trust, move || {
                     let _ = changed.unbounded_send(());
@@ -518,9 +554,14 @@ impl Session {
         self.items.push(Item::User(text.clone()));
         (self.state, self.cancelled, self.done) = (State::Running, false, false);
         let core = crate::core(cx).clone();
-        let (repo, trust, repos) = (self.spec.repo.clone(), self.trust.clone(), self.repos(cx));
+        let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
+        let repos = match self.seat {
+            Some(_) => vec![],
+            None => self.repos(cx),
+        };
+        let checked = self.seat.as_ref().is_none_or(|s| s.accept.is_some());
         let ready = blocking::run(cx, move || {
-            let moved = fingerprint(&core, &repo).is_some_and(|f| f != trust);
+            let moved = checked && fingerprint(&core, &repo).is_some_and(|f| f != trust);
             let snap = |r: String| (api::snapshot(&core, &r), r);
             (!moved).then(|| repos.into_iter().map(snap).collect())
         });
@@ -852,8 +893,12 @@ impl Session {
     fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
         self.drop_replies();
         let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
+        self.failure = r.as_ref().err().cloned();
         let stop = match r {
-            Ok(t) => Some(t.stop),
+            Ok(t) => {
+                self.tokens += t.tokens.map_or(0, |(i, o)| i + o);
+                Some(t.stop)
+            }
             Err(f) if f.cause == Some(Cause::OutOfExtraUsage) => {
                 self.note(OUT_OF_EXTRA_USAGE.into());
                 None
@@ -870,6 +915,7 @@ impl Session {
         self.items.push(Item::End { stop, ms });
         let core = crate::core(cx).clone();
         let repo = self.spec.repo.clone();
+        let checked = self.seat.as_ref().is_none_or(|s| s.accept.is_some());
         let found = blocking::run(cx, move || {
             let changes = |repo: &str, start: String| {
                 let end = api::snapshot(&core, repo)?;
@@ -892,7 +938,7 @@ impl Session {
             let all: Vec<_> = (starts.into_iter())
                 .map(|(r, start)| (changes(&r, start), r))
                 .collect();
-            (all, fingerprint(&core, &repo))
+            (all, checked.then(|| fingerprint(&core, &repo)).flatten())
         });
         self.task(cx, async move |this, cx| {
             let (all, trust) = found.await;
@@ -1052,10 +1098,20 @@ fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
     Some(p.fingerprint)
 }
 
-/// Starts or resumes the session on its provider's backend, with its trust as it is now.
-fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) -> Result<Started> {
-    let project = trust::project(&core.env(), Path::new(&spec.repo))?;
-    spec.trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
+/// Starts or resumes the session on its provider's backend, with its trust as it is now: the trust
+/// files in its tree as `accept` accepted them; None reads none of them.
+fn start(
+    core: &AppState,
+    mut spec: Spec,
+    past: Option<&str>,
+    events: Events,
+    accept: Option<String>,
+) -> Result<Started> {
+    let project = match &accept {
+        Some(_) => trust::project(&core.env(), Path::new(&spec.repo))?,
+        None => Default::default(),
+    };
+    spec.trusted = accept.is_some_and(|a| trust::trusted(&core.config_dir, &a, &project));
     let trusted = spec.trusted;
     // Skills never stop a session: a bad item is listed with its error, and the CLI reads its own.
     spec.skills = Skills::load(core, Some(&spec.repo)).map_or_else(|_| vec![], |s| s.all);
@@ -1143,4 +1199,4 @@ fn backend(p: &Provider) -> &'static dyn Backend {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

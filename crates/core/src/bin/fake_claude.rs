@@ -449,13 +449,15 @@ impl Turn<'_> {
                 )
             })
             .unwrap_or_else(|| text.to_string());
+        // The prompt goes in first, as the CLI writes it: a turn that dies still has it.
+        self.transcript(Some(text));
         let s = self.shared.lock().unwrap();
         let init = json!({"type": "system", "subtype": "init", "session_id": s.id,
             "model": s.model, "permissionMode": s.mode});
         drop(s);
         self.send(init);
         let result = steps.split(';').try_for_each(|step| self.step(step.trim()));
-        self.transcript(text);
+        self.transcript(None);
         let said = self.said.lock().unwrap().clone();
         let id = self.shared.lock().unwrap().id.clone();
         let (subtype, error, result) = match result {
@@ -853,8 +855,9 @@ impl Turn<'_> {
         self.message("user", json!([result]));
     }
 
-    /// The turn's prompt and messages, appended to `projects/<cwd>/<id>.jsonl` as the CLI writes it.
-    fn transcript(&self, prompt: &str) {
+    /// The turn's prompt or its messages so far, appended to `projects/<cwd>/<id>.jsonl` as the CLI
+    /// writes them.
+    fn transcript(&self, prompt: Option<&str>) {
         let Ok(cwd) = std::env::current_dir() else {
             return;
         };
@@ -869,8 +872,12 @@ impl Turn<'_> {
         let dir = config_dir().join("projects").join(name);
         let _ = std::fs::create_dir_all(&dir);
         let mut lines = String::new();
-        let messages = self.messages.lock().unwrap().clone();
-        for (role, content) in [("user", json!(prompt))].into_iter().chain(messages) {
+        let messages = std::mem::take(&mut *self.messages.lock().unwrap());
+        for (role, content) in prompt
+            .map(|p| ("user", json!(p)))
+            .into_iter()
+            .chain(messages)
+        {
             s.lines += 1;
             let uuid = format!("{}-{}", s.id, s.lines);
             let line = json!({"parentUuid": s.leaf, "isSidechain": false, "type": role,

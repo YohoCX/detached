@@ -40,6 +40,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     update::init(cx);
     agents::init(cx);
     session::init(cx);
+    panel::live::init(cx);
     invalidate::init(cx);
     workspace::init(cx);
 }

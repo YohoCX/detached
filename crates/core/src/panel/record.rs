@@ -163,6 +163,7 @@ struct Line {
 }
 
 /// Appends events to a run's `events.jsonl`.
+#[derive(Clone)]
 pub struct Record {
     pub dir: PathBuf,
 }
@@ -174,15 +175,11 @@ impl Record {
         Ok(Record { dir: dir.into() })
     }
 
-    /// Appends `e` with the time now, which it returns in ms.
-    pub fn append(&self, e: &Event) -> Result<i64> {
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        let now = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
+    /// Appends `e` at `at`, in ms.
+    pub fn append(&self, at: i64, e: &Event) -> Result<()> {
+        let t = chrono::DateTime::from_timestamp_millis(at).unwrap_or_default();
         let line = Line {
-            at: now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            at: t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             event: e.clone(),
         };
         let mut f = fs::OpenOptions::new()
@@ -190,8 +187,14 @@ impl Record {
             .append(true)
             .open(self.dir.join("events.jsonl"))?;
         f.write_all(format!("{}\n", serde_json::to_string(&line)?).as_bytes())?;
-        Ok(ms)
+        Ok(())
     }
+}
+
+/// The time now in ms.
+pub fn now() -> i64 {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    t.unwrap_or_default().as_millis() as i64
 }
 
 /// The events of `dir`'s log with their times; a torn last line is skipped.
@@ -749,7 +752,7 @@ mod tests {
             verdict("adv-2", Judged::Confirmed),
         ];
         for e in &events {
-            r.append(e).unwrap();
+            r.append(now(), e).unwrap();
         }
         let s = State::replay(&read(dir.path()).unwrap());
         assert_eq!(s.heads().count(), 2);
