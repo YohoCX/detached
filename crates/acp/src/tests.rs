@@ -559,13 +559,7 @@ fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowe
 
 #[test]
 fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_reads() {
-    let sb = Sandbox::new();
-    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
-    let config = adapters::Config {
-        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
-        codex: true,
-    };
-    sb.state.set_block(BLOCK, config).unwrap();
+    let sb = codex_fake();
     let repo = sb.path("tree");
     std::fs::create_dir_all(repo.join(".codex")).unwrap();
     std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.repo]\n").unwrap();
@@ -590,6 +584,60 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
         [permissions.detached-reviewer.filesystem]\n\
         \"/home/u/.ssh\" = \"deny\"\n\"/r/a \\\"b\\\"\" = \"deny\"\n";
     assert_eq!(layer, want);
+}
+
+/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI.
+fn codex_fake() -> Sandbox {
+    let sb = Sandbox::new();
+    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
+    let config = adapters::Config {
+        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
+        codex: true,
+    };
+    sb.state.set_block(BLOCK, config).unwrap();
+    sb
+}
+
+/// A Codex session on `acp` in the sandbox with `effort` and `model`, and its stream.
+fn codex_open(
+    acp: &Acp,
+    sb: &Sandbox,
+    effort: &str,
+    model: Option<&str>,
+) -> (Result<Open>, Receiver<backend::Event>) {
+    let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
+    spec.mode = "plan".into();
+    spec.effort = Some(effort.into());
+    spec.model = model.map(String::from);
+    let (tx, rx) = mpsc::channel();
+    let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    (open, rx)
+}
+
+#[test]
+fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
+    let (acp, sb) = (Acp::default(), codex_fake());
+    let (open, rx) = codex_open(&acp, &sb, "high", None);
+    let open = open.unwrap();
+    let config = until(&rx, |e| match e {
+        backend::Event::Opened(o) => Some(o.config),
+        _ => None,
+    });
+    let effort = config.iter().find(|c| c.id == "reasoning_effort").unwrap();
+    assert_eq!(effort.value, "high");
+    open.prompt("effort").unwrap();
+    assert_eq!(said(&rx), "high");
+}
+
+#[test]
+fn a_refused_setting_fails_the_open_and_closes_its_session() {
+    let (acp, sb) = (Acp::default(), codex_fake());
+    let (kept, rx) = codex_open(&acp, &sb, "low", None);
+    let kept = kept.unwrap();
+    let (refused, _) = codex_open(&acp, &sb, "low", Some("no-such-model"));
+    assert!(refused.is_err());
+    kept.prompt("sessions").unwrap();
+    assert_eq!(said(&rx), "1");
 }
 
 /// Every process's command line.

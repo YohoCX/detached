@@ -193,7 +193,8 @@ fn an_untrusted_participant_writes_reaches_and_cross_reads_nothing() {
 }
 
 /// Codex's cancel ends the turn, and the command goes on as a background terminal: the session's
-/// close ends it, with the adapter still running.
+/// close ends it, with the adapter still running. The command outlasts the turn's wait, so a turn
+/// that ends only with it fails.
 #[test]
 #[ignore = "make codex-live"]
 fn a_cancel_mid_command_ends_the_turn_and_the_session_s_close_its_command() {
@@ -204,27 +205,32 @@ fn a_cancel_mid_command_ends_the_turn_and_the_session_s_close_its_command() {
     spec.mode = "read-only".into();
     let marker = format!("H13A{}", std::process::id());
     let prompt = format!(
-        "Run exactly this shell command and wait for it to finish: perl -e 'sleep 60' {marker}"
+        "Run exactly this shell command and wait for it to finish: perl -e 'sleep 600' {marker}"
     );
-    let mut cancelled = false;
+    let mut cancelled = None;
     let (seen, open) = turn(&sb, &spec, &prompt, Answer::Allow, |open, t| {
         let runs = t
             .input
             .as_ref()
             .is_some_and(|i| i.to_string().contains(&marker));
-        if runs && !cancelled && t.status.as_deref() == Some("in_progress") {
+        if runs && cancelled.is_none() && t.status.as_deref() == Some("in_progress") {
             let start = Instant::now();
             while running(&marker).is_empty() {
                 assert!(start.elapsed() < START, "the command never ran");
                 std::thread::yield_now();
             }
             open.cancel();
-            cancelled = true;
+            cancelled = Some(Instant::now());
         }
     });
-    assert!(cancelled, "{:?}", seen.tools);
+    let cancelled = cancelled.unwrap_or_else(|| panic!("{:?}", seen.tools));
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(30),
+        "{:?}",
+        cancelled.elapsed()
+    );
     assert_eq!(seen.end.unwrap().unwrap().stop, StopReason::Cancelled);
-    eprintln!("after the cancelled turn: {:?} run", running(&marker));
+    assert!(!running(&marker).is_empty(), "the cancel ended the command");
     let live = open.live.clone();
     drop(open);
     let start = Instant::now();

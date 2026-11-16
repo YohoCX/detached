@@ -2002,7 +2002,8 @@ WSL run is open.**
     sets each listed option that differs with `set_config_option` (§2). Effort is
     `reasoning_effort`.
   - A cancelled command runs on to its end (60 s of 60) unless the session closes, which ended it
-    in 20 ms (§2, TECHDEBT).
+    in 20 ms (§2, TECHDEBT). The row now runs a 600 s command and fails unless the turn ends
+    within 30 s of the cancel with the command still running.
   - A permission profile reaches a session only through the user's, the system's or a
     user-trusted project's config, so the backend writes it as the project layer of the tree the
     host made (§5).
