@@ -2065,7 +2065,9 @@ Codex account is out of usage until 2026-11-19, so no live turn ran.**
     `agent-full-access`.
   - The ACP backend: switches through `set_config_option`, checked against the options last
     reported, a refused one coming back as `Update::Refused`, which the feed notes; the chat takes
-    back what the agent kept, so its next session (a resume after Stop) opens with it (Codex's `reasoning_effort` is the seam's `effort`); models from the `model` option
+    back what the agent kept, so its next session (a resume after Stop) opens with it. A woken
+    turn (H10) runs in its provider's asking mode, Codex's `read-only` through that switch, and a
+    refused switch stops it (Codex's `reasoning_effort` is the seam's `effort`); models from the `model` option
     with their names; a command's output from `_meta.terminal_output_delta`, its last 64 KiB whole
     in the call's output; `/` commands from `available_commands_update`; past sessions from
     `session/list` narrowed to those in the host's index, which now lists every chat session at

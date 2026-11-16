@@ -25,6 +25,9 @@
 //! - `act <json>` calls the host's `detached_act` with those arguments through the session's first
 //!   MCP server, over HTTP, and says its answer.
 //!
+//! A prompt's `acp-wake: <steps>` line is what the host's wake line, `You have new messages`, runs
+//! in that session from then on.
+//!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
 //! first. A new session asked for the model `die` exits with code 3 before it answers. On stdin's
@@ -62,6 +65,8 @@ struct Session {
     hold_close: bool,
     /// Commands a cancel leaves running.
     background: Vec<Child>,
+    /// The steps the host's wake line runs, from a prompt's `acp-wake:` line.
+    wake: Option<String>,
 }
 
 fn main() {
@@ -245,8 +250,22 @@ fn main() {
                 }
                 let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
                 let text = params["prompt"][0]["text"].as_str().unwrap_or_default();
-                let script = text.lines().find_map(|l| l.strip_prefix("acp: "));
-                let text = script.unwrap_or(text).to_string();
+                let line = |p: &str| {
+                    text.lines()
+                        .find_map(|l| l.strip_prefix(p))
+                        .map(String::from)
+                };
+                let mut all = sessions.lock().unwrap();
+                let s = all.get_mut(&sid);
+                let wake = match s {
+                    Some(s) => {
+                        s.wake = line("acp-wake: ").or(s.wake.take());
+                        s.wake.clone().filter(|_| text == WAKE)
+                    }
+                    None => None,
+                };
+                drop(all);
+                let text = line("acp: ").or(wake).unwrap_or(text.into());
                 listed(|all| {
                     let s = all.iter_mut().find(|s| s["sessionId"] == sid.as_str());
                     if let Some(s) = s.filter(|s| s["title"].is_null()) {
@@ -328,6 +347,8 @@ fn models() -> &'static [(&'static str, &'static str)] {
 }
 
 const EFFORTS: &[&str] = &["low", "medium", "high"];
+/// The host's line for a woken turn.
+const WAKE: &str = "You have new messages";
 
 fn codex() -> bool {
     exe_name().starts_with("codex-acp")

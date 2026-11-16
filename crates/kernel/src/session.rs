@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model,
-    Part, Piece, Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
+    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
@@ -648,8 +648,8 @@ impl Session {
         }
         let picked = std::mem::take(&mut self.picked);
         let mode = picked.iter().any(|s| matches!(s, Setting::Mode(_)));
-        let back =
-            (!mode && self.spec.mode != self.spec.provider.ask).then(|| Setting::Mode(self.spec.mode.clone()));
+        let back = (!mode && self.spec.mode != self.spec.provider.ask)
+            .then(|| Setting::Mode(self.spec.mode.clone()));
         for setting in back.into_iter().chain(picked) {
             if let Err(e) = self.set(setting) {
                 self.note(format!("Not set after the woken turns: {e}"));

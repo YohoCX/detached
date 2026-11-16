@@ -176,6 +176,7 @@ impl Corpus {
             mode: self.mode.clone(),
             untrusted: true,
             budget: Some(self.budget - self.spent),
+            codex: false,
         };
         let p = live::start(s, cx);
         self._watch = Some(cx.observe(&p, |c: &mut Corpus, p, cx| {
