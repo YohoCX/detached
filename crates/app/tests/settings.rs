@@ -40,6 +40,7 @@ fn each_page_opens_by_its_id(cx: &mut TestAppContext) {
         ("cli", "settings.cli"),
         ("repository", "settings.removed"),
         ("sharing", "settings.sharing"),
+        ("skills", "settings.skills"),
         ("worktrees", "settings.worktrees"),
         ("files", "settings.files"),
     ];
@@ -76,6 +77,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Current repository",
         "Repository",
         "Sharing",
+        "Skills",
         "Worktrees",
     ];
     assert_eq!(nav(cx), groups);
