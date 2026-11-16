@@ -28,6 +28,7 @@ use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
+use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
 use kernel::session::{Answer, Back, Item, Session};
 use kernel::workspace::Workspace;
@@ -113,6 +114,7 @@ impl ChatView {
                 }
                 cx.notify();
             }),
+            cx.observe(&Messages::global(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     this.suggest(cx);
@@ -435,10 +437,65 @@ impl ChatView {
             .child(modes)
             .child(picker)
             .children(effort)
+            .child(self.messages(cx))
             .child(div().flex_1())
             .children(usage)
             .children(limits)
             .children(unknown)
+    }
+
+    /// The group whose sessions this chat's agent messages, and whether new messages wake it.
+    fn messages(&self, cx: &App) -> AnyElement {
+        let chat = self.session.read(cx);
+        let id = chat.current().and_then(|s| s.read(cx).id.clone());
+        let m = Messages::get(cx);
+        let mine = id
+            .as_deref()
+            .and_then(|id| m.group(id))
+            .map(|g| g.name.clone());
+        let wake = id.as_deref().is_some_and(|id| m.wake.contains(id));
+        let label = match (&mine, wake) {
+            (Some(g), true) => format!("{g} · wakes"),
+            (Some(g), false) => g.clone(),
+            (None, true) => "Wakes".into(),
+            (None, false) => "No group".into(),
+        };
+        let groups: Vec<(String, usize)> = (m.groups.iter())
+            .filter(|g| Some(&g.name) != mine.as_ref())
+            .map(|g| (g.name.clone(), g.members.len()))
+            .collect();
+        let fresh = m.fresh_name();
+        ui::titled(
+            ui::icon_button("chat.group", div().child(label.clone()), cx)
+                .child(Icon::Down.size(px(10.))),
+            "Messages between agents",
+        )
+        .aria_description(SharedString::from(label))
+        .test_support()
+        .on_click(move |e, window, cx| {
+            let on = id.is_some();
+            let id = id.clone().unwrap_or_default();
+            let join = |name: Option<String>| {
+                let id = id.clone();
+                move |_: &mut Window, cx: &mut App| inbox::join(cx, &id, name.clone())
+            };
+            let mut menu = Menu::default();
+            for (name, n) in &groups {
+                let label = format!("Join {name} ({n})");
+                menu = menu.item_if(on, label, join(Some(name.clone())));
+            }
+            let wakes = match wake {
+                true => "Stop waking on messages",
+                false => "Wake on messages",
+            };
+            let id = id.clone();
+            menu.item_if(on, format!("New group: {fresh}"), join(Some(fresh.clone())))
+                .item_if(mine.is_some(), "Leave the group", join(None))
+                .separator()
+                .item_if(on, wakes, move |_, cx| inbox::set_wake(cx, &id, !wake))
+                .show(e.position(), window, cx);
+        })
+        .into_any_element()
     }
 
     /// Lays out each whole text once, and drops what is gone.
@@ -767,9 +824,20 @@ impl ChatView {
                 .text_color(t.warning)
                 .child(text.clone())
                 .into_any_element(),
+            Item::Woken => self
+                .row(i, "Woken by new messages".into())
+                .text_size(text::SMALL)
+                .text_color(t.muted)
+                .child("Woken by new messages")
+                .into_any_element(),
             Item::Act(act) => {
                 let text = match act {
                     Act::Proc(p) => format!("{:?} the process {} in {}", p.op, p.name, p.repo),
+                    Act::Send(m) => format!("To {}: {}", super::name_of(&m.to, cx), m.text),
+                    Act::Watch(w) => match &w.process {
+                        Some(p) => format!("Watching the process {p} in {}", w.repo),
+                        None => format!("Watching the pipeline in {}", w.repo),
+                    },
                     act => format!("{act:?}"),
                 };
                 self.row(i, text.clone())

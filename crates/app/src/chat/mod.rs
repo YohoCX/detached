@@ -197,6 +197,16 @@ pub fn forget(id: &str, cx: &mut App) {
     }
 }
 
+/// The open chat on conversation `id` by its place and topic, else the id.
+pub fn name_of(id: &str, cx: &App) -> String {
+    let chat = open(cx)
+        .into_iter()
+        .find(|(.., s)| s.read(cx).conversation(cx) == Some(id));
+    chat.map_or(id.into(), |(repo, n, _)| {
+        ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into()
+    })
+}
+
 /// How a chat stands: working, waiting for you, done, stopped, or not started.
 fn state_icon(state: State, cx: &App) -> AnyElement {
     let t = theme(cx);

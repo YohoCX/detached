@@ -13,14 +13,15 @@ Callers: a session's host tools (`crates/kernel/src/session.rs:242`) and the own
 answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `core::host`.
 
 ## Public API
-- `Identity { subject, can }` — who asks: `subject: None` reads the whole workspace; `can` lists
-  the action names it may take (`crates/kernel/src/host.rs:34`).
+- `Identity { subject, can, panel, session }` — who asks: `subject: None` reads the whole
+  workspace; `can` lists the action names it may take; `session` is the asking session's id, which
+  `inbox` and `group` read, set by the session's tools at each read (`crates/kernel/src/host.rs:34`).
 - `Subject { repo, mr }` — a review's repo path and its MR number, if any.
 - `Identity::owner()` — the workspace, no action.
 - `Identity::subject(repo, mr)` — that repo alone, that MR alone, no sessions; may
   `report_finding`, `report_verdict`, `done`.
 - `Identity::of(kind, repo)` — `Kind::Chat` reads as the owner and may `proc`, which
-  `kernel::proc::act` runs; `Verifier` and `Untrusted` as `subject(repo, None)` (`crates/kernel/src/host.rs:66`).
+  `kernel::proc::act` runs, and `send` and `watch`, which `kernel::inbox` runs; `Verifier` and `Untrusted` as `subject(repo, None)` (`crates/kernel/src/host.rs:66`).
 - `Identity::may(&Act)` — `Err("This session cannot <name>.")` unless the act's name is in `can`.
 - `query(cx, who, query) -> Task<Result<Value>>` — the GraphQL answer `{data, errors?}`; `Err`
   when the query is refused (parse, subset, limits) (`crates/kernel/src/host.rs:82`).
@@ -68,6 +69,9 @@ answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `cor
   wrong or missing arguments (enums checked against the SDL), a missing or extra selection.
 - A `Node` accessor hits `unreachable!` when a resolver row's type and the node it gets disagree.
 - `core::host`'s `detached_read` description is written by hand; keep it in line with the SDL.
+- `inbox` is the one read with an effect: the messages it returned are marked read once the answer
+  is final. `inbox` and `group` are empty for an identity without `send` or without a session.
+- `exec::run` returns the ids of the messages it returned beside the answer and its needs.
 
 ## Tests
 - `crates/kernel/src/host/exec.rs` (unit, over a hand-made `Snap`):

@@ -780,7 +780,7 @@ Later steps add to the SDL:
 - H7: `docs`, `DocSection`;
 - H8: `skills`, `Skill`;
 - H9: `processes`, `Process` (`log` is nullable);
-- H10: `inbox`, `Message`.
+- H10: `inbox`, `Message`, and `group` (the sessions `send` reaches).
 
 ## 8. Processes and the env store
 
@@ -1966,6 +1966,37 @@ Done when a dev server runs from a definition and an agent with `read` quotes it
 The owner checks: the same, and one with `off` cannot.
 
 ### Step H10. Messages, groups and `watch`
+
+**Status (2026-11-17): built, with every test below; waiting for the owner's check.**
+`kernel::inbox` keeps each session's `Inbox` by its conversation id (a resume reads the same one),
+the owner's groups and the sessions with wake on, none by default; groups and wake live for the
+run, and a chat that ends leaves both. The chat's identity gains `send` and `watch` (panel
+participants have neither). `send { to, text, reply_to? }` reaches only another session of the
+sender's group and shows in the sender's feed. The SDL has `inbox(all: Boolean)`, which returns the
+unread messages and marks what it returned read, `Message { id from replyTo text read }` (`from` is
+`detached` for a watch), and `group`, the sessions `send` reaches, which the plan did not list: an
+agent needs its mates' ids. Wake: a message to a session with wake on starts, when it is idle, a
+woken turn whose prompt is the fixed line and whose feed item is `Woken`; a busy or starting one
+takes it once its turn ends. Each woken turn first sets `default` through the backend's mode switch
+(on Claude `set_permission_mode`, sent before every wake prompt, whatever the kernel's copy of the
+mode says) and takes no always-rule. Woken turns that follow one another keep `default`; after the
+last, the owner's mode comes back, then any mode, model or effort the owner picked meanwhile, which
+waits until then. A frame naming another mode during a woken turn cancels it. The ACP backend
+switches no mode yet, so an ACP session is never woken (TECHDEBT). The cap counts woken turns per group,
+or per lone session for a watch's wake; the sixth gets a note and the messages wait, and a user
+turn in the group lets five more run. Stop in a chat cancels every running turn of its group, drops
+the wakes due and holds the group like the cap until the owner's next message. `watch { repo,
+process | pipeline }` puts one message from `detached` into the watcher's inbox: a running process
+once ready (or its exit or failure first), a pipeline of the repo's branch once it ends, judged on a load
+made after the watch: the newest then if it runs, else the next one (or the id given, or a newer
+one), with the watch reloading the list every 10 s. The chat
+has a group menu under the box (join, new group, leave, wake on messages), and its feed shows `To
+<chat>: <text>` and "Woken by new messages". `fake_claude` gains `bash` (asks unless in `auto` or
+`bypassPermissions`), `reply`, and `fake-wake:` lines for the wake prompt. Tested in
+`kernel::inbox`'s tests (each test of the list below, a busy receiver, a frame in another mode, and
+the Done: two sessions write one change each by messages, and one Stop ends both) and
+`tests/chat.rs` (two chats grouped through the menu, one woken by the other's message). The owner
+checks: two grouped chats finishing one change by messages, and Stop in one ending both.
 
 Work: `kernel::Inbox`, `send`, groups, wake, the cap, a group's Stop, `watch`, `inbox` in the SDL.
 

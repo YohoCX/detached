@@ -15,10 +15,11 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
 ## Public API
 - `READ`, `ACT` — the tool names, `"detached_read"` and `"detached_act"`.
 - `Call` — a parsed tool call: `Read(query)` or `Act(Act)`.
-- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `Done(Done)`, `Proc(ProcAct)`;
+- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `ReportGroup(Group)`, `Done(Done)`,
+  `Proc(ProcAct)`, `Send(SendAct)`, `Watch(WatchAct)`;
   serde-tagged as `{"action": "<snake_case>", "args": {...}}` (`crates/core/src/host.rs:23`).
-- `Act::name()` — `"report_finding"`, `"report_verdict"`, `"done"` or `"proc"`; what
-  `Identity::may` checks.
+- `Act::name()` — `"report_finding"`, `"report_verdict"`, `"report_group"`, `"done"`, `"proc"`,
+  `"send"` or `"watch"`; what `Identity::may` checks.
 - `Finding` — severity, class, title, body, optional fix, file, line, optional end line, quote,
   lenses.
 - `Severity` (`critical`, `major`, `minor`), `Class` (`correctness` … `tests`).
@@ -28,6 +29,10 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
 - `Done` — `nothing_found`, optional note.
 - `ProcAct` — `op` (`Op`: `start`, `stop`, `restart`), the repo's path and the process's name; the
   kernel runs it only where the definition's `agents` is `start` (`crates/core/src/host.rs:100`).
+- `SendAct` — `to` (a session's id), `text`, optional `reply_to` (a message's id); the kernel
+  delivers it only within the sender's group (`kernel::inbox::send`).
+- `WatchAct` — the repo's path and `process` (a running one's name) or `pipeline` (an id; the
+  branch's newest when neither is given); one message comes back through the inbox.
 - `server(answer) -> backend::Tools` — the server; `answer(Call)` returns the result or an error
   string the agent sees (`crates/core/src/host.rs:115`).
 
@@ -49,7 +54,7 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
   kernel's callback ships the call to the main thread and waits on a channel.
 - The tool descriptions and `inputSchema` in `tools()` are written by hand: keep them in line with
   `Act`'s serde shape and the kernel's SDL (`crates/kernel/src/host/schema.graphql`).
-- The `args` schema is an `anyOf` of the four shapes; serde, not the schema, ties `args` to
+- The `args` schema is an `anyOf` of the seven shapes; serde, not the schema, ties `args` to
   `action`, so a mismatch fails at deserialize with serde's message.
 - Notifications are answered with a result object anyway; the transport decides whether to send it.
 - The server checks no permissions: `Identity::may` in the kernel refuses an act the session may

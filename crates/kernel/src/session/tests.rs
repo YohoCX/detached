@@ -814,7 +814,7 @@ fn a_turn_that_changed_a_covered_file_says_which_doc_may_need_an_update(cx: &mut
     );
 }
 
-fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
+pub(crate) fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
     let text = s.read(cx).items[from..].iter().filter_map(|i| match i {
         Item::Text(t) => Some(t.as_str()),
         _ => None,
