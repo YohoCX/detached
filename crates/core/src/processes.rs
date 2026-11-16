@@ -179,6 +179,9 @@ pub enum Output {
 pub struct Run {
     pty: Pty,
     stopper: Stopper,
+    /// The batch file cmd reads the command from while it runs.
+    #[cfg(windows)]
+    _script: tempfile::TempPath,
 }
 
 /// What stops a run, from any thread, while the run stays where it is.
@@ -204,14 +207,25 @@ pub fn start(
     };
     let ready = def.ready.as_deref().map(Regex::new).transpose();
     let ready = ready.map_err(|e| Error::Other(e.to_string()))?;
-    // portable-pty quotes each argument as the C runtime reads it, which cmd does not: cmd gets the
-    // command from a variable it expands, as typed, the variables in it expanded first.
-    let argv = match cfg!(windows) {
-        true => ["cmd", "/C", "%DETACHED_COMMAND%"].map(String::from),
-        false => ["sh".into(), "-c".into(), def.command.clone()],
+    let cwd = repo.join(&def.folder);
+    if !cwd.is_dir() {
+        return Err(Error::Other(format!("{} is not a folder.", cwd.display())));
+    }
+    // portable-pty quotes each argument as the C runtime reads it, which cmd does not: cmd runs
+    // the command as a batch file's line, so it expands every variable itself.
+    #[cfg(windows)]
+    let script = {
+        let mut f = tempfile::Builder::new().suffix(".cmd").tempfile()?;
+        let text = format!("@chcp 65001 >nul\r\n@echo off\r\n{}\r\n", def.command);
+        std::io::Write::write_all(&mut f, text.as_bytes())?;
+        f.into_temp_path()
     };
-    let mut cmd = CommandBuilder::from_argv(argv.map(Into::into).to_vec());
-    cmd.cwd(repo.join(&def.folder));
+    #[cfg(windows)]
+    let argv = vec!["cmd".into(), "/C".into(), script.as_os_str().to_owned()];
+    #[cfg(unix)]
+    let argv = vec!["sh".into(), "-c".into(), def.command.clone().into()];
+    let mut cmd = CommandBuilder::from_argv(argv);
+    cmd.cwd(cwd);
     let env = state.env();
     for (k, v) in env.login.iter() {
         cmd.env(k, v);
@@ -219,11 +233,6 @@ pub fn start(
     cmd.env("PATH", &env.path);
     for (k, v) in env.vars.iter().chain(values.iter()) {
         cmd.env(k, v);
-    }
-    if cfg!(windows) {
-        let get = |n: &str| cmd.get_env(n).map(|v| v.to_string_lossy().into_owned());
-        let command = expand(&def.command, get);
-        cmd.env("DETACHED_COMMAND", command);
     }
     let size = PtySize {
         rows: 50,
@@ -294,7 +303,12 @@ pub fn start(
         #[cfg(windows)]
         job,
     };
-    Ok(Run { pty, stopper })
+    Ok(Run {
+        pty,
+        stopper,
+        #[cfg(windows)]
+        _script: script,
+    })
 }
 
 impl Run {
@@ -452,30 +466,6 @@ impl Lines {
     }
 }
 
-/// `command` with each `%NAME%` that `get` knows replaced, as cmd expands a typed line; an unknown
-/// one stays.
-fn expand(command: &str, get: impl Fn(&str) -> Option<String>) -> String {
-    let (mut out, mut rest) = (String::new(), command);
-    while let Some(at) = rest.find('%') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
-        match after
-            .find('%')
-            .and_then(|end| Some((end, get(&after[..end])?)))
-        {
-            Some((end, value)) if end > 0 => {
-                out.push_str(&value);
-                rest = &after[end + 1..];
-            }
-            _ => {
-                out.push('%');
-                rest = after;
-            }
-        }
-    }
-    out + rest
-}
-
 /// `line` without terminal escapes and the control characters but tab and carriage return.
 fn strip(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -610,39 +600,64 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_windows_command_gets_its_variables_expanded_as_cmd_does() {
-        let get = |n: &str| (n.eq_ignore_ascii_case("port")).then(|| "3000".to_string());
-        assert_eq!(
-            expand(
-                r#""C:\Program Files\node.exe" s.js --port %PORT% %NOPE% 100%"#,
-                get
-            ),
-            r#""C:\Program Files\node.exe" s.js --port 3000 %NOPE% 100%"#
-        );
-        assert_eq!(expand("%%port%%", get), "%3000%");
+    /// What `def` prints in `repo`, empty lines left out, to its exit.
+    fn printed(sb: &Sandbox, repo: &Path, def: &Definition) -> Vec<Output> {
+        let (tx, rx) = mpsc::channel();
+        let _run = start(&sb.state, repo, def, move |o| _ = tx.send(o)).unwrap();
+        let got = rx.iter().filter(|o| *o != Output::Line(String::new()));
+        got.collect()
     }
 
     #[cfg(windows)]
     #[test]
-    fn a_quoted_program_path_runs_under_cmd() {
+    fn cmd_runs_a_quoted_program_path_and_expands_its_dynamic_variables() {
         let sb = Sandbox::new();
         let repo = sb.clone_pair("repo");
         let dir = repo.join("with space");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("say.cmd"), "@echo said-%1\r\n").unwrap();
-        let def = Definition {
-            name: "say".into(),
-            command: format!("\"{}\" hi && exit 4", dir.join("say.cmd").display()),
+        let comspec = std::env::var("COMSPEC").unwrap();
+        std::fs::copy(comspec, dir.join("c.exe")).unwrap();
+        let def = |command: String| Definition {
+            name: "cmd".into(),
+            command,
             ..Default::default()
         };
-        let (tx, rx) = mpsc::channel();
-        let _run = start(&sb.state, &repo, &def, move |o| _ = tx.send(o)).unwrap();
-        let got: Vec<Output> = rx
-            .iter()
-            .filter(|o| *o != Output::Line(String::new()))
-            .collect();
-        assert_eq!(got, [Output::Line("said-hi".into()), Output::Exit(Some(4))]);
+        let quoted = format!(
+            "\"{}\" /C echo said-hi && exit 4",
+            dir.join("c.exe").display()
+        );
+        assert_eq!(
+            printed(&sb, &repo, &def(quoted)),
+            [Output::Line("said-hi".into()), Output::Exit(Some(4))]
+        );
+        let got = printed(&sb, &repo, &def("echo cd=%CD% && echo r=%RANDOM%".into()));
+        let [Output::Line(cd), Output::Line(r), Output::Exit(Some(0))] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert!(cd.to_lowercase().ends_with("\\repo"), "{cd}");
+        let digits = r.strip_prefix("r=").unwrap();
+        assert!(
+            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn a_missing_folder_fails_the_start() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("repo");
+        let def = Definition {
+            name: "web".into(),
+            command: "echo ran > ran.txt".into(),
+            folder: "web".into(),
+            ..Default::default()
+        };
+        let e = start(&sb.state, &repo, &def, |_| {})
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("is not a folder"), "{e}");
+        assert!(!repo.join("ran.txt").exists());
     }
 
     #[test]
@@ -796,12 +811,7 @@ mod tests {
             command: command.into(),
             ..Default::default()
         };
-        let (tx, rx) = mpsc::channel();
-        let _run = start(&sb.state, &repo, &def, move |o| _ = tx.send(o)).unwrap();
-        let got: Vec<Output> = rx
-            .iter()
-            .filter(|o| *o != Output::Line(String::new()))
-            .collect();
+        let got = printed(&sb, &repo, &def);
         assert_eq!(got[0], Output::Line("got-from-zprofile".into()));
     }
 }

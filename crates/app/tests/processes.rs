@@ -138,3 +138,46 @@ fn the_env_profiles_page_keeps_values_in_the_store_and_names_in_settings(cx: &mu
     cx.click("env.remove.dev");
     wait_until(cx, |cx| cx.find("env.profile.dev").is_none());
 }
+
+#[gpui_kit::test]
+fn a_run_keeps_its_stop_when_its_definition_changes_or_goes(cx: &mut TestAppContext) {
+    let serve = if cfg!(windows) {
+        "echo up && ping -n 60 127.0.0.1 >NUL"
+    } else {
+        "echo up && sleep 60"
+    };
+    let cx = &mut open(cx, |sb, main| {
+        for name in ["web", "api"] {
+            let def = Definition {
+                name: name.into(),
+                command: serve.into(),
+                ..Default::default()
+            };
+            processes::save(&sb.state, main, &def).unwrap();
+        }
+    });
+    let main = cx.sb.path("repos/main");
+    let path = main.display().to_string();
+    let store = detached_core::store::RepoStore::open(&core(cx), &main).unwrap();
+    let file = |name: &str| store.local.join(format!("local/processes/{name}.toml"));
+    for (name, change) in [("web", true), ("api", false)] {
+        let row = format!("processes.row.{name}");
+        wait_until(cx, |cx| cx.find(row.clone()).is_some());
+        cx.click(row.clone());
+        cx.click("processes.start");
+        wait_label(cx, "processes.state", "Running");
+        match change {
+            true => std::fs::write(file(name), "command = \"echo changed\"\n").unwrap(),
+            false => std::fs::remove_file(file(name)).unwrap(),
+        }
+        cx.update(|_, cx| {
+            let defs = kernel::proc::definitions(cx, &path);
+            defs.update(cx, |d, cx| d.refresh(cx));
+        });
+        wait_until(cx, |cx| cx.find("processes.untrusted").is_some());
+        cx.click("processes.stop");
+        let p = cx.update(|_, cx| kernel::proc::get(cx, &path, name).unwrap());
+        wait_until(cx, |cx| cx.update(|_, cx| !p.read(cx).running()));
+        assert!(!label(cx, &row).contains("Running"), "{name}");
+    }
+}

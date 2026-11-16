@@ -115,6 +115,16 @@ pub fn get(cx: &App, repo: &str, name: &str) -> Option<Entity<Proc>> {
     found.cloned()
 }
 
+/// The runs of `repo`'s processes, once started; a run keeps its handle whatever becomes of its
+/// definition.
+pub fn runs<'a>(cx: &'a App, repo: &'a str) -> impl Iterator<Item = Entity<Proc>> + 'a {
+    let all = cx
+        .try_global::<Procs>()
+        .map(|p| p.0.as_slice())
+        .unwrap_or_default();
+    all.iter().filter(move |p| p.read(cx).repo == repo).cloned()
+}
+
 fn entity(cx: &mut App, repo: &str, name: &str) -> Entity<Proc> {
     get(cx, repo, name).unwrap_or_else(|| {
         let p = cx.new(|_| Proc {
@@ -138,14 +148,18 @@ fn entity(cx: &mut App, repo: &str, name: &str) -> Entity<Proc> {
 fn allowed(cx: &App, repo: &str, name: &str) -> Task<Result<()>> {
     let (core, repo, name) = (crate::core(cx).clone(), repo.to_string(), name.to_string());
     blocking::run(cx, move || {
-        let def = processes::get(&core, Path::new(&repo), &name)?;
-        match def.agents {
-            Agents::Start => Ok(()),
-            _ => Err(Error::Other(format!(
-                "The definition of {name} does not let agents start, stop or restart it."
-            ))),
-        }
+        granted(&processes::get(&core, Path::new(&repo), &name)?)
     })
+}
+
+fn granted(def: &processes::Definition) -> Result<()> {
+    match def.agents {
+        Agents::Start => Ok(()),
+        _ => Err(Error::Other(format!(
+            "The definition of {} does not let agents start, stop or restart it.",
+            def.name
+        ))),
+    }
 }
 
 /// Starts `name` of `repo` from its definition; `agent` first checks that it lets agents. A stop
@@ -159,7 +173,8 @@ pub fn start(cx: &mut App, repo: &str, name: &str, agent: bool) -> Task<Result<(
         if let Some(check) = check {
             check.await?;
         }
-        cx.update(|cx| run(cx, &p, since, &repo, &name)).await
+        cx.update(|cx| run(cx, &p, since, agent, &repo, &name))
+            .await
     })
 }
 
@@ -193,7 +208,7 @@ pub fn restart(cx: &mut App, repo: &str, name: &str, agent: bool) -> Task<Result
             return Err(stopped(&name));
         }
         let mine = cx.update(|cx| halt(cx, p.clone())).await;
-        cx.update(|cx| run(cx, &p, mine, &repo, &name)).await
+        cx.update(|cx| run(cx, &p, mine, agent, &repo, &name)).await
     })
 }
 
@@ -201,8 +216,16 @@ fn stopped(name: &str) -> Error {
     Error::Other(format!("{name} was stopped meanwhile."))
 }
 
-/// Spawns the run, unless a stop came since `since` or a run is still there or stopping.
-fn run(cx: &mut App, p: &Entity<Proc>, since: u64, repo: &str, name: &str) -> Task<Result<()>> {
+/// Spawns the run, unless a stop came since `since` or a run is still there or stopping. For an
+/// `agent` the definition it launches must still let agents.
+fn run(
+    cx: &mut App,
+    p: &Entity<Proc>,
+    since: u64,
+    agent: bool,
+    repo: &str,
+    name: &str,
+) -> Task<Result<()>> {
     let refused = match p.read(cx) {
         p if p.stops != since => Some(stopped(name)),
         p if p.busy > 0 || p.running() => {
@@ -225,6 +248,9 @@ fn run(cx: &mut App, p: &Entity<Proc>, since: u64, repo: &str, name: &str) -> Ta
     let sink = queue.clone();
     let started = blocking::run(cx, move || {
         let def = processes::get(&core, Path::new(&repo), &name)?;
+        if agent {
+            granted(&def)?;
+        }
         processes::start(&core, Path::new(&repo), &def, move |o| {
             if sink.lock().unwrap().push(o) {
                 _ = wake.unbounded_send(());
@@ -479,6 +505,30 @@ mod tests {
         done(cx, again).unwrap();
         let stopped = cx.update(|cx| stop(cx, &repo, "slow", false));
         done(cx, stopped).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn an_agent_s_restart_does_not_launch_once_its_grant_is_revoked(cx: &mut gpui::TestAppContext) {
+        let marker = &marker("revoked-restart");
+        let command =
+            format!("trap 'sleep 1; exit 0' TERM; echo {marker}; while :; do sleep 0.1; done");
+        let (_dir, repo) = slow(cx, &command);
+        let started = cx.update(|cx| start(cx, &repo, "slow", false));
+        done(cx, started).unwrap();
+        crate::wait_until(cx, |cx| {
+            let p = get(cx, &repo, "slow").unwrap();
+            p.read(cx).log.iter().any(|l| l == marker)
+        });
+        let restarted = cx.update(|cx| restart(cx, &repo, "slow", true));
+        crate::wait_until(cx, |cx| get(cx, &repo, "slow").unwrap().read(cx).busy > 0);
+        let core = cx.update(|cx| crate::core(cx).clone());
+        let mut def = processes::get(&core, Path::new(&repo), "slow").unwrap();
+        def.agents = Agents::Read;
+        processes::save(&core, Path::new(&repo), &def).unwrap();
+        let refused = done(cx, restarted).unwrap_err().to_string();
+        assert!(refused.contains("does not let agents"), "{refused}");
+        assert!(!alive(marker) && !running(cx, &repo));
     }
 
     #[test]
