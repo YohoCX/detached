@@ -521,6 +521,44 @@ The owner checks: every round under `.revmux/tasks/` imports and reads faster th
 
 ### Step P2. Panels, live: review and gate
 
+**Status (2026-11-17): built on macOS and Linux, items 1–4 and 6–11, with item 5 (Windows and WSL)
+left; waiting for the owner's check.**
+- Built: the event schema and its replay (`core::panel::record`); modes and roles as files with
+  TOML front matter between `+++` lines, review and gate built in; briefs with the subject as
+  JSON-quoted data and the quote check (`brief`); trusted pinned and finder worktrees, the raw-object
+  export, run-end removal, Merge and Discard, the verifiers' state check (`tree`, `run`); the
+  untrusted root, its lock and the enumerated deny list (`root`); trust marks with the refspec,
+  upstream and reflog rules (`marks`) on the Sharing page and the start form; raw-blob trust scans
+  (`trust::at`); the backend's sandbox, temp dir, denied reads, MCP file and `probe`;
+  `kernel::panel::live` (stages, cap with chat turns first, attempts with resume or restart, stall
+  with a tool call's own limit, the wall-clock sleep gap, offline on the host's own probe, back-off,
+  budget, cancel, interrupted runs closed); the read tool's `panels`, `Finding`, raw `diff`, `log`
+  and `search`; the Panels app's start form, live header, stage rail, participants and status bar.
+- Tests: on `fake_claude` in `kernel::panel::tests` and `tests/panels.rs`; on the real `claude`
+  against the fake Messages API in `kernel::panel::tests::real` (`make agent-test`, now in agent CI):
+  the probe passes, an untrusted participant reads a toolchain but no seeded secret (also through a
+  link), writes nothing and reaches no host, a sandboxed trusted verifier writes neither the tree nor
+  a ref and is not asked, an orchestrator finder commits on its branch with no prompt and no MCP
+  `env` in any argv, and the built-in gate says ship on a clean branch, trusted and untrusted.
+- Recorded: a sandboxed trusted verifier under `bypassPermissions` runs a `curl` to an unlisted host
+  with no request (claude 2.1.325, macOS). The sandbox's proxy answers an untrusted participant's
+  `curl` with an error, so only `curl -f` fails.
+- Choices: the merge stage is a participant (`report_group`) that is skipped below two findings, and
+  a degraded merge leaves every finding standing; a quote that fails its check is `unverified` and
+  never reaches a verifier; a gate with a degraded participant ends `incomplete`, a second state
+  change of verify ends the run "verify failed"; run ids are `<mode>-<date>-<time>-<ms>`, tasks are
+  the branch's name; the estimate is the mean of the repo's earlier runs of the mode, tokens only;
+  the probe's pass is kept in memory (TECHDEBT); finder settings are accepted per repo for the
+  head's trust files; the reflog rule takes `commit:` and `commit (amend):` entries alone.
+- Left: item 5 (Detached's distro and "WSL ready", a session through `wsl.exe` there, the firewall
+  step, native Windows' job per attempt), so untrusted runs refuse on Windows; Codex rows (H13a);
+  a click on a participant opening its transcript; the actual model on a row; a rate limit's reset
+  time; the remaining real-claude rows of the test list (each deny-list entry through Bash and
+  `Read`, the workspace `.env` made after start, another run's MCP file, two instances on one lock,
+  a 3-minute command, the tiers each a temp dir, the stall then load of an untrusted participant).
+- The owner checks: a review and a gate on this repo; the network pulled mid-run; a cancel; on
+  Windows 11 an untrusted review in WSL2, once item 5 is built.
+
 Work:
 1. The event schema and the record.
 2. Each participant's tree, in host §10's layout (the trusted verifiers' state check of §3
