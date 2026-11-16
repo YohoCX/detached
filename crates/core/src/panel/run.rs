@@ -373,7 +373,7 @@ pub fn teardown(core: &AppState, p: &Prepared, run: &str) -> Vec<Event> {
     if p.trust.trusted {
         _ = tree::remove(core, repo, &p.pinned);
         _ = fs::remove_dir_all(core.data_dir.join("private").join(run));
-        _ = fs::remove_dir_all(tree::trusted_root(core, run));
+        tree::prune(core, run);
     }
     if let Some(dir) = &p.dir {
         _ = fs::remove_dir_all(dir);

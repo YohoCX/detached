@@ -521,11 +521,19 @@ fn a_finder_with_changes_keeps_its_tree_and_branch_until_discarded(cx: &mut Test
     assert_eq!((participant.as_str(), dirty), ("f1", true));
     assert!(git(&f, &["branch", "--format=%(refname:short)"]).contains(&branch));
     let (task, run) = p.read_with(cx, |p, _| (p.task.clone(), p.run.clone()));
+    let tree = f
+        .core
+        .data_dir
+        .join("trees/trusted")
+        .join(&run)
+        .join("finders/f1");
+    assert!(tree.join("b.txt").exists(), "the tree with changes stays");
     let repo = f.repo.clone();
     let done = cx.update(|cx| live::discard(&repo, &task, &run, &branch, cx));
     cx.executor().allow_parking();
     cx.foreground_executor().block_test(done).unwrap();
     assert!(!git(&f, &["branch", "--format=%(refname:short)"]).contains(&branch));
+    assert!(!tree.exists());
     assert!(p.read_with(cx, |p, _| p.state.kept.is_empty()));
     assert!(replayed(&f, &p, cx).kept.is_empty());
 }
@@ -727,4 +735,48 @@ fn a_rate_limit_backs_off_without_an_attempt_and_out_of_extra_usage_waits_for_yo
     );
     p.update(cx, |p, cx| p.resume(cx));
     assert_eq!(ended(&p, cx).participants[0].attempt, 1);
+}
+
+#[gpui::test]
+fn a_run_left_without_an_end_closes_as_interrupted_and_its_trees_go(cx: &mut TestAppContext) {
+    use detached_core::panel::record::{Event, Record, Subject};
+    use detached_core::panel::tree;
+    let f = boot(cx);
+    let repo = Path::new(&f.repo);
+    let head = git(&f, &["rev-parse", "feat"]).trim().to_string();
+    let common = git(
+        &f,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    let r = Record::create(&Path::new(common.trim()).join("detached/panels/feat/run1")).unwrap();
+    let subject = Subject {
+        repo: f.repo.clone(),
+        branch: "feat".into(),
+        remote: false,
+        base: "main".into(),
+        base_sha: head.clone(),
+        head_sha: head.clone(),
+    };
+    let started = record::Started {
+        subject,
+        mode: "review".into(),
+        trusted: true,
+        seats: vec![],
+        prompts: Default::default(),
+        cli: None,
+        schema: record::SCHEMA,
+        limits: vec![],
+    };
+    r.append(record::now(), &Event::RunStarted(started))
+        .unwrap();
+    let pinned = tree::pinned(&f.core, repo, "run1", &head).unwrap();
+    let (work, branch) = tree::finder(&f.core, repo, "run1", "f1", &head).unwrap();
+    std::fs::write(work.join("b.txt"), "left").unwrap();
+    let done = cx.update(|cx| live::close_interrupted(&f.repo, "feat", "run1", cx));
+    cx.executor().allow_parking();
+    cx.foreground_executor().block_test(done).unwrap();
+    let s = State::replay(&record::read(&r.dir).unwrap());
+    assert_eq!(s.ended, Some(End::Interrupted));
+    assert_eq!(s.kept, [("f1".to_string(), branch, true)]);
+    assert!(!pinned.exists() && work.join("b.txt").exists());
 }

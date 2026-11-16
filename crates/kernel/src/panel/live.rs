@@ -934,11 +934,13 @@ impl Panel {
                 cx,
             );
         }
+        let paused = self.state.paused.is_some();
         let stalled: Vec<(String, Duration)> = (self.live.iter())
-            .filter(|l| l.status == Status::Running)
+            .filter(|l| l.status == Status::Running && !paused)
             .filter_map(|l| {
                 let s = l.session.as_ref()?.read(cx);
-                let busy = matches!(s.state, session::State::Running | session::State::Starting);
+                // From its prompt to its turn's end.
+                let busy = l.prompted && s.state == session::State::Running;
                 let limit = if in_tool(&s.items) { tool } else { stall };
                 let quiet = now.saturating_duration_since(l.last);
                 (busy && quiet > limit).then(|| (l.name.clone(), quiet))
@@ -1003,40 +1005,42 @@ impl Panel {
 
     /// One verifier per standing finding whose quote holds, on a model other than its sources'.
     fn verify(&mut self, p: &Arc<Prepared>, cx: &mut Context<Self>) {
+        // A trusted run's pinned tree is read before its first verifier starts.
+        if p.trust.trusted && self.before.is_none() {
+            let (env, pinned, prep) = (crate::core(cx).env(), p.pinned.clone(), p.clone());
+            let before = blocking::run(cx, move || tree::state(&env, &pinned));
+            self.checking += 1;
+            self.task(cx, async move |this, cx| {
+                let before = before.await;
+                this.update(cx, |p, cx| {
+                    p.checking -= 1;
+                    match before {
+                        Ok(b) => {
+                            p.before = Some(b);
+                            p.verify(&prep, cx);
+                        }
+                        Err(e) => {
+                            let reason = format!("The pinned tree cannot be read: {e}");
+                            p.end(End::Failed { reason }, cx);
+                        }
+                    }
+                })
+                .ok();
+            });
+            return;
+        }
         let (mut add, mut notes) = (vec![], vec![]);
         for f in self.state.heads().filter(|f| f.unverified.is_none()) {
             let sources = self.state.sources(&f.id);
             let (model, note) = record::verifier(&p.mode.verifiers, &sources);
             notes.extend(note);
-            add.push((
-                format!("verify-{}", f.id),
-                model,
-                brief::verify(&p.verifier, &p.data, f),
-                f.id.clone(),
-            ));
+            let brief = brief::verify(&p.verifier, &p.data, f);
+            add.push((format!("verify-{}", f.id), model, brief, f.id.clone()));
         }
         for n in notes {
             if !self.state.notes.iter().any(|x| x == n) {
                 self.state.notes.push(n.into());
             }
-        }
-        if p.trust.trusted {
-            let (env, pinned) = (crate::core(cx).env(), p.pinned.clone());
-            let before = blocking::run(cx, move || tree::state(&env, &pinned));
-            self.task(cx, async move |this, cx| {
-                let before = before.await;
-                this.update(cx, |p, cx| match before {
-                    Ok(b) if p.stage() == Stage::Verify => p.before = Some(b),
-                    Ok(_) => {}
-                    Err(e) => p.end(
-                        End::Failed {
-                            reason: format!("The pinned tree cannot be read: {e}"),
-                        },
-                        cx,
-                    ),
-                })
-                .ok();
-            });
         }
         for (name, model, brief, finding) in add {
             self.add(
@@ -1430,7 +1434,7 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
                 }
             }
             _ = tree::remove(&core, path, &root.join("pinned"));
-            _ = std::fs::remove_dir_all(&root);
+            tree::prune(&core, &run);
             _ = std::fs::remove_dir_all(core.data_dir.join("private").join(&run));
             r.append(record::now(), &Event::RunEnded(End::Interrupted))
         }

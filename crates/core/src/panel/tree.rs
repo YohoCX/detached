@@ -85,6 +85,13 @@ pub fn remove(core: &AppState, repo: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Removes a trusted run's folder as far as it is empty: a finder's tree with changes stays.
+pub fn prune(core: &AppState, run: &str) {
+    let root = trusted_root(core, run);
+    _ = fs::remove_dir(root.join("finders"));
+    _ = fs::remove_dir(root);
+}
+
 /// What a run's end leaves of a finder.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Left {
