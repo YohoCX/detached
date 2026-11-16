@@ -897,15 +897,12 @@ fn a_settings_or_command_change_mid_turn_keeps_the_turn_and_ends_the_session_aft
         });
         let got = items(cx)[from..].to_vec();
         let at = |s: &str| (got.iter().skip(1).position(|i| i.contains(s))).unwrap();
-        let order = [
-            "config block",
-            "changed mid-turn",
-            "still going",
-            "Done in ",
-            "so the session ended",
-        ];
+        // The watcher may beat the CLI's callback, so the note can precede "config block".
+        let order = ["still going", "Done in ", "so the session ended"];
         assert!(
-            order.windows(2).all(|w| at(w[0]) < at(w[1])),
+            at("config block") <= at("still going")
+                && at("changed mid-turn") < at("still going")
+                && order.windows(2).all(|w| at(w[0]) < at(w[1])),
             "the turn went on: {got:?}"
         );
         idle(cx);
