@@ -1677,6 +1677,17 @@ The owner checks: asks a headless session (H4c's `make agent-login`) for a repo'
 
 ### Step H8. Skills
 
+**Status (2026-11-16): built, with every test below; waiting for the owner's check.**
+`core::skills` reads the folder list by §10's precedence: the repo's local and shared stores,
+`<repo>/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`, and `~/.agents/skills`
+unless the Skills page turns it off. A session's `Spec` carries its trusted skills that are not
+overridden. Claude's backend copies those its CLI does not read itself under the kind into
+`cache/plugins/<id>.*/`, the plugin `detached` (its skills are `detached:<name>`), passes it with
+`--plugin-dir` and removes it with the session; ACP renders none. `skills` sits on the read tool's
+`Repo`. The real test passed on macOS with claude 2.1.325, under the chat's sources and under `[]`.
+Open: an untrusted participant's `--tools` has no `Skill`, so it lists skills it cannot call (P2);
+in a WSL distro the plugin's path assumes `/mnt` (docs/TECHDEBT.md).
+
 Work: the folder list; repo skills with Share and Make local and hash acceptance (§10); Claude's
 per-session plugin through `--plugin-dir` (§11); `skills` in the SDL; the Skills page.
 

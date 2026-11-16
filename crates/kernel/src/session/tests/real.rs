@@ -54,6 +54,28 @@ both!(
     a_three_minute_command_reports_in_progress_before_it_ends,
 );
 
+/// The Done of PLAN-AGENT-HOST's H8: Claude reads no `~/.agents`, so the skill came through the
+/// session's plugin, under the chat's setting sources and under none.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppContext) {
+    let (f, _api) = boot(cx, Real::Direct, json!([]));
+    let dir = f.dir.path().join("home/.agents/skills/hello");
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = "---\nname: hello\ndescription: Says hello\n---\nSay hello.\n";
+    std::fs::write(dir.join("SKILL.md"), text).unwrap();
+    for kind in [Kind::Chat, Kind::Untrusted] {
+        let s = open(&f, kind, cx);
+        let names: Vec<String> = s.read_with(cx, |s, _| {
+            s.commands.iter().map(|c| c.name.clone()).collect()
+        });
+        assert!(
+            names.iter().any(|n| n == "detached:hello"),
+            "{kind:?}: {names:?}"
+        );
+    }
+}
+
 impl Fixture {
     fn write(&self, path: &str, text: &str) {
         let path = Path::new(&self.repo).join(path);
