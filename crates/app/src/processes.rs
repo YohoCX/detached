@@ -97,9 +97,26 @@ impl Processes {
         cx.notify();
     }
 
-    fn entries(&self, cx: &App) -> Vec<Entry> {
-        let defs = self.defs.as_ref().and_then(|d| d.read(cx).value.clone());
-        defs.unwrap_or_default()
+    /// The definitions, then each run whose definition is gone, which keeps its Stop.
+    fn entries(&self, cx: &App) -> Vec<Row> {
+        let defs = self.defs.as_ref().and_then(|d| d.read(cx).value.as_ref());
+        let defs = defs.into_iter().flatten().map(|e: &Entry| Row {
+            name: e.name.clone(),
+            def: e.def.clone(),
+        });
+        let mut rows: Vec<Row> = defs.collect();
+        let repo = self.repo.as_deref().unwrap_or_default();
+        for p in procs::runs(cx, repo) {
+            let p = p.read(cx);
+            if p.running() && !rows.iter().any(|r| r.name == p.name) {
+                let def = Err("Its definition is gone.".to_string());
+                rows.push(Row {
+                    name: p.name.clone(),
+                    def,
+                });
+            }
+        }
+        rows
     }
 
     /// Shows what `task` failed with, or closes the form, and the definitions as they are after it.
@@ -203,7 +220,7 @@ impl Processes {
         self.save(def, cx);
     }
 
-    fn list(&self, entries: &[Entry], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn list(&self, entries: &[Row], cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let rows = entries.iter().map(|e| {
             let run = (self.repo.as_ref()).and_then(|r| procs::get(cx, r, &e.name));
             let (color, said) = match (&e.def, &run) {
@@ -250,32 +267,44 @@ impl Processes {
             .children(rows)
     }
 
-    fn detail(&self, e: &Entry, cx: &mut Context<Self>) -> AnyElement {
+    fn detail(&self, e: &Row, cx: &mut Context<Self>) -> AnyElement {
+        let repo = self.repo.clone().unwrap_or_default();
         let def = match &e.def {
             Ok(def) => def.clone(),
+            // A run outlives its definition's change: it keeps Stop and its log.
             Err(why) => {
-                let e = format!("{} needs acceptance on the Sharing page: {why}", e.name);
+                let run = procs::get(cx, &repo, &e.name).map(|p| p.read(cx));
+                let running = run.is_some_and(Proc::running);
+                let lines = run.map_or(vec![], shown);
+                let name = e.name.clone();
+                let said = format!("{}: {why} Accept or fix it on the Sharing page.", e.name);
                 return div()
-                    .p(px(10.))
-                    .child(labeled("processes.untrusted", e))
-                    .child(row().child(button(
-                        "processes.sharing",
-                        "Open Sharing",
-                        true,
-                        cx,
-                        |_, _, cx| crate::settings::open(cx, "sharing"),
-                    )))
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .p(px(8.))
+                    .gap(px(6.))
+                    .child(labeled("processes.untrusted", said))
+                    .child(
+                        row()
+                            .when(running, |r| {
+                                r.child(button("processes.stop", "Stop", !self.busy, cx, {
+                                    move |this, _, cx| this.op(&name, Op::Stop, cx)
+                                }))
+                            })
+                            .child(button("processes.sharing", "Open Sharing", true, cx, {
+                                |_, _, cx| crate::settings::open(cx, "sharing")
+                            })),
+                    )
+                    .child(log(lines, cx))
                     .into_any_element();
             }
         };
-        let repo = self.repo.clone().unwrap_or_default();
         let run = procs::get(cx, &repo, &def.name).map(|p| p.read(cx));
         let running = run.is_some_and(Proc::running);
         let said = run.map_or("Stopped".into(), |p| summary(p, cx).1);
-        let lines: Vec<String> = run.map_or(vec![], |p| {
-            let skip = p.log.len().saturating_sub(SHOWN);
-            p.log.iter().skip(skip).cloned().collect()
-        });
+        let lines = run.map_or(vec![], shown);
         let name = def.name.clone();
         let opn = |op: Op| {
             let name = name.clone();
@@ -372,21 +401,7 @@ impl Processes {
                         .text_color(theme(cx).warning),
                 )
             })
-            .child(
-                div()
-                    .id("processes.log")
-                    .test_support()
-                    .aria_label(SharedString::from(lines.join("\n")))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p(px(6.))
-                    .rounded(ui::radius::ITEM)
-                    .bg(theme(cx).code)
-                    .font_family(theme::mono(cx))
-                    .text_size(text::SMALL)
-                    .children(lines.into_iter().map(|l| div().child(l))),
-            )
+            .child(log(lines, cx))
             .into_any_element()
     }
 
@@ -455,6 +470,34 @@ enum Op {
     Delete,
 }
 
+/// A definition, or a run whose definition no longer loads.
+struct Row {
+    name: String,
+    def: std::result::Result<Definition, String>,
+}
+
+/// The end of a run's log that is drawn.
+fn shown(p: &Proc) -> Vec<String> {
+    let skip = p.log.len().saturating_sub(SHOWN);
+    p.log.iter().skip(skip).cloned().collect()
+}
+
+fn log(lines: Vec<String>, cx: &App) -> impl IntoElement {
+    div()
+        .id("processes.log")
+        .test_support()
+        .aria_label(SharedString::from(lines.join("\n")))
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .p(px(6.))
+        .rounded(ui::radius::ITEM)
+        .bg(theme(cx).code)
+        .font_family(theme::mono(cx))
+        .text_size(text::SMALL)
+        .children(lines.into_iter().map(|l| div().child(l)))
+}
+
 /// A run's color and state in words.
 fn summary(p: &Proc, cx: &App) -> (gpui_kit::Hsla, String) {
     let t = theme(cx);
@@ -471,7 +514,7 @@ fn summary(p: &Proc, cx: &App) -> (gpui_kit::Hsla, String) {
 }
 
 /// What letting agents start a process means.
-fn warning(e: &Entry, cx: &App) -> String {
+fn warning(e: &Row, cx: &App) -> String {
     let Ok(def) = &e.def else {
         return String::new();
     };
