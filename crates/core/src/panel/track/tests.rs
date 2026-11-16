@@ -79,6 +79,7 @@ impl Rounds {
                 priors: priors.clone(),
                 untrusted: false,
                 budget: None,
+                codex: false,
             }),
             Event::ParticipantStarted {
                 participant: "f1".into(),

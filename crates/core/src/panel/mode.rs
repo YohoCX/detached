@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::{CLAUDE, PROVIDERS, Provider};
 use crate::error::{Error, Result};
 use crate::state::AppState;
 use crate::store::{Files, Kind, RepoStore};
@@ -41,6 +42,30 @@ pub struct Seat {
 
 fn claude() -> String {
     "claude".into()
+}
+
+impl Seat {
+    /// Its model as the run names it: `codex:<model>`, or `codex` for Codex's own default.
+    pub fn model(&self) -> String {
+        match (self.provider.as_str(), self.model.as_str()) {
+            ("claude", m) => m.into(),
+            (p, "") => p.into(),
+            (p, m) => format!("{p}:{m}"),
+        }
+    }
+}
+
+/// The provider and model a run's model names; a bare model is Claude's.
+pub fn provider(model: &str) -> (&'static Provider, Option<&str>) {
+    for p in PROVIDERS {
+        if model == p.id {
+            return (p, None);
+        }
+        if let Some(m) = model.strip_prefix(p.id).and_then(|m| m.strip_prefix(':')) {
+            return (p, Some(m));
+        }
+    }
+    (&CLAUDE, Some(model))
 }
 
 fn high() -> String {

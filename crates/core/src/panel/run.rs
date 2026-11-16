@@ -12,6 +12,7 @@ use super::mode::{self, Mode, Role, Seat};
 use super::record::{Event, Record, Subject};
 use super::track::{self, Prior};
 use super::{brief, root, tree};
+use crate::adapters::{CLAUDE, CODEX};
 use crate::backend::Probe;
 use crate::error::{Error, Result};
 use crate::git::runner::{Kind, out};
@@ -32,6 +33,8 @@ pub struct Start {
     pub untrusted: bool,
     /// Tokens after which the run pauses and asks.
     pub budget: Option<u64>,
+    /// Codex verifies before the mode's verifiers.
+    pub codex: bool,
 }
 
 /// A finder: its name, role, seat and tree, and its branch on a trusted run.
@@ -242,7 +245,15 @@ pub fn prepare(
     let pv = preview(core, s)?;
     let subject = pv.subject;
     brief::sha(&subject.head_sha)?;
-    let mode = mode::mode(core, repo, &s.mode)?;
+    let mut mode = mode::mode(core, repo, &s.mode)?;
+    if s.codex {
+        mode.verifiers.insert(0, CODEX.id.into());
+    }
+    let mut limits = vec![];
+    // Codex loads a tree's own settings whatever it is told: on one not accepted, Claude stands in.
+    if !pv.accepted && claude_only(&mut mode) {
+        limits.push("cross-provider verification unavailable: the subject's agent settings are not accepted, so Codex does not run".into());
+    }
     let role = |n: &str| mode::role(core, repo, n);
     let priors = track::priors(core, repo, task, &subject.head_sha)?;
     let common = common(core, repo)?;
@@ -254,7 +265,6 @@ pub fn prepare(
         names.push(name.clone());
         seats.push((name, role(&seat.role)?, seat.clone()));
     }
-    let mut limits = vec![];
     let mut p = Prepared {
         record,
         data: brief::subject(&env, &subject)?,
@@ -374,6 +384,19 @@ fn probing(
             Err(_) => return Err(Error::Other("The probe stopped".into())),
         }
     }
+}
+
+/// Puts Claude in the place of every other provider in `mode`; whether there was one.
+fn claude_only(m: &mut Mode) -> bool {
+    let other = |model: &String| mode::provider(model).0.id != CLAUDE.id;
+    let mut changed = false;
+    for s in m.roster.iter_mut().filter(|s| s.provider != CLAUDE.id) {
+        (s.provider, s.model, changed) = (CLAUDE.id.into(), "opus".into(), true);
+    }
+    changed |= m.verifiers.iter().any(other) || m.merge.as_ref().is_some_and(other);
+    m.verifiers.retain(|v| !other(v));
+    m.merge = m.merge.take().filter(|v| !other(v));
+    changed
 }
 
 /// The repo's MCP servers, from `.mcp.json` at the subject's head and the CLI's entry for the repo's
@@ -501,6 +524,34 @@ mod tests {
     use crate::git::testutil::Sandbox;
 
     #[test]
+    fn claude_stands_in_for_every_other_provider() {
+        let seat = |provider: &str, model: &str| Seat {
+            role: "bugs".into(),
+            model: model.into(),
+            provider: provider.into(),
+            effort: "high".into(),
+        };
+        let mut m = Mode {
+            name: "review".into(),
+            graph: vec![],
+            roster: vec![seat("claude", "sonnet"), seat("codex", "gpt-5.5")],
+            merge: Some("codex".into()),
+            verifiers: vec!["codex:gpt-5.5".into(), "opus".into()],
+            block: vec![],
+            text: String::new(),
+        };
+        assert_eq!(m.roster[1].model(), "codex:gpt-5.5");
+        assert!(claude_only(&mut m));
+        let models: Vec<String> = m.roster.iter().map(Seat::model).collect();
+        assert_eq!(models, ["sonnet", "opus"]);
+        assert_eq!(
+            (&m.merge, &m.verifiers[..]),
+            (&None, &["opus".to_string()][..])
+        );
+        assert!(!claude_only(&mut m));
+    }
+
+    #[test]
     fn accepting_a_head_covers_the_local_settings_its_finders_get() {
         let sb = Sandbox::new();
         let repo = sb.path("r");
@@ -520,6 +571,7 @@ mod tests {
             mode: "review".into(),
             untrusted: false,
             budget: None,
+            codex: false,
         };
         let pv = preview(&sb.state, &s).unwrap();
         assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
@@ -557,6 +609,7 @@ mod tests {
             mode: "review".into(),
             untrusted: false,
             budget: None,
+            codex: false,
         };
         let shown = preview(&sb.state, &s).unwrap();
         fs::write(repo.join(".claude/settings.json"), settings("never shown")).unwrap();
@@ -594,6 +647,7 @@ mod tests {
             mode: "review".into(),
             untrusted: false,
             budget: None,
+            codex: false,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let later = stop.clone();

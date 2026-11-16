@@ -1,6 +1,7 @@
 //! Live runs: the start form in the Panels app, a run's header, participants and kept branches in
 //! its tab, and a line per run in the status bar.
 
+use detached_core::adapters::CODEX;
 use detached_core::panel::mode::Stage;
 use detached_core::panel::record::State;
 use detached_core::panel::run::{Preview, Start};
@@ -28,6 +29,8 @@ pub(super) struct Form {
     budget: Entity<InputState>,
     gate: bool,
     untrusted: bool,
+    /// Codex verifies first.
+    codex: bool,
     preview: Option<Result<Preview, String>>,
     rounds: Interest<Rounds>,
     busy: bool,
@@ -53,6 +56,7 @@ impl Form {
             repo,
             gate: false,
             untrusted: false,
+            codex: false,
             preview: None,
             busy: false,
             done: false,
@@ -72,6 +76,7 @@ impl Form {
             mode: if self.gate { "gate" } else { "review" }.into(),
             untrusted: self.untrusted,
             budget: text(&self.budget).parse().ok(),
+            codex: self.codex,
         }
     }
 
@@ -140,6 +145,25 @@ impl Render for Form {
                 },
                 cx,
             ))
+            .when(
+                crate::chat::providers(cx).iter().any(|p| p.id == CODEX.id),
+                |b| {
+                    let me = cx.entity().downgrade();
+                    b.child(ui::segmented(
+                        "panels.form.verifier",
+                        &[(false, "Claude verifies"), (true, "Codex verifies")],
+                        self.codex,
+                        move |codex, _, cx| {
+                            me.update(cx, |f, cx| {
+                                f.codex = codex;
+                                cx.notify();
+                            })
+                            .ok();
+                        },
+                        cx,
+                    ))
+                },
+            )
             .child(ui::input(&self.budget, cx))
             .child(
                 div().flex().gap(GAP).child(

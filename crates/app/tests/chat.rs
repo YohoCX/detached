@@ -1285,3 +1285,127 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
             .any(|i| i.starts_with("You:") && i.contains("hello"))
     );
 }
+
+/// Codex on, `fake_acp` its adapter and CLI beside `fake_claude`, its sessions in a Codex home.
+#[cfg(unix)]
+fn codex(sb: &Sandbox) {
+    use detached_core::adapters::{self, CODEX, Installed, Version};
+    let fake = detached_core::testutil::bin("detached-acp", "fake_acp");
+    let v = Version::new(2, 6, 0);
+    let exe = adapters::exe(&sb.state.data_dir, CODEX.adapter, &v);
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::copy(&fake, &exe).unwrap();
+    let installed = Installed {
+        current: Some(v),
+        previous: None,
+    };
+    let folder = sb.state.data_dir.join("adapters").join(CODEX.adapter);
+    std::fs::write(
+        folder.join("installed.json"),
+        serde_json::to_vec(&installed).unwrap(),
+    )
+    .unwrap();
+    let cli = detached_core::testutil::claude::fake()
+        .display()
+        .to_string();
+    let config = Config {
+        cli: [
+            (CLAUDE.id.into(), cli),
+            (CODEX.id.into(), fake.display().to_string()),
+        ]
+        .into(),
+        codex: true,
+    };
+    sb.state.set_block(BLOCK, config).unwrap();
+    let home = sb.path("codex-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = ("CODEX_HOME".into(), home.display().to_string());
+    sb.state.env.write().unwrap().vars.push(home);
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_background_command(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_seeded(cx, codex);
+    cx.click("chat.provider.pick");
+    cx.update(|w, cx| assert!(menu::pick("Codex", w, cx)));
+    wait_until(cx, |cx| label(cx, "chat.name").as_deref() == Some("Codex"));
+    let mode = cx
+        .find("chat.mode")
+        .and_then(|e| e.description().map(String::from));
+    assert_eq!(mode.as_deref(), Some("Auto review"));
+    say(cx, "run hi");
+    let run = index_of(cx, "execute Run echo hi ok");
+    cx.click(("chat.item", run));
+    assert_eq!(label(cx, ("chat.output", run)).as_deref(), Some("hi\nhi\n"));
+    idle(cx);
+    let first = id(cx, 0);
+    let solo = cx.sb.solo().display().to_string();
+    // Sent through the chat: the click on the output took the box's focus.
+    let send = |text: &str, cx: &mut VisualTestContext| {
+        let solo = solo.clone();
+        cx.update(|_, cx| {
+            let chat = chat::find(&solo, 0, cx).unwrap();
+            chat.update(cx, |c, cx| c.send(text.into(), cx));
+        })
+    };
+    send("bg", cx);
+    let pid = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let chat = chat::find(&solo, 0, cx)?;
+            let s = chat.read(cx).current()?.read(cx);
+            s.items.iter().find_map(|i| match i {
+                kernel::session::Item::Tool(t) => t.input.as_ref()?["pid"].as_u64(),
+                _ => None,
+            })
+        })
+    };
+    wait_until(cx, |cx| pid(cx).is_some());
+    let pid1 = pid(cx).unwrap();
+    cx.click("chat.stop");
+    idle(cx);
+    wait_until(cx, |_| !alive(pid1));
+    send("say again", cx);
+    wait_for_item(cx, "again");
+    assert_eq!(
+        id(cx, 0),
+        first,
+        "the next message resumed the conversation"
+    );
+    idle(cx);
+    cx.click("chat.effort");
+    cx.update(|w, cx| assert!(menu::pick("high", w, cx)));
+    wait_until(cx, |cx| {
+        cx.find("chat.effort")
+            .and_then(|e| e.description().map(String::from))
+            == Some("high".into())
+    });
+    // A switch the agent refuses is said, and the bar keeps what the session runs in.
+    cx.click("chat.mode");
+    cx.update(|w, cx| assert!(menu::pick("Workspace", w, cx)));
+    wait_for_item(cx, "The agent kept its setting");
+    let mode = cx
+        .find("chat.mode")
+        .and_then(|e| e.description().map(String::from));
+    assert_eq!(mode.as_deref(), Some("Auto review"));
+    // The next session, after a Stop, opens with what the agent kept, not the refused pick.
+    send("bg", cx);
+    wait_until(cx, |cx| pid(cx).is_some_and(|p| p != pid1));
+    cx.click("chat.stop");
+    idle(cx);
+    send("model", cx);
+    // The model is the one the load kept, the mode the one the agent refused to leave.
+    wait_for_item(cx, "gpt-5.5-mini agent");
+}
+
+#[cfg(unix)]
+fn alive(pid: u64) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+}

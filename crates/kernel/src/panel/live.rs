@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::CODEX;
 use detached_core::backend::{self, Cause, Kind, Probe, Sandbox, Spec, Tool};
 use detached_core::error::{Error, Result};
 use detached_core::host::Act;
 use detached_core::panel::brief;
 use detached_core::panel::marks;
-use detached_core::panel::mode::Stage;
+use detached_core::panel::mode::{self, Stage};
 use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, State};
 use detached_core::panel::run::{self, Prepared, Start};
 use detached_core::panel::{track, tree};
@@ -359,6 +359,7 @@ impl Panel {
             priors: p.priors.clone(),
             untrusted: self.start.untrusted,
             budget: self.start.budget,
+            codex: self.start.codex,
         };
         self.emit(Event::RunStarted(started), cx);
         // Cancelled while it prepared: its trees go at once.
@@ -373,7 +374,7 @@ impl Panel {
                 &f.name,
                 &f.role.name,
                 Stage::Find,
-                &f.seat.model,
+                &f.seat.model(),
                 &f.seat.effort,
                 f.cwd.clone(),
                 brief,
@@ -438,16 +439,28 @@ impl Panel {
             (true, Stage::Find) => Kind::Chat,
             (true, _) => Kind::Verifier,
         };
-        let mut spec = Spec::new(&CLAUDE, &l.cwd.display().to_string(), kind);
-        (spec.model, spec.effort) = (Some(l.model.clone()), Some(l.effort.clone()));
-        spec.mode = if trusted {
-            "bypassPermissions"
-        } else {
-            "default"
+        let (provider, model) = mode::provider(&l.model);
+        let mut spec = Spec::new(provider, &l.cwd.display().to_string(), kind);
+        (spec.model, spec.effort) = (model.map(String::from), Some(l.effort.clone()));
+        spec.mode = match trusted {
+            true => provider.full,
+            false => provider.ask,
         }
         .into();
         spec.mcp = (kind == Kind::Chat).then(|| p.mcp.clone()).flatten();
         spec.sandbox = match kind {
+            // Codex's profile is the shared tree's project layer, the same for each of its
+            // participants: it denies every temp dir, its own Codex home in its own among them.
+            Kind::Untrusted if provider.id == CODEX.id => Some(Sandbox {
+                deny_read: p
+                    .deny
+                    .iter()
+                    .cloned()
+                    .chain(p.dir.as_ref().map(|d| d.join("tmp")))
+                    .collect(),
+                deny_write: vec![],
+                tmp: p.dir.as_ref().map(|d| d.join("tmp").join(&l.name)),
+            }),
             Kind::Untrusted => {
                 let tmp = p.dir.as_ref().map(|d| d.join("tmp"));
                 let peers = (self.live.iter())

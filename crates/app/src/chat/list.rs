@@ -1,7 +1,7 @@
 //! The Chats app: the chats open now, then past conversations by repo and folder, each a row the
 //! keys walk, open, archive and delete.
 
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::Sizable;
@@ -61,9 +61,12 @@ impl Line {
     }
 }
 
+/// A folder and a provider's id.
+type Place = (String, &'static str);
+
 pub struct ChatList {
-    /// Each place's past conversations: the workspace's repos and folders.
-    past: Vec<(String, Interest<Vec<Past>>)>,
+    /// Each place's past conversations by provider: the workspace's repos and folders.
+    past: Vec<(Place, Interest<Vec<Past>>)>,
     filter: Filter,
     query: Entity<InputState>,
     show_archived: bool,
@@ -115,11 +118,16 @@ impl ChatList {
                 places.push(f.clone());
             }
         }
-        self.past.retain(|(p, _)| places.contains(p));
+        let providers = super::providers(cx);
+        self.past
+            .retain(|((p, id), _)| places.contains(p) && providers.iter().any(|x| x.id == *id));
         for p in places {
-            if !self.past.iter().any(|(q, _)| *q == p) {
-                let past = kernel::session::past_of(&CLAUDE, &p, cx);
-                self.past.push((p, Interest::view(past, cx)));
+            for &x in &providers {
+                let key = (p.clone(), x.id);
+                if !self.past.iter().any(|(k, _)| *k == key) {
+                    let past = kernel::session::past_of(x, &p, cx);
+                    self.past.push((key, Interest::view(past, cx)));
+                }
             }
         }
         cx.notify();
@@ -137,8 +145,9 @@ impl ChatList {
     }
 
     /// Changes `cwd`'s list at once, before its reload says the same.
-    fn edit(&self, cwd: &str, f: impl FnOnce(&mut Vec<Past>), cx: &mut App) {
-        if let Some((_, p)) = self.past.iter().find(|(c, _)| c == cwd) {
+    fn edit(&self, cwd: &str, p: &Provider, f: impl FnOnce(&mut Vec<Past>), cx: &mut App) {
+        let key = (cwd.to_string(), p.id);
+        if let Some((_, p)) = self.past.iter().find(|(k, _)| *k == key) {
             p.resource().update(cx, |r, cx| {
                 r.value.as_mut().map(f);
                 cx.notify();
@@ -160,7 +169,7 @@ impl ChatList {
                 if let Err(e) = done {
                     Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx));
                 }
-                if let Some((_, p)) = l.past.iter().find(|(c, _)| *c == cwd) {
+                for (_, p) in l.past.iter().filter(|((c, _), _)| *c == cwd) {
                     p.refresh(cx);
                 }
             })
@@ -177,18 +186,19 @@ impl ChatList {
             .cloned()
     }
 
-    /// The conversation a row stands for, and its folder.
-    fn conversation(&self, key: &Key, cx: &App) -> Option<(String, String)> {
+    /// The conversation a row stands for, its folder and its provider.
+    fn conversation(&self, key: &Key, cx: &App) -> Option<(String, String, &'static Provider)> {
         match key {
             Key::Open(repo, n) => {
-                let s = super::find(repo, *n, cx)?;
-                let id = s.read(cx).conversation(cx)?.to_string();
-                Some((repo.clone(), id))
+                let s = super::find(repo, *n, cx)?.read(cx);
+                let id = s.conversation(cx)?.to_string();
+                Some((repo.clone(), id, s.provider))
             }
             Key::Past(id) => {
                 let all = self.all(cx);
                 let p = all.iter().find(|p| p.id == *id)?;
-                Some((p.cwd.clone().unwrap_or_default(), id.clone()))
+                let cwd = p.cwd.clone().unwrap_or_default();
+                Some((cwd, id.clone(), super::provider(&p.provider)))
             }
             Key::Archived => None,
         }
@@ -206,7 +216,7 @@ impl ChatList {
     }
 
     fn archive(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((cwd, id)) = self.conversation(key, cx) else {
+        let Some((cwd, id, provider)) = self.conversation(key, cx) else {
             return;
         };
         let next = self.next(key, cx);
@@ -214,6 +224,7 @@ impl ChatList {
         let archived = matches!(key, Key::Open(..)) || !was;
         self.edit(
             &cwd,
+            provider,
             |all| {
                 for p in all.iter_mut().filter(|p| p.id == id) {
                     p.tag = archived.then(|| "archived".to_string());
@@ -234,16 +245,16 @@ impl ChatList {
 
     fn delete(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
         self.deleting = None;
-        let Some((cwd, id)) = self.conversation(key, cx) else {
+        let Some((cwd, id, provider)) = self.conversation(key, cx) else {
             return;
         };
         self.selected = self.next(key, cx);
-        self.edit(&cwd, |all| all.retain(|p| p.id != id), cx);
+        self.edit(&cwd, provider, |all| all.retain(|p| p.id != id), cx);
         match key {
             Key::Open(repo, n) => super::end(repo, *n, window, cx),
             _ => super::forget(&id, cx),
         }
-        let spec = Spec::new(&CLAUDE, &cwd, Kind::Chat);
+        let spec = Spec::new(provider, &cwd, Kind::Chat);
         let done = kernel::session::delete(spec, id, cx);
         self.then(cwd, done, cx);
     }
@@ -331,10 +342,10 @@ impl ChatList {
                 Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
             }
             Key::Past(id) => {
-                let Some((cwd, _)) = self.conversation(key, cx) else {
+                let Some((cwd, _, p)) = self.conversation(key, cx) else {
                     return;
                 };
-                super::resume(cwd, id.clone(), cx);
+                super::resume(cwd, p, id.clone(), cx);
             }
             Key::Archived => self.show_archived = !self.show_archived,
         }
@@ -573,6 +584,12 @@ impl ChatList {
     /// A delete waiting for its confirm, in the row's own place and height.
     fn confirm(&self, ix: usize, key: Key, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
+        // Codex's delete archives the conversation in Codex's own history.
+        let keeps = (self.conversation(&key, cx)).is_some_and(|(.., p)| p.id == CODEX.id);
+        let ask = match keeps {
+            true => "Delete here? Codex keeps it archived",
+            false => "Delete for good?",
+        };
         let (row, yes, no) = match key {
             Key::Open(..) => (
                 "chats.open.confirm",
@@ -608,13 +625,7 @@ impl ChatList {
             .rounded(radius::ITEM)
             .bg(t.error.opacity(0.14))
             .child(div().text_color(t.error).child(Icon::Trash.size(px(12.))))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child("Delete for good?"),
-            )
+            .child(div().flex_1().min_w_0().truncate().child(ask))
             .child(
                 small(no, "Cancel")
                     .text_color(t.muted)

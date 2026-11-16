@@ -1586,6 +1586,7 @@ name = "detached-acp"
 version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
+ "chrono",
  "detached-core",
  "futures",
  "serde",

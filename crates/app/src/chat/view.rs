@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use detached_core::adapters::CLAUDE;
 use detached_core::api;
 use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool};
 use gpui_kit::base::TestSupportExt;
@@ -26,35 +25,13 @@ use super::session::Chat;
 use crate::files::{Links, Markdown};
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
+use detached_core::adapters::CLAUDE;
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
-use kernel::session::{Answer, Back, Item, Session};
+use kernel::session::{AUTO, Answer, Back, Item, Session};
 use kernel::workspace::Workspace;
-
-const MODES: &[(&str, &str, Option<&str>)] = &[
-    (
-        "auto",
-        "Auto",
-        Some("A classifier approves or blocks each action, and asks you when it can't tell"),
-    ),
-    (
-        "acceptEdits",
-        "Edits",
-        Some("File edits run; other actions that need approval ask you"),
-    ),
-    (
-        "plan",
-        "Plan",
-        Some("Explores and plans without changing files"),
-    ),
-    (
-        "default",
-        "Manual",
-        Some("Anything that needs approval asks you"),
-    ),
-];
 
 /// How close to the end still counts as following it.
 const FOLLOW: f32 = 24.;
@@ -88,7 +65,10 @@ pub struct ChatView {
     texts: HashMap<(EntityId, usize), (String, Entity<Markdown>)>,
     /// Per question of a waiting ask, the options picked.
     picked: HashMap<(EntityId, usize), Vec<Vec<usize>>>,
-    past: Interest<Vec<Past>>,
+    /// The past conversations of the provider it names.
+    past: (&'static str, Interest<Vec<Past>>),
+    /// The provider the box's placeholder names.
+    named: &'static str,
     me: WeakEntity<ChatView>,
     /// A `/` typed before any session listed its commands.
     unlisted: bool,
@@ -98,11 +78,11 @@ pub struct ChatView {
 
 impl ChatView {
     pub fn new(session: Entity<Chat>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let p = session.read(cx).provider;
         let input = cx.new(|cx| {
-            TextareaState::new(window, cx).rows(3).placeholder(format!(
-                "Message {}. / for commands, @ for files, Enter sends.",
-                CLAUDE.name
-            ))
+            TextareaState::new(window, cx)
+                .rows(3)
+                .placeholder(placeholder(p.name))
         });
         input.update(cx, |s, cx| s.focus(window, cx));
         let scroll = ScrollHandle::new();
@@ -126,7 +106,7 @@ impl ChatView {
             s.check_trust(cx);
         });
         let repo = session.read(cx).repo.clone();
-        let past = Interest::view(kernel::session::past_of(&CLAUDE, &repo, cx), cx);
+        let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
         scroll.scroll_to_bottom();
         ChatView {
             session,
@@ -137,11 +117,28 @@ impl ChatView {
             outputs: HashSet::new(),
             texts: HashMap::new(),
             picked: HashMap::new(),
-            past,
+            past: (p.id, past),
+            named: p.id,
             me: cx.weak_entity(),
             unlisted: false,
             _files: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Follows a change of the chat's provider: the box's placeholder and the past conversations.
+    fn follow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chat = self.session.read(cx);
+        let (p, repo) = (chat.provider, chat.repo.clone());
+        if self.named != p.id {
+            self.named = p.id;
+            let text = placeholder(p.name);
+            self.input
+                .update(cx, |s, cx| s.set_placeholder(text, window, cx));
+        }
+        if self.past.0 != p.id {
+            let past = kernel::session::past_of(p, &repo, cx);
+            self.past = (p.id, Interest::view(past, cx));
         }
     }
 
@@ -331,25 +328,23 @@ impl ChatView {
                 })
             })
         };
-        let mode = MODES
-            .iter()
-            .find(|(m, ..)| *m == chat.mode)
-            .unwrap_or(&MODES[0]);
-        let modes = MODES
-            .iter()
+        let p = chat.provider;
+        // The session's own mode once it says one: a refused switch leaves it as it was.
+        let now = s.and_then(|s| s.option("mode")).unwrap_or(&chat.mode);
+        let mode = (p.modes.iter())
+            .find(|(m, ..)| *m == now)
+            .or(p.modes.iter().find(|(m, ..)| *m == chat.mode))
+            .unwrap_or(&p.modes[0]);
+        let modes = (p.modes.iter())
             .map(|(m, label, _)| (label.to_string(), Some(Setting::Mode(m.to_string()))))
             .collect();
-        let modes = menu(
-            "chat.mode",
-            mode.2.unwrap_or(mode.1),
-            mode.1.to_string(),
-            modes,
-        );
+        let modes = menu("chat.mode", mode.2, mode.1.to_string(), modes);
         let models: &[Model] = s.map_or(&[], |s| &s.models);
+        let has_auto = p.modes.iter().any(|(m, ..)| *m == AUTO);
         let entries = models
             .iter()
             .map(|m| {
-                let label = match m.auto {
+                let label = match m.auto || !has_auto {
                     true => m.label.clone(),
                     false => format!("{} (no auto)", m.label),
                 };
@@ -360,7 +355,14 @@ impl ChatView {
         let model = current.map_or("Default model".into(), |m| model_name(m, models));
         let picker = menu("chat.model", "Model", model, entries);
         let efforts = models.iter().find(|m| Some(m.value.as_str()) == current);
-        let efforts: Vec<_> = (efforts.map_or(&[][..], |m| &m.efforts).iter())
+        let efforts = efforts.map_or(&[][..], |m| &m.efforts);
+        // An agent that lists efforts as an option of the session, not per model.
+        let listed = s.and_then(|s| s.config.iter().find(|c| c.id == "effort"));
+        let efforts = match (efforts.is_empty(), listed) {
+            (true, Some(c)) => &c.values[..],
+            _ => efforts,
+        };
+        let efforts: Vec<_> = (efforts.iter())
             .map(|e| (e.clone(), Some(Setting::Effort(e.clone()))))
             .collect();
         let effort = (!efforts.is_empty()).then(|| {
@@ -391,6 +393,22 @@ impl ChatView {
             Some(e) => SharedString::from(format!("{} · {e}", a.plan)),
             None => SharedString::from(a.plan.clone()),
         });
+        // Another provider is picked while nothing is said.
+        let others: Vec<_> = (super::providers(cx).into_iter())
+            .filter(|o| o.id != p.id && chat.is_new(cx))
+            .collect();
+        let pick = (!others.is_empty()).then(|| {
+            let chat = self.session.clone();
+            move |e: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut App| {
+                let menu = others.iter().fold(Menu::default(), |menu, o| {
+                    let (chat, o) = (chat.clone(), *o);
+                    menu.item(o.name, move |_, cx| {
+                        chat.update(cx, |c, cx| c.set_provider(o, cx))
+                    })
+                });
+                menu.show(e.position(), window, cx);
+            }
+        });
         let provider = div()
             .id("chat.provider")
             .test_support()
@@ -403,10 +421,18 @@ impl ChatView {
                 div()
                     .id("chat.name")
                     .test_support()
-                    .aria_label(CLAUDE.name)
+                    .aria_label(p.name)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(CLAUDE.name),
+                    .child(p.name),
             )
+            .when_some(pick, |d, pick| {
+                let button = ui::icon_button("chat.provider.pick", Icon::Down.size(px(10.)), cx);
+                d.child(
+                    ui::titled(button, "Who answers")
+                        .test_support()
+                        .on_click(pick),
+                )
+            })
             .when_some(plan, |d, plan| d.aria_label(plan))
             .when_some(tip, |d, tip| {
                 d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
@@ -941,9 +967,10 @@ impl ChatView {
             Answer::Gone => "no answer",
         };
         let asking = questions.is_empty();
+        let name = self.session.read(cx).provider.name;
         let title = match asking {
-            true => format!("{} asks to use {}", CLAUDE.name, kind(tool)),
-            false => format!("{} asks", CLAUDE.name),
+            true => format!("{name} asks to use {}", kind(tool)),
+            false => format!("{name} asks"),
         };
         let detail = title_of(tool, asking);
         let open = answer == Answer::Waiting;
@@ -1302,7 +1329,12 @@ impl ChatView {
     /// The repo's own settings, until the user trusts them or puts it off.
     fn review(&self, cx: &App) -> Option<AnyElement> {
         let t = theme(cx);
-        let p = self.session.read(cx).review.as_ref()?;
+        let chat = self.session.read(cx);
+        let p = chat.review.as_ref()?;
+        let until = match chat.provider.id == CLAUDE.id {
+            true => "Until you trust them, sessions here load only your own settings, so the repo's CLAUDE.md and .claude are skipped too.".to_string(),
+            false => format!("{} loads them itself, so it runs here only once you trust them.", chat.provider.name),
+        };
         let small = |text: &str| {
             div()
                 .text_size(text::SMALL)
@@ -1321,13 +1353,11 @@ impl ChatView {
             .rounded(radius::FIELD)
             .border_1()
             .border_color(t.warning)
-            .child(div().font_weight(FontWeight::SEMIBOLD).child("This repo's Claude settings would run"))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("This repo's agent settings would run"))
             .children(p.items.iter().map(|i| {
                 div().text_size(text::SMALL).font_family(theme::mono(cx)).child(i.clone())
             }))
-            .child(small(
-                "Until you trust them, sessions here load only your own settings, so the repo's CLAUDE.md and .claude are skipped too.",
-            ))
+            .child(small(&until))
             .child(small(
                 "Trusting covers these files as they are; a change asks again. It also trusts future versions of the scripts they run.",
             ))
@@ -1353,7 +1383,7 @@ impl ChatView {
     fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let s = self.session.read(cx);
-        let past = self.past.read(cx).value.iter().flatten();
+        let past = self.past.1.read(cx).value.iter().flatten();
         let mut past: Vec<&Past> = past.filter(|p| !p.archived()).collect();
         past.sort_by_key(|p| std::cmp::Reverse(p.modified));
         let rows: Vec<_> = past
@@ -1361,7 +1391,7 @@ impl ChatView {
             .take(PAST)
             .enumerate()
             .map(|(i, p)| {
-                let (cwd, id) = (s.repo.clone(), p.id.clone());
+                let (cwd, id, provider) = (s.repo.clone(), p.id.clone(), s.provider);
                 ui::row(("chat.past", i), false, cx)
                     .test_support()
                     .aria_label(SharedString::from(p.title.clone()))
@@ -1370,9 +1400,11 @@ impl ChatView {
                         // Another chat that shows it comes forward; else it opens here.
                         let open = super::open(cx);
                         match open.iter().any(|(.., s)| s.read(cx).shows(&id, cx)) {
-                            true => super::resume(cwd.clone(), id.clone(), cx),
+                            true => super::resume(cwd.clone(), provider, id.clone(), cx),
                             false => {
-                                this.session.update(cx, |s, cx| s.open_past(id.clone(), cx));
+                                let id = id.clone();
+                                this.session
+                                    .update(cx, |s, cx| s.open_past(provider, id, cx));
                                 this.focus(window, cx);
                             }
                         }
@@ -1429,7 +1461,7 @@ impl ChatView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(format!(
                         "Ask {} about {}",
-                        CLAUDE.name,
+                        s.provider.name,
                         super::label(&s.repo, cx)
                     )),
             )
@@ -1603,8 +1635,9 @@ fn tokens(n: u64) -> String {
 }
 
 impl Render for ChatView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
+        self.follow(window, cx);
         self.lay_out(cx);
         let items = self.feed(cx);
         let empty = items.is_empty().then(|| self.empty(cx));
@@ -1691,6 +1724,10 @@ impl Render for ChatView {
                     ),
             )
     }
+}
+
+fn placeholder(name: &str) -> String {
+    format!("Message {name}. / for commands, @ for files, Enter sends.")
 }
 
 fn seconds(ms: u64) -> String {

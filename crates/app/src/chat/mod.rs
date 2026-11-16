@@ -21,7 +21,7 @@ use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec, DocKind};
 use crate::ui::{self, Icon, theme};
 use crate::util::first_line;
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::{CLAUDE, Config, PROVIDERS, Provider};
 use detached_core::backend::StopReason;
 use kernel::activity::Activity;
 use kernel::doc::Doc;
@@ -122,8 +122,25 @@ pub fn ask(repo: String, prompt: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-/// Shows past conversation `id`: in the chat that has it, else in a chat on `cwd` with nothing in it.
-pub fn resume(cwd: String, id: String, cx: &mut App) {
+/// The providers a chat may pick: Claude, and Codex once it is on.
+pub fn providers(cx: &App) -> Vec<&'static Provider> {
+    let config: Config = (kernel::settings::Settings::get(cx))
+        .block(detached_core::adapters::BLOCK)
+        .unwrap_or_default();
+    PROVIDERS.into_iter().filter(|p| config.shows(p)).collect()
+}
+
+/// The provider of a past conversation, by its id.
+pub fn provider(id: &str) -> &'static Provider {
+    PROVIDERS
+        .into_iter()
+        .find(|p| p.id == id)
+        .unwrap_or(&CLAUDE)
+}
+
+/// Shows `p`'s past conversation `id`: in the chat that has it, else in a chat on `cwd` with
+/// nothing in it.
+pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
     let (repo, n) = match open(cx)
         .into_iter()
         .find(|(.., s)| s.read(cx).shows(&id, cx))
@@ -131,7 +148,7 @@ pub fn resume(cwd: String, id: String, cx: &mut App) {
         Some((repo, n, _)) => (repo, n),
         None => {
             let n = fresh(&cwd, None, cx);
-            session(&cwd, n, cx).update(cx, |s, cx| s.open_past(id, cx));
+            session(&cwd, n, cx).update(cx, |s, cx| s.open_past(p, id, cx));
             (cwd, n)
         }
     };
@@ -146,9 +163,14 @@ fn fresh(repo: &str, from: Option<&Entity<Chat>>, cx: &mut App) -> u32 {
     let n = mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0);
     let s = session(repo, n, cx);
     if let Some(f) = from.map(|f| f.read(cx)) {
-        let (mode, model, effort) = (f.mode.clone(), f.model.clone(), f.effort.clone());
+        let (p, mode, model, effort) = (
+            f.provider,
+            f.mode.clone(),
+            f.model.clone(),
+            f.effort.clone(),
+        );
         s.update(cx, |s, _| {
-            (s.mode, s.model, s.effort) = (mode, model, effort)
+            (s.provider, s.mode, s.model, s.effort) = (p, mode, model, effort)
         });
     }
     n
@@ -248,12 +270,14 @@ impl DocKind for ChatDocs {
             unreachable!()
         };
         let place = label(repo, cx);
-        match find(repo, *n, cx)
-            .as_ref()
-            .and_then(|s| s.read(cx).topic(cx))
-        {
+        let chat = find(repo, *n, cx);
+        let chat = chat.as_ref().map(|s| s.read(cx));
+        match chat.and_then(|s| s.topic(cx)) {
             Some(t) => format!("{place} · {}", first_line(t)).into(),
-            None => format!("{} · {place}", CLAUDE.name).into(),
+            None => {
+                let name = chat.map_or(CLAUDE.name, |c| c.provider.name);
+                format!("{name} · {place}").into()
+            }
         }
     }
 
@@ -291,10 +315,16 @@ impl DocKind for ChatDocs {
 
 /// Tells the system that a chat that was working now waits for the user or is done, when no
 /// window of ours has focus.
-fn alert(repo: &str, state: State, topic: Option<String>, me: &Entity<Chat>, cx: &mut App) {
+fn alert(
+    (repo, name): (&str, &str),
+    state: State,
+    topic: Option<String>,
+    me: &Entity<Chat>,
+    cx: &mut App,
+) {
     let title = match state {
-        State::Waiting => format!("{} is waiting for you", CLAUDE.name),
-        State::Done => format!("{} is done", CLAUDE.name),
+        State::Waiting => format!("{name} is waiting for you"),
+        State::Done => format!("{name} is done"),
         _ => return,
     };
     let windows = cx.windows();

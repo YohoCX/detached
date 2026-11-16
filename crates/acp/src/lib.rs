@@ -3,6 +3,7 @@
 //! `block_on`; no async type and no protocol name leaves this crate, only `backend()`.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,11 +16,12 @@ use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
 use detached_core::adapters::{self, BLOCK, CLAUDE, CODEX, Cli};
 use detached_core::backend::{
-    self, Answer, Ask, Backend, Caps, Cause, Config, Events, Exit, Failure, Kind, Opened, Reply,
-    Setting, Spec, StopReason, Tool, Turn, Update,
+    self, Answer, Ask, Backend, Caps, Cause, Config, Events, Exit, Failure, Kind, Model, Opened,
+    Past, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
+use detached_core::sessions;
 use detached_core::state::AppState;
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -27,6 +29,9 @@ use futures::executor::block_on;
 use serde_json::{Value, json};
 
 mod mcp;
+
+/// Pages of a session list read at most.
+const PAGES: usize = 20;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 
@@ -45,15 +50,68 @@ pub fn backend() -> &'static dyn Backend {
     &*ACP
 }
 
+/// An adapter's executable and env.
+type Key = (PathBuf, Vec<(String, OsString)>);
+
 #[derive(Default)]
 struct Acp {
-    /// By executable: a start holds its slot alone, so a hung adapter blocks only its own version.
-    adapters: Mutex<HashMap<PathBuf, Arc<Mutex<Weak<Live>>>>>,
+    /// By executable and env: a start holds its slot alone, so a hung adapter blocks only its own
+    /// version, and a participant with a home of its own gets an adapter of its own.
+    adapters: Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>,
 }
 
 impl Backend for Acp {
     fn caps(&self) -> Caps {
-        Caps::default()
+        Caps {
+            context: true,
+            past: true,
+            delete: true,
+            ..Caps::default()
+        }
+    }
+
+    /// The agent lists every session of the folder, the CLI's and other clients' too: those the
+    /// host's index does not know are hidden.
+    fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
+        let (live, _) = self.adapter(core, spec)?;
+        let known = sessions::index(core);
+        let mut all = vec![];
+        let mut cursor = None;
+        // A page filtered by folder may be empty with more after it; a bad cursor ends the walk.
+        for _ in 0..PAGES {
+            let list = ListSessionsRequest::new()
+                .cwd(PathBuf::from(&spec.repo))
+                .cursor(cursor);
+            let r = live.adapter.call(list)?;
+            let mine =
+                (r.sessions.into_iter()).filter(|s| known.contains_key(&s.session_id.to_string()));
+            all.extend(mine.map(|s| {
+                Past {
+                    id: s.session_id.to_string(),
+                    title: s.title.unwrap_or_else(|| "Untitled".into()),
+                    modified: (s.updated_at.as_deref())
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map_or(0, |t| t.timestamp_millis() as u64),
+                    cwd: Some(s.cwd.display().to_string()),
+                    tag: None,
+                    model: None,
+                    provider: String::new(),
+                }
+            }));
+            cursor = r.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        all.sort_by_key(|p| std::cmp::Reverse(p.modified));
+        Ok(all)
+    }
+
+    fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
+        let (live, _) = self.adapter(core, spec)?;
+        live.adapter
+            .call(DeleteSessionRequest::new(id.to_string()))
+            .map(drop)
     }
 
     fn open(
@@ -77,8 +135,7 @@ impl Backend for Acp {
 }
 
 impl Acp {
-    /// Finds the CLI and the adapter, then starts or loads the session on the adapter of its
-    /// version, started here unless it runs already.
+    /// Starts or loads the session on the adapter of its version.
     fn start(
         &self,
         core: &AppState,
@@ -86,6 +143,89 @@ impl Acp {
         resume: Option<&str>,
         events: Events,
     ) -> Result<Open> {
+        let p = spec.provider;
+        let codex = p.id == CODEX.id;
+        // Codex trusts its cwd and loads the tree's own config and skills whatever it is told.
+        if codex && spec.kind == Kind::Chat && !spec.trusted {
+            return Err(Error::Other(format!(
+                "{} loads this repo's own agent settings itself, so it runs here only once you \
+                 trust them",
+                p.name
+            )));
+        }
+        let (live, note) = self.adapter(core, spec)?;
+        if let Some(s) = &spec.sandbox
+            && codex
+            && spec.kind == Kind::Untrusted
+        {
+            isolate(Path::new(&spec.repo), &s.deny_read)?;
+        }
+        // Filled once the session is open: the route's breach ends it.
+        let ends: Arc<OnceLock<(Weak<Live>, String)>> = Default::default();
+        let route = match &spec.tools {
+            Some(tools) => {
+                let ends = ends.clone();
+                let breach = move || {
+                    if let Some((live, id)) = ends.get()
+                        && let Some(live) = live.upgrade()
+                    {
+                        live.end(id);
+                    }
+                };
+                Some(mcp::Route::new(tools.clone(), breach)?)
+            }
+            None => None,
+        };
+        let server = route.as_ref().map(|r| {
+            let name = format!("detached-host-{}", &mcp::random()[..8]);
+            (name, r.url.clone())
+        });
+        let options = Options {
+            cwd: spec.repo.clone().into(),
+            config: config_of(spec),
+            meta: meta(spec, server.as_ref().map(|s| s.0.as_str())),
+            server,
+            mcp: match &spec.mcp {
+                Some(file) => from_file(file)?,
+                None => vec![],
+            },
+            codex,
+        };
+        let opened = match resume {
+            Some(id) => live.adapter.load_session(id, &options),
+            None => live.adapter.new_session(&options),
+        };
+        let opened = opened.and_then(|o| live.adapter.configure(o, &options));
+        let opened = match opened {
+            Ok(o) => Some(Opened { note, ..o }),
+            // Its exit ends the stream.
+            Err(_) if live.adapter.gone() => None,
+            Err(e) => {
+                if let Some(id) = resume {
+                    live.demux.lock().unwrap().early.remove(id);
+                }
+                return Err(e);
+            }
+        };
+        let id = opened.as_ref().map(|o| o.id.as_str()).or(resume);
+        let id = id.unwrap_or_default().to_string();
+        let host = options.server.map(|s| s.0);
+        live.demux.lock().unwrap().open(opened, host, events);
+        _ = ends.set((Arc::downgrade(&live), id.clone()));
+        if route.as_ref().is_some_and(|r| r.breached()) {
+            live.end(&id);
+        }
+        Ok(Open {
+            live,
+            id,
+            codex,
+            _route: route,
+        })
+    }
+
+    /// Finds the CLI and the adapter, and the adapter of that version, started here unless it
+    /// runs already; with what the user should know of the CLI.
+    fn adapter(&self, core: &AppState, spec: &Spec) -> Result<(Arc<Live>, Option<String>)> {
         let p = spec.provider;
         let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
         let env = core.env();
@@ -118,6 +258,18 @@ impl Acp {
         };
         let mut vars = proc::env(p.env, proc::parent(&env));
         vars.push((p.cli_var.into(), cli.into()));
+        if p.id == CODEX.id && spec.kind == Kind::Untrusted {
+            let tmp = spec.sandbox.as_ref().and_then(|s| s.tmp.as_deref());
+            let own = || Error::Other("An untrusted Codex runs in a folder of its own".into());
+            let var = |k: &str| {
+                let v = vars.iter().find(|(n, v)| n == k && !v.is_empty());
+                v.map(|(_, v)| PathBuf::from(v))
+            };
+            let owner = var("CODEX_HOME").or_else(|| Some(var("HOME")?.join(".codex")));
+            let home = codex_home(tmp.ok_or_else(own)?, owner.as_deref())?;
+            vars.retain(|(k, _)| k != "CODEX_HOME");
+            vars.push(("CODEX_HOME".into(), home.into()));
+        }
         let program = adapters::exe(&core.data_dir, p.adapter, &version);
         let spec_proc = proc::Spec {
             program,
@@ -127,72 +279,13 @@ impl Acp {
         };
         // Claude's adapter stops a background task only for AIR; Codex's would move a command's
         // output out of the standard fields.
-        let live = self.live(spec_proc, p.id == CLAUDE.id)?;
-        if let Some(s) = &spec.sandbox
-            && p.id == CODEX.id
-        {
-            isolate(Path::new(&spec.repo), &s.deny_read)?;
-        }
-        // Filled once the session is open: the route's breach ends it.
-        let ends: Arc<OnceLock<(Weak<Live>, String)>> = Default::default();
-        let route = match &spec.tools {
-            Some(tools) => {
-                let ends = ends.clone();
-                let breach = move || {
-                    if let Some((live, id)) = ends.get()
-                        && let Some(live) = live.upgrade()
-                    {
-                        live.end(id);
-                    }
-                };
-                Some(mcp::Route::new(tools.clone(), breach)?)
-            }
-            None => None,
-        };
-        let server = route.as_ref().map(|r| {
-            let name = format!("detached-host-{}", &mcp::random()[..8]);
-            (name, r.url.clone())
-        });
-        let options = Options {
-            cwd: spec.repo.clone().into(),
-            config: config_of(spec),
-            meta: meta(spec, server.as_ref().map(|s| s.0.as_str())),
-            server,
-        };
-        let opened = match resume {
-            Some(id) => live.adapter.load_session(id, &options),
-            None => live.adapter.new_session(&options),
-        };
-        let opened = opened.and_then(|o| live.adapter.configure(o, &options.config));
-        let opened = match opened {
-            Ok(o) => Some(Opened { note, ..o }),
-            // Its exit ends the stream.
-            Err(_) if live.adapter.gone() => None,
-            Err(e) => {
-                if let Some(id) = resume {
-                    live.demux.lock().unwrap().early.remove(id);
-                }
-                return Err(e);
-            }
-        };
-        let id = opened.as_ref().map(|o| o.id.as_str()).or(resume);
-        let id = id.unwrap_or_default().to_string();
-        let host = options.server.map(|s| s.0);
-        live.demux.lock().unwrap().open(opened, host, events);
-        _ = ends.set((Arc::downgrade(&live), id.clone()));
-        if route.as_ref().is_some_and(|r| r.breached()) {
-            live.end(&id);
-        }
-        Ok(Open {
-            live,
-            id,
-            _route: route,
-        })
+        Ok((self.live(spec_proc, p.id == CLAUDE.id)?, note))
     }
 
     /// The adapter running `spec`'s program, or a new one.
     fn live(&self, spec: proc::Spec, air: bool) -> Result<Arc<Live>> {
-        let slot = (self.adapters.lock().unwrap().entry(spec.program.clone()))
+        let key = (spec.program.clone(), spec.env.clone());
+        let slot = (self.adapters.lock().unwrap().entry(key))
             .or_default()
             .clone();
         let mut slot = slot.lock().unwrap();
@@ -208,18 +301,17 @@ impl Acp {
     }
 }
 
-/// `configOptions`, set before the session starts: mode, model, effort.
+/// `configOptions`, set before the session starts: mode, model, effort. A Codex verifier or
+/// untrusted participant reads in Codex's own sandbox; a trusted finder takes its mode as asked.
 fn config_of(spec: &Spec) -> Vec<(String, String)> {
-    let codex = spec.provider.id == CODEX.id;
-    let mode = match codex && spec.sandbox.is_some() {
+    let mode = match spec.provider.id == CODEX.id && spec.kind != Kind::Chat {
         true => "read-only",
         false => &spec.mode,
     };
-    let effort = if codex { "reasoning_effort" } else { "effort" };
     let set = [
         ("mode", Some(mode.to_string())),
         ("model", spec.model.clone()),
-        (effort, spec.effort.clone()),
+        ("effort", spec.effort.clone()),
     ];
     let set = set
         .into_iter()
@@ -227,19 +319,64 @@ fn config_of(spec: &Spec) -> Vec<(String, String)> {
     set.collect()
 }
 
+/// A config option's id on the wire: Codex's effort is `reasoning_effort`, which `configs` reads
+/// back as `effort`.
+fn wire(id: &str, codex: bool) -> String {
+    match (id, codex) {
+        ("effort", true) => EFFORT.into(),
+        _ => id.into(),
+    }
+}
+
+const EFFORT: &str = "reasoning_effort";
+
+/// The servers of a run's MCP file, as Claude's `--mcp-config` takes them.
+fn from_file(file: &Path) -> Result<Vec<McpServer>> {
+    let all: Value = serde_json::from_slice(&std::fs::read(file)?)?;
+    let pairs = |v: &Value| -> Vec<(String, String)> {
+        let all = v.as_object().into_iter().flatten();
+        all.map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().into()))
+            .collect()
+    };
+    let servers = all["mcpServers"].as_object().into_iter().flatten();
+    let server = |(name, s): (&String, &Value)| match s["url"].as_str() {
+        Some(url) => {
+            let headers = pairs(&s["headers"]);
+            let headers = headers.into_iter().map(|(k, v)| HttpHeader::new(k, v));
+            let http = McpServerHttp::new(name, url).headers(headers.collect());
+            McpServer::Http(http)
+        }
+        None => {
+            let args = s["args"].as_array().into_iter().flatten();
+            let args = args.filter_map(|a| a.as_str().map(String::from)).collect();
+            let env = pairs(&s["env"])
+                .into_iter()
+                .map(|(k, v)| EnvVariable::new(k, v));
+            let command = s["command"].as_str().unwrap_or_default();
+            McpServer::Stdio(
+                McpServerStdio::new(name, command)
+                    .args(args)
+                    .env(env.collect()),
+            )
+        }
+    };
+    Ok(servers.map(server).collect())
+}
+
 /// Codex's project layer in `cwd`, a tree the host made: a permission profile that extends
 /// `:read-only` and denies reading `deny`. The adapter trusts the cwd, so the layer loads.
+/// Participants of one run share the tree and its profile: the first writes it, whole by a rename,
+/// and those after find it written.
 fn isolate(cwd: &Path, deny: &[PathBuf]) -> Result<()> {
     const ID: &str = "detached-reviewer";
+    static WRITE: Mutex<()> = Mutex::new(());
+    let _held = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let dir = cwd.join(".codex");
     if dir.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
         return Err(Error::Other(format!("{} is not a folder", dir.display())));
     }
     std::fs::create_dir_all(&dir)?;
     let file = dir.join("config.toml");
-    if file.symlink_metadata().is_ok() {
-        std::fs::remove_file(&file)?;
-    }
     let mut toml = format!(
         "default_permissions = \"{ID}\"\n[permissions.{ID}]\nextends = \":read-only\"\n\
          [permissions.{ID}.filesystem]\n"
@@ -248,8 +385,31 @@ fn isolate(cwd: &Path, deny: &[PathBuf]) -> Result<()> {
         // A JSON string is a TOML basic string.
         toml.push_str(&format!("{} = \"deny\"\n", json!(p.display().to_string())));
     }
-    let mut f = std::fs::File::create_new(file)?;
-    Ok(f.write_all(toml.as_bytes())?)
+    let ours = file.symlink_metadata().is_ok_and(|m| m.is_file())
+        && std::fs::read(&file).is_ok_and(|b| b == toml.as_bytes());
+    if ours {
+        return Ok(());
+    }
+    let tmp = dir.join(format!("config.toml.{}", mcp::random()));
+    std::fs::File::create_new(&tmp)?.write_all(toml.as_bytes())?;
+    Ok(std::fs::rename(tmp, file)?)
+}
+
+/// An untrusted Codex participant's own Codex home under its temp dir: the owner's login, linked,
+/// and nothing else, so none of the owner's rules, config, hooks or history load.
+fn codex_home(tmp: &Path, owner: Option<&Path>) -> Result<PathBuf> {
+    let home = tmp.join("codex-home");
+    std::fs::create_dir_all(&home)?;
+    let (auth, login) = (home.join("auth.json"), owner.map(|o| o.join("auth.json")));
+    if let Some(login) = login.filter(|l| l.is_file())
+        && auth.symlink_metadata().is_err()
+    {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(login, &auth)?;
+        #[cfg(not(unix))]
+        std::fs::copy(login, &auth)?;
+    }
+    Ok(home)
 }
 
 /// `_meta`, sent whole on every new and load: a closed session loads with the defaults otherwise.
@@ -304,8 +464,11 @@ struct Demux {
     orphans: Vec<Events>,
     /// Each session's host tools server, whose calls are allowed here.
     hosts: HashMap<String, String>,
-    /// Each session's tool calls of its turn, by id: Codex asks with the call's id alone.
+    /// Each session's tool calls of its turn, by id: Codex asks with the call's id alone, and sends
+    /// a command's output in pieces.
     calls: HashMap<String, HashMap<String, Tool>>,
+    /// Each session's config options as last reported, which a switch is checked against.
+    configs: HashMap<String, Vec<Config>>,
     /// The adapter's exit, and whether the host asked for it.
     exit: Option<(Exit, bool)>,
 }
@@ -320,6 +483,33 @@ impl Demux {
                 call.kind = t.kind.clone().or(call.kind.take());
                 call.input = t.input.clone().or(call.input.take());
                 (id, backend::Event::Update(Update::Tool(t)))
+            }
+            Event::Output(id, call, data) => {
+                let calls = self.calls.entry(id.clone()).or_default();
+                let was = calls.entry(call.clone()).or_default();
+                let mut all = match was.output.take() {
+                    Some(Value::String(s)) => s,
+                    _ => String::new(),
+                };
+                all.push_str(&data);
+                if all.len() > OUTPUT {
+                    let mut cut = all.len() - OUTPUT;
+                    while !all.is_char_boundary(cut) {
+                        cut += 1;
+                    }
+                    all.drain(..cut);
+                }
+                was.output = Some(Value::String(all.clone()));
+                let t = Tool {
+                    id: call,
+                    output: Some(Value::String(all)),
+                    ..Tool::default()
+                };
+                (id, backend::Event::Update(Update::Tool(Box::new(t))))
+            }
+            Event::Update(id, Update::Config(c)) => {
+                self.configs.insert(id.clone(), c.clone());
+                (id, backend::Event::Update(Update::Config(c)))
             }
             Event::Update(id, u) => (id, backend::Event::Update(u)),
             Event::Ask(id, mut ask, reply) => {
@@ -343,6 +533,7 @@ impl Demux {
                 self.early.remove(&id);
                 self.hosts.remove(&id);
                 self.calls.remove(&id);
+                self.configs.remove(&id);
                 if let Some(mut sink) = self.sinks.remove(&id) {
                     sink(backend::Event::Closed);
                 }
@@ -350,6 +541,7 @@ impl Demux {
             }
             Event::Exited(x, asked) => {
                 self.calls.clear();
+                self.configs.clear();
                 let sinks = self.sinks.drain().map(|(_, s)| s);
                 for mut sink in sinks.chain(self.orphans.drain(..)) {
                     sink(gone(&x, asked));
@@ -377,6 +569,7 @@ impl Demux {
         if let Some(h) = host {
             self.hosts.insert(id.clone(), h);
         }
+        self.configs.insert(id.clone(), o.config.clone());
         sink(backend::Event::Opened(o));
         self.early
             .remove(&id)
@@ -403,6 +596,7 @@ fn gone(x: &Exit, asked: bool) -> backend::Event {
 struct Open {
     live: Arc<Live>,
     id: String,
+    codex: bool,
     /// Its host tools' path, refused once the session goes.
     _route: Option<mcp::Route>,
 }
@@ -416,10 +610,22 @@ impl backend::Session for Open {
         self.live.adapter.cancel(&self.id);
     }
 
-    fn set(&self, _: Setting) -> Result<()> {
-        Err(Error::Other(
-            "This agent switches nothing mid-session yet".into(),
-        ))
+    /// Checked against the options the session last reported; the agent's answer comes as a
+    /// config update, or as `Refused` when it keeps what it had.
+    fn set(&self, setting: Setting) -> Result<()> {
+        let (k, v) = match setting {
+            Setting::Model(v) => ("model", v),
+            Setting::Effort(v) => ("effort", v),
+            Setting::Mode(v) => ("mode", v),
+        };
+        let demux = self.live.demux.lock().unwrap();
+        let listed = demux.configs.get(&self.id).into_iter().flatten();
+        if !listed.filter(|c| c.id == k).any(|c| c.values.contains(&v)) {
+            return Err(Error::Other(format!("This agent offers no {k} {v}")));
+        }
+        drop(demux);
+        self.live.adapter.set(&self.id, &wire(k, self.codex), &v);
+        Ok(())
     }
 
     fn stop_task(&self, _: &str) {}
@@ -431,6 +637,9 @@ impl Drop for Open {
     }
 }
 
+/// The end of a command's output the feed keeps.
+const OUTPUT: usize = 64 * 1024;
+
 /// What `session/new` and `session/load` send besides the session's id.
 #[derive(Clone, Debug, Default)]
 struct Options {
@@ -441,11 +650,16 @@ struct Options {
     meta: Value,
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
+    /// A run's MCP servers.
+    mcp: Vec<McpServer>,
+    codex: bool,
 }
 
 /// What the adapter sends, by session id, in the order it sent it.
 enum Event {
     Update(String, Update),
+    /// A piece of a command's output, by its call's id.
+    Output(String, String, String),
     Ask(String, Box<Ask>, Reply),
     /// A prompt's answer: the turn ended.
     Ended(String, std::result::Result<Turn, Failure>),
@@ -525,8 +739,12 @@ impl Adapter {
                     .name("detached")
                     .on_receive_notification(
                         async move |n: SessionNotification, _cx| {
+                            let id = n.session_id.to_string();
+                            if let Some((call, data)) = output(&n.update) {
+                                on_update(Event::Output(id.clone(), call, data));
+                            }
                             if let Some(u) = update(n.update) {
-                                on_update(Event::Update(n.session_id.to_string(), u));
+                                on_update(Event::Update(id, u));
                             }
                             Ok(())
                         },
@@ -607,7 +825,7 @@ impl Adapter {
         let r = self.call(
             NewSessionRequest::new(&o.cwd)
                 .mcp_servers(servers(o))
-                .config_options(initial(&o.config))
+                .config_options(initial(o))
                 .meta(o.meta.as_object().cloned()),
         )?;
         Ok(self.opened(r.session_id.to_string(), r.config_options))
@@ -618,7 +836,7 @@ impl Adapter {
         let r = self.call(
             LoadSessionRequest::new(id.to_string(), &o.cwd)
                 .mcp_servers(servers(o))
-                .config_options(initial(&o.config))
+                .config_options(initial(o))
                 .meta(o.meta.as_object().cloned()),
         )?;
         Ok(self.opened(id.into(), r.config_options))
@@ -626,13 +844,14 @@ impl Adapter {
 
     /// Sets what `new` and `load` did not: Codex's adapter reads no `configOptions` there. An option
     /// the agent does not list is left out; one it refuses closes the session.
-    fn configure(&self, mut o: Opened, want: &[(String, String)]) -> Result<Opened> {
-        for (k, v) in want {
+    fn configure(&self, mut o: Opened, want: &Options) -> Result<Opened> {
+        for (k, v) in &want.config {
             if !o.config.iter().any(|c| c.id == *k && c.value != *v) {
                 continue;
             }
             let value = SessionConfigOptionValue::value_id(v.clone());
-            let set = SetSessionConfigOptionRequest::new(o.id.clone(), k.clone(), value);
+            let id = wire(k, want.codex);
+            let set = SetSessionConfigOptionRequest::new(o.id.clone(), id, value);
             match self.call(set) {
                 Ok(r) => o.config = configs(r.config_options),
                 Err(e) => {
@@ -645,12 +864,32 @@ impl Adapter {
     }
 
     fn opened(&self, id: String, config: Option<Vec<SessionConfigOption>>) -> Opened {
+        let config = config.unwrap_or_default();
         Opened {
             id,
             version: self.version.clone(),
-            config: configs(config.unwrap_or_default()),
+            models: models(&config),
+            config: configs(config),
             ..Opened::default()
         }
+    }
+
+    /// Sets a config option; the answer's options come as a config update.
+    fn set(&self, session: &str, k: &str, v: &str) {
+        let (id, sent) = (session.to_string(), self.on_event.clone());
+        let value = SessionConfigOptionValue::value_id(v.to_string());
+        let req = SetSessionConfigOptionRequest::new(session.to_string(), k.to_string(), value);
+        let _ = self
+            .cx
+            .send_request(req)
+            .on_receiving_result(async move |r| {
+                let u = match r {
+                    Ok(r) => Update::Config(configs(r.config_options)),
+                    Err(e) => Update::Refused(e.to_string()),
+                };
+                sent(Event::Update(id, u));
+                Ok(())
+            });
     }
 
     /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
@@ -702,20 +941,44 @@ impl Drop for Adapter {
 
 fn servers(o: &Options) -> Vec<McpServer> {
     let http = |(name, url): &(String, String)| McpServer::Http(McpServerHttp::new(name, url));
-    o.server.iter().map(http).collect()
+    o.server.iter().map(http).chain(o.mcp.clone()).collect()
 }
 
-fn initial(config: &[(String, String)]) -> Vec<InitialSessionConfigOption> {
+fn initial(o: &Options) -> Vec<InitialSessionConfigOption> {
     let option = |(k, v): &(String, String)| {
-        InitialSessionConfigOption::new(k.clone(), SessionConfigOptionValue::value_id(v.clone()))
+        let value = SessionConfigOptionValue::value_id(v.clone());
+        InitialSessionConfigOption::new(wire(k, o.codex), value)
     };
-    config.iter().map(option).collect()
+    o.config.iter().map(option).collect()
+}
+
+/// The `model` option's choices, with their names; efforts come with the `effort` option.
+fn models(options: &[SessionConfigOption]) -> Vec<Model> {
+    let model = options.iter().find(|o| o.id.to_string() == "model");
+    let Some(SessionConfigKind::Select(s)) = model.map(|o| &o.kind) else {
+        return vec![];
+    };
+    let all: Vec<&SessionConfigSelectOption> = match &s.options {
+        SessionConfigSelectOptions::Ungrouped(v) => v.iter().collect(),
+        SessionConfigSelectOptions::Grouped(g) => g.iter().flat_map(|g| &g.options).collect(),
+        _ => vec![],
+    };
+    let model = |o: &&SessionConfigSelectOption| Model {
+        value: o.value.to_string(),
+        label: o.name.clone(),
+        auto: false,
+        efforts: vec![],
+    };
+    all.iter().map(model).collect()
 }
 
 fn configs(options: Vec<SessionConfigOption>) -> Vec<Config> {
     let select = |o: SessionConfigOption| match o.kind {
         SessionConfigKind::Select(s) => Some(Config {
-            id: o.id.to_string(),
+            id: match o.id.to_string() {
+                id if id == EFFORT => "effort".into(),
+                id => id,
+            },
             value: s.current_value.to_string(),
             values: match s.options {
                 SessionConfigSelectOptions::Ungrouped(v) => {
@@ -797,7 +1060,27 @@ fn update(u: SessionUpdate) -> Option<Update> {
             lines: None,
         })),
         SessionUpdate::ToolCallUpdate(t) => {
-            Update::Tool(Box::new(tool(t.tool_call_id.to_string(), t.fields)))
+            let t = tool(t.tool_call_id.to_string(), t.fields);
+            let empty = Tool {
+                id: t.id.clone(),
+                ..Tool::default()
+            };
+            // An update that only carried a piece of output, which `output` took.
+            if t == empty {
+                return None;
+            }
+            Update::Tool(Box::new(t))
+        }
+        SessionUpdate::AvailableCommandsUpdate(c) => {
+            let command = |c: AvailableCommand| SlashCommand {
+                hint: match c.input {
+                    Some(AvailableCommandInput::Unstructured(i)) => i.hint,
+                    _ => String::new(),
+                },
+                name: c.name,
+                description: c.description,
+            };
+            Update::Commands(c.available_commands.into_iter().map(command).collect())
         }
         SessionUpdate::UsageUpdate(u) => Update::Usage {
             used: u.used,
@@ -809,6 +1092,17 @@ fn update(u: SessionUpdate) -> Option<Update> {
         SessionUpdate::CurrentModeUpdate(m) => Update::Mode(m.current_mode_id.to_string()),
         _ => return None,
     })
+}
+
+/// A piece of a command's output: Codex sends it beside the call's update, as Zed takes it.
+fn output(u: &SessionUpdate) -> Option<(String, String)> {
+    let (id, meta) = match u {
+        SessionUpdate::ToolCall(t) => (&t.tool_call_id, &t.meta),
+        SessionUpdate::ToolCallUpdate(t) => (&t.tool_call_id, &t.meta),
+        _ => return None,
+    };
+    let data = meta.as_ref()?.get("terminal_output_delta")?["data"].as_str()?;
+    Some((id.to_string(), data.to_string()))
 }
 
 /// The option for `answer`: `allow_once` or `reject_once`, never an `_always`.

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, ASKING, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model,
+    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model,
     Part, Piece, Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::docs::{Docs, Need};
@@ -179,6 +179,8 @@ pub struct Session {
     pub queued: Option<String>,
     /// A prompt the session ended on before it went out.
     pub unsent: Option<String>,
+    /// The agent refused a switch since this was last taken: what it kept is in `config`.
+    pub refused: bool,
     /// Settings picked while the session starts or woken turns run, applied once it has or they
     /// ended.
     picked: Vec<Setting>,
@@ -428,6 +430,7 @@ impl Session {
                 history: 0,
                 queued: None,
                 unsent: None,
+                refused: false,
                 picked: vec![],
                 open: None,
                 trust: String::new(),
@@ -626,7 +629,7 @@ impl Session {
             return cx.notify();
         }
         // Sent before every woken prompt: the kernel's copy of the mode may lag the agent's.
-        if let Err(e) = o.set(Setting::Mode(ASKING.into())) {
+        if let Err(e) = o.set(Setting::Mode(self.spec.provider.ask.into())) {
             self.note(format!(
                 "Not woken: the agent cannot switch to asking first: {e}"
             ));
@@ -646,7 +649,7 @@ impl Session {
         let picked = std::mem::take(&mut self.picked);
         let mode = picked.iter().any(|s| matches!(s, Setting::Mode(_)));
         let back =
-            (!mode && self.spec.mode != ASKING).then(|| Setting::Mode(self.spec.mode.clone()));
+            (!mode && self.spec.mode != self.spec.provider.ask).then(|| Setting::Mode(self.spec.mode.clone()));
         for setting in back.into_iter().chain(picked) {
             if let Err(e) = self.set(setting) {
                 self.note(format!("Not set after the woken turns: {e}"));
@@ -887,6 +890,11 @@ impl Session {
         let opened = matches!(e, Event::Opened(_));
         match e {
             Event::Opened(o) => {
+                // The chat's, which the lists show; an agent may list other clients' sessions too.
+                if self.seat.is_none() {
+                    let (core, id) = (crate::core(cx).clone(), o.id.clone());
+                    blocking::run(cx, move || _ = sessions::seen(&core, &id)).detach();
+                }
                 self.id = Some(o.id);
                 self.version = Some(o.version);
                 self.config = o.config;
@@ -930,7 +938,7 @@ impl Session {
         }
         // The agent drops a mode by itself, as `auto` on a model without it.
         let want = match self.woken {
-            true => ASKING.to_string(),
+            true => self.spec.provider.ask.to_string(),
             false => self.spec.mode.clone(),
         };
         let now = self.option("mode");
@@ -991,9 +999,21 @@ impl Session {
             (Update::Limits(l), _) => self.limits = Some(l),
             (Update::Lacks(p), _) => self.lacks.push(p),
             (Update::Trust, _) => _ = self.changed.unbounded_send(()),
+            (Update::Refused(why), _) => {
+                self.note(format!("The agent kept its setting: {why}"));
+                // A woken turn that cannot ask first does not run.
+                if self.woken && self.state == State::Running {
+                    self.cancel();
+                    return;
+                }
+                if let Some(m) = self.option("mode") {
+                    self.spec.mode = m.into();
+                }
+                self.refused = true;
+            }
             (Update::Config(c), _) => self.config = c,
             (Update::Mode(m), _) => {
-                if self.woken && m != ASKING {
+                if self.woken && m != self.spec.provider.ask {
                     self.note(format!(
                         "The woken turn ran in {m}, not asking first, so it stopped."
                     ));
@@ -1270,6 +1290,7 @@ fn listed(core: &AppState, spec: &Spec) -> Result<Vec<backend::Past>> {
     let index = sessions::index(core);
     for p in &mut all {
         p.cwd = Some(spec.repo.clone());
+        p.provider = spec.provider.id.into();
         if let Some(e) = index.get(&p.id) {
             p.tag = e.archived.then(|| "archived".into());
         }
@@ -1311,6 +1332,11 @@ pub fn delete(spec: Spec, id: String, cx: &App) -> Task<Result<()>> {
         backend(spec.provider).delete(&core, &spec, &id)?;
         sessions::forget(&core, &id)
     })
+}
+
+/// What the provider's backend has.
+pub fn caps(p: &Provider) -> backend::Caps {
+    backend(p).caps()
 }
 
 /// The backend the provider's manifest names.

@@ -246,6 +246,7 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         mode: "review".into(),
         untrusted: false,
         budget: None,
+        codex: false,
     };
     let shown = detached_core::panel::run::preview(&f.core, &start).unwrap();
     detached_core::panel::run::accept(&f.core, &shown).unwrap();
@@ -345,6 +346,7 @@ fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut Tes
             mode: "gate".into(),
             untrusted: false,
             budget: None,
+            codex: false,
         };
         let p = cx.update(|cx| super::super::live::start(start, cx));
         wait_for(cx, START, |cx| {

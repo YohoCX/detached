@@ -30,6 +30,14 @@ pub fn archive(core: &AppState, id: &str, archived: bool) -> Result<()> {
     })
 }
 
+/// Lists a session the host started, unless it is listed.
+pub fn seen(core: &AppState, id: &str) -> Result<()> {
+    if index(core).contains_key(id) {
+        return Ok(());
+    }
+    edit(core, |all| _ = all.entry(id.into()).or_default())
+}
+
 /// Drops a deleted session's entry.
 pub fn forget(core: &AppState, id: &str) -> Result<()> {
     edit(core, |all| _ = all.remove(id))

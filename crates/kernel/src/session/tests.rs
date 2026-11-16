@@ -821,3 +821,75 @@ pub(crate) fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
     });
     text.collect()
 }
+
+/// The kernel with `fake_acp` as Codex's adapter and CLI, Codex on, its sessions in a Codex home.
+#[cfg(unix)]
+fn boot_codex(cx: &mut TestAppContext) -> Fixture {
+    use detached_core::adapters::CODEX;
+    let fake = detached_acp::testutil::fake();
+    let f = boot_on(cx, &fake, &[], &CODEX, |core| {
+        detached_acp::testutil::install_as(core, CODEX.adapter, &fake, "2.6.0");
+        let home = core.data_dir.join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let home = ("CODEX_HOME".into(), home.display().to_string());
+        core.env.write().unwrap().vars.push(home);
+    });
+    let config = Config {
+        cli: [(CODEX.id.into(), fake.display().to_string())].into(),
+        codex: true,
+    };
+    f.core.set_block(BLOCK, config).unwrap();
+    f
+}
+
+#[cfg(unix)]
+fn alive(pid: u64) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+}
+
+/// Codex's cancel spares a background command: ending the session ends it, and the chat goes on in
+/// a resume that lists among the past sessions.
+#[cfg(unix)]
+#[gpui::test]
+fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut TestAppContext) {
+    use detached_core::adapters::CODEX;
+    let f = boot_codex(cx);
+    let mut spec = f.spec(Kind::Chat);
+    spec.mode = CODEX.chat.into();
+    let s = open_spec(spec.clone(), None, cx);
+    assert_eq!(
+        s.read_with(cx, |s, _| s.option("mode").map(String::from))
+            .unwrap(),
+        "agent"
+    );
+    s.update(cx, |s, cx| s.prompt("bg".into(), cx));
+    let pid = |cx: &App| {
+        s.read(cx).items.iter().find_map(|i| match i {
+            Item::Tool(t) => t.input.as_ref()?["pid"].as_u64(),
+            _ => None,
+        })
+    };
+    wait_until(cx, |cx| pid(cx).is_some());
+    let pid = cx.read(pid).unwrap();
+    s.update(cx, |s, cx| s.cancel_and_end(cx));
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    let start = std::time::Instant::now();
+    while alive(pid) {
+        assert!(start.elapsed() < START, "the background command runs on");
+        cx.run_until_parked();
+    }
+    let id = s.read_with(cx, |s, _| s.id.clone());
+    let again = open_spec(spec.clone(), id.clone(), cx);
+    assert_eq!(turn(&again, "say on", cx), "on");
+    let past = listed(&f.core, &spec).unwrap();
+    assert_eq!(
+        past.iter().map(|p| &p.id).collect::<Vec<_>>(),
+        [&id.unwrap()]
+    );
+    assert_eq!(past[0].provider, "codex");
+}

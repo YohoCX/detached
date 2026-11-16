@@ -1,5 +1,5 @@
 //! A scripted ACP agent for the tests. A prompt is steps split by `;`, each a verb and its
-//! arguments:
+//! arguments; a prompt with a line `acp: <steps>` runs those alone:
 //! - `say <text>` streams the text in three chunks with a usage update; `prose` answers without a tool;
 //! - `stall` runs a foreground command until `session/cancel`, which kills it;
 //! - `die` exits with code 3 mid-turn;
@@ -11,17 +11,29 @@
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
 //! - `env` says the names in its env; `meta` the `_meta` its session got, `params` all of its
-//!   `session/new` or `session/load`; `model` its model and mode, `effort` its effort; `sessions`
+//!   `session/new` or `session/load`; `model` its model and mode, `effort` its effort; `home` the
+//!   names in its `CODEX_HOME`; `sessions`
 //!   the count of its open sessions;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `out-of-usage` fails the prompt as Claude does when extra usage has run out;
-//! - `hold-close` answers the session's close only once the next prompt, of any session, comes.
+//! - `hold-close` answers the session's close only once the next prompt, of any session, comes;
+//! - `run <text>` runs a command whose output, `<text>` and a newline twice, comes in pieces beside
+//!   the call's updates, as Codex sends it;
+//! - `bg` starts a command that a cancel leaves running, as Codex's background terminals, and the
+//!   session's close ends; it runs until `session/cancel`;
+//! - `act <json>` calls the host's `detached_act` with those arguments through the session's first
+//!   MCP server, over HTTP, and says its answer.
 //!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
-//! first. Installed as `codex-acp` it reads no `configOptions` on new or load and lists
-//! `reasoning_effort`, as Codex's adapter. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//! first. A new session asked for the model `die` exits with code 3 before it answers. On stdin's
+//! EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//!
+//! Installed as `codex-acp` it is Codex's: it reads no `configOptions` on new or load, has Codex's
+//! modes, models and `reasoning_effort`, starts in `agent` on `gpt-5.5` and loads on
+//! `gpt-5.5-mini`. With `CODEX_HOME` set it keeps its sessions in `fake-sessions.json` there, which
+//! `session/list` reads, titled by their first prompt, and `session/delete` archives.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -48,6 +60,8 @@ struct Session {
     mode: String,
     effort: String,
     hold_close: bool,
+    /// Commands a cancel leaves running.
+    background: Vec<Child>,
 }
 
 fn main() {
@@ -98,7 +112,8 @@ fn main() {
         match method {
             "initialize" => reply(json!({
                 "protocolVersion": 1,
-                "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"close": {}}},
+                "agentCapabilities": {"loadSession": true,
+                    "sessionCapabilities": {"close": {}, "list": {}}},
                 "agentInfo": {"name": "fake_acp", "version": version},
                 "authMethods": [],
             })),
@@ -125,19 +140,25 @@ fn main() {
                     eprintln!("fake_acp: died at session/new");
                     std::process::exit(3);
                 }
-                let fallback = if method == "session/load" {
-                    "fallback-opus"
-                } else {
-                    "default"
+                let load = method == "session/load";
+                let fallback = match (codex(), load) {
+                    (true, true) => "gpt-5.5-mini",
+                    (true, false) => "gpt-5.5",
+                    (false, true) => "fallback-opus",
+                    (false, false) => "default",
                 };
+                let mode = if codex() { "agent" } else { "auto" };
                 let s = Session {
                     cwd: params["cwd"].as_str().unwrap_or_default().into(),
                     params: params.clone(),
                     model: asked("model").unwrap_or(fallback.into()),
-                    mode: asked("mode").unwrap_or("auto".into()),
+                    mode: asked("mode").unwrap_or(mode.into()),
                     effort: "medium".into(),
-                    hold_close: false,
+                    ..Session::default()
                 };
+                if !load {
+                    listed(|all| all.push(json!({"sessionId": sid, "cwd": s.cwd})));
+                }
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
                 if method == "session/new" {
@@ -158,10 +179,32 @@ fn main() {
                     replies.remove(&rid);
                     let _ = turn.join();
                 }
-                match sessions.lock().unwrap().remove(sid) {
+                let mut s = sessions.lock().unwrap().remove(sid);
+                for c in s.iter_mut().flat_map(|s| &mut s.background) {
+                    end(c);
+                }
+                match s {
                     Some(s) if s.hold_close => held = Some(id.clone()),
                     _ => reply(json!({})),
                 }
+            }
+            "session/list" => {
+                let cwd = params["cwd"].clone();
+                let mut all = vec![];
+                listed(|l| all = l.clone());
+                let mine = all
+                    .into_iter()
+                    .filter(|s| s["cwd"] == cwd && s["archived"].is_null());
+                reply(json!({"sessions": mine.collect::<Vec<_>>()}));
+            }
+            "session/delete" => {
+                let sid = params["sessionId"].clone();
+                listed(|all| {
+                    for s in all.iter_mut().filter(|s| s["sessionId"] == sid) {
+                        s["archived"] = json!(true);
+                    }
+                });
+                reply(json!({}));
             }
             "session/set_config_option" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
@@ -169,9 +212,17 @@ fn main() {
                 let Some(s) = all.get_mut(sid) else { continue };
                 let v = params["value"].as_str().unwrap_or_default().to_string();
                 match params["configId"].as_str() {
-                    Some("mode") if MODES.contains(&v.as_str()) => s.mode = v,
-                    Some("model") if MODELS.contains(&v.as_str()) => s.model = v,
-                    Some("reasoning_effort") if EFFORTS.contains(&v.as_str()) => s.effort = v,
+                    // Codex's fake lists `workspace-write` and refuses it, as an agent may.
+                    Some("mode")
+                        if modes().contains(&v.as_str())
+                            && !(codex() && v == "workspace-write") =>
+                    {
+                        s.mode = v
+                    }
+                    Some("model") if models().iter().any(|m| m.0 == v) => s.model = v,
+                    Some("reasoning_effort") if codex() && EFFORTS.contains(&v.as_str()) => {
+                        s.effort = v
+                    }
                     _ => {
                         send(
                             &out,
@@ -193,10 +244,16 @@ fn main() {
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
                 }
                 let sid = params["sessionId"].as_str().unwrap_or_default().to_string();
-                let text = params["prompt"][0]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
+                let text = params["prompt"][0]["text"].as_str().unwrap_or_default();
+                let script = text.lines().find_map(|l| l.strip_prefix("acp: "));
+                let text = script.unwrap_or(text).to_string();
+                listed(|all| {
+                    let s = all.iter_mut().find(|s| s["sessionId"] == sid.as_str());
+                    if let Some(s) = s.filter(|s| s["title"].is_null()) {
+                        s["title"] = json!(text);
+                        s["updatedAt"] = json!("2026-11-17T10:00:00.000Z");
+                    }
+                });
                 let (cancel, cancelled) = mpsc::channel();
                 let (answered, answer) = mpsc::channel();
                 let rid = next_request(&mut next);
@@ -244,16 +301,49 @@ fn next_request(next: &mut u64) -> u64 {
     1000 + *next
 }
 
-const MODES: &[&str] = &[
-    "auto",
-    "default",
-    "acceptEdits",
-    "plan",
-    "bypassPermissions",
-    "read-only",
-];
-const MODELS: &[&str] = &["default", "haiku", "fallback-opus"];
+fn modes() -> &'static [&'static str] {
+    match codex() {
+        true => &["read-only", "workspace-write", "agent", "agent-full-access"],
+        false => &[
+            "auto",
+            "default",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions",
+            "read-only",
+        ],
+    }
+}
+
+/// Each model's value and name.
+fn models() -> &'static [(&'static str, &'static str)] {
+    match codex() {
+        true => &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-5.5 mini")],
+        false => &[
+            ("default", "default"),
+            ("haiku", "haiku"),
+            ("fallback-opus", "fallback-opus"),
+        ],
+    }
+}
+
 const EFFORTS: &[&str] = &["low", "medium", "high"];
+
+fn codex() -> bool {
+    exe_name().starts_with("codex-acp")
+}
+
+/// Runs `f` on the sessions `CODEX_HOME` keeps, and keeps what it leaves.
+fn listed(f: impl FnOnce(&mut Vec<Value>)) {
+    let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty() && codex()) else {
+        return;
+    };
+    let file = std::path::Path::new(&home).join("fake-sessions.json");
+    let bytes = std::fs::read(&file).unwrap_or_default();
+    let mut all: Vec<Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+    f(&mut all);
+    let _ = std::fs::write(file, Value::from(all).to_string());
+}
 
 fn exe_name() -> String {
     let exe = std::env::current_exe().unwrap_or_default();
@@ -264,21 +354,23 @@ fn exe_name() -> String {
 }
 
 fn config(s: &Session) -> Value {
-    let select = |id: &str, value: &str, values: &[&str]| {
+    let select = |id: &str, value: &str, values: &[(&str, &str)]| {
         let options: Vec<Value> = values
             .iter()
-            .map(|v| json!({"value": v, "name": v}))
+            .map(|(v, name)| json!({"value": v, "name": name}))
             .collect();
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
+    let modes: Vec<_> = modes().iter().map(|m| (*m, *m)).collect();
     let mut all = vec![
-        select("mode", &s.mode, MODES),
-        select("model", &s.model, MODELS),
+        select("mode", &s.mode, &modes),
+        select("model", &s.model, models()),
     ];
-    if exe_name().starts_with("codex-acp") {
-        all.push(select("reasoning_effort", &s.effort, EFFORTS));
+    if codex() {
+        let efforts: Vec<_> = EFFORTS.iter().map(|e| (*e, *e)).collect();
+        all.push(select("reasoning_effort", &s.effort, &efforts));
     }
-    json!(all)
+    Value::from(all)
 }
 
 enum Stop {
@@ -366,6 +458,39 @@ impl Turn<'_> {
                 eprintln!("fake_acp: died mid-turn");
                 std::process::exit(3);
             }
+            "run" => {
+                let id = "t-run";
+                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": id,
+                    "title": format!("Run echo {rest}"), "kind": "execute", "status": "in_progress",
+                    "rawInput": {"command": format!("echo {rest}")},
+                    "_meta": {"terminal_info": {"terminal_id": id, "cwd": "/"}}}));
+                for _ in 0..2 {
+                    let delta = json!({"terminal_id": id, "data": format!("{rest}\n")});
+                    self.update(
+                        json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
+                        "_meta": {"terminal_output_delta": delta}}),
+                    );
+                }
+                self.update(
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": id,
+                    "status": "completed",
+                    "_meta": {"terminal_exit": {"terminal_id": id, "exit_code": 0}}}),
+                );
+            }
+            "bg" => {
+                let child = me()
+                    .arg("--sleep")
+                    .stdin(Stdio::null())
+                    .spawn()
+                    .map_err(err)?;
+                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t-bg", "title": "Run server",
+                    "kind": "execute", "status": "in_progress", "rawInput": {"command": "server", "pid": child.id()}}));
+                let mut all = self.sessions.lock().unwrap();
+                all.get_mut(self.sid).unwrap().background.push(child);
+                drop(all);
+                let _ = self.cancelled.recv();
+                return Err(Stop::Cancelled);
+            }
             "bare" | "host-ask" => {
                 let input = match verb {
                     "bare" => json!({"command": "make"}),
@@ -425,6 +550,15 @@ impl Turn<'_> {
             }
             "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
             "effort" => self.say(&self.session(|s| s.effort.clone())),
+            "home" => {
+                let home = std::env::var_os("CODEX_HOME").unwrap_or_default();
+                let all = std::fs::read_dir(home).into_iter().flatten().flatten();
+                let mut names: Vec<String> = all
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                self.say(&names.join(","));
+            }
             "sessions" => self.say(&self.sessions.lock().unwrap().len().to_string()),
             "api" => self.say(&api().map_err(err)?),
             "write" => {
@@ -432,6 +566,11 @@ impl Turn<'_> {
                 let path = self.session(|s| std::path::Path::new(&s.cwd).join(path));
                 std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
                 std::fs::write(path, text).map_err(err)?;
+            }
+            "act" => {
+                let url = self.session(|s| s.params["mcpServers"][0]["url"].clone());
+                let said = act(url.as_str().unwrap_or_default(), rest).map_err(err)?;
+                self.say(&said);
             }
             "out-of-usage" => {
                 return Err(Stop::Error(
@@ -455,6 +594,54 @@ fn end(child: &mut Child) {
 
 fn err(e: impl std::fmt::Display) -> Stop {
     Stop::Error(e.to_string())
+}
+
+/// Calls `detached_act` with `args` on the MCP server at `url`: an `initialize`, then the call on
+/// the session it answered with.
+fn act(url: &str, args: &str) -> std::io::Result<String> {
+    let args: Value = serde_json::from_str(args).map_err(std::io::Error::other)?;
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18"}});
+    let (session, _) = post(url, None, &init)?;
+    let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "detached_act", "arguments": args}});
+    let (_, body) = post(url, session.as_deref(), &call)?;
+    let r: Value = serde_json::from_str(&body).unwrap_or_default();
+    Ok(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or(&body)
+        .to_string())
+}
+
+/// One HTTP POST of `body`: the answer's `Mcp-Session-Id` and body.
+fn post(
+    url: &str,
+    session: Option<&str>,
+    body: &Value,
+) -> std::io::Result<(Option<String>, String)> {
+    let rest = url.trim_start_matches("http://");
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let mut s = std::net::TcpStream::connect(host)?;
+    let body = body.to_string();
+    let mut head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    if let Some(id) = session {
+        head.push_str(&format!("Mcp-Session-Id: {id}\r\n"));
+    }
+    write!(s, "{head}\r\n{body}")?;
+    // The server keeps a connection until its client is done.
+    s.shutdown(std::net::Shutdown::Write)?;
+    let mut reply = String::new();
+    s.read_to_string(&mut reply)?;
+    let (head, body) = reply.split_once("\r\n\r\n").unwrap_or((&reply, ""));
+    let session = head.lines().find_map(|l| {
+        let (k, v) = l.split_once(": ")?;
+        k.eq_ignore_ascii_case("mcp-session-id")
+            .then(|| v.to_string())
+    });
+    Ok((session, body.to_string()))
 }
 
 /// One request to the Messages API the env names, by hand: the fake has no HTTP client.

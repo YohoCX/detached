@@ -72,6 +72,14 @@ pub struct Provider {
     pub env: &'static [&'static str],
     /// The files a session loads only once their items are trusted, as globs from a tree's root.
     pub trust: &'static [&'static str],
+    /// The modes a chat offers: id, label and what it does.
+    pub modes: &'static [(&'static str, &'static str, &'static str)],
+    /// The mode that asks for anything that needs approval.
+    pub ask: &'static str,
+    /// The mode a chat starts in.
+    pub chat: &'static str,
+    /// The mode of trusted panel work: no prompts, full access.
+    pub full: &'static str,
 }
 
 pub static CLAUDE: Provider = claude(backend::Name::Direct);
@@ -120,6 +128,23 @@ pub(crate) const fn claude(backend: backend::Name) -> Provider {
             ".claude/agents/**",
             ".mcp.json",
         ],
+        modes: &[
+            (
+                "auto",
+                "Auto",
+                "A classifier approves or blocks each action, and asks you when it can't tell",
+            ),
+            (
+                "acceptEdits",
+                "Edits",
+                "File edits run; other actions that need approval ask you",
+            ),
+            ("plan", "Plan", "Explores and plans without changing files"),
+            ("default", "Manual", "Anything that needs approval asks you"),
+        ],
+        ask: "default",
+        chat: "auto",
+        full: "bypassPermissions",
     }
 }
 
@@ -134,7 +159,32 @@ pub static CODEX: Provider = Provider {
     installer: None,
     cli_var: "CODEX_PATH",
     env: &["CODEX_HOME"],
-    trust: &[".codex/config.toml", ".agents/skills/*/SKILL.md"],
+    trust: &[".codex/**", ".agents/skills/*/SKILL.md"],
+    modes: &[
+        (
+            "agent",
+            "Auto review",
+            "Edits the workspace; asks only for actions detected as potentially unsafe",
+        ),
+        (
+            "workspace-write",
+            "Workspace",
+            "Edits the workspace; asks before writing outside it or using the network",
+        ),
+        (
+            "read-only",
+            "Read-only",
+            "Asks before editing files or using the network",
+        ),
+        (
+            "agent-full-access",
+            "Full access",
+            "Any file and the network, without asking",
+        ),
+    ],
+    ask: "read-only",
+    chat: "agent",
+    full: "agent-full-access",
 };
 
 pub static PROVIDERS: [&Provider; 2] = [&CLAUDE, &CODEX];

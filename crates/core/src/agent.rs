@@ -175,6 +175,9 @@ pub struct Past {
     pub tag: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The provider's id, which a resume takes.
+    #[serde(default)]
+    pub provider: String,
 }
 
 impl Past {

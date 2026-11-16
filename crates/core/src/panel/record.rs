@@ -50,6 +50,9 @@ pub struct Started {
     pub untrusted: bool,
     #[serde(default)]
     pub budget: Option<u64>,
+    /// Codex verified first.
+    #[serde(default)]
+    pub codex: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -701,9 +704,11 @@ pub fn corroboration(sources: &[&Found]) -> usize {
     models.len()
 }
 
-/// A model's family: `opus`, `sonnet` or `haiku` wherever its id names it, else the id.
+/// A model's family: `opus`, `sonnet` or `haiku` wherever its id names it, else the id without
+/// its provider; a provider's default model is the provider's.
 pub fn family(model: &str) -> String {
-    let m = model.to_lowercase();
+    let (p, m) = super::mode::provider(model);
+    let m = m.unwrap_or(p.id).to_lowercase();
     let known = ["opus", "sonnet", "haiku"]
         .into_iter()
         .find(|f| m.contains(f));
@@ -841,6 +846,14 @@ mod tests {
             },
         );
         assert_eq!(s2.gate(&["major".into()]), Gate::Incomplete);
+    }
+
+    #[test]
+    fn a_model_s_family_drops_its_provider() {
+        assert_eq!(family("codex:gpt-5.5"), "gpt-5.5");
+        assert_eq!(family("codex"), "codex");
+        assert_eq!(family("claude-opus-4-5"), "opus");
+        assert_ne!(family("codex"), family("opus"));
     }
 
     #[test]
