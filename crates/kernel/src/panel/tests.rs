@@ -351,7 +351,7 @@ fn a_stalled_participant_retries_and_a_sleep_gap_does_not_stall_it(cx: &mut Test
     role(
         &f,
         "f1",
-        &format!("fake: first stuck hang\nfake-resume: {}", done()),
+        &format!("fake: say stuck;first stuck hang\nfake-resume: {}", done()),
     );
     let wall = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(record::now()));
     let clock = wall.clone();
@@ -359,7 +359,13 @@ fn a_stalled_participant_retries_and_a_sleep_gap_does_not_stall_it(cx: &mut Test
     let p = start(&f, "review", cx);
     let running = |cx: &gpui::App| {
         let s = p.read(cx).live.first().and_then(|l| l.session.clone());
-        s.is_some_and(|s| s.read(cx).state == crate::session::State::Running)
+        // Its words come after its transcript, which the resume reads.
+        let said = |s: &crate::session::Session| {
+            s.items
+                .iter()
+                .any(|i| matches!(i, crate::session::Item::Text(_)))
+        };
+        s.is_some_and(|s| s.read(cx).state == crate::session::State::Running && said(s.read(cx)))
     };
     wait_for(cx, LONG, running);
     cx.executor().advance_clock(Duration::from_secs(100));
