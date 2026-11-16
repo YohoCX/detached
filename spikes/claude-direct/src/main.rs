@@ -50,7 +50,16 @@ fn tag() -> String {
 }
 
 fn root() -> PathBuf {
-    std::env::temp_dir().join(format!("claude-direct-{}", tag()))
+    let tmp = std::env::temp_dir();
+    // Windows' temp folder can be an 8.3 name (RUNNER~1), which the CLI asks about at every use.
+    #[cfg(windows)]
+    let tmp = PathBuf::from(
+        fs::canonicalize(&tmp)
+            .unwrap()
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\"),
+    );
+    tmp.join(format!("claude-direct-{}", tag()))
 }
 
 fn out() -> PathBuf {
@@ -199,8 +208,10 @@ impl Run {
     }
 
     /// `program` in the repo with the whole env: nothing inherited but PATH (and what Windows
-    /// itself needs), all HTTPS to a dead proxy.
+    /// itself needs), all HTTPS to a dead proxy but for the fake API's host.
     fn command(&self, program: &str) -> Command {
+        let host = self.url.trim_start_matches("http://");
+        let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
         let mut vars = vec![
             ("PATH", std::env::var("PATH").unwrap()),
             ("HOME", self.at("home")),
@@ -210,7 +221,7 @@ impl Run {
             ("ANTHROPIC_BASE_URL", self.url.clone()),
             ("ANTHROPIC_API_KEY", "sk-ant-placeholder".into()),
             ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
-            ("NO_PROXY", "127.0.0.1,localhost".into()),
+            ("NO_PROXY", format!("127.0.0.1,localhost,{host}")),
         ];
         vars.extend(self.vars.iter().map(|(k, v)| (k.as_str(), v.clone())));
         if wsl().is_some() {

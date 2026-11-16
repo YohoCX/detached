@@ -697,9 +697,11 @@ fn transcripts() {
     println!("worktree: under projects/ {files:?}; the main checkout's folder would be {main}");
     keep("worktree", &run, &id);
 
-    // Last: on Windows a cwd past MAX_PATH may not spawn at all.
+    // Last: on Windows a cwd past MAX_PATH may not spawn at all. 230 characters on every OS's
+    // temp folder, past §6's cut at 200.
+    let pad = 230 - root().join("transcripts-long-/repo").as_os_str().len();
     let run = Run::new(
-        &format!("transcripts-long-{}", "d".repeat(150)),
+        &format!("transcripts-long-{}", "d".repeat(pad)),
         json!([text("one")]),
     );
     let (mut cli, id) = session(&run);

@@ -387,8 +387,8 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestA
     });
     // On Windows the command runs on until the adapter or the CLI goes (docs/TECHDEBT.md).
     if cfg!(windows) && wsl().is_none() {
-        drop(s);
-        cx.update(|_| {});
+        assert!(running(&marker));
+        cx.update(|_| drop(s));
     }
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
@@ -396,9 +396,8 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestA
 fn a_session_gone_mid_command_leaves_no_process(real: Real, cx: &mut TestAppContext) {
     let (_f, _api, marker, s) = mid_command(real, "gone", cx);
     // The adapter's last session or the CLI's own goes, which ends it; on Windows its job then closes.
-    drop(s);
-    // Releases it: nothing else may flush the entity's drop meanwhile.
-    cx.update(|_| {});
+    // Released in an update: a dropped handle alone waits for the next one.
+    cx.update(|_| drop(s));
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
