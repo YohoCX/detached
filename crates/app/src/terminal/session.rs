@@ -95,8 +95,8 @@ pub struct Started {
 }
 
 /// The shell in `cwd`, a thread reading its output into the emulator, one writing its input and
-/// one waiting for its exit.
-pub fn start(cwd: PathBuf) -> io::Result<Started> {
+/// one waiting for its exit. `socket` is the owner socket's, for `detached-cli`.
+pub fn start(cwd: PathBuf, socket: Option<PathBuf>) -> io::Result<Started> {
     let grid = Grid { cols: 80, rows: 24 };
     let pair = native_pty_system()
         .openpty(pty_size(grid, (8, 16)))
@@ -109,6 +109,9 @@ pub fn start(cwd: PathBuf) -> io::Result<Started> {
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    if let Some(socket) = socket {
+        cmd.env(detached_core::owner::SOCKET_VAR, socket);
+    }
     let mut child = pair.slave.spawn_command(cmd).map_err(io::Error::other)?;
     drop(pair.slave);
     let (mut reader, mut writer, stop) = pipes(&*pair.master)?;
@@ -254,7 +257,9 @@ fn thread(name: &str, f: impl FnOnce() + Send + 'static) -> io::Result<()> {
 
 impl Session {
     pub fn new(s: Started, cx: &mut Context<Self>) -> Self {
-        let memory = memory(Arc::new(os::Session::new(s.pid)), cx);
+        let shell = Arc::new(os::Session::new(s.pid));
+        crate::owner::add_tab(cx.entity_id().as_u64(), &shell, cx);
+        let memory = memory(shell, cx);
         Session {
             term: s.term,
             pty: s.pty,

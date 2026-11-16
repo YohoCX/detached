@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use detached_app::{actions, keymap, shell};
+use detached_app::{actions, keymap, owner, shell};
+use detached_core::error::Error;
 use detached_core::state::AppState;
-use gpui_kit::App;
+use gpui_kit::{App, Task};
 use kernel::ui_state;
 
 #[cfg(debug_assertions)]
@@ -64,6 +65,9 @@ fn main() {
         } else {
             kernel::update::start(cx);
             kernel::agents::start(cx);
+            let no_reads =
+                |_: &_, _: &mut _| Task::ready(Err(Error::Other("No reads yet.".into())));
+            owner::start(no_reads, cx).detach();
         }
         cx.activate(true);
     });

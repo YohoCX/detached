@@ -65,13 +65,14 @@ detached-core = { workspace = true, features = ["testutil", "e2e"] }
 detached-forge-fake = { path = "../forge-fake" }
 gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 semver = "1"
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 
 [package.metadata.packager]
 product-name = "Detached"
 identifier = "com.w-devs.detached"
 # The deb's Maintainer, without which dpkg warns on every run.
 authors = ["w-devs.com"]
-binaries = [{ path = "detached", main = true }]
+binaries = [{ path = "detached", main = true }, { path = "detached-cli", main = false }]
 icons = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
 category = "DeveloperTool"
 macos = { minimum-system-version = "15.0" }

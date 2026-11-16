@@ -8,6 +8,7 @@ pub mod history;
 pub mod keymap;
 pub mod nav;
 pub mod notices;
+pub mod owner;
 pub mod panels;
 pub mod repos;
 pub mod search;
