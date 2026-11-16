@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # CI's agent harness on one OS (.github/workflows/agent.yml): H4's tests on the fake ACP agent and the
 # fake CLI, then `claude` from Anthropic's installer and the real tests of `make agent-test`, on the
-# adapter and on the direct backend. `claude` is
-# at the version the adapter's SDK pins. VET=1 runs them on each entry of the committed, signed
-# catalog this app accepts instead, each at its min_cli; LATEST=1 takes the newest `claude`.
+# adapter and on the direct backend. `claude` is at the version the adapter's SDK pins. WSL=<distro> on
+# Windows runs the direct backend's real tests again with the CLI in that distro. VET=1 runs them on
+# each entry of the committed, signed catalog this app accepts instead, each at its min_cli; LATEST=1
+# takes the newest `claude`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,12 +34,27 @@ real() {
   cargo test -p detached-kernel --lib session::tests::real -- --ignored
   cargo test -p detached-acp -- --ignored
 }
+# The direct backend's real tests with `claude` $1 in the distro $WSL, reaching the fake API on the
+# distro's gateway address.
+wsl_real() {
+  export MSYS_NO_PATHCONV=1
+  wsl.exe -d "$WSL" -e sh -c "curl -fsSL https://claude.ai/install.sh | bash -s $1 && ~/.local/bin/claude --version"
+  host=$(wsl.exe -d "$WSL" -e sh -c "ip route show default | cut -d' ' -f3")
+  echo "the gateway: $host"
+  powershell -NoProfile -Command "New-NetFirewallRule -DisplayName detached-agent-wsl -Direction Inbound -LocalAddress $host -Action Allow | Out-Null"
+  # A temp folder by its long name: the distro sees no 8.3 names.
+  tmp=${RUNNER_TEMP:-$TMP}
+  TMP=$tmp TEMP=$tmp DETACHED_AGENT_WSL=$WSL DETACHED_AGENT_WSL_HOST=$host \
+    cargo test -p detached-kernel --lib session::tests::real -- --ignored --skip ::adapter \
+    --skip an_entry_of_a_signed_catalog
+}
 
 if [ "${VET:-}" != 1 ]; then
   version=$(jq -r .claudeCodeVersion adapters/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/package.json)
   [ "${LATEST:-}" = 1 ] && version=latest
   cli "$version"
   real
+  if [ -n "${WSL:-}" ]; then wsl_real "$version"; fi
   exit 0
 fi
 

@@ -1,6 +1,7 @@
 # The agent harness on every OS of PLAN-AGENT-HOST §17 (scripts/agent-ci.sh): H4's tests on the fake
 # ACP agent and the fake CLI, then the official `claude` on a scripted fake Messages API, through the
-# real Claude adapter and through the direct backend.
+# real Claude adapter and through the direct backend; on Windows the direct backend's again with the
+# CLI in a WSL distro, the product's WSL shape.
 # No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
 # agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/.
 name: Agent
@@ -71,6 +72,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: npm install -g bun@1.4.4
+      # The product's WSL shape: the stock distro, which mounts the runner's drives.
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        if: runner.os == 'Windows'
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          additional-packages: curl ca-certificates perl
 
       # GPUI's libraries for the kernel's tests, and the CLI sandbox's bubblewrap and socat.
       - name: Linux packages
@@ -90,6 +98,8 @@ jobs:
       - run: echo "RUST_TEST_THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
 
       - run: ./scripts/agent-ci.sh
+        env:
+          WSL: ${{ runner.os == 'Windows' && 'Ubuntu-24.04' || '' }}
 
   # The Linux sandbox inside WSL2 on the Windows runner, built there, in WSL's own filesystem.
   wsl2:

@@ -17,7 +17,12 @@ pub struct Api {
 impl Api {
     /// `script` holds one array of blocks per step: `{"text": ..}` or `{"tool": .., "input": ..}`.
     pub fn serve(script: Value) -> Api {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        Api::serve_on("127.0.0.1", script)
+    }
+
+    /// On `ip`: a WSL distro in NAT mode reaches the host on its gateway address alone.
+    pub fn serve_on(ip: &str, script: Value) -> Api {
+        let listener = TcpListener::bind((ip, 0)).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(vec![]));
         let log = seen.clone();

@@ -1,12 +1,15 @@
 //! The user's `claude` on the scripted fake Messages API, through the real adapter and through the
 //! direct backend, run by `make agent-test`, where a missing adapter or CLI fails. Each test runs on
 //! `boot_on`'s sandbox, with its own HOME and CLAUDE_CONFIG_DIR and Detached's three tiers apart.
+//! With `DETACHED_AGENT_WSL=<distro>` on Windows, the direct backend's CLI runs in that distro, which
+//! reaches the fake on `DETACHED_AGENT_WSL_HOST`.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use detached_acp::testutil::from_catalog;
 use detached_core::adapters::{CATALOG_KEY, Installed, Version};
+use detached_core::backend;
 use detached_core::env::Env;
 use detached_core::testutil::api::Api;
 
@@ -60,6 +63,18 @@ impl Fixture {
     fn claude_dir(&self) -> PathBuf {
         self.dir.path().join("claude-config")
     }
+}
+
+fn wsl() -> Option<String> {
+    std::env::var("DETACHED_AGENT_WSL")
+        .ok()
+        .filter(|d| !d.is_empty())
+}
+
+/// A Windows path as the stock distro mounts it.
+fn linux(path: &str) -> String {
+    let (drive, rest) = path.split_once(":\\").unwrap_or(("c", path));
+    format!("/mnt/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"))
 }
 
 /// The user's `claude`, found as the app finds it.
@@ -130,15 +145,32 @@ fn boot_with(
     provider: &'static Provider,
     install: impl FnOnce(&AppState),
 ) -> (Fixture, Api) {
-    let api = Api::serve(script);
+    let host = wsl().map(|_| std::env::var("DETACHED_AGENT_WSL_HOST").expect("the gateway"));
+    let api = Api::serve_on(host.as_deref().unwrap_or("127.0.0.1"), script);
+    // The CLI sends even plain HTTP through the proxy.
+    let no_proxy = ["127.0.0.1", "localhost"]
+        .into_iter()
+        .chain(host.as_deref());
+    let no_proxy = no_proxy.collect::<Vec<_>>().join(",");
     let vars = [
         ("ANTHROPIC_BASE_URL", api.url.as_str()),
         ("ANTHROPIC_API_KEY", "sk-ant-placeholder"),
         // Anything the CLI sends past the fake goes nowhere.
         ("HTTPS_PROXY", "http://127.0.0.1:9"),
-        ("NO_PROXY", "127.0.0.1,localhost"),
+        ("NO_PROXY", &no_proxy),
     ];
-    (super::boot_on(cx, &claude(), &vars, provider, install), api)
+    // The distro's own `claude` runs there.
+    let cli = wsl().map_or_else(claude, |_| PathBuf::from("claude"));
+    let mut f = super::boot_on(cx, &cli, &vars, provider, install);
+    if wsl().is_some() {
+        for (k, v) in &mut f.core.env.write().unwrap().vars {
+            if ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR"].contains(&k.as_str()) {
+                *v = linux(v);
+            }
+        }
+        f.wsl = wsl();
+    }
+    (f, api)
 }
 
 fn waiting(s: &Entity<Session>, cx: &App) -> Option<usize> {
@@ -190,14 +222,17 @@ fn running(marker: &str) -> bool {
 
 /// The command lines that hold `marker`.
 fn commands(marker: &str) -> Vec<String> {
-    let out = match cfg!(windows) {
-        true => Command::new("powershell")
+    let ps = ["ps", "-ww", "-A", "-o", "command="];
+    let out = match wsl() {
+        Some(d) => Command::new("wsl.exe")
+            .args(["-d", &d, "-e"])
+            .args(ps)
+            .output(),
+        None if cfg!(windows) => Command::new("powershell")
             .args(["-NoProfile", "-Command"])
             .arg("Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }")
             .output(),
-        false => Command::new("ps")
-            .args(["-ww", "-A", "-o", "command="])
-            .output(),
+        None => Command::new(ps[0]).args(&ps[1..]).output(),
     };
     let out = String::from_utf8_lossy(&out.unwrap().stdout).into_owned();
     let lines = out
@@ -351,7 +386,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestA
         assert_eq!(*stop, Some(StopReason::Cancelled));
     });
     // On Windows the command runs on until the adapter or the CLI goes (docs/TECHDEBT.md).
-    if cfg!(windows) {
+    if cfg!(windows) && wsl().is_none() {
         drop(s);
         cx.update(|_| {});
     }
@@ -469,4 +504,41 @@ fn a_host_tool_call_needs_no_listener_and_puts_nothing_in_argv(cx: &mut TestAppC
     );
     let argv = commands(&id);
     assert!(argv.iter().all(|l| !l.contains("http")), "{argv:?}");
+}
+
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a_delete(
+    cx: &mut TestAppContext,
+) {
+    let (f, _api) = boot(
+        cx,
+        Real::Direct,
+        json!([[bash("echo made")], text("made it")]),
+    );
+    let spec = f.spec(Kind::Chat);
+    let s = open_spec(spec.clone(), None, cx);
+    run(&s, "go", cx);
+    let said = |i: &&Item| matches!(i, Item::User(_) | Item::Text(_) | Item::Tool(_));
+    let (id, live) = s.read_with(cx, |s, _| {
+        (
+            s.id.clone().unwrap(),
+            s.items.iter().filter(said).cloned().collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(
+        lines(&live),
+        ["> go", "Bash echo made completed", "made it"]
+    );
+    s.update(cx, |s, cx| s.end(cx));
+    let past = backend::direct().past(&f.core, &spec).unwrap();
+    let listed = past.iter().find(|p| p.id == id).expect("listed");
+    assert_eq!(listed.title, "go");
+    let resumed = open_spec(spec.clone(), Some(id.clone()), cx);
+    resumed.read_with(cx, |s, _| assert_eq!(s.items, live));
+    resumed.update(cx, |s, cx| s.end(cx));
+    wait_for(cx, START, |cx| !cx.global::<Sessions>().open.contains(&id));
+    backend::direct().delete(&f.core, &spec, &id).unwrap();
+    let past = backend::direct().past(&f.core, &spec).unwrap();
+    assert!(past.iter().all(|p| p.id != id));
 }

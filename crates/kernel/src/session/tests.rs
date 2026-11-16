@@ -63,11 +63,14 @@ struct Fixture {
     repo: String,
     core: Arc<AppState>,
     provider: &'static Provider,
+    wsl: Option<String>,
 }
 
 impl Fixture {
     fn spec(&self, kind: Kind) -> Spec {
-        Spec::new(self.provider, &self.repo, kind)
+        let mut spec = Spec::new(self.provider, &self.repo, kind);
+        spec.wsl = self.wsl.clone();
+        spec
     }
 }
 
@@ -187,6 +190,7 @@ fn boot_on(
         repo,
         core,
         provider,
+        wsl: None,
     }
 }
 
