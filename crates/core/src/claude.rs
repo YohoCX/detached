@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use crate::adapters::{self, BLOCK, Cli};
+use crate::adapters::{self, BLOCK, Cli, Provider, Version};
 use crate::backend::{
     self, Account, Answer, Ask, Backend, Caps, Cause, Choice, Config, Event, Events, Exit, Failure,
     Kind, Limit, Model, Opened, Part, Past, Piece, Question, Reply, Setting, SlashCommand, Spec,
@@ -243,13 +243,17 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     let catalog = adapters::stored(&core.data_dir);
     let note = match adapters::check_own_cli(p, catalog.as_ref(), &has) {
         Cli::Ok => None,
-        Cli::Old(need) => {
+        Cli::Old(need) if spec.kind != Kind::Chat => {
             let e = format!(
                 "{} needs {} {need} or newer; this one is {has}",
                 p.name, p.cli
             );
             return Err(Error::Other(e));
         }
+        Cli::Old(need) => Some(format!(
+            "{} needs {} {need} or newer; this one is {has}. Update it: see the Agents page.",
+            p.name, p.cli
+        )),
         Cli::Blocked if spec.kind != Kind::Chat => {
             let e = format!("{} {has} is blocked for {}: update it", p.cli, p.name);
             return Err(Error::Other(e));
@@ -295,7 +299,10 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     if spec.tools.is_some() {
         init["sdkMcpServers"] = json!([SERVER]);
     }
-    let init = live.0.call(init)?;
+    let init = live
+        .0
+        .call(init)
+        .map_err(|e| unsupported(p, catalog.as_ref(), &has, e))?;
     let models: Vec<Model> = list(&init["models"], model);
     let offered: Vec<String> = (init["models"].as_array().into_iter().flatten())
         .flat_map(|m| [&m["value"], &m["resolvedModel"]])
@@ -344,7 +351,37 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     }
     live.0
         .open(opened, history.flatten().unwrap_or_default(), events)?;
+    live.0.limits();
     Ok(live)
+}
+
+/// What the chat says of a `claude` it cannot talk to: the terminal, and the vetted floor with what
+/// keeps it from updating itself.
+fn unsupported(
+    p: &Provider,
+    catalog: Option<&adapters::Catalog>,
+    has: &Version,
+    e: Error,
+) -> Error {
+    let floor = match adapters::check_own_cli(p, catalog, &Version::new(0, 0, 0)) {
+        Cli::Old(v) => v,
+        _ => p.min_cli.clone(),
+    };
+    let install = adapters::installer(p).map(|i| match cfg!(windows) {
+        // The piped form takes no version.
+        true => format!(
+            "& ([scriptblock]::Create(({}))) {floor}",
+            i.trim_end_matches(" | iex")
+        ),
+        false => format!("{i} -s {floor}"),
+    });
+    let install = install.map_or_else(String::new, |i| {
+        format!(" Or install {floor}, the version Detached is vetted on, with `{i}`, and keep it there with DISABLE_AUTOUPDATER=1.")
+    });
+    Error::Other(format!(
+        "{} {has} is not supported yet ({e}). Run `{}` in a terminal tab until Detached supports it.{install}",
+        p.cli, p.cli
+    ))
 }
 
 /// The skills of `spec` that load and its CLI does not read itself, and the names the CLI would read
@@ -475,6 +512,8 @@ struct State {
     tasks: Vec<String>,
     turn: Vec<String>,
     bash: Vec<String>,
+    /// Tool calls the permissions denied, whose failed result keeps them shown as denied.
+    denied: Vec<String>,
     models: Vec<Model>,
     offered: Vec<String>,
     config: Vec<Config>,
@@ -762,13 +801,15 @@ impl Client {
             }
             "user" => {
                 for b in blocks.filter(|b| b["type"] == "tool_result") {
-                    let bash = self
-                        .state
-                        .lock()
-                        .unwrap()
-                        .bash
-                        .contains(&text(&b["tool_use_id"]));
-                    self.update(Update::Tool(Box::new(result(b, bash))));
+                    let id = text(&b["tool_use_id"]);
+                    let st = self.state.lock().unwrap();
+                    let (bash, denied) = (st.bash.contains(&id), st.denied.contains(&id));
+                    drop(st);
+                    let mut t = result(b, bash);
+                    if denied {
+                        (t.status, t.output) = (None, None);
+                    }
+                    self.update(Update::Tool(Box::new(t)));
                 }
             }
             "result" => self.ended(v),
@@ -782,10 +823,26 @@ impl Client {
         match v["subtype"].as_str().unwrap_or_default() {
             "init" | "status" => {
                 if let Some(m) = v["permissionMode"].as_str() {
+                    let mut st = self.state.lock().unwrap();
+                    if let Some(c) = st.config.iter_mut().find(|c| c.id == "mode") {
+                        c.value = m.into();
+                    }
+                    drop(st);
                     self.update(Update::Mode(m.into()));
                 }
             }
             "commands_changed" => self.update(Update::Commands(commands(&v["commands"]))),
+            "permission_denied" => {
+                let id = text(&v["tool_use_id"]);
+                self.state.lock().unwrap().denied.push(id.clone());
+                let why = v["decision_reason"].as_str().or(v["message"].as_str());
+                self.update(Update::Tool(Box::new(Tool {
+                    id,
+                    status: Some("denied".into()),
+                    output: why.map(|w| Value::String(w.into())),
+                    ..Tool::default()
+                })));
+            }
             "task_started" => {
                 let mut st = self.state.lock().unwrap();
                 st.tasks.push(task.clone());
@@ -870,6 +927,11 @@ impl Client {
                 ended(c);
             }),
         }
+        self.limits();
+    }
+
+    /// Asks for the plan's limits, unless the CLI lacks the request.
+    fn limits(&self) {
         if !self.lacks(Piece::Limits) {
             self.request(json!({"subtype": "get_usage"}), |c, r| match r {
                 // An API key's account has no plan limits.

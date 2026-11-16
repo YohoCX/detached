@@ -262,7 +262,7 @@ fn a_session_keeps_what_its_cli_reports(cx: &mut TestAppContext) {
     wait_until(cx, |cx| s.read(cx).limits.is_some());
     s.read_with(cx, |s, _| {
         let models: Vec<&str> = s.models.iter().map(|m| m.value.as_str()).collect();
-        assert_eq!(models, ["default", "haiku", "sonnet", "opus"]);
+        assert_eq!(models, ["default", "haiku", "sonnet", "opus", "old"]);
         assert_eq!(s.commands[0].name, "review");
         assert_eq!(
             s.account.as_ref().map(|a| a.plan.as_str()),

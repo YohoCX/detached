@@ -125,7 +125,7 @@ fn a_model_the_cli_does_not_offer_is_refused() {
 }
 
 #[test]
-fn a_claude_below_the_floor_is_refused_and_a_blocked_one_warns_a_chat_and_refuses_a_participant() {
+fn a_claude_below_the_floor_or_blocked_warns_a_chat_and_refuses_a_participant() {
     let run = boot();
     let catalog = Fixture::new();
     let rule = |min: &str, blocked: &[&str]| CliRule {
@@ -136,11 +136,20 @@ fn a_claude_below_the_floor_is_refused_and_a_blocked_one_warns_a_chat_and_refuse
     let fetch = || adapters::fetch(&catalog.url(), &catalog.key, &run.sb.state.data_dir).unwrap();
     catalog.publish_cli(1, &[rule("2.1.500", &[])]);
     fetch();
-    let e = open(&run, &chat(&run)).err().unwrap().to_string();
+    let (_, rx) = open(&run, &chat(&run)).unwrap();
+    let Ok(Event::Opened(o)) = rx.recv() else {
+        panic!("not opened");
+    };
+    let note = o.note.unwrap();
     assert!(
-        e.contains("2.1.500 or newer") && e.contains("2.1.400"),
-        "{e}"
+        note.contains("2.1.500 or newer")
+            && note.contains("2.1.400")
+            && note.contains("Agents page"),
+        "{note}"
     );
+    let verifier = Spec::new(&CLAUDE, &run.repo, Kind::Verifier);
+    let e = open(&run, &verifier).err().unwrap().to_string();
+    assert!(e.contains("2.1.500 or newer"), "{e}");
     catalog.publish_cli(2, &[rule("2.1.300", &["2.1.400"])]);
     fetch();
     let (_, rx) = open(&run, &chat(&run)).unwrap();
@@ -351,4 +360,45 @@ fn a_distro_gets_the_user_s_skills_through_the_plugin_unless_its_cli_reads_their
         .filter(|(k, _)| k != "CLAUDE_CONFIG_DIR")
         .collect();
     assert_eq!(passed(&spec, &env), 1);
+}
+
+#[test]
+fn a_claude_that_cannot_talk_says_it_is_not_supported_and_names_the_terminal_and_the_floor() {
+    let run = boot();
+    let bin = tempfile::tempdir().unwrap();
+    let cli = adapters::testutil::fake_cli(bin.path(), "2.1.400");
+    let agents = adapters::Config {
+        cli: [(CLAUDE.id.into(), cli.display().to_string())].into(),
+        codex: false,
+    };
+    run.sb.state.set_block(BLOCK, agents).unwrap();
+    let e = open(&run, &chat(&run)).err().unwrap().to_string();
+    for part in [
+        "claude 2.1.400 is not supported yet",
+        "terminal tab",
+        "2.1.322",
+        "DISABLE_AUTOUPDATER",
+    ] {
+        assert!(e.contains(part), "{part:?} in {e}");
+    }
+}
+
+#[test]
+fn a_denied_call_stays_denied_with_its_reason() {
+    let run = boot();
+    let s = open(&run, &chat(&run)).unwrap();
+    let (_, events) = turn(&s, "deny");
+    let tools: Vec<&Tool> = (events.iter())
+        .filter_map(|e| match e {
+            Event::Update(Update::Tool(t)) => Some(&**t),
+            _ => None,
+        })
+        .collect();
+    let [call, denied, result] = &tools[..] else {
+        panic!("{tools:?}");
+    };
+    assert_eq!(call.kind.as_deref(), Some("Bash"));
+    assert_eq!(denied.status.as_deref(), Some("denied"));
+    assert_eq!(denied.output, Some(json!("needs approval")));
+    assert_eq!((&result.status, &result.output), (&None, &None));
 }

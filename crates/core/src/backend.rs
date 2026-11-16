@@ -220,7 +220,7 @@ pub struct Tool {
     pub id: String,
     pub title: Option<String>,
     pub kind: Option<String>,
-    /// `pending`, `in_progress`, `completed` or `failed`.
+    /// `pending`, `in_progress`, `completed`, `failed` or `denied`, with the reason as its output.
     pub status: Option<String>,
     /// Shown, never read by the host.
     pub input: Option<Value>,

@@ -17,7 +17,17 @@
 //! - `mcp [<json message>]` sends the message, else `tools/list`, to the host's tools over
 //!   `mcp_message` and says the answer;
 //! - `out-of-usage` fails the turn as Claude does once extra usage has run out;
-//! - `hold` keeps the CLI after stdin's EOF until SIGTERM.
+//! - `hold` keeps the CLI after stdin's EOF until SIGTERM;
+//! - `tools` runs two commands, one failing, and an edit; `deny` has a command denied, and `read
+//!   <path>` reads, denied by `--disallowedTools` for a `.env` file;
+//! - `settings` says whether the project's settings load, `effort` the effort, `session` whether
+//!   it resumed and its id;
+//! - `background <text>` starts a task that runs until `stop_task`;
+//! - any other step says `said <step>`.
+//!
+//! `fake.json` in the config dir sets what `initialize` answers as `account`, the `rate_limits`
+//! and `context` of `get_usage` and `get_context_usage`, the requests it `lacks` from the start, and
+//! `init_wait`, a file in the config dir that `initialize` waits for.
 //!
 //! It exits 1 on a flag it does not know or a line that is not JSON. A resume without `--model`
 //! runs on `fallback-opus`, and one of a session still open exits 1. Each turn goes to a transcript
@@ -64,7 +74,11 @@ struct Shared {
     id: String,
     model: String,
     mode: String,
+    effort: String,
     lacks: Vec<String>,
+    /// Background tasks running, by id and description.
+    tasks: Vec<(String, String)>,
+    fake: Value,
     hooks: bool,
     mcp: bool,
     hold: bool,
@@ -126,6 +140,11 @@ fn main() {
     };
     s.model = flag("--model").unwrap_or(fallback.into());
     s.mode = flag("--permission-mode").unwrap_or("default".into());
+    s.effort = flag("--effort").unwrap_or_default();
+    let fake = std::fs::read(config_dir().join("fake.json")).unwrap_or_default();
+    s.fake = serde_json::from_slice(&fake).unwrap_or_default();
+    let lacks = s.fake["lacks"].as_array().into_iter().flatten();
+    s.lacks = lacks.filter_map(|l| l.as_str().map(String::from)).collect();
     let live = config_dir().join(format!("{}.live", s.id));
     if flag("--resume").is_some() && live.exists() {
         eprintln!("fake_claude: session {} is open in another process", s.id);
@@ -174,6 +193,7 @@ fn main() {
                 let r = &v["request"];
                 let subtype = r["subtype"].as_str().unwrap_or_default();
                 let mut s = shared.lock().unwrap();
+                let mut then = vec![];
                 let ok = match subtype {
                     _ if s.lacks.iter().any(|l| l == subtype) => None,
                     "initialize" => {
@@ -187,14 +207,40 @@ fn main() {
                         }
                         Some(json!({"still_queued": []}))
                     }
-                    "stop_task" | "apply_flag_settings" => Some(json!({})),
-                    "get_context_usage" => Some(json!({"totalTokens": 1200, "maxTokens": 200000,
-                        "categories": [{"name": "Messages", "tokens": 1000},
-                            {"name": "Free space", "tokens": 198800}]})),
-                    "get_usage" => Some(json!({"rate_limits": {"five_hour":
-                        {"utilization": 12.5, "resets_at": "2026-11-16T17:00:00Z"}}})),
+                    "stop_task" => {
+                        let id = r["task_id"].as_str().unwrap_or_default();
+                        if s.tasks.iter().any(|(t, _)| t == id) {
+                            s.tasks.retain(|(t, _)| t != id);
+                            then.push(json!({"type": "system", "subtype": "task_notification",
+                                "task_id": id, "status": "stopped"}));
+                            then.push(tasks(&s));
+                        }
+                        Some(json!({}))
+                    }
+                    "apply_flag_settings" => {
+                        let e = r["settings"]["effortLevel"].as_str();
+                        s.effort = e.unwrap_or_default().into();
+                        Some(json!({}))
+                    }
+                    "get_context_usage" => Some(match &s.fake["context"] {
+                        Value::Null => json!({"totalTokens": 1200, "maxTokens": 200000,
+                            "categories": [{"name": "Messages", "tokens": 1000},
+                                {"name": "Free space", "tokens": 198800}]}),
+                        c => c.clone(),
+                    }),
+                    "get_usage" => Some(match s.fake.get("rate_limits") {
+                        Some(r) => json!({"rate_limits": r}),
+                        None => json!({"rate_limits": {"five_hour":
+                            {"utilization": 12.5, "resets_at": "2026-11-16T17:00:00Z"}}}),
+                    }),
                     "set_model" => {
                         s.model = r["model"].as_str().unwrap_or_default().into();
+                        // A model without `auto` drops the session to `default`, as the CLI does.
+                        if s.mode == "auto" && s.model == "old" {
+                            s.mode = "default".into();
+                            then.push(json!({"type": "system", "subtype": "status",
+                                "permissionMode": "default"}));
+                        }
                         Some(json!({"model": s.model}))
                     }
                     "set_permission_mode" => {
@@ -214,6 +260,7 @@ fn main() {
                     &out,
                     json!({"type": "control_response", "response": response}),
                 );
+                then.into_iter().for_each(|v| send(&out, v));
             }
             _ => {}
         }
@@ -230,21 +277,39 @@ fn main() {
 }
 
 fn initialize(s: &Shared) -> Value {
+    if let Some(name) = s.fake["init_wait"].as_str() {
+        while !config_dir().join(name).exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     let model = |v: &str| {
+        let auto = v != "old";
         json!({"value": v, "resolvedModel": format!("claude-{v}-9"),
-        "displayName": v, "supportedEffortLevels": ["low", "high"], "supportsAutoMode": true})
+        "displayName": v, "supportedEffortLevels": ["low", "high"], "supportsAutoMode": auto})
     };
-    let models = ["default", "haiku", "sonnet", "opus"].map(model);
+    let models = ["default", "haiku", "sonnet", "opus", "old"].map(model);
+    let account = match &s.fake["account"] {
+        Value::Null => json!({"apiProvider": "firstParty", "apiKeySource": "ANTHROPIC_API_KEY"}),
+        a => a.clone(),
+    };
     let mut commands = vec![command("review", "Reviews a change", "<pr>")];
     commands.extend(skills(s));
     json!({
         "models": models,
         "commands": commands,
-        "account": {"apiProvider": "firstParty", "apiKeySource": "ANTHROPIC_API_KEY"},
+        "account": account,
         "claude_code_version": VERSION,
-        "current_permission_mode": "default",
+        "current_permission_mode": s.mode,
         "pid": std::process::id(),
     })
+}
+
+/// The running tasks as the CLI reports them.
+fn tasks(s: &Shared) -> Value {
+    let all: Vec<Value> = (s.tasks.iter())
+        .map(|(id, d)| json!({"task_id": id, "description": d}))
+        .collect();
+    json!({"type": "system", "subtype": "background_tasks_changed", "tasks": all})
 }
 
 fn command(name: &str, description: &str, hint: &str) -> Value {
@@ -586,9 +651,112 @@ impl Turn<'_> {
                 ));
             }
             "hold" => self.shared.lock().unwrap().hold = true,
-            _ => return Err(Stop::Error(format!("unknown step {step}"))),
+            "tools" => {
+                self.tool("t-a", "Bash", json!({"command": "echo a"}), Ok("a"));
+                self.tool("t-b", "Bash", json!({"command": "false"}), Err("exit 1"));
+                let edit = json!({"file_path": "README.md", "old_string": "x",
+                    "new_string": "a\nb\nc"});
+                self.tool("t-c", "Edit", edit, Ok("edited"));
+            }
+            "deny" => self.denied(
+                "t-deny",
+                "Bash",
+                json!({"command": "rm -rf /"}),
+                "needs approval",
+            ),
+            "read" => {
+                let id = format!("t-read-{rest}");
+                let rules = self
+                    .shared
+                    .lock()
+                    .unwrap()
+                    .flags
+                    .get("--disallowedTools")
+                    .cloned();
+                let env = Path::new(rest)
+                    .file_name()
+                    .is_some_and(|f| f.to_string_lossy().starts_with(".env"));
+                let input = json!({"file_path": rest});
+                match rules.filter(|r| env && r.contains("Read(//**/.env*)")) {
+                    Some(_) => self.denied(&id, "Read", input, "Read(//**/.env*)"),
+                    None => {
+                        let text = std::fs::read_to_string(cwd.join(rest)).map_err(err)?;
+                        self.tool(&id, "Read", input, Ok(&text));
+                    }
+                }
+            }
+            "settings" => {
+                let s = self.shared.lock().unwrap();
+                let sources = s
+                    .flags
+                    .get("--setting-sources")
+                    .cloned()
+                    .unwrap_or_default();
+                drop(s);
+                let on = if sources.contains("project") {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.say(&format!("project settings {on}"));
+            }
+            "effort" => {
+                let effort = self.shared.lock().unwrap().effort.clone();
+                self.say(&format!("effort {effort}"));
+            }
+            "session" => {
+                let s = self.shared.lock().unwrap();
+                let how = if s.flags.contains_key("--resume") {
+                    "resumed"
+                } else {
+                    "new"
+                };
+                let said = format!("{how} {}", s.id);
+                drop(s);
+                self.say(&said);
+            }
+            "background" => {
+                let mut s = self.shared.lock().unwrap();
+                s.lines += 1;
+                let id = format!("bg-{}", s.lines);
+                s.tasks.push((id.clone(), rest.into()));
+                let all = tasks(&s);
+                drop(s);
+                let input = json!({"command": rest, "run_in_background": true});
+                self.tool(&format!("t-{id}"), "Bash", input, Ok("started"));
+                self.send(json!({"type": "system", "subtype": "task_started", "task_id": id}));
+                self.send(all);
+            }
+            _ => self.say(&format!("said {step}")),
         }
         Ok(())
+    }
+
+    /// A tool call and its result.
+    fn tool(&self, id: &str, name: &str, input: Value, out: Result<&str, &str>) {
+        let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
+        self.message("assistant", json!([call]));
+        let (text, error) = match out {
+            Ok(t) => (t, false),
+            Err(t) => (t, true),
+        };
+        let result = json!({"type": "tool_result", "tool_use_id": id, "is_error": error,
+            "content": text});
+        self.message("user", json!([result]));
+    }
+
+    /// A tool call the permissions deny, as the CLI reports it.
+    fn denied(&self, id: &str, name: &str, input: Value, reason: &str) {
+        let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
+        self.message("assistant", json!([call]));
+        let message = format!("Permission to use {name} has been denied.");
+        self.send(
+            json!({"type": "system", "subtype": "permission_denied", "tool_name": name,
+            "tool_use_id": id, "decision_reason": reason, "message": message}),
+        );
+        let result = json!({"type": "tool_result", "tool_use_id": id, "is_error": true,
+            "content": message});
+        self.message("user", json!([result]));
     }
 
     /// The turn's prompt and messages, appended to `projects/<cwd>/<id>.jsonl` as the CLI writes it.
