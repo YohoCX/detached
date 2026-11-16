@@ -452,12 +452,15 @@ pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
         } else if meta.is_file() {
             all.0.insert(rel, fs::read(path)?);
         } else if meta.is_symlink() {
-            if !out && !path.canonicalize().is_ok_and(|p| p.starts_with(root)) {
+            let target = fs::read_link(path)?;
+            let inside = path.canonicalize().is_ok_and(|p| p.starts_with(root));
+            // An absolute link would point back at the original once the item is moved or copied.
+            if !out && !(inside && target.is_relative()) {
                 return Err(Error::Other(
-                    "A link in an item cannot lead out of its folder".into(),
+                    "A link in an item must lead inside its folder by a relative path".into(),
                 ));
             }
-            all.1.insert(rel, fs::read_link(path)?);
+            all.1.insert(rel, target);
         } else {
             return Err(Error::Other("Items cannot contain special files".into()));
         }
@@ -466,6 +469,20 @@ pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
     no_links(path)?;
     let (root, mut all) = (path.canonicalize()?, Default::default());
     walk(&root, &root, out, &mut all)?;
+    // A copy holds only the folders its files and links are in, so a link to another would dangle.
+    let (files, links) = &all;
+    let kept = |t: &Path| {
+        files
+            .keys()
+            .chain(links.keys())
+            .any(|k| root.join(k).starts_with(t))
+    };
+    let held = |k: &PathBuf| root.join(k).canonicalize().is_ok_and(|t| kept(&t));
+    if !out && !links.keys().all(held) {
+        return Err(Error::Other(
+            "A link in an item cannot lead to an empty folder".into(),
+        ));
+    }
     Ok(all)
 }
 

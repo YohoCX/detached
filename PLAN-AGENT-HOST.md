@@ -822,10 +822,11 @@ Later steps add to the SDL:
   `cache/plugins/<id>/`, with the skills copied in, not linked, for Windows; a link inside a skill
   stays a link in the copy.
 - **What loads is what the Skills page shows.** Only a skill that loads overrides: trusted, with no
-  special file inside. A link inside loads as the CLI loads it, except a store skill's link out of
-  its folder, which its hash cannot cover, and on Windows a link in a skill the plugin passes; both
-  are listed with why and not passed ([decision](docs/decisions/2026-11-16-skills-with-links.md)).
-  A store skill's link inside its folder is hashed by its target text. A skill Claude
+  special file inside. A link inside loads as the CLI loads it, except a store skill's link that is
+  absolute, leads out of its folder or to an empty folder in it, which its hash or a copy cannot
+  keep, and on Windows a link in a skill the plugin passes; both are listed with why and not passed
+  ([decision](docs/decisions/2026-11-16-skills-with-links.md)). A store skill's relative link inside
+  its folder is hashed by its target text. A skill Claude
   reads itself that does not load is turned off by name (`skillOverrides`), and the one that loads
   in its place comes through the plugin as `detached:<name>`; so the repo's `.claude` wins over
   `~/.claude`, which the CLI alone would not do. A bad store item is listed with its error and never
@@ -1707,8 +1708,10 @@ Open: an untrusted participant's `--tools` has no `Skill`, so it lists skills it
 in a WSL distro the plugin's path assumes `/mnt` (docs/TECHDEBT.md).
 Skills with links (2026-11-16, [decision](docs/decisions/2026-11-16-skills-with-links.md)): a link
 inside no longer turns a skill off. The plugin's copy keeps links as links, a personal skill's
-relative one pointed back at the original. A store skill refuses a link out of its folder and hashes
-one inside by its target text, and Share and Make local move it as a link. On Windows a link in a
+relative one pointed back at the original; a copy is built aside and renamed in whole, so a failed
+one leaves nothing. A store skill refuses an absolute link, one out of its folder and one to an empty
+folder in it, hashes a relative one inside by its target text, and Share and Make local move it as a
+link. On Windows a link in a
 skill the plugin passes (`~/.agents`, the stores) is listed with why; a skill Claude reads itself
 that the plugin has to pass there is left out silently. The owner checks: a personal skill with a
 `.venv` or a `LICENSE -> ../LICENSE` reaches the chat.

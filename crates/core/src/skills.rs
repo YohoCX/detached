@@ -218,20 +218,24 @@ pub fn copy(skill: &Skill, to: &Path) -> Result<()> {
             skill.name
         )));
     }
+    fs::create_dir_all(to.parent().unwrap())?;
+    // Built aside and renamed in whole, so a failed copy leaves no partial skill behind.
+    let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     for (rel, bytes) in files {
-        let dest = to.join(rel);
+        let dest = tmp.path().join(rel);
         fs::create_dir_all(dest.parent().unwrap())?;
         fs::write(dest, bytes)?;
     }
     for (rel, target) in links {
-        // A store item's links stay inside it; any other relative link points back at the original.
+        // A store item's links are relative and inside it; any other relative link points back at
+        // the original.
         let target = match skill.hash {
             Some(_) => target,
             None => from.join(&rel).parent().unwrap().join(target),
         };
-        store::link(&target, &to.join(rel))?;
+        store::link(&target, &tmp.path().join(rel))?;
     }
-    Ok(())
+    Ok(fs::rename(tmp.path(), to)?)
 }
 
 #[cfg(test)]
@@ -400,9 +404,13 @@ mod tests {
         let (sb, repo) = setup();
         let store = RepoStore::open(&sb.state, repo.as_ref()).unwrap();
         put(&sb.path("LICENSE"), "license");
-        for dir in ["in", "out"].map(|n| store.shared.join("skills").join(n)) {
+        let shared = store.shared.join("skills");
+        for dir in ["abs", "empty", "in", "out"].map(|n| shared.join(n)) {
             put(&dir.join("SKILL.md"), "s");
         }
+        symlink(shared.join("abs/SKILL.md"), shared.join("abs/more")).unwrap();
+        fs::create_dir(shared.join("empty/data")).unwrap();
+        symlink("data", shared.join("empty/alias")).unwrap();
         for dir in ["claude/skills/z", "home/.agents/skills/a"] {
             put(&sb.path(dir).join("SKILL.md"), "s");
         }
@@ -429,9 +437,16 @@ mod tests {
         let errors: Vec<_> = (s.all.iter())
             .map(|s| (s.name.as_str(), s.error.as_deref().unwrap_or_default()))
             .collect();
-        let out = "A link in an item cannot lead out of its folder";
+        let out = "A link in an item must lead inside its folder by a relative path";
+        let empty = "A link in an item cannot lead to an empty folder";
         let special = "Items cannot contain special files";
-        let want = [("in", ""), ("out", out), ("z", "")];
+        let want = [
+            ("abs", out),
+            ("empty", empty),
+            ("in", ""),
+            ("out", out),
+            ("z", ""),
+        ];
         assert_eq!(
             errors,
             [&want[..], &[("a", ""), ("f", special), ("z", "")]].concat()
@@ -446,6 +461,11 @@ mod tests {
             fs::read_to_string(sb.path("plugin/a/LICENSE")).unwrap(),
             "license"
         );
+        put(&sb.path("plugin/taken/x"), "x");
+        assert!(copy(a, &sb.path("plugin/taken")).is_err());
+        let left = |dir: &str| entries(&sb.path(dir)).into_iter().map(|(n, _)| n);
+        assert_eq!(left("plugin").collect::<Vec<_>>(), ["a", "taken"]);
+        assert_eq!(left("plugin/taken").collect::<Vec<_>>(), ["x"]);
 
         let item = store
             .item(&sb.state, Kind::Skills, Scope::Shared, "in")
