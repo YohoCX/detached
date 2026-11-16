@@ -28,6 +28,8 @@ Darwin)
     package --target "$target" -f app
     mkdir "$out/$arch"
     mv "$out/Detached.app" "$out/$arch/"
+    # Nested code is signed before the bundle that holds it.
+    codesign --force --options runtime -s "$identity" "$out/$arch/Detached.app/Contents/MacOS/detached-cli"
     codesign --force --options runtime -s "$identity" "$out/$arch/Detached.app"
     ditto -c -k --keepParent "$out/$arch/Detached.app" "$out/Detached-macos-$arch.zip"
     # Cargo's detached.dSYM is a link to deps/detached-<hash>.dSYM.

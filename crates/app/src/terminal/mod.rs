@@ -98,7 +98,7 @@ impl Terminals {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Entity<Session>> {
-        let session = match session::start(cwd) {
+        let session = match session::start(cwd, crate::owner::socket(cx)) {
             Ok(started) => cx.new(|cx| Session::new(started, cx)),
             Err(e) => {
                 let e = format!("Cannot start the shell: {e}");

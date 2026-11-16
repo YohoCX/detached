@@ -2,6 +2,7 @@
 
 mod agents;
 mod api;
+mod cli;
 mod sharing;
 mod updates;
 mod worktrees;
@@ -63,6 +64,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     register_page(cx, "keymap", "Keymap", Group::App, keymap::page);
     register_page(cx, "updates", "Updates", Group::App, updates::page);
     register_page(cx, "agents", "Agents", Group::App, agents::page);
+    register_page(cx, "cli", "Command line", Group::App, cli::page);
     register_page(cx, "sharing", "Sharing", Group::Repo, sharing::page);
     register_page(cx, "worktrees", "Worktrees", Group::Repo, worktrees::page);
     vec![]

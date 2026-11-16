@@ -12,6 +12,7 @@ pub mod forge;
 pub mod git;
 pub mod host;
 pub mod os;
+pub mod owner;
 pub mod panel;
 pub mod paths;
 pub mod proc;

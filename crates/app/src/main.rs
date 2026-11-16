@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use detached_app::{actions, keymap, shell};
+use detached_app::{actions, keymap, owner, shell};
 use detached_core::state::AppState;
 use gpui_kit::App;
+use kernel::host::{self, Identity};
 use kernel::ui_state;
 
 #[cfg(debug_assertions)]
@@ -54,6 +55,11 @@ fn main() {
             }
         })
         .detach();
+        // Before the window: the tabs it restores start their shells as it opens.
+        if !smoke {
+            let read = |q: &str, cx: &mut App| host::query(cx, &Identity::owner(), q);
+            owner::start(read, cx).detach();
+        }
         if let Err(e) = shell::open(cx) {
             fail(e);
         }

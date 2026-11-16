@@ -1614,7 +1614,7 @@ mid-command and finds no process; that session's history under `--resume`, and i
 
 ### Step H5. Host tools and the owner socket
 
-**Status (2026-11-16): items 1–5 are built; 6 and 7 are next.** `core::host` is the MCP server of
+**Status (2026-11-16): items 1–7 are built.** `core::host` is the MCP server of
 `detached_read` and `detached_act`, which every `kernel::Session` gets on its control channel as
 its kind's `Identity` (the chat the owner's view, any other kind its repo alone, with the reports).
 `kernel::host::query(cx, who, query)` runs the two phases over
@@ -1623,6 +1623,22 @@ SDL is §7's without `pipelines`, `Pipeline` and `Job`, which come with a Resour
 jobs. A turn of a session that may report `done` and did not ends with a note. The tests above
 for items 1–5 pass, the real ones under `make agent-test`; "asks without `--allowedTools`" is
 tested as an ask rule in the user's settings, which beats the pre-allow as its absence would.
+The owner socket is
+`core::owner` (not `core::host`, so the two branches add no file in common): `serve`, `ask`, and
+`Tabs`, which each terminal tab joins with its shell's `os::Session`; a peer outside every tab's
+session or job gets a refusal. A tab's shell gets `DETACHED_SOCKET`. `app::owner::start` takes the
+read as a closure, `Fn(&str, &mut App) -> Task<Result<Value>>`, and `main` wires it to
+`kernel::host::query` with the owner's identity. `env run` asks the owner once per tab
+through a window prompt, which runs started together share, then answers that there is no env store
+yet (H9). The packages list `detached-cli`, macOS signs it before the bundle, and Settings has a
+Command line page with Install to PATH (a link in `~/.local/bin` that never replaces a file not its
+own, or the app's folder added to the user's Path on Windows, kept unexpanded). `main` starts the
+socket before the window, whose restored tabs start their shells. A second instance on the same data
+folder is refused the socket. Tested: `tests/cli.rs` (the built CLI in a real tab against the live
+socket; refused outside, double-forked and after setsid, also from inside a tab; `--version` with no
+socket; the packager's binaries; `env run`'s prompt once per tab, also for two at once) and
+`core::owner`'s own tests. `make build` was not run: a debug `cargo packager -f app` held both
+binaries and the bundled CLI's `--version` ran.
 
 Work:
 1. `core::host`: the tools' MCP handler, and Claude's transport on the session's control channel

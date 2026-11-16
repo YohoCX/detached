@@ -134,6 +134,14 @@ impl Session {
         }
     }
 
+    /// Whether process `pid` is the shell or one it started, still in its session or job.
+    pub fn holds(&self, pid: u32) -> bool {
+        #[cfg(unix)]
+        return unsafe { libc::getsid(pid as libc::pid_t) } == self.sid;
+        #[cfg(windows)]
+        self.job.holds(pid)
+    }
+
     /// Bytes in use: macOS phys_footprint, Linux Pss, Windows private bytes. None when unknown.
     pub fn memory(&self) -> Option<u64> {
         #[cfg(target_os = "macos")]
@@ -182,7 +190,7 @@ mod win {
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectBasicProcessIdList,
         QueryInformationJobObject,
     };
     use windows_sys::Win32::System::ProcessStatus::{
@@ -208,6 +216,19 @@ mod win {
                     CloseHandle(p);
                 }
                 Job(job)
+            }
+        }
+
+        pub fn holds(&self, pid: u32) -> bool {
+            unsafe {
+                let p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if p.is_null() {
+                    return false;
+                }
+                let mut r = 0;
+                let ok = IsProcessInJob(p, self.0, &mut r);
+                CloseHandle(p);
+                ok != 0 && r != 0
             }
         }
 
