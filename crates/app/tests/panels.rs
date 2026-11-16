@@ -833,3 +833,104 @@ fn timeline_layout_shares_stages_and_keeps_marks_inside_lanes() {
     let short = layout(&run, 600., |s| s.len() as f32 * 8.);
     assert!(short.ticks.iter().any(|t| t.label.ends_with('s')));
 }
+
+/// A personal mode with one finder, and roles whose text is `fake_claude`'s script.
+fn live_mode(sb: &Sandbox, finder: &str, verifier: &str) {
+    let dir = &sb.state.config_dir;
+    let mode = "+++\ngraph = [\"find\", \"verify\"]\nverifiers = [\"sonnet\"]\n[[seat]]\nrole = \"f1\"\nmodel = \"opus\"\n+++\nReview it.\n";
+    write(&dir.join("modes"), [("review.md", mode)]);
+    let role = |script: &str| format!("+++\nlenses = [\"bugs\"]\n+++\nfake: {script}\n");
+    write(
+        &dir.join("roles"),
+        [("f1.md", role(finder)), ("verifier.md", role(verifier))],
+    );
+}
+
+#[gpui_kit::test]
+fn a_live_review_starts_from_the_panels_app_and_ends_with_a_verified_card_whose_images_are_links(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::panel::marks::{BLOCK, Mark, Panels};
+    use serde_json::json;
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        let r = repo(sb, "reviewed");
+        sb.git(&r, &["switch", "-qc", "feat"]);
+        sb.commit(&r, "a.txt", "let x = 1\n", "feat");
+        let mark = Mark {
+            name: r.display().to_string(),
+            ..Mark::default()
+        };
+        sb.state
+            .set_block(
+                BLOCK,
+                Panels {
+                    repos: vec![mark],
+                    ..Panels::default()
+                },
+            )
+            .unwrap();
+        let body = "See ![pic](https://x.invalid/a.png) ![old](http://x.invalid/b.png) ![ref][r] <img src=\"https://x.invalid/c.png\">\n\n[r]: https://x.invalid/d.png";
+        let finding = json!({"action": "report_finding", "args": {"severity": "major",
+            "class": "correctness", "title": "x is one", "body": body, "file": "a.txt", "line": 1,
+            "quote": "let x = 1", "lenses": ["bugs"]}});
+        let done = json!({"action": "done", "args": {"nothing_found": false}});
+        let verdict = json!({"action": "report_verdict", "args": {"finding": "f1-1",
+            "verdict": "confirmed", "quote": "let x = 1"}});
+        live_mode(
+            sb,
+            &format!("act {finding};act {done}"),
+            &format!("act {verdict};act {done}"),
+        );
+    });
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    app.update(|_, cx| {
+        cx.set_global(detached_app::files::ImageFetch(std::sync::Arc::new(
+            move |url: &str| {
+                log.lock().unwrap().push(url.into());
+                None
+            },
+        )))
+    });
+    open_tab(&mut app, "tab.panels");
+    app.click("panels.new");
+    wait_until(&mut app, |cx| cx.find("panels.form.trust").is_some());
+    let trust = app
+        .find("panels.form.trust")
+        .unwrap()
+        .label()
+        .unwrap()
+        .to_string();
+    assert!(trust.starts_with("Trusted (trusted by repo"), "{trust}");
+    app.click("panels.form.start");
+    wait_until(&mut app, |cx| cx.find("panel.live").is_some());
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    assert_eq!(
+        app.find("panel.ended").unwrap().label(),
+        Some("Ended: done")
+    );
+    let row = app
+        .find(("panel.participant.live", 0usize))
+        .unwrap()
+        .label()
+        .unwrap()
+        .to_string();
+    assert!(row.starts_with("f1 · opus · done · 1 found"), "{row}");
+    wait_until(&mut app, |cx| cx.find("panel.finding.f1-1").is_some());
+    let card = app
+        .find("panel.finding.f1-1")
+        .unwrap()
+        .label()
+        .unwrap()
+        .to_string();
+    assert_eq!(card, "major · confirmed · x is one");
+    app.click("panel.finding.f1-1");
+    settle(&app);
+    app.update(|w, cx| w.render_frame(cx));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        Vec::<String>::new(),
+        "agent text fetches nothing"
+    );
+}

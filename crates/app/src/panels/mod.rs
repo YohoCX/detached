@@ -1,4 +1,5 @@
 pub mod flow;
+pub mod live;
 mod round;
 mod task;
 pub mod timeline;
@@ -41,6 +42,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 struct List {
     repo: Option<String>,
     rounds: Option<Interest<Rounds>>,
+    form: Option<(Entity<live::Form>, Subscription)>,
     _workspace: Subscription,
 }
 
@@ -49,6 +51,7 @@ impl List {
         let mut list = Self {
             repo: None,
             rounds: None,
+            form: None,
             _workspace: Workspace::observe(cx, |v: &mut Self, cx| {
                 v.follow(cx);
                 cx.notify();
@@ -67,6 +70,28 @@ impl List {
             .as_ref()
             .map(|r| Interest::view(kernel::panel::rounds(cx, r), cx));
         self.repo = repo;
+        self.form = None;
+    }
+
+    /// Opens the start form on the current repo's branch, or closes it.
+    fn toggle_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.form.take().is_some() {
+            return cx.notify();
+        }
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        let status = kernel::repo::Repo::get(cx, &repo).and_then(|r| r.status());
+        let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
+        let form = cx.new(|cx| live::Form::new(repo, branch, window, cx));
+        let watch = cx.observe(&form, |v: &mut Self, f, cx| {
+            if f.read(cx).done {
+                v.form = None;
+            }
+            cx.notify();
+        });
+        self.form = Some((form, watch));
+        cx.notify();
     }
 }
 
@@ -171,6 +196,11 @@ impl Render for List {
                     .p(GAP)
                     .child("Panels")
                     .child(
+                        ui::button("panels.new", "New run", cx)
+                            .test_support()
+                            .on_click(cx.listener(|v, _, window, cx| v.toggle_form(window, cx))),
+                    )
+                    .child(
                         ui::icon_button("panels.refresh", ui::Icon::Refresh, cx)
                             .test_support()
                             .aria_label("Refresh rounds")
@@ -191,6 +221,7 @@ impl Render for List {
                         .child(e),
                 )
             })
+            .when_some(self.form.as_ref().map(|f| f.0.clone()), |d, f| d.child(f))
             .child(
                 div()
                     .id("panels.rounds")

@@ -20,8 +20,9 @@ use crate::trust;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Start {
     pub repo: String,
-    /// A local branch, or `<remote>/<branch>` with `remote`.
+    /// A local branch, or `<remote>/<branch>`.
     pub branch: String,
+    /// Read it as a remote branch even where a local one has its name.
     pub remote: bool,
     pub base: String,
     pub mode: String,
@@ -87,26 +88,35 @@ pub fn common(core: &AppState, repo: &Path) -> Result<PathBuf> {
 /// The subject at its two SHAs: the branch's head, and where it left its base.
 pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
     let (env, repo) = (core.env(), Path::new(&s.repo));
-    let full = match s.remote {
-        true => format!("refs/remotes/{}", s.branch),
-        false => format!("refs/heads/{}", s.branch),
+    let at = |full: String| {
+        let rev = format!("{full}^{{commit}}");
+        out(
+            &env,
+            repo,
+            &["rev-parse", "--verify", "-q", &rev],
+            Kind::Read,
+        )
     };
-    let head = out(
-        &env,
-        repo,
-        &["rev-parse", "--verify", &format!("{full}^{{commit}}")],
-        Kind::Read,
-    )?;
+    // A name with no local branch is a remote one's.
+    let local = (!s.remote)
+        .then(|| at(format!("refs/heads/{}", s.branch)).ok())
+        .flatten();
+    let remote = local.is_none();
+    let head = match local {
+        Some(h) => h,
+        None => at(format!("refs/remotes/{}", s.branch))
+            .map_err(|_| Error::Other(format!("No branch {}", s.branch)))?,
+    };
     let base = out(
         &env,
         repo,
-        &["merge-base", &s.base, head.trim()],
+        &["merge-base", crate::git::arg(&s.base)?, head.trim()],
         Kind::Read,
     )?;
     Ok(Subject {
         repo: s.repo.clone(),
         branch: s.branch.clone(),
-        remote: s.remote,
+        remote,
         base: s.base.clone(),
         base_sha: base.trim().into(),
         head_sha: head.trim().into(),

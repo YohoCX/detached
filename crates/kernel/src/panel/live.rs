@@ -33,7 +33,8 @@ const CONTINUE: &str = "You were interrupted. Go on where you left off: report w
 /// The panels of this app, the sandbox probe's last pass, the reachability probe and the wall
 /// clock in ms.
 struct Panels {
-    all: Vec<WeakEntity<Panel>>,
+    /// Held here, so a run goes on with no tab open.
+    all: Vec<Entity<Panel>>,
     probe: Option<Probe>,
     reach: Arc<dyn Fn() -> bool + Send + Sync>,
     wall: Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -76,11 +77,7 @@ pub fn set_wall(cx: &mut App, wall: impl Fn() -> i64 + Send + Sync + 'static) {
 
 /// The live panels.
 pub fn all(cx: &App) -> Vec<Entity<Panel>> {
-    cx.global::<Panels>()
-        .all
-        .iter()
-        .filter_map(WeakEntity::upgrade)
-        .collect()
+    cx.global::<Panels>().all.clone()
 }
 
 pub fn find(cx: &App, repo: &str, task: &str, run: &str) -> Option<Entity<Panel>> {
@@ -147,6 +144,8 @@ pub struct Panel {
     pub run: String,
     pub start: Start,
     pub phase: Phase,
+    /// The mode's stages.
+    pub graph: Vec<Stage>,
     /// The run as its record says.
     pub state: State,
     pub live: Vec<Live>,
@@ -185,6 +184,7 @@ pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
             budget: s.budget,
             start: s.clone(),
             phase: Phase::Preparing,
+            graph: vec![],
             state: State::default(),
             live: vec![],
             offline: None,
@@ -227,9 +227,7 @@ pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
         });
         p
     });
-    let g = cx.global_mut::<Panels>();
-    g.all.retain(|p| p.upgrade().is_some());
-    g.all.push(p.downgrade());
+    cx.global_mut::<Panels>().all.push(p.clone());
     p
 }
 
@@ -243,11 +241,33 @@ impl Panel {
         self.tasks.push(cx.spawn(f));
     }
 
+    /// "Review `feature/x`".
+    pub fn title(&self) -> String {
+        let mut mode = self.start.mode.clone();
+        if let Some(c) = mode.get_mut(..1) {
+            c.make_ascii_uppercase();
+        }
+        format!("{mode} `{}`", self.start.branch)
+    }
+
     fn now(cx: &App) -> Instant {
         cx.background_executor().now()
     }
 
     fn emit(&mut self, e: Event, cx: &mut Context<Self>) {
+        let said = match &e {
+            Event::RunStarted(_) => Some(format!("{} started", self.title())),
+            Event::Paused { reason } => Some(format!("{} paused: {reason}", self.title())),
+            Event::RunEnded(end) => Some(format!("{} ended: {}", self.title(), ended(end))),
+            _ => None,
+        };
+        if let Some(text) = said {
+            let level = match &e {
+                Event::RunEnded(End::Failed { .. }) => crate::activity::Level::Error,
+                _ => crate::activity::Level::Info,
+            };
+            crate::activity::Activity::global(cx).update(cx, |a, cx| a.record(level, text, cx));
+        }
         let at = record::now();
         self.state.apply(at, &e);
         self.queue.push((at, e));
@@ -265,6 +285,12 @@ impl Panel {
             return;
         };
         let batch = std::mem::take(&mut self.queue);
+        let listed = (batch.iter()).any(|(_, e)| {
+            matches!(
+                e,
+                Event::RunStarted(_) | Event::Stage { .. } | Event::RunEnded(_)
+            )
+        });
         self.flushing = true;
         let r = p.record.clone();
         let done = blocking::run(cx, move || {
@@ -278,6 +304,9 @@ impl Panel {
                     p.state
                         .notes
                         .push(format!("The record could not be written: {e}"));
+                }
+                if listed {
+                    super::refresh(cx, &p.repo);
                 }
                 p.flush(cx);
             })
@@ -297,6 +326,7 @@ impl Panel {
             cx.global_mut::<Panels>().probe = Some(Probe::Passed);
         }
         (self.sandboxed, self.phase) = (p.sandboxed, Phase::Running);
+        self.graph = p.mode.graph.clone();
         self.prepared = Some(p.clone());
         let mut limits = p.limits.clone();
         limits.extend(threat_lines(&p));
@@ -868,7 +898,7 @@ impl Panel {
 
     fn tick(&mut self, cx: &mut Context<Self>) {
         let now = Self::now(cx);
-        let limits = marks::load(crate::core(cx));
+        let limits = limits(cx);
         let (stall, tool) = (
             Duration::from_secs(limits.stall),
             Duration::from_secs(limits.tool),
@@ -1198,10 +1228,17 @@ fn live(
     }
 }
 
+/// The panels' settings as the snapshot has them.
+pub fn limits(cx: &App) -> marks::Panels {
+    crate::settings::Settings::get(cx)
+        .block(marks::BLOCK)
+        .unwrap_or_default()
+}
+
 /// Room under the cap: live participants of every panel, `mine` of the one asking, and running
 /// chat turns count.
 fn room(cx: &App, me: gpui::EntityId, mine: usize) -> usize {
-    let cap = marks::load(crate::core(cx)).cap;
+    let cap = limits(cx).cap;
     let others = all(cx).into_iter().filter(|p| p.entity_id() != me);
     let panels: usize = mine
         + others
@@ -1405,11 +1442,39 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
     })
 }
 
-/// What a gate's decision says.
-pub fn gate_text(g: Gate) -> &'static str {
-    match g {
-        Gate::Ship => "ship",
-        Gate::Block => "do not ship",
-        Gate::Incomplete => "incomplete",
+/// What the start dialog shows for `s`.
+pub fn preview(s: Start, cx: &App) -> Task<Result<run::Preview>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || run::preview(&core, &s))
+}
+
+/// Accepts the subject's trust files at its head.
+pub fn accept(s: Start, cx: &App) -> Task<Result<()>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || run::accept(&core, &s))
+}
+
+/// Changes the panels' trust marks and limits.
+pub fn change(cx: &App, f: impl FnOnce(&mut marks::Panels) + Send + 'static) -> Task<Result<()>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || marks::change(&core, f))
+}
+
+/// How a run ended, in words.
+pub fn ended(end: &End) -> String {
+    match end {
+        End::Done { gate: None } => "done".into(),
+        End::Done {
+            gate: Some(Gate::Ship),
+        } => "ship".into(),
+        End::Done {
+            gate: Some(Gate::Block),
+        } => "do not ship".into(),
+        End::Done {
+            gate: Some(Gate::Incomplete),
+        } => "incomplete: not every participant reported".into(),
+        End::Cancelled => "cancelled".into(),
+        End::Failed { reason } => format!("failed: {reason}"),
+        End::Interrupted => "interrupted".into(),
     }
 }

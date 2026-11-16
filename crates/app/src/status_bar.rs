@@ -23,6 +23,7 @@ pub struct StatusBar {
     _workspace: Subscription,
     _activity: Subscription,
     _update: Subscription,
+    _panels: gpui_kit::Task<()>,
 }
 
 impl StatusBar {
@@ -31,6 +32,7 @@ impl StatusBar {
             _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
             _activity: cx.observe(&Activity::global(cx), |_, _, cx| cx.notify()),
             _update: cx.observe(&Update::global(cx), |_, _, cx| cx.notify()),
+            _panels: crate::panels::live::ticking(cx),
         }
     }
 }
@@ -187,6 +189,7 @@ impl Render for StatusBar {
             .text_color(t.muted)
             .child(left)
             .child(div().flex_1())
+            .children(crate::panels::live::status(cx))
             .children(ops)
             .children(update(cx))
             .children(events)

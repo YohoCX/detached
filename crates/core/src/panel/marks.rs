@@ -67,6 +67,13 @@ pub fn load(core: &AppState) -> Panels {
     core.get_settings().block(BLOCK).unwrap_or_default()
 }
 
+/// Changes the marks and limits in settings.json.
+pub fn change(core: &AppState, f: impl FnOnce(&mut Panels)) -> Result<()> {
+    let mut p = load(core);
+    f(&mut p);
+    core.set_block(BLOCK, p).map(drop)
+}
+
 /// What decides a subject's run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trust {

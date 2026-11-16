@@ -396,6 +396,8 @@ fn the_cap_holds_with_a_chat_turn_first(cx: &mut TestAppContext) {
     let mut p = marks::load(&f.core);
     p.cap = 1;
     f.core.set_block(marks::BLOCK, p).unwrap();
+    cx.update(crate::settings::refresh);
+    wait_for(cx, LONG, |cx| live::limits(cx).cap == 1);
     mode(&f, "review", &["find"], &["f1"]);
     role(&f, "f1", &format!("fake: {}", done()));
     let chat = cx.update(|cx| {
