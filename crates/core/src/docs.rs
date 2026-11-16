@@ -312,29 +312,30 @@ fn cites(text: &str) -> Vec<(String, u32)> {
 
 /// The commits to its covered files after the doc's own last commit; none before it has one.
 fn newer(env: &Env, repo: &Path, d: &Doc) -> crate::error::Result<Vec<CommitSummary>> {
-    let Some(own) = commits(env, repo, &["-1", "--", &d.path])?.pop() else {
+    // Literal pathspecs: a doc's paths are file names, never git patterns or magic.
+    let literal = |p: &str| format!(":(literal){p}");
+    let Some(own) = commits(env, repo, &["-1", "--", &literal(&d.path)])?.pop() else {
         return Ok(vec![]);
     };
-    let range = format!("{}..HEAD", own.sha);
-    let args: Vec<&str> = [range.as_str(), "--"]
-        .into_iter()
-        .chain(d.covers.iter().map(String::as_str))
-        .collect();
-    commits(env, repo, &args)
+    let mut args = vec![format!("{}..HEAD", own.sha), "--".into()];
+    args.extend(d.covers.iter().map(|c| literal(c)));
+    commits(
+        env,
+        repo,
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
 }
 
 /// `path` relative to `repo`, normalized, when it stays there as a plain path: no `..`, no link,
-/// no `.env*` part (the agents' deny) and no pathspec magic.
+/// no `.env*` part in any case (the agents' deny).
 fn inside(repo: &Path, path: &str) -> Result<String, String> {
     let out = || format!("{path} is outside the repo, a link or denied, so it is skipped");
-    if path.starts_with([':', '/', '\\']) {
-        return Err(out());
-    }
     let mut parts = vec![];
     for c in Path::new(path).components() {
         match c {
             Component::CurDir => continue,
-            Component::Normal(n) if !n.to_string_lossy().starts_with(".env") => {
+            // Case-blind: `.ENV` opens `.env` on macOS and Windows.
+            Component::Normal(n) if !n.to_string_lossy().to_lowercase().starts_with(".env") => {
                 parts.push(n.to_string_lossy().into_owned());
             }
             _ => return Err(out()),
@@ -521,6 +522,32 @@ mod tests {
     }
 
     #[test]
+    fn covered_paths_reach_git_as_literal_names_never_patterns_or_magic() {
+        let sb = Sandbox::new();
+        let r = repo(&sb, true);
+        let env = sb.state.env();
+        let cover = |covers: &str| {
+            let doc = format!("---\ncovers: {covers}\n---\n# W\n");
+            sb.commit(&r, "docs/watch.md", &doc, "doc");
+        };
+        let newer = || {
+            let d = Docs::load(&env, &r).all.remove(0);
+            assert_eq!(d.error, None);
+            d.newer.len()
+        };
+        fs::write(r.join("src/[ab].rs"), "x\n").unwrap();
+        sb.git(&r, &["add", "."]);
+        cover("src/[ab].rs");
+        sb.commit(&r, "src/a.rs", "a\n", "a only");
+        assert_eq!(newer(), 0, "`[ab]` is no pattern");
+        sb.commit(&r, "src/[ab].rs", "y\n", "the literal file");
+        assert_eq!(newer(), 1);
+        cover("./:(exclude)src");
+        sb.commit(&r, "README.md", "x\n", "outside src");
+        assert_eq!(newer(), 0, "no magic");
+    }
+
+    #[test]
     fn a_change_to_a_covered_file_names_its_doc_unless_the_doc_changed_too() {
         let sb = Sandbox::new();
         let docs = Docs::read(&repo(&sb, true));
@@ -565,18 +592,20 @@ mod tests {
         let sb = Sandbox::new();
         let r = repo(&sb, true);
         fs::write(sb.path("secret.md"), "## Flow\nwatcher secret\n").unwrap();
+        fs::write(r.join(".env"), "watcher secret\n").unwrap();
         let secret = sb.path("secret.md").display().to_string();
         let mut index = format!(
             "- ../secret.md — src — read when the watcher.\n\
              - {secret} — src — read when the watcher.\n\
              - docs/.env.md — src — read when the watcher.\n\
+             - .ENV — src — read when the watcher.\n\
+             - docs/.Env/x.md — src — read when the watcher.\n\
              - docs/store.md — ../secret.md — read when the watcher.\n"
         );
         fs::write(r.join("docs/store.md"), "# Store\n\n## Flow\nwatcher\n").unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(sb.path("secret.md"), r.join("docs/link.md")).unwrap();
-            fs::write(r.join(".env"), "watcher secret\n").unwrap();
             std::os::unix::fs::symlink("../.env", r.join("docs/setup.md")).unwrap();
             std::os::unix::fs::symlink("../docs", r.join("src/docs")).unwrap();
             index += "- docs/link.md — src — read when the watcher.\n\
@@ -586,7 +615,7 @@ mod tests {
         fs::write(r.join(INDEX), index).unwrap();
         let docs = Docs::read(&r);
         let modules: Vec<_> = docs.all.iter().filter(|d| d.kind == Kind::Module).collect();
-        assert_eq!(modules.len(), if cfg!(unix) { 7 } else { 4 });
+        assert_eq!(modules.len(), if cfg!(unix) { 9 } else { 6 });
         for d in modules {
             let e = d
                 .error

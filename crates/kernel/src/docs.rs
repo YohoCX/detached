@@ -24,8 +24,8 @@ pub fn get(cx: &mut App, repo: &str) -> Entity<Resource<Docs>> {
     })
 }
 
-/// What asks a session to update the docs a turn may have made stale.
-pub fn prompt(needs: &[Need]) -> String {
+/// What asks a session to update the docs a turn may have made stale in `repo`.
+pub fn prompt(repo: &str, needs: &[Need]) -> String {
     let lines = needs.iter().map(|n| {
         let files = n.files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>();
         format!(
@@ -37,9 +37,9 @@ pub fn prompt(needs: &[Need]) -> String {
     });
     let lines = lines.collect::<Vec<_>>().join("\n");
     format!(
-        "This turn changed files these docs cover. Check each section against the code and \
-         update what is no longer true, keeping its format; leave a section that still holds.\n\
-         {lines}"
+        "In `{repo}`, this turn changed files these docs cover. Check each section against the \
+         code and update what is no longer true, keeping its format; leave a section that still \
+         holds. Paths are relative to that repo.\n{lines}"
     )
 }
 

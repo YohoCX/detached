@@ -1044,7 +1044,7 @@ impl ChatView {
                 .on_click(move |_, _, cx| kernel::nav::open(cx, loc.clone()))
                 .child(format!("{} {}", n.doc, n.section))
         });
-        let prompt = kernel::docs::prompt(needs);
+        let prompt = kernel::docs::prompt(repo, needs);
         let chat = self.session.clone();
         let ask = (!chat.read(cx).busy(cx)).then(|| {
             ui::button(("chat.docs.ask", i), "Ask to update them", cx)

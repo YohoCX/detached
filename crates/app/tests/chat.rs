@@ -1223,10 +1223,14 @@ fn a_turn_that_changed_a_covered_file_offers_to_ask_for_the_doc_s_update(cx: &mu
     let i = index_of(cx, "Docs may need: `docs/readme.md` Flow");
     idle(cx);
     cx.click(("chat.docs.ask", i));
-    wait_for_item(cx, "You: This turn changed files these docs cover.");
+    let solo = cx.sb.solo().display().to_string();
+    wait_for_item(
+        cx,
+        &format!("You: In `{solo}`, this turn changed files these docs cover."),
+    );
     let asked = items(cx)
         .into_iter()
-        .find(|i| i.starts_with("You: This turn"))
+        .find(|i| i.starts_with("You: In `"))
         .unwrap();
     assert!(
         asked.contains("- `docs/readme.md` Flow: the turn changed `README.md`"),

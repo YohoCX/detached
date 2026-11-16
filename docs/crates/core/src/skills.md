@@ -25,10 +25,10 @@ per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`,
 - `Skill::loads()` — trusted, no error, not overridden.
 - `Skills { folders, all }` — the folder list and every skill found, in precedence order.
 - `Skills::load(core, repo) -> Result<Skills>` — reads the list; `repo: None` reads the user's
-  folders alone (`crates/core/src/skills.rs:82`).
+  folders alone (`crates/core/src/skills.rs:83`).
 - `Skills::active()` — the skills that load.
 - `copy(skill, to) -> Result<()>` — writes the skill's files under `to`; refuses a store item whose
-  files no longer match its accepted hash (`crates/core/src/skills.rs:200`).
+  files no longer match its accepted hash (`crates/core/src/skills.rs:212`).
 
 ## Flow
 1. Read `Config` from settings and resolve the home and Claude config dir from the env.
@@ -40,12 +40,15 @@ per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`,
 5. Entries are read sorted by name, skipping `.detached-trash`; a folder without a `SKILL.md` is
    not a skill. Non-store skills get an error if `store::read` refuses their files.
 6. `add` sets `overridden` to the source of an earlier same-name skill that loads, and reads the
-   `description:` line of `SKILL.md`'s front matter (`crates/core/src/skills.rs:146`).
+   `description:` line of `SKILL.md`'s front matter (`crates/core/src/skills.rs:147`).
 
 ## Gotchas
 - Only a skill that loads overrides: an untrusted or broken skill earlier in the list lets a later
   one of the same name load.
-- A link or special file inside a skill folder is an error, listed with why, never loaded.
+- A special file inside a skill folder is an error, listed with why. Links follow the CLI: in
+  user and project skills any link loads and is copied as a link pointing back at the original; a
+  store item's links must be relative and stay inside its folder; on Windows a copied skill with a
+  link inside is an error, since the plugin passes copies there (`crates/core/src/skills.rs:157`).
 - A store entry whose item opens but has no `SKILL.md` is skipped silently; one whose item fails
   to open is listed, untrusted, with the error, `SKILL.md` or not.
 - `copy` checks the hash only for store items (`hash: Some`); other skills copy as read.
@@ -59,7 +62,7 @@ per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`,
   `the_repo_s_skills_override_the_user_s_and_its_claude_folder_loads_once_trusted`,
   `share_then_make_local_round_trips_a_skill_and_its_copy`,
   `a_foreign_local_skill_asks_once_and_a_changed_shared_one_is_not_copied`,
-  `a_skill_with_a_link_inside_is_listed_with_why_and_overrides_nothing` (`#[cfg(unix)]`).
+  `links_load_as_the_cli_loads_them_and_a_store_skill_s_stay_inside_it` (`#[cfg(unix)]`).
 - The kernel resource is exercised through `kernel::host`'s
   `a_repo_s_skills_load_within_the_wait_for_the_owner_and_its_subject`.
 - Run: `cargo test -p detached-core skills::`.

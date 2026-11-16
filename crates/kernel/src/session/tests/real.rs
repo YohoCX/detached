@@ -390,6 +390,7 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
         [{"tool": "Read", "input": {"file_path": ".env"}}],
         [{"tool": "Read", "input": {"file_path": "sub/.env.local"}}],
         [bash("cat .env")],
+        [{"tool": "Read", "input": {"file_path": ".ENV"}}],
         text("tried"),
     ]);
     let (f, api) = boot(cx, real, script);
@@ -398,7 +399,7 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
     let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     let results = api.results();
-    assert_eq!(results.len(), 3, "{results:?}");
+    assert_eq!(results.len(), 4, "{results:?}");
     assert!(
         results.iter().all(|r| !r.contains("fixture-not")),
         "{results:?}"

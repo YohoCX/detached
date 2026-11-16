@@ -1872,8 +1872,8 @@ line's covers when it has none), sections with their lines and the `path:line` p
 root's `PLAN*.md`, `docs/decisions/` newest first and the three contracts. A doc is stale by the
 commits to its covered paths after its own last commit (`git log <doc's>..HEAD -- <covers>`).
 Every path the index or `covers:` names must be a plain path in the repo: relative, no `..`, no
-link, no `.env*` part, no pathspec magic; it is normalized, and a doc that fails is skipped with its
-reason.
+link, no `.env*` part in any case; it is normalized and reaches git as a literal pathspec, and a
+doc that fails is skipped with its reason. The update prompt names its repo.
 `kernel::docs::get` is the `Resource<Docs>` on the repo's status. The read tool's `Repo` has
 `docs(query: String!): [DocSection!]`, `DocSection { path heading line text stale }`, `stale` the
 newer commits; words of the query are cut to five letters to meet the index's, and a repo with no
