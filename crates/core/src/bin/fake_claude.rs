@@ -10,6 +10,7 @@
 //! - `spawn` starts a child in a process group of its own, which only this CLI's SIGTERM ends;
 //!   `deaf` one in this CLI's group that ignores SIGTERM;
 //! - `env` says the names in its env, `argv` its arguments, `model` its model and mode;
+//!   `initialize` lists the skills it loads among the commands, as the CLI does;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
 //! - `wait <name>` waits for `$CLAUDE_CONFIG_DIR/<name>`;
@@ -47,6 +48,7 @@ const VALUED: &[&str] = &[
     "--settings",
     "--allowedTools",
     "--add-dir",
+    "--plugin-dir",
 ];
 const BARE: &[&str] = &[
     "--verbose",
@@ -177,7 +179,7 @@ fn main() {
                     "initialize" => {
                         s.hooks = r["hooks"]["ConfigChange"].is_array();
                         s.mcp = r["sdkMcpServers"].is_array();
-                        Some(initialize())
+                        Some(initialize(&s))
                     }
                     "interrupt" => {
                         if let Some((cancel, ..)) = &turn {
@@ -227,20 +229,59 @@ fn main() {
     quit(0);
 }
 
-fn initialize() -> Value {
+fn initialize(s: &Shared) -> Value {
     let model = |v: &str| {
         json!({"value": v, "resolvedModel": format!("claude-{v}-9"),
         "displayName": v, "supportedEffortLevels": ["low", "high"], "supportsAutoMode": true})
     };
     let models = ["default", "haiku", "sonnet", "opus"].map(model);
+    let mut commands = vec![command("review", "Reviews a change", "<pr>")];
+    commands.extend(skills(s));
     json!({
         "models": models,
-        "commands": [{"name": "review", "description": "Reviews a change", "argumentHint": "<pr>"}],
+        "commands": commands,
         "account": {"apiProvider": "firstParty", "apiKeySource": "ANTHROPIC_API_KEY"},
         "claude_code_version": VERSION,
         "current_permission_mode": "default",
         "pid": std::process::id(),
     })
+}
+
+fn command(name: &str, description: &str, hint: &str) -> Value {
+    json!({"name": name, "description": description, "argumentHint": hint})
+}
+
+/// The skills the CLI loads, as commands: the user's and the project's by the setting sources, and a
+/// plugin's as `<plugin>:<skill>`.
+fn skills(s: &Shared) -> Vec<Value> {
+    let sources = s
+        .flags
+        .get("--setting-sources")
+        .map_or("user,project", |v| v);
+    let has = |source| sources.split(',').any(|x| x == source);
+    let mut dirs = vec![];
+    if has("user") {
+        dirs.push((String::new(), config_dir().join("skills")));
+    }
+    if has("project") {
+        dirs.push((String::new(), PathBuf::from(".claude/skills")));
+    }
+    if let Some(plugin) = s.flags.get("--plugin-dir").map(PathBuf::from) {
+        let manifest = std::fs::read(plugin.join(".claude-plugin/plugin.json")).unwrap_or_default();
+        let manifest: Value = serde_json::from_slice(&manifest).unwrap_or_default();
+        let name = manifest["name"].as_str().unwrap_or_default();
+        dirs.push((format!("{name}:"), plugin.join("skills")));
+    }
+    let mut all = vec![];
+    for (prefix, dir) in dirs {
+        let mut names: Vec<String> = (std::fs::read_dir(dir).into_iter().flatten().flatten())
+            .filter(|e| e.path().join("SKILL.md").is_file())
+            .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
+            .collect();
+        names.sort();
+        all.extend(names.iter().map(|n| command(n, "", "")));
+    }
+    all
 }
 
 fn config_dir() -> PathBuf {

@@ -1,5 +1,7 @@
 //! Claude's own, on `fake_claude`: what the host spawns it with, its rule keys and what it blocks.
 
+use detached_core::store::{Kind as StoreKind, RepoStore};
+
 use super::*;
 
 fn boot(cx: &mut TestAppContext, vars: &[(&str, &str)]) -> Fixture {
@@ -86,6 +88,42 @@ fn the_setting_sources_follow_the_kind_and_the_trust_and_no_spawn_goes_without_t
     let project = trust::project(&f.core.env(), Path::new(&f.repo)).unwrap();
     trust::trust(&f.core.config_dir, &f.repo, &project).unwrap();
     assert_eq!(sources(Kind::Chat, cx), (some("user,project,local"), false));
+}
+
+#[gpui::test]
+fn skills_the_cli_does_not_read_itself_reach_it_as_a_plugin_and_an_untrusted_shared_one_not(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    skill(&f.dir.path().join("claude-config/skills/mine"));
+    skill(&f.dir.path().join("home/.agents/skills/theirs"));
+    skill(&Path::new(&f.repo).join(".detached/skills/team"));
+    let skills = |kind: Kind, cx: &mut TestAppContext| {
+        let s = open(&f, kind, cx);
+        let names: Vec<String> = s.read_with(cx, |s, _| {
+            s.commands.iter().map(|c| c.name.clone()).collect()
+        });
+        s.update(cx, |s, cx| s.end(cx));
+        names
+    };
+    let plugin = ["detached:theirs"];
+    assert_eq!(
+        skills(Kind::Untrusted, cx),
+        ["review", "detached:mine", plugin[0]]
+    );
+    assert_eq!(skills(Kind::Chat, cx), ["review", "mine", plugin[0]]);
+    let store = RepoStore::open(&f.core, f.repo.as_ref()).unwrap();
+    for item in store.list(&f.core, StoreKind::Skills).unwrap() {
+        store.accept(&f.core, &item).unwrap();
+    }
+    assert_eq!(
+        skills(Kind::Chat, cx),
+        ["review", "mine", "detached:team", plugin[0]]
+    );
+    let plugins = f.core.cache_dir.join("plugins");
+    wait_for(cx, START, |_| {
+        std::fs::read_dir(&plugins).unwrap().next().is_none()
+    });
 }
 
 #[gpui::test]

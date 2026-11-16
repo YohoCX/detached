@@ -7,7 +7,8 @@
 //!   `-` without raw input, and says the option it got;
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
-//! - `env` says the names in its env; `meta` the `_meta` its session got; `model` its model;
+//! - `env` says the names in its env; `meta` the `_meta` its session got, `params` all of its
+//!   `session/new` or `session/load`; `model` its model;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `out-of-usage` fails the prompt as Claude does when extra usage has run out;
@@ -37,7 +38,7 @@ fn send(out: &Out, v: Value) {
 #[derive(Default)]
 struct Session {
     cwd: String,
-    meta: Value,
+    params: Value,
     model: String,
     mode: String,
     hold_close: bool,
@@ -122,7 +123,7 @@ fn main() {
                 };
                 let s = Session {
                     cwd: params["cwd"].as_str().unwrap_or_default().into(),
-                    meta: params["_meta"].clone(),
+                    params: params.clone(),
                     model: asked("model").unwrap_or(fallback.into()),
                     mode: asked("mode").unwrap_or("auto".into()),
                     hold_close: false,
@@ -359,7 +360,8 @@ impl Turn<'_> {
                 names.sort();
                 self.say(&names.join(","));
             }
-            "meta" => self.say(&self.session(|s| s.meta.to_string())),
+            "meta" => self.say(&self.session(|s| s.params["_meta"].to_string())),
+            "params" => self.say(&self.session(|s| s.params.to_string())),
             "hold-close" => {
                 let mut all = self.sessions.lock().unwrap();
                 all.get_mut(self.sid).unwrap().hold_close = true;

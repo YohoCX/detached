@@ -15,6 +15,7 @@ use detached_core::backend::{
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
 use detached_core::host::{self as tools, Act, Call};
+use detached_core::skills::Skills;
 use detached_core::state::AppState;
 use detached_core::trust;
 use detached_core::types::{FileChange, Side};
@@ -855,6 +856,8 @@ fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
 fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) -> Result<Started> {
     let project = trust::project(&core.env(), Path::new(&spec.repo))?;
     spec.trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
+    let skills = Skills::load(core, Some(&spec.repo))?;
+    spec.skills = skills.active().cloned().collect();
     let b = backend(spec.provider);
     let session = match past {
         Some(id) => b.resume(core, &spec, id, events)?,

@@ -594,6 +594,23 @@ fn an_untrusted_repo_s_chat_loads_the_user_s_settings_and_a_participant_none(
     assert_eq!(participant["strictMcpConfig"], json!(true));
 }
 
+/// A skill with one SKILL.md in `dir`.
+fn skill(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), "Say hi.").unwrap();
+}
+
+#[gpui::test]
+fn no_directory_is_added_to_an_acp_session_for_skills(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    skill(&f.dir.path().join("home/.agents/skills/hi"));
+    let params: Value =
+        serde_json::from_str(&turn(&open(&f, Kind::Chat, cx), "params", cx)).unwrap();
+    assert_eq!(params["cwd"], json!(f.repo));
+    assert!(!params.to_string().contains("skills"), "{params}");
+    assert!(!f.core.cache_dir.join("plugins").exists());
+}
+
 /// A Messages API stand-in that answers one request and hands its head back.
 fn api() -> (String, std::sync::mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

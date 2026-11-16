@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use tempfile::TempDir;
 
 use crate::adapters::{self, BLOCK, Cli};
 use crate::backend::{
@@ -22,6 +23,7 @@ use crate::backend::{
 };
 use crate::error::{Error, Result};
 use crate::proc::{self, GRACE, Proc};
+use crate::skills::{self, Skill, Source};
 use crate::state::AppState;
 
 mod history;
@@ -51,6 +53,8 @@ const DENIED: &[&str] = &[
 const BLOCKED: &[&str] = &["project_settings", "local_settings", "skills"];
 const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk"];
 const SERVER: &str = "detached-host";
+/// The per-session plugin's name; its skills are `detached:<name>`.
+const PLUGIN: &str = "detached";
 /// The CLI on the leash's own stdin, SIGTERM once the host is gone; a background job's stdin is
 /// /dev/null unless redirected, hence fd 3.
 const LEASH: &str = "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; while kill -0 $! 2>/dev/null; do \
@@ -243,7 +247,12 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     let id = resume.map_or_else(uuid, String::from);
     // Read before the CLI holds the file.
     let history = resume.map(|id| place(spec, env.clone()).read(id));
-    let (program, args) = command(spec, cli, flags(spec, &id, resume.is_some()));
+    let plugin = plugin(core, spec, &id)?;
+    let mut flags = flags(spec, &id, resume.is_some());
+    if let Some(dir) = &plugin {
+        flags.extend(["--plugin-dir".into(), mounted(spec, dir.path())]);
+    }
+    let (program, args) = command(spec, cli, flags);
     let cwd = match spec.wsl {
         Some(_) => std::env::temp_dir(),
         None => spec.repo.clone().into(),
@@ -254,7 +263,7 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
         cwd,
         env,
     })?;
-    let live = Live::run(proc, spec)?;
+    let live = Live::run(proc, spec, plugin)?;
     let mut init = json!({"subtype": "initialize"});
     if spec.kind == Kind::Chat && spec.trusted {
         init["hooks"] = json!({"ConfigChange": [{"hookCallbackIds": ["config"]}]});
@@ -314,6 +323,43 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     Ok(live)
 }
 
+/// The skills the CLI does not read itself under `spec`, copied as a plugin into a folder of the
+/// session's own; a skill that fails to copy, as a store item changed since accepted, is left out.
+fn plugin(core: &AppState, spec: &Spec, id: &str) -> Result<Option<TempDir>> {
+    let reads = |s: &&Skill| match s.source {
+        Source::Project => true,
+        Source::User => spec.kind != Kind::Untrusted,
+        _ => false,
+    };
+    let skills: Vec<&Skill> = spec.skills.iter().filter(|s| !reads(s)).collect();
+    if skills.is_empty() {
+        return Ok(None);
+    }
+    let root = core.cache_dir.join("plugins");
+    std::fs::create_dir_all(&root)?;
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("{id}."))
+        .tempdir_in(root)?;
+    let manifest = dir.path().join(".claude-plugin/plugin.json");
+    std::fs::create_dir_all(manifest.parent().unwrap())?;
+    std::fs::write(manifest, json!({"name": PLUGIN}).to_string())?;
+    for s in skills {
+        _ = skills::copy(s, &dir.path().join("skills").join(&s.name));
+    }
+    Ok(Some(dir))
+}
+
+/// `path` as the CLI sees it: in a distro, the Windows path under WSL's default `/mnt`.
+fn mounted(spec: &Spec, path: &Path) -> String {
+    let p = path.to_string_lossy();
+    match (&spec.wsl, p.split_once(":\\")) {
+        (Some(_), Some((drive, rest))) => {
+            format!("/mnt/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"))
+        }
+        _ => p.into_owned(),
+    }
+}
+
 /// `spec` as flags, all of them again on a resume: the CLI keeps none of them.
 fn flags(spec: &Spec, id: &str, resume: bool) -> Vec<String> {
     let (sources, strict) = match spec.kind {
@@ -370,6 +416,8 @@ struct Client {
     state: Mutex<State>,
     closing: AtomicBool,
     tools: Option<backend::Tools>,
+    /// Removed once the CLI is gone and the session dropped.
+    _plugin: Option<TempDir>,
 }
 
 #[derive(Default)]
@@ -391,7 +439,7 @@ struct State {
 }
 
 impl Live {
-    fn run(mut proc: Proc, spec: &Spec) -> Result<Live> {
+    fn run(mut proc: Proc, spec: &Spec, plugin: Option<TempDir>) -> Result<Live> {
         let (Some(mut stdin), Some(stdout)) = (proc.stdin.take(), proc.stdout.take()) else {
             return Err(Error::Other("claude has no pipes".into()));
         };
@@ -412,6 +460,7 @@ impl Live {
             state: Default::default(),
             closing: AtomicBool::new(false),
             tools: spec.tools.clone(),
+            _plugin: plugin,
         });
         let reader = c.clone();
         thread::spawn(move || reader.read(stdout));
