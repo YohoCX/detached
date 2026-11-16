@@ -85,7 +85,8 @@ impl DocsApp {
             label += &format!(" · {e}");
         }
         let path = d.path.clone();
-        let decision = d.kind == Kind::Decision;
+        // A doc with no sections to list opens on a click.
+        let leaf = d.kind == Kind::Decision || d.sections.is_empty();
         let row = ui::row(
             SharedString::from(format!("docs.doc.{}", d.path)),
             false,
@@ -95,7 +96,7 @@ impl DocsApp {
         .aria_label(SharedString::from(label))
         .py(px(4.))
         .cursor_pointer()
-        .when(!decision, |r| {
+        .when(!leaf, |r| {
             r.child(match open {
                 true => Icon::Down.size(px(12.)).into_any_element(),
                 false => Icon::Chevron.size(px(12.)).into_any_element(),
@@ -126,7 +127,7 @@ impl DocsApp {
         })
         .on_click(cx.listener({
             let repo = repo.to_string();
-            move |v, _, _, cx| match decision {
+            move |v, _, _, cx| match leaf {
                 true => kernel::nav::open(cx, at(&repo, &path, None)),
                 false => {
                     if !v.open.remove(&path) {

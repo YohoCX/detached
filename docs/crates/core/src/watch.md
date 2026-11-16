@@ -40,8 +40,9 @@ reloading: the kernel's `invalidate` turns each batch into status loads.
    per repo at a time (`crates/kernel/src/invalidate.rs:64`) through `Workspace::refresh`
    (`crates/kernel/src/workspace.rs:118`), which then calls `status_loaded`
    (`crates/kernel/src/workspace.rs:138`) to reach the resources.
-7. Window activation sets the watcher again (`crates/kernel/src/invalidate.rs:192`), which brings
-   back a watch the OS dropped and rereads the excludes.
+7. Window activation sets the watcher again (`crates/kernel/src/invalidate.rs:192`), which
+   rereads the excludes. A watch the OS dropped while the set still lists it stays gone: `apply`
+   changes nothing when the sets match (`crates/core/src/watch.rs:139`).
 
 ## Gotchas
 - Platforms differ for the worktree (`crates/core/src/watch.rs:368`): macOS one recursive watch on

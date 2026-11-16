@@ -2,7 +2,7 @@
 //! plans, the decisions and the contracts. Read only; agents write docs, the host never does.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::env::Env;
 use crate::git::status::commits;
@@ -84,7 +84,7 @@ impl Docs {
     /// The docs with what makes them stale, from the repo's history.
     pub fn load(env: &Env, repo: &Path) -> Docs {
         let mut docs = Docs::read(repo);
-        for d in docs.all.iter_mut().filter(|d| !d.covers.is_empty()) {
+        for d in (docs.all.iter_mut()).filter(|d| d.error.is_none() && !d.covers.is_empty()) {
             d.newer = newer(env, repo, d).unwrap_or_default();
         }
         docs
@@ -92,7 +92,10 @@ impl Docs {
 
     /// The docs as their files say, without staleness.
     pub fn read(repo: &Path) -> Docs {
-        let file = |p: &str| fs::read_to_string(repo.join(p));
+        let file = |p: &str| {
+            let f = inside(repo, p)?;
+            fs::read_to_string(f).map_err(|e| format!("{p} cannot be read: {e}"))
+        };
         let mut all = vec![];
         let index = file(INDEX).ok();
         for (path, covers, when) in index.iter().flat_map(|i| i.lines().filter_map(entry)) {
@@ -120,6 +123,9 @@ impl Docs {
         }
         for p in CONTRACTS.into_iter().filter(|p| repo.join(p).is_file()) {
             all.push(doc(p.into(), Kind::Contract, file(p)));
+        }
+        for d in all.iter_mut().filter(|d| d.error.is_none()) {
+            d.error = d.covers.iter().find_map(|c| inside(repo, c).err());
         }
         Docs {
             index: index.is_some(),
@@ -199,7 +205,7 @@ fn entry(line: &str) -> Option<(String, Vec<String>, String)> {
     ))
 }
 
-fn doc(path: String, kind: Kind, text: std::io::Result<String>) -> Doc {
+fn doc(path: String, kind: Kind, text: Result<String, String>) -> Doc {
     let mut d = Doc {
         path,
         kind,
@@ -215,7 +221,7 @@ fn doc(path: String, kind: Kind, text: std::io::Result<String>) -> Doc {
     let text = match text {
         Ok(t) => t,
         Err(e) => {
-            d.error = Some(format!("{} cannot be read: {e}", d.path));
+            d.error = Some(e);
             return d;
         }
     };
@@ -311,6 +317,28 @@ fn newer(env: &Env, repo: &Path, d: &Doc) -> crate::error::Result<Vec<CommitSumm
         .chain(d.covers.iter().map(String::as_str))
         .collect();
     commits(env, repo, &args)
+}
+
+/// `path` in `repo`, when it stays there: relative, no `..`, no `.env*` part (the agents' deny),
+/// no pathspec magic, and inside after its links when it exists.
+fn inside(repo: &Path, path: &str) -> Result<PathBuf, String> {
+    let out = || {
+        Err(format!(
+            "{path} is outside the repo or denied, so it is skipped"
+        ))
+    };
+    let part = |c: Component| match c {
+        Component::Normal(n) => !n.to_string_lossy().starts_with(".env"),
+        c => c == Component::CurDir,
+    };
+    if path.starts_with([':', '/', '\\']) || !Path::new(path).components().all(part) {
+        return out();
+    }
+    let file = repo.join(path);
+    match (repo.canonicalize(), file.canonicalize()) {
+        (Ok(root), Ok(f)) if !f.starts_with(&root) => out(),
+        _ => Ok(file),
+    }
 }
 
 fn covered(file: &str, cover: &str) -> bool {
@@ -499,6 +527,40 @@ mod tests {
         );
         assert!(changed(&["src/watch.rs", "docs/watch.md"]).is_empty());
         assert!(changed(&["src/watch.rsx", "PLAN-X.md"]).is_empty());
+    }
+
+    #[test]
+    fn a_path_out_of_the_repo_or_denied_is_skipped_with_its_reason() {
+        let sb = Sandbox::new();
+        let r = repo(&sb, true);
+        fs::write(sb.path("secret.md"), "## Flow\nwatcher secret\n").unwrap();
+        let secret = sb.path("secret.md").display().to_string();
+        let mut index = format!(
+            "- ../secret.md — src — read when the watcher.\n\
+             - {secret} — src — read when the watcher.\n\
+             - docs/.env.md — src — read when the watcher.\n\
+             - docs/store.md — ../secret.md — read when the watcher.\n"
+        );
+        fs::write(r.join("docs/store.md"), "# Store\n\n## Flow\nwatcher\n").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(sb.path("secret.md"), r.join("docs/link.md")).unwrap();
+            index += "- docs/link.md — src — read when the watcher.\n";
+        }
+        fs::write(r.join(INDEX), index).unwrap();
+        let docs = Docs::read(&r);
+        let modules: Vec<_> = docs.all.iter().filter(|d| d.kind == Kind::Module).collect();
+        assert_eq!(modules.len(), if cfg!(unix) { 5 } else { 4 });
+        for d in modules {
+            let e = d
+                .error
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} was read", d.path));
+            assert!(e.contains("outside the repo or denied"), "{e}");
+            assert!(!d.body.contains("secret"), "{}", d.path);
+        }
+        assert!(docs.find("watcher secret").is_empty());
+        assert!(docs.may_need(&["src/watch.rs".into()]).is_empty());
     }
 
     #[test]

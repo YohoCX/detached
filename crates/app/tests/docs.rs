@@ -47,6 +47,7 @@ fn the_docs_app_shows_the_index_sections_their_cites_staleness_and_decisions_by_
                 ("PLAN-A.md", "# Plan A\n\n## Steps\nOne.\n"),
                 ("docs/decisions/2026-01-01-old.md", "# Old\n"),
                 ("docs/decisions/2026-02-01-new.md", "# New\n"),
+                ("docs/KEYMAP.md", "# Keys\n\n| a | b |\n"),
             ],
         );
         sb.git(&r, &["add", "."]);
@@ -76,19 +77,25 @@ fn the_docs_app_shows_the_index_sections_their_cites_staleness_and_decisions_by_
         label(cx, "docs.section.docs/src.md:10"),
         "docs/src.md:10 Flow"
     );
-    let at = |path: &str, line| {
+    let at = |path: &str, line: Option<u32>| {
         Some(Doc::File(Location {
             repo: main.display().to_string(),
             rev: None,
             path: path.into(),
-            line: Some(line),
+            line,
             doc: None,
         }))
     };
     cx.click("docs.section.docs/src.md:10");
-    assert_eq!(shown(cx), at("docs/src.md", 10));
+    assert_eq!(shown(cx), at("docs/src.md", Some(10)));
     cx.click("docs.cite.docs/src.md:10.src/w.rs:3");
-    assert_eq!(shown(cx), at("src/w.rs", 3));
+    assert_eq!(shown(cx), at("src/w.rs", Some(3)));
+    cx.click("docs.doc.docs/KEYMAP.md");
+    assert_eq!(
+        shown(cx),
+        at("docs/KEYMAP.md", None),
+        "no sections: it opens"
+    );
 }
 
 #[gpui_kit::test]

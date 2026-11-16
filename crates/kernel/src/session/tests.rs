@@ -736,6 +736,8 @@ fn a_turn_that_changed_a_covered_file_says_which_doc_may_need_an_update(cx: &mut
     std::fs::write(repo.join("docs/INDEX.md"), index).unwrap();
     let doc = "---\ncovers:\n  - src\n---\n# src\n\n## Flow\nIt runs.\n";
     std::fs::write(repo.join("docs/src.md"), doc).unwrap();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/old.rs"), "fn old() {}\n".repeat(20)).unwrap();
     let git = |args: &[&str]| {
         let o = detached_core::git::runner::run(
             &f.core.env(),
@@ -790,4 +792,32 @@ fn a_turn_that_changed_a_covered_file_says_which_doc_may_need_an_update(cx: &mut
         std::fs::read_to_string(repo.join("docs/src.md")).unwrap(),
         "updated"
     );
+    let from = s.read_with(cx, |s, _| s.items.len());
+    s.update(cx, |s, cx| {
+        s.prompt("say moving;wait go;say done".into(), cx)
+    });
+    wait_until(cx, |cx| said_from(&s, from, cx) == "moving");
+    std::fs::create_dir_all(repo.join("lib")).unwrap();
+    std::fs::rename(repo.join("src/old.rs"), repo.join("lib/old.rs")).unwrap();
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| s.read(cx).state != State::Running);
+    let moved = s.read_with(cx, |s, _| {
+        s.items[from..].iter().find_map(|i| match i {
+            Item::Docs { needs, .. } => Some(needs[0].files.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(
+        moved,
+        Some(vec!["src/old.rs".to_string()]),
+        "a rename out of the covers"
+    );
+}
+
+fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
+    let text = s.read(cx).items[from..].iter().filter_map(|i| match i {
+        Item::Text(t) => Some(t.as_str()),
+        _ => None,
+    });
+    text.collect()
 }

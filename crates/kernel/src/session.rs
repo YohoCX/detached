@@ -878,7 +878,14 @@ impl Session {
                     Side::Rev { rev: end.clone() },
                 );
                 let files = api::list_changes(&core, repo, &from, &to)?;
-                let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+                let paths: Vec<String> = (files.iter())
+                    .flat_map(|f| {
+                        [Some(&f.path), f.orig_path.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .cloned()
+                    })
+                    .collect();
                 let needs = Docs::read(Path::new(repo)).may_need(&paths);
                 Ok::<_, Error>((start, end, files, needs))
             };

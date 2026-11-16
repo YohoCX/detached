@@ -1871,6 +1871,8 @@ reads `docs/INDEX.md`'s lines, each module doc's `covers:` (a `- path` list or i
 line's covers when it has none), sections with their lines and the `path:line` places they cite, the
 root's `PLAN*.md`, `docs/decisions/` newest first and the three contracts. A doc is stale by the
 commits to its covered paths after its own last commit (`git log <doc's>..HEAD -- <covers>`).
+Every path the index or `covers:` names must stay in the repo: relative, no `..`, no `.env*`
+part, no pathspec magic, inside after its links; a doc that fails is skipped with its reason.
 `kernel::docs::get` is the `Resource<Docs>` on the repo's status. The read tool's `Repo` has
 `docs(query: String!): [DocSection!]`, `DocSection { path heading line text stale }`, `stale` the
 newer commits; words of the query are cut to five letters to meet the index's, and a repo with no
