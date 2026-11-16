@@ -3,7 +3,8 @@
 # real Claude adapter and through the direct backend; on Windows the direct backend's again with the
 # CLI in a WSL distro, the product's WSL shape.
 # No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
-# agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/.
+# agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/,
+# and with `cli` and `ref` to vet a `claude` at main or at a release tag, on that tree's own tests.
 name: Agent
 
 on:
@@ -43,6 +44,10 @@ on:
         description: The newest claude in place of the entry's min_cli
         type: boolean
         default: false
+      cli:
+        description: The claude to run, a version, floor or latest; else the adapter SDK's
+        type: string
+        default: ''
   workflow_call:
     inputs:
       vet:
@@ -51,10 +56,19 @@ on:
       latest:
         type: boolean
         default: false
+      cli:
+        description: The claude to run, a version, floor or latest; else the adapter SDK's
+        type: string
+        default: ''
+      ref:
+        description: The tree to test; else the one that called
+        type: string
+        default: ''
 
 env:
   VET: ${{ inputs.vet && '1' || '' }}
   LATEST: ${{ inputs.latest && '1' || '' }}
+  CLI: ${{ inputs.cli }}
 
 jobs:
   native:
@@ -69,6 +83,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: npm install -g bun@1.4.4
@@ -107,6 +123,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         with:
           distribution: Ubuntu-24.04
@@ -124,4 +142,4 @@ jobs:
           curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4
           export PATH=$HOME/.cargo/bin:$HOME/.bun/bin:$PATH RUST_TEST_THREADS=$(nproc)
           cd ~/detached
-          VET='${{ env.VET }}' LATEST='${{ env.LATEST }}' ./scripts/agent-ci.sh
+          VET='${{ env.VET }}' LATEST='${{ env.LATEST }}' CLI='${{ env.CLI }}' ./scripts/agent-ci.sh

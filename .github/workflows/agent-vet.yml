@@ -1,6 +1,10 @@
-# The catalog's vetting (PLAN-AGENT-HOST §3): agent.yml on each signed catalog entry, on
-# each catalog bump against its min_cli, and weekly against the newest `claude`. A weekly failure
-# opens an issue for the owner, who decides on blocked_cli; nothing is published from here.
+# The vetting (PLAN-AGENT-HOST §3), each run through agent.yml on every OS:
+# - daily, `claude` at its floor and the latest, through Claude's backend at main and, from 0.6.0 on,
+#   at the latest release tag on that tag's own tests;
+# - Claude's adapter on each signed catalog entry, on each catalog bump against its min_cli and weekly
+#   against the newest `claude`.
+# A scheduled failure opens an issue for the owner, who decides on blocked_cli; nothing is published
+# from here.
 name: Agent vetting
 
 on:
@@ -9,17 +13,51 @@ on:
     paths: [adapters/adapters.json, adapters/adapters.json.minisig]
   schedule:
     - cron: '23 5 * * 1'
+    - cron: '41 4 * * *'
   workflow_dispatch:
 
 jobs:
   vet:
+    if: github.event.schedule != '41 4 * * *'
     uses: ./.github/workflows/agent.yml
     with:
       vet: true
       latest: ${{ github.event_name == 'schedule' }}
 
+  # main, and the latest release tag once it has Claude's backend.
+  refs:
+    if: github.event_name != 'push' && github.event.schedule != '23 5 * * 1'
+    runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.r.outputs.legs }}
+    steps:
+      - id: r
+        env:
+          REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          tag=$(git ls-remote --tags --refs "$REPO" 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)
+          refs='"main"'
+          if [ -n "$tag" ] && [ "$(printf '0.6.0\n%s\n' "${tag#v}" | sort -V | head -1)" = 0.6.0 ]; then
+            refs="$refs, \"$tag\""
+          else
+            echo "::notice::The latest release, ${tag:-none}, is older than 0.6.0: main alone."
+          fi
+          echo "legs=[$refs]" >> "$GITHUB_OUTPUT"
+
+  claude:
+    needs: refs
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: ${{ fromJSON(needs.refs.outputs.legs) }}
+        cli: [floor, latest]
+    uses: ./.github/workflows/agent.yml
+    with:
+      ref: ${{ matrix.ref }}
+      cli: ${{ matrix.cli }}
+
   issue:
-    needs: vet
+    needs: [vet, claude]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -29,8 +67,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="The weekly adapter vetting failed"
-          body="$RUN failed on the newest claude. If that claude breaks the adapter, add its version to the entry's blocked_cli, then \`make adapters-sign\` and push."
+          title="The scheduled agent vetting failed"
+          body="$RUN failed. If a claude version breaks Claude's backend or the adapter, add it to blocked_cli, then \`make adapters-sign\` and push."
           open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
           if [ -n "$open" ]; then
             gh issue comment "$open" -R "$GITHUB_REPOSITORY" --body "$body"
