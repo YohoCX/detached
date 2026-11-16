@@ -7,6 +7,7 @@ pub mod agents;
 pub mod blocking;
 pub mod crash;
 pub mod doc;
+pub mod docs;
 pub mod forge;
 pub mod host;
 pub mod invalidate;

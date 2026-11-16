@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use detached_core::api;
@@ -165,4 +166,79 @@ fn a_repo_s_skills_load_within_the_wait_for_the_owner_and_its_subject(cx: &mut T
             json!([{"name": "lint", "source": "AGENTS", "description": "Lints", "path": lint}])
         );
     }
+}
+
+fn git(repo: &str, args: &[&str]) {
+    let id = [
+        "-c",
+        "user.name=T",
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "commit.gpgsign=false",
+    ];
+    let o = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(id.iter().chain(args))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+#[gpui::test]
+fn docs_route_by_read_when_to_one_section_flag_a_stale_doc_and_write_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, _forge, a, b) = boot(cx);
+    let at = |p: &str| Path::new(&a).join(p);
+    std::fs::create_dir_all(at("docs")).unwrap();
+    std::fs::write(
+        at("docs/INDEX.md"),
+        "- docs/f.md — f — read when the watcher misses file events.\n",
+    )
+    .unwrap();
+    let doc = format!(
+        "---\ncovers:\n  - f\n---\n# f\n\n## Purpose\nWatches.\n\n## Flow\nEach event of \
+         the watcher reloads.\n{}",
+        "more\n".repeat(100)
+    );
+    std::fs::write(at("docs/f.md"), &doc).unwrap();
+    git(&a, &["add", "."]);
+    git(&a, &["commit", "-qm", "docs"]);
+    std::fs::write(at("f"), "moved\n").unwrap();
+    git(&a, &["commit", "-qam", "f moved"]);
+    let q = |repo: &str| {
+        format!(
+            r#"{{ repo(path: "{repo}") {{ docs(query: "how does the watcher handle events") {{
+                path heading line text stale }} }} }}"#
+        )
+    };
+    let out = ask(cx, &Identity::subject(&a, None), &q(&a));
+    let hits = &out["data"]["repo"]["docs"];
+    assert_eq!(hits.as_array().unwrap().len(), 1, "{out}");
+    let hit = &hits[0];
+    assert_eq!(
+        (&hit["path"], &hit["heading"], &hit["line"]),
+        (&json!("docs/f.md"), &json!("Flow"), &json!(10))
+    );
+    assert!(hit["text"].as_str().unwrap().starts_with("Each event"));
+    let stale = hit["stale"].as_array().unwrap();
+    assert!(
+        stale.len() == 1 && stale[0].as_str().unwrap().ends_with(" f moved"),
+        "{stale:?}"
+    );
+    let out = ask(cx, &Identity::owner(), &q(&b));
+    assert_eq!(out["data"]["repo"]["docs"], Value::Null);
+    assert_eq!(out["errors"][0]["message"], "b has no docs/INDEX.md");
+    assert_eq!(std::fs::read_to_string(at("docs/f.md")).unwrap(), doc);
+    let status = std::process::Command::new("git")
+        .current_dir(&a)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&status.stdout),
+        "",
+        "the host wrote nothing"
+    );
 }

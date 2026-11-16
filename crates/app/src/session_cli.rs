@@ -345,6 +345,13 @@ fn line(item: &Item) -> String {
             let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
             format!("[changes] {}", paths.join(", "))
         }
+        Item::Docs { needs, .. } => {
+            let docs: Vec<String> = needs
+                .iter()
+                .map(|n| format!("{} {}", n.doc, n.section))
+                .collect();
+            format!("[docs may need] {}", docs.join(", "))
+        }
         Item::End { stop, ms } => format!("[end] {stop:?} in {ms} ms"),
         Item::Note(t) => format!("[note] {t}"),
         Item::Act(a) => format!("[act] {a:?}"),

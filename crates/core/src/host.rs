@@ -170,8 +170,9 @@ fn tools() -> Value {
     );
     json!({"tools": [
         {"name": READ, "inputSchema": read, "description": "Reads Detached's data: its repos, \
-            their status and merge requests, and the agent sessions. `{ schema }` returns the \
-            schema. Queries only, without fragments, variables, directives or introspection; at \
+            their status, merge requests, skills and docs, and the agent sessions. Ask a repo's \
+            `docs(query)` how its code works before reading the source: it answers the doc \
+            sections whose index routes there. `{ schema }` returns the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
             verdict on a finding, or `done` at the end of the work, which every turn of a review \

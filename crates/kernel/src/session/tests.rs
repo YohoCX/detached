@@ -726,3 +726,98 @@ fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(
         );
     });
 }
+
+#[gpui::test]
+fn a_turn_that_changed_a_covered_file_says_which_doc_may_need_an_update(cx: &mut TestAppContext) {
+    let f = boot_fake(cx, Fake::Claude);
+    let repo = Path::new(&f.repo);
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    let index = "- docs/src.md — src — read when src changes.\n";
+    std::fs::write(repo.join("docs/INDEX.md"), index).unwrap();
+    let doc = "---\ncovers:\n  - src\n---\n# src\n\n## Flow\nIt runs.\n";
+    std::fs::write(repo.join("docs/src.md"), doc).unwrap();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/old.rs"), "fn old() {}\n".repeat(20)).unwrap();
+    let git = |args: &[&str]| {
+        let o = detached_core::git::runner::run(
+            &f.core.env(),
+            repo,
+            args,
+            detached_core::git::runner::Kind::Write,
+            Default::default(),
+        );
+        assert_eq!(o.unwrap().code, 0, "{args:?}");
+    };
+    git(&["add", "."]);
+    git(&["commit", "-qm", "docs"]);
+    let s = open(&f, Kind::Chat, cx);
+    turn(&s, "write src/a.rs made;write notes.txt x;say done", cx);
+    let needs = |s: &Entity<Session>, cx: &mut TestAppContext| {
+        s.read_with(cx, |s, _| {
+            let at = s.items.iter().position(|i| matches!(i, Item::Docs { .. }));
+            (
+                at,
+                s.items.iter().find_map(|i| match i {
+                    Item::Docs { needs, .. } => Some(needs.clone()),
+                    _ => None,
+                }),
+            )
+        })
+    };
+    let (at, got) = needs(&s, cx);
+    let want = detached_core::docs::Need {
+        doc: "docs/src.md".into(),
+        section: "Flow",
+        files: vec!["src/a.rs".into()],
+    };
+    assert_eq!(got, Some(vec![want]));
+    s.read_with(cx, |s, _| {
+        let at = at.unwrap();
+        assert!(matches!(s.items[at - 1], Item::Changes { .. }));
+        assert!(matches!(s.items[at + 1], Item::End { .. }));
+    });
+    let from = s.read_with(cx, |s, _| s.items.len());
+    turn(
+        &s,
+        "write src/b.rs made;write docs/src.md updated;say done",
+        cx,
+    );
+    let docs = s.read_with(cx, |s, _| {
+        s.items[from..]
+            .iter()
+            .any(|i| matches!(i, Item::Docs { .. }))
+    });
+    assert!(!docs, "the turn updated the doc itself");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("docs/src.md")).unwrap(),
+        "updated"
+    );
+    let from = s.read_with(cx, |s, _| s.items.len());
+    s.update(cx, |s, cx| {
+        s.prompt("say moving;wait go;say done".into(), cx)
+    });
+    wait_until(cx, |cx| said_from(&s, from, cx) == "moving");
+    std::fs::create_dir_all(repo.join("lib")).unwrap();
+    std::fs::rename(repo.join("src/old.rs"), repo.join("lib/old.rs")).unwrap();
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| s.read(cx).state != State::Running);
+    let moved = s.read_with(cx, |s, _| {
+        s.items[from..].iter().find_map(|i| match i {
+            Item::Docs { needs, .. } => Some(needs[0].files.clone()),
+            _ => None,
+        })
+    });
+    assert_eq!(
+        moved,
+        Some(vec!["src/old.rs".to_string()]),
+        "a rename out of the covers"
+    );
+}
+
+fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
+    let text = s.read(cx).items[from..].iter().filter_map(|i| match i {
+        Item::Text(t) => Some(t.as_str()),
+        _ => None,
+    });
+    text.collect()
+}

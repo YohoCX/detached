@@ -390,6 +390,7 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
         [{"tool": "Read", "input": {"file_path": ".env"}}],
         [{"tool": "Read", "input": {"file_path": "sub/.env.local"}}],
         [bash("cat .env")],
+        [{"tool": "Read", "input": {"file_path": ".ENV"}}],
         text("tried"),
     ]);
     let (f, api) = boot(cx, real, script);
@@ -398,7 +399,7 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
     let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     let results = api.results();
-    assert_eq!(results.len(), 3, "{results:?}");
+    assert_eq!(results.len(), 4, "{results:?}");
     assert!(
         results.iter().all(|r| !r.contains("fixture-not")),
         "{results:?}"
@@ -572,6 +573,32 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
     wait_for(cx, START, |cx| s.read(cx).state != State::Running);
     assert!(asked(&s, cx));
     answered(from);
+}
+
+/// The Done of PLAN-AGENT-HOST's H7: asked about the watcher, `claude` reads the doc's section
+/// through `docs`, and the model gets it.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_real_claude_reads_the_watcher_s_doc_through_docs(cx: &mut TestAppContext) {
+    let query = r#"{ workspace { repos { docs(query: "how does the watcher work") { path heading
+        text stale } } } }"#;
+    let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
+    let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
+    f.write(
+        "docs/INDEX.md",
+        "- docs/watch.md — src/watch.rs — read when asking how the watcher works.\n",
+    );
+    f.write(
+        "docs/watch.md",
+        "---\ncovers:\n  - src/watch.rs\n---\n# watch\n\n## Flow\nEvents wait 50 ms.\n",
+    );
+    f.list(cx);
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "how does the watcher work?", cx);
+    let results = api.results();
+    let read =
+        |r: &String| r.contains(r#""path":"docs/watch.md""#) && r.contains("Events wait 50 ms.");
+    assert!(results.iter().any(read), "{results:?}");
 }
 
 #[gpui::test]

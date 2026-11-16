@@ -1,3 +1,7 @@
+---
+covers:
+  - crates/kernel
+---
 # Detached — foundation plan
 
 The layer the agent host will stand on: a kernel crate with the app's live state, one owner for

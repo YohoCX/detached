@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use detached_core::backend::Kind;
+use detached_core::docs::Docs;
 use detached_core::error::{Error, Result};
 use detached_core::host::Act;
 use detached_core::skills::Skills;
@@ -99,11 +100,12 @@ pub fn query(cx: &mut App, who: &Identity, query: &str) -> Task<Result<Value>> {
     })
 }
 
-/// What the query waits for: a repo's MRs, the open ones alone or all, and its skills.
+/// What the query waits for: a repo's MRs, the open ones alone or all, its skills and its docs.
 #[derive(Default)]
 struct Held {
     mrs: Vec<(String, bool, Interest<Listed>)>,
     skills: Vec<(String, Interest<Skills>)>,
+    docs: Vec<(String, Interest<Docs>)>,
 }
 
 fn hold(cx: &mut App, needs: &[Need]) -> Held {
@@ -119,6 +121,10 @@ fn hold(cx: &mut App, needs: &[Need]) -> Held {
                 let i = Interest::new(skills::get(cx, Some(repo)), cx);
                 held.skills.push((repo.clone(), i));
             }
+            Need::Docs(repo) if !held.docs.iter().any(|(r, _)| r == repo) => {
+                let i = Interest::new(crate::docs::get(cx, repo), cx);
+                held.docs.push((repo.clone(), i));
+            }
             _ => {}
         }
     }
@@ -133,6 +139,7 @@ fn ready(cx: &App, held: &Held, needs: &[Need]) -> bool {
     };
     held.mrs.iter().all(|(_, _, i)| i.loaded(cx).is_some())
         && held.skills.iter().all(|(_, i)| i.loaded(cx).is_some())
+        && held.docs.iter().all(|(_, i)| i.loaded(cx).is_some())
         && needs.iter().all(status)
 }
 
@@ -154,6 +161,15 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
             (None, None) => Err("not loaded".into()),
         })
     };
+    let docs = |path: &str| {
+        let (_, i) = held.docs.iter().find(|(r, _)| r == path)?;
+        let r = i.loaded(cx)?;
+        Some(match (&r.error, &r.value) {
+            (Some(e), _) => Err(e.clone()),
+            (None, Some(d)) => Ok(d.clone()),
+            (None, None) => Err("not loaded".into()),
+        })
+    };
     let repos = w
         .repos()
         .iter()
@@ -163,6 +179,7 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
             status: Repo::get(cx, &info.path).and_then(|r| r.status.clone()),
             mrs: mrs(&info.path),
             skills: skills(&info.path),
+            docs: docs(&info.path),
         });
     let waiting = |i: &Item| {
         matches!(

@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
+use detached_core::docs::{Doc, Docs, Section};
 use detached_core::skills::{Skill, Source};
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
 use graphql_parser::query::{
@@ -35,6 +36,8 @@ pub struct RepoSnap {
     pub mrs: Vec<(bool, Result<Vec<MergeRequest>, String>)>,
     /// The ones that load; None until asked for and loaded.
     pub skills: Option<Result<Vec<Skill>, String>>,
+    /// None until asked for and loaded.
+    pub docs: Option<Result<Docs, String>>,
 }
 
 pub struct SessionSnap {
@@ -52,6 +55,7 @@ pub enum Need {
     Status(String),
     Mrs(String, bool),
     Skills(String),
+    Docs(String),
 }
 
 /// The query's answer, `{data, errors?}`, and what it found not loaded; a query outside the subset
@@ -96,6 +100,8 @@ enum Node<'a> {
     Mr(&'a MergeRequest),
     Session(&'a SessionSnap),
     Skill(&'a Skill),
+    /// A doc's section, or the whole doc.
+    Doc(&'a Doc, Option<&'a Section>),
 }
 
 enum Out<'a> {
@@ -145,6 +151,7 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
     }),
     ("Repo", "mrs", |c, n, a| c.mrs(n.repo(), word(a, "state"))),
     ("Repo", "skills", |c, n, _| c.skills(n.repo())),
+    ("Repo", "docs", |c, n, a| c.docs(n.repo(), text(a, "query"))),
     ("Status", "changed", |_, n, _| val(n.status().changes.len())),
     ("Status", "staged", |_, n, _| {
         val(n
@@ -187,6 +194,23 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
         val(&n.skill().description)
     }),
     ("Skill", "path", |_, n, _| val(&n.skill().path)),
+    ("DocSection", "path", |_, n, _| val(&n.doc().0.path)),
+    ("DocSection", "heading", |_, n, _| {
+        val(n.doc().1.map(|s| &s.heading))
+    }),
+    ("DocSection", "line", |_, n, _| {
+        val(n.doc().1.map_or(1, |s| s.line))
+    }),
+    ("DocSection", "text", |_, n, _| {
+        let (d, s) = n.doc();
+        val(s.map_or(&d.body, |s| &s.text))
+    }),
+    ("DocSection", "stale", |_, n, _| {
+        let newer = n.doc().0.newer.iter();
+        val(newer
+            .map(|c| format!("{} {}", &c.sha[..c.sha.len().min(10)], c.subject))
+            .collect::<Vec<_>>())
+    }),
     ("Session", "id", |_, n, _| val(&n.session().id)),
     ("Session", "provider", |_, n, _| val(&n.session().provider)),
     ("Session", "model", |_, n, _| val(&n.session().model)),
@@ -224,6 +248,12 @@ impl<'a> Node<'a> {
     fn skill(self) -> &'a Skill {
         let Node::Skill(s) = self else { unreachable!() };
         s
+    }
+    fn doc(self) -> (&'a Doc, Option<&'a Section>) {
+        let Node::Doc(d, s) = self else {
+            unreachable!()
+        };
+        (d, s)
     }
     fn session(self) -> &'a SessionSnap {
         let Node::Session(s) = self else {
@@ -284,6 +314,26 @@ impl<'a> Ctx<'a> {
                 Err(format!("{}'s skills did not load in time", r.info.name))
             }
         }
+    }
+
+    fn docs(&self, r: &'a RepoSnap, query: Option<&str>) -> Result<Out<'a>, String> {
+        let docs = match &r.docs {
+            Some(Ok(d)) => d,
+            Some(Err(e)) => return Err(format!("{}'s docs: {e}", r.info.name)),
+            None => {
+                self.needs
+                    .borrow_mut()
+                    .push(Need::Docs(r.info.path.clone()));
+                return Err(format!("{}'s docs did not load in time", r.info.name));
+            }
+        };
+        if !docs.index {
+            return Err(format!("{} has no docs/INDEX.md", r.info.name));
+        }
+        let hits = docs.find(query.unwrap_or_default()).into_iter();
+        Ok(Out::List(
+            hits.map(|h| Node::Doc(h.doc, h.section)).collect(),
+        ))
     }
 
     fn error(&self, message: String, path: &[Value]) {
@@ -568,6 +618,7 @@ mod tests {
                 status: Some(Ok(status)),
                 mrs: vec![],
                 skills: None,
+                docs: None,
             }],
             current: Some("/w/app".into()),
             sessions: vec![],

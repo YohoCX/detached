@@ -1,3 +1,29 @@
+---
+covers:
+  - crates/acp
+  - crates/core/src/backend.rs
+  - crates/core/src/claude.rs
+  - crates/core/src/claude
+  - crates/core/src/adapters.rs
+  - crates/core/src/adapters
+  - crates/core/src/host.rs
+  - crates/core/src/owner.rs
+  - crates/core/src/skills.rs
+  - crates/core/src/docs.rs
+  - crates/core/src/store.rs
+  - crates/core/src/trust.rs
+  - crates/core/src/sessions.rs
+  - crates/core/src/proc.rs
+  - crates/kernel/src/session.rs
+  - crates/kernel/src/session
+  - crates/kernel/src/host.rs
+  - crates/kernel/src/host
+  - crates/kernel/src/skills.rs
+  - crates/kernel/src/docs.rs
+  - crates/app/src/chat
+  - crates/app/src/docs.rs
+  - crates/app/src/bin/detached-cli.rs
+---
 # Detached — agent host plan
 
 Agents as first-class participants of the client:
@@ -1839,6 +1865,28 @@ Done when the owner's DHP setup, written as a recipe, matches `wt new`.
 The owner checks: the same.
 
 ### Step H7. Docs
+
+**Status (2026-11-17): built, with every test below; waiting for the owner's check.** `core::docs`
+reads `docs/INDEX.md`'s lines, each module doc's `covers:` (a `- path` list or inline; the index
+line's covers when it has none), sections with their lines and the `path:line` places they cite, the
+root's `PLAN*.md`, `docs/decisions/` newest first and the three contracts. A doc is stale by the
+commits to its covered paths after its own last commit (`git log <doc's>..HEAD -- <covers>`).
+Every path the index or `covers:` names must be a plain path in the repo: relative, no `..`, no
+link, no `.env*` part in any case; it is normalized and reaches git as a literal pathspec, and a
+doc that fails is skipped with its reason. The update prompt names its repo.
+`kernel::docs::get` is the `Resource<Docs>` on the repo's status. The read tool's `Repo` has
+`docs(query: String!): [DocSection!]`, `DocSection { path heading line text stale }`, `stale` the
+newer commits; words of the query are cut to five letters to meet the index's, and a repo with no
+index is `null` with its error. A turn's end adds `Item::Docs` after its changes for each indexed
+doc covering a changed file the turn did not change itself, `Tests` when only tests changed and
+`Flow` otherwise; the chat shows it as "Docs may need: …" with a button that sends the update prompt.
+The Docs app (`panel.docs`, left zone, no chord) lists the index, plans, decisions by date and
+contracts; a doc opens to its sections and cites as `path:line` links and the commits that made it
+stale; a repo with no index offers a chat that writes one. This repo's index has six module docs;
+the plans in progress carry `covers:`, the closed PLAN.md and PLAN-M2.md none, so they never read as
+stale. The Done runs as `a_real_claude_reads_the_watcher_s_doc_through_docs` under
+`make agent-test`, passed with claude 2.1.325, and `this_repo_s_docs_keep_the_layout_and_route_the_watcher`
+checks this repo's docs in `make check`.
 
 Work: `core::docs`, `Resource<Docs>`, staleness, `docs` in the SDL, the Docs app, the turn's "docs
 may need" line, this repo's own `docs/INDEX.md` and `covers:`.

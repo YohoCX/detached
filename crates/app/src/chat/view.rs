@@ -17,6 +17,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, relative,
 };
 
+use detached_core::docs::Need;
 use detached_core::git::snapshot::Skip;
 use detached_core::types::Side;
 
@@ -758,6 +759,7 @@ impl ChatView {
                 questions,
             } => self.ask(i, at, tool, *answer, questions, cx),
             Item::Changes { .. } => self.changes(i, at, item, cx),
+            Item::Docs { repo, needs } => self.docs(i, repo, needs, cx),
             Item::Note(text) => self
                 .row(i, text.clone())
                 .text_size(text::SMALL)
@@ -1018,6 +1020,48 @@ impl ChatView {
             _ => *p = vec![o],
         }
         cx.notify();
+    }
+
+    /// The docs whose covered files the turn changed, each opening on a click, and a button that
+    /// asks the session to update them.
+    fn docs(&self, i: usize, repo: &str, needs: &[Need], cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let label = needs.iter().map(|n| format!("`{}` {}", n.doc, n.section));
+        let label = format!("Docs may need: {}", label.collect::<Vec<_>>().join(", "));
+        let docs = needs.iter().enumerate().map(|(j, n)| {
+            let loc = Location {
+                repo: repo.into(),
+                rev: None,
+                path: n.doc.clone(),
+                line: None,
+                doc: None,
+            };
+            div()
+                .id(SharedString::from(format!("chat.docs.{i}.{j}")))
+                .cursor_pointer()
+                .font_family(theme::mono(cx))
+                .hover(|s| s.text_color(t.fg))
+                .on_click(move |_, _, cx| kernel::nav::open(cx, loc.clone()))
+                .child(format!("{} {}", n.doc, n.section))
+        });
+        let prompt = kernel::docs::prompt(repo, needs);
+        let chat = self.session.clone();
+        let ask = (!chat.read(cx).busy(cx)).then(|| {
+            ui::button(("chat.docs.ask", i), "Ask to update them", cx)
+                .test_support()
+                .on_click(move |_, _, cx| chat.update(cx, |c, cx| c.send(prompt.clone(), cx)))
+        });
+        self.row(i, label)
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.))
+            .text_size(text::SMALL)
+            .text_color(t.muted)
+            .child("Docs may need:")
+            .children(docs)
+            .children(ask)
+            .into_any_element()
     }
 
     /// What a turn changed, each file opening its diff, and going back to before it.

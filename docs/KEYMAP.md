@@ -19,6 +19,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `panel.project` | Project tree app | Cmd+1 | M1 | F |
 | `panel.log` | Git log app | Cmd+9 | M2 | F |
 | `panel.panels` | Panels app | — | P1 | P1 |
+| `panel.docs` | Docs app | — | H7 | H7 |
 | `panel.commit` | Commit panel | Cmd+0 | M3 | — |
 | `vcs.commit` | Commit | Cmd+K | M3 | — |
 | `vcs.push` | Push | Cmd+Shift+K | M3 | — |
