@@ -41,42 +41,41 @@ pub(crate) enum Place {
 }
 
 impl Place {
-    fn sh(&self, cwd: Option<&str>, script: &str, args: &[&str]) -> Result<Vec<u8>> {
-        let Place::Wsl(distro, env) = self else {
-            unreachable!("a script runs in a distro")
-        };
-        wsl(distro, env, cwd, &format!("{PROJECTS}; {script}"), args)
-    }
-
     /// The history of session `id`; None when it cannot be read.
     pub(crate) fn read(&self, id: &str) -> Option<Vec<Update>> {
         match self {
             Place::Here(dir) => read(dir, id),
             _ if !valid(id) => None,
-            _ => {
-                let script =
-                    r#"for f in "$p"/*/"$1".jsonl; do [ -f "$f" ] && exec cat "$f"; done; exit 1"#;
-                history(&self.sh(None, script, &[id]).ok()?)
+            Place::Wsl(d, env) => {
+                let script = r#"for f in "$p"/*/"$1".jsonl; do [ -f "$f" ] && exec cat "$f"; done
+                    exit 1"#;
+                history(&sh(d, env, None, script, &[id]).ok()?)
             }
         }
     }
 
     /// The past sessions of the folder `repo`, newest first.
     pub(crate) fn past(&self, repo: &str) -> Result<Vec<Past>> {
-        let Place::Here(dir) = self else {
-            let cwd = String::from_utf8_lossy(&self.sh(Some(repo), "pwd -P", &[])?).into_owned();
-            let cwd = cwd.trim_end();
-            let script = format!(
-                r#"for f in "$p/$1"/*.jsonl; do [ -f "$f" ] || continue; i=${{f%.jsonl}}
-                printf '%s\0%s\0' "${{i##*/}}" "$(stat -c %Y "$f")"; cat "$i/custom-title.json" 2>/dev/null
-                printf '\0'; if [ "$(wc -c < "$f")" -le {} ]; then cat "$f"
-                else head -c {WINDOW} "$f"; echo; tail -c {WINDOW} "$f"; fi; printf '\0'; done"#,
-                2 * WINDOW
-            );
-            return Ok(listed(&self.sh(None, &script, &[&folder(cwd)])?, cwd));
-        };
-        let cwd = fs::canonicalize(repo).map_or(repo.into(), |p| p.display().to_string());
-        Ok(past(dir, cwd.trim_start_matches(r"\\?\")))
+        match self {
+            Place::Here(dir) => {
+                let cwd = fs::canonicalize(repo).map_or(repo.into(), |p| p.display().to_string());
+                Ok(past(dir, cwd.trim_start_matches(r"\\?\")))
+            }
+            Place::Wsl(d, env) => {
+                let cwd =
+                    String::from_utf8_lossy(&sh(d, env, Some(repo), "pwd -P", &[])?).into_owned();
+                let cwd = cwd.trim_end();
+                let script = format!(
+                    r#"for f in "$p/$1"/*.jsonl; do [ -f "$f" ] || continue; i=${{f%.jsonl}}
+                    printf '%s\0%s\0' "${{i##*/}}" "$(stat -c %Y "$f")"
+                    cat "$i/custom-title.json" 2>/dev/null; printf '\0'
+                    if [ "$(wc -c < "$f")" -le {} ]; then cat "$f"
+                    else head -c {WINDOW} "$f"; echo; tail -c {WINDOW} "$f"; fi; printf '\0'; done"#,
+                    2 * WINDOW
+                );
+                Ok(listed(&sh(d, env, None, &script, &[&folder(cwd)])?, cwd))
+            }
+        }
     }
 
     /// Removes session `id`'s transcript and its folder.
@@ -84,13 +83,25 @@ impl Place {
         match self {
             Place::Here(dir) => delete(dir, id),
             _ if !valid(id) => Err(Error::Other(format!("No session {id}."))),
-            _ => {
+            Place::Wsl(d, env) => {
                 let script = r#"for f in "$p"/*/"$1".jsonl; do
-                    [ -f "$f" ] && rm -rf "${f%.jsonl}" && exec rm "$f"; done; echo "No session $1." >&2; exit 1"#;
-                self.sh(None, script, &[id]).map(drop)
+                    [ -f "$f" ] && rm -rf "${f%.jsonl}" && exec rm "$f"; done
+                    echo "No session $1." >&2; exit 1"#;
+                sh(d, env, None, script, &[id]).map(drop)
             }
         }
     }
+}
+
+/// `script` in the distro, with `$p` its transcripts' folder.
+fn sh(
+    distro: &str,
+    env: &[(String, OsString)],
+    cwd: Option<&str>,
+    script: &str,
+    args: &[&str],
+) -> Result<Vec<u8>> {
+    wsl(distro, env, cwd, &format!("{PROJECTS}; {script}"), args)
 }
 
 /// The project folder the CLI keeps `cwd`'s transcripts in; `cwd` as the CLI sees it, its symlinks
