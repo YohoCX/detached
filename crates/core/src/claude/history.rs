@@ -9,6 +9,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
 use super::{result, tool, wsl};
@@ -68,9 +70,10 @@ impl Place {
                 let script = format!(
                     r#"for f in "$p/$1"/*.jsonl; do [ -f "$f" ] || continue; i=${{f%.jsonl}}
                     printf '%s\0%s\0' "${{i##*/}}" "$(stat -c %Y "$f")"
-                    cat "$i/custom-title.json" 2>/dev/null; printf '\0'
-                    if [ "$(wc -c < "$f")" -le {} ]; then cat "$f"
-                    else head -c {WINDOW} "$f"; echo; tail -c {WINDOW} "$f"; fi; printf '\0'; done"#,
+                    base64 "$i/custom-title.json" 2>/dev/null; printf '\0'
+                    if [ "$(wc -c < "$f")" -le {} ]; then base64 "$f"
+                    else {{ head -c {WINDOW} "$f"; echo; tail -c {WINDOW} "$f"; }} | base64; fi
+                    printf '\0'; done"#,
                     2 * WINDOW
                 );
                 Ok(listed(&sh(d, env, None, &script, &[&folder(cwd)])?, cwd))
@@ -183,17 +186,25 @@ pub(crate) fn past(dir: &Path, cwd: &str) -> Vec<Past> {
     all
 }
 
-/// The past sessions of `cwd` in a distro's listing: each transcript's id, mtime in seconds, side
-/// file and ends, each part ended by a NUL, which JSON lines never hold.
+/// The past sessions of `cwd` in a distro's listing: each transcript's id, mtime in seconds, and
+/// side file and ends in base64, each part ended by a NUL.
 fn listed(bytes: &[u8], cwd: &str) -> Vec<Past> {
     let mut parts = bytes.split(|&b| b == 0);
+    let decode = |b: &[u8]| {
+        let b: Vec<u8> = b
+            .iter()
+            .copied()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect();
+        STANDARD.decode(b).unwrap_or_default()
+    };
     let mut all = vec![];
     while let (Some(id), Some(secs), Some(side), Some(ends)) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     {
         let secs = String::from_utf8_lossy(secs).trim().parse().unwrap_or(0u64);
         let id = String::from_utf8_lossy(id).into_owned();
-        all.extend(entry(id, secs * 1000, side, ends, cwd));
+        all.extend(entry(id, secs * 1000, &decode(side), &decode(ends), cwd));
     }
     all.sort_by_key(|p| std::cmp::Reverse(p.modified));
     all

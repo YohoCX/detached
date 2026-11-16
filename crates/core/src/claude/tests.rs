@@ -311,8 +311,17 @@ fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() 
     );
     let vars = env(&run.sb.state, &spec);
     let wslenv = vars.iter().find(|(k, _)| k == "WSLENV").unwrap();
-    let names: Vec<String> = CLAUDE.env.iter().map(|k| format!("{k}/u")).collect();
-    assert_eq!(wslenv.1, OsString::from(names.join(":")));
+    let wslenv: Vec<&str> = wslenv.1.to_str().unwrap().split(':').collect();
+    assert_eq!(wslenv.len(), CLAUDE.env.len());
+    for k in [
+        "CLAUDE_CONFIG_DIR/up",
+        "CLAUDE_CODE_TMPDIR/up",
+        "NODE_EXTRA_CA_CERTS/up",
+    ] {
+        assert!(wslenv.contains(&k), "{k} in {wslenv:?}");
+    }
+    assert!(wslenv.contains(&"ANTHROPIC_API_KEY/u"));
+    assert!(vars.iter().any(|(k, v)| k == "WSL_UTF8" && v == "1"));
     assert!(vars.iter().any(|(k, _)| k == "PATH"));
     spec.wsl = None;
     assert!(!env(&run.sb.state, &spec).iter().any(|(k, _)| k == "WSLENV"));

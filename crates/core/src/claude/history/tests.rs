@@ -232,16 +232,25 @@ fn delete_removes_the_transcript_and_its_folder_and_never_follows_a_path() {
 }
 
 #[test]
-fn a_distro_s_listing_reads_as_the_folder_does() {
+fn a_distro_s_listing_reads_as_the_folder_does_past_a_nul_in_a_title() {
     let cwd = "/tmp/h4c/transcripts-titled/repo";
     let dir = laid("titled", cwd);
     let file = file(dir.path(), TITLED).unwrap();
     let side = fs::read(file.with_extension("").join("custom-title.json")).unwrap();
-    let mut bytes = format!("{TITLED}\x001700000000\0").into_bytes();
-    bytes.extend(side);
-    bytes.push(0);
-    bytes.extend(fs::read(&file).unwrap());
-    bytes.extend(b"\0other\x001700000001\0\0not json\0");
+    let b64 = |b: &[u8]| {
+        let b = STANDARD.encode(b).into_bytes();
+        b.chunks(76).collect::<Vec<_>>().join(&b'\n')
+    };
+    let mut bytes = b"other\x001700000001\0".to_vec();
+    for part in [&b"{\"customTitle\": \"a\0b\"}"[..], b"not\0json"] {
+        bytes.extend(b64(part));
+        bytes.push(0);
+    }
+    bytes.extend(format!("{TITLED}\x001700000000\0").into_bytes());
+    for part in [side, fs::read(&file).unwrap()] {
+        bytes.extend(b64(&part));
+        bytes.push(0);
+    }
     let listed = listed(&bytes, cwd);
     let here = past(dir.path(), cwd);
     assert_eq!(listed.len(), 1);

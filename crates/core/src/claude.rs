@@ -57,6 +57,12 @@ const LEASH: &str = "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; while kill -0 $! 2>
     kill -0 $PPID 2>/dev/null || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; \
     done; wait $!";
 const WAIT: Duration = Duration::from_secs(60);
+/// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
+const PATHS: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_TMPDIR",
+    "NODE_EXTRA_CA_CERTS",
+];
 
 pub(crate) fn backend() -> &'static dyn Backend {
     &Direct
@@ -112,14 +118,16 @@ impl Backend for Direct {
 }
 
 /// The CLI's env: the allowlist and the manifest's names; a distro gets the manifest's alone, through
-/// `WSLENV`.
+/// `WSLENV`, and wsl.exe speaks UTF-8 instead of UTF-16.
 fn env(core: &AppState, spec: &Spec) -> Vec<(String, OsString)> {
     let p = spec.provider;
     let mut vars = proc::env(p.env, proc::parent(&core.env()));
     if spec.wsl.is_some() {
         let names = vars.iter().filter(|(k, _)| p.env.contains(&k.as_str()));
-        let names: Vec<String> = names.map(|(k, _)| format!("{k}/u")).collect();
+        let flag = |k: &str| if PATHS.contains(&k) { "up" } else { "u" };
+        let names: Vec<String> = names.map(|(k, _)| format!("{k}/{}", flag(k))).collect();
         vars.push(("WSLENV".into(), names.join(":").into()));
+        vars.push(("WSL_UTF8".into(), "1".into()));
     }
     vars
 }
@@ -129,9 +137,12 @@ fn place(spec: &Spec, env: Vec<(String, OsString)>) -> Place {
     let Some(distro) = spec.wsl.clone() else {
         let get = |k: &str| env.iter().find(|(n, v)| n == k && !v.is_empty());
         let get = |k: &str| get(k).map(|(_, v)| PathBuf::from(v));
-        let home = get("HOME")
-            .or_else(|| get("USERPROFILE"))
-            .or_else(dirs::home_dir);
+        // The CLI's home dir is USERPROFILE on Windows, whatever HOME says.
+        let [a, b] = match cfg!(windows) {
+            true => ["USERPROFILE", "HOME"],
+            false => ["HOME", "USERPROFILE"],
+        };
+        let home = get(a).or_else(|| get(b)).or_else(dirs::home_dir);
         let dir = get("CLAUDE_CONFIG_DIR").or_else(|| Some(home?.join(".claude")));
         return Place::Here(dir.unwrap_or_default());
     };

@@ -71,12 +71,6 @@ fn wsl() -> Option<String> {
         .filter(|d| !d.is_empty())
 }
 
-/// A Windows path as the stock distro mounts it.
-fn linux(path: &str) -> String {
-    let (drive, rest) = path.split_once(":\\").unwrap_or(("c", path));
-    format!("/mnt/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"))
-}
-
 /// The user's `claude`, found as the app finds it.
 fn claude() -> PathBuf {
     let env = Env {
@@ -162,14 +156,7 @@ fn boot_with(
     // The distro's own `claude` runs there.
     let cli = wsl().map_or_else(claude, |_| PathBuf::from("claude"));
     let mut f = super::boot_on(cx, &cli, &vars, provider, install);
-    if wsl().is_some() {
-        for (k, v) in &mut f.core.env.write().unwrap().vars {
-            if ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR"].contains(&k.as_str()) {
-                *v = linux(v);
-            }
-        }
-        f.wsl = wsl();
-    }
+    f.wsl = wsl();
     (f, api)
 }
 
