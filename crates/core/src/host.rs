@@ -26,6 +26,8 @@ pub enum Act {
     ReportGroup(Group),
     Done(Done),
     Proc(ProcAct),
+    Send(SendAct),
+    Watch(WatchAct),
 }
 
 impl Act {
@@ -36,6 +38,8 @@ impl Act {
             Act::ReportGroup(_) => "report_group",
             Act::Done(_) => "done",
             Act::Proc(_) => "proc",
+            Act::Send(_) => "send",
+            Act::Watch(_) => "watch",
         }
     }
 }
@@ -121,6 +125,23 @@ pub enum Op {
     Restart,
 }
 
+/// A message to a session of the sender's group, or a reply to one it got.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SendAct {
+    pub to: String,
+    pub text: String,
+    pub reply_to: Option<String>,
+}
+
+/// One message to the watcher when a running process is ready, or when a pipeline of the repo's
+/// branch ends: `pipeline`'s, else the newest.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WatchAct {
+    pub repo: String,
+    pub process: Option<String>,
+    pub pipeline: Option<String>,
+}
+
 /// The server: `answer` takes each tool call, and its error goes back to the agent as the call's.
 pub fn server(answer: impl Fn(Call) -> Result<Value, String> + Send + Sync + 'static) -> Tools {
     Arc::new(move |m: Value| {
@@ -198,28 +219,39 @@ fn tools() -> Value {
             "name": s("The process's name")}),
         &["op", "repo", "name"],
     );
+    let send = object(
+        json!({"to": s("A session's id from `group`"), "text": s("The message"),
+            "reply_to": s("The id of the message this answers")}),
+        &["to", "text"],
+    );
+    let watch = object(
+        json!({"repo": s("The repo's path"), "process": s("A running process's name"),
+            "pipeline": s("A pipeline's id; the branch's newest when neither is given")}),
+        &["repo"],
+    );
     let read = object(
         json!({"query": s("A GraphQL query, such as { schema }")}),
         &["query"],
     );
     let act = object(
         json!({"action": one_of(&["report_finding", "report_verdict", "report_group", "done",
-                "proc"]),
-            "args": {"anyOf": [finding, verdict, group, done, proc],
+                "proc", "send", "watch"]),
+            "args": {"anyOf": [finding, verdict, group, done, proc, send, watch],
                 "description": "The action's arguments"}}),
         &["action", "args"],
     );
     json!({"tools": [
         {"name": READ, "inputSchema": read, "description": "Reads Detached's data: its repos, \
-            their status, merge requests, skills, docs and defined processes with their logs, and \
-            the agent sessions. Ask a repo's `docs(query)` how its code works before reading the \
+            their status, merge requests, skills, docs and defined processes with their logs, the \
+            agent sessions, and this session's `inbox` and `group`. Ask a repo's `docs(query)` how its code works before reading the \
             source: it answers the doc sections whose index routes there. `{ schema }` returns \
             the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
             verdict on a finding, a group of duplicate findings, or `done` at the end of the work, which every turn of a review \
             ends with; `proc` starts, stops or restarts a defined process where its definition \
-            lets agents."},
+            lets agents; `send` messages a session of this one's group; `watch` puts one message \
+            into this session's inbox when a process is ready or a pipeline ends."},
     ]})
 }
 

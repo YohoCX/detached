@@ -10,6 +10,7 @@ pub mod doc;
 pub mod docs;
 pub mod forge;
 pub mod host;
+pub mod inbox;
 pub mod invalidate;
 pub mod nav;
 pub mod panel;
@@ -41,6 +42,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     update::init(cx);
     agents::init(cx);
     session::init(cx);
+    inbox::init(cx);
     panel::live::init(cx);
     invalidate::init(cx);
     workspace::init(cx);

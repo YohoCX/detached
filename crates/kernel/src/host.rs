@@ -25,7 +25,7 @@ use exec::{FindingSnap, Need, PanelSnap, ProcSnap, RepoSnap, SessionSnap, Snap};
 
 mod exec;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 const WAIT: Duration = Duration::from_secs(10);
 const REPORTS: &[&str] = &["report_finding", "report_verdict", "done"];
@@ -38,6 +38,8 @@ pub struct Identity {
     pub can: &'static [&'static str],
     /// A panel participant's own corner of its run.
     pub panel: Option<Scope>,
+    /// The session asking, whose `inbox` and `group` it reads.
+    pub session: Option<String>,
 }
 
 /// What a participant reads of its run: its own findings, and in verify the one it judges.
@@ -62,6 +64,7 @@ impl Identity {
             subject: None,
             can: &[],
             panel: None,
+            session: None,
         }
     }
 
@@ -72,6 +75,7 @@ impl Identity {
             subject: Some(Subject { repo, mr }),
             can: REPORTS,
             panel: None,
+            session: None,
         }
     }
 
@@ -84,12 +88,12 @@ impl Identity {
         }
     }
 
-    /// A session's by its kind: the chat reads as the owner and runs processes where their
-    /// definitions let agents, any other kind reads its repo alone.
+    /// A session's by its kind: the chat reads as the owner, runs processes where their definitions
+    /// let agents, messages its group and watches; any other kind reads its repo alone.
     pub fn of(kind: Kind, repo: &str) -> Identity {
         match kind {
             Kind::Chat => Identity {
-                can: &["proc"],
+                can: &["proc", "send", "watch"],
                 ..Identity::owner()
             },
             Kind::Verifier | Kind::Untrusted => Identity::subject(repo, None),
@@ -117,18 +121,23 @@ pub fn query(cx: &mut App, who: &Identity, query: &str) -> Task<Result<Value>> {
     let q = query.clone();
     let first = blocking::run(cx, move || exec::run(&snap, &q));
     cx.spawn(async move |cx| {
-        let (value, needs) = first.await.map_err(Error::Other)?;
-        if needs.is_empty() {
-            return Ok(value);
+        let (mut value, needs, mut read) = first.await.map_err(Error::Other)?;
+        if !needs.is_empty() {
+            let held = cx.update(|cx| hold(cx, &needs));
+            let until = cx.background_executor().now() + WAIT;
+            while !cx.update(|cx| ready(cx, &held, &needs))
+                && cx.background_executor().now() < until
+            {
+                cx.background_executor().timer(FRAME).await;
+            }
+            let snap = cx.update(|cx| snapshot(cx, &who, &held));
+            let done = cx.update(|cx| blocking::run(cx, move || exec::run(&snap, &query)));
+            (value, _, read) = done.await.map_err(Error::Other)?;
         }
-        let held = cx.update(|cx| hold(cx, &needs));
-        let until = cx.background_executor().now() + WAIT;
-        while !cx.update(|cx| ready(cx, &held, &needs)) && cx.background_executor().now() < until {
-            cx.background_executor().timer(FRAME).await;
+        if let Some(id) = who.session.as_ref().filter(|_| !read.is_empty()) {
+            cx.update(|cx| crate::inbox::mark_read(cx, id, &read));
         }
-        let snap = cx.update(|cx| snapshot(cx, &who, &held));
-        let done = cx.update(|cx| blocking::run(cx, move || exec::run(&snap, &query)));
-        Ok(done.await.map_err(Error::Other)?.0)
+        Ok(value)
     })
 }
 
@@ -261,10 +270,17 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
                 repo: s.spec.repo.clone(),
             })
         });
+    let m = crate::inbox::Messages::get(cx);
+    let me = who.session.as_deref().filter(|_| who.can.contains(&"send"));
+    let group = me.and_then(|id| m.group(id).map(|g| (id, g)));
     Snap {
         repos: repos.collect(),
         current: w.current().filter(|c| sees(c)).map(String::from),
         sessions: sessions.collect(),
+        inbox: me.map_or(vec![], |id| m.inbox(id).to_vec()),
+        group: group.map_or(vec![], |(id, g)| {
+            g.members.iter().filter(|x| *x != id).cloned().collect()
+        }),
         panels: panels(cx, who),
         env: Some(crate::core(cx).env()),
     }

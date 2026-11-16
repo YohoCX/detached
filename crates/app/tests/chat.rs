@@ -1237,3 +1237,50 @@ fn a_turn_that_changed_a_covered_file_offers_to_ask_for_the_doc_s_update(cx: &mu
         "{asked}"
     );
 }
+
+#[gpui_kit::test]
+fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_on(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    say(cx, "say here");
+    wait_for_item(cx, "here");
+    cx.click("chat.new");
+    let solo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| {
+        let chat = chat::find(&solo, 1, cx).unwrap();
+        let text = "fake: say ready\nfake-wake: query { inbox { text } }";
+        chat.update(cx, |c, cx| c.send(text.into(), cx));
+    });
+    wait_for_item(cx, "ready");
+    idle(cx);
+    let second = id(cx, 1);
+    let group = |cx: &mut VisualTestContext| {
+        cx.find("chat.group")
+            .and_then(|e| e.description().map(String::from))
+    };
+    assert_eq!(group(cx).as_deref(), Some("No group"));
+    cx.click("chat.group");
+    cx.update(|w, cx| assert!(menu::pick("New group: Group 1", w, cx)));
+    cx.click("chat.group");
+    cx.update(|w, cx| assert!(menu::pick("Wake on messages", w, cx)));
+    wait_until(cx, |cx| group(cx).as_deref() == Some("Group 1 · wakes"));
+
+    let repo = solo.clone();
+    cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
+    cx.click("chat.group");
+    cx.update(|w, cx| assert!(menu::pick("Join Group 1 (1)", w, cx)));
+    let args = json!({"action": "send", "args": {"to": second, "text": "hello there"}});
+    say(cx, &format!("act {args}"));
+    wait_for_item(cx, ": hello there");
+    idle(cx);
+
+    cx.workspace(|w, cx| w.show(Doc::Chat { repo: solo, n: 1 }, cx));
+    wait_for_item(cx, "Woken by new messages");
+    wait_for_item(cx, r#"{"data":{"inbox":[{"text":"hello there"}]}}"#);
+    assert!(
+        !items(cx)
+            .iter()
+            .any(|i| i.starts_with("You:") && i.contains("hello"))
+    );
+}

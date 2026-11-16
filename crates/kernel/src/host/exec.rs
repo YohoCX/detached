@@ -16,6 +16,8 @@ use graphql_parser::schema::{self, ObjectType, Type, TypeDefinition, parse_schem
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::inbox::Message;
+
 const SDL: &str = include_str!("schema.graphql");
 const DEPTH: usize = 8;
 const SIZE: usize = 256 * 1024;
@@ -32,6 +34,9 @@ pub struct Snap {
     pub sessions: Vec<SessionSnap>,
     pub panels: Vec<PanelSnap>,
     pub env: Option<Env>,
+    /// The asking session's messages, and the ids of the others in its group.
+    pub inbox: Vec<Message>,
+    pub group: Vec<String>,
 }
 
 pub struct PanelSnap {
@@ -98,15 +103,16 @@ pub enum Need {
     Processes(String),
 }
 
-/// The query's answer, `{data, errors?}`, and what it found not loaded; a query outside the subset
-/// or the limits is refused by name.
-pub fn run(snap: &Snap, query: &str) -> Result<(Value, Vec<Need>), String> {
+/// The query's answer, `{data, errors?}`, what it found not loaded, and the messages it returned;
+/// a query outside the subset or the limits is refused by name.
+pub fn run(snap: &Snap, query: &str) -> Result<(Value, Vec<Need>, Vec<String>), String> {
     let doc = parse_query::<&str>(query).map_err(|e| format!("The query does not parse: {e}"))?;
     let set = check(&doc)?;
     let c = Ctx {
         snap,
         needs: RefCell::default(),
         errors: RefCell::default(),
+        read: RefCell::default(),
         size: Cell::default(),
     };
     let mut out = json!({"data": object(&c, "Query", Node::Query, set, &mut vec![])});
@@ -119,13 +125,15 @@ pub fn run(snap: &Snap, query: &str) -> Result<(Value, Vec<Need>), String> {
     if !errors.is_empty() {
         out["errors"] = errors.into();
     }
-    Ok((out, c.needs.into_inner()))
+    Ok((out, c.needs.into_inner(), c.read.into_inner()))
 }
 
 struct Ctx<'a> {
     snap: &'a Snap,
     needs: RefCell<Vec<Need>>,
     errors: RefCell<Vec<Value>>,
+    /// The messages' ids returned.
+    read: RefCell<Vec<String>>,
     /// The serialized result's bytes so far; the build stops once past SIZE.
     size: Cell<usize>,
 }
@@ -148,6 +156,7 @@ enum Node<'a> {
     /// A value with fields of its own: a commit, a match.
     Row(&'a Value),
     Proc(&'a ProcSnap),
+    Message(&'a Message),
 }
 
 enum Out<'a> {
@@ -182,6 +191,29 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
                 .collect(),
         ))
     }),
+    ("Query", "inbox", |c, _, a| {
+        let all = boolean(a, "all") == Some(true);
+        let shown: Vec<&Message> = (c.snap.inbox.iter()).filter(|m| all || !m.read).collect();
+        let ids = shown.iter().map(|m| m.id.clone());
+        c.read.borrow_mut().extend(ids);
+        Ok(Out::List(shown.into_iter().map(Node::Message).collect()))
+    }),
+    ("Query", "group", |c, _, _| {
+        let of = |s: &&SessionSnap| c.snap.group.contains(&s.id);
+        Ok(Out::List(
+            c.snap
+                .sessions
+                .iter()
+                .filter(of)
+                .map(Node::Session)
+                .collect(),
+        ))
+    }),
+    ("Message", "id", |_, n, _| val(&n.message().id)),
+    ("Message", "from", |_, n, _| val(&n.message().from)),
+    ("Message", "replyTo", |_, n, _| val(&n.message().reply_to)),
+    ("Message", "text", |_, n, _| val(&n.message().text)),
+    ("Message", "read", |_, n, _| val(n.message().read)),
     ("Query", "panels", |c, _, _| {
         Ok(Out::List(c.snap.panels.iter().map(Node::Panel).collect()))
     }),
@@ -425,6 +457,12 @@ impl<'a> Node<'a> {
         };
         f
     }
+    fn message(self) -> &'a Message {
+        let Node::Message(m) = self else {
+            unreachable!()
+        };
+        m
+    }
     fn row(self) -> &'a Value {
         let Node::Row(v) = self else { unreachable!() };
         v
@@ -577,6 +615,13 @@ fn text<'v>(args: &'v Args<'_>, name: &str) -> Option<&'v str> {
 fn word<'v>(args: &'v Args<'_>, name: &str) -> Option<&'v str> {
     match arg(args, name)? {
         Gql::Enum(e) => Some(e),
+        _ => None,
+    }
+}
+
+fn boolean(args: &Args<'_>, name: &str) -> Option<bool> {
+    match arg(args, name)? {
+        Gql::Boolean(b) => Some(*b),
         _ => None,
     }
 }
@@ -786,7 +831,8 @@ fn fits<'q, 't>(v: &Gql<'q, &'q str>, ty: &Type<'t, &'t str>) -> bool {
         (v, Type::NonNullType(t)) => fits(v, t),
         (Gql::List(l), Type::ListType(t)) => l.iter().all(|v| fits(v, t)),
         (Gql::String(_), Type::NamedType("String" | "ID"))
-        | (Gql::Int(_), Type::NamedType("Int")) => true,
+        | (Gql::Int(_), Type::NamedType("Int"))
+        | (Gql::Boolean(_), Type::NamedType("Boolean")) => true,
         (Gql::Enum(e), Type::NamedType(n)) => values(n).is_some_and(|v| v.contains(e)),
         _ => false,
     }
@@ -854,7 +900,7 @@ mod tests {
 
     #[test]
     fn a_query_reads_the_snapshot_and_names_what_was_not_loaded() {
-        let (out, needs) = run(
+        let (out, needs, _) = run(
             &snap(),
             "{ schema workspace { current { name branch ahead status { changed staged \
                 files(limit: 1) { path kind } } m: mrs(state: OPENED) { id } } } }",
@@ -951,6 +997,7 @@ mod tests {
             snap: &snap,
             needs: RefCell::default(),
             errors: RefCell::default(),
+            read: RefCell::default(),
             size: Cell::default(),
         };
         object(&c, "Query", Node::Query, check(&doc).unwrap(), &mut vec![]);

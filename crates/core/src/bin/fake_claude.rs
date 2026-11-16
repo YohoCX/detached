@@ -4,6 +4,8 @@
 //! - `die` exits with code 3 mid-turn;
 //! - `ask [<tool> <json input>]` asks for the tool (Write notes.txt), offering a rule, and says
 //!   what it got; a rule handed back is written to `.claude/settings.local.json`, as the CLI does;
+//!   `bash <command>` runs at once in `auto` and `bypassPermissions` and asks for it in any other
+//!   mode;
 //! - `question` asks a question and says the answers;
 //! - `noise` sends frames and a request nobody knows; `lack <request>` answers that request
 //!   `unsupported_request` from then on;
@@ -24,7 +26,8 @@
 //!   it resumed and its id;
 //! - `background <text>` starts a task that runs until `stop_task`;
 //! - `act <json>` calls the host's `detached_act` with those arguments, `query <q>` its
-//!   `detached_read`, and says the answer;
+//!   `detached_read`, and says the answer; `reply <text>` reads the inbox and sends the text to
+//!   the last unread message's sender, and says both answers;
 //! - `probe` does what the CLI does with the probe's responder: asks it, runs the Bash call it
 //!   returns, and sends the result back; sandboxed by `--settings`, the call writes elsewhere,
 //!   unless `fake.json`'s `sandbox` is `off`, or is not run when it is `unavailable`;
@@ -33,7 +36,8 @@
 //! - any other step says `said <step>`.
 //!
 //! A prompt with a line `fake: <steps>` runs those steps alone. A resumed session given a prompt
-//! without one runs its first prompt's `fake-resume: <steps>` line, as a model remembers its brief.
+//! without one runs its first prompt's `fake-resume: <steps>` line, as a model remembers its brief,
+//! and the host's wake, `You have new messages`, its `fake-wake: <steps>` line.
 //!
 //! `fake.json` in the config dir sets what `initialize` answers as `account`, the `rate_limits`
 //! and `context` of `get_usage` and `get_context_usage`, the requests it `lacks` from the start, and
@@ -54,6 +58,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 const VERSION: &str = "2.1.400";
+const WAKE: &str = "You have new messages";
 const VALUED: &[&str] = &[
     "--output-format",
     "--input-format",
@@ -442,13 +447,14 @@ impl Turn<'_> {
                 .find_map(|l| l.strip_prefix(prefix))
                 .map(String::from)
         };
+        let first = || first_prompt(&self.shared.lock().unwrap().id);
         let steps = script("fake: ", text)
             .or_else(|| {
-                script(
-                    "fake-resume: ",
-                    &first_prompt(&self.shared.lock().unwrap().id),
-                )
+                (text == WAKE)
+                    .then(|| script("fake-wake: ", &first()))
+                    .flatten()
             })
+            .or_else(|| script("fake-resume: ", &first()))
             .unwrap_or_else(|| text.to_string());
         // The prompt goes in first, as the CLI writes it: a turn that dies still has it.
         self.transcript(Some(text));
@@ -498,6 +504,24 @@ impl Turn<'_> {
         drop(s);
         self.send(json!({"type": "control_request", "request_id": id, "request": request}));
         self.answers.recv().map_err(err)
+    }
+
+    /// Calls a host tool: its text, after `error: ` when it failed.
+    fn host(&self, name: &str, arguments: Value) -> Result<String, Stop> {
+        let message = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}});
+        let r = self.ask(
+            json!({"subtype": "mcp_message", "server_name": "detached-host",
+            "message": message}),
+        )?;
+        let result = &r["response"]["mcp_response"]["result"];
+        let text = result["content"][0]["text"].as_str().unwrap_or_default();
+        let error = if result["isError"] == true {
+            "error: "
+        } else {
+            ""
+        };
+        Ok(format!("{error}{text}"))
     }
 
     fn step(&self, step: &str) -> Result<(), Stop> {
@@ -596,6 +620,13 @@ impl Turn<'_> {
                 let rules = if given { " with rules" } else { "" };
                 self.say(&format!("picked {behavior}{rules}"));
             }
+            "bash" => {
+                let mode = self.shared.lock().unwrap().mode.clone();
+                match mode.as_str() {
+                    "auto" | "bypassPermissions" => self.say(&format!("ran {rest} ")),
+                    _ => return self.step(&format!("ask Bash {}", json!({"command": rest}))),
+                }
+            }
             "question" => {
                 let options = json!([{"label": "Left", "description": "l"},
                     {"label": "Right", "description": "r"}]);
@@ -684,20 +715,24 @@ impl Turn<'_> {
                     "act" => ("detached_act", serde_json::from_str(rest).map_err(err)?),
                     _ => ("detached_read", json!({"query": rest})),
                 };
-                let message = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                    "params": {"name": name, "arguments": arguments}});
-                let r = self.ask(
-                    json!({"subtype": "mcp_message", "server_name": "detached-host",
-                    "message": message}),
+                let said = self.host(name, arguments)?;
+                self.say(&format!("{said} "));
+            }
+            "reply" if self.shared.lock().unwrap().mcp => {
+                let read = self.host(
+                    "detached_read",
+                    json!({"query": "{ inbox { id from text } }"}),
                 )?;
-                let result = &r["response"]["mcp_response"]["result"];
-                let text = result["content"][0]["text"].as_str().unwrap_or_default();
-                let error = if result["isError"] == true {
-                    "error: "
-                } else {
-                    ""
-                };
-                self.say(&format!("{error}{text} "));
+                let v: Value = serde_json::from_str(&read).unwrap_or_default();
+                let last = v["data"]["inbox"]
+                    .as_array()
+                    .and_then(|a| a.last())
+                    .cloned();
+                let last = last.unwrap_or_default();
+                let args = json!({"action": "send",
+                    "args": {"to": last["from"], "text": rest, "reply_to": last["id"]}});
+                let sent = self.host("detached_act", args)?;
+                self.say(&format!("{read} {sent} "));
             }
             "probe" => self.probe().map_err(err)?,
             "fail" => return Err(Stop::Error(rest.into())),

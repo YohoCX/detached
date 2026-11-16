@@ -6,6 +6,8 @@ type Query {
   repo(path: String!): Repo
   sessions(repo: String): [Session!]!
   panels: [Panel!]!                          # a participant sees its own run alone
+  inbox(all: Boolean): [Message!]!           # this session's unread messages, or all; read once returned
+  group: [Session!]!                         # the sessions `send` reaches: none outside an owner's group
 }
 type Workspace { repos: [Repo!]!  current: Repo }
 type Repo {
@@ -36,6 +38,8 @@ type DocSection { path: String!  heading: String  line: Int!  text: String!
 type Process { name: String!  command: String!  agents: ProcessAccess!  state: ProcessState!
                exitCode: Int  ready: Boolean!
                log(last: Int): String }      # null where agents may not read it; 100 lines by default
+# from: the sending session's id, or "detached" for what `watch` puts there.
+type Message { id: ID!  from: String!  replyTo: ID  text: String!  read: Boolean! }
 type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
                repo: Repo }
 enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }

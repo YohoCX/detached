@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
-    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    self, ASKING, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model,
+    Part, Piece, Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
@@ -131,6 +131,8 @@ pub enum Item {
     Note(String),
     /// Reported through the host's tools.
     Act(Act),
+    /// A turn the host started on new messages, with `inbox::WAKE` as its prompt.
+    Woken,
 }
 
 /// A panel participant's place: whom its tools answer as, and the repo whose acceptance of its
@@ -199,6 +201,10 @@ pub struct Session {
     whole: usize,
     /// The running turn reported `done`.
     done: bool,
+    /// While a woken turn runs: the mode to set back when it ends.
+    woken: Option<String>,
+    /// New messages came while it was busy: it is woken once idle.
+    pub(crate) wake_due: bool,
     /// Asks for a trust recheck, from the watcher or the agent's own report.
     changed: mpsc::UnboundedSender<()>,
     /// Taken by the recheck loop once the session started.
@@ -262,6 +268,10 @@ fn host_tools(
         let (who, me) = (who.clone(), me.clone());
         let job: Job = match call {
             Call::Read(q) => Box::new(move |cx| {
+                let who = Identity {
+                    session: me.upgrade().and_then(|s| s.read(cx).id.clone()),
+                    ..who
+                };
                 let read = crate::host::query(cx, &who, &q);
                 cx.spawn(async move |_| _ = said.send(read.await.map_err(|e| e.to_string())))
                     .detach();
@@ -281,6 +291,25 @@ fn host_tools(
                         );
                     })
                     .detach();
+                })
+            }
+            Call::Act(act @ (Act::Send(_) | Act::Watch(_))) => {
+                who.may(&act)?;
+                Box::new(move |cx| {
+                    let id = me.upgrade().and_then(|s| s.read(cx).id.clone());
+                    let id = id.unwrap_or_default();
+                    let done = match &act {
+                        Act::Send(m) => crate::inbox::send(cx, &id, m),
+                        Act::Watch(w) => crate::inbox::watch(cx, &id, w),
+                        _ => unreachable!("matched above"),
+                    };
+                    if done.is_ok() {
+                        me.update(cx, |s, cx| s.acted(act, cx)).ok();
+                    }
+                    _ = said.send(
+                        done.map(serde_json::Value::String)
+                            .map_err(|e| e.to_string()),
+                    );
                 })
             }
             Call::Act(act) => {
@@ -409,6 +438,8 @@ impl Session {
                 cancelled: false,
                 whole: 0,
                 done: false,
+                woken: None,
+                wake_due: false,
                 changed,
                 changes: Some(changes),
                 _watch: None,
@@ -534,6 +565,9 @@ impl Session {
         if let Some(text) = self.queued.take() {
             self.prompt(text, cx);
         }
+        if self.wake_due {
+            self.wake(cx);
+        }
     }
 
     /// A turn runs, or waits for the session to start.
@@ -568,7 +602,54 @@ impl Session {
         if self.open.is_none() || self.state != State::Idle {
             return;
         }
+        if let Some(id) = &self.id {
+            crate::inbox::user_turn(cx, id);
+        }
         self.items.push(Item::User(text.clone()));
+        self.begin(text, cx);
+    }
+
+    /// New messages: an idle session takes a woken turn in the asking mode, a busy one once idle.
+    pub(crate) fn wake(&mut self, cx: &mut Context<Self>) {
+        if self.state != State::Idle || self.queued.is_some() {
+            self.wake_due = !matches!(self.state, State::Ended(_));
+            return;
+        }
+        self.wake_due = false;
+        let (Some(id), Some(o)) = (self.id.clone(), self.open.as_ref()) else {
+            return;
+        };
+        if !crate::inbox::spend(cx, &id) {
+            self.note(crate::inbox::HELD.into());
+            return cx.notify();
+        }
+        let was = self.option("mode").unwrap_or(&self.spec.mode).to_string();
+        if was != ASKING
+            && let Err(e) = o.set(Setting::Mode(ASKING.into()))
+        {
+            self.note(format!(
+                "Not woken: the agent cannot switch to asking first: {e}"
+            ));
+            return cx.notify();
+        }
+        self.woken = Some(was);
+        self.items.push(Item::Woken);
+        self.begin(crate::inbox::WAKE.into(), cx);
+    }
+
+    /// Sets the mode a woken turn left back.
+    fn unwake(&mut self, was: Option<String>) {
+        let Some(was) = was.filter(|m| m != ASKING) else {
+            return;
+        };
+        if let Some(Err(e)) = self.open.as_ref().map(|o| o.set(Setting::Mode(was))) {
+            self.note(format!(
+                "The mode did not come back after the woken turn: {e}"
+            ));
+        }
+    }
+
+    fn begin(&mut self, text: String, cx: &mut Context<Self>) {
         (self.state, self.cancelled, self.done) = (State::Running, false, false);
         let core = crate::core(cx).clone();
         let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
@@ -601,10 +682,12 @@ impl Session {
             (Some(_), Some(end)) => Some(end),
             (Some(trees), None) => return self.prompted(trees, text, cx),
         };
-        if self.items.last() == Some(&Item::User(text.clone())) {
-            self.items.pop();
+        if self.woken.take().is_none() {
+            if self.items.last() == Some(&Item::User(text.clone())) {
+                self.items.pop();
+            }
+            self.unsent = Some(text);
         }
-        self.unsent = Some(text);
         self.close(end.unwrap_or(End::Closed), cx);
     }
 
@@ -637,6 +720,8 @@ impl Session {
             Err(e) => {
                 self.state = State::Idle;
                 self.note(format!("The prompt did not reach the agent: {e}"));
+                let was = self.woken.take();
+                self.unwake(was);
             }
         }
         cx.notify();
@@ -645,6 +730,7 @@ impl Session {
     /// Ends the running turn and its foreground command, and answers its asks `cancelled`; a
     /// queued prompt goes.
     pub fn cancel(&mut self) {
+        self.wake_due = false;
         if let Some(text) = self.queued.take() {
             self.items.push(Item::User(text));
         }
@@ -701,6 +787,10 @@ impl Session {
     pub fn set(&mut self, setting: Setting) -> Result<()> {
         if self.state == State::Starting {
             self.picked.push(setting);
+            return Ok(());
+        }
+        if let (Setting::Mode(m), Some(was)) = (&setting, &mut self.woken) {
+            (*was, self.spec.mode) = (m.clone(), m.clone());
             return Ok(());
         }
         let o = self
@@ -817,7 +907,9 @@ impl Session {
                 // A dropped reply answers `cancelled`.
                 let answer = if self.cancelled {
                     Answer::Gone
-                } else if key.as_ref().is_some_and(|k| self.rules.contains(k)) {
+                } else if self.woken.is_none()
+                    && key.as_ref().is_some_and(|k| self.rules.contains(k))
+                {
                     reply.send(backend::Answer::Allow);
                     Answer::Always
                 } else {
@@ -839,8 +931,12 @@ impl Session {
             }
         }
         // The agent drops a mode by itself, as `auto` on a model without it.
+        let want = match self.woken {
+            Some(_) => ASKING.to_string(),
+            None => self.spec.mode.clone(),
+        };
         let now = self.option("mode");
-        if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != self.spec.mode) {
+        if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != want) {
             let note = format!("Asked for {}, the session runs in {now}.", self.spec.mode);
             self.note(note);
         }
@@ -851,7 +947,7 @@ impl Session {
         cx.notify();
     }
 
-    fn update(&mut self, u: Update) {
+    pub(crate) fn update(&mut self, u: Update) {
         let items = &mut self.items;
         let open = items.len() > self.whole;
         match (u, items.last_mut().filter(|_| open)) {
@@ -899,6 +995,12 @@ impl Session {
             (Update::Trust, _) => _ = self.changed.unbounded_send(()),
             (Update::Config(c), _) => self.config = c,
             (Update::Mode(m), _) => {
+                if self.woken.is_some() && m != ASKING {
+                    self.note(format!(
+                        "The woken turn ran in {m}, not asking first, so it stopped."
+                    ));
+                    self.cancel();
+                }
                 if let Some(c) = self.config.iter_mut().find(|c| c.id == "mode") {
                     c.value = m;
                 }
@@ -909,6 +1011,8 @@ impl Session {
     /// The turn's end: its snapshots, what it changed and the trust re-hash, then idle again.
     fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
         self.drop_replies();
+        let was = self.woken.take();
+        self.unwake(was);
         let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
         self.failure = r.as_ref().err().cloned();
         let stop = match r {
@@ -991,7 +1095,12 @@ impl Session {
                 match s.ending.take() {
                     Some(end) => s.close(end, cx),
                     None if trust_moved => s.close(End::Trust, cx),
-                    None if s.state == State::Running => s.state = State::Idle,
+                    None if s.state == State::Running => {
+                        s.state = State::Idle;
+                        if s.wake_due {
+                            s.wake(cx);
+                        }
+                    }
                     None => {}
                 }
                 cx.notify();

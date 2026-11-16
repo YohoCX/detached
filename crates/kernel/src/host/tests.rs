@@ -13,7 +13,7 @@ use super::*;
 use crate::wait_until;
 
 /// Repos `a`, on the forge fake with MRs 1 and 2, and `b`, with no remote, every status loaded.
-fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) {
+pub(crate) fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) {
     let mut sb = Sandbox::new();
     let claude = sb.path("claude").display().to_string();
     let env = sb.state.env.get_mut().unwrap();

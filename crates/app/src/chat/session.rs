@@ -165,9 +165,10 @@ impl Chat {
         self.current().is_some_and(|s| s.read(cx).busy())
     }
 
+    /// Stops the turn, and every turn of the session's group.
     pub fn stop(&self, cx: &mut Context<Self>) {
         if let Some(s) = self.current() {
-            s.update(cx, |s, _| s.cancel());
+            kernel::inbox::stop(cx, s);
         }
     }
 
@@ -393,9 +394,14 @@ impl Chat {
         first.or(self.topic.as_deref())
     }
 
-    /// Ends its sessions for good: the chat is going away, or shows another conversation.
+    /// Ends its sessions for good, out of any group: the chat is going away, or shows another
+    /// conversation.
     pub fn end(&mut self, cx: &mut Context<Self>) {
         for s in self.sessions.drain(..) {
+            if let Some(id) = s.read(cx).id.clone() {
+                kernel::inbox::join(cx, &id, None);
+                kernel::inbox::set_wake(cx, &id, false);
+            }
             s.update(cx, |s, cx| s.end(cx));
         }
         self._watch.clear();
