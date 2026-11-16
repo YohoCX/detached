@@ -625,7 +625,7 @@ impl Adapter {
     }
 
     /// Sets what `new` and `load` did not: Codex's adapter reads no `configOptions` there. An option
-    /// the agent does not list is left out.
+    /// the agent does not list is left out; one it refuses closes the session.
     fn configure(&self, mut o: Opened, want: &[(String, String)]) -> Result<Opened> {
         for (k, v) in want {
             if !o.config.iter().any(|c| c.id == *k && c.value != *v) {
@@ -633,7 +633,13 @@ impl Adapter {
             }
             let value = SessionConfigOptionValue::value_id(v.clone());
             let set = SetSessionConfigOptionRequest::new(o.id.clone(), k.clone(), value);
-            o.config = configs(self.call(set)?.config_options);
+            match self.call(set) {
+                Ok(r) => o.config = configs(r.config_options),
+                Err(e) => {
+                    self.close_session(&o.id);
+                    return Err(e);
+                }
+            }
         }
         Ok(o)
     }

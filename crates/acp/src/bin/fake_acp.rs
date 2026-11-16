@@ -11,7 +11,8 @@
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
 //! - `env` says the names in its env; `meta` the `_meta` its session got, `params` all of its
-//!   `session/new` or `session/load`; `model` its model;
+//!   `session/new` or `session/load`; `model` its model and mode, `effort` its effort; `sessions`
+//!   the count of its open sessions;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `out-of-usage` fails the prompt as Claude does when extra usage has run out;
@@ -19,7 +20,8 @@
 //!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
-//! first. Installed as `codex-acp` it reads no `configOptions` on new or load, as Codex's adapter. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//! first. Installed as `codex-acp` it reads no `configOptions` on new or load and lists
+//! `reasoning_effort`, as Codex's adapter. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -44,6 +46,7 @@ struct Session {
     params: Value,
     model: String,
     mode: String,
+    effort: String,
     hold_close: bool,
 }
 
@@ -132,6 +135,7 @@ fn main() {
                     params: params.clone(),
                     model: asked("model").unwrap_or(fallback.into()),
                     mode: asked("mode").unwrap_or("auto".into()),
+                    effort: "medium".into(),
                     hold_close: false,
                 };
                 let config = config(&s);
@@ -167,6 +171,7 @@ fn main() {
                 match params["configId"].as_str() {
                     Some("mode") if MODES.contains(&v.as_str()) => s.mode = v,
                     Some("model") if MODELS.contains(&v.as_str()) => s.model = v,
+                    Some("reasoning_effort") if EFFORTS.contains(&v.as_str()) => s.effort = v,
                     _ => {
                         send(
                             &out,
@@ -248,6 +253,7 @@ const MODES: &[&str] = &[
     "read-only",
 ];
 const MODELS: &[&str] = &["default", "haiku", "fallback-opus"];
+const EFFORTS: &[&str] = &["low", "medium", "high"];
 
 fn exe_name() -> String {
     let exe = std::env::current_exe().unwrap_or_default();
@@ -265,10 +271,14 @@ fn config(s: &Session) -> Value {
             .collect();
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
-    json!([
+    let mut all = vec![
         select("mode", &s.mode, MODES),
-        select("model", &s.model, MODELS)
-    ])
+        select("model", &s.model, MODELS),
+    ];
+    if exe_name().starts_with("codex-acp") {
+        all.push(select("reasoning_effort", &s.effort, EFFORTS));
+    }
+    json!(all)
 }
 
 enum Stop {
@@ -414,6 +424,8 @@ impl Turn<'_> {
                 all.get_mut(self.sid).unwrap().hold_close = true;
             }
             "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
+            "effort" => self.say(&self.session(|s| s.effort.clone())),
+            "sessions" => self.say(&self.sessions.lock().unwrap().len().to_string()),
             "api" => self.say(&api().map_err(err)?),
             "write" => {
                 let (path, text) = rest.split_once(' ').unwrap_or((rest, ""));
