@@ -2,7 +2,7 @@
 //! its tab, and a line per run in the status bar.
 
 use detached_core::panel::mode::Stage;
-use detached_core::panel::record::{End, State};
+use detached_core::panel::record::State;
 use detached_core::panel::run::{Preview, Start};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
@@ -105,16 +105,9 @@ impl Form {
         }));
     }
 
-    /// Mean tokens of this repo's earlier runs of the mode.
     fn estimate(&self, cx: &App) -> Option<u64> {
         let mode = if self.gate { "gate" } else { "review" };
-        let rounds = self.rounds.read(cx).value.as_ref()?;
-        let runs = rounds.records.values().filter(|s| {
-            s.started.as_ref().is_some_and(|x| x.mode == mode)
-                && matches!(s.ended, Some(End::Done { .. }))
-        });
-        let tokens: Vec<u64> = runs.map(State::tokens).collect();
-        (!tokens.is_empty()).then(|| tokens.iter().sum::<u64>() / tokens.len() as u64)
+        self.rounds.read(cx).value.as_ref()?.estimate(mode)
     }
 }
 
@@ -684,7 +677,7 @@ pub fn ticking<V: 'static>(cx: &mut Context<V>) -> Task<()> {
 }
 
 /// Runs `t` and shows its error in the status message.
-fn report(t: Task<detached_core::error::Result<()>>, cx: &mut App) {
+pub(super) fn report(t: Task<detached_core::error::Result<()>>, cx: &mut App) {
     cx.spawn(async move |cx| {
         if let Err(e) = t.await {
             cx.update(|cx| {

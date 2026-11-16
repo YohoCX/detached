@@ -712,6 +712,29 @@ Windows 11, an untrusted review in WSL2, with mirrored networking and the Hyper-
 
 ### Step P3. Dispositions, rounds and the loop
 
+**Status (2026-11-17): built; waiting for the owner's check.**
+- Built: `core::panel::track` maps a finding's file and lines from its round's head to the new one
+  through a raw `git diff -U0` of that file; `run_started` records the task's tracked findings so
+  mapped (`priors`); the verifier sees the nearest within 3 lines as `earlier` and answers
+  `same_issue` in `report_verdict`, and the verdict event keeps which one it saw. Threads, `new`,
+  `still open`, `not raised`, `fixed` and "dismissed before" derive from the records alone. Dismiss
+  (with a reason), Defer and Reopen are `disposition` events in the finding's run; Defer also copies
+  a TECHDEBT.md row. The round tab compares with the round before and marks each card; the task tab
+  shows each finding's fate and the loop, with Next round while it goes on.
+- Tests: `core::panel::track` (fingerprints and every row above on written records),
+  `kernel::panel::tests` (a three-round loop on `fake_claude`: one major fixed by hand, one
+  dismissed, the loop stops), `tests/panels.rs` (Defer, Reopen, Dismiss and Next round in the UI).
+- Choices: a finding takes part when it stands alone, its quote holds and no verdict set it aside;
+  a link needs the verifier's `same_issue: true`, so no ruling makes a new thread; a dismissal or
+  deferral covers later findings of its thread at its severity or lower, a higher one reopens the
+  thread, marked with the dismissal, and a new thread beside a dismissed one is marked too; a
+  deferred thread does not gate; `fixed` needs a round that ended done with every finder reported;
+  a renamed file reads as gone, and a head that cannot be diffed leaves its finding unmapped and
+  open until dismissed; Next round is a gate on the task's subject (§8's re-review roster) behind
+  the estimate on its button; Defer writes the disposition to the run's record in the git dir and
+  nothing to the tree. Fix is P4's.
+- The owner checks: a loop on a real branch.
+
 Work: dispositions; Defer's clipboard row; fingerprints; round compare; suppression; the loop.
 
 Tests:

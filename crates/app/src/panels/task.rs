@@ -1,4 +1,5 @@
 use super::*;
+use detached_core::panel::track::Track;
 use detached_core::panel::{Counts, ThreadMark};
 use gpui_kit::{Bounds, ContentMask, PathBuilder, canvas, fill, point, relative, size};
 
@@ -50,6 +51,13 @@ fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App
 }
 
 fn fate(task: &kernel::panel::Task, index: usize, finding: &str) -> String {
+    if let Some(t) = &task.track {
+        return t
+            .of(&task.rounds[index], finding)
+            .map_or("set aside".into(), |(t, m)| {
+                format!("{} → {}", m.text(), t.fate.text())
+            });
+    }
     let Some(thread) = task
         .threads
         .iter()
@@ -134,6 +142,59 @@ fn bar(counts: Counts, max: usize) -> impl IntoElement {
     .h(GAP)
 }
 
+impl TaskView {
+    /// Whether the loop stops, and Next round while it goes on.
+    fn looping(&self, track: &Track, rounds: &Rounds, cx: &App) -> impl IntoElement {
+        let open = track.gating().count();
+        let (text, next) = match () {
+            _ if track.running => ("Loop: the latest round is running".to_string(), false),
+            _ if !track.complete => ("Loop goes on: the latest round did not finish".into(), true),
+            _ if open == 0 => ("Loop stops: no major or critical is open".into(), false),
+            _ => (format!("Loop goes on: {open} major or critical open"), true),
+        };
+        let start = rounds.next(&self.task).filter(|_| next);
+        let estimate = rounds
+            .estimate("gate")
+            .map_or("estimate unknown".into(), |e| {
+                format!("about {} tokens", super::live::tokens(e))
+            });
+        div()
+            .flex()
+            .gap(GAP)
+            .items_center()
+            .min_w_0()
+            .child(
+                div()
+                    .id("panel.task.loop")
+                    .test_support()
+                    .aria_label(text.clone())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(text),
+            )
+            .when_some(start, |d, s| {
+                d.child(
+                    ui::button(
+                        "panel.task.next",
+                        format!("Next round: gate, {estimate}"),
+                        cx,
+                    )
+                    .test_support()
+                    .on_click(move |_, _, cx| {
+                        let p = kernel::panel::live::start(s.clone(), cx);
+                        let (repo, task, round) = {
+                            let p = p.read(cx);
+                            (p.repo.clone(), p.task.clone(), p.run.clone())
+                        };
+                        let doc = Doc::Panel { repo, task, round };
+                        Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+                    }),
+                )
+            })
+    }
+}
+
 impl Render for TaskView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = div()
@@ -173,6 +234,9 @@ impl Render for TaskView {
                     .truncate()
                     .child(header),
             );
+            if let Some(track) = &task.track {
+                content = content.child(self.looping(track, rounds, cx));
+            }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

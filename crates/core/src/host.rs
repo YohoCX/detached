@@ -79,6 +79,8 @@ pub struct Verdict {
     pub verdict: Judged,
     pub quote: String,
     pub body: Option<String>,
+    /// Whether it is the same issue as the earlier finding its brief shows.
+    pub same_issue: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,7 +179,9 @@ fn tools() -> Value {
     let verdict = object(
         json!({"finding": s("The finding's id"),
             "verdict": one_of(&["confirmed", "refined", "rejected", "immaterial", "pre_existing"]),
-            "quote": s("The code as it is"), "body": s("Why")}),
+            "quote": s("The code as it is"), "body": s("Why"),
+            "same_issue": {"type": "boolean",
+                "description": "When the brief shows an earlier finding: whether this is the same issue"}}),
         &["finding", "verdict", "quote"],
     );
     let group = object(

@@ -2,7 +2,7 @@
 //! sessions with chat turns first, attempts, stalls, sleep, offline and back-off, and its record,
 //! whose replay is the run's state.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -14,9 +14,10 @@ use detached_core::host::Act;
 use detached_core::panel::brief;
 use detached_core::panel::marks;
 use detached_core::panel::mode::Stage;
-use detached_core::panel::record::{self, End, Event, Found, Gate, State};
+use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, State};
 use detached_core::panel::run::{self, Prepared, Start};
-use detached_core::panel::tree;
+use detached_core::panel::{track, tree};
+use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, WeakEntity};
 
 use crate::blocking;
@@ -119,8 +120,9 @@ pub struct Live {
     effort: String,
     cwd: PathBuf,
     brief: String,
-    /// The finding a verifier judges.
+    /// The finding a verifier judges, and the earlier one it sees beside it.
     pub finding: Option<String>,
+    earlier: Option<String>,
     pub session: Option<Entity<Session>>,
     /// The agent's session id, which a retry resumes.
     sid: Option<String>,
@@ -354,6 +356,7 @@ impl Panel {
             cli: None,
             schema: record::SCHEMA,
             limits,
+            priors: p.priors.clone(),
         };
         self.emit(Event::RunStarted(started), cx);
         // Cancelled while it prepared: its trees go at once.
@@ -372,7 +375,7 @@ impl Panel {
                 &f.seat.effort,
                 f.cwd.clone(),
                 brief,
-                None,
+                [None, None],
                 now,
             ));
         }
@@ -738,12 +741,13 @@ impl Panel {
                 });
             }
             Act::ReportVerdict(verdict) => {
-                let model = self.live[i].model.clone();
+                let (model, earlier) = (self.live[i].model.clone(), self.live[i].earlier.clone());
                 self.emit(
                     Event::Verdict {
                         participant: name.into(),
                         model,
                         verdict,
+                        earlier,
                     },
                     cx,
                 );
@@ -1012,7 +1016,7 @@ impl Panel {
                 }
                 let brief = brief::merge(&p.merge, &heads);
                 let model = p.mode.merge.clone().unwrap_or_else(|| "sonnet".into());
-                self.add(&p, "merge", "merge", next, &model, brief, None, cx);
+                self.add(&p, "merge", "merge", next, &model, brief, [None, None], cx);
             }
             Stage::Verify => self.verify(&p, cx),
             Stage::Gate => {
@@ -1053,25 +1057,18 @@ impl Panel {
             let sources = self.state.sources(&f.id);
             let (model, note) = record::verifier(&p.mode.verifiers, &sources);
             notes.extend(note);
-            let brief = brief::verify(&p.verifier, &p.data, f);
-            add.push((format!("verify-{}", f.id), model, brief, f.id.clone()));
+            let earlier = track::beside(&p.priors, &f.finding);
+            let brief = brief::verify(&p.verifier, &p.data, f, earlier.map(|e| &e.finding));
+            let ids = [Some(f.id.clone()), earlier.map(|e| e.key.clone())];
+            add.push((format!("verify-{}", f.id), model, brief, ids));
         }
         for n in notes {
             if !self.state.notes.iter().any(|x| x == n) {
                 self.state.notes.push(n.into());
             }
         }
-        for (name, model, brief, finding) in add {
-            self.add(
-                p,
-                &name,
-                "verifier",
-                Stage::Verify,
-                &model,
-                brief,
-                Some(finding),
-                cx,
-            );
+        for (name, model, brief, ids) in add {
+            self.add(p, &name, "verifier", Stage::Verify, &model, brief, ids, cx);
         }
         self.schedule(cx);
     }
@@ -1085,7 +1082,7 @@ impl Panel {
         stage: Stage,
         model: &str,
         brief: String,
-        finding: Option<String>,
+        ids: [Option<String>; 2],
         cx: &mut Context<Self>,
     ) {
         let (p2, n, text) = (p.clone(), name.to_string(), brief.clone());
@@ -1103,7 +1100,7 @@ impl Panel {
             "high",
             p.pinned.clone(),
             brief,
-            finding,
+            ids,
             now,
         ));
     }
@@ -1254,7 +1251,7 @@ fn live(
     effort: &str,
     cwd: PathBuf,
     brief: String,
-    finding: Option<String>,
+    [finding, earlier]: [Option<String>; 2],
     now: Instant,
 ) -> Live {
     Live {
@@ -1266,6 +1263,7 @@ fn live(
         cwd,
         brief,
         finding,
+        earlier,
         session: None,
         sid: None,
         attempt: 1,
@@ -1398,30 +1396,50 @@ fn branch_done(
     into: Option<String>,
     cx: &mut App,
 ) -> Task<Result<()>> {
+    let branch = branch.to_string();
+    let done = append([repo, task, run], cx, move |core, path| {
+        match &into {
+            Some(subject) => tree::merge(core, path, subject, &branch)?,
+            None => tree::discard(core, path, &branch)?,
+        }
+        let merged = into.is_some();
+        Ok(Event::BranchDone { branch, merged })
+    });
+    let repo = repo.to_string();
+    cx.spawn(async move |cx| {
+        done.await?;
+        cx.update(|cx| crate::invalidate::status(cx, &repo).detach());
+        Ok(())
+    })
+}
+
+/// Records the owner's disposition of a run's finding; a dismissal needs a reason.
+pub fn dispose(
+    [repo, task, run, finding]: [&str; 4],
+    disposition: Disposition,
+    reason: Option<String>,
+    cx: &mut App,
+) -> Task<Result<()>> {
+    let e = track::dispose(finding, disposition, reason);
+    append([repo, task, run], cx, move |_, _| e)
+}
+
+/// Runs `op` off the main thread and appends the event it returns to the run's record and to its
+/// live panel's state.
+fn append(
+    [repo, task, run]: [&str; 3],
+    cx: &mut App,
+    op: impl FnOnce(&AppState, &Path) -> Result<Event> + Send + 'static,
+) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
-    let (repo, task, run, branch) = (
-        repo.to_string(),
-        task.to_string(),
-        run.to_string(),
-        branch.to_string(),
-    );
-    let live = find(cx, &repo, &task, &run);
+    let live = find(cx, repo, task, run);
+    let (repo, task, run) = (repo.to_string(), task.to_string(), run.to_string());
     let done = blocking::run(cx, {
-        let (repo, branch) = (repo.clone(), branch.clone());
+        let repo = repo.clone();
         move || {
-            let path = std::path::Path::new(&repo);
-            match &into {
-                Some(subject) => tree::merge(&core, path, subject, &branch)?,
-                None => tree::discard(&core, path, &branch)?,
-            }
-            let dir = run::common(&core, path)?
-                .join("detached/panels")
-                .join(&task)
-                .join(&run);
-            let e = Event::BranchDone {
-                branch,
-                merged: into.is_some(),
-            };
+            let path = Path::new(&repo);
+            let e = op(&core, path)?;
+            let dir = run::dir(&core, path, &task, &run)?;
             record::Record { dir }.append(record::now(), &e)?;
             Ok::<_, Error>(e)
         }
@@ -1435,7 +1453,6 @@ fn branch_done(
                     cx.notify();
                 });
             }
-            crate::invalidate::status(cx, &repo).detach();
             super::refresh(cx, &repo);
         });
         Ok(())
@@ -1449,11 +1466,8 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
     let done = blocking::run(cx, {
         let repo = repo.clone();
         move || {
-            let path = std::path::Path::new(&repo);
-            let dir = run::common(&core, path)?
-                .join("detached/panels")
-                .join(&task)
-                .join(&run);
+            let path = Path::new(&repo);
+            let dir = run::dir(&core, path, &task, &run)?;
             let r = record::Record { dir: dir.clone() };
             let state = State::replay(&record::read(&dir)?);
             let root = tree::trusted_root(&core, &run);

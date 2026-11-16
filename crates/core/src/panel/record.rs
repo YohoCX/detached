@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::graphs::{Lineage, Outcome, Stages};
 use super::mode::{Seat, Stage};
+use super::track::Prior;
 use super::{Finding, Participant as Row, Run};
 use crate::error::Result;
 use crate::host::{self, Judged};
@@ -41,6 +42,17 @@ pub struct Started {
     /// Threat-model lines that do not hold for this run, and other limits, as the header shows them.
     #[serde(default)]
     pub limits: Vec<String>,
+    /// The task's earlier findings still tracked, mapped to this head.
+    #[serde(default)]
+    pub priors: Vec<Prior>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Disposition {
+    Open,
+    Dismissed,
+    Deferred,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -112,6 +124,9 @@ pub enum Event {
         participant: String,
         model: String,
         verdict: host::Verdict,
+        /// The earlier finding the verifier saw beside it, as `<run>/<id>`.
+        #[serde(default)]
+        earlier: Option<String>,
     },
     /// The participant called `done`.
     Reported {
@@ -149,7 +164,7 @@ pub enum Event {
     },
     Disposition {
         finding: String,
-        disposition: String,
+        disposition: Disposition,
         reason: Option<String>,
     },
     RunEnded(End),
@@ -244,6 +259,8 @@ pub struct Found {
     /// The group's first finding, when this one folded into it.
     pub folded: Option<String>,
     pub verdict: Option<(host::Verdict, String)>,
+    /// The earlier finding its verifier saw beside it.
+    pub earlier: Option<String>,
 }
 
 /// A run as its log says it went.
@@ -261,6 +278,8 @@ pub struct State {
     pub kept: Vec<(String, String, bool)>,
     pub ended: Option<End>,
     pub timeline: Vec<super::Event>,
+    /// The owner's latest disposition of each finding.
+    pub dispositions: BTreeMap<String, (Disposition, Option<String>)>,
 }
 
 impl State {
@@ -358,6 +377,7 @@ impl State {
                     unverified: unverified.clone(),
                     folded: None,
                     verdict: None,
+                    earlier: None,
                 });
             }
             Event::Group { ids, .. } => {
@@ -380,9 +400,15 @@ impl State {
                     }
                 }
             }
-            Event::Verdict { model, verdict, .. } => {
+            Event::Verdict {
+                model,
+                verdict,
+                earlier,
+                ..
+            } => {
                 if let Some(f) = self.findings.iter_mut().find(|f| f.id == verdict.finding) {
                     f.verdict = Some((verdict.clone(), model.clone()));
+                    f.earlier = earlier.clone();
                 }
             }
             Event::Reported {
@@ -439,7 +465,11 @@ impl State {
                 .kept
                 .push((participant.clone(), branch.clone(), *dirty)),
             Event::BranchDone { branch, .. } => self.kept.retain(|k| k.1 != *branch),
-            Event::Disposition { .. } => {}
+            Event::Disposition {
+                finding,
+                disposition,
+                reason,
+            } => _ = (self.dispositions).insert(finding.clone(), (*disposition, reason.clone())),
             Event::RunEnded(end) => {
                 self.ended = Some(end.clone());
                 self.paused = None;
@@ -718,7 +748,9 @@ mod tests {
                 verdict: v,
                 quote: "q".into(),
                 body: None,
+                same_issue: None,
             },
+            earlier: None,
         }
     }
 
@@ -802,6 +834,7 @@ mod tests {
             unverified: None,
             folded: None,
             verdict: None,
+            earlier: None,
         };
         let (opus, sonnet) = (f("opus"), f("claude-sonnet-4-5"));
         let vs = ["sonnet".to_string(), "opus".to_string()];

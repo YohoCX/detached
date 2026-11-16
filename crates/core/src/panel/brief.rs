@@ -10,6 +10,7 @@ use super::record::{Found, Subject};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::runner::{self, Kind, Opts};
+use crate::host;
 
 /// How far from its line a quote may be found.
 const SLACK: usize = 3;
@@ -81,17 +82,29 @@ pub fn merge(role: &Role, found: &[&Found]) -> String {
     )
 }
 
-/// A verifier's brief over one finding, with no word of who raised it.
-pub fn verify(role: &Role, subject: &Value, f: &Found) -> String {
-    let finding = json!({"id": f.id, "file": f.finding.file, "line": f.finding.line,
-        "end_line": f.finding.end_line, "severity": f.finding.severity, "class": f.finding.class,
-        "title": f.finding.title, "body": f.finding.body, "quote": f.finding.quote});
+/// A verifier's brief over one finding, with no word of who raised it; `earlier` is a past
+/// round's finding near it, its lines mapped to this head.
+pub fn verify(role: &Role, subject: &Value, f: &Found, earlier: Option<&host::Finding>) -> String {
+    let finding = |id: Option<&str>, f: &host::Finding| {
+        json!({"id": id, "file": f.file, "line": f.line, "end_line": f.end_line,
+            "severity": f.severity, "class": f.class, "title": f.title, "body": f.body,
+            "quote": f.quote})
+    };
+    let mut data = json!({"subject": subject, "finding": finding(Some(&f.id), &f.finding)});
+    let mut text = role.text.clone();
+    if let Some(e) = earlier {
+        data["earlier"] = finding(None, e);
+        text.push_str(EARLIER);
+    }
     format!(
-        "{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
-        role.text,
-        data(&json!({"subject": subject, "finding": finding}))
+        "{text}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
+        self::data(&data)
     )
 }
+
+const EARLIER: &str = "\n\nBeside the finding is `earlier`, one an earlier round reported near the \
+    same lines, mapped to this head. In your verdict, set `same_issue` to whether the finding is the \
+    same issue as `earlier`, however worded, whatever its lens or class.";
 
 /// Whether `quote` is in `file` at `sha` within a few lines of `line`..`end`; Err says why not. The
 /// blob is read raw, with no filter.

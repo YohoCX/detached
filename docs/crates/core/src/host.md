@@ -22,7 +22,8 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
 - `Finding` — severity, class, title, body, optional fix, file, line, optional end line, quote,
   lenses.
 - `Severity` (`critical`, `major`, `minor`), `Class` (`correctness` … `tests`).
-- `Verdict` — the finding's id, a `Judged` verdict, quote, optional body.
+- `Verdict` — the finding's id, a `Judged` verdict, quote, optional body, and `same_issue`:
+  whether it is the same issue as the earlier finding its brief shows.
 - `Judged` — `confirmed`, `refined`, `rejected`, `immaterial`, `pre_existing`.
 - `Done` — `nothing_found`, optional note.
 - `ProcAct` — `op` (`Op`: `start`, `stop`, `restart`), the repo's path and the process's name; the
