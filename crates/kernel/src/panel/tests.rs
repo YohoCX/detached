@@ -351,7 +351,7 @@ fn a_stalled_participant_retries_and_a_sleep_gap_does_not_stall_it(cx: &mut Test
     role(
         &f,
         "f1",
-        &format!("fake: first stuck hang\nfake-resume: {}", done()),
+        &format!("fake: say stuck;first stuck hang\nfake-resume: {}", done()),
     );
     let wall = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(record::now()));
     let clock = wall.clone();
@@ -359,7 +359,13 @@ fn a_stalled_participant_retries_and_a_sleep_gap_does_not_stall_it(cx: &mut Test
     let p = start(&f, "review", cx);
     let running = |cx: &gpui::App| {
         let s = p.read(cx).live.first().and_then(|l| l.session.clone());
-        s.is_some_and(|s| s.read(cx).state == crate::session::State::Running)
+        // Its words come after its transcript, which the resume reads.
+        let said = |s: &crate::session::Session| {
+            s.items
+                .iter()
+                .any(|i| matches!(i, crate::session::Item::Text(_)))
+        };
+        s.is_some_and(|s| s.read(cx).state == crate::session::State::Running && said(s.read(cx)))
     };
     wait_for(cx, LONG, running);
     cx.executor().advance_clock(Duration::from_secs(100));
@@ -512,14 +518,30 @@ fn a_verifier_s_ignored_cache_and_git_status_leave_the_state_check_quiet(cx: &mu
         &f,
         "verifier",
         &format!(
-            "fake: write cache/tool.log x;{};{}",
+            "fake: write cache/tool.log x;wait go;{};{}",
             verdict("f1-1", "confirmed"),
             done()
         ),
     );
     let p = start(&f, "gate", cx);
-    git(&f, &["status"]);
+    let verifying = |cx: &gpui::App| {
+        let p = p.read(cx);
+        let v = p.live.iter().find(|l| l.stage == Stage::Verify);
+        v.and_then(|l| l.session.clone())
+            .is_some_and(|s| s.read(cx).state == crate::session::State::Running)
+    };
+    wait_for(cx, LONG, verifying);
+    // While the verifier runs: a read-only status in its pinned tree, and a shared ref moved.
+    let run = p.read_with(cx, |p, _| p.run.clone());
+    let pinned = f
+        .core
+        .data_dir
+        .join("trees/trusted")
+        .join(run)
+        .join("pinned");
+    out(&f.core.env(), &pinned, &["status"], Kind::Write).unwrap();
     git(&f, &["branch", "moved-meanwhile"]);
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
     assert_eq!(
         ended(&p, cx).ended,
         Some(End::Done {

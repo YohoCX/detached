@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
@@ -131,12 +132,15 @@ pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
 
 /// What the start dialog shows: the subject, its trust and why, its commits' authors, and the trust
 /// files at its head with whether they are accepted.
+#[derive(Clone)]
 pub struct Preview {
     pub subject: Subject,
     pub trust: Trust,
     pub authors: Vec<(String, String, bool)>,
     pub items: Vec<String>,
     pub accepted: bool,
+    /// What accepting this preview accepts, and no other.
+    pub fingerprint: String,
 }
 
 pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
@@ -153,17 +157,21 @@ pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
     Ok(Preview {
         authors: marks::authors(&core.env(), &p, &subject)?,
         accepted: trust::trusted(&core.config_dir, &s.repo, &project),
+        fingerprint: project.fingerprint,
         items: project.items,
         trust,
         subject,
     })
 }
 
-/// Accepts the subject's trust files at its head for its repo.
-pub fn accept(core: &AppState, s: &Start) -> Result<()> {
-    let subject = subject(core, s)?;
-    let project = head_trust(core, &subject)?;
-    trust::trust(&core.config_dir, &s.repo, &project)
+/// Accepts the trust files the preview showed, by their fingerprint: a moved branch or another
+/// subject's are not accepted with them.
+pub fn accept(core: &AppState, pv: &Preview) -> Result<()> {
+    let project = trust::Project {
+        items: pv.items.clone(),
+        fingerprint: pv.fingerprint.clone(),
+    };
+    trust::trust(&core.config_dir, &pv.subject.repo, &project)
 }
 
 /// What a finder's tree would load: the trust files at the head, raw, and the owner's gitignored
@@ -176,8 +184,11 @@ fn head_trust(core: &AppState, s: &Subject) -> Result<trust::Project> {
 
 const LOCAL: &str = ".claude/settings.local.json";
 
-/// Copies the owner's local settings into a finder's tree.
+/// Copies the owner's local settings into a finder's tree, unless the head tracks its own.
 pub fn copy_local(repo: &Path, tree: &Path) -> Result<()> {
+    if tree.join(LOCAL).exists() {
+        return Ok(());
+    }
     if let Ok(l) = fs::read(repo.join(LOCAL)) {
         fs::create_dir_all(tree.join(".claude"))?;
         fs::write(tree.join(LOCAL), l)?;
@@ -212,7 +223,7 @@ pub fn prepare(
     s: &Start,
     task: &str,
     run: &str,
-    probe: &dyn Fn() -> Result<Probe>,
+    probe: Arc<dyn Fn() -> Result<Probe> + Send + Sync>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Prepared> {
     let env = core.env();
@@ -258,27 +269,37 @@ pub fn prepare(
             ));
         }
         tree::check_prefix(&env, repo)?;
-        p.sandboxed = probe().is_ok_and(|r| r == Probe::Passed);
+        p.sandboxed = probing(probe, cancelled)? == Probe::Passed;
         if !p.sandboxed {
             limits
                 .push("Verifiers run without the sandbox: the state check stands in for it".into());
         }
-        p.pinned = tree::pinned(core, repo, run, &sha)?;
-        for (name, role, seat) in seats {
-            let (cwd, branch) = tree::finder(core, repo, run, &name, &sha)?;
-            copy_local(repo, &cwd)?;
-            p.finders.push(Finder {
-                name,
-                role,
-                seat,
-                cwd,
-                branch: Some(branch),
-            });
+        let trees = || {
+            halt(cancelled)?;
+            p.pinned = tree::pinned(core, repo, run, &sha)?;
+            for (name, role, seat) in seats {
+                halt(cancelled)?;
+                let (cwd, branch) = tree::finder(core, repo, run, &name, &sha)?;
+                let branch = Some(branch);
+                p.finders.push(Finder {
+                    name,
+                    role,
+                    seat,
+                    cwd,
+                    branch,
+                });
+                copy_local(repo, &p.finders.last().unwrap().cwd)?;
+            }
+            p.mcp = mcp(core, repo, &p.pinned, run)?;
+            halt(cancelled)
+        };
+        if let Err(e) = trees() {
+            teardown(core, &p, run);
+            return Err(e);
         }
-        p.mcp = mcp(core, repo, &p.pinned, run)?;
     } else {
         p.deny = root::denied(core)?;
-        match probe()? {
+        match probing(probe, cancelled)? {
             Probe::Passed => {}
             Probe::Failed(why) => {
                 return Err(Error::Other(format!(
@@ -291,10 +312,12 @@ pub fn prepare(
         root::clean(&lock, &root)?;
         let dir = root.join(run);
         p.pinned = dir.join("pinned");
-        tree::export(&env, repo, &sha, &p.pinned)?;
+        (p.dir, p.lock) = (Some(dir), Some(lock));
+        if let Err(e) = tree::export(&env, repo, &sha, &p.pinned, cancelled) {
+            teardown(core, &p, run);
+            return Err(e);
+        }
         p.deny.push(p.common.join("detached"));
-        p.dir = Some(dir);
-        p.lock = Some(lock);
         p.sandboxed = true;
         for (name, role, seat) in seats {
             let cwd = p.pinned.clone();
@@ -315,6 +338,29 @@ pub fn prepare(
         )?;
     }
     Ok(p)
+}
+
+fn halt(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    match cancelled() {
+        true => Err(Error::Cancelled),
+        false => Ok(()),
+    }
+}
+
+/// The probe's answer, on a thread of its own so a cancel need not wait for it.
+fn probing(
+    probe: Arc<dyn Fn() -> Result<Probe> + Send + Sync>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Probe> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || _ = tx.send(probe()));
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(r) => return r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => halt(cancelled)?,
+            Err(_) => return Err(Error::Other("The probe stopped".into())),
+        }
+    }
 }
 
 /// The repo's MCP servers, from `.mcp.json` at the subject's head and the CLI's entry for the repo's
@@ -464,8 +510,8 @@ mod tests {
         };
         let pv = preview(&sb.state, &s).unwrap();
         assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
-        accept(&sb.state, &s).unwrap();
-        let head = pv.subject.head_sha;
+        accept(&sb.state, &pv).unwrap();
+        let head = pv.subject.head_sha.clone();
         let (tree, _) = tree::finder(&sb.state, &repo, "run", "f1", &head).unwrap();
         copy_local(&repo, &tree).unwrap();
         let p = trust::project(&sb.state.env(), &tree).unwrap();
@@ -474,5 +520,84 @@ mod tests {
             "{}",
             p.fingerprint
         );
+    }
+
+    #[test]
+    fn accepting_takes_the_preview_shown_not_the_branch_as_it_is_now() {
+        let sb = Sandbox::new();
+        let repo = sb.path("r");
+        fs::create_dir_all(repo.join(".claude")).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        let settings = |cmd: &str| {
+            format!(
+                r#"{{"hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "{cmd}"}}]}}]}}}}"#
+            )
+        };
+        fs::write(repo.join(".claude/settings.json"), settings("shown")).unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "a"]);
+        let s = Start {
+            repo: repo.display().to_string(),
+            branch: "main".into(),
+            remote: false,
+            base: "main".into(),
+            mode: "review".into(),
+            untrusted: false,
+            budget: None,
+        };
+        let shown = preview(&sb.state, &s).unwrap();
+        fs::write(repo.join(".claude/settings.json"), settings("never shown")).unwrap();
+        sb.git(&repo, &["commit", "-qam", "b"]);
+        accept(&sb.state, &shown).unwrap();
+        assert!(
+            !preview(&sb.state, &s).unwrap().accepted,
+            "the moved head is not accepted"
+        );
+        sb.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+        assert!(preview(&sb.state, &s).unwrap().accepted);
+    }
+
+    #[test]
+    fn a_cancel_stops_a_prepare_waiting_on_its_probe_before_any_tree() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let sb = Sandbox::new();
+        let repo = sb.path("r");
+        fs::create_dir_all(&repo).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        sb.commit(&repo, "a", "a", "a");
+        let path = repo.display().to_string();
+        marks::change(&sb.state, |p| {
+            p.repos.push(marks::Mark {
+                name: path.clone(),
+                ..Default::default()
+            })
+        })
+        .unwrap();
+        let s = Start {
+            repo: path,
+            branch: "main".into(),
+            remote: false,
+            base: "main".into(),
+            mode: "review".into(),
+            untrusted: false,
+            budget: None,
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let later = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            later.store(true, Ordering::SeqCst);
+        });
+        let hung = Arc::new(|| {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            Ok(Probe::Passed)
+        });
+        let began = std::time::Instant::now();
+        let r = prepare(&sb.state, &s, "t", "run", hung, &|| {
+            stop.load(Ordering::SeqCst)
+        });
+        assert!(matches!(r, Err(Error::Cancelled)));
+        assert!(began.elapsed() < std::time::Duration::from_secs(5));
+        assert!(!tree::trusted_root(&sb.state, "run").exists());
     }
 }

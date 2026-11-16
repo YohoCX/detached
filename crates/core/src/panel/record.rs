@@ -361,16 +361,22 @@ impl State {
                 });
             }
             Event::Group { ids, .. } => {
-                let mut standing: Vec<&String> = vec![];
+                let mut standing: Vec<String> = vec![];
                 for id in ids {
                     let stands = self.found(id).is_some_and(|f| f.folded.is_none());
-                    if stands && !standing.contains(&id) {
-                        standing.push(id);
+                    if stands && !standing.contains(id) {
+                        standing.push(id.clone());
                     }
                 }
+                // A leader whose quote failed would keep a member that holds from its verifier.
+                let checked = |id: &String| self.found(id).is_some_and(|f| f.unverified.is_none());
+                standing.sort_by_key(|id| !checked(id));
                 if let Some((head, rest)) = standing.split_first() {
-                    for f in self.findings.iter_mut().filter(|f| rest.contains(&&f.id)) {
-                        f.folded = Some(head.to_string());
+                    let folds = |f: &Found| {
+                        rest.contains(&f.id) || f.folded.as_ref().is_some_and(|h| rest.contains(h))
+                    };
+                    for f in self.findings.iter_mut().filter(|f| folds(f)) {
+                        f.folded = Some(head.clone());
                     }
                 }
             }
@@ -835,5 +841,32 @@ mod tests {
             },
         );
         assert_eq!(s.heads().count(), 2);
+    }
+
+    #[test]
+    fn a_checked_member_leads_its_group_and_a_regroup_carries_the_old_members() {
+        let mut s = State::default();
+        s.apply(0, &started("a", "opus", Stage::Find));
+        let mut bad = found("a", "a-1", Severity::Major);
+        if let Event::Finding { unverified, .. } = &mut bad {
+            *unverified = Some("the quote is not at a:1".into());
+        }
+        for e in [
+            bad,
+            found("a", "a-2", Severity::Major),
+            found("a", "a-3", Severity::Major),
+        ] {
+            s.apply(0, &e);
+        }
+        let group = |ids: &[&str]| Event::Group {
+            participant: "merge".into(),
+            ids: ids.iter().map(|i| i.to_string()).collect(),
+        };
+        s.apply(0, &group(&["a-1", "a-2"]));
+        let heads: Vec<&str> = s.heads().map(|f| f.id.as_str()).collect();
+        assert_eq!(heads, ["a-2", "a-3"]);
+        s.apply(0, &group(&["a-3", "a-2"]));
+        assert_eq!(s.heads().count(), 1);
+        assert_eq!(s.sources("a-3").len(), 3, "a-1 moved with its leader");
     }
 }

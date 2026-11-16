@@ -247,7 +247,8 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         untrusted: false,
         budget: None,
     };
-    detached_core::panel::run::accept(&f.core, &start).unwrap();
+    let shown = detached_core::panel::run::preview(&f.core, &start).unwrap();
+    detached_core::panel::run::accept(&f.core, &shown).unwrap();
     let sha = String::from_utf8(
         std::process::Command::new("git")
             .args(["rev-parse", "HEAD"])

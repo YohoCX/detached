@@ -214,11 +214,12 @@ impl Render for Form {
                                 .map(|i| div().text_size(text::SMALL).child(i.clone())),
                         );
                     if p.trust.trusted {
+                        let shown = p.clone();
                         body = body.child(
                             ui::button("panels.form.accept", "Accept these settings", cx)
                                 .test_support()
-                                .on_click(cx.listener(|f, _, _, cx| {
-                                    let t = live::accept(f.start(cx), cx);
+                                .on_click(cx.listener(move |f, _, _, cx| {
+                                    let t = live::accept(shown.clone(), cx);
                                     f.after(t, cx);
                                 })),
                         );
@@ -340,7 +341,15 @@ pub(super) fn header(panel: &Entity<Panel>, cx: &App) -> AnyElement {
     let at = subject.map_or(String::new(), |s| {
         format!(" at {}", &s.head_sha[..s.head_sha.len().min(8)])
     });
-    let elapsed = (p.state.last - p.state.at).max(0) / 1000;
+    let to = match p.state.ended {
+        Some(_) => p.state.last,
+        None => detached_core::panel::record::now(),
+    };
+    let elapsed = if p.state.at == 0 {
+        0
+    } else {
+        (to - p.state.at).max(0) / 1000
+    };
     let mut head = div()
         .id("panel.live")
         .test_support()

@@ -126,7 +126,13 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
 
 /// `p` with `repo`'s file `rel` as it is on disk, when it exists, in the order `project` reads.
 pub fn with_file(env: &Env, mut p: Project, repo: &Path, rel: &str) -> Result<Project> {
-    let Ok(text) = fs::read_to_string(repo.join(rel)) else {
+    let tracked = p
+        .fingerprint
+        .lines()
+        .any(|l| l.split_once(' ').is_some_and(|x| x.1 == rel));
+    // A tracked one is among the head's files already.
+    let text = (!tracked).then(|| fs::read_to_string(repo.join(rel)).ok());
+    let Some(text) = text.flatten() else {
         return Ok(p);
     };
     settings(rel, &text, &mut p.items);

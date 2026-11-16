@@ -212,11 +212,12 @@ pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
         let flag = p.cancelled.clone();
         let cancelled = move || flag.load(Ordering::SeqCst);
         let prepared = blocking::run(cx, move || {
-            let probe = || match cached.clone() {
+            let c = core.clone();
+            let probe = Arc::new(move || match cached.clone() {
                 Some(p) => Ok(p),
-                None => backend::direct().probe(&core, None),
-            };
-            run::prepare(&core, &s, &task, &run, &probe, &cancelled)
+                None => backend::direct().probe(&c, None),
+            });
+            run::prepare(&core, &s, &task, &run, probe, &cancelled)
         });
         p.task(cx, async move |this, cx| {
             let prepared = prepared.await;
@@ -1500,10 +1501,10 @@ pub fn preview(s: Start, cx: &App) -> Task<Result<run::Preview>> {
     blocking::run(cx, move || run::preview(&core, &s))
 }
 
-/// Accepts the subject's trust files at its head.
-pub fn accept(s: Start, cx: &App) -> Task<Result<()>> {
+/// Accepts the trust files the preview showed.
+pub fn accept(pv: run::Preview, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || run::accept(&core, &s))
+    blocking::run(cx, move || run::accept(&core, &pv))
 }
 
 /// Changes the panels' trust marks and limits.

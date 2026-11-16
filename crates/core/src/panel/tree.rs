@@ -382,31 +382,42 @@ fn torn() -> Error {
 /// Writes `sha`'s tree into the empty folder `dest` from raw objects: no checkout, no filter, no
 /// `.git`; executable bits and symlinks as git stores them, a submodule an empty folder.
 #[cfg(unix)]
-pub fn export(env: &Env, repo: &Path, sha: &str, dest: &Path) -> Result<()> {
+pub fn export(
+    env: &Env,
+    repo: &Path,
+    sha: &str,
+    dest: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, symlink};
     let all = entries(env, repo, sha, &[])?;
-    let files: Vec<&Entry> = all.iter().filter(|e| e.mode != "160000").collect();
-    let oids: Vec<&str> = files.iter().map(|e| e.oid.as_str()).collect();
-    let bodies = blobs(env, repo, &oids)?;
     fs::create_dir_all(dest)?;
     for e in all.iter().filter(|e| e.mode == "160000") {
         dir(dest, &e.path)?;
         fs::create_dir(dest.join(&e.path))?;
     }
-    for (e, body) in files.into_iter().zip(bodies) {
-        let parent = dir(dest, &e.path)?;
-        let path = parent.join(Path::new(&e.path).file_name().unwrap_or_default());
-        match e.mode.as_str() {
-            "120000" => symlink(String::from_utf8_lossy(&body).as_ref(), &path)?,
-            mode => {
-                let perm = if mode == "100755" { 0o755 } else { 0o644 };
-                let mut f = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(perm)
-                    .open(&path)?;
-                f.write_all(&body)?;
+    let files: Vec<&Entry> = all.iter().filter(|e| e.mode != "160000").collect();
+    // A batch at a time, so a cancel stops it between batches.
+    for batch in files.chunks(256) {
+        if cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let oids: Vec<&str> = batch.iter().map(|e| e.oid.as_str()).collect();
+        for (e, body) in batch.iter().zip(blobs(env, repo, &oids)?) {
+            let parent = dir(dest, &e.path)?;
+            let path = parent.join(Path::new(&e.path).file_name().unwrap_or_default());
+            match e.mode.as_str() {
+                "120000" => symlink(String::from_utf8_lossy(&body).as_ref(), &path)?,
+                mode => {
+                    let perm = if mode == "100755" { 0o755 } else { 0o644 };
+                    let mut f = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(perm)
+                        .open(&path)?;
+                    f.write_all(&body)?;
+                }
             }
         }
     }
@@ -414,7 +425,7 @@ pub fn export(env: &Env, repo: &Path, sha: &str, dest: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub fn export(_: &Env, _: &Path, _: &str, _: &Path) -> Result<()> {
+pub fn export(_: &Env, _: &Path, _: &str, _: &Path, _: &dyn Fn() -> bool) -> Result<()> {
     Err(Error::Other(
         "An untrusted run needs WSL here, which this build does not run yet".into(),
     ))
@@ -543,7 +554,11 @@ mod tests {
         _ = fs::remove_file(&marker);
         let sha = sb.git(&repo, &["rev-parse", "HEAD"]);
         let dest = sb.path("export");
-        export(&sb.state.env(), &repo, &sha, &dest).unwrap();
+        export(&sb.state.env(), &repo, &sha, &dest, &|| false).unwrap();
+        assert!(matches!(
+            export(&sb.state.env(), &repo, &sha, &sb.path("stopped"), &|| true),
+            Err(Error::Cancelled)
+        ));
         assert!(!marker.exists(), "no filter or hook ran");
         assert!(
             fs::read_to_string(dest.join("x.bin"))
