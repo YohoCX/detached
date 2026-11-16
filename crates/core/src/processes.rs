@@ -212,16 +212,28 @@ pub fn start(
         return Err(Error::Other(format!("{} is not a folder.", cwd.display())));
     }
     // portable-pty quotes each argument as the C runtime reads it, which cmd does not: cmd runs
-    // the command as a batch file's line, so it expands every variable itself.
+    // the command as a batch file's line, so it expands every variable itself. It starts in the
+    // script's folder and gets its bare name, so no path reaches cmd's command line unquoted.
     #[cfg(windows)]
     let script = {
         let mut f = tempfile::Builder::new().suffix(".cmd").tempfile()?;
-        let text = format!("@chcp 65001 >nul\r\n@echo off\r\n{}\r\n", def.command);
+        let folder = cwd.display().to_string().replace('%', "%%");
+        let text = format!(
+            "@chcp 65001 >nul\r\n@cd /d \"{folder}\"\r\n@echo off\r\n{}\r\n",
+            def.command
+        );
         std::io::Write::write_all(&mut f, text.as_bytes())?;
         f.into_temp_path()
     };
     #[cfg(windows)]
-    let argv = vec!["cmd".into(), "/C".into(), script.as_os_str().to_owned()];
+    let (argv, cwd) = (
+        vec![
+            "cmd".into(),
+            "/C".into(),
+            script.file_name().unwrap_or_default().to_owned(),
+        ],
+        script.parent().unwrap_or(&cwd).to_path_buf(),
+    );
     #[cfg(unix)]
     let argv = vec!["sh".into(), "-c".into(), def.command.clone().into()];
     let mut cmd = CommandBuilder::from_argv(argv);
@@ -606,6 +618,26 @@ mod tests {
         let _run = start(&sb.state, repo, def, move |o| _ = tx.send(o)).unwrap();
         let got = rx.iter().filter(|o| *o != Output::Line(String::new()));
         got.collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_runs_in_a_folder_whose_path_holds_its_metacharacters() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("repo");
+        let folder = "a&b ^c (100%)";
+        std::fs::create_dir_all(repo.join(folder)).unwrap();
+        let def = Definition {
+            name: "cd".into(),
+            command: "echo cd=%CD%".into(),
+            folder: folder.into(),
+            ..Default::default()
+        };
+        let got = printed(&sb, &repo, &def);
+        let [Output::Line(cd), Output::Exit(Some(0))] = &got[..] else {
+            panic!("{got:?}")
+        };
+        assert!(cd.ends_with(&format!("\\{folder}")), "{cd}");
     }
 
     #[cfg(windows)]
