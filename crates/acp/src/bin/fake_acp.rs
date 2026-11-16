@@ -5,6 +5,9 @@
 //! - `die` exits with code 3 mid-turn;
 //! - `ask [<path>|-]` asks permission to write the path (notes.txt), its title always the same and
 //!   `-` without raw input, and says the option it got;
+//! - `bare` announces a command with its title and raw input, then asks with the call's id alone,
+//!   as Codex does, and says the option it got; `host-ask` the same for a call of the session's
+//!   first MCP server's tool;
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
 //! - `env` says the names in its env; `meta` the `_meta` its session got, `params` all of its
@@ -16,7 +19,7 @@
 //!
 //! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
 //! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
-//! first. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
+//! first. Installed as `codex-acp` it reads no `configOptions` on new or load, as Codex's adapter. A new session asked for the model `die` exits with code 3 before it answers. On stdin's EOF it exits 1 with `EPIPE`, as Claude's adapter does.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -105,6 +108,9 @@ fn main() {
                     }
                 };
                 let asked = |k: &str| {
+                    if exe_name().starts_with("codex-acp") {
+                        return None;
+                    }
                     let all = params["configOptions"]
                         .as_array()
                         .cloned()
@@ -152,6 +158,24 @@ fn main() {
                     Some(s) if s.hold_close => held = Some(id.clone()),
                     _ => reply(json!({})),
                 }
+            }
+            "session/set_config_option" => {
+                let sid = params["sessionId"].as_str().unwrap_or_default();
+                let mut all = sessions.lock().unwrap();
+                let Some(s) = all.get_mut(sid) else { continue };
+                let v = params["value"].as_str().unwrap_or_default().to_string();
+                match params["configId"].as_str() {
+                    Some("mode") if MODES.contains(&v.as_str()) => s.mode = v,
+                    Some("model") if MODELS.contains(&v.as_str()) => s.model = v,
+                    _ => {
+                        send(
+                            &out,
+                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "no such value"}}),
+                        );
+                        continue;
+                    }
+                }
+                reply(json!({"configOptions": config(s)}));
             }
             "session/cancel" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
@@ -215,6 +239,24 @@ fn next_request(next: &mut u64) -> u64 {
     1000 + *next
 }
 
+const MODES: &[&str] = &[
+    "auto",
+    "default",
+    "acceptEdits",
+    "plan",
+    "bypassPermissions",
+    "read-only",
+];
+const MODELS: &[&str] = &["default", "haiku", "fallback-opus"];
+
+fn exe_name() -> String {
+    let exe = std::env::current_exe().unwrap_or_default();
+    exe.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn config(s: &Session) -> Value {
     let select = |id: &str, value: &str, values: &[&str]| {
         let options: Vec<Value> = values
@@ -224,18 +266,8 @@ fn config(s: &Session) -> Value {
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
     json!([
-        select(
-            "mode",
-            &s.mode,
-            &[
-                "auto",
-                "default",
-                "acceptEdits",
-                "plan",
-                "bypassPermissions"
-            ]
-        ),
-        select("model", &s.model, &["default", "haiku", "fallback-opus"]),
+        select("mode", &s.mode, MODES),
+        select("model", &s.model, MODELS)
     ])
 }
 
@@ -274,6 +306,25 @@ impl Turn<'_> {
         f(&self.sessions.lock().unwrap()[self.sid])
     }
 
+    /// Asks permission for `tool` and returns the option picked.
+    fn ask(&self, tool: Value) -> Result<String, Stop> {
+        let options = json!([
+            {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "allow_once", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
+        ]);
+        let p = json!({"sessionId": self.sid, "toolCall": tool, "options": options});
+        send(
+            self.out,
+            json!({"jsonrpc": "2.0", "id": self.rid, "method": "session/request_permission", "params": p}),
+        );
+        let r = self.answer.recv().map_err(err)?;
+        Ok(match r["outcome"]["outcome"].as_str() {
+            Some("selected") => r["outcome"]["optionId"].as_str().unwrap_or("?").to_string(),
+            other => other.unwrap_or("?").to_string(),
+        })
+    }
+
     fn step(&self, step: &str) -> Result<(), Stop> {
         let (verb, rest) = step.split_once(' ').unwrap_or((step, ""));
         match verb {
@@ -305,6 +356,19 @@ impl Turn<'_> {
                 eprintln!("fake_acp: died mid-turn");
                 std::process::exit(3);
             }
+            "bare" | "host-ask" => {
+                let input = match verb {
+                    "bare" => json!({"command": "make"}),
+                    _ => {
+                        let server = self.session(|s| s.params["mcpServers"][0]["name"].clone());
+                        json!({"server": server, "tool": "detached_act", "arguments": {}})
+                    }
+                };
+                self.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t-bare",
+                    "title": "Run make", "kind": "execute", "status": "in_progress", "rawInput": input}));
+                let tool = json!({"toolCallId": "t-bare", "kind": "execute", "status": "pending"});
+                self.say(&format!("picked {}", self.ask(tool)?));
+            }
             "ask" => {
                 let mut tool =
                     json!({"toolCallId": "t-ask", "title": "Write notes.txt", "kind": "edit"});
@@ -316,24 +380,7 @@ impl Turn<'_> {
                     json!({"sessionUpdate": "tool_call", "status": "pending", "toolCallId": "t-ask",
                     "title": "Write notes.txt", "kind": "edit"}),
                 );
-                let options = json!([
-                    {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
-                    {"optionId": "allow_once", "name": "Allow", "kind": "allow_once"},
-                    {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"},
-                ]);
-                let p = json!({"sessionId": self.sid, "toolCall": tool, "options": options});
-                send(
-                    self.out,
-                    json!({"jsonrpc": "2.0", "id": self.rid, "method": "session/request_permission", "params": p}),
-                );
-                let r = self.answer.recv().map_err(err)?;
-                let picked = match r["outcome"]["outcome"].as_str() {
-                    Some("selected") => {
-                        r["outcome"]["optionId"].as_str().unwrap_or("?").to_string()
-                    }
-                    other => other.unwrap_or("?").to_string(),
-                };
-                self.say(&format!("picked {picked}"));
+                self.say(&format!("picked {}", self.ask(tool)?));
             }
             "malformed" => {
                 self.update(json!({"sessionUpdate": "tool_call", "toolCallId": 7, "title": ["not", "text"]}));

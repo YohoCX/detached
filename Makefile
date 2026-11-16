@@ -1,4 +1,4 @@
-.PHONY: check app ui-test agent-test agent-login warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
+.PHONY: check app ui-test agent-test codex-live agent-login warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
 
 # The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
 # runs first without it, so the linker's temp files stay off it.
@@ -25,7 +25,13 @@ agent-test:
 	./scripts/adapter-build.sh claude-agent-acp
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
 	cargo test -p detached-kernel --lib panel::tests::real -- --ignored
-	cargo test -p detached-acp -- --ignored
+	cargo test -p detached-acp -- --ignored --skip codex_live
+
+# The owner's, never CI's: Codex's live rows through the bun build of its adapter, on his own `codex`
+# and login. Three short model turns; each checks his config.toml unchanged.
+codex-live:
+	./scripts/adapter-build.sh codex-acp
+	cargo test -p detached-acp --lib codex_live -- --ignored --nocapture --test-threads=1
 
 # The owner's, never CI's or an agent's: `detached --session` on his own `claude` and login, in a
 # temp repo and config directory kept between runs; prompt=<text> (else stdin), args=--past,
