@@ -1353,9 +1353,13 @@ every trust path that moved is one its backend blocks.
   AIR test. `agent.yml`'s Windows job runs the direct set again with the CLI in Ubuntu 24.04, the
   fake API on the distro's gateway address; it has not run yet.
 
-Open for the gate: part 0's answers (CI's reruns, row 4 in the WSL shape among them), the real
-`stop_task` and killed-host tests, the WSL shape's first green run, a `Break` in ACP's replay, then
-gate steps 3 and 4.
+**Status (2026-11-16):** the real `stop_task` and killed-host tests pass on the direct backend
+under `make agent-test` on macOS with `claude` 2.1.325, and `--session` takes `/mode`, `/model` and
+`/stop <task id>` between turns and prints the config and the tasks as they change, for gate step
+3's turn in `auto`.
+
+Open for the gate: part 0's answers (CI's reruns, row 4 in the WSL shape among them), the WSL
+shape's first green run, a `Break` in ACP's replay, then gate steps 3 and 4.
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.

@@ -1,20 +1,22 @@
 //! `detached --session <repo> [prompt]` in debug builds: a chat session through `kernel::Session`
-//! as lines on stdout, its asks and, with no prompt, its prompts read from stdin.
+//! as lines on stdout, its asks and, with no prompt, its prompts read from stdin. Between turns
+//! stdin also takes `/mode`, `/model` and `/stop <task id>`.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 
 use detached_core::adapters::CLAUDE;
-use detached_core::backend::{Kind, Spec, Tool};
+use detached_core::backend::{Kind, Setting, Spec, Tool};
 use detached_core::state::AppState;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::{App, Entity, WindowingRequest};
 use kernel::session::{self, Answer, End, Item, Session, State};
 
-const USAGE: &str =
-    "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]";
+const USAGE: &str = "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]
+stdin: prompts, y/a/n to an ask, /mode <default|acceptEdits|plan|auto>, /model <name>, /stop <task id>";
+const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto"];
 
 enum Input {
     Changed,
@@ -107,6 +109,7 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
     let one_shot = run.prompt.is_some();
     let (mut prompt, mut feed) = (run.prompt, Feed::default());
     let (mut lines, mut eof, mut opened, mut due) = (VecDeque::new(), false, false, false);
+    let (mut config, mut tasks) = (vec![], vec![]);
     cx.spawn(async move |cx| {
         while let Some(input) = rx.next().await {
             match input {
@@ -119,6 +122,17 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
                 if let (false, Some(v)) = (opened, &now.version) {
                     opened = true;
                     println!("[session] {} on {v}", now.id.as_deref().unwrap_or("-"));
+                }
+                if now.config != config {
+                    config = now.config.clone();
+                    let all = config.iter().map(|c| format!("{} {}", c.id, c.value));
+                    println!("[config] {}", all.collect::<Vec<_>>().join(", "));
+                }
+                if now.tasks != tasks {
+                    tasks = now.tasks.clone();
+                    let all = tasks.iter().map(|t| format!("{} {}", t.id, t.description));
+                    let all = all.collect::<Vec<_>>().join("; ");
+                    println!("[tasks] {}", if all.is_empty() { "none" } else { &all });
                 }
                 let state = now.state.clone();
                 let ended = feed.print(now, state != State::Running);
@@ -138,6 +152,9 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
                         if std::mem::take(&mut due) {
                             report(s.read(cx));
                         }
+                        while lines.front().is_some_and(|l| command(&s, l, cx)) {
+                            lines.pop_front();
+                        }
                         let next = prompt
                             .take()
                             .or_else(|| if one_shot { None } else { lines.pop_front() });
@@ -152,6 +169,30 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// Runs `line` when it is one of the commands; false when it is a prompt.
+fn command(s: &Entity<Session>, line: &str, cx: &mut App) -> bool {
+    let Some((cmd, arg)) = line.trim().split_once(' ') else {
+        return false;
+    };
+    let session = s.read(cx);
+    let setting = match cmd {
+        "/mode" if MODES.contains(&arg) => Ok(Setting::Mode(arg.into())),
+        "/mode" => Err(format!("no mode {arg}")),
+        "/model" if session.models.iter().any(|m| m.value == arg) => Ok(Setting::Model(arg.into())),
+        "/model" => Err(format!("this session offers no model {arg}")),
+        "/stop" => {
+            session.stop_task(arg);
+            return true;
+        }
+        _ => return false,
+    };
+    let done = setting.and_then(|set| s.update(cx, |s, _| s.set(set)).map_err(|e| e.to_string()));
+    if let Err(e) = done {
+        println!("[refused] {e}");
+    }
+    true
 }
 
 /// Answers the waiting ask with the next line: y once, a always, n reject, anything else or

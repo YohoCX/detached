@@ -4,6 +4,7 @@
 //! With `DETACHED_AGENT_WSL=<distro>` on Windows, the direct backend's CLI runs in that distro, which
 //! reaches the fake on `DETACHED_AGENT_WSL_HOST`.
 
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -527,4 +528,66 @@ fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a
     backend::direct().delete(&f.core, &spec, &id).unwrap();
     let past = backend::direct().past(&f.core, &spec).unwrap();
     assert!(past.iter().all(|p| p.id != id));
+}
+
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn stop_task_ends_a_background_command_and_the_session_goes_on(cx: &mut TestAppContext) {
+    let marker = format!("detached-mark-{}-background", std::process::id());
+    let command = json!({"tool": "Bash", "input": {"command": format!("perl -e 'sleep 600' {marker}"),
+        "description": "a background command", "run_in_background": true}});
+    let script = json!([[command], text("started"), text("after")]);
+    let (f, _api) = boot(cx, Real::Direct, script);
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "go", cx);
+    wait_for(cx, START, |cx| {
+        running(&marker) && !s.read(cx).tasks.is_empty()
+    });
+    let task = s.read_with(cx, |s, _| s.tasks[0].id.clone());
+    s.read_with(cx, |s, _| s.stop_task(&task));
+    wait_for(cx, START, |cx| {
+        !running(&marker) && s.read(cx).tasks.is_empty()
+    });
+    assert_eq!(state(&s, cx), State::Idle);
+    let from = s.read_with(cx, |s, _| s.items.len());
+    run(&s, "again", cx);
+    assert_eq!(said(&s, from, cx), "after");
+}
+
+/// The host is this test re-run with `HOST` set, SIGKILLed mid-command; on Windows its job closes.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_killed_host_leaves_no_process(cx: &mut TestAppContext) {
+    const HOST: &str = "DETACHED_TEST_HOST";
+    if std::env::var_os(HOST).is_some() {
+        let (_f, _api, marker, s) = mid_command(Real::Direct, "killed", cx);
+        let id = s.read_with(cx, |s, _| s.id.clone()).unwrap();
+        println!("host {marker} {id}");
+        loop {
+            std::thread::park();
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session::tests::real::a_killed_host_leaves_no_process",
+        ])
+        .args(["--ignored", "--nocapture"])
+        .env(HOST, "1")
+        .envs(["TMPDIR", "TMP", "TEMP"].map(|k| (k, tmp.path())))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let lines = BufReader::new(host.stdout.take().unwrap()).lines();
+    let line = lines.map_while(std::io::Result::ok);
+    let mut line = line.filter_map(|l| Some(l.strip_prefix("host ")?.to_string()));
+    let line = line.next().expect("the host's session ran its command");
+    let (marker, id) = line.split_once(' ').unwrap();
+    host.kill().unwrap();
+    host.wait().unwrap();
+    // The leash's SIGTERM, then its 5 s before a SIGKILL.
+    wait_for(cx, Duration::from_secs(30), |_| {
+        !running(marker) && !running(id)
+    });
 }

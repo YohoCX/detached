@@ -28,7 +28,7 @@ agent-test:
 
 # The owner's, never CI's or an agent's: `detached --session` on his own `claude` and login, in a
 # temp repo and config directory kept between runs; prompt=<text> (else stdin), args=--past,
-# --resume <id> or --delete <id>.
+# --resume <id> or --delete <id>. Between turns stdin takes /mode, /model and /stop <task id>.
 LOGIN = $(patsubst %/,%,$(or $(TMPDIR),/tmp))/detached-agent-login
 agent-login:
 	test -d "$(LOGIN)/repo" || (git init -q "$(LOGIN)/repo" && \
