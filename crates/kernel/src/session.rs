@@ -14,6 +14,7 @@ use detached_core::backend::{
 };
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
+use detached_core::host::{self as tools, Act, Call};
 use detached_core::state::AppState;
 use detached_core::trust;
 use detached_core::types::{FileChange, Side};
@@ -22,6 +23,7 @@ use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
 
 use crate::blocking::{self, FRAME};
+use crate::host::Identity;
 
 pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past the plan's limits \
     this session drew from extra usage, and that has run out. Claude in a terminal tab (`claude`) \
@@ -31,6 +33,8 @@ pub const HISTORY_UNAVAILABLE: &str = "History unavailable: the session goes on 
 
 const TRUST_CHANGED: &str = "The repo's agent settings changed, so the session ended. A new one \
     loads them only once you trust them.";
+
+pub const NO_DONE: &str = "The turn ended without `done`.";
 
 pub const TRUST_STALE: &str = "The repo's agent settings changed mid-turn. The agent keeps the ones \
     it started with, and the session ends with this turn.";
@@ -104,10 +108,14 @@ pub enum Item {
         ms: u64,
     },
     Note(String),
+    /// Reported through the host's tools.
+    Act(Act),
 }
 
 pub struct Session {
     pub spec: Spec,
+    /// Whom its host tools answer as.
+    pub who: Identity,
     pub state: State,
     pub items: Vec<Item>,
     /// The agent's id, which a resume takes.
@@ -147,6 +155,8 @@ pub struct Session {
     cancelled: bool,
     /// Items before this are whole: the last `Break` came after them.
     whole: usize,
+    /// The running turn reported `done`.
+    done: bool,
     _watch: Option<trust::Watch>,
     _tasks: Vec<Task<()>>,
 }
@@ -162,6 +172,7 @@ struct Sessions {
     loading: HashSet<String>,
     /// Resumes of an id still loading or open, which start once that is over.
     waiting: Vec<WeakEntity<Session>>,
+    all: Vec<WeakEntity<Session>>,
 }
 
 impl Global for Sessions {}
@@ -173,6 +184,7 @@ pub(crate) fn init(cx: &mut App) {
         open: HashSet::new(),
         loading: HashSet::new(),
         waiting: vec![],
+        all: vec![],
     });
     cx.spawn(async move |cx| {
         while let Some(first) = rx.next().await {
@@ -183,6 +195,43 @@ pub(crate) fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The sessions alive.
+pub fn all(cx: &App) -> impl Iterator<Item = Entity<Session>> {
+    cx.global::<Sessions>()
+        .all
+        .iter()
+        .filter_map(WeakEntity::upgrade)
+}
+
+/// The host's tools as `who`: each call is answered on the main thread.
+fn host_tools(
+    who: Identity,
+    me: WeakEntity<Session>,
+    tx: mpsc::UnboundedSender<Job>,
+) -> backend::Tools {
+    tools::server(move |call| {
+        let (said, answer) = std::sync::mpsc::channel();
+        let (who, me) = (who.clone(), me.clone());
+        let job: Job = match call {
+            Call::Read(q) => Box::new(move |cx| {
+                let read = crate::host::query(cx, &who, &q);
+                cx.spawn(async move |_| _ = said.send(read.await.map_err(|e| e.to_string())))
+                    .detach();
+            }),
+            Call::Act(act) => {
+                who.may(&act)?;
+                Box::new(move |cx| {
+                    me.update(cx, |s, cx| s.acted(act, cx)).ok();
+                    _ = said.send(Ok("Recorded.".into()));
+                })
+            }
+        };
+        let gone = || "Detached closed before it answered".to_string();
+        tx.unbounded_send(job).map_err(|_| gone())?;
+        answer.recv().map_err(|_| gone())?
+    })
 }
 
 /// A session's stream, as jobs for its entity; `id` is a resume's until `Opened` says it.
@@ -243,11 +292,15 @@ struct Started {
 }
 
 impl Session {
-    /// Starts a session, or resumes the past session `past`.
-    pub fn open(spec: Spec, past: Option<String>, cx: &mut App) -> Entity<Session> {
-        cx.new(|cx| {
+    /// Starts a session, or resumes the past session `past`, with its kind's host tools.
+    pub fn open(mut spec: Spec, past: Option<String>, cx: &mut App) -> Entity<Session> {
+        let s = cx.new(|cx| {
+            let who = Identity::of(spec.kind, &spec.repo);
+            let tx = cx.global::<Sessions>().tx.clone();
+            spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
             let mut s = Session {
                 spec: spec.clone(),
+                who,
                 state: State::Starting,
                 items: vec![],
                 id: past.clone(),
@@ -271,12 +324,17 @@ impl Session {
                 ending: None,
                 cancelled: false,
                 whole: 0,
+                done: false,
                 _watch: None,
                 _tasks: vec![],
             };
             s.start(cx);
             s
-        })
+        });
+        let all = &mut cx.global_mut::<Sessions>().all;
+        all.retain(|s| s.upgrade().is_some());
+        all.push(s.downgrade());
+        s
     }
 
     /// Starts or resumes the session; a resume of an id still loading or open waits for that to
@@ -376,7 +434,7 @@ impl Session {
             return;
         }
         self.items.push(Item::User(text.clone()));
-        (self.state, self.cancelled) = (State::Running, false);
+        (self.state, self.cancelled, self.done) = (State::Running, false, false);
         let core = crate::core(cx).clone();
         let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
         let ready = blocking::run(cx, move || {
@@ -651,6 +709,9 @@ impl Session {
             }
         };
         let ms = began.elapsed().as_millis() as u64;
+        if self.who.can.contains(&"done") && !self.done {
+            self.note(NO_DONE.into());
+        }
         self.items.push(Item::End { stop, ms });
         let core = crate::core(cx).clone();
         let repo = self.spec.repo.clone();
@@ -753,6 +814,12 @@ impl Session {
             })
             .ok();
         });
+        cx.notify();
+    }
+
+    fn acted(&mut self, act: Act, cx: &mut Context<Self>) {
+        self.done |= matches!(act, Act::Done(_));
+        self.items.push(Item::Act(act));
         cx.notify();
     }
 

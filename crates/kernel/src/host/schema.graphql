@@ -1,0 +1,21 @@
+# What detached_read answers. A field that did not load in time is null, with an error naming it.
+schema { query: Query }
+type Query {
+  schema: String!
+  workspace: Workspace!
+  repo(path: String!): Repo
+  sessions(repo: String): [Session!]!
+}
+type Workspace { repos: [Repo!]!  current: Repo }
+type Repo {
+  path: String!  name: String!  branch: String  ahead: Int  behind: Int  status: Status
+  mrs(state: MrState): [MergeRequest!]       # null: not loaded
+}
+type Status { changed: Int!  staged: Int!  conflicted: Int!  files(limit: Int): [FileChange!]! }
+type FileChange { path: String!  kind: ChangeKind! }
+type MergeRequest { id: ID!  title: String!  state: MrState!  author: String!  url: String! }
+type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
+               repo: Repo }
+enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }
+enum MrState { OPENED MERGED CLOSED }
+enum SessionState { IDLE RUNNING WAITING ENDED }

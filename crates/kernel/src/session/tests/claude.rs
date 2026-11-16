@@ -254,3 +254,70 @@ fn a_resumed_session_shows_its_past_as_its_turns_did(cx: &mut TestAppContext) {
     assert_eq!(lines(&live)[3], "Bash echo hi completed");
     assert_eq!(turn(&resumed, "say again", cx), "again");
 }
+
+/// What the host's tools answered the session's call of `name` with `arguments`.
+fn call(s: &Entity<Session>, name: &str, arguments: Value, cx: &mut TestAppContext) -> Value {
+    let m = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": name, "arguments": arguments}});
+    let said: Value = serde_json::from_str(&turn(s, &format!("mcp {m}"), cx)).unwrap();
+    said["result"].clone()
+}
+
+#[gpui::test]
+fn the_host_tools_answer_as_the_session_s_kind_and_a_turn_without_done_is_recorded(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    std::fs::write(Path::new(&f.repo).join("new.txt"), "x").unwrap();
+    f.list(cx);
+    let query = "{ workspace { repos { name status { changed } } } \
+        sessions { provider state repo { name } } }";
+    let read = |s: &Entity<Session>, cx: &mut TestAppContext| {
+        let r = call(s, "detached_read", json!({ "query": query }), cx);
+        let text = r["content"][0]["text"].as_str().unwrap().to_string();
+        serde_json::from_str::<Value>(&text).unwrap()["data"].clone()
+    };
+    let done = json!({"action": "done", "args": {"nothing_found": true}});
+    let chat = open(&f, Kind::Chat, cx);
+    let listed: Value = serde_json::from_str(&turn(&chat, "mcp", cx)).unwrap();
+    let tools = listed["result"]["tools"].as_array().unwrap().iter();
+    let names: Vec<&str> = tools.map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["detached_read", "detached_act"]);
+    let repos = json!([{"name": "repo", "status": {"changed": 1}}]);
+    let me = json!({"provider": "claude", "state": "RUNNING", "repo": {"name": "repo"}});
+    assert_eq!(
+        read(&chat, cx),
+        json!({"workspace": {"repos": repos}, "sessions": [me]})
+    );
+    let refused = call(&chat, "detached_act", done.clone(), cx);
+    assert_eq!(refused["isError"], true);
+    assert_eq!(refused["content"][0]["text"], "This session cannot done.");
+    assert!(!chat.read_with(cx, |s, _| s.items.iter().any(|i| matches!(i, Item::Act(_)))));
+
+    let participant = open(&f, Kind::Untrusted, cx);
+    let argv = argv(&participant, cx);
+    assert!(flag(&argv, "--strict-mcp-config").is_some() && flag(&argv, "--mcp-config").is_none());
+    assert_eq!(
+        read(&participant, cx),
+        json!({"workspace": {"repos": repos}, "sessions": []})
+    );
+    let undone = |cx: &mut TestAppContext| {
+        let note = Item::Note(NO_DONE.into());
+        participant.read_with(cx, |s, _| s.items.iter().filter(|i| **i == note).count())
+    };
+    assert_eq!(undone(cx), 2, "the argv turn and the read's");
+    let recorded = call(&participant, "detached_act", done, cx);
+    assert_eq!(recorded["content"][0]["text"], "Recorded.");
+    assert_eq!(undone(cx), 2);
+    participant.read_with(cx, |s, _| {
+        let acts: Vec<&str> = (s.items.iter())
+            .filter_map(|i| match i {
+                Item::Act(a) => Some(a.name()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(acts, ["done"]);
+    });
+    turn(&participant, "say hi", cx);
+    assert_eq!(undone(cx), 3);
+}
