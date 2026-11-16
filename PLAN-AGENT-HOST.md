@@ -819,9 +819,13 @@ Later steps add to the SDL:
   Repo skills are trust items.
 - **Claude** gets the folders it does not read itself as a local plugin, through `--plugin-dir`
   (not run in spike 0c; H4c part 0 runs it). The plugin folder is per session in
-  `cache/plugins/<id>/`, with the skills copied in, not linked, for Windows.
-- **What loads is what the Skills page shows.** Only a skill that loads overrides: trusted, and a
-  plain folder (a link or special file inside is listed with why and not passed). A skill Claude
+  `cache/plugins/<id>/`, with the skills copied in, not linked, for Windows; a link inside a skill
+  stays a link in the copy.
+- **What loads is what the Skills page shows.** Only a skill that loads overrides: trusted, with no
+  special file inside. A link inside loads as the CLI loads it, except a store skill's link out of
+  its folder, which its hash cannot cover, and on Windows a link in a skill the plugin passes; both
+  are listed with why and not passed ([decision](docs/decisions/2026-11-16-skills-with-links.md)).
+  A store skill's link inside its folder is hashed by its target text. A skill Claude
   reads itself that does not load is turned off by name (`skillOverrides`), and the one that loads
   in its place comes through the plugin as `detached:<name>`; so the repo's `.claude` wins over
   `~/.claude`, which the CLI alone would not do. A bad store item is listed with its error and never
@@ -1701,6 +1705,13 @@ name the CLI reads itself that does not load (§11); ACP renders none. `skills` 
 `Repo`. The real test passed on macOS with claude 2.1.325, under the chat's sources and under `[]`.
 Open: an untrusted participant's `--tools` has no `Skill`, so it lists skills it cannot call (P2);
 in a WSL distro the plugin's path assumes `/mnt` (docs/TECHDEBT.md).
+Skills with links (2026-11-16, [decision](docs/decisions/2026-11-16-skills-with-links.md)): a link
+inside no longer turns a skill off. The plugin's copy keeps links as links, a personal skill's
+relative one pointed back at the original. A store skill refuses a link out of its folder and hashes
+one inside by its target text, and Share and Make local move it as a link. On Windows a link in a
+skill the plugin passes (`~/.agents`, the stores) is listed with why; a skill Claude reads itself
+that the plugin has to pass there is left out silently. The owner checks: a personal skill with a
+`.venv` or a `LICENSE -> ../LICENSE` reaches the chat.
 
 Work: the folder list; repo skills with Share and Make local and hash acceptance (§10); Claude's
 per-session plugin through `--plugin-dir` (§11); `skills` in the SDL; the Skills page.

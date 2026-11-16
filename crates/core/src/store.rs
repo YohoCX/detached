@@ -134,6 +134,9 @@ pub enum Scope {
 /// An empty path holds a single-file item; other paths are relative to the item folder.
 pub type Files = BTreeMap<PathBuf, Vec<u8>>;
 
+/// An item folder's links by their target text.
+pub type Links = BTreeMap<PathBuf, PathBuf>;
+
 #[derive(Clone, Debug)]
 pub struct Item {
     pub kind: Kind,
@@ -241,7 +244,8 @@ impl RepoStore {
     /// The item `name` in `scope`, not overridden.
     pub fn item(&self, state: &AppState, kind: Kind, scope: Scope, name: &str) -> Result<Item> {
         let path = self.path(state, kind, scope, name)?;
-        let hash = hash(&read(&path)?);
+        let (files, links) = read(&path, false)?;
+        let hash = hash(&files, &links);
         Ok(Item {
             kind,
             name: name.into(),
@@ -262,8 +266,8 @@ impl RepoStore {
     ) -> Result<Option<Files>> {
         match self.list(state, kind)?.into_iter().find(|i| i.name == name) {
             Some(item) if item.trusted => {
-                let files = read(&item.path)?;
-                if hash(&files) != item.hash {
+                let (files, links) = read(&item.path, false)?;
+                if hash(&files, &links) != item.hash {
                     return Err(Error::Other("Item changed while loading".into()));
                 }
                 Ok(Some(files))
@@ -278,15 +282,15 @@ impl RepoStore {
         remember(state, &item.path, &item.hash)
     }
 
-    fn check(&self, state: &AppState, item: &Item) -> Result<Files> {
+    fn check(&self, state: &AppState, item: &Item) -> Result<(Files, Links)> {
         if self.path(state, item.kind, item.scope, &item.name)? != item.path {
             return Err(Error::Other("Item belongs to another store".into()));
         }
-        let files = read(&item.path)?;
-        if hash(&files) != item.hash {
+        let (files, links) = read(&item.path, false)?;
+        if hash(&files, &links) != item.hash {
             return Err(Error::Other("Item changed; review it again".into()));
         }
-        Ok(files)
+        Ok((files, links))
     }
 
     pub fn write(&self, state: &AppState, kind: Kind, name: &str, files: &Files) -> Result<()> {
@@ -297,7 +301,7 @@ impl RepoStore {
         let path = self.path(state, kind, scope, name)?;
         create(&path, files)?;
         if scope == Scope::Local {
-            remember(state, &path, &hash(files))?;
+            remember(state, &path, &hash(files, &Links::new()))?;
         }
         Ok(())
     }
@@ -310,14 +314,14 @@ impl RepoStore {
             Scope::Shared => Scope::Local,
             _ => return Err(Error::Other("Only repo items can change scope".into())),
         };
-        let files = self.check(state, item)?;
+        let (files, links) = self.check(state, item)?;
         if !accepted(state, &item.path, &item.hash) {
             return Err(Error::Other("Accept this item before moving it".into()));
         }
         let to = self.path(state, item.kind, scope, &item.name)?;
         remember(state, &to, &item.hash)?;
         fs::create_dir_all(to.parent().unwrap())?;
-        copy_move(&item.path, &to, &files, &self.local.join("trash"))
+        copy_move(&item.path, &to, &files, &links, &self.local.join("trash"))
     }
 }
 
@@ -339,11 +343,14 @@ fn trash_dir(root: &Path) -> Result<tempfile::TempDir> {
     Ok(tempfile::tempdir_in(root)?)
 }
 
-fn copy_move(from: &Path, to: &Path, files: &Files, trash: &Path) -> Result<()> {
+fn copy_move(from: &Path, to: &Path, files: &Files, links: &Links, trash: &Path) -> Result<()> {
     let trash = trash_dir(trash)?;
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
     create(&stage, files)?;
+    for (rel, target) in links {
+        link(target, &stage.join(rel))?;
+    }
     for rel in files.keys() {
         let (source, dest) = if rel.as_os_str().is_empty() {
             (from.to_path_buf(), stage.clone())
@@ -433,39 +440,66 @@ fn no_links(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read(path: &Path) -> Result<Files> {
-    fn walk(root: &Path, path: &Path, files: &mut Files) -> Result<()> {
+/// The files and links under `path`; a link that leads out of it is refused unless `out`.
+pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
+    fn walk(root: &Path, path: &Path, out: bool, all: &mut (Files, Links)) -> Result<()> {
         let meta = fs::symlink_metadata(path)?;
+        let rel = path.strip_prefix(root).unwrap().to_path_buf();
         if meta.is_dir() {
             for entry in fs::read_dir(path)? {
-                walk(root, &entry?.path(), files)?;
+                walk(root, &entry?.path(), out, all)?;
             }
         } else if meta.is_file() {
-            files.insert(
-                path.strip_prefix(root).unwrap().to_path_buf(),
-                fs::read(path)?,
-            );
+            all.0.insert(rel, fs::read(path)?);
+        } else if meta.is_symlink() {
+            if !out && !path.canonicalize().is_ok_and(|p| p.starts_with(root)) {
+                return Err(Error::Other(
+                    "A link in an item cannot lead out of its folder".into(),
+                ));
+            }
+            all.1.insert(rel, fs::read_link(path)?);
         } else {
-            return Err(Error::Other("Items must contain regular files only".into()));
+            return Err(Error::Other("Items cannot contain special files".into()));
         }
         Ok(())
     }
     no_links(path)?;
-    let mut files = Files::new();
-    walk(path, path, &mut files)?;
-    Ok(files)
+    let (root, mut all) = (path.canonicalize()?, Default::default());
+    walk(&root, &root, out, &mut all)?;
+    Ok(all)
 }
 
-pub(crate) fn hash(files: &Files) -> String {
-    let mut hash = Sha256::new();
-    for (path, bytes) in files {
+pub(crate) fn hash(files: &Files, links: &Links) -> String {
+    fn put(hash: &mut Sha256, path: &Path, bytes: &[u8]) {
         let path = path.as_os_str().as_encoded_bytes();
         hash.update((path.len() as u64).to_le_bytes());
         hash.update(path);
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
     }
+    let mut hash = Sha256::new();
+    files.iter().for_each(|(p, b)| put(&mut hash, p, b));
+    if !links.is_empty() {
+        // No path has this length, so a link never hashes as a file holding its target text.
+        hash.update(u64::MAX.to_le_bytes());
+        (links.iter()).for_each(|(p, t)| put(&mut hash, p, t.as_os_str().as_encoded_bytes()));
+    }
     format!("{:x}", hash.finalize())
+}
+
+/// A link at `at` to `target`; Windows makes none without developer mode, so it refuses.
+pub(crate) fn link(target: &Path, at: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    return Err(Error::Other(format!(
+        "{} links to {}: Windows does not copy links",
+        at.display(),
+        target.display()
+    )));
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(at.parent().unwrap())?;
+        Ok(std::os::unix::fs::symlink(target, at)?)
+    }
 }
 
 fn create(path: &Path, files: &Files) -> Result<()> {
@@ -798,7 +832,7 @@ mod tests {
             .collect();
         assert_eq!(saved.len(), 2);
         for path in saved {
-            assert_eq!(read(&path).unwrap(), files);
+            assert_eq!(read(&path, false).unwrap().0, files);
         }
         assert!(!store.shared.join("skills/.detached-trash").exists());
         assert!(!store.local.join("local/skills/.detached-trash").exists());
@@ -847,7 +881,7 @@ mod tests {
             fs::remove_file(&settings).unwrap();
             fs::create_dir(&settings).unwrap();
             assert!(store.move_item(&sb.state, &item).is_err());
-            assert_eq!(read(&item.path).unwrap(), file("review"));
+            assert_eq!(read(&item.path, false).unwrap().0, file("review"));
             assert!(!to.exists());
             assert_eq!(
                 store
@@ -858,7 +892,7 @@ mod tests {
             fs::remove_dir(&settings).unwrap();
             store.move_item(&sb.state, &item).unwrap();
             assert!(!item.path.exists());
-            assert_eq!(read(&to).unwrap(), file("review"));
+            assert_eq!(read(&to, false).unwrap().0, file("review"));
             assert_eq!(
                 store
                     .load(&sb.state, Kind::Roles, &item.name, None)
@@ -882,8 +916,8 @@ mod tests {
             create(&from, &files).unwrap();
             create(&to, &file("concurrent")).unwrap();
             assert!(publish(&from, &to).is_err());
-            assert_eq!(read(&to).unwrap(), file("concurrent"));
-            assert_eq!(read(&from).unwrap(), files);
+            assert_eq!(read(&to, false).unwrap().0, file("concurrent"));
+            assert_eq!(read(&from, false).unwrap().0, files);
         }
         let from = root.join("source");
         let to = root.join("destination");
@@ -914,10 +948,17 @@ mod tests {
                 from.clone()
             };
             let mut handle = fs::OpenOptions::new().append(true).open(source).unwrap();
-            copy_move(&from, &to, &files, &root.join(".git/detached/trash")).unwrap();
+            copy_move(
+                &from,
+                &to,
+                &files,
+                &Links::new(),
+                &root.join(".git/detached/trash"),
+            )
+            .unwrap();
             handle.write_all(b" edited").unwrap();
             assert!(!from.exists());
-            assert_eq!(read(&to).unwrap(), files);
+            assert_eq!(read(&to, false).unwrap().0, files);
             let trash = fs::read_dir(root.join(".git/detached/trash"))
                 .unwrap()
                 .map(|entry| entry.unwrap().path().join(&name))
@@ -957,7 +998,14 @@ mod tests {
         }
         let from = root.join("source");
         create(&from, &file("first")).unwrap();
-        copy_move(&from, &root.join("destination"), &file("first"), &trash).unwrap();
+        copy_move(
+            &from,
+            &root.join("destination"),
+            &file("first"),
+            &Links::new(),
+            &trash,
+        )
+        .unwrap();
         assert!(!trash.join("old").exists());
         assert!(trash.join("new/item").exists());
     }
@@ -972,12 +1020,12 @@ mod tests {
         create(&from, &files).unwrap();
         let broken = [("a".into(), vec![]), ("a/b".into(), vec![])].into();
         let trash = root.join(".git/detached/trash");
-        assert!(copy_move(&from, &to, &broken, &trash).is_err());
+        assert!(copy_move(&from, &to, &broken, &Links::new(), &trash).is_err());
         assert!(!to.exists());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
-        assert_eq!(read(&from).unwrap(), files);
-        copy_move(&from, &to, &files, &trash).unwrap();
-        assert_eq!(read(&to).unwrap(), files);
+        assert_eq!(read(&from, false).unwrap().0, files);
+        copy_move(&from, &to, &files, &Links::new(), &trash).unwrap();
+        assert_eq!(read(&to, false).unwrap().0, files);
     }
 
     #[test]
@@ -995,11 +1043,11 @@ mod tests {
         // A source folder that refuses the rename stands in for a trash on another filesystem.
         let folder = from.parent().unwrap();
         fs::set_permissions(folder, fs::Permissions::from_mode(0o555)).unwrap();
-        let error = copy_move(&from, &to, &files, &root.join("trash")).unwrap_err();
+        let error = copy_move(&from, &to, &files, &Links::new(), &root.join("trash")).unwrap_err();
         fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(error.to_string().contains("the original stays"), "{error}");
-        assert_eq!(read(&from).unwrap(), files);
-        assert_eq!(read(&to).unwrap(), files);
+        assert_eq!(read(&from, false).unwrap().0, files);
+        assert_eq!(read(&to, false).unwrap().0, files);
         assert_eq!(fs::read_dir(root.join("trash")).unwrap().count(), 0);
     }
 
@@ -1110,8 +1158,11 @@ mod tests {
         let item = store.list(&sb.state, Kind::Roles).unwrap().remove(0);
         put(&store.shared.join("roles/x"), "team");
         assert!(store.move_item(&sb.state, &item).is_err());
-        assert_eq!(read(&item.path).unwrap(), file("local"));
-        assert_eq!(read(&store.shared.join("roles/x")).unwrap(), file("team"));
+        assert_eq!(read(&item.path, false).unwrap().0, file("local"));
+        assert_eq!(
+            read(&store.shared.join("roles/x"), false).unwrap().0,
+            file("team")
+        );
         for name in ["../escape", "/absolute", ".", ""] {
             assert!(
                 store
