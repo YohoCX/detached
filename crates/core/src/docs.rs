@@ -2,7 +2,7 @@
 //! plans, the decisions and the contracts. Read only; agents write docs, the host never does.
 
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use crate::env::Env;
 use crate::git::status::commits;
@@ -93,12 +93,13 @@ impl Docs {
     /// The docs as their files say, without staleness.
     pub fn read(repo: &Path) -> Docs {
         let file = |p: &str| {
-            let f = inside(repo, p)?;
+            let f = repo.join(inside(repo, p)?);
             fs::read_to_string(f).map_err(|e| format!("{p} cannot be read: {e}"))
         };
         let mut all = vec![];
         let index = file(INDEX).ok();
         for (path, covers, when) in index.iter().flat_map(|i| i.lines().filter_map(entry)) {
+            let path = inside(repo, &path).unwrap_or(path);
             let mut d = doc(path.clone(), Kind::Module, file(&path));
             if d.covers.is_empty() {
                 d.covers = covers;
@@ -125,7 +126,10 @@ impl Docs {
             all.push(doc(p.into(), Kind::Contract, file(p)));
         }
         for d in all.iter_mut().filter(|d| d.error.is_none()) {
-            d.error = d.covers.iter().find_map(|c| inside(repo, c).err());
+            match d.covers.iter().map(|c| inside(repo, c)).collect() {
+                Ok(covers) => d.covers = covers,
+                Err(e) => d.error = Some(e),
+            }
         }
         Docs {
             index: index.is_some(),
@@ -319,25 +323,30 @@ fn newer(env: &Env, repo: &Path, d: &Doc) -> crate::error::Result<Vec<CommitSumm
     commits(env, repo, &args)
 }
 
-/// `path` in `repo`, when it stays there: relative, no `..`, no `.env*` part (the agents' deny),
-/// no pathspec magic, and inside after its links when it exists.
-fn inside(repo: &Path, path: &str) -> Result<PathBuf, String> {
-    let out = || {
-        Err(format!(
-            "{path} is outside the repo or denied, so it is skipped"
-        ))
-    };
-    let part = |c: Component| match c {
-        Component::Normal(n) => !n.to_string_lossy().starts_with(".env"),
-        c => c == Component::CurDir,
-    };
-    if path.starts_with([':', '/', '\\']) || !Path::new(path).components().all(part) {
-        return out();
+/// `path` relative to `repo`, normalized, when it stays there as a plain path: no `..`, no link,
+/// no `.env*` part (the agents' deny) and no pathspec magic.
+fn inside(repo: &Path, path: &str) -> Result<String, String> {
+    let out = || format!("{path} is outside the repo, a link or denied, so it is skipped");
+    if path.starts_with([':', '/', '\\']) {
+        return Err(out());
     }
-    let file = repo.join(path);
-    match (repo.canonicalize(), file.canonicalize()) {
-        (Ok(root), Ok(f)) if !f.starts_with(&root) => out(),
-        _ => Ok(file),
+    let mut parts = vec![];
+    for c in Path::new(path).components() {
+        match c {
+            Component::CurDir => continue,
+            Component::Normal(n) if !n.to_string_lossy().starts_with(".env") => {
+                parts.push(n.to_string_lossy().into_owned());
+            }
+            _ => return Err(out()),
+        }
+        let link = fs::symlink_metadata(repo.join(parts.join("/")));
+        if link.is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(out());
+        }
+    }
+    match parts.is_empty() {
+        true => Err(out()),
+        false => Ok(parts.join("/")),
     }
 }
 
@@ -527,6 +536,28 @@ mod tests {
         );
         assert!(changed(&["src/watch.rs", "docs/watch.md"]).is_empty());
         assert!(changed(&["src/watch.rsx", "PLAN-X.md"]).is_empty());
+        let r = sb.path("repo");
+        fs::write(
+            r.join("docs/watch.md"),
+            "---\ncovers: ./src//, docs/../docs\n---\n",
+        )
+        .unwrap();
+        let docs = Docs::read(&r);
+        assert!(docs.all[0].error.is_some(), "`..` is refused");
+        fs::write(r.join("docs/watch.md"), "---\ncovers: ./src//\n---\n").unwrap();
+        let index = fs::read_to_string(r.join(INDEX)).unwrap();
+        fs::write(
+            r.join(INDEX),
+            index.replace("- docs/watch.md", "- ./docs//watch.md"),
+        )
+        .unwrap();
+        let docs = Docs::read(&r);
+        assert_eq!(
+            (docs.all[0].path.as_str(), &docs.all[0].covers[..]),
+            ("docs/watch.md", &["src".to_string()][..])
+        );
+        let need = docs.may_need(&["src/a.rs".into()]);
+        assert_eq!(need[0].files, ["src/a.rs"]);
     }
 
     #[test]
@@ -545,18 +576,23 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(sb.path("secret.md"), r.join("docs/link.md")).unwrap();
-            index += "- docs/link.md — src — read when the watcher.\n";
+            fs::write(r.join(".env"), "watcher secret\n").unwrap();
+            std::os::unix::fs::symlink("../.env", r.join("docs/setup.md")).unwrap();
+            std::os::unix::fs::symlink("../docs", r.join("src/docs")).unwrap();
+            index += "- docs/link.md — src — read when the watcher.\n\
+                      - docs/setup.md — src — read when the watcher.\n\
+                      - src/docs/store.md — src — read when the watcher.\n";
         }
         fs::write(r.join(INDEX), index).unwrap();
         let docs = Docs::read(&r);
         let modules: Vec<_> = docs.all.iter().filter(|d| d.kind == Kind::Module).collect();
-        assert_eq!(modules.len(), if cfg!(unix) { 5 } else { 4 });
+        assert_eq!(modules.len(), if cfg!(unix) { 7 } else { 4 });
         for d in modules {
             let e = d
                 .error
                 .as_deref()
                 .unwrap_or_else(|| panic!("{} was read", d.path));
-            assert!(e.contains("outside the repo or denied"), "{e}");
+            assert!(e.ends_with("so it is skipped"), "{e}");
             assert!(!d.body.contains("secret"), "{}", d.path);
         }
         assert!(docs.find("watcher secret").is_empty());
