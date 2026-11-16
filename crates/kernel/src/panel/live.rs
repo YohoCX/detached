@@ -754,6 +754,8 @@ impl Panel {
                 },
                 cx,
             ),
+            // A participant may not: `Identity::may` refuses it first.
+            Act::Proc(_) => {}
         }
     }
 

@@ -266,6 +266,23 @@ fn host_tools(
                 cx.spawn(async move |_| _ = said.send(read.await.map_err(|e| e.to_string())))
                     .detach();
             }),
+            Call::Act(Act::Proc(p)) => {
+                who.may(&Act::Proc(p.clone()))?;
+                Box::new(move |cx| {
+                    let done = crate::proc::act(cx, &who, &p);
+                    cx.spawn(async move |cx| {
+                        let done = done.await;
+                        if done.is_ok() {
+                            me.update(cx, |s, cx| s.acted(Act::Proc(p), cx)).ok();
+                        }
+                        _ = said.send(
+                            done.map(serde_json::Value::String)
+                                .map_err(|e| e.to_string()),
+                        );
+                    })
+                    .detach();
+                })
+            }
             Call::Act(act) => {
                 who.may(&act)?;
                 Box::new(move |cx| {

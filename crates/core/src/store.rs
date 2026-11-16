@@ -565,7 +565,7 @@ fn accepted(state: &AppState, path: &Path, hash: &str) -> bool {
         .is_some_and(|h| h == hash)
 }
 
-fn remember(state: &AppState, path: &Path, hash: &str) -> Result<()> {
+pub(crate) fn remember(state: &AppState, path: &Path, hash: &str) -> Result<()> {
     state.update(|s| {
         let mut all: BTreeMap<String, String> = s.block("storeTrust").unwrap_or_default();
         all.insert(path.to_string_lossy().into(), hash.into());

@@ -1904,6 +1904,37 @@ The owner checks: the Docs app on this repo.
 
 ### Step H9. Processes and the env store
 
+**Status (2026-11-17): built, with every test below; waiting for the owner's check.**
+`core::secrets` keeps named profiles: their variable names in Settings (`envProfiles`), their
+values in `data/secrets`, sealed with ChaCha20-Poly1305 (`ring`) under a key in the system's
+credential store. Profiles are the app's, not a repo's; per-repo profiles, worktree overrides and a
+`.env` on demand stay in the backlog. A definition is a `processes` store item, `<name>.toml`:
+command, folder, profile, a readiness regex and `agents` (`off`, `read`, `start`). `portable-pty`
+moved to `core::proc::pty`, which the terminal uses too. A run is `sh -c` (`cmd /C` on Windows) on
+a PTY of its own, with the login shell's whole environment (`core::env` reads it with `env -0`),
+core's variables and the profile; core cuts its output into lines and redacts every profile value
+of 4 characters or more before anything else touches a line, again once its escapes are stripped,
+and only then trims it (shorter values would hide common text); readiness matches the line as
+printed, inside core. A line past 16 KB keeps its start, redacted over the cut and the longest
+value, with a mark, and the rest of it is dropped. A run ends when its group (on Windows its job)
+is empty, so Stop still reaches what outlived the leader; Stop ends the group or job and kills it
+after 5 s, and wins over any start or restart under way. `kernel::proc` holds
+the definitions as a `Resource` and a `Proc` per run: state, exit code, readiness and the last 2000
+lines. The SDL has `Repo.processes` and `Process`, whose `log` is null below `read` and the last 100
+lines by default; `proc` start, stop and restart is the chat's alone (panel participants have no
+such capability) and needs `start`, and a start by an agent shows in its chat and in Events. The
+Processes app (bottom zone, `panel.processes`) lists the current repo's definitions, starts, stops,
+restarts, edits and deletes them, shows the log and the agents level, whose `start` says it runs
+code as the owner outside the sandbox and names the profile's variables. Settings' Env profiles
+page sets a profile's values, which never come back to the page. `detached-cli env run` runs with
+the profile's values. Tested: `core::secrets`, `core::processes`, the kernel's
+`a_process_reaches_agents_by_its_level_and_its_profile_values_never_leave` (settings, the session's
+records and index, its env, the log through `processes { log }`; `off`, `read`, `start`; readiness,
+the exit, the agent quoting the error), `tests/processes.rs`, `tests/cli.rs`, and under
+`make agent-test` a real `claude` that gets a failed dev server's error with `read` and no log with
+`off`. The Windows side has never run (TECHDEBT). The owner checks: a dev server from a definition
+in the Processes app, an agent with `read` quoting its error, and one with `off` that cannot.
+
 Work: `core::secrets`; profiles; definitions; `portable-pty` into `core::proc`; `kernel::Proc`;
 the Processes app; `proc` actions; `processes` in the SDL; redaction.
 

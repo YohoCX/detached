@@ -25,6 +25,7 @@ pub enum Act {
     ReportVerdict(Verdict),
     ReportGroup(Group),
     Done(Done),
+    Proc(ProcAct),
 }
 
 impl Act {
@@ -34,6 +35,7 @@ impl Act {
             Act::ReportVerdict(_) => "report_verdict",
             Act::ReportGroup(_) => "report_group",
             Act::Done(_) => "done",
+            Act::Proc(_) => "proc",
         }
     }
 }
@@ -99,6 +101,22 @@ pub struct Group {
 pub struct Done {
     pub nothing_found: bool,
     pub note: Option<String>,
+}
+
+/// Starts, stops or restarts a defined process, where its definition lets agents.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProcAct {
+    pub op: Op,
+    pub repo: String,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Op {
+    Start,
+    Stop,
+    Restart,
 }
 
 /// The server: `answer` takes each tool call, and its error goes back to the agent as the call's.
@@ -171,25 +189,33 @@ fn tools() -> Value {
         json!({"nothing_found": {"type": "boolean"}, "note": s("Anything to add")}),
         &["nothing_found"],
     );
+    let proc = object(
+        json!({"op": one_of(&["start", "stop", "restart"]), "repo": s("The repo's path"),
+            "name": s("The process's name")}),
+        &["op", "repo", "name"],
+    );
     let read = object(
         json!({"query": s("A GraphQL query, such as { schema }")}),
         &["query"],
     );
     let act = object(
-        json!({"action": one_of(&["report_finding", "report_verdict", "report_group", "done"]),
-            "args": {"anyOf": [finding, verdict, group, done],
+        json!({"action": one_of(&["report_finding", "report_verdict", "report_group", "done",
+                "proc"]),
+            "args": {"anyOf": [finding, verdict, group, done, proc],
                 "description": "The action's arguments"}}),
         &["action", "args"],
     );
     json!({"tools": [
         {"name": READ, "inputSchema": read, "description": "Reads Detached's data: its repos, \
-            their status, merge requests, skills and docs, and the agent sessions. Ask a repo's \
-            `docs(query)` how its code works before reading the source: it answers the doc \
-            sections whose index routes there. `{ schema }` returns the schema. Queries only, without fragments, variables, directives or introspection; at \
+            their status, merge requests, skills, docs and defined processes with their logs, and \
+            the agent sessions. Ask a repo's `docs(query)` how its code works before reading the \
+            source: it answers the doc sections whose index routes there. `{ schema }` returns \
+            the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
             verdict on a finding, a group of duplicate findings, or `done` at the end of the work, which every turn of a review \
-            ends with."},
+            ends with; `proc` starts, stops or restarts a defined process where its definition \
+            lets agents."},
     ]})
 }
 

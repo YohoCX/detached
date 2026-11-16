@@ -5,7 +5,7 @@ through the read tool's `docs(query)`, which routes by these lines; PLAN-AGENT-H
 layout.
 
 - docs/crates/core/src/docs.md — crates/core/src/docs.rs, crates/kernel/src/docs.rs — read when changing how docs are indexed, routed, flagged stale or offered for an update after a turn, or a docs query that finds the wrong doc.
-- docs/crates/core/src/host.md — crates/core/src/host.rs — read when changing the MCP server behind `detached_read` and `detached_act`, the report actions (finding, verdict, done) and their JSON schemas, or how tool errors reach the agent.
+- docs/crates/core/src/host.md — crates/core/src/host.rs — read when changing the MCP server behind `detached_read` and `detached_act`, the actions (finding, verdict, done, proc) and their JSON schemas, or how tool errors reach the agent.
 - docs/crates/core/src/skills.md — crates/core/src/skills.rs, crates/kernel/src/skills.rs — read when asking where a session's skills come from, why a skill does not load (trust, a link inside, overridden by name), or how skills are copied into a session.
 - docs/crates/core/src/watch.md — crates/core/src/watch.rs — read when changing the file watcher or how file events reach a repo's status, or debugging a watcher that misses, repeats or over-reports events (ignored paths, .gitignore, refs, Linux, macOS and Windows differences).
 - docs/crates/kernel/src/host.md — crates/kernel/src/host.rs, crates/kernel/src/host — read when adding a field to `detached_read`'s GraphQL schema, changing what a session or review may see or do, or debugging a read query that returns null or is refused.

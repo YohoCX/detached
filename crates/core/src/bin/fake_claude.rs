@@ -9,7 +9,7 @@
 //!   `unsupported_request` from then on;
 //! - `spawn` starts a child in a process group of its own, which only this CLI's SIGTERM ends;
 //!   `deaf` one in this CLI's group that ignores SIGTERM;
-//! - `env` says the names in its env, `argv` its arguments, `model` its model and mode;
+//! - `env [<text>]` says the names in its env, of the values with the text, `argv` its arguments, `model` its model and mode;
 //!   `initialize` lists the skills it loads among the commands, as the CLI does;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
@@ -640,7 +640,9 @@ impl Turn<'_> {
                 self.say(&format!("child {} ", child.id()));
             }
             "env" => {
+                let has = |v: &std::ffi::OsStr| v.to_string_lossy().contains(rest);
                 let mut names: Vec<String> = std::env::vars_os()
+                    .filter(|(_, v)| has(v))
                     .map(|(k, _)| k.to_string_lossy().into_owned())
                     .collect();
                 names.sort();

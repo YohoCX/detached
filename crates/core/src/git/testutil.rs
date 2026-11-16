@@ -50,7 +50,12 @@ impl Sandbox {
         let state = AppState::new(
             dir.path().join("config"),
             Default::default(),
-            Env { path, git, vars },
+            Env {
+                path,
+                git,
+                vars,
+                ..Default::default()
+            },
             Arc::new(MemoryStore::default()),
         );
         Sandbox { dir, state }

@@ -19,6 +19,7 @@ use gpui_kit::{
 
 use detached_core::docs::Need;
 use detached_core::git::snapshot::Skip;
+use detached_core::host::Act;
 use detached_core::types::Side;
 
 use super::session::Chat;
@@ -767,7 +768,10 @@ impl ChatView {
                 .child(text.clone())
                 .into_any_element(),
             Item::Act(act) => {
-                let text = format!("{act:?}");
+                let text = match act {
+                    Act::Proc(p) => format!("{:?} the process {} in {}", p.op, p.name, p.repo),
+                    act => format!("{act:?}"),
+                };
                 self.row(i, text.clone())
                     .text_size(text::SMALL)
                     .text_color(t.muted)

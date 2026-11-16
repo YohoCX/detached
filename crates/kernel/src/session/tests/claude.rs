@@ -446,3 +446,119 @@ fn the_host_tools_answer_as_the_session_s_kind_and_a_turn_without_done_is_record
     turn(&participant, "say hi", cx);
     assert_eq!(undone(cx), 3);
 }
+
+#[gpui::test]
+fn a_process_reaches_agents_by_its_level_and_its_profile_values_never_leave(
+    cx: &mut TestAppContext,
+) {
+    use crate::proc::{self as procs, State as Run};
+    use detached_core::processes::{self, Agents, Definition};
+
+    let f = boot(cx, &[]);
+    f.list(cx);
+    let repo = cx.read(|cx| crate::workspace::Workspace::get(cx).repos()[0].path.clone());
+    let secret = "not-a-real-secret-7f3a";
+    let vars = [("API_TOKEN".to_string(), secret.to_string())];
+    detached_core::secrets::save(&f.core, "dev", &vars).unwrap();
+    let define = |agents, port: u16| {
+        let command = if cfg!(windows) {
+            format!(
+                "echo token %API_TOKEN% && echo listening && echo Error: port {port} in use && exit 3"
+            )
+        } else {
+            format!(
+                "echo \"token $API_TOKEN\" && echo listening && echo 'Error: port {port} in use' && exit 3"
+            )
+        };
+        let def = Definition {
+            name: "web".into(),
+            command,
+            profile: Some("dev".into()),
+            ready: Some("^listening$".into()),
+            agents,
+            ..Default::default()
+        };
+        processes::save(&f.core, Path::new(&repo), &def).unwrap();
+    };
+    define(Agents::Read, 3000);
+    let started = cx.update(|cx| procs::start(cx, &repo, "web", false));
+    cx.executor().allow_parking();
+    cx.foreground_executor().block_test(started).unwrap();
+    let ended = |cx: &App| {
+        procs::get(cx, &repo, "web").is_some_and(|p| {
+            let p = p.read(cx);
+            p.ready && p.state == Run::Exited(Some(3))
+        })
+    };
+    wait_until(cx, ended);
+
+    let chat = open(&f, Kind::Chat, cx);
+    // A GraphQL string escapes as JSON does, a Windows path's backslashes included.
+    let path = serde_json::to_string(&repo).unwrap();
+    let query = format!(
+        "{{ repo(path: {path}) {{ processes {{ name agents state exitCode ready log }} }} }}"
+    );
+    let read = |cx: &mut TestAppContext| {
+        let r = call(&chat, "detached_read", json!({ "query": query }), cx);
+        serde_json::from_str::<Value>(r["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    let out = read(cx);
+    let web = &out["data"]["repo"]["processes"][0];
+    assert_eq!(
+        (&web["state"], &web["exitCode"], &web["ready"]),
+        (&json!("EXITED"), &json!(3), &json!(true))
+    );
+    let log = web["log"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty());
+    assert_eq!(
+        log.collect::<Vec<_>>(),
+        ["token [redacted]", "listening", "Error: port 3000 in use"]
+    );
+    let act = |op: &str| json!({"action": "proc", "args": {"op": op, "repo": repo, "name": "web"}});
+    let refused = call(&chat, "detached_act", act("start"), cx);
+    assert_eq!(refused["isError"], true, "{refused}");
+
+    define(Agents::Off, 3000);
+    let out = read(cx);
+    assert_eq!(out["data"]["repo"]["processes"][0]["log"], Value::Null);
+    let said = out["errors"][0]["message"].as_str().unwrap();
+    assert!(said.contains("does not let agents read"), "{said}");
+
+    define(Agents::Start, 3001);
+    let participant = open(&f, Kind::Untrusted, cx);
+    let refused = call(&participant, "detached_act", act("restart"), cx);
+    assert_eq!(refused["content"][0]["text"], "This session cannot proc.");
+    let restarted = call(&chat, "detached_act", act("restart"), cx);
+    assert_eq!(
+        restarted["content"][0]["text"],
+        "An agent restarted the process web in repo."
+    );
+    wait_until(cx, |cx| {
+        ended(cx)
+            && procs::get(cx, &repo, "web")
+                .is_some_and(|p| p.read(cx).log.iter().any(|l| l.contains("port 3001")))
+    });
+    let events = cx.read(|cx| crate::activity::Activity::global(cx).read(cx).log.clone());
+    assert!(
+        events
+            .iter()
+            .any(|e| e.text.contains("restarted the process web"))
+    );
+    assert!(chat.read_with(cx, |s, _| s.items.iter().any(|i| matches!(i, Item::Act(_)))));
+
+    let records = chat.read_with(cx, |s, _| format!("{:?}", s.items));
+    let index = std::fs::read_to_string(f.core.data_dir.join("sessions.json")).unwrap_or_default();
+    let settings = std::fs::read_to_string(f.core.config_dir.join("settings.json")).unwrap();
+    for (what, text) in [
+        ("records", records),
+        ("index", index),
+        ("settings", settings),
+    ] {
+        assert!(!text.contains(secret), "{what}: {text}");
+    }
+    assert_eq!(turn(&chat, &format!("env {secret}"), cx), "");
+    assert!(!turn(&chat, "env", cx).contains("API_TOKEN"));
+}

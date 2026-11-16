@@ -1362,6 +1362,7 @@ fn remote_urls_resolve_ssh_aliases_and_strip_the_base_sub_path() {
         ),
         git: "git".into(),
         vars: vec![],
+        ..Default::default()
     };
     let gl = acc("g", "https://git.example.com/gitlab");
     let gh = Account {

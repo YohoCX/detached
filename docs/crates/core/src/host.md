@@ -14,22 +14,25 @@ the answers themselves belong to the caller. The kernel builds one per session
 ## Public API
 - `READ`, `ACT` — the tool names, `"detached_read"` and `"detached_act"`.
 - `Call` — a parsed tool call: `Read(query)` or `Act(Act)`.
-- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `Done(Done)`; serde-tagged as
-  `{"action": "<snake_case>", "args": {...}}` (`crates/core/src/host.rs:22`).
-- `Act::name()` — `"report_finding"`, `"report_verdict"` or `"done"`; what `Identity::may` checks.
+- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `Done(Done)`, `Proc(ProcAct)`;
+  serde-tagged as `{"action": "<snake_case>", "args": {...}}` (`crates/core/src/host.rs:23`).
+- `Act::name()` — `"report_finding"`, `"report_verdict"`, `"done"` or `"proc"`; what
+  `Identity::may` checks.
 - `Finding` — severity, class, title, body, optional fix, file, line, optional end line, quote,
   lenses.
 - `Severity` (`critical`, `major`, `minor`), `Class` (`correctness` … `tests`).
 - `Verdict` — the finding's id, a `Judged` verdict, quote, optional body.
 - `Judged` — `confirmed`, `refined`, `rejected`, `immaterial`, `pre_existing`.
 - `Done` — `nothing_found`, optional note.
+- `ProcAct` — `op` (`Op`: `start`, `stop`, `restart`), the repo's path and the process's name; the
+  kernel runs it only where the definition's `agents` is `start` (`crates/core/src/host.rs:100`).
 - `server(answer) -> backend::Tools` — the server; `answer(Call)` returns the result or an error
-  string the agent sees (`crates/core/src/host.rs:97`).
+  string the agent sees (`crates/core/src/host.rs:115`).
 
 ## Flow
 1. `initialize` echoes the client's `protocolVersion`, declares `tools`, names `detached-host`.
 2. `tools/list` returns both tools with their JSON schemas and descriptions
-   (`crates/core/src/host.rs:136`).
+   (`crates/core/src/host.rs:154`).
 3. `tools/call`: `detached_read` takes `arguments.query` as a string; `detached_act` deserializes
    `arguments` into `Act`; any other name is an error.
 4. The parsed `Call` goes to `answer`. A string result is the text as is; other JSON is
@@ -44,7 +47,7 @@ the answers themselves belong to the caller. The kernel builds one per session
   to the main thread and waits on a channel.
 - The tool descriptions and `inputSchema` in `tools()` are written by hand: keep them in line with
   `Act`'s serde shape and the kernel's SDL (`crates/kernel/src/host/schema.graphql`).
-- The `args` schema is an `anyOf` of the three shapes; serde, not the schema, ties `args` to
+- The `args` schema is an `anyOf` of the four shapes; serde, not the schema, ties `args` to
   `action`, so a mismatch fails at deserialize with serde's message.
 - Notifications are answered with a result object anyway; the transport decides whether to send it.
 - The server checks no permissions: `Identity::may` in the kernel refuses an act the session may

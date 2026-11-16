@@ -19,23 +19,24 @@ answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `cor
 - `Identity::owner()` — the workspace, no action.
 - `Identity::subject(repo, mr)` — that repo alone, that MR alone, no sessions; may
   `report_finding`, `report_verdict`, `done`.
-- `Identity::of(kind, repo)` — `Kind::Chat` reads as the owner; `Verifier` and `Untrusted` as
-  `subject(repo, None)` (`crates/kernel/src/host.rs:66`).
+- `Identity::of(kind, repo)` — `Kind::Chat` reads as the owner and may `proc`, which
+  `kernel::proc::act` runs; `Verifier` and `Untrusted` as `subject(repo, None)` (`crates/kernel/src/host.rs:66`).
 - `Identity::may(&Act)` — `Err("This session cannot <name>.")` unless the act's name is in `can`.
 - `query(cx, who, query) -> Task<Result<Value>>` — the GraphQL answer `{data, errors?}`; `Err`
   when the query is refused (parse, subset, limits) (`crates/kernel/src/host.rs:82`).
 
 ## Flow
 1. `query` builds a `Snap` on the main thread with an empty `Held`: repos and current repo cut to
-   `who`, statuses as loaded, sessions only for the owner, no MRs, skills or docs
+   `who`, statuses as loaded, sessions only for the owner, no MRs, skills, docs or processes
    (`crates/kernel/src/host.rs:147`).
 2. `exec::run` runs on the pool: parse, `check` against the SDL, then `object` walks the
    selection and calls each field's resolver (`crates/kernel/src/host/exec.rs:63`).
-3. A resolver that finds its data missing pushes a `Need` (`Status`, `Mrs(repo, open)`, `Skills`, `Docs`),
+3. A resolver that finds its data missing pushes a `Need` (`Status`, `Mrs(repo, open)`, `Skills`, `Docs`,
+   `Processes`),
    and the field becomes `null` with an error carrying its path (`crates/kernel/src/host/exec.rs:276`).
 4. No needs: the answer is returned as is.
 5. Otherwise `hold` takes one kernel `Interest` per distinct need: `forge::mrs` with
-   `MrFilter::Open` or `All`, `skills::get(repo)`, `docs::get(repo)`; statuses are not held, the repo loads them.
+   `MrFilter::Open` or `All`, `skills::get(repo)`, `docs::get(repo)`, `proc::definitions(repo)`; statuses are not held, the repo loads them.
 6. It polls every `FRAME` until `ready` (every held resource loaded, every needed status present)
    or `WAIT` (10 s) passed.
 7. A second snapshot reads the held resources (MRs cut to the subject's MR), and the query runs

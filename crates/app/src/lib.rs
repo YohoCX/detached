@@ -11,6 +11,7 @@ pub mod nav;
 pub mod notices;
 pub mod owner;
 pub mod panels;
+pub mod processes;
 pub mod repos;
 pub mod search;
 pub mod settings;
@@ -39,6 +40,7 @@ pub fn register(cx: &mut App) {
         events::register(cx),
         panels::register(cx),
         docs::register(cx),
+        processes::register(cx),
     ];
     cx.set_global(Kept {
         _actions: kept.into_iter().flatten().collect(),
