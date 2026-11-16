@@ -1198,3 +1198,38 @@ fn an_agent_reply_s_images_are_links_and_nothing_is_fetched(cx: &mut TestAppCont
     cx.update(|w, cx| w.render_frame(cx));
     assert_eq!(*asked.lock().unwrap(), Vec::<String>::new());
 }
+
+#[gpui_kit::test]
+fn a_turn_that_changed_a_covered_file_offers_to_ask_for_the_doc_s_update(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let solo = sb.solo();
+        write(
+            &solo,
+            [
+                (
+                    "docs/INDEX.md",
+                    "- docs/readme.md — README.md — read when greeting.\n",
+                ),
+                (
+                    "docs/readme.md",
+                    "---\ncovers: README.md\n---\n# README\n\n## Flow\nHi.\n",
+                ),
+            ],
+        );
+        sb.git(&solo, &["add", "."]);
+        sb.git(&solo, &["commit", "-qm", "docs"]);
+    });
+    say(cx, EDIT);
+    let i = index_of(cx, "Docs may need: `docs/readme.md` Flow");
+    idle(cx);
+    cx.click(("chat.docs.ask", i));
+    wait_for_item(cx, "You: This turn changed files these docs cover.");
+    let asked = items(cx)
+        .into_iter()
+        .find(|i| i.starts_with("You: This turn"))
+        .unwrap();
+    assert!(
+        asked.contains("- `docs/readme.md` Flow: the turn changed `README.md`"),
+        "{asked}"
+    );
+}

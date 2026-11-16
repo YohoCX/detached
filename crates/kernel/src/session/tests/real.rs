@@ -574,6 +574,32 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
     answered(from);
 }
 
+/// The Done of PLAN-AGENT-HOST's H7: asked about the watcher, `claude` reads the doc's section
+/// through `docs`, and the model gets it.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_real_claude_reads_the_watcher_s_doc_through_docs(cx: &mut TestAppContext) {
+    let query = r#"{ workspace { repos { docs(query: "how does the watcher work") { path heading
+        text stale } } } }"#;
+    let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
+    let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
+    f.write(
+        "docs/INDEX.md",
+        "- docs/watch.md — src/watch.rs — read when asking how the watcher works.\n",
+    );
+    f.write(
+        "docs/watch.md",
+        "---\ncovers:\n  - src/watch.rs\n---\n# watch\n\n## Flow\nEvents wait 50 ms.\n",
+    );
+    f.list(cx);
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "how does the watcher work?", cx);
+    let results = api.results();
+    let read =
+        |r: &String| r.contains(r#""path":"docs/watch.md""#) && r.contains("Events wait 50 ms.");
+    assert!(results.iter().any(read), "{results:?}");
+}
+
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a_delete(

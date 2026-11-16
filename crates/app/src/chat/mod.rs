@@ -115,6 +115,13 @@ pub fn new_chat(repo: String, from: Option<&Entity<Chat>>, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
+/// Sends `prompt` in a chat on `repo` with nothing in it, and shows it.
+pub fn ask(repo: String, prompt: String, cx: &mut App) {
+    let n = fresh(&repo, None, cx);
+    session(&repo, n, cx).update(cx, |s, cx| s.send(prompt, cx));
+    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
+}
+
 /// Shows past conversation `id`: in the chat that has it, else in a chat on `cwd` with nothing in it.
 pub fn resume(cwd: String, id: String, cx: &mut App) {
     let (repo, n) = match open(cx)

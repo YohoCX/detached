@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod chat;
 pub mod dock;
+pub mod docs;
 pub mod events;
 pub mod files;
 pub mod forge;
@@ -37,6 +38,7 @@ pub fn register(cx: &mut App) {
         terminal::register(cx),
         events::register(cx),
         panels::register(cx),
+        docs::register(cx),
     ];
     cx.set_global(Kept {
         _actions: kept.into_iter().flatten().collect(),

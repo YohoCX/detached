@@ -6,6 +6,7 @@ pub mod api;
 pub mod backend;
 mod claude;
 pub mod crash;
+pub mod docs;
 pub mod env;
 pub mod error;
 pub mod forge;

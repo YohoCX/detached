@@ -11,11 +11,16 @@ type Repo {
   path: String!  name: String!  branch: String  ahead: Int  behind: Int  status: Status
   mrs(state: MrState): [MergeRequest!]       # null: not loaded
   skills: [Skill!]                           # null: not loaded; the ones that load, by precedence
+  docs(query: String!): [DocSection!]        # null: not loaded or no docs/INDEX.md
 }
 type Status { changed: Int!  staged: Int!  conflicted: Int!  files(limit: Int): [FileChange!]! }
 type FileChange { path: String!  kind: ChangeKind! }
 type MergeRequest { id: ID!  title: String!  state: MrState!  author: String!  url: String! }
 type Skill { name: String!  source: SkillSource!  description: String  path: String! }
+# The docs whose index line's "read when" fits the query, at most two: a doc under 100 lines whole
+# (heading null), else its one section that fits best. Read them before the source.
+type DocSection { path: String!  heading: String  line: Int!  text: String!
+                  stale: [String!]! }        # the covered files' commits newer than the doc
 type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
                repo: Repo }
 enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }

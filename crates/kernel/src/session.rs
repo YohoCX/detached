@@ -12,6 +12,7 @@ use detached_core::backend::{
     self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
     Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
+use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
 use detached_core::host::{self as tools, Act, Call};
@@ -116,6 +117,11 @@ pub enum Item {
         end: String,
         files: Vec<FileChange>,
         back: Back,
+    },
+    /// Docs that cover files the turn changed in `repo`: "docs may need".
+    Docs {
+        repo: String,
+        needs: Vec<Need>,
     },
     /// A turn ended: how and after how long.
     End {
@@ -872,7 +878,9 @@ impl Session {
                     Side::Rev { rev: end.clone() },
                 );
                 let files = api::list_changes(&core, repo, &from, &to)?;
-                Ok::<_, Error>((start, end, files))
+                let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+                let needs = Docs::read(Path::new(repo)).may_need(&paths);
+                Ok::<_, Error>((start, end, files, needs))
             };
             let all: Vec<_> = (starts.into_iter())
                 .map(|(r, start)| (changes(&r, start), r))
@@ -885,7 +893,13 @@ impl Session {
                 for (changes, repo) in all {
                     crate::invalidate::status(cx, &repo).detach();
                     match changes {
-                        Ok((start, end, files)) if !files.is_empty() => {
+                        Ok((start, end, files, needs)) if !files.is_empty() => {
+                            let at = s.items.iter().rposition(|i| matches!(i, Item::End { .. }));
+                            let at = at.unwrap_or(s.items.len());
+                            if !needs.is_empty() {
+                                let repo = repo.clone();
+                                s.items.insert(at, Item::Docs { repo, needs });
+                            }
                             let back = Back::Idle;
                             let changes = Item::Changes {
                                 repo,
@@ -894,8 +908,7 @@ impl Session {
                                 files,
                                 back,
                             };
-                            let at = s.items.iter().rposition(|i| matches!(i, Item::End { .. }));
-                            s.items.insert(at.unwrap_or(s.items.len()), changes);
+                            s.items.insert(at, changes);
                         }
                         Err(e) => s.note(format!(
                             "No snapshot of {} after the turn: {e}",
