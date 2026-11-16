@@ -82,7 +82,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
-        Some("--version") => return println!("{VERSION} ({} {})", "Claude", "Code"),
+        Some("--version") => return println!(concat!("{} (Claude", " Code)"), VERSION),
         Some(mode @ ("--sleep" | "--child" | "--deaf")) => {
             #[cfg(unix)]
             if mode == "--deaf" {
