@@ -960,7 +960,7 @@ fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_rou
             "line": 1, "quote": "let x = 1", "lenses": ["bugs"]}});
         let done = json!({"action": "done", "args": {"nothing_found": false}});
         let verdict = json!({"action": "report_verdict", "args": {"finding": "f1-1",
-            "verdict": "confirmed", "quote": "let x = 1", "same_issue": true}});
+            "verdict": "confirmed", "quote": "let x = 1", "same_as": "e1"}});
         live_mode(
             sb,
             &format!("act {finding};act {done}"),

@@ -120,9 +120,9 @@ pub struct Live {
     effort: String,
     cwd: PathBuf,
     brief: String,
-    /// The finding a verifier judges, and the earlier one it sees beside it.
+    /// The finding a verifier judges, and the earlier ones it sees beside it.
     pub finding: Option<String>,
-    earlier: Option<String>,
+    earlier: Vec<String>,
     pub session: Option<Entity<Session>>,
     /// The agent's session id, which a retry resumes.
     sid: Option<String>,
@@ -357,6 +357,8 @@ impl Panel {
             schema: record::SCHEMA,
             limits,
             priors: p.priors.clone(),
+            untrusted: self.start.untrusted,
+            budget: self.start.budget,
         };
         self.emit(Event::RunStarted(started), cx);
         // Cancelled while it prepared: its trees go at once.
@@ -375,7 +377,7 @@ impl Panel {
                 &f.seat.effort,
                 f.cwd.clone(),
                 brief,
-                [None, None],
+                (None, vec![]),
                 now,
             ));
         }
@@ -1016,7 +1018,16 @@ impl Panel {
                 }
                 let brief = brief::merge(&p.merge, &heads);
                 let model = p.mode.merge.clone().unwrap_or_else(|| "sonnet".into());
-                self.add(&p, "merge", "merge", next, &model, brief, [None, None], cx);
+                self.add(
+                    &p,
+                    "merge",
+                    "merge",
+                    next,
+                    &model,
+                    brief,
+                    (None, vec![]),
+                    cx,
+                );
             }
             Stage::Verify => self.verify(&p, cx),
             Stage::Gate => {
@@ -1057,9 +1068,13 @@ impl Panel {
             let sources = self.state.sources(&f.id);
             let (model, note) = record::verifier(&p.mode.verifiers, &sources);
             notes.extend(note);
-            let earlier = track::beside(&p.priors, &f.finding);
-            let brief = brief::verify(&p.verifier, &p.data, f, earlier.map(|e| &e.finding));
-            let ids = [Some(f.id.clone()), earlier.map(|e| e.key.clone())];
+            let near = track::beside(&p.priors, &f.finding);
+            let earlier: Vec<_> = near.iter().map(|e| &e.finding).collect();
+            let brief = brief::verify(&p.verifier, &p.data, f, &earlier);
+            let ids = (
+                Some(f.id.clone()),
+                near.iter().map(|e| e.key.clone()).collect(),
+            );
             add.push((format!("verify-{}", f.id), model, brief, ids));
         }
         for n in notes {
@@ -1082,7 +1097,7 @@ impl Panel {
         stage: Stage,
         model: &str,
         brief: String,
-        ids: [Option<String>; 2],
+        ids: (Option<String>, Vec<String>),
         cx: &mut Context<Self>,
     ) {
         let (p2, n, text) = (p.clone(), name.to_string(), brief.clone());
@@ -1251,7 +1266,7 @@ fn live(
     effort: &str,
     cwd: PathBuf,
     brief: String,
-    [finding, earlier]: [Option<String>; 2],
+    (finding, earlier): (Option<String>, Vec<String>),
     now: Instant,
 ) -> Live {
     Live {

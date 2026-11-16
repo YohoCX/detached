@@ -110,13 +110,12 @@ impl RunView {
     }
 
     /// The run's record as it replays.
-    fn record(&self, cx: &App) -> Option<State> {
+    fn record<'a>(&self, cx: &'a App) -> Option<&'a State> {
         if let Some((p, ..)) = &self.live {
-            return Some(p.read(cx).state.clone());
+            return Some(&p.read(cx).state);
         }
         let rounds = self.rounds.read(cx).value.as_ref()?;
-        let key = (self.task.clone(), self.round.clone());
-        rounds.records.get(&key).cloned()
+        rounds.records.get(&(self.task.clone(), self.round.clone()))
     }
 
     /// "new · open": the finding's mark in this round and where its thread stands.
@@ -132,19 +131,16 @@ impl RunView {
     fn dispose(&mut self, id: &str, d: Disposition, why: Option<String>, cx: &mut Context<Self>) {
         let ids = [&*self.repo, &self.task, &self.round, id];
         let t = live::dispose(ids, d, why, cx);
-        cx.spawn(async move |this, cx| match t.await {
-            Ok(()) => {
-                _ = this.update(cx, |v, cx| {
-                    v.reason = None;
-                    cx.notify();
-                })
-            }
-            Err(e) => cx.update(|cx| {
-                let a = kernel::activity::Activity::global(cx);
-                a.update(cx, |a, cx| a.say(e.to_string(), true, cx));
-            }),
-        })
-        .detach();
+        let t = cx.spawn(async move |this, cx| {
+            t.await?;
+            this.update(cx, |v, cx| {
+                v.reason = None;
+                cx.notify();
+            })
+            .ok();
+            Ok(())
+        });
+        super::live::report(t, cx);
     }
 
     /// Dismiss with its reason, Defer, or Reopen, for a finding of a live run.
@@ -521,14 +517,7 @@ impl Render for RunView {
         let compare = self.track(cx).and_then(|t| t.compare(&self.round));
         let resource = self.rounds.read(cx);
         let error = resource.error.clone();
-        let record = match &self.live {
-            Some((p, ..)) => Some(p.read(cx).state.clone()),
-            None => (resource.value.as_ref()).and_then(|r| {
-                r.records
-                    .get(&(self.task.clone(), self.round.clone()))
-                    .cloned()
-            }),
-        };
+        let record = self.record(cx).cloned();
         let mut content = div()
             .id("panel.content")
             .test_support()

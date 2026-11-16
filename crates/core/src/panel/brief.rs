@@ -82,18 +82,21 @@ pub fn merge(role: &Role, found: &[&Found]) -> String {
     )
 }
 
-/// A verifier's brief over one finding, with no word of who raised it; `earlier` is a past
-/// round's finding near it, its lines mapped to this head.
-pub fn verify(role: &Role, subject: &Value, f: &Found, earlier: Option<&host::Finding>) -> String {
-    let finding = |id: Option<&str>, f: &host::Finding| {
+/// A verifier's brief over one finding, with no word of who raised it; `earlier` are past rounds'
+/// findings near it, their lines mapped to this head.
+pub fn verify(role: &Role, subject: &Value, f: &Found, earlier: &[&host::Finding]) -> String {
+    let finding = |id: String, f: &host::Finding| {
         json!({"id": id, "file": f.file, "line": f.line, "end_line": f.end_line,
             "severity": f.severity, "class": f.class, "title": f.title, "body": f.body,
             "quote": f.quote})
     };
-    let mut data = json!({"subject": subject, "finding": finding(Some(&f.id), &f.finding)});
+    let mut data = json!({"subject": subject, "finding": finding(f.id.clone(), &f.finding)});
     let mut text = role.text.clone();
-    if let Some(e) = earlier {
-        data["earlier"] = finding(None, e);
+    if !earlier.is_empty() {
+        let refs = earlier.iter().enumerate();
+        data["earlier"] = refs
+            .map(|(i, e)| finding(format!("e{}", i + 1), e))
+            .collect();
         text.push_str(EARLIER);
     }
     format!(
@@ -102,9 +105,10 @@ pub fn verify(role: &Role, subject: &Value, f: &Found, earlier: Option<&host::Fi
     )
 }
 
-const EARLIER: &str = "\n\nBeside the finding is `earlier`, one an earlier round reported near the \
-    same lines, mapped to this head. In your verdict, set `same_issue` to whether the finding is the \
-    same issue as `earlier`, however worded, whatever its lens or class.";
+const EARLIER: &str = "\n\nBeside the finding is `earlier`: findings earlier rounds reported near the \
+    same lines, mapped to this head. In your verdict, set `same_as` to the `id` of the one the \
+    finding is the same issue as, however worded, whatever its lens or class; leave it out when it \
+    is none of them.";
 
 /// Whether `quote` is in `file` at `sha` within a few lines of `line`..`end`; Err says why not. The
 /// blob is read raw, with no filter.

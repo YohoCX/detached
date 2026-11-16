@@ -17,6 +17,8 @@ use crate::state::AppState;
 
 /// How near, in lines, a later finding must come to an earlier one to be compared with it.
 const NEAR: u32 = 3;
+/// How many earlier findings a verifier sees beside one.
+const BESIDE: usize = 3;
 
 /// An earlier finding a round tracks, its lines mapped to the round's head.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -31,7 +33,8 @@ pub struct Prior {
 }
 
 /// Lines `line..=end` of `file` at `from`, at `to`: where they are, None when the file is gone, and
-/// whether a change touched them. The diff is raw, with no textconv or external diff.
+/// whether a change touched them. The diff is raw, its path literal, and no diff setting of the
+/// owner's shapes its hunks.
 pub fn map(
     env: &Env,
     repo: &Path,
@@ -39,17 +42,20 @@ pub fn map(
     file: &str,
     [line, end]: [u32; 2],
 ) -> Result<(Option<(u32, u32)>, bool)> {
+    let path = format!(":(literal){file}");
     let args = [
         "diff",
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
         "--no-renames",
+        "--no-relative",
+        "--inter-hunk-context=0",
         "-U0",
         brief::sha(from)?,
         brief::sha(to)?,
         "--",
-        file,
+        &path,
     ];
     let diff = runner::out(env, repo, &args, Kind::Read)?;
     if diff.lines().any(|l| l == "+++ /dev/null") {
@@ -95,8 +101,9 @@ fn shift(hunks: &[(u32, u32, u32)], line: u32, end: u32) -> (Option<(u32, u32)>,
     (Some((start as u32, stop as u32)), changed)
 }
 
-/// The tracked earlier finding nearest `f`'s lines, in its file and within a few lines.
-pub fn beside<'a>(priors: &'a [Prior], f: &host::Finding) -> Option<&'a Prior> {
+/// The tracked earlier findings within a few lines of `f`'s in its file, nearest first, at most
+/// `BESIDE`.
+pub fn beside<'a>(priors: &'a [Prior], f: &host::Finding) -> Vec<&'a Prior> {
     let (line, end) = (f.line, f.end_line.unwrap_or(f.line).max(f.line));
     let gap = |p: &Prior| {
         let (l, e) = (p.finding.line, p.finding.end_line.unwrap_or(p.finding.line));
@@ -105,7 +112,10 @@ pub fn beside<'a>(priors: &'a [Prior], f: &host::Finding) -> Option<&'a Prior> {
     let near = priors
         .iter()
         .filter(|p| !p.gone && p.finding.file == f.file);
-    near.filter(|p| gap(p) <= NEAR).min_by_key(|p| gap(p))
+    let mut near: Vec<&Prior> = near.filter(|p| gap(p) <= NEAR).collect();
+    near.sort_by_key(|p| gap(p));
+    near.truncate(BESIDE);
+    near
 }
 
 /// How a thread shows in a round, with the round's finding where it raised it.
@@ -169,10 +179,10 @@ pub struct Thread {
     pub fate: Fate,
     /// The reason of an earlier dismissal nearby that it surfaced past.
     pub past: Option<String>,
-    /// Its findings as `<run>/<id>`, with their round and severity.
-    seen: Vec<(String, usize, Severity)>,
-    /// The earlier finding its first verifier saw beside it.
-    earlier: Option<String>,
+    /// Its findings as `<run>/<id>`, with their round, severity and time.
+    seen: Vec<(String, usize, Severity, i64)>,
+    /// The earlier findings its first verifier saw beside it.
+    earlier: Vec<String>,
     fixed: bool,
 }
 
@@ -227,14 +237,14 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
     for (i, (run, s)) in rounds.iter().enumerate() {
         said.extend((s.dispositions.iter()).map(|(id, d)| (key(run, id), d.clone())));
         for f in standing(s) {
-            let same = f.verdict.as_ref().and_then(|(v, _)| v.same_issue) == Some(true);
-            let to = f.earlier.as_ref().filter(|_| same).and_then(|e| {
+            let to = f.same().and_then(|e| {
                 let last = |t: &Thread| t.seen.last().is_some_and(|x| &x.0 == e);
                 threads
                     .iter()
                     .position(|t| !t.fixed && t.marks[i].is_none() && last(t))
             });
-            let (sev, seen) = (f.finding.severity, (key(run, &f.id), i, f.finding.severity));
+            let sev = f.finding.severity;
+            let seen = (key(run, &f.id), i, sev, f.at);
             match to {
                 Some(j) => {
                     let t = &mut threads[j];
@@ -260,6 +270,7 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
             }
         }
         let priors = s.started.as_ref().map_or(&[][..], |s| &s.priors[..]);
+        let raised: Vec<&host::Finding> = standing(s).map(|f| &f.finding).collect();
         let complete = complete(s);
         for t in threads
             .iter_mut()
@@ -269,7 +280,11 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
             let Some(p) = priors.iter().find(|p| Some(p.key.as_str()) == last) else {
                 continue;
             };
-            t.fixed = p.changed && complete;
+            // Fixed by hand: its lines changed and the round raised nothing there.
+            let there = raised
+                .iter()
+                .any(|f| !beside(std::slice::from_ref(p), f).is_empty());
+            t.fixed = p.changed && complete && !there;
             t.marks[i] = Some(if t.fixed {
                 Mark::Fixed
             } else {
@@ -280,19 +295,13 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
     for t in &mut threads {
         fate(t, &said);
     }
-    // The dismissal in force at an earlier finding a verifier saw.
-    let dismissal = |e: &String| {
-        threads.iter().find_map(|u| {
-            let upto = u.seen.iter().position(|x| &x.0 == e)?;
-            let (d, why) = u.seen[..=upto].iter().rev().find_map(|x| said.get(&x.0))?;
-            (*d == Disposition::Dismissed).then(|| why.clone().unwrap_or_default())
-        })
-    };
     let past: Vec<Option<String>> = (threads.iter())
         .map(|t| {
+            let of = |e: &String| threads.iter().find(|u| u.seen.iter().any(|x| &x.0 == e));
+            let dismissed = |e: &String| of(e).and_then(|u| dismissal(u, &said));
             t.past
                 .clone()
-                .or_else(|| t.earlier.as_ref().and_then(dismissal))
+                .or_else(|| t.earlier.iter().find_map(dismissed))
         })
         .collect();
     for (t, past) in threads.iter_mut().zip(past) {
@@ -308,25 +317,51 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
     }
 }
 
-/// A thread's fate from the dispositions of its findings: a dismissal or deferral covers later
-/// findings at its severity or lower, and one at a higher severity reopens the thread.
-fn fate(t: &mut Thread, said: &BTreeMap<String, (Disposition, Option<String>)>) {
-    let mut by: Option<(Disposition, Option<String>, Severity)> = None;
-    for (k, i, sev) in t.seen.clone() {
-        if let Some((d, why)) = said.get(&k) {
-            by = (*d != Disposition::Open).then(|| (*d, why.clone(), sev));
-            continue;
-        }
-        let Some((d, why, at)) = &by else { continue };
-        if rank(sev) > rank(*at) {
+type Said = BTreeMap<String, (i64, Disposition, Option<String>)>;
+
+/// The owner's latest disposition of the thread's findings.
+fn latest<'a>(t: &Thread, said: &'a Said) -> Option<&'a (i64, Disposition, Option<String>)> {
+    let all = t.seen.iter().filter_map(|x| said.get(&x.0));
+    all.max_by_key(|d| d.0)
+}
+
+/// The reason the thread is dismissed for, when the owner's latest disposition dismissed it.
+fn dismissal(t: &Thread, said: &Said) -> Option<String> {
+    let (_, d, why) = latest(t, said)?;
+    (*d == Disposition::Dismissed).then(|| why.clone().unwrap_or_default())
+}
+
+/// A thread's fate from the owner's latest disposition of any of its findings. A dismissal or
+/// deferral covers what the thread raised before it and later findings at that severity or lower;
+/// a later one at a higher severity reopens the thread.
+fn fate(t: &mut Thread, said: &Said) {
+    let mut by = latest(t, said)
+        .filter(|d| d.1 != Disposition::Open)
+        .cloned();
+    if let Some((at, d, why)) = &by {
+        let before = t.seen.iter().filter(|x| x.3 <= *at);
+        let covers = before.map(|x| rank(x.2)).max().unwrap_or(0);
+        if t.seen.iter().any(|x| x.3 > *at && rank(x.2) > covers) {
             t.past = why.clone().filter(|_| *d == Disposition::Dismissed);
             by = None;
-        } else if let (Disposition::Dismissed, Some(Mark::StillOpen(id))) = (d, &t.marks[i]) {
-            t.marks[i] = Some(Mark::DismissedBefore(id.clone()));
+        }
+    }
+    if let Some((_, Disposition::Dismissed, _)) = by {
+        let first = t.seen.iter().filter_map(|x| said.get(&x.0));
+        let first = first
+            .filter(|d| d.1 == Disposition::Dismissed)
+            .map(|d| d.0)
+            .min();
+        for (k, i, _, at) in t.seen.clone() {
+            if let (Some(Mark::StillOpen(id)), false) = (&t.marks[i], said.contains_key(&k))
+                && first.is_some_and(|f| at > f)
+            {
+                t.marks[i] = Some(Mark::DismissedBefore(id.clone()));
+            }
         }
     }
     t.fate = match by {
-        Some((Disposition::Dismissed, why, _)) => Fate::Dismissed(why.unwrap_or_default()),
+        Some((_, Disposition::Dismissed, why)) => Fate::Dismissed(why.unwrap_or_default()),
         Some(_) => Fate::Deferred,
         None if t.fixed => Fate::Fixed,
         None => Fate::Open,
@@ -416,7 +451,7 @@ pub fn priors(core: &AppState, repo: &Path, task: &str, head: &str) -> Result<Ve
     let env = core.env();
     let mut out = vec![];
     for t in track(&refs).threads.iter().filter(|t| !t.fixed) {
-        let Some((key, i, _)) = t.seen.last() else {
+        let Some((key, i, _, _)) = t.seen.last() else {
             continue;
         };
         let s = &rounds[*i].1;

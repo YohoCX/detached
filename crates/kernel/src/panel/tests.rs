@@ -706,7 +706,7 @@ fn the_read_scope_gives_a_participant_its_own_findings_and_a_verifier_its_one(
         verdict: detached_core::host::Judged::Confirmed,
         quote: LINE.into(),
         body: None,
-        same_issue: None,
+        same_as: None,
     });
     assert!(verifier.may(&other).unwrap_err().contains("f2-1"));
     let elsewhere = Identity::participant(
@@ -816,6 +816,8 @@ fn a_run_left_without_an_end_closes_as_interrupted_and_its_trees_go(cx: &mut Tes
         schema: record::SCHEMA,
         limits: vec![],
         priors: vec![],
+        untrusted: false,
+        budget: None,
     };
     r.append(record::now(), &Event::RunStarted(started))
         .unwrap();
@@ -991,7 +993,7 @@ fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
     };
     let same = |id: &str| {
         let args = json!({"finding": id, "verdict": "confirmed", "quote": "line 5",
-            "same_issue": true});
+            "same_as": "e1"});
         format!("act {}", json!({"action": "report_verdict", "args": args}))
     };
     let verify = format!(
@@ -1033,7 +1035,7 @@ fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
     let (task, run) = p.read_with(cx, |p, _| (p.task.clone(), p.run.clone()));
     let brief = std::fs::read_to_string(record_dir(&f, &task, &run).join("brief/verify-f1-1.md"));
     assert!(
-        brief.unwrap().contains(r#""earlier": {"#),
+        brief.unwrap().contains(r#""earlier": ["#),
         "the verifier sees the earlier one"
     );
     let k = track();
@@ -1072,4 +1074,45 @@ fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
         Some(Mark::DismissedBefore("f1-1".into()))
     );
     assert!(k.stops());
+}
+
+#[test]
+fn the_next_round_keeps_the_owner_s_trust_choice_and_budget() {
+    use detached_core::panel::record::{Event, Started, Subject};
+    let started = |untrusted: bool, budget| {
+        let subject = Subject {
+            repo: "/r".into(),
+            branch: "feat".into(),
+            remote: false,
+            base: "main".into(),
+            base_sha: "a".into(),
+            head_sha: "b".into(),
+        };
+        let e = Event::RunStarted(Started {
+            subject,
+            mode: "review".into(),
+            trusted: !untrusted,
+            seats: vec![],
+            prompts: Default::default(),
+            cli: None,
+            schema: record::SCHEMA,
+            limits: vec![],
+            priors: vec![],
+            untrusted,
+            budget,
+        });
+        State::replay(&[(1, e)])
+    };
+    let rounds = |s: State| super::Rounds {
+        runs: vec![],
+        errors: vec![],
+        tasks: Default::default(),
+        records: [(("feat".to_string(), "r1".to_string()), s)].into(),
+    };
+    let next = rounds(started(true, Some(9))).next("feat").unwrap();
+    assert_eq!(
+        (next.mode.as_str(), next.untrusted, next.budget),
+        ("gate", true, Some(9))
+    );
+    assert!(!rounds(started(false, None)).next("feat").unwrap().untrusted);
 }

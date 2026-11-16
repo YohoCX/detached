@@ -174,22 +174,24 @@ impl TaskView {
                     .child(text),
             )
             .when_some(start, |d, s| {
+                let once = if s.untrusted {
+                    "untrusted this once, "
+                } else {
+                    ""
+                };
+                let label = format!("Next round: gate, {once}{estimate}");
                 d.child(
-                    ui::button(
-                        "panel.task.next",
-                        format!("Next round: gate, {estimate}"),
-                        cx,
-                    )
-                    .test_support()
-                    .on_click(move |_, _, cx| {
-                        let p = kernel::panel::live::start(s.clone(), cx);
-                        let (repo, task, round) = {
-                            let p = p.read(cx);
-                            (p.repo.clone(), p.task.clone(), p.run.clone())
-                        };
-                        let doc = Doc::Panel { repo, task, round };
-                        Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
-                    }),
+                    ui::button("panel.task.next", label, cx)
+                        .test_support()
+                        .on_click(move |_, _, cx| {
+                            let p = kernel::panel::live::start(s.clone(), cx);
+                            let (repo, task, round) = {
+                                let p = p.read(cx);
+                                (p.repo.clone(), p.task.clone(), p.run.clone())
+                            };
+                            let doc = Doc::Panel { repo, task, round };
+                            Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+                        }),
                 )
             })
     }

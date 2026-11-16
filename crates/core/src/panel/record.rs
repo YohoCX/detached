@@ -45,6 +45,11 @@ pub struct Started {
     /// The task's earlier findings still tracked, mapped to this head.
     #[serde(default)]
     pub priors: Vec<Prior>,
+    /// The owner ran a trusted subject untrusted this once.
+    #[serde(default)]
+    pub untrusted: bool,
+    #[serde(default)]
+    pub budget: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,9 +129,9 @@ pub enum Event {
         participant: String,
         model: String,
         verdict: host::Verdict,
-        /// The earlier finding the verifier saw beside it, as `<run>/<id>`.
+        /// The earlier findings the verifier saw beside it, as `<run>/<id>`, `e1` first.
         #[serde(default)]
-        earlier: Option<String>,
+        earlier: Vec<String>,
     },
     /// The participant called `done`.
     Reported {
@@ -259,8 +264,19 @@ pub struct Found {
     /// The group's first finding, when this one folded into it.
     pub folded: Option<String>,
     pub verdict: Option<(host::Verdict, String)>,
-    /// The earlier finding its verifier saw beside it.
-    pub earlier: Option<String>,
+    /// The earlier findings its verifier saw beside it, `e1` first.
+    pub earlier: Vec<String>,
+    /// When it was reported, in ms.
+    pub at: i64,
+}
+
+impl Found {
+    /// The earlier finding its verifier ruled it the same issue as.
+    pub fn same(&self) -> Option<&String> {
+        let r = self.verdict.as_ref()?.0.same_as.as_deref()?;
+        let n: usize = r.strip_prefix('e')?.parse().ok()?;
+        self.earlier.get(n.checked_sub(1)?)
+    }
 }
 
 /// A run as its log says it went.
@@ -278,8 +294,8 @@ pub struct State {
     pub kept: Vec<(String, String, bool)>,
     pub ended: Option<End>,
     pub timeline: Vec<super::Event>,
-    /// The owner's latest disposition of each finding.
-    pub dispositions: BTreeMap<String, (Disposition, Option<String>)>,
+    /// The owner's latest disposition of each finding, with its time.
+    pub dispositions: BTreeMap<String, (i64, Disposition, Option<String>)>,
 }
 
 impl State {
@@ -377,7 +393,8 @@ impl State {
                     unverified: unverified.clone(),
                     folded: None,
                     verdict: None,
-                    earlier: None,
+                    earlier: vec![],
+                    at,
                 });
             }
             Event::Group { ids, .. } => {
@@ -469,7 +486,9 @@ impl State {
                 finding,
                 disposition,
                 reason,
-            } => _ = (self.dispositions).insert(finding.clone(), (*disposition, reason.clone())),
+            } => {
+                _ = (self.dispositions).insert(finding.clone(), (at, *disposition, reason.clone()))
+            }
             Event::RunEnded(end) => {
                 self.ended = Some(end.clone());
                 self.paused = None;
@@ -748,9 +767,9 @@ mod tests {
                 verdict: v,
                 quote: "q".into(),
                 body: None,
-                same_issue: None,
+                same_as: None,
             },
-            earlier: None,
+            earlier: vec![],
         }
     }
 
@@ -834,7 +853,8 @@ mod tests {
             unverified: None,
             folded: None,
             verdict: None,
-            earlier: None,
+            earlier: vec![],
+            at: 0,
         };
         let (opus, sonnet) = (f("opus"), f("claude-sonnet-4-5"));
         let vs = ["sonnet".to_string(), "opus".to_string()];

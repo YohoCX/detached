@@ -30,19 +30,21 @@ pub struct Task {
 }
 
 impl Rounds {
-    /// The next round of a live task: a gate on its subject, the roster re-reviews default to.
+    /// The next round of a live task: a gate on its subject, the roster re-reviews default to, with
+    /// the owner's trust choice and budget of the round before.
     pub fn next(&self, task: &str) -> Option<Start> {
         let runs = self.records.iter().filter(|((t, _), _)| t == task);
         let last = runs.max_by_key(|((_, run), s)| (s.at, run.clone()))?.1;
-        let s = &last.started.as_ref()?.subject;
+        let started = last.started.as_ref()?;
+        let s = &started.subject;
         Some(Start {
             repo: s.repo.clone(),
             branch: s.branch.clone(),
             remote: s.remote,
             base: s.base.clone(),
             mode: "gate".into(),
-            untrusted: false,
-            budget: None,
+            untrusted: started.untrusted,
+            budget: started.budget,
         })
     }
 
