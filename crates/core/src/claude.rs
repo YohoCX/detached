@@ -398,6 +398,7 @@ impl Live {
         let (out, lines) = mpsc::channel::<String>();
         thread::spawn(move || {
             for line in lines {
+                wire('>', &line);
                 if stdin.write_all(format!("{line}\n").as_bytes()).is_err() {
                     return;
                 }
@@ -605,6 +606,7 @@ impl Client {
     fn read(self: Arc<Self>, stdout: std::process::ChildStdout) {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            wire('<', &line);
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 self.on(&v);
             }
@@ -855,6 +857,18 @@ impl Client {
         });
         self.emit(Event::Ask(Box::new(ask), reply));
     }
+}
+
+/// Debug builds with `DETACHED_WIRE=<file>`: each line to (`>`) and from (`<`) the CLI, appended.
+fn wire(dir: char, line: &str) {
+    let Some(path) = std::env::var_os("DETACHED_WIRE").filter(|_| cfg!(debug_assertions)) else {
+        return;
+    };
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path);
+    _ = f.and_then(|mut f| writeln!(f, "{dir} {line}"));
 }
 
 fn text(v: &Value) -> String {
