@@ -128,7 +128,13 @@ pub fn quote(
     }
     let from = (line as usize).saturating_sub(1 + SLACK);
     let to = (end.unwrap_or(line) as usize + SLACK + want.len()).min(lines.len());
-    let window = lines.get(from..to).unwrap_or_default().join("\n");
+    // Blank lines count on neither side.
+    let window = lines
+        .get(from..to)
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| !l.is_empty());
+    let window = window.copied().collect::<Vec<_>>().join("\n");
     match window.contains(&want.join("\n")) {
         true => Ok(()),
         false => Err(format!("the quote is not at {file}:{line}")),
@@ -166,6 +172,16 @@ mod tests {
         let q = |line, text: &str| quote(&env, &repo, &sha, "a.rs", line, None, text);
         assert_eq!(q(10, "line 10"), Ok(()));
         assert_eq!(q(8, "line 10\n  line 11"), Ok(()));
+        let gap = sb.commit(
+            &repo,
+            "b.rs",
+            "fn a() {\n    first\n\n    second\n}\n",
+            "gap",
+        );
+        assert_eq!(
+            quote(&env, &repo, &gap, "b.rs", 2, Some(4), "first\n\nsecond"),
+            Ok(())
+        );
         assert!(q(2, "line 10").is_err());
         assert!(q(10, "line 99").is_err());
         assert!(

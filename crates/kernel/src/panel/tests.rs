@@ -512,14 +512,30 @@ fn a_verifier_s_ignored_cache_and_git_status_leave_the_state_check_quiet(cx: &mu
         &f,
         "verifier",
         &format!(
-            "fake: write cache/tool.log x;{};{}",
+            "fake: write cache/tool.log x;wait go;{};{}",
             verdict("f1-1", "confirmed"),
             done()
         ),
     );
     let p = start(&f, "gate", cx);
-    git(&f, &["status"]);
+    let verifying = |cx: &gpui::App| {
+        let p = p.read(cx);
+        let v = p.live.iter().find(|l| l.stage == Stage::Verify);
+        v.and_then(|l| l.session.clone())
+            .is_some_and(|s| s.read(cx).state == crate::session::State::Running)
+    };
+    wait_for(cx, LONG, verifying);
+    // While the verifier runs: a read-only status in its pinned tree, and a shared ref moved.
+    let run = p.read_with(cx, |p, _| p.run.clone());
+    let pinned = f
+        .core
+        .data_dir
+        .join("trees/trusted")
+        .join(run)
+        .join("pinned");
+    out(&f.core.env(), &pinned, &["status"], Kind::Write).unwrap();
     git(&f, &["branch", "moved-meanwhile"]);
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
     assert_eq!(
         ended(&p, cx).ended,
         Some(End::Done {
