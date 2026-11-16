@@ -65,7 +65,8 @@ pub struct Skill {
     /// A store item's accepted hash, which its copy must still have.
     pub hash: Option<String>,
     pub trusted: bool,
-    /// Why it cannot be read: a link or a special file inside, a store item that does not open.
+    /// Why it cannot be read: a special file inside, a store item that does not open or has a link
+    /// out of its folder, a link inside one Windows would pass as a copy.
     pub error: Option<String>,
     /// The source of the earlier skill of the same name that loads instead.
     pub overridden: Option<Source>,
@@ -133,8 +134,8 @@ impl Skills {
             }
             for (name, path) in entries(&path) {
                 if path.join("SKILL.md").is_file() {
-                    let files = path.canonicalize().map_err(Error::from);
-                    let error = files.and_then(|p| store::read(&p)).err();
+                    let read = path.canonicalize().map_err(Error::from);
+                    let error = read.and_then(|p| store::read(&p, true)).err();
                     let error = error.map(|e| e.to_string());
                     s.add(source, name, path, None, trusted, error);
                 }
@@ -150,8 +151,12 @@ impl Skills {
         path: PathBuf,
         hash: Option<String>,
         trusted: bool,
-        error: Option<String>,
+        mut error: Option<String>,
     ) {
+        let copied = !matches!(source, Source::Project | Source::User);
+        if cfg!(windows) && copied && error.is_none() && linked(&path) {
+            error = Some("A link inside: the plugin passes copies on Windows".into());
+        }
         let by = self.all.iter().find(|s| s.name == name && s.loads());
         self.all.push(Skill {
             description: description(&path),
@@ -188,6 +193,12 @@ fn entries(dir: &Path) -> Vec<(String, PathBuf)> {
     all
 }
 
+fn linked(dir: &Path) -> bool {
+    let read = dir.canonicalize().map_err(Error::from);
+    read.and_then(|p| store::read(&p, true))
+        .is_ok_and(|(_, links)| !links.is_empty())
+}
+
 /// The SKILL.md front matter's `description`.
 fn description(dir: &Path) -> Option<String> {
     let text = fs::read_to_string(dir.join("SKILL.md")).ok()?;
@@ -196,25 +207,35 @@ fn description(dir: &Path) -> Option<String> {
     Some(line.trim().trim_matches('"').to_string())
 }
 
-/// Copies the skill's files into `to`; a store item that changed since it was accepted is refused.
+/// Copies the skill into `to`, its links as links; a store item that changed since it was accepted
+/// is refused.
 pub fn copy(skill: &Skill, to: &Path) -> Result<()> {
-    let files = store::read(&skill.path.canonicalize()?)?;
-    if skill
-        .hash
-        .as_ref()
-        .is_some_and(|h| *h != store::hash(&files))
-    {
+    let from = skill.path.canonicalize()?;
+    let (files, links) = store::read(&from, skill.hash.is_none())?;
+    if (skill.hash.as_ref()).is_some_and(|h| *h != store::hash(&files, &links)) {
         return Err(Error::Other(format!(
             "{} changed since it was accepted",
             skill.name
         )));
     }
+    fs::create_dir_all(to.parent().unwrap())?;
+    // Built aside and renamed in whole, so a failed copy leaves no partial skill behind.
+    let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     for (rel, bytes) in files {
-        let dest = to.join(rel);
+        let dest = tmp.path().join(rel);
         fs::create_dir_all(dest.parent().unwrap())?;
         fs::write(dest, bytes)?;
     }
-    Ok(())
+    for (rel, target) in links {
+        // A store item's links are relative and inside it; any other relative link points back at
+        // the original.
+        let target = match skill.hash {
+            Some(_) => target,
+            None => from.join(&rel).parent().unwrap().join(target),
+        };
+        store::link(&target, &tmp.path().join(rel))?;
+    }
+    Ok(fs::rename(tmp.path(), to)?)
 }
 
 #[cfg(test)]
@@ -334,8 +355,8 @@ mod tests {
             let s = Skills::load(&sb.state, Some(&repo)).unwrap();
             assert_eq!(names(&s), [("check".into(), source, true, None)]);
             copy(&s.all[0], &sb.path(to)).unwrap();
-            let copied = store::read(&sb.path(to).canonicalize().unwrap());
-            assert_eq!(copied.unwrap(), files);
+            let copied = store::read(&sb.path(to).canonicalize().unwrap(), false);
+            assert_eq!(copied.unwrap().0, files);
             let item = store.list(&sb.state, Kind::Skills).unwrap().remove(0);
             store.move_item(&sb.state, &item).unwrap();
         };
@@ -378,21 +399,92 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_skill_with_a_link_inside_is_listed_with_why_and_overrides_nothing() {
+    fn links_load_as_the_cli_loads_them_and_a_store_skill_s_stay_inside_it() {
+        use std::os::unix::fs::symlink;
         let (sb, repo) = setup();
-        for dir in ["repo/.detached/skills/bad", "claude/skills/z"] {
-            put(&sb.path(dir).join("SKILL.md"), "s");
-            std::os::unix::fs::symlink("SKILL.md", sb.path(dir).join("more")).unwrap();
+        let store = RepoStore::open(&sb.state, repo.as_ref()).unwrap();
+        put(&sb.path("LICENSE"), "license");
+        let shared = store.shared.join("skills");
+        for dir in ["abs", "back", "detour", "empty", "in", "out"].map(|n| shared.join(n)) {
+            put(&dir.join("SKILL.md"), "s");
         }
-        for dir in ["home/.agents/skills/bad", "home/.agents/skills/z"] {
+        symlink("../back/SKILL.md", shared.join("back/more")).unwrap();
+        fs::create_dir(shared.join("detour/data")).unwrap();
+        symlink("data/../SKILL.md", shared.join("detour/alias")).unwrap();
+        symlink(shared.join("abs/SKILL.md"), shared.join("abs/more")).unwrap();
+        fs::create_dir(shared.join("empty/data")).unwrap();
+        symlink("data", shared.join("empty/alias")).unwrap();
+        for dir in ["claude/skills/z", "home/.agents/skills/a"] {
             put(&sb.path(dir).join("SKILL.md"), "s");
         }
+        for dir in ["home/.agents/skills/f", "home/.agents/skills/z"] {
+            put(&sb.path(dir).join("SKILL.md"), "s");
+        }
+        symlink("SKILL.md", store.shared.join("skills/in/more")).unwrap();
+        symlink(
+            "../../../../LICENSE",
+            store.shared.join("skills/out/LICENSE"),
+        )
+        .unwrap();
+        symlink("../../../LICENSE", sb.path("claude/skills/z/LICENSE")).unwrap();
+        symlink(
+            "../../../../LICENSE",
+            sb.path("home/.agents/skills/a/LICENSE"),
+        )
+        .unwrap();
+        let pipe = std::ffi::CString::new(sb.path("home/.agents/skills/f/pipe").to_str().unwrap());
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(pipe.unwrap().as_ptr(), 0o600) }, 0);
+
         let s = Skills::load(&sb.state, Some(&repo)).unwrap();
-        let errors: Vec<_> = s.all.iter().map(|s| s.error.is_some()).collect();
-        assert_eq!(errors, [true, true, false, false]);
+        let errors: Vec<_> = (s.all.iter())
+            .map(|s| (s.name.as_str(), s.error.as_deref().unwrap_or_default()))
+            .collect();
+        let out = "A link in an item must lead inside its folder by a relative path";
+        let empty = "A link in an item cannot lead to an empty folder";
+        let special = "Items cannot contain special files";
+        let want = [
+            ("abs", out),
+            ("back", out),
+            ("detour", out),
+            ("empty", empty),
+            ("in", ""),
+            ("out", out),
+            ("z", ""),
+        ];
+        assert_eq!(
+            errors,
+            [&want[..], &[("a", ""), ("f", special), ("z", "")]].concat()
+        );
         assert_eq!(
             active(&sb.state, &repo),
-            [("bad".into(), Source::Agents), ("z".into(), Source::Agents)]
+            [("z".into(), Source::User), ("a".into(), Source::Agents)]
         );
+        let a = s.all.iter().find(|s| s.name == "a").unwrap();
+        copy(a, &sb.path("plugin/a")).unwrap();
+        assert_eq!(
+            fs::read_to_string(sb.path("plugin/a/LICENSE")).unwrap(),
+            "license"
+        );
+        put(&sb.path("plugin/taken/x"), "x");
+        assert!(copy(a, &sb.path("plugin/taken")).is_err());
+        let left = |dir: &str| entries(&sb.path(dir)).into_iter().map(|(n, _)| n);
+        assert_eq!(left("plugin").collect::<Vec<_>>(), ["a", "taken"]);
+        assert_eq!(left("plugin/taken").collect::<Vec<_>>(), ["x"]);
+
+        let item = store
+            .item(&sb.state, Kind::Skills, Scope::Shared, "in")
+            .unwrap();
+        store.accept(&sb.state, &item).unwrap();
+        store.move_item(&sb.state, &item).unwrap();
+        let s = Skills::load(&sb.state, Some(&repo)).unwrap();
+        assert_eq!(names(&s)[0], ("in".into(), Source::Local, true, None));
+        copy(&s.all[0], &sb.path("plugin/in")).unwrap();
+        let link = fs::read_link(sb.path("plugin/in/more")).unwrap();
+        assert_eq!(link, Path::new("SKILL.md"));
+        let more = s.all[0].path.join("more");
+        fs::remove_file(&more).unwrap();
+        symlink("./SKILL.md", &more).unwrap();
+        assert!(!Skills::load(&sb.state, Some(&repo)).unwrap().all[0].trusted);
     }
 }
