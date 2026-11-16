@@ -1712,6 +1712,11 @@ The owner checks: the same, through H4c's `make agent-login`. The in-chat check 
 
 ### Step H11. The chat on `kernel::Session`
 
+**Status (2026-11-16): item 4 is built.** `Links::Agent` makes every image a link: inline,
+reference and raw `<img>`, any scheme. `ImageFetch`, a global, replaces `web_image`'s network.
+`files.rs`'s `agent_markdown_links_every_image_and_fetches_none` checks both modes through a
+recording stub. The chat still has to pass `Links::Agent` (item 1).
+
 Work:
 1. The chat view on `kernel::Session`.
 2. `tests/chat.rs` on the fake CLI (H4c).
