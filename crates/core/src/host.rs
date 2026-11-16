@@ -23,6 +23,7 @@ pub enum Call {
 pub enum Act {
     ReportFinding(Finding),
     ReportVerdict(Verdict),
+    ReportGroup(Group),
     Done(Done),
 }
 
@@ -31,6 +32,7 @@ impl Act {
         match self {
             Act::ReportFinding(_) => "report_finding",
             Act::ReportVerdict(_) => "report_verdict",
+            Act::ReportGroup(_) => "report_group",
             Act::Done(_) => "done",
         }
     }
@@ -85,6 +87,12 @@ pub enum Judged {
     Rejected,
     Immaterial,
     PreExisting,
+}
+
+/// Findings that are one problem, the best-described first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,6 +162,11 @@ fn tools() -> Value {
             "quote": s("The code as it is"), "body": s("Why")}),
         &["finding", "verdict", "quote"],
     );
+    let group = object(
+        json!({"ids": {"type": "array", "items": {"type": "string"},
+            "description": "The findings' ids, the best-described first"}}),
+        &["ids"],
+    );
     let done = object(
         json!({"nothing_found": {"type": "boolean"}, "note": s("Anything to add")}),
         &["nothing_found"],
@@ -163,9 +176,9 @@ fn tools() -> Value {
         &["query"],
     );
     let act = object(
-        json!({"action": one_of(&["report_finding", "report_verdict", "done"]),
-            "args": {"anyOf": [finding, verdict, done],
-                "description": "report_finding's, report_verdict's or done's arguments"}}),
+        json!({"action": one_of(&["report_finding", "report_verdict", "report_group", "done"]),
+            "args": {"anyOf": [finding, verdict, group, done],
+                "description": "The action's arguments"}}),
         &["action", "args"],
     );
     json!({"tools": [
@@ -175,7 +188,7 @@ fn tools() -> Value {
             sections whose index routes there. `{ schema }` returns the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
-            verdict on a finding, or `done` at the end of the work, which every turn of a review \
+            verdict on a finding, a group of duplicate findings, or `done` at the end of the work, which every turn of a review \
             ends with."},
     ]})
 }
