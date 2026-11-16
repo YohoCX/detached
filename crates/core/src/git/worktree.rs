@@ -316,7 +316,7 @@ pub fn remove(
 }
 
 /// Runs git with `core.hooksPath` at an empty folder, so no hook of the repo or a branch runs.
-fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
+pub(crate) fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
     let none = tempfile::tempdir()?;
     let hooks = format!("core.hooksPath={}", none.path().display());
     let args = [&["-c", &hooks][..], args].concat();

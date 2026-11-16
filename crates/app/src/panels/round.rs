@@ -11,6 +11,11 @@ impl DocKind for PanelDocs {
         };
         let (repo, task, round) = (repo.clone(), task.clone(), round.clone());
         cx.new(|cx| RunView {
+            live: kernel::panel::live::find(cx, &repo, &task, &round).map(|p| {
+                let watch = cx.observe(&p, |_, _, cx| cx.notify());
+                (p, watch, super::live::ticking(cx))
+            }),
+            confirm: None,
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             mode: kernel::ui_state::get("panels.mode", cx).unwrap_or(2),
             repo,
@@ -52,6 +57,14 @@ impl DocKind for PanelDocs {
 }
 
 pub(super) struct RunView {
+    /// The run while it is live in this app, with its observer and ticker.
+    live: Option<(
+        Entity<kernel::panel::live::Panel>,
+        Subscription,
+        gpui_kit::Task<()>,
+    )>,
+    /// A kept branch whose Discard waits for a second click.
+    confirm: Option<String>,
     pub repo: String,
     task: String,
     round: String,
@@ -66,6 +79,19 @@ pub(super) struct RunView {
 }
 
 impl RunView {
+    /// The run: as the live panel has it, else as its record or archive reads.
+    fn run(&self, cx: &App) -> Option<Run> {
+        if let Some((p, ..)) = &self.live {
+            return Some(p.read(cx).state.run(&self.task, &self.round));
+        }
+        let rounds = self.rounds.read(cx).value.as_ref()?;
+        let run = rounds
+            .runs
+            .iter()
+            .find(|r| r.task == self.task && r.round == self.round);
+        run.cloned()
+    }
+
     fn sync_selection(&mut self, cx: &mut Context<Self>) {
         let key = selection_key(&self.repo, &self.task, &self.round);
         let id: Option<String> = kernel::ui_state::get(&key, cx);
@@ -348,17 +374,17 @@ impl RunView {
 impl Render for RunView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_selection(cx);
+        let run = self.run(cx);
         let resource = self.rounds.read(cx);
-        let run = resource
-            .value
-            .as_ref()
-            .and_then(|r| {
-                r.runs
-                    .iter()
-                    .find(|r| r.task == self.task && r.round == self.round)
-            })
-            .cloned();
         let error = resource.error.clone();
+        let record = match &self.live {
+            Some((p, ..)) => Some(p.read(cx).state.clone()),
+            None => (resource.value.as_ref()).and_then(|r| {
+                r.records
+                    .get(&(self.task.clone(), self.round.clone()))
+                    .cloned()
+            }),
+        };
         let mut content = div()
             .id("panel.content")
             .test_support()
@@ -424,58 +450,75 @@ impl Render for RunView {
                         )))
                         .child(div().flex_none().child(count_badges(run.counts(), cx))),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .flex_wrap()
-                        .gap(GAP)
-                        .children(run.participants.iter().enumerate().map(|(i, p)| {
-                            let label = format!(
-                                "{} · {} · {}{}{}",
-                                p.name,
-                                if p.degraded { "degraded" } else { "done" },
-                                if p.actual_model.is_empty() {
-                                    "model unavailable"
-                                } else {
-                                    &p.actual_model
-                                },
-                                if p.actual_model != p.requested_model
-                                    && !p.requested_model.is_empty()
-                                {
-                                    format!(" (actual; requested {})", p.requested_model)
-                                } else {
-                                    String::new()
-                                },
-                                if p.cause.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" · {}", p.cause)
-                                }
-                            );
-                            div()
-                                .id(("panel.participant", i))
-                                .test_support()
-                                .aria_label(label.clone())
-                                .min_w_0()
-                                .max_w_full()
-                                .overflow_hidden()
-                                .bg(theme(cx).panel)
-                                .rounded(theme::radius::ITEM)
-                                .p(GAP)
-                                .flex()
-                                .items_center()
-                                .gap(GAP)
-                                .child(div().flex_none().child(ui::dot(if p.degraded {
-                                    theme(cx).warning
-                                } else {
-                                    theme(cx).success
-                                })))
-                                .child(div().min_w_0().truncate().child(label))
-                        })),
-                )
+                .when_some(self.live.as_ref(), |d, (p, ..)| {
+                    d.child(super::live::header(p, cx))
+                })
+                .when_some(record, |d, state| {
+                    let view = cx.entity().downgrade();
+                    d.child(super::live::record_actions(
+                        [&self.repo, &self.task, &self.round],
+                        &state,
+                        self.live.is_some(),
+                        self.confirm.as_deref(),
+                        view,
+                        |v: &mut RunView, c| v.confirm = c,
+                        cx,
+                    ))
+                })
+                .when(self.live.is_none(), |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .flex_wrap()
+                            .gap(GAP)
+                            .children(run.participants.iter().enumerate().map(|(i, p)| {
+                                let label = format!(
+                                    "{} · {} · {}{}{}",
+                                    p.name,
+                                    if p.degraded { "degraded" } else { "done" },
+                                    if p.actual_model.is_empty() {
+                                        "model unavailable"
+                                    } else {
+                                        &p.actual_model
+                                    },
+                                    if p.actual_model != p.requested_model
+                                        && !p.requested_model.is_empty()
+                                    {
+                                        format!(" (actual; requested {})", p.requested_model)
+                                    } else {
+                                        String::new()
+                                    },
+                                    if p.cause.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" · {}", p.cause)
+                                    }
+                                );
+                                div()
+                                    .id(("panel.participant", i))
+                                    .test_support()
+                                    .aria_label(label.clone())
+                                    .min_w_0()
+                                    .max_w_full()
+                                    .overflow_hidden()
+                                    .bg(theme(cx).panel)
+                                    .rounded(theme::radius::ITEM)
+                                    .p(GAP)
+                                    .flex()
+                                    .items_center()
+                                    .gap(GAP)
+                                    .child(div().flex_none().child(ui::dot(if p.degraded {
+                                        theme(cx).warning
+                                    } else {
+                                        theme(cx).success
+                                    })))
+                                    .child(div().min_w_0().truncate().child(label))
+                            })),
+                    )
+                })
                 .children(run.warnings.iter().map(|w| {
                     div()
                         .flex_none()
@@ -521,10 +564,15 @@ impl Render for RunView {
         div()
             .id("panel.run")
             .test_support()
+            .flex()
+            .gap(GAP)
             .size_full()
             .p(GAP)
             .min_w_0()
             .overflow_hidden()
+            .when_some(self.live.as_ref(), |d, (p, ..)| {
+                d.child(super::live::participants(p, cx))
+            })
             .child(content)
     }
 }

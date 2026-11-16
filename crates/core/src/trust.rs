@@ -78,6 +78,70 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     Ok(Project { items, fingerprint })
 }
 
+/// What `repo`'s trust files at `sha` would bring in, read as raw blobs: a link among them or more
+/// than 1 MiB of them refuses the scan.
+pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
+    use crate::panel::tree;
+    let all = tree::entries(env, repo, sha, &[".claude", ".mcp.json"])?;
+    let wanted = |p: &str| {
+        SETTINGS.contains(&p)
+            || p == ".mcp.json"
+            || (MARKDOWN.iter().any(|d| p.starts_with(&format!("{d}/"))) && p.ends_with(".md"))
+    };
+    let link = |p: &str| {
+        p == ".claude"
+            || MARKDOWN
+                .iter()
+                .any(|d| d.starts_with(p) || p.starts_with(d))
+            || wanted(p)
+    };
+    if let Some(e) = all.iter().find(|e| e.mode == "120000" && link(&e.path)) {
+        return Err(Error::Other(format!(
+            "{} is a link: the scan refuses it",
+            e.path
+        )));
+    }
+    let mut files: Vec<&tree::Entry> = all.iter().filter(|e| wanted(&e.path)).collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    if files.iter().map(|e| e.size).sum::<u64>() > 1 << 20 {
+        return Err(Error::Other(
+            "The trust files are over 1 MiB: the scan refuses them".into(),
+        ));
+    }
+    let oids: Vec<&str> = files.iter().map(|e| e.oid.as_str()).collect();
+    let bodies = tree::blobs(env, repo, &oids)?;
+    let mut items = vec![];
+    let mut fingerprint = String::new();
+    for (e, body) in files.iter().zip(bodies) {
+        let text = String::from_utf8_lossy(&body);
+        match e.path.as_str() {
+            ".mcp.json" => mcp(&text, &mut items),
+            f if f.ends_with(".json") => settings(f, &text, &mut items),
+            f => front(f, &text, &mut items),
+        }
+        fingerprint.push_str(&format!("{} {}\n", e.oid, e.path));
+    }
+    Ok(Project { items, fingerprint })
+}
+
+/// `p` with `repo`'s file `rel` as it is on disk, when it exists, in the order `project` reads.
+pub fn with_file(env: &Env, mut p: Project, repo: &Path, rel: &str) -> Result<Project> {
+    let Ok(text) = fs::read_to_string(repo.join(rel)) else {
+        return Ok(p);
+    };
+    settings(rel, &text, &mut p.items);
+    let id = out(env, repo, &["hash-object", "--", rel], Kind::Read)?;
+    let mut lines: Vec<String> = p.fingerprint.lines().map(|l| format!("{l}\n")).collect();
+    lines.push(format!("{} {rel}\n", id.trim()));
+    lines.sort_by(|a, b| {
+        a.split_once(' ')
+            .map(|x| x.1)
+            .cmp(&b.split_once(' ').map(|x| x.1))
+    });
+    p.fingerprint = lines.concat();
+    Ok(p)
+}
+
 /// True when there is nothing to trust, or the user trusted exactly this.
 pub fn trusted(config_dir: &Path, repo: &str, p: &Project) -> bool {
     p.items.is_empty() || load(config_dir).get(repo) == Some(&p.fingerprint)
@@ -416,5 +480,58 @@ mod tests {
         }
         let folded = named(".Claude/SETTINGS.local.json");
         assert_eq!(folded, cfg!(any(target_os = "macos", windows)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scan_at_a_sha_reads_blobs_and_refuses_links_and_size() {
+        let sb = crate::git::testutil::Sandbox::new();
+        let repo = sb.path("r");
+        fs::create_dir_all(repo.join(".claude/skills/x")).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        let hook =
+            r#"{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "evil"}]}]}}"#;
+        fs::write(repo.join(".claude/settings.json"), hook).unwrap();
+        fs::write(
+            repo.join(".claude/skills/x/SKILL.md"),
+            "---\nname: x\n---\n",
+        )
+        .unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "a"]);
+        let env = sb.state.env();
+        let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+        let p = at(&env, &repo, &head).unwrap();
+        assert_eq!(p, project(&env, &repo).unwrap());
+        assert!(!p.items.is_empty());
+        fs::remove_file(repo.join(".claude/skills/x/SKILL.md")).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", repo.join(".claude/skills/x/SKILL.md")).unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "link"]);
+        let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+        assert!(
+            at(&env, &repo, &head)
+                .unwrap_err()
+                .to_string()
+                .contains("link")
+        );
+        fs::remove_file(repo.join(".claude/skills/x/SKILL.md")).unwrap();
+        fs::remove_dir(repo.join(".claude/skills/x")).unwrap();
+        std::os::unix::fs::symlink("/etc", repo.join(".claude/skills/x")).unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "dir link"]);
+        let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+        assert!(at(&env, &repo, &head).is_err());
+        fs::remove_file(repo.join(".claude/skills/x")).unwrap();
+        fs::write(repo.join(".mcp.json"), " ".repeat(2 << 20)).unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "big"]);
+        let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+        assert!(
+            at(&env, &repo, &head)
+                .unwrap_err()
+                .to_string()
+                .contains("1 MiB")
+        );
     }
 }

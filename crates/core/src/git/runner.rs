@@ -46,6 +46,8 @@ pub struct Opts<'a> {
     pub lines: Option<LineFn<'a>>,
     /// A private index in place of the repo's.
     pub index: Option<&'a Path>,
+    /// Written to git's stdin, which is closed after it.
+    pub input: Option<Vec<u8>>,
 }
 
 pub type LineFn<'a> = &'a (dyn Fn(&[u8]) -> bool + Sync);
@@ -102,7 +104,10 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
     cmd.env("PATH", &env.path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
-        .stdin(Stdio::null())
+        .stdin(match opts.input {
+            Some(_) => Stdio::piped(),
+            None => Stdio::null(),
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     os::group(&mut cmd);
@@ -111,6 +116,9 @@ pub fn run(env: &Env, repo: &Path, args: &[&str], kind: Kind, opts: Opts) -> Res
     }
     let mut child = cmd.spawn()?;
     let group = child.id();
+    if let (Some(input), Some(mut stdin)) = (opts.input, child.stdin.take()) {
+        thread::spawn(move || _ = std::io::Write::write_all(&mut stdin, &input));
+    }
     let (tx, rx) = mpsc::channel();
     drain(child.stdout.take().unwrap(), tx.clone(), Chunk::Out);
     drain(child.stderr.take().unwrap(), tx, Chunk::Err);

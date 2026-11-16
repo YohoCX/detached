@@ -167,14 +167,14 @@ fn boot(cx: &mut TestAppContext, real: Real, script: Value) -> (Fixture, Api) {
     }
 }
 
-fn boot_with(
+pub(crate) fn boot_with(
     cx: &mut TestAppContext,
     script: Value,
     provider: &'static Provider,
     install: impl FnOnce(&AppState),
 ) -> (Fixture, Api) {
     let host = wsl().map(|_| std::env::var("DETACHED_AGENT_WSL_HOST").expect("the gateway"));
-    let api = Api::serve_on(host.as_deref().unwrap_or("127.0.0.1"), script);
+    let api = Api::serve_on(host.as_deref().unwrap_or("127.0.0.1"), script).unwrap();
     // The CLI sends even plain HTTP through the proxy.
     let no_proxy = ["127.0.0.1", "localhost"]
         .into_iter()

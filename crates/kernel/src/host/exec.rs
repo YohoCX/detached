@@ -4,6 +4,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
 use detached_core::docs::{Doc, Docs, Section};
+use detached_core::env::Env;
+use detached_core::panel::tree;
 use detached_core::skills::{Skill, Source};
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
 use graphql_parser::query::{
@@ -20,12 +22,34 @@ const SIZE: usize = 256 * 1024;
 static SCHEMA: LazyLock<schema::Document<'static, &'static str>> =
     LazyLock::new(|| parse_schema(SDL).expect("the SDL parses"));
 
-/// What a query reads, the scope already applied.
+/// What a query reads, the scope already applied; `env` runs git for the reviewers' reads.
 #[derive(Default)]
 pub struct Snap {
     pub repos: Vec<RepoSnap>,
     pub current: Option<String>,
     pub sessions: Vec<SessionSnap>,
+    pub panels: Vec<PanelSnap>,
+    pub env: Option<Env>,
+}
+
+pub struct PanelSnap {
+    pub run: String,
+    pub mode: String,
+    pub stage: Option<String>,
+    /// Name, role, model and state.
+    pub participants: Vec<[String; 4]>,
+    pub findings: Vec<FindingSnap>,
+}
+
+#[derive(Serialize)]
+pub struct FindingSnap {
+    pub id: String,
+    pub severity: String,
+    pub file: String,
+    pub line: u32,
+    pub title: String,
+    pub body: String,
+    pub verdict: Option<String>,
 }
 
 pub struct RepoSnap {
@@ -102,12 +126,19 @@ enum Node<'a> {
     Skill(&'a Skill),
     /// A doc's section, or the whole doc.
     Doc(&'a Doc, Option<&'a Section>),
+    Panel(&'a PanelSnap),
+    Participant(&'a [String; 4]),
+    Finding(&'a FindingSnap),
+    /// A value with fields of its own: a commit, a match.
+    Row(&'a Value),
 }
 
 enum Out<'a> {
     Value(Value),
     Node(Node<'a>),
     List(Vec<Node<'a>>),
+    /// Values a resolver built, each with its fields.
+    Rows(Vec<Value>),
 }
 
 type Args<'q> = [(&'q str, Gql<'q, &'q str>)];
@@ -133,6 +164,80 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
                 .map(Node::Session)
                 .collect(),
         ))
+    }),
+    ("Query", "panels", |c, _, _| {
+        Ok(Out::List(c.snap.panels.iter().map(Node::Panel).collect()))
+    }),
+    ("Panel", "run", |_, n, _| val(&n.panel().run)),
+    ("Panel", "mode", |_, n, _| val(&n.panel().mode)),
+    ("Panel", "stage", |_, n, _| val(&n.panel().stage)),
+    ("Panel", "participants", |_, n, _| {
+        Ok(Out::List(
+            n.panel()
+                .participants
+                .iter()
+                .map(Node::Participant)
+                .collect(),
+        ))
+    }),
+    ("Panel", "findings", |_, n, _| {
+        Ok(Out::List(
+            n.panel().findings.iter().map(Node::Finding).collect(),
+        ))
+    }),
+    ("Participant", "name", |_, n, _| val(&n.participant()[0])),
+    ("Participant", "role", |_, n, _| val(&n.participant()[1])),
+    ("Participant", "model", |_, n, _| val(&n.participant()[2])),
+    ("Participant", "state", |_, n, _| val(&n.participant()[3])),
+    ("Finding", "id", |_, n, _| val(&n.finding().id)),
+    ("Finding", "severity", |_, n, _| val(&n.finding().severity)),
+    ("Finding", "file", |_, n, _| val(&n.finding().file)),
+    ("Finding", "line", |_, n, _| val(n.finding().line)),
+    ("Finding", "title", |_, n, _| val(&n.finding().title)),
+    ("Finding", "body", |_, n, _| val(&n.finding().body)),
+    ("Finding", "verdict", |_, n, _| val(&n.finding().verdict)),
+    ("Repo", "diff", |c, n, a| {
+        let (base, head) = (text(a, "base").unwrap_or(""), text(a, "head").unwrap_or(""));
+        let d = tree::diff(c.env()?, c.path(n), base, head, text(a, "path"));
+        val(d.map_err(|e| e.to_string())?)
+    }),
+    ("Repo", "log", |c, n, a| {
+        let limit = int(a, "limit").map_or(50, |l| l.clamp(0, 500) as usize);
+        let rows = tree::log(c.env()?, c.path(n), text(a, "range").unwrap_or(""), limit);
+        let rows = rows.map_err(|e| e.to_string())?;
+        Ok(Out::Rows(rows.into_iter().map(|[sha, author, subject]| json!({"sha": sha, "author": author, "subject": subject})).collect()))
+    }),
+    ("Repo", "search", |c, n, a| {
+        let limit = int(a, "limit").map_or(100, |l| l.clamp(0, 1000) as usize);
+        let (rev, pattern) = (
+            text(a, "rev").unwrap_or(""),
+            text(a, "pattern").unwrap_or(""),
+        );
+        let rows =
+            tree::search(c.env()?, c.path(n), rev, pattern, limit).map_err(|e| e.to_string())?;
+        Ok(Out::Rows(
+            rows.into_iter()
+                .map(|(path, line, text)| json!({"path": path, "line": line, "text": text}))
+                .collect(),
+        ))
+    }),
+    ("Commit", "sha", |_, n, _| {
+        Ok(Out::Value(n.row()["sha"].clone()))
+    }),
+    ("Commit", "author", |_, n, _| {
+        Ok(Out::Value(n.row()["author"].clone()))
+    }),
+    ("Commit", "subject", |_, n, _| {
+        Ok(Out::Value(n.row()["subject"].clone()))
+    }),
+    ("Match", "path", |_, n, _| {
+        Ok(Out::Value(n.row()["path"].clone()))
+    }),
+    ("Match", "line", |_, n, _| {
+        Ok(Out::Value(n.row()["line"].clone()))
+    }),
+    ("Match", "text", |_, n, _| {
+        Ok(Out::Value(n.row()["text"].clone()))
     }),
     ("Workspace", "repos", |c, _, _| {
         Ok(Out::List(c.snap.repos.iter().map(Node::Repo).collect()))
@@ -261,9 +366,40 @@ impl<'a> Node<'a> {
         };
         s
     }
+    fn panel(self) -> &'a PanelSnap {
+        let Node::Panel(p) = self else { unreachable!() };
+        p
+    }
+    fn participant(self) -> &'a [String; 4] {
+        let Node::Participant(p) = self else {
+            unreachable!()
+        };
+        p
+    }
+    fn finding(self) -> &'a FindingSnap {
+        let Node::Finding(f) = self else {
+            unreachable!()
+        };
+        f
+    }
+    fn row(self) -> &'a Value {
+        let Node::Row(v) = self else { unreachable!() };
+        v
+    }
 }
 
 impl<'a> Ctx<'a> {
+    fn env(&self) -> Result<&'a Env, String> {
+        self.snap
+            .env
+            .as_ref()
+            .ok_or_else(|| "git is not reachable here".into())
+    }
+
+    fn path(&self, n: Node<'a>) -> &'a std::path::Path {
+        std::path::Path::new(&n.repo().info.path)
+    }
+
     fn repo(&self, path: Option<&str>) -> Option<Node<'a>> {
         let r = self
             .snap
@@ -428,6 +564,22 @@ fn object<'a, 'q>(
                 let items = nodes.into_iter().enumerate().map(|(i, n)| {
                     path.push(i.into());
                     let v = object(c, named(&field.field_type), n, &f.selection_set, path);
+                    path.pop();
+                    v
+                });
+                items.collect()
+            }
+            Ok(Out::Rows(rows)) => {
+                c.charge("[]".len());
+                let items = rows.iter().enumerate().map(|(i, r)| {
+                    path.push(i.into());
+                    let v = object(
+                        c,
+                        named(&field.field_type),
+                        Node::Row(r),
+                        &f.selection_set,
+                        path,
+                    );
                     path.pop();
                     v
                 });
@@ -621,7 +773,7 @@ mod tests {
                 docs: None,
             }],
             current: Some("/w/app".into()),
-            sessions: vec![],
+            ..Snap::default()
         }
     }
 

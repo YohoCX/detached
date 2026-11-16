@@ -5,6 +5,7 @@ type Query {
   workspace: Workspace!
   repo(path: String!): Repo
   sessions(repo: String): [Session!]!
+  panels: [Panel!]!                          # a participant sees its own run alone
 }
 type Workspace { repos: [Repo!]!  current: Repo }
 type Repo {
@@ -12,7 +13,17 @@ type Repo {
   mrs(state: MrState): [MergeRequest!]       # null: not loaded
   skills: [Skill!]                           # null: not loaded; the ones that load, by precedence
   docs(query: String!): [DocSection!]        # null: not loaded or no docs/INDEX.md
+  diff(base: String!, head: String!, path: String): String     # raw blobs: no textconv or filter
+  log(range: String!, limit: Int): [Commit!]
+  search(pattern: String!, rev: String!, limit: Int): [Match!] # git grep over raw blobs
 }
+type Commit { sha: String!  author: String!  subject: String! }
+type Match { path: String!  line: Int!  text: String! }
+type Panel { run: String!  mode: String!  stage: String  participants: [Participant!]!
+             findings: [Finding!]! }
+type Participant { name: String!  role: String!  model: String!  state: String! }
+type Finding { id: ID!  severity: String!  file: String!  line: Int!  title: String!  body: String!
+               verdict: String }
 type Status { changed: Int!  staged: Int!  conflicted: Int!  files(limit: Int): [FileChange!]! }
 type FileChange { path: String!  kind: ChangeKind! }
 type MergeRequest { id: ID!  title: String!  state: MrState!  author: String!  url: String! }

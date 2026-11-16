@@ -4,6 +4,7 @@ use std::time::Instant;
 use super::*;
 use crate::adapters::testutil::Fixture;
 use crate::adapters::{CLAUDE, CliRule};
+use crate::backend::{self as b, Probe};
 use crate::git::testutil::Sandbox;
 
 struct Run {
@@ -304,7 +305,11 @@ fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() 
     let run = boot();
     let mut spec = chat(&run);
     spec.wsl = Some("Ubuntu".into());
-    let (program, args) = command(&spec, "claude".into(), flags(&spec, "s1", false));
+    let (program, args) = command(
+        &spec,
+        "claude".into(),
+        flags(&spec, "s1", false, Default::default()),
+    );
     assert_eq!(program, PathBuf::from("wsl.exe"));
     let front = [
         "-d", "Ubuntu", "--cd", &run.repo, "-e", "sh", "-c", LEASH, "leash", "claude",
@@ -423,4 +428,98 @@ fn a_config_change_the_cli_reports_is_blocked_and_asks_for_a_trust_recheck() {
     assert_eq!(said, "config block config unreported ");
     let recheck = |e: &&Event| matches!(e, Event::Update(Update::Trust));
     assert_eq!(events.iter().filter(recheck).count(), 1);
+}
+
+/// The value after `flag` in `args`.
+fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let i = args.iter().position(|a| a == flag)?;
+    args.get(i + 1).map(String::as_str)
+}
+
+#[test]
+fn a_sandbox_and_a_run_s_mcp_file_go_into_one_settings_flag_and_the_read_rules() {
+    let run = boot();
+    let secret = run.sb.path("home/.ssh");
+    let mut spec = Spec::new(&CLAUDE, &run.repo, Kind::Untrusted);
+    spec.sandbox = Some(b::Sandbox {
+        deny_read: vec![secret.clone()],
+        deny_write: vec![],
+        tmp: Some(run.sb.path("tmp/p1")),
+    });
+    let off = ["x".to_string()].into();
+    let a = flags(&spec, "s1", false, off);
+    assert_eq!(a.iter().filter(|f| *f == "--settings").count(), 1);
+    let settings: Value = serde_json::from_str(after(&a, "--settings").unwrap()).unwrap();
+    let sb = &settings["sandbox"];
+    assert_eq!(sb["filesystem"]["denyRead"], json!([secret]));
+    assert_eq!(sb["network"]["strictAllowlist"], true);
+    assert_eq!(settings["skillOverrides"]["x"], "off");
+    assert_eq!(after(&a, "--tools"), Some("Read,Grep,Glob,Bash"));
+    assert_eq!(after(&a, "--setting-sources"), Some(""));
+    let denied = a
+        .iter()
+        .find(|f| f.starts_with("--disallowedTools="))
+        .unwrap();
+    assert!(
+        denied.contains(&format!("Read(/{}/**)", secret.display())),
+        "{denied}"
+    );
+    let tmp = env(&run.sb.state, &spec);
+    let tmp = tmp.iter().find(|(k, _)| k == "CLAUDE_CODE_TMPDIR").unwrap();
+    assert_eq!(PathBuf::from(&tmp.1), run.sb.path("tmp/p1"));
+
+    let mut verifier = Spec::new(&CLAUDE, &run.repo, Kind::Verifier);
+    verifier.mode = "bypassPermissions".into();
+    let a = flags(&verifier, "s2", false, Default::default());
+    assert_eq!(after(&a, "--tools"), Some("Read,Grep,Glob,Bash"));
+    assert_eq!(after(&a, "--setting-sources"), Some("user"));
+    assert!(a.contains(&"--strict-mcp-config".into()) && !a.contains(&"--settings".into()));
+    verifier.sandbox = Some(b::Sandbox {
+        deny_write: vec![run.sb.path("common")],
+        ..b::Sandbox::default()
+    });
+    let a = flags(&verifier, "s2", false, Default::default());
+    let settings: Value = serde_json::from_str(after(&a, "--settings").unwrap()).unwrap();
+    assert!(
+        settings["sandbox"]["network"].is_null(),
+        "an unlisted host becomes a request"
+    );
+    assert_eq!(
+        settings["sandbox"]["filesystem"]["denyWrite"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let mut finder = chat(&run);
+    (finder.trusted, finder.mcp) = (true, Some(run.sb.path("private/r/mcp.json")));
+    let a = flags(&finder, "s3", false, Default::default());
+    assert_eq!(
+        after(&a, "--mcp-config"),
+        Some(run.sb.path("private/r/mcp.json").to_str().unwrap())
+    );
+    assert_eq!(after(&a, "--setting-sources"), Some("user,project,local"));
+}
+
+#[test]
+fn the_probe_passes_only_when_its_write_is_denied_and_reaches_its_responder_whatever_the_env() {
+    let mut run = boot();
+    let env = run.sb.state.env.get_mut().unwrap();
+    for (k, v) in [
+        ("CLAUDE_CODE_USE_BEDROCK", "1"),
+        ("CLAUDE_CODE_USE_VERTEX", "1"),
+        ("ANTHROPIC_BASE_URL", "http://127.0.0.1:9"),
+    ] {
+        env.vars.retain(|(n, _)| n != k);
+        env.vars.push((k.into(), v.into()));
+    }
+    let fake = |sandbox: &str| {
+        let config = run.sb.path("claude-config/fake.json");
+        std::fs::write(config, json!({"sandbox": sandbox}).to_string()).unwrap();
+        backend().probe(&run.sb.state, None).unwrap()
+    };
+    assert_eq!(fake("works"), Probe::Passed);
+    assert!(matches!(fake("off"), Probe::Failed(e) if e.contains("wrote")));
+    assert!(matches!(fake("unavailable"), Probe::Failed(_)));
 }

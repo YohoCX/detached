@@ -1,4 +1,5 @@
 use detached_core::error::Result;
+use detached_core::panel::marks::{self, Mark, Panels};
 use detached_core::state::AppState;
 use detached_core::store::{Kind, RepoStore, Scope};
 use gpui_kit::{
@@ -20,6 +21,9 @@ pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
             busy: false,
             error: None,
             _workspace: Workspace::observe(cx, |this: &mut Page, cx| this.follow(cx)),
+            _settings: cx.observe(&kernel::settings::Settings::global(cx), |_, _, cx| {
+                cx.notify()
+            }),
         };
         page.follow(cx);
         page
@@ -33,6 +37,7 @@ struct Page {
     busy: bool,
     error: Option<String>,
     _workspace: Subscription,
+    _settings: Subscription,
 }
 
 impl Page {
@@ -79,6 +84,155 @@ impl Page {
         })
         .detach();
         cx.notify();
+    }
+}
+
+impl Page {
+    /// The panels' trust marks for this repo: the repo, its workspaces, forks and marked branches.
+    /// Personal and per machine, never shared.
+    fn marks(
+        &self,
+        mut page: gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>,
+        cx: &Context<Self>,
+    ) -> gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>> {
+        let Some(repo) = self.repo.clone() else {
+            return page;
+        };
+        let settings = kernel::settings::Settings::get(cx);
+        let p: Panels = settings.block(marks::BLOCK).unwrap_or_default();
+        page = page.child(labeled(
+            "sharing.marks",
+            "Panels: a trusted subject runs in orchestrator mode, unsandboxed; anything else gets a \
+             sandboxed, read-only review. These marks stay on this machine.",
+        ));
+        let mark = p.repos.iter().find(|m| m.name == repo).cloned();
+        let text = match &mark {
+            Some(m) => format!(
+                "This repo is trusted, its own remote {}{}",
+                m.remote.as_deref().unwrap_or("origin"),
+                if m.forks { ", forks included" } else { "" }
+            ),
+            None => "This repo is not marked trusted".into(),
+        };
+        let r = repo.clone();
+        let mut line = row().child(text).child(button(
+            "sharing.marks.repo",
+            if mark.is_some() {
+                "Stop trusting it"
+            } else {
+                "Trust this repo"
+            },
+            !self.busy,
+            cx,
+            move |this, _, cx| {
+                let r = r.clone();
+                this.run(cx, move |_, core| {
+                    marks::change(core, |p| match p.repos.iter().position(|m| m.name == r) {
+                        Some(i) => _ = p.repos.remove(i),
+                        None => p.repos.push(Mark {
+                            name: r,
+                            ..Mark::default()
+                        }),
+                    })
+                })
+            },
+        ));
+        if let Some(m) = mark {
+            let r = repo.clone();
+            line = line.child(button(
+                "sharing.marks.forks",
+                if m.forks {
+                    "Exclude forks"
+                } else {
+                    "Include forks"
+                },
+                !self.busy,
+                cx,
+                move |this, _, cx| {
+                    let r = r.clone();
+                    this.run(cx, move |_, core| {
+                        marks::change(core, |p| {
+                            p.repos
+                                .iter_mut()
+                                .filter(|m| m.name == r)
+                                .for_each(|m| m.forks = !m.forks)
+                        })
+                    })
+                },
+            ));
+        }
+        page = page.child(line);
+        let holds = |w: &&detached_core::settings::Workspace| {
+            w.folders
+                .iter()
+                .any(|f| std::path::Path::new(&repo).starts_with(f))
+        };
+        for w in settings.workspaces.iter().filter(holds) {
+            let marked = p.workspaces.iter().any(|m| m.name == w.name);
+            let name = w.name.clone();
+            page = page.child(
+                row()
+                    .child(format!(
+                        "Workspace {}: {}",
+                        w.name,
+                        if marked {
+                            "trusted"
+                        } else {
+                            "not marked trusted"
+                        }
+                    ))
+                    .child(button(
+                        SharedString::from(format!("sharing.marks.workspace.{}", w.name)),
+                        if marked {
+                            "Stop trusting it"
+                        } else {
+                            "Trust this workspace"
+                        },
+                        !self.busy,
+                        cx,
+                        move |this, _, cx| {
+                            let name = name.clone();
+                            this.run(cx, move |_, core| {
+                                marks::change(core, |p| {
+                                    match p.workspaces.iter().position(|m| m.name == name) {
+                                        Some(i) => _ = p.workspaces.remove(i),
+                                        None => p.workspaces.push(Mark {
+                                            name,
+                                            ..Mark::default()
+                                        }),
+                                    }
+                                })
+                            })
+                        },
+                    )),
+            );
+        }
+        for b in p.branches.iter().filter(|b| b.repo == repo) {
+            let (r, branch) = (b.repo.clone(), b.branch.clone());
+            page = page.child(
+                row()
+                    .child(format!(
+                        "Branch {} trusted by you at {}",
+                        b.branch,
+                        &b.head[..b.head.len().min(8)]
+                    ))
+                    .child(button(
+                        SharedString::from(format!("sharing.marks.branch.{}", b.branch)),
+                        "Remove",
+                        !self.busy,
+                        cx,
+                        move |this, _, cx| {
+                            let (r, branch) = (r.clone(), branch.clone());
+                            this.run(cx, move |_, core| {
+                                marks::change(core, |p| {
+                                    p.branches.retain(|b| !(b.repo == r && b.branch == branch))
+                                })
+                            })
+                        },
+                    )),
+            );
+        }
+        page
     }
 }
 
@@ -141,6 +295,7 @@ impl Render for Page {
                 },
             )));
         }
+        page = self.marks(page, cx);
         for item in &value.items {
             let label = format!(
                 "{} / {} · {:?}{}",
