@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use detached_app::chat::{self, Item};
+use detached_app::chat;
 use detached_app::{settings, terminal};
 use detached_core::update::testutil::{Server, keys};
 use detached_core::update::{Install, Release};
@@ -216,7 +216,7 @@ fn restart_now_names_the_live_chats_and_shells_first(cx: &mut TestAppContext) {
     set(cx, |u| u.state = State::Ready);
     cx.update(|_, cx| {
         let talked = chat::session("/x/api", 0, cx);
-        talked.update(cx, |s, _| s.items.push(Item::User("fix the login".into())));
+        talked.update(cx, |s, _| s.topic = Some("fix the login".into()));
         chat::session("/x/web", 0, cx);
     });
     cx.press("alt-f12");

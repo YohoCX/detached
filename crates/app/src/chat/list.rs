@@ -1,11 +1,8 @@
 //! The Chats app: the chats open now, then past conversations by repo and folder, each a row the
 //! keys walk, open, archive and delete.
 
-use std::path::Path;
-
-use detached_core::agent::{self, Command, Event, Past};
-use futures::StreamExt;
-use futures::channel::mpsc;
+use detached_core::adapters::CLAUDE;
+use detached_core::backend::{Kind, Past, Spec};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -16,12 +13,13 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{Item, Session, label, open, state_icon};
+use super::{Chat, label, open, state_icon};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, now};
 use kernel::activity::Activity;
-use kernel::blocking;
 use kernel::doc::Doc;
+use kernel::resource::Interest;
+use kernel::session::Item;
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
@@ -47,7 +45,7 @@ enum Key {
 enum Line {
     /// A section, with a repo's or a folder's icon.
     Heading(String, Option<Icon>),
-    Open(String, u32, Entity<Session>),
+    Open(String, u32, Entity<Chat>),
     Past(Past),
     Archived(usize),
 }
@@ -64,7 +62,8 @@ impl Line {
 }
 
 pub struct ChatList {
-    past: Vec<Past>,
+    /// Each place's past conversations: the workspace's repos and folders.
+    past: Vec<(String, Interest<Vec<Past>>)>,
     filter: Filter,
     query: Entity<InputState>,
     show_archived: bool,
@@ -73,10 +72,7 @@ pub struct ChatList {
     deleting: Option<Key>,
     focus: FocusHandle,
     scroll: ScrollHandle,
-    /// The last command's run, which waits for the one before.
-    _run: Option<Task<()>>,
-    /// Runs begun: only the last one's list is shown, as an earlier one's misses later commands.
-    runs: usize,
+    _work: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,21 +91,81 @@ impl ChatList {
             deleting: None,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
-            _run: None,
-            runs: 0,
+            _work: vec![],
             _subscriptions: vec![
-                cx.observe(&Workspace::global(cx), |_, _, cx| cx.notify()),
-                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Workspace::global(cx), |l, _, cx| l.watch(cx)),
+                cx.observe(&Settings::global(cx), |l, _, cx| l.watch(cx)),
                 cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
             query,
         };
-        list.refresh(cx);
+        list.watch(cx);
         list
     }
 
+    /// Holds the past conversations of each place in the workspace, and no other.
+    fn watch(&mut self, cx: &mut Context<Self>) {
+        let mut places: Vec<String> = Workspace::get(cx)
+            .repos()
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        for f in Settings::get(cx).workspaces.iter().flat_map(|w| &w.folders) {
+            if !places.contains(f) {
+                places.push(f.clone());
+            }
+        }
+        self.past.retain(|(p, _)| places.contains(p));
+        for p in places {
+            if !self.past.iter().any(|(q, _)| *q == p) {
+                let past = kernel::session::past_of(&CLAUDE, &p, cx);
+                self.past.push((p, Interest::view(past, cx)));
+            }
+        }
+        cx.notify();
+    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.run(vec![], cx);
+        for (_, p) in &self.past {
+            p.refresh(cx);
+        }
+    }
+
+    fn all(&self, cx: &App) -> Vec<Past> {
+        let all = self.past.iter().flat_map(|(_, p)| p.read(cx).value.clone());
+        all.flatten().collect()
+    }
+
+    /// Changes `cwd`'s list at once, before its reload says the same.
+    fn edit(&self, cwd: &str, f: impl FnOnce(&mut Vec<Past>), cx: &mut App) {
+        if let Some((_, p)) = self.past.iter().find(|(c, _)| c == cwd) {
+            p.resource().update(cx, |r, cx| {
+                r.value.as_mut().map(f);
+                cx.notify();
+            });
+        }
+    }
+
+    /// Reloads `cwd`'s list once `done` is, and says why it failed.
+    fn then(
+        &mut self,
+        cwd: String,
+        done: Task<detached_core::error::Result<()>>,
+        cx: &mut Context<Self>,
+    ) {
+        self._work.retain(|t| !t.is_ready());
+        self._work.push(cx.spawn(async move |this, cx| {
+            let done = done.await;
+            this.update(cx, |l, cx| {
+                if let Err(e) = done {
+                    Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx));
+                }
+                if let Some((_, p)) = l.past.iter().find(|(c, _)| *c == cwd) {
+                    p.refresh(cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     /// The row after `key`'s, or the one before at the end, to take the selection when it goes.
@@ -126,11 +182,12 @@ impl ChatList {
         match key {
             Key::Open(repo, n) => {
                 let s = super::find(repo, *n, cx)?;
-                let id = s.read(cx).conversation()?.to_string();
+                let id = s.read(cx).conversation(cx)?.to_string();
                 Some((repo.clone(), id))
             }
             Key::Past(id) => {
-                let p = self.past.iter().find(|p| p.id == *id)?;
+                let all = self.all(cx);
+                let p = all.iter().find(|p| p.id == *id)?;
                 Some((p.cwd.clone().unwrap_or_default(), id.clone()))
             }
             Key::Archived => None,
@@ -153,11 +210,17 @@ impl ChatList {
             return;
         };
         let next = self.next(key, cx);
-        let past = self.past.iter_mut().find(|p| p.id == id);
-        let archived = matches!(key, Key::Open(..)) || !past.as_ref().is_some_and(|p| p.archived());
-        if let Some(p) = past {
-            p.tag = archived.then(|| "archived".to_string());
-        }
+        let was = self.all(cx).iter().any(|p| p.id == id && p.archived());
+        let archived = matches!(key, Key::Open(..)) || !was;
+        self.edit(
+            &cwd,
+            |all| {
+                for p in all.iter_mut().filter(|p| p.id == id) {
+                    p.tag = archived.then(|| "archived".to_string());
+                }
+            },
+            cx,
+        );
         if archived && !self.show_archived && self.selected.as_ref() == Some(key) {
             self.selected = next;
         }
@@ -165,7 +228,8 @@ impl ChatList {
             Key::Open(repo, n) => super::end(repo, *n, window, cx),
             _ => super::forget(&id, cx),
         }
-        self.run(vec![Command::Archive { cwd, id, archived }], cx);
+        let done = kernel::session::archive(id, archived, cx);
+        self.then(cwd, done, cx);
     }
 
     fn delete(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
@@ -174,92 +238,35 @@ impl ChatList {
             return;
         };
         self.selected = self.next(key, cx);
-        self.past.retain(|p| p.id != id);
+        self.edit(&cwd, |all| all.retain(|p| p.id != id), cx);
         match key {
             Key::Open(repo, n) => super::end(repo, *n, window, cx),
             _ => super::forget(&id, cx),
         }
-        self.run(vec![Command::Delete { cwd, id }], cx);
-    }
-
-    /// Sends `first` to a sidecar of its own once earlier runs are done, then takes the list it gives
-    /// back.
-    fn run(&mut self, first: Vec<Command>, cx: &mut Context<Self>) {
-        cx.notify();
-        let core = kernel::core(cx).clone();
-        let program = agent::sidecar(&core.config_dir);
-        if !program.is_file() {
-            return;
-        }
-        let (tx, mut rx) = mpsc::unbounded();
-        let started = blocking::run(cx, move || {
-            agent::start(&program, &core.env(), move |e| {
-                let _ = tx.unbounded_send(e);
-            })
-        });
-        let before = self._run.take();
-        self.runs += 1;
-        let run = self.runs;
-        self._run = Some(cx.spawn(async move |this, cx| {
-            if let Some(b) = before {
-                b.await;
-            }
-            let Ok(agent) = started.await else { return };
-            for c in first {
-                agent.send(&c);
-            }
-            agent.send(&Command::Sessions { cwd: String::new() });
-            // Closing stdin lets the sidecar finish these and exit, so `rx` always ends.
-            drop(agent);
-            while let Some(e) = rx.next().await {
-                match e {
-                    Event::Sessions { sessions } => {
-                        this.update(cx, |l, cx| {
-                            if l.runs == run {
-                                l.past = sessions;
-                                cx.notify();
-                            }
-                        })
-                        .ok();
-                        return;
-                    }
-                    Event::Error { message } => {
-                        cx.update(|cx| {
-                            Activity::global(cx).update(cx, |a, cx| a.say(message, true, cx))
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }));
+        let spec = Spec::new(&CLAUDE, &cwd, Kind::Chat);
+        let done = kernel::session::delete(spec, id, cx);
+        self.then(cwd, done, cx);
     }
 
     /// Past conversations in the workspace's folders, archived or not, newest place first.
-    fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<&Past>)> {
+    fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<Past>)> {
         let q = self.query(cx);
-        let s = Settings::get(cx);
-        let ours = |cwd: &str| {
-            s.workspaces
-                .iter()
-                .flat_map(|w| &w.folders)
-                .any(|f| Path::new(cwd).starts_with(f))
-        };
-        let mut places: Vec<(String, Vec<&Past>)> = vec![];
-        let mut past: Vec<&Past> = self.past.iter().collect();
+        let mut places: Vec<(String, Vec<Past>)> = vec![];
+        let mut past = self.all(cx);
         past.sort_by_key(|p| std::cmp::Reverse(p.modified));
         for p in past {
             let Some(cwd) = p
                 .cwd
-                .as_deref()
-                .filter(|c| ours(c) && p.archived() == archived)
+                .clone()
+                .filter(|_| p.archived() == archived)
                 .filter(|c| has(&q, &p.title) || has(&q, &label(c, cx)))
             else {
                 continue;
             };
-            match places.iter_mut().find(|(c, _)| c == cwd) {
+            match places.iter_mut().find(|(c, _)| *c == cwd) {
                 Some((_, list)) if list.len() < PER_PLACE => list.push(p),
                 Some(_) => {}
-                None => places.push((cwd.to_string(), vec![p])),
+                None => places.push((cwd, vec![p])),
             }
         }
         places
@@ -277,7 +284,8 @@ impl ChatList {
             let mut open = open(cx);
             open.retain(|(r, _, s)| {
                 let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
-                has(&q, &label(r, cx)) || s.read(cx).items.iter().any(said)
+                let feed = s.read(cx).feed(cx);
+                has(&q, &label(r, cx)) || feed.iter().any(|(_, i)| said(i))
             });
             if !open.is_empty() {
                 out.push(Line::Heading("Active".into(), None));
@@ -287,14 +295,14 @@ impl ChatList {
         if self.filter == Filter::Active {
             return out;
         }
-        let place = |out: &mut Vec<Line>, (cwd, past): (String, Vec<&Past>)| {
+        let place = |out: &mut Vec<Line>, (cwd, past): (String, Vec<Past>)| {
             let name = label(&cwd, cx);
             let icon = match name.ends_with('/') {
                 true => Icon::Folder,
                 false => Icon::Repo,
             };
             out.push(Line::Heading(name, Some(icon)));
-            out.extend(past.into_iter().map(|p| Line::Past(p.clone())));
+            out.extend(past.into_iter().map(Line::Past));
         };
         for p in self.places(false, cx) {
             place(&mut out, p);
@@ -323,8 +331,7 @@ impl ChatList {
                 Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
             }
             Key::Past(id) => {
-                let past = self.past.iter().find(|p| p.id == *id);
-                let Some(cwd) = past.and_then(|p| p.cwd.clone()) else {
+                let Some((cwd, _)) = self.conversation(key, cx) else {
                     return;
                 };
                 super::resume(cwd, id.clone(), cx);
@@ -430,9 +437,9 @@ impl ChatList {
                     return self.confirm(i, key, cx);
                 }
                 let s = session.read(cx);
-                let state = s.state();
-                let said = s.conversation().is_some();
-                let last = s.items.iter().rev().find_map(|it| match it {
+                let state = s.state(cx);
+                let said = s.conversation(cx).is_some();
+                let last = s.feed(cx).iter().rev().find_map(|(_, it)| match it {
                     Item::User(text) => Some(text.clone()),
                     _ => None,
                 });

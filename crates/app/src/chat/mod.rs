@@ -1,4 +1,5 @@
-//! The chats with Claude in the main area, any number per repo or folder.
+//! The chats with the agent in the main area, any number per repo or folder, each on its own
+//! sessions.
 
 mod list;
 mod session;
@@ -14,39 +15,42 @@ use gpui_kit::{
     div, px,
 };
 
-pub use session::{Item, Session, State};
+pub use session::{Chat, State};
 
 use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec, DocKind};
 use crate::ui::{self, Icon, theme};
 use crate::util::first_line;
+use detached_core::adapters::CLAUDE;
+use detached_core::backend::StopReason;
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 use kernel::workspace::Workspace;
 
-/// Sessions outlive their page, which goes when another document is shown.
+/// Chats outlive their page, which goes when another document is shown.
 #[derive(Default)]
-struct Chats(BTreeMap<(String, u32), Entity<Session>>);
+struct Chats(BTreeMap<(String, u32), Entity<Chat>>);
 
 impl Global for Chats {}
 
-/// Chat `n` on `repo`, new if there is none.
-pub fn session(repo: &str, n: u32, cx: &mut App) -> Entity<Session> {
+/// Whether a turn that ended so went to its end.
+pub fn done(stop: Option<StopReason>) -> bool {
+    stop.is_some_and(|s| s != StopReason::Cancelled)
+}
+
+/// Chat `n` on `repo`, new if there is none; its first session opens when it shows.
+pub fn session(repo: &str, n: u32, cx: &mut App) -> Entity<Chat> {
     if let Some(s) = find(repo, n, cx) {
         return s;
     }
-    let s = cx.new(|cx| {
-        let mut s = Session::new(repo.to_string());
-        s.remember(cx);
-        s
-    });
+    let s = cx.new(|cx| Chat::new(repo.to_string(), cx));
     cx.default_global::<Chats>()
         .0
         .insert((repo.into(), n), s.clone());
     s
 }
 
-pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Session>> {
+pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Chat>> {
     cx.try_global::<Chats>()?.0.get(&(repo.into(), n)).cloned()
 }
 
@@ -106,14 +110,17 @@ pub fn show(repo: String, cx: &mut App) {
 
 /// Shows a chat on `repo` with nothing in it: an untouched open one, else a new one with `from`'s
 /// mode, model and effort.
-pub fn new_chat(repo: String, from: Option<&Entity<Session>>, cx: &mut App) {
+pub fn new_chat(repo: String, from: Option<&Entity<Chat>>, cx: &mut App) {
     let n = fresh(&repo, from, cx);
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
 /// Shows past conversation `id`: in the chat that has it, else in a chat on `cwd` with nothing in it.
 pub fn resume(cwd: String, id: String, cx: &mut App) {
-    let (repo, n) = match open(cx).into_iter().find(|(.., s)| s.read(cx).shows(&id)) {
+    let (repo, n) = match open(cx)
+        .into_iter()
+        .find(|(.., s)| s.read(cx).shows(&id, cx))
+    {
         Some((repo, n, _)) => (repo, n),
         None => {
             let n = fresh(&cwd, None, cx);
@@ -124,23 +131,23 @@ pub fn resume(cwd: String, id: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-fn fresh(repo: &str, from: Option<&Entity<Session>>, cx: &mut App) -> u32 {
+fn fresh(repo: &str, from: Option<&Entity<Chat>>, cx: &mut App) -> u32 {
     let mine: Vec<_> = open(cx).into_iter().filter(|(r, ..)| r == repo).collect();
-    if let Some((_, n, _)) = mine.iter().find(|(.., s)| s.read(cx).is_new()) {
+    if let Some((_, n, _)) = mine.iter().find(|(.., s)| s.read(cx).is_new(cx)) {
         return *n;
     }
     let n = mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0);
     let s = session(repo, n, cx);
     if let Some(f) = from.map(|f| f.read(cx)) {
-        let (asked, model, effort) = (f.asked.clone(), f.model.clone(), f.effort.clone());
+        let (mode, model, effort) = (f.mode.clone(), f.model.clone(), f.effort.clone());
         s.update(cx, |s, _| {
-            (s.asked, s.model, s.effort) = (asked, model, effort)
+            (s.mode, s.model, s.effort) = (mode, model, effort)
         });
     }
     n
 }
 
-/// Ends chat `n` on `repo`: its sidecar stops and its tab closes.
+/// Ends chat `n` on `repo`: its sessions end and its tab closes.
 pub fn end(repo: &str, n: u32, window: &mut Window, cx: &mut App) {
     if let Some(s) = cx.default_global::<Chats>().0.remove(&(repo.into(), n)) {
         s.update(cx, |s, cx| s.end(cx));
@@ -154,7 +161,7 @@ pub fn end(repo: &str, n: u32, window: &mut Window, cx: &mut App) {
 }
 
 /// The chats open in this run, by place and number.
-pub fn open(cx: &App) -> Vec<(String, u32, Entity<Session>)> {
+pub fn open(cx: &App) -> Vec<(String, u32, Entity<Chat>)> {
     let mut all: Vec<_> = cx.try_global::<Chats>().map_or(vec![], |c| {
         c.0.iter()
             .map(|((r, n), s)| (r.clone(), *n, s.clone()))
@@ -166,7 +173,9 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Session>)> {
 
 /// The open chats with something in them, by their tabs' titles.
 pub fn live(cx: &App) -> Vec<String> {
-    let live = open(cx).into_iter().filter(|(.., s)| !s.read(cx).is_new());
+    let live = open(cx)
+        .into_iter()
+        .filter(|(.., s)| !s.read(cx).is_new(cx));
     live.map(|(repo, n, _)| ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into())
         .collect()
 }
@@ -174,11 +183,10 @@ pub fn live(cx: &App) -> Vec<String> {
 /// Resets the idle open chat that shows past conversation `id`, which is going away.
 pub fn forget(id: &str, cx: &mut App) {
     for (.., s) in open(cx) {
-        s.update(cx, |s, cx| {
-            if s.shows(id) && !s.busy {
-                s.reset(cx)
-            }
-        });
+        let reset = s.read(cx).shows(id, cx) && !s.read(cx).busy(cx);
+        if reset {
+            s.update(cx, |s, cx| s.reset(cx));
+        }
     }
 }
 
@@ -223,9 +231,12 @@ impl DocKind for ChatDocs {
             unreachable!()
         };
         let place = label(repo, cx);
-        match find(repo, *n, cx).as_ref().and_then(|s| s.read(cx).topic()) {
+        match find(repo, *n, cx)
+            .as_ref()
+            .and_then(|s| s.read(cx).topic(cx))
+        {
             Some(t) => format!("{place} · {}", first_line(t)).into(),
-            None => format!("Claude · {place}").into(),
+            None => format!("{} · {place}", CLAUDE.name).into(),
         }
     }
 
@@ -234,7 +245,7 @@ impl DocKind for ChatDocs {
         let Doc::Chat { repo, n } = doc else {
             unreachable!()
         };
-        let state = find(repo, *n, cx)?.read(cx).state();
+        let state = find(repo, *n, cx)?.read(cx).state(cx);
         matches!(state, State::Working | State::Waiting).then(|| {
             div()
                 .id(SharedString::from(format!("{}.state", self.id(doc))))
@@ -263,10 +274,10 @@ impl DocKind for ChatDocs {
 
 /// Tells the system that a chat that was working now waits for the user or is done, when no
 /// window of ours has focus.
-fn alert(s: &Session, me: &Entity<Session>, cx: &mut App) {
-    let title = match s.state() {
-        State::Waiting => "Claude is waiting for you",
-        State::Done => "Claude is done",
+fn alert(repo: &str, state: State, topic: Option<String>, me: &Entity<Chat>, cx: &mut App) {
+    let title = match state {
+        State::Waiting => format!("{} is waiting for you", CLAUDE.name),
+        State::Done => format!("{} is done", CLAUDE.name),
         _ => return,
     };
     let windows = cx.windows();
@@ -276,10 +287,14 @@ fn alert(s: &Session, me: &Entity<Session>, cx: &mut App) {
     });
     let chats = cx.try_global::<Chats>().map(|c| &c.0);
     let chat = chats.and_then(|c| c.iter().find(|(_, e)| *e == me));
-    let Some((repo, n)) = chat.map(|(k, _)| k.clone()).filter(|_| !focused) else {
+    let Some((_, n)) = chat.map(|(k, _)| k.clone()).filter(|_| !focused) else {
         return;
     };
-    let body = format!("{} · {}", label(&repo, cx), s.topic().unwrap_or("New chat"));
+    let body = format!(
+        "{} · {}",
+        label(repo, cx),
+        topic.as_deref().unwrap_or("New chat")
+    );
     cx.show_system_notification(SystemNotification {
         tag: format!("chat:{n}:{repo}").into(),
         title: title.into(),

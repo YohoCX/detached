@@ -6,7 +6,6 @@ use detached_app::dock::{self, AppSpec, DocKind};
 use detached_app::files::{self, DiffDoc, Side};
 use detached_app::shell;
 use detached_app::terminal::Terminals;
-use detached_core::agent;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
@@ -308,9 +307,7 @@ fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut T
 fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         layout(sb);
-        let installed = agent::sidecar(&sb.state.config_dir);
-        std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
-        std::fs::copy(env!("CARGO_BIN_EXE_fake_sidecar"), installed).unwrap();
+        claude(sb, &detached_core::testutil::claude::fake());
     });
     let solo = cx.sb.solo().display().to_string();
     cx.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
@@ -318,7 +315,7 @@ fn a_running_chat_moves_to_another_zone_with_its_turn_going_on(cx: &mut TestAppC
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);
     cx.click("top.chat");
-    cx.input("hang");
+    cx.input("say Working; wait never");
     cx.press("enter");
     let working = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {

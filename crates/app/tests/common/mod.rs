@@ -25,6 +25,27 @@ pub use gpui_kit::base::dock::DockPlacement;
 
 pub use detached_core::git::testutil::Sandbox;
 
+/// Makes `cli` Claude's CLI, with its config dir `claude/` in the sandbox and every other name of
+/// its manifest empty, so nothing of the caller's login or cloud reaches it. Returns the config dir.
+pub fn claude(sb: &Sandbox, cli: &Path) -> PathBuf {
+    use detached_core::adapters::{BLOCK, CLAUDE, Config};
+    let cli = [(CLAUDE.id.into(), cli.display().to_string())].into();
+    sb.state
+        .set_block(BLOCK, Config { cli, codex: false })
+        .unwrap();
+    let dir = sb.path("claude");
+    fs::create_dir_all(&dir).unwrap();
+    let mut env = sb.state.env.write().unwrap();
+    env.vars
+        .push(("CLAUDE_CONFIG_DIR".into(), dir.display().to_string()));
+    for k in CLAUDE.env {
+        if !env.vars.iter().any(|(n, _)| n == k) {
+            env.vars.push((k.to_string(), String::new()));
+        }
+    }
+    dir
+}
+
 /// `repos/<name>` with one commit on main.
 pub fn repo(sb: &Sandbox, name: &str) -> PathBuf {
     let repo = sb.path("repos").join(name);
