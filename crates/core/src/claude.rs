@@ -299,10 +299,15 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     if spec.tools.is_some() {
         init["sdkMcpServers"] = json!([SERVER]);
     }
-    let init = live
-        .0
-        .call(init)
-        .map_err(|e| unsupported(p, catalog.as_ref(), &has, e))?;
+    let init = match live.0.call(init) {
+        Ok(Ok(init)) => init,
+        // Refused, or answered in something other than frames: it speaks another protocol.
+        Ok(Err(e)) => return Err(unsupported(p, catalog.as_ref(), &has, e)),
+        Err(e) if live.0.stray.load(Ordering::SeqCst) => {
+            return Err(unsupported(p, catalog.as_ref(), &has, e.to_string()));
+        }
+        Err(e) => return Err(e),
+    };
     let models: Vec<Model> = list(&init["models"], model);
     let offered: Vec<String> = (init["models"].as_array().into_iter().flatten())
         .flat_map(|m| [&m["value"], &m["resolvedModel"]])
@@ -361,7 +366,7 @@ fn unsupported(
     p: &Provider,
     catalog: Option<&adapters::Catalog>,
     has: &Version,
-    e: Error,
+    e: String,
 ) -> Error {
     let floor = match adapters::check_own_cli(p, catalog, &Version::new(0, 0, 0)) {
         Cli::Old(v) => v,
@@ -495,6 +500,8 @@ struct Client {
     next: AtomicU64,
     state: Mutex<State>,
     closing: AtomicBool,
+    /// Stdout carried a line that is not JSON.
+    stray: AtomicBool,
     tools: Option<backend::Tools>,
     /// Removed once the CLI is gone and the session dropped.
     _plugin: Option<TempDir>,
@@ -541,6 +548,7 @@ impl Live {
             next: AtomicU64::new(1),
             state: Default::default(),
             closing: AtomicBool::new(false),
+            stray: AtomicBool::new(false),
             tools: spec.tools.clone(),
             _plugin: plugin,
         });
@@ -639,15 +647,16 @@ impl Client {
         }
     }
 
-    /// A request answered within `WAIT`; never on the reader's thread.
-    fn call(&self, body: Value) -> Result<Value> {
+    /// A request's answer, success or refusal, within `WAIT`; never on the reader's thread.
+    fn call(&self, body: Value) -> Result<std::result::Result<Value, String>> {
         let (tx, rx) = mpsc::channel();
         self.request(body, move |_, r| _ = tx.send(r));
-        let fail = |e: String| Error::Other(format!("claude did not start: {e}"));
-        match rx.recv_timeout(WAIT) {
-            Ok(r) => r.map_err(fail),
-            Err(_) => Err(fail(last(&self.proc.stderr()))),
-        }
+        rx.recv_timeout(WAIT).map_err(|_| {
+            Error::Other(format!(
+                "claude did not start: {}",
+                last(&self.proc.stderr())
+            ))
+        })
     }
 
     fn respond(&self, request: &Value, response: Value) {
@@ -738,8 +747,10 @@ impl Client {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             wire('<', &line);
-            if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                self.on(&v);
+            match serde_json::from_str::<Value>(&line) {
+                Ok(v) => self.on(&v),
+                Err(_) if !line.trim().is_empty() => self.stray.store(true, Ordering::SeqCst),
+                Err(_) => {}
             }
         }
         self.pending.lock().unwrap().clear();

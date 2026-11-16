@@ -384,6 +384,16 @@ fn a_claude_that_cannot_talk_says_it_is_not_supported_and_names_the_terminal_and
 }
 
 #[test]
+fn a_claude_that_exits_at_start_says_why_and_not_that_it_is_unsupported() {
+    let run = boot();
+    std::fs::write(run.sb.dir.path().join("claude-config/held.live"), "").unwrap();
+    let resumed = backend().resume(&run.sb.state, &chat(&run), "held", Box::new(|_| {}));
+    let e = resumed.err().unwrap().to_string();
+    assert!(e.contains("session held is open in another process"), "{e}");
+    assert!(!e.contains("not supported"), "{e}");
+}
+
+#[test]
 fn a_denied_call_stays_denied_with_its_reason() {
     let run = boot();
     let s = open(&run, &chat(&run)).unwrap();

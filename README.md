@@ -15,8 +15,8 @@ zone; drag a zone's edge to resize it, double-click to reset it, drag it nearly 
 Errors and warnings from everywhere collect in Events. Themes: Fleet and Classic, or your own JSON
 in the config folder's `themes`, reloaded as you edit.
 
-A Claude chat on a repo or a whole folder is in development: its tabs are there, but the sidecar it
-runs on is not in the packages yet, so the chat says it is not installed.
+A Claude chat on a repo or a whole folder runs on your own `claude` CLI, the one on PATH or a path
+set in Settings › Agents; that page also runs Claude's installer and logs you in from a terminal tab.
 
 Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
 bar, and everything (sidebar, fetch and pull all, quick open, search) covers their repos. The

@@ -327,8 +327,10 @@ impl ChatView {
                 })
             })
         };
-        let asked = s.map_or(&chat.mode, |s| &s.spec.mode);
-        let mode = MODES.iter().find(|(m, ..)| m == asked).unwrap_or(&MODES[0]);
+        let mode = MODES
+            .iter()
+            .find(|(m, ..)| *m == chat.mode)
+            .unwrap_or(&MODES[0]);
         let modes = MODES
             .iter()
             .map(|(m, label, _)| (label.to_string(), Some(Setting::Mode(m.to_string()))))

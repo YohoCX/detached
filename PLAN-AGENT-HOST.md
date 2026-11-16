@@ -1715,15 +1715,17 @@ The owner checks: the same, through H4c's `make agent-login`. The in-chat check 
 **Status (2026-11-16): items 1 to 4 are built.** The chat
 holds its conversation's `kernel::Session`s, the first opened when it shows; one that ended goes on
 in a resume after it, its history left out of the feed. `kernel::Session` takes a prompt while it
-starts, keeps one a trust change refused for the next session, snapshots each repo of a folder,
-undoes a restore and plans again over moved files, keeps mode, model and effort for a resume, takes
-`auto` back after a model without it and notes the drop. Archive is a flag in the host's index,
-`core::sessions` (`data/sessions.json`); delete removes the transcript and the entry; the past list
+starts and hands it to the next session when it ends meanwhile, keeps one a trust change refused for
+the next session, applies a mode, model or effort picked while it starts once it has, snapshots each
+repo of a folder, undoes a restore and plans again over moved files, takes `auto` back after a model
+without it and notes the drop; the chat keeps mode, model and effort for the next session. Archive
+is a flag in the host's index, `core::sessions` (`data/sessions.json`); delete removes the transcript and the entry; the past list
 is a `Resource` per provider and folder. Claude's backend asks `get_usage` at open too, reports a
 denied call with its reason (`Tool.status` `denied`, the seam's one addition), warns a chat below
 `min_cli` and refuses other kinds, and says of a `claude` it cannot talk to that it is not supported
-yet, with the terminal and the floor's installer. The label is `CLAUDE.name`. `tests/chat.rs` runs on
-`fake_claude`: all its tests, `dock.rs`'s, and one per row below but Codex's delete (H13). `Links::Agent` makes every image in agent text a link (inline, reference, raw `<img>`, any scheme);
+yet, with the terminal and the floor's installer, when it refuses `initialize` or answers in
+something other than frames; another failure says what failed. The label is `CLAUDE.name`.
+`tests/chat.rs` runs on `fake_claude`: all its tests, `dock.rs`'s, and one per row below but Codex's delete (H13). `Links::Agent` makes every image in agent text a link (inline, reference, raw `<img>`, any scheme);
 `ImageFetch`, a global, replaces `web_image`'s network in tests. Open: the sidecar's removal, the
 follow-up below.
 

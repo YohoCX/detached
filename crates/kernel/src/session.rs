@@ -158,6 +158,8 @@ pub struct Session {
     pub queued: Option<String>,
     /// A prompt the session ended on before it went out.
     pub unsent: Option<String>,
+    /// Settings picked while the session starts, applied once it has.
+    picked: Vec<Setting>,
     /// Waiting asks by item, with their keys; dropped before `open`, so their answers go out first.
     replies: HashMap<usize, (backend::Reply, Option<String>)>,
     /// Dropped, it closes on its backend.
@@ -340,6 +342,7 @@ impl Session {
                 history: 0,
                 queued: None,
                 unsent: None,
+                picked: vec![],
                 open: None,
                 trust: String::new(),
                 blocks: backend(spec.provider).caps().blocks,
@@ -454,9 +457,15 @@ impl Session {
         self.limits.is_some() || self.lacks.contains(&Piece::Limits) || !has
     }
 
-    /// Started: idle, its history before it, and a queued prompt sent.
+    /// Started: idle, its history before it, the settings picked meanwhile applied and a queued
+    /// prompt sent.
     fn ready(&mut self, cx: &mut Context<Self>) {
         (self.state, self.history) = (State::Idle, self.items.len());
+        for setting in std::mem::take(&mut self.picked) {
+            if let Err(e) = self.set(setting) {
+                self.note(e.to_string());
+            }
+        }
         if let Some(text) = self.queued.take() {
             self.prompt(text, cx);
         }
@@ -617,9 +626,13 @@ impl Session {
         cx.notify();
     }
 
-    /// Switches the model, effort or mode, and keeps it for a resume; its new value comes as a
-    /// config update. A model with `auto` takes it back when it was asked for.
+    /// Switches the model, effort or mode, at once or, while the session starts, once it has; its
+    /// new value comes as a config update. A model with `auto` takes it back when it was asked for.
     pub fn set(&mut self, setting: Setting) -> Result<()> {
+        if self.state == State::Starting {
+            self.picked.push(setting);
+            return Ok(());
+        }
         let o = self
             .open
             .as_ref()
@@ -631,10 +644,9 @@ impl Session {
                 if self.spec.mode == AUTO && auto {
                     o.set(Setting::Mode(AUTO.into()))?;
                 }
-                self.spec.model = Some(m);
             }
-            Setting::Effort(e) => self.spec.effort = Some(e),
             Setting::Mode(m) => self.spec.mode = m,
+            Setting::Effort(_) => {}
         }
         Ok(())
     }
@@ -678,6 +690,13 @@ impl Session {
         {
             o.cancel();
         }
+        // A prompt the host's end kept from going out goes on in the next session.
+        if let Some(text) = self.queued.take() {
+            match end {
+                End::Closed | End::Trust => self.unsent = self.unsent.take().or(Some(text)),
+                _ => self.items.push(Item::User(text)),
+            }
+        }
         (self._watch, self.turn, self.ending) = (None, None, None);
         self.state = State::Ended(end);
         cx.notify();
@@ -705,6 +724,7 @@ impl Session {
             return;
         }
         let mode = self.option("mode").map(String::from);
+        let opened = matches!(e, Event::Opened(_));
         match e {
             Event::Opened(o) => {
                 self.id = Some(o.id);
@@ -714,9 +734,6 @@ impl Session {
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
                     self.note(HISTORY_UNAVAILABLE.into());
-                }
-                if self.open.is_some() {
-                    self.ready(cx);
                 }
             }
             Event::Update(u) => self.update(u),
@@ -756,6 +773,10 @@ impl Session {
         if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != self.spec.mode) {
             let note = format!("Asked for {}, the session runs in {now}.", self.spec.mode);
             self.note(note);
+        }
+        // After the check: what `ready` applies has not reached the config yet.
+        if opened && self.open.is_some() {
+            self.ready(cx);
         }
         cx.notify();
     }

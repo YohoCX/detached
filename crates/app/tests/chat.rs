@@ -356,6 +356,25 @@ fn auto_is_armed_again_after_a_model_switch(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_mode_picked_while_the_session_starts_is_the_one_it_runs_in(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
+    cx.click("chat.mode");
+    cx.update(|w, cx| assert!(menu::pick("Plan", w, cx)));
+    let mode = cx
+        .find("chat.mode")
+        .and_then(|e| e.description().map(String::from));
+    assert_eq!(mode.as_deref(), Some("Plan"));
+    say(cx, "model");
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_for_item(cx, "default ");
+    assert!(
+        items(cx).contains(&"default plan".into()),
+        "{:?}",
+        items(cx)
+    );
+}
+
+#[gpui_kit::test]
 fn the_session_outlives_its_page(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");
@@ -907,6 +926,24 @@ fn trusting_during_a_turn_ends_it_and_keeps_its_changes(cx: &mut TestAppContext)
     wait_for_item(cx, "changed in this turn: during.txt");
     say(cx, "settings");
     wait_for_item(cx, "project settings on");
+}
+
+#[gpui_kit::test]
+fn trusting_while_the_session_starts_sends_its_waiting_message_in_the_next(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go"}));
+        std::fs::create_dir_all(sb.solo().join(".claude")).unwrap();
+        std::fs::write(sb.solo().join(".claude/settings.json"), HOOK).unwrap();
+    });
+    wait_until(cx, |cx| cx.find("chat.trust").is_some());
+    say(cx, "settings");
+    cx.click("chat.trust.accept");
+    wait_for_item(cx, "load from the next message");
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_for_item(cx, "project settings on");
+    idle(cx);
 }
 
 #[gpui_kit::test]
