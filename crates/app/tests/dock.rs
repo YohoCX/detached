@@ -161,9 +161,13 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
     let tab =
         |name| serde_json::json!({"panel_name": name, "children": [], "info": {"panel": null}});
     assert_eq!(added, [tab("panels"), tab("docs")]);
+    let bottom = saved["bottom_dock"]["panel"]["children"]
+        .as_array_mut()
+        .unwrap();
+    assert_eq!(bottom.pop(), Some(tab("processes")));
     assert_eq!(
         saved, old,
-        "existing layout preserved, Panels and Docs appended"
+        "existing layout preserved, Panels, Docs and Processes appended"
     );
 }
 

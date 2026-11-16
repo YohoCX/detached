@@ -13,6 +13,7 @@ pub mod host;
 pub mod invalidate;
 pub mod nav;
 pub mod panel;
+pub mod proc;
 pub mod repo;
 pub mod resource;
 pub mod session;

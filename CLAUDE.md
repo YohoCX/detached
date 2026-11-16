@@ -4,7 +4,7 @@ Multi-repo git client, native on GPUI. It writes to a repo only through switch, 
 worktrees (`git worktree add`/`remove`), panels' pinned trees and finder branches with their Merge
 and Discard, and the chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
-  in `proc`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
+  and PTYs in `proc`, defined processes in `processes`, the env store in `secrets`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
   with `fake_claude`, the scripted CLI the tests run, the sidecar's protocol and trust), blocking
   Rust, no UI types.
 - `crates/acp`: the ACP client on `agent-client-protocol`, a blocking API whose async deps stay

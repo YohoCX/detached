@@ -28,6 +28,7 @@ fn state(accounts: &[Account]) -> (TempDir, AppState) {
         git: crate::env::find_git(&path).unwrap(),
         path,
         vars: vec![],
+        ..Default::default()
     };
     let tokens = Arc::new(MemoryStore::default());
     let state = AppState::new(dir.path().into(), Settings::default(), env, tokens);

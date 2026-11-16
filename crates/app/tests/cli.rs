@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use common::*;
 use detached_app::owner;
 use detached_core::owner::{REFUSED, SOCKET_VAR};
+use detached_core::secrets;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Task, TestAppContext, VisualTestContext};
 use serde_json::json;
@@ -13,14 +14,17 @@ use serde_json::json;
 const CLI: &str = env!("CARGO_BIN_EXE_detached-cli");
 
 /// The app with its socket answering every `q` with `{"stub": 42}`, the queries it got, and a
-/// shell in the Terminal app.
+/// shell in the Terminal app; the env profile `dev` has `GREETING`.
 fn open(cx: &mut TestAppContext) -> (TestApp, Arc<Mutex<Vec<String>>>) {
     #[cfg(unix)]
     // SAFETY: every test of this file sets the same value before any shell starts.
     unsafe {
         std::env::set_var("SHELL", "/bin/sh")
     };
-    let mut app = open_app(cx);
+    let mut app = open_app_with(cx, |sb| {
+        let vars = [("GREETING".into(), "hello".into())];
+        secrets::save(&sb.state, "dev", &vars).unwrap();
+    });
     let seen = Arc::new(Mutex::new(vec![]));
     let s = seen.clone();
     let listening = app.update(|_, cx| {
@@ -49,12 +53,16 @@ fn rows(cx: &mut VisualTestContext) -> Vec<String> {
     })
 }
 
-/// The rows where `env run` answered past the owner's prompt.
-fn stubbed(cx: &mut VisualTestContext) -> usize {
-    let rows = rows(cx);
-    rows.iter()
-        .filter(|r| r.contains("No env store yet"))
-        .count()
+/// A command that prints `got-` and the profile's `GREETING`.
+const GREET: &str = if cfg!(windows) {
+    "cmd /C echo got-%GREETING%"
+} else {
+    "sh -c 'echo got-$GREETING'"
+};
+
+/// The rows where `env run` ran with the profile.
+fn greeted(cx: &mut VisualTestContext) -> usize {
+    rows(cx).iter().filter(|r| *r == "got-hello").count()
 }
 
 fn wait_for_row(cx: &mut VisualTestContext, row: impl Fn(&str) -> bool) {
@@ -152,21 +160,43 @@ fn q_refuses_a_double_fork_or_setsid_outside_and_setsid_inside_a_tab(cx: &mut Te
 }
 
 #[gpui_kit::test]
-fn env_run_asks_the_owner_once_per_tab(cx: &mut TestAppContext) {
+fn env_run_asks_the_owner_once_per_tab_and_runs_with_the_profile(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
-    let run = "env run dev -- git --version";
-    cli_in_tab(&mut app, run);
+    let run = format!("env run dev -- {GREET}");
+    cli_in_tab(&mut app, &run);
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Allow");
-    wait_until(&mut app, |cx| stubbed(cx) == 1);
-    cli_in_tab(&mut app, run);
-    wait_until(&mut app, |cx| stubbed(cx) == 2);
+    wait_until(&mut app, |cx| greeted(cx) == 1);
+    cli_in_tab(&mut app, &run);
+    wait_until(&mut app, |cx| greeted(cx) == 2);
     assert!(!app.has_pending_prompt());
+    cli_in_tab(&mut app, "env run nope -- true");
+    wait_for_row(&mut app, |r| r.contains("No env profile \"nope\""));
     app.click("terminal.new");
-    cli_in_tab(&mut app, run);
+    cli_in_tab(&mut app, &run);
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Deny");
     wait_for_row(&mut app, |r| r.contains("did not allow"));
+}
+
+#[gpui_kit::test]
+fn env_run_is_refused_outside_a_tab_with_no_prompt(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    let mut run = Command::new(CLI);
+    run.args(["env", "run", "dev", "--", "true"]);
+    let said = outside(&mut app, run);
+    assert!(said.contains(REFUSED), "{said}");
+    #[cfg(unix)]
+    for script in [
+        format!("('{CLI}' env run dev -- true &)"),
+        format!("{SETSID} '{CLI}' env run dev -- true"),
+    ] {
+        let mut sh = Command::new("sh");
+        sh.args(["-c", &script]);
+        let said = outside(&mut app, sh);
+        assert!(said.contains(REFUSED), "{script}: {said}");
+    }
+    assert!(!app.has_pending_prompt());
 }
 
 #[cfg(unix)]
@@ -178,12 +208,12 @@ fn env_run_twice_at_once_asks_once(cx: &mut TestAppContext) {
     let [one, two] = said.each_ref().map(|p| p.display().to_string());
     cli_in_tab(
         &mut app,
-        &format!("env run dev -- true 2>'{one}' & '{CLI}' env run dev -- true 2>'{two}'"),
+        &format!("env run dev -- {GREET} >'{one}' & '{CLI}' env run dev -- {GREET} >'{two}'"),
     );
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Allow");
-    let stubbed = |p| std::fs::read_to_string(p).is_ok_and(|s| s.contains("No env store yet"));
-    wait_until(&mut app, |_| said.iter().all(stubbed));
+    let greeted = |p| std::fs::read_to_string(p).is_ok_and(|s| s.trim() == "got-hello");
+    wait_until(&mut app, |_| said.iter().all(greeted));
     assert!(!app.has_pending_prompt());
 }
 

@@ -44,15 +44,11 @@ markdown = "1.0.0"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 parking_lot = "0.12"
 percent-encoding = "2.3"
-portable-pty = "0.9"
 tempfile.workspace = true
 tree-sitter = "0.26"
 tree-sitter-containerfile = "0.9.2"
 ureq = "3.5"
 url = "2.5"
-
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.28", features = ["fs", "poll", "signal"] }
 
 [build-dependencies]
 sha2 = "0.10"

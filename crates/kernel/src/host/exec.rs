@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use detached_core::docs::{Doc, Docs, Section};
 use detached_core::env::Env;
 use detached_core::panel::tree;
+use detached_core::processes::Agents;
 use detached_core::skills::{Skill, Source};
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
 use graphql_parser::query::{
@@ -18,6 +19,7 @@ use serde_json::{Map, Value, json};
 const SDL: &str = include_str!("schema.graphql");
 const DEPTH: usize = 8;
 const SIZE: usize = 256 * 1024;
+const LOG_LINES: usize = 100;
 
 static SCHEMA: LazyLock<schema::Document<'static, &'static str>> =
     LazyLock::new(|| parse_schema(SDL).expect("the SDL parses"));
@@ -62,6 +64,19 @@ pub struct RepoSnap {
     pub skills: Option<Result<Vec<Skill>, String>>,
     /// None until asked for and loaded.
     pub docs: Option<Result<Docs, String>>,
+    /// The definitions that load; None until asked for and loaded.
+    pub processes: Option<Result<Vec<ProcSnap>, String>>,
+}
+
+pub struct ProcSnap {
+    pub name: String,
+    pub command: String,
+    pub agents: Agents,
+    pub state: &'static str,
+    pub exit: Option<i32>,
+    pub ready: bool,
+    /// None where agents may not read it.
+    pub log: Option<Vec<String>>,
 }
 
 pub struct SessionSnap {
@@ -80,6 +95,7 @@ pub enum Need {
     Mrs(String, bool),
     Skills(String),
     Docs(String),
+    Processes(String),
 }
 
 /// The query's answer, `{data, errors?}`, and what it found not loaded; a query outside the subset
@@ -131,6 +147,7 @@ enum Node<'a> {
     Finding(&'a FindingSnap),
     /// A value with fields of its own: a commit, a match.
     Row(&'a Value),
+    Proc(&'a ProcSnap),
 }
 
 enum Out<'a> {
@@ -257,6 +274,7 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
     ("Repo", "mrs", |c, n, a| c.mrs(n.repo(), word(a, "state"))),
     ("Repo", "skills", |c, n, _| c.skills(n.repo())),
     ("Repo", "docs", |c, n, a| c.docs(n.repo(), text(a, "query"))),
+    ("Repo", "processes", |c, n, _| c.processes(n.repo())),
     ("Status", "changed", |_, n, _| val(n.status().changes.len())),
     ("Status", "staged", |_, n, _| {
         val(n
@@ -316,6 +334,27 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
             .map(|c| format!("{} {}", &c.sha[..c.sha.len().min(10)], c.subject))
             .collect::<Vec<_>>())
     }),
+    ("Process", "name", |_, n, _| val(&n.proc().name)),
+    ("Process", "command", |_, n, _| val(&n.proc().command)),
+    ("Process", "agents", |_, n, _| {
+        val(match n.proc().agents {
+            Agents::Off => "OFF",
+            Agents::Read => "READ",
+            Agents::Start => "START",
+        })
+    }),
+    ("Process", "state", |_, n, _| val(n.proc().state)),
+    ("Process", "exitCode", |_, n, _| val(n.proc().exit)),
+    ("Process", "ready", |_, n, _| val(n.proc().ready)),
+    ("Process", "log", |_, n, a| {
+        let p = n.proc();
+        let log = p
+            .log
+            .as_ref()
+            .ok_or_else(|| format!("{}'s definition does not let agents read its log.", p.name))?;
+        let last = int(a, "last").map_or(LOG_LINES, |l| l.max(0) as usize);
+        val(log[log.len().saturating_sub(last)..].join("\n"))
+    }),
     ("Session", "id", |_, n, _| val(&n.session().id)),
     ("Session", "provider", |_, n, _| val(&n.session().provider)),
     ("Session", "model", |_, n, _| val(&n.session().model)),
@@ -359,6 +398,10 @@ impl<'a> Node<'a> {
             unreachable!()
         };
         (d, s)
+    }
+    fn proc(self) -> &'a ProcSnap {
+        let Node::Proc(p) = self else { unreachable!() };
+        p
     }
     fn session(self) -> &'a SessionSnap {
         let Node::Session(s) = self else {
@@ -470,6 +513,19 @@ impl<'a> Ctx<'a> {
         Ok(Out::List(
             hits.map(|h| Node::Doc(h.doc, h.section)).collect(),
         ))
+    }
+
+    fn processes(&self, r: &'a RepoSnap) -> Result<Out<'a>, String> {
+        match &r.processes {
+            Some(Ok(all)) => Ok(Out::List(all.iter().map(Node::Proc).collect())),
+            Some(Err(e)) => Err(format!("{}'s processes: {e}", r.info.name)),
+            None => {
+                self.needs
+                    .borrow_mut()
+                    .push(Need::Processes(r.info.path.clone()));
+                Err(format!("{}'s processes did not load in time", r.info.name))
+            }
+        }
     }
 
     fn error(&self, message: String, path: &[Value]) {
@@ -771,6 +827,7 @@ mod tests {
                 mrs: vec![],
                 skills: None,
                 docs: None,
+                processes: None,
             }],
             current: Some("/w/app".into()),
             ..Snap::default()

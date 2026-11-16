@@ -601,6 +601,53 @@ fn a_real_claude_reads_the_watcher_s_doc_through_docs(cx: &mut TestAppContext) {
     assert!(results.iter().any(read), "{results:?}");
 }
 
+/// The Done of PLAN-AGENT-HOST's H9: a dev server that failed runs from its definition, and a real
+/// `claude` with `read` gets its error through the host's tools; with `off` it gets no log.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_real_claude_reads_a_failed_dev_server_s_error_by_its_level(cx: &mut TestAppContext) {
+    use detached_core::processes::{self, Agents, Definition};
+    let query = "{ workspace { repos { processes { name state exitCode log } } } }";
+    let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
+    let script = json!([[call.clone()], text("read"), [call], text("read")]);
+    let (f, api) = boot(cx, Real::Direct, script);
+    f.list(cx);
+    let repo = cx.read(|cx| crate::workspace::Workspace::get(cx).repos()[0].path.clone());
+    let define = |agents| {
+        let def = Definition {
+            name: "dev".into(),
+            command: "echo Error: listen EADDRINUSE 3000 && exit 1".into(),
+            agents,
+            ..Default::default()
+        };
+        processes::save(&f.core, Path::new(&repo), &def).unwrap();
+    };
+    define(Agents::Read);
+    let started = cx.update(|cx| crate::proc::start(cx, &repo, "dev", false));
+    cx.executor().allow_parking();
+    cx.foreground_executor().block_test(started).unwrap();
+    wait_until(cx, |cx| {
+        let p = crate::proc::get(cx, &repo, "dev").unwrap();
+        p.read(cx).state == crate::proc::State::Exited(Some(1))
+    });
+    // The last tool result the model got.
+    let answer = || {
+        let last = api.requests().last().unwrap().to_string();
+        last[last.rfind("tool_result").unwrap()..].to_string()
+    };
+    let error = "Error: listen EADDRINUSE 3000";
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "Why did the dev server stop?", cx);
+    assert!(answer().contains(error), "{}", answer());
+    define(Agents::Off);
+    run(&s, "And now?", cx);
+    let now = answer();
+    assert!(
+        !now.contains(error) && now.contains("does not let agents read"),
+        "{now}"
+    );
+}
+
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a_delete(

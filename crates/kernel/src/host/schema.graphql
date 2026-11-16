@@ -16,6 +16,7 @@ type Repo {
   diff(base: String!, head: String!, path: String): String     # raw blobs: no textconv or filter
   log(range: String!, limit: Int): [Commit!]
   search(pattern: String!, rev: String!, limit: Int): [Match!] # git grep over raw blobs
+  processes: [Process!]                      # null: not loaded; the definitions that load
 }
 type Commit { sha: String!  author: String!  subject: String! }
 type Match { path: String!  line: Int!  text: String! }
@@ -32,9 +33,14 @@ type Skill { name: String!  source: SkillSource!  description: String  path: Str
 # (heading null), else its one section that fits best. Read them before the source.
 type DocSection { path: String!  heading: String  line: Int!  text: String!
                   stale: [String!]! }        # the covered files' commits newer than the doc
+type Process { name: String!  command: String!  agents: ProcessAccess!  state: ProcessState!
+               exitCode: Int  ready: Boolean!
+               log(last: Int): String }      # null where agents may not read it; 100 lines by default
 type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
                repo: Repo }
 enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }
 enum MrState { OPENED MERGED CLOSED }
 enum SessionState { IDLE RUNNING WAITING ENDED }
 enum SkillSource { LOCAL SHARED PROJECT USER AGENTS }
+enum ProcessAccess { OFF READ START }
+enum ProcessState { STOPPED STARTING RUNNING EXITED FAILED }

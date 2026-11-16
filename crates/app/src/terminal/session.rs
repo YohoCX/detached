@@ -1,20 +1,16 @@
 //! One shell on a PTY: the emulator, the threads around the PTY, and their events on the UI thread.
 
-#[cfg(unix)]
-use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc as channel};
 use std::time::Duration;
 
 use detached_core::os;
+use detached_core::proc::pty::{self, ChildKiller, CommandBuilder, Pty, PtySize};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui_kit::{Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Pixels, Task};
-#[cfg(unix)]
-use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use parking_lot::Mutex;
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::ghostty::{Mode, Term};
 use super::keys;
@@ -60,8 +56,7 @@ pub struct Exited;
 
 pub struct Session {
     pub term: Arc<Mutex<Term>>,
-    pty: Box<dyn MasterPty + Send>,
-    _stop: Stop,
+    pty: Pty,
     listener: Listener,
     killer: Box<dyn ChildKiller + Send + Sync>,
     shell: String,
@@ -85,8 +80,7 @@ impl EventEmitter<Exited> for Session {}
 /// A shell started on its PTY, not yet on the UI thread.
 pub struct Started {
     term: Arc<Mutex<Term>>,
-    pty: Box<dyn MasterPty + Send>,
-    stop: Stop,
+    pty: Pty,
     listener: Listener,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: u32,
@@ -98,9 +92,6 @@ pub struct Started {
 /// one waiting for its exit. `socket` is the owner socket's, for `detached-cli`.
 pub fn start(cwd: PathBuf, socket: Option<PathBuf>) -> io::Result<Started> {
     let grid = Grid { cols: 80, rows: 24 };
-    let pair = native_pty_system()
-        .openpty(pty_size(grid, (8, 16)))
-        .map_err(io::Error::other)?;
     let mut cmd = if cfg!(windows) {
         CommandBuilder::new("powershell")
     } else {
@@ -112,12 +103,18 @@ pub fn start(cwd: PathBuf, socket: Option<PathBuf>) -> io::Result<Started> {
     if let Some(socket) = socket {
         cmd.env(detached_core::owner::SOCKET_VAR, socket);
     }
-    let mut child = pair.slave.spawn_command(cmd).map_err(io::Error::other)?;
-    drop(pair.slave);
-    let (mut reader, mut writer, stop) = pipes(&*pair.master)?;
+    let pty::Spawned {
+        pty,
+        mut reader,
+        mut writer,
+        mut child,
+    } = pty::spawn(cmd, pty_size(grid, (8, 16)))?;
     let (tx, rx) = mpsc::unbounded();
-    let (pty, input) = channel::channel::<Vec<u8>>();
-    let listener = Listener { events: tx, pty };
+    let (to_pty, input) = channel::channel::<Vec<u8>>();
+    let listener = Listener {
+        events: tx,
+        pty: to_pty,
+    };
     let term = Arc::new(Mutex::new(Term::new(grid, SCROLLBACK, listener.clone())?));
     let (t, events) = (term.clone(), listener.events.clone());
     thread("PTY read", move || {
@@ -152,100 +149,13 @@ pub fn start(cwd: PathBuf, socket: Option<PathBuf>) -> io::Result<Started> {
     })?;
     Ok(Started {
         term,
-        pty: pair.master,
-        stop,
+        pty,
         listener,
         killer,
         pid,
         cwd,
         rx,
     })
-}
-
-/// The PTY's reader and writer, and the stop that ends both when dropped, whoever still holds the
-/// shell's side; ConPTY ends them itself once its master is closed.
-type Pipes = (Box<dyn Read + Send>, Box<dyn Write + Send>, Stop);
-#[cfg(unix)]
-type Stop = io::PipeWriter;
-#[cfg(windows)]
-type Stop = ();
-
-#[cfg(windows)]
-fn pipes(pty: &dyn MasterPty) -> io::Result<Pipes> {
-    let reader = pty.try_clone_reader().map_err(io::Error::other)?;
-    Ok((reader, pty.take_writer().map_err(io::Error::other)?, ()))
-}
-
-#[cfg(unix)]
-fn pipes(pty: &dyn MasterPty) -> io::Result<Pipes> {
-    use std::os::fd::{AsRawFd, BorrowedFd};
-    let raw = pty.as_raw_fd().ok_or_else(|| io::Error::other("no PTY"))?;
-    // SAFETY: the master is open for the length of this call, and the dup outlives it.
-    let fd = unsafe { BorrowedFd::borrow_raw(raw) }.try_clone_to_owned()?;
-    // Shared by every dup of the master, so no read or write blocks past the stop.
-    let flags = nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK);
-    nix::fcntl::fcntl(fd.as_raw_fd(), flags)?;
-    let (stopped, stop) = io::pipe()?;
-    let reader = Polled {
-        file: fd.try_clone()?.into(),
-        stopped: stopped.try_clone()?,
-    };
-    let writer = Polled {
-        file: fd.into(),
-        stopped,
-    };
-    Ok((Box::new(reader), Box::new(writer), stop))
-}
-
-/// The PTY's master, read and written until the stop is dropped.
-#[cfg(unix)]
-struct Polled {
-    file: File,
-    stopped: io::PipeReader,
-}
-
-#[cfg(unix)]
-impl Polled {
-    fn retry<T>(
-        &mut self,
-        events: PollFlags,
-        mut f: impl FnMut(&mut File) -> io::Result<T>,
-    ) -> io::Result<T> {
-        use std::os::fd::AsFd;
-        // The stop first, so a job that never lets the PTY go quiet cannot outrun it.
-        loop {
-            let mut fds = [
-                PollFd::new(self.file.as_fd(), events),
-                PollFd::new(self.stopped.as_fd(), PollFlags::POLLIN),
-            ];
-            poll(&mut fds, PollTimeout::NONE)?;
-            if fds[1].any() == Some(true) {
-                return Err(io::ErrorKind::BrokenPipe.into());
-            }
-            match f(&mut self.file) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-                r => return r,
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Read for Polled {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.retry(PollFlags::POLLIN, |f| f.read(buf))
-    }
-}
-
-#[cfg(unix)]
-impl Write for Polled {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.retry(PollFlags::POLLOUT, |f| f.write(buf))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 fn thread(name: &str, f: impl FnOnce() + Send + 'static) -> io::Result<()> {
@@ -263,7 +173,6 @@ impl Session {
         Session {
             term: s.term,
             pty: s.pty,
-            _stop: s.stop,
             listener: s.listener,
             killer: s.killer,
             shell: shell_name(),
@@ -342,11 +251,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         // A hangup for the shell and the job in front of it. Dropping the stop then ends the PTY's
         // threads, even if a job that outlives them still holds the shell's side.
-        #[cfg(unix)]
-        if let Some(pg) = self.pty.process_group_leader() {
-            use nix::sys::signal::{SIGHUP, killpg};
-            let _ = killpg(nix::unistd::Pid::from_raw(pg), SIGHUP);
-        }
+        self.pty.hangup();
         let _ = self.killer.kill();
     }
 }

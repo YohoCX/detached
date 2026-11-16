@@ -9,6 +9,7 @@ use std::sync::mpsc as reply;
 use detached_core::error::{Error, Result};
 use detached_core::os;
 use detached_core::owner::{self, Ask, Server, Tabs};
+use detached_core::secrets;
 use futures::channel::mpsc;
 use futures::future::Shared;
 use futures::{FutureExt, StreamExt};
@@ -94,10 +95,15 @@ fn env(tab: u64, profile: String, cx: &mut App) -> Task<Result<Value>> {
             allowed
         }
     };
-    cx.spawn(async move |_| {
+    let core = kernel::core(cx).clone();
+    cx.spawn(async move |cx| {
         allowed.await.map_err(|e| Error::Other(e.into()))?;
-        let e = format!("No env store yet: profile \"{profile}\" cannot be read.");
-        Err(Error::Other(e))
+        let values = cx.update(|cx| blocking::run(cx, move || secrets::values(&core, &profile)));
+        let values = values
+            .await?
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)));
+        Ok(Value::Object(values.collect()))
     })
 }
 

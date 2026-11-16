@@ -71,6 +71,7 @@ fn the_pages_list_by_group_and_a_registered_one_shows_in_its_own(cx: &mut TestAp
         "Updates",
         "Agents",
         "Command line",
+        "Env profiles",
         "Files",
         "Modules",
         "Stub",

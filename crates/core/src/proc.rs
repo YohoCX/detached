@@ -1,5 +1,8 @@
 //! Agent processes: spawned with pipes and an env built from nothing, in their own process group,
-//! and on Windows in a job that ends whatever they left once they have exited.
+//! and on Windows in a job that ends whatever they left once they have exited; `pty` runs a command
+//! on a terminal of its own.
+
+pub mod pty;
 
 use std::ffi::OsString;
 use std::io::{self, Read};
@@ -99,7 +102,7 @@ impl Proc {
             .stderr(Stdio::piped());
         let mut child = unbusy(|| cmd.spawn())?;
         #[cfg(windows)]
-        let job = match job::Job::new(&child) {
+        let job = match job::Job::new(std::os::windows::io::AsRawHandle::as_raw_handle(&child)) {
             Ok(job) => job,
             Err(e) => {
                 let _ = child.kill();
@@ -209,16 +212,16 @@ fn failed() -> ExitStatus {
 }
 
 #[cfg(windows)]
-mod job {
-    use std::os::windows::io::AsRawHandle;
-    use std::process::Child;
+pub(crate) mod job {
+    use std::os::windows::io::RawHandle;
     use std::ptr::null;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
     };
 
     /// Kills every process still in it when dropped.
@@ -226,11 +229,12 @@ mod job {
 
     // SAFETY: a job handle can be used and closed from any thread.
     unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
 
     impl Job {
-        /// A job with the child in it. The child's own children join it as they start; any it
+        /// A job with the process `child` in it. Its own children join it as they start; any it
         /// started before this call stay out.
-        pub fn new(child: &Child) -> std::io::Result<Job> {
+        pub fn new(child: RawHandle) -> std::io::Result<Job> {
             // SAFETY: the handles are ours; `info` outlives the call that reads it.
             unsafe {
                 let job = CreateJobObjectW(null(), null());
@@ -246,11 +250,35 @@ mod job {
                     (&raw const info).cast(),
                     size_of_val(&info) as u32,
                 );
-                if set == 0 || AssignProcessToJobObject(job.0, child.as_raw_handle() as _) == 0 {
+                if set == 0 || AssignProcessToJobObject(job.0, child as _) == 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(job)
             }
+        }
+    }
+
+    impl Job {
+        /// Whether a process of it runs.
+        pub fn active(&self) -> bool {
+            // SAFETY: `info` outlives the call that writes it.
+            unsafe {
+                let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+                let ok = QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut info).cast(),
+                    size_of_val(&info) as u32,
+                    std::ptr::null_mut(),
+                );
+                ok != 0 && info.ActiveProcesses > 0
+            }
+        }
+
+        /// Ends every process of it.
+        pub fn kill(&self) {
+            // SAFETY: the handle is ours.
+            unsafe { TerminateJobObject(self.0, 1) };
         }
     }
 

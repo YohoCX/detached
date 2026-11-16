@@ -33,14 +33,21 @@ dirs = "7"
 flate2 = "1.1"
 tar = { version = "0.4.44", default-features = false }
 open = { version = "5.4", features = ["shellexecute-on-windows"] }
+portable-pty = "0.9"
+regex = "1"
+# The env store's cipher; rustls brings it already.
+ring = "0.17"
 minisign-verify = "0.3"
 semver = { version = "1", features = ["serde"] }
-toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "display", "serde"] }
 # Signs the test feed in `update::testutil`.
 minisign = { version = "0.10", optional = true }
 
 [dev-dependencies]
 minisign = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["fs", "poll"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"

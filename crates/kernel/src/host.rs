@@ -8,6 +8,7 @@ use detached_core::backend::Kind;
 use detached_core::docs::Docs;
 use detached_core::error::{Error, Result};
 use detached_core::host::Act;
+use detached_core::processes::{Agents, Entry};
 use detached_core::skills::Skills;
 use detached_core::types::{MergeRequest, MrFilter};
 use gpui::{App, Task};
@@ -20,7 +21,7 @@ use crate::resource::Interest;
 use crate::session::{self, Answer, Item, State};
 use crate::skills;
 use crate::workspace::Workspace;
-use exec::{FindingSnap, Need, PanelSnap, RepoSnap, SessionSnap, Snap};
+use exec::{FindingSnap, Need, PanelSnap, ProcSnap, RepoSnap, SessionSnap, Snap};
 
 mod exec;
 #[cfg(test)]
@@ -83,10 +84,14 @@ impl Identity {
         }
     }
 
-    /// A session's by its kind: the chat reads as the owner, any other kind its repo alone.
+    /// A session's by its kind: the chat reads as the owner and runs processes where their
+    /// definitions let agents, any other kind reads its repo alone.
     pub fn of(kind: Kind, repo: &str) -> Identity {
         match kind {
-            Kind::Chat => Identity::owner(),
+            Kind::Chat => Identity {
+                can: &["proc"],
+                ..Identity::owner()
+            },
             Kind::Verifier | Kind::Untrusted => Identity::subject(repo, None),
         }
     }
@@ -127,12 +132,14 @@ pub fn query(cx: &mut App, who: &Identity, query: &str) -> Task<Result<Value>> {
     })
 }
 
-/// What the query waits for: a repo's MRs, the open ones alone or all, its skills and its docs.
+/// What the query waits for: a repo's MRs, the open ones alone or all, its skills, docs and
+/// processes.
 #[derive(Default)]
 struct Held {
     mrs: Vec<(String, bool, Interest<Listed>)>,
     skills: Vec<(String, Interest<Skills>)>,
     docs: Vec<(String, Interest<Docs>)>,
+    processes: Vec<(String, Interest<Vec<Entry>>)>,
 }
 
 fn hold(cx: &mut App, needs: &[Need]) -> Held {
@@ -152,6 +159,10 @@ fn hold(cx: &mut App, needs: &[Need]) -> Held {
                 let i = Interest::new(crate::docs::get(cx, repo), cx);
                 held.docs.push((repo.clone(), i));
             }
+            Need::Processes(repo) if !held.processes.iter().any(|(r, _)| r == repo) => {
+                let i = Interest::new(crate::proc::definitions(cx, repo), cx);
+                held.processes.push((repo.clone(), i));
+            }
             _ => {}
         }
     }
@@ -167,6 +178,7 @@ fn ready(cx: &App, held: &Held, needs: &[Need]) -> bool {
     held.mrs.iter().all(|(_, _, i)| i.loaded(cx).is_some())
         && held.skills.iter().all(|(_, i)| i.loaded(cx).is_some())
         && held.docs.iter().all(|(_, i)| i.loaded(cx).is_some())
+        && held.processes.iter().all(|(_, i)| i.loaded(cx).is_some())
         && needs.iter().all(status)
 }
 
@@ -197,6 +209,15 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
             (None, None) => Err("not loaded".into()),
         })
     };
+    let processes = |path: &str| {
+        let (_, i) = held.processes.iter().find(|(r, _)| r == path)?;
+        let r = i.loaded(cx)?;
+        Some(match (&r.error, &r.value) {
+            (Some(e), _) => Err(e.clone()),
+            (None, Some(all)) => Ok(all.iter().filter_map(|e| proc_snap(cx, path, e)).collect()),
+            (None, None) => Err("not loaded".into()),
+        })
+    };
     let repos = w
         .repos()
         .iter()
@@ -207,6 +228,7 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
             mrs: mrs(&info.path),
             skills: skills(&info.path),
             docs: docs(&info.path),
+            processes: processes(&info.path),
         });
     let waiting = |i: &Item| {
         matches!(
@@ -305,6 +327,32 @@ fn panels(cx: &App, who: &Identity) -> Vec<PanelSnap> {
         });
     }
     all
+}
+
+/// A definition that loads, with its run if it has one; the log only where agents read it.
+fn proc_snap(cx: &App, repo: &str, e: &Entry) -> Option<ProcSnap> {
+    use crate::proc::State;
+    let def = e.def.as_ref().ok()?;
+    let run = crate::proc::get(cx, repo, &e.name).map(|p| p.read(cx));
+    let (state, exit) = match run.map(|p| &p.state) {
+        None | Some(State::Stopped) => ("STOPPED", None),
+        Some(State::Starting) => ("STARTING", None),
+        Some(State::Running) => ("RUNNING", None),
+        Some(State::Exited(code)) => ("EXITED", *code),
+        Some(State::Failed(_)) => ("FAILED", None),
+    };
+    Some(ProcSnap {
+        name: e.name.clone(),
+        command: def.command.clone(),
+        agents: def.agents,
+        state,
+        exit,
+        ready: run.is_some_and(|p| p.ready),
+        log: (def.agents >= Agents::Read).then(|| match run {
+            Some(p) => p.log.iter().cloned().collect(),
+            None => vec![],
+        }),
+    })
 }
 
 /// A held MR list as it loaded for this query, cut to `who`'s subject.

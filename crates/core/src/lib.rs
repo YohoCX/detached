@@ -17,7 +17,9 @@ pub mod owner;
 pub mod panel;
 pub mod paths;
 pub mod proc;
+pub mod processes;
 pub mod search;
+pub mod secrets;
 #[cfg(unix)]
 pub mod selftest;
 pub mod sessions;

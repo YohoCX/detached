@@ -531,6 +531,7 @@ mod tests {
             path,
             git: "git".into(),
             vars: vec![("HOME".into(), home.display().to_string())],
+            ..Default::default()
         };
         assert!(install(&exe, &env("/usr/bin".into())).is_err());
         std::fs::create_dir(&exe).unwrap();

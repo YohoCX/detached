@@ -1,25 +1,37 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::git::runner::Kind;
 use crate::types::EnvInfo;
 
-/// PATH, git binary and extra variables every git process gets.
+/// PATH, git binary and extra variables every git process gets, and the login shell's whole
+/// environment, which a defined process gets.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     pub path: String,
     pub git: PathBuf,
     pub vars: Vec<(String, String)>,
+    /// Empty on Windows, where the app has the user's environment as is.
+    pub login: Arc<Vec<(String, String)>>,
 }
 
 impl Env {
     /// Also says whether PATH came from the login shell rather than the fallback.
     pub fn detect(git_override: Option<&str>) -> (Env, bool) {
         #[cfg(unix)]
-        let probed = unix::login_path(
+        let login = unix::login_env(
             &std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
             &[],
         );
-        // A Windows app gets the user's PATH as is.
+        // A Windows app gets the user's environment as is.
+        #[cfg(windows)]
+        let login: Option<Vec<(String, String)>> = None;
+        #[cfg(unix)]
+        let probed = login
+            .as_ref()
+            .and_then(|l| l.iter().find(|(k, _)| k == "PATH"));
+        #[cfg(unix)]
+        let probed = probed.map(|(_, v)| v.clone());
         #[cfg(windows)]
         let probed = std::env::var("PATH").ok();
         let from_shell = probed.is_some();
@@ -33,6 +45,7 @@ impl Env {
                 path,
                 git,
                 vars: vec![],
+                login: Arc::new(login.unwrap_or_default()),
             },
             from_shell,
         )
@@ -89,15 +102,27 @@ mod unix {
 
     pub(super) const MARK: &str = "__WB__";
 
-    /// Interactive login shell, so `.zshrc` additions (nvm, fnm) count; rc files may print, hence markers.
-    /// Stops at the closing marker: a job the rc files disowned can hold the pipe open forever.
-    pub(super) fn login_path(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
+    /// What the shell keeps for itself.
+    const OWN: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+
+    /// The interactive login shell's environment, so `.zshrc` additions (nvm, fnm) count; rc
+    /// files may print, hence markers. Stops at the closing marker: a job the rc files disowned
+    /// can hold the pipe open forever.
+    pub(super) fn login_env(shell: &str, envs: &[(&str, &str)]) -> Option<Vec<(String, String)>> {
+        let all = login(shell, envs)?;
+        let vars = all.split('\0').filter_map(|e| e.split_once('='));
+        let vars = vars.filter(|(k, _)| !k.is_empty() && !OWN.contains(k));
+        let vars: Vec<_> = vars.map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        vars.iter().any(|(k, _)| k == "PATH").then_some(vars)
+    }
+
+    fn login(shell: &str, envs: &[(&str, &str)]) -> Option<String> {
         let mut cmd = Command::new(shell);
         cmd.args([
             "-l",
             "-i",
             "-c",
-            &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
+            &format!("printf '{MARK}'; env -0; printf '{MARK}'"),
         ])
         .envs(envs.iter().copied())
         .stdin(Stdio::null())
@@ -123,7 +148,7 @@ mod unix {
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut out = Vec::new();
-        let path = loop {
+        let all = loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(left) {
                 Ok(b) => {
@@ -140,7 +165,7 @@ mod unix {
             }
         };
         std::thread::spawn(move || child.wait());
-        path
+        all
     }
 
     pub(super) fn parse_marked(out: &str) -> Option<String> {
@@ -164,13 +189,19 @@ mod tests {
     }
 
     #[test]
-    fn reads_zshrc_additions() {
+    fn reads_zshrc_additions_and_the_whole_environment() {
         let dir = tempfile::tempdir().unwrap();
-        let rc = "echo hello from rc\nexport PATH=\"/wb-test-bin:$PATH\"\n";
+        let rc = "echo hello from rc\nexport PATH=\"/wb-test-bin:$PATH\"\n\
+            export JAVA_HOME_TEST='/opt/java 21'\nexport MULTI='a\nb'\n";
         std::fs::write(dir.path().join(".zshrc"), rc).unwrap();
         let zdotdir = dir.path().to_str().unwrap();
-        let path = login_path("/bin/zsh", &[("ZDOTDIR", zdotdir)]).unwrap();
+        let vars = login_env("/bin/zsh", &[("ZDOTDIR", zdotdir)]).unwrap();
+        let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        let path = get("PATH").unwrap();
         assert!(path.split(':').any(|p| p == "/wb-test-bin"), "{path}");
+        assert_eq!(get("JAVA_HOME_TEST"), Some("/opt/java 21"));
+        assert_eq!(get("MULTI"), Some("a\nb"));
+        assert_eq!(get("SHLVL"), None);
     }
 
     #[test]
@@ -179,7 +210,7 @@ mod tests {
         std::fs::write(dir.path().join(".zshrc"), "sleep 30 &!\n").unwrap();
         let start = Instant::now();
         let zdotdir = dir.path().to_str().unwrap();
-        assert!(login_path("/bin/zsh", &[("ZDOTDIR", zdotdir)]).is_some());
+        assert!(login_env("/bin/zsh", &[("ZDOTDIR", zdotdir)]).is_some());
         assert!(
             start.elapsed() < Duration::from_secs(4),
             "{:?}",
