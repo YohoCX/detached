@@ -7,6 +7,7 @@ use std::time::Duration;
 use detached_core::backend::Kind;
 use detached_core::error::{Error, Result};
 use detached_core::host::Act;
+use detached_core::skills::Skills;
 use detached_core::types::{MergeRequest, MrFilter};
 use gpui::{App, Task};
 use serde_json::Value;
@@ -16,6 +17,7 @@ use crate::forge::{self, Listed};
 use crate::repo::Repo;
 use crate::resource::Interest;
 use crate::session::{self, Answer, Item, State};
+use crate::skills;
 use crate::workspace::Workspace;
 use exec::{Need, RepoSnap, SessionSnap, Snap};
 
@@ -78,7 +80,7 @@ impl Identity {
 /// Answers `query` as `who` sees the app: `{data, errors?}`, or why it was refused.
 pub fn query(cx: &mut App, who: &Identity, query: &str) -> Task<Result<Value>> {
     let (who, query) = (who.clone(), query.to_string());
-    let snap = snapshot(cx, &who, &[]);
+    let snap = snapshot(cx, &who, &Held::default());
     let q = query.clone();
     let first = blocking::run(cx, move || exec::run(&snap, &q));
     cx.spawn(async move |cx| {
@@ -97,40 +99,60 @@ pub fn query(cx: &mut App, who: &Identity, query: &str) -> Task<Result<Value>> {
     })
 }
 
-/// A repo's MRs, the open ones alone or all, held while the query waits.
-type Held = (String, bool, Interest<Listed>);
+/// What the query waits for: a repo's MRs, the open ones alone or all, and its skills.
+#[derive(Default)]
+struct Held {
+    mrs: Vec<(String, bool, Interest<Listed>)>,
+    skills: Vec<(String, Interest<Skills>)>,
+}
 
-fn hold(cx: &mut App, needs: &[Need]) -> Vec<Held> {
-    let mut held: Vec<Held> = vec![];
+fn hold(cx: &mut App, needs: &[Need]) -> Held {
+    let mut held = Held::default();
     for n in needs {
-        if let Need::Mrs(repo, open) = n
-            && !held.iter().any(|(r, o, _)| r == repo && o == open)
-        {
-            let filter = if *open { MrFilter::Open } else { MrFilter::All };
-            let i = Interest::new(forge::mrs(cx, repo, filter), cx);
-            held.push((repo.clone(), *open, i));
+        match n {
+            Need::Mrs(repo, open) if !held.mrs.iter().any(|(r, o, _)| r == repo && o == open) => {
+                let filter = if *open { MrFilter::Open } else { MrFilter::All };
+                let i = Interest::new(forge::mrs(cx, repo, filter), cx);
+                held.mrs.push((repo.clone(), *open, i));
+            }
+            Need::Skills(repo) if !held.skills.iter().any(|(r, _)| r == repo) => {
+                let i = Interest::new(skills::get(cx, Some(repo)), cx);
+                held.skills.push((repo.clone(), i));
+            }
+            _ => {}
         }
     }
     held
 }
 
-/// Whether what the query waits for is in: the held MRs and the statuses it found loading.
-fn ready(cx: &App, held: &[Held], needs: &[Need]) -> bool {
+/// Whether what the query waits for is in: the held resources and the statuses it found loading.
+fn ready(cx: &App, held: &Held, needs: &[Need]) -> bool {
     let status = |n: &Need| match n {
         Need::Status(r) => Repo::get(cx, r).is_none_or(|r| r.status.is_some()),
-        Need::Mrs(..) => true,
+        _ => true,
     };
-    held.iter().all(|(_, _, i)| i.loaded(cx).is_some()) && needs.iter().all(status)
+    held.mrs.iter().all(|(_, _, i)| i.loaded(cx).is_some())
+        && held.skills.iter().all(|(_, i)| i.loaded(cx).is_some())
+        && needs.iter().all(status)
 }
 
 /// What `who` reads now, with the held MRs as they loaded.
-fn snapshot(cx: &App, who: &Identity, held: &[Held]) -> Snap {
+fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
     let w = Workspace::get(cx);
     let sees = |path: &str| who.subject.as_ref().is_none_or(|s| s.repo == path);
     let mrs = |path: &str| {
-        let held = held.iter().filter(|(r, ..)| r == path);
-        let of = |(_, open, i): &Held| (*open, listed(cx, i, who));
-        held.map(of).collect()
+        let held = held.mrs.iter().filter(|(r, ..)| r == path);
+        held.map(|(_, open, i)| (*open, listed(cx, i, who)))
+            .collect()
+    };
+    let skills = |path: &str| {
+        let (_, i) = held.skills.iter().find(|(r, _)| r == path)?;
+        let r = i.loaded(cx)?;
+        Some(match (&r.error, &r.value) {
+            (Some(e), _) => Err(e.clone()),
+            (None, Some(s)) => Ok(s.active().cloned().collect()),
+            (None, None) => Err("not loaded".into()),
+        })
     };
     let repos = w
         .repos()
@@ -140,6 +162,7 @@ fn snapshot(cx: &App, who: &Identity, held: &[Held]) -> Snap {
             info: info.clone(),
             status: Repo::get(cx, &info.path).and_then(|r| r.status.clone()),
             mrs: mrs(&info.path),
+            skills: skills(&info.path),
         });
     let waiting = |i: &Item| {
         matches!(

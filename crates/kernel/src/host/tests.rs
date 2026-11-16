@@ -13,7 +13,10 @@ use crate::wait_until;
 
 /// Repos `a`, on the forge fake with MRs 1 and 2, and `b`, with no remote, every status loaded.
 fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) {
-    let sb = Sandbox::new();
+    let mut sb = Sandbox::new();
+    let claude = sb.path("claude").display().to_string();
+    let env = sb.state.env.get_mut().unwrap();
+    env.vars.push(("CLAUDE_CONFIG_DIR".into(), claude));
     let forge = Forge::start().unwrap();
     for name in ["a", "b"] {
         let repo = sb.path(&format!("repos/{name}"));
@@ -146,4 +149,20 @@ fn a_subject_reads_its_repo_alone_and_its_mr_alone(cx: &mut TestAppContext) {
         out["data"]["workspace"]["repos"].as_array().unwrap().len(),
         2
     );
+}
+
+#[gpui::test]
+fn a_repo_s_skills_load_within_the_wait_for_the_owner_and_its_subject(cx: &mut TestAppContext) {
+    let (dir, _forge, a, _) = boot(cx);
+    let lint = dir.path().join("home/.agents/skills/lint");
+    std::fs::create_dir_all(&lint).unwrap();
+    std::fs::write(lint.join("SKILL.md"), "---\ndescription: Lints\n---\nLint.").unwrap();
+    let q = format!(r#"{{ repo(path: "{a}") {{ skills {{ name source description path }} }} }}"#);
+    for who in [Identity::owner(), Identity::subject(&a, None)] {
+        let out = ask(cx, &who, &q);
+        assert_eq!(
+            out["data"]["repo"]["skills"],
+            json!([{"name": "lint", "source": "AGENTS", "description": "Lints", "path": lint}])
+        );
+    }
 }

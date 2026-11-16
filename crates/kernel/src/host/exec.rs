@@ -3,6 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
+use detached_core::skills::{Skill, Source};
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
 use graphql_parser::query::{
     Definition, Document, OperationDefinition, Selection, SelectionSet, Value as Gql, parse_query,
@@ -32,6 +33,8 @@ pub struct RepoSnap {
     pub status: Option<Result<RepoStatus, String>>,
     /// By whether they are the open ones alone; a list not here was not asked for yet.
     pub mrs: Vec<(bool, Result<Vec<MergeRequest>, String>)>,
+    /// The ones that load; None until asked for and loaded.
+    pub skills: Option<Result<Vec<Skill>, String>>,
 }
 
 pub struct SessionSnap {
@@ -48,6 +51,7 @@ pub struct SessionSnap {
 pub enum Need {
     Status(String),
     Mrs(String, bool),
+    Skills(String),
 }
 
 /// The query's answer, `{data, errors?}`, and what it found not loaded; a query outside the subset
@@ -91,6 +95,7 @@ enum Node<'a> {
     File(&'a FileChange),
     Mr(&'a MergeRequest),
     Session(&'a SessionSnap),
+    Skill(&'a Skill),
 }
 
 enum Out<'a> {
@@ -139,6 +144,7 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
         Ok(Out::Node(Node::Status(c.status(n.repo())?)))
     }),
     ("Repo", "mrs", |c, n, a| c.mrs(n.repo(), word(a, "state"))),
+    ("Repo", "skills", |c, n, _| c.skills(n.repo())),
     ("Status", "changed", |_, n, _| val(n.status().changes.len())),
     ("Status", "staged", |_, n, _| {
         val(n
@@ -167,6 +173,20 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
     }),
     ("MergeRequest", "author", |_, n, _| val(&n.mr().author)),
     ("MergeRequest", "url", |_, n, _| val(&n.mr().web_url)),
+    ("Skill", "name", |_, n, _| val(&n.skill().name)),
+    ("Skill", "source", |_, n, _| {
+        val(match n.skill().source {
+            Source::Local => "LOCAL",
+            Source::Shared => "SHARED",
+            Source::Project => "PROJECT",
+            Source::User => "USER",
+            Source::Agents => "AGENTS",
+        })
+    }),
+    ("Skill", "description", |_, n, _| {
+        val(&n.skill().description)
+    }),
+    ("Skill", "path", |_, n, _| val(&n.skill().path)),
     ("Session", "id", |_, n, _| val(&n.session().id)),
     ("Session", "provider", |_, n, _| val(&n.session().provider)),
     ("Session", "model", |_, n, _| val(&n.session().model)),
@@ -200,6 +220,10 @@ impl<'a> Node<'a> {
     fn mr(self) -> &'a MergeRequest {
         let Node::Mr(m) = self else { unreachable!() };
         m
+    }
+    fn skill(self) -> &'a Skill {
+        let Node::Skill(s) = self else { unreachable!() };
+        s
     }
     fn session(self) -> &'a SessionSnap {
         let Node::Session(s) = self else {
@@ -247,6 +271,19 @@ impl<'a> Ctx<'a> {
             .map_err(|e| format!("{}'s merge requests: {e}", r.info.name))?;
         let of = |m: &&MergeRequest| state.is_none_or(|s| mr_state(&m.state) == s);
         Ok(Out::List(listed.iter().filter(of).map(Node::Mr).collect()))
+    }
+
+    fn skills(&self, r: &'a RepoSnap) -> Result<Out<'a>, String> {
+        match &r.skills {
+            Some(Ok(all)) => Ok(Out::List(all.iter().map(Node::Skill).collect())),
+            Some(Err(e)) => Err(format!("{}'s skills: {e}", r.info.name)),
+            None => {
+                self.needs
+                    .borrow_mut()
+                    .push(Need::Skills(r.info.path.clone()));
+                Err(format!("{}'s skills did not load in time", r.info.name))
+            }
+        }
     }
 
     fn error(&self, message: String, path: &[Value]) {
@@ -530,6 +567,7 @@ mod tests {
                 info,
                 status: Some(Ok(status)),
                 mrs: vec![],
+                skills: None,
             }],
             current: Some("/w/app".into()),
             sessions: vec![],

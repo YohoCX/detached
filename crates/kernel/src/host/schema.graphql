@@ -10,12 +10,15 @@ type Workspace { repos: [Repo!]!  current: Repo }
 type Repo {
   path: String!  name: String!  branch: String  ahead: Int  behind: Int  status: Status
   mrs(state: MrState): [MergeRequest!]       # null: not loaded
+  skills: [Skill!]                           # null: not loaded; the ones that load, by precedence
 }
 type Status { changed: Int!  staged: Int!  conflicted: Int!  files(limit: Int): [FileChange!]! }
 type FileChange { path: String!  kind: ChangeKind! }
 type MergeRequest { id: ID!  title: String!  state: MrState!  author: String!  url: String! }
+type Skill { name: String!  source: SkillSource!  description: String  path: String! }
 type Session { id: ID!  provider: String!  model: String  title: String  state: SessionState!
                repo: Repo }
 enum ChangeKind { ADDED MODIFIED DELETED RENAMED CONFLICTED UNTRACKED }
 enum MrState { OPENED MERGED CLOSED }
 enum SessionState { IDLE RUNNING WAITING ENDED }
+enum SkillSource { LOCAL SHARED PROJECT USER AGENTS }

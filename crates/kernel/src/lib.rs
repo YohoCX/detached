@@ -17,6 +17,7 @@ pub mod resource;
 pub mod session;
 pub mod settings;
 pub mod sharing;
+pub mod skills;
 pub mod ui_state;
 pub mod update;
 pub mod workspace;
