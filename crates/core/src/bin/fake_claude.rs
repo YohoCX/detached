@@ -13,7 +13,8 @@
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
 //! - `wait <name>` waits for `$CLAUDE_CONFIG_DIR/<name>`;
-//! - `mcp` lists the host's tools over `mcp_message`;
+//! - `mcp [<json message>]` sends the message, else `tools/list`, to the host's tools over
+//!   `mcp_message` and says the answer;
 //! - `out-of-usage` fails the turn as Claude does once extra usage has run out;
 //! - `hold` keeps the CLI after stdin's EOF until SIGTERM.
 //!
@@ -523,7 +524,10 @@ impl Turn<'_> {
                 }
             }
             "mcp" if self.shared.lock().unwrap().mcp => {
-                let message = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+                let message = match rest {
+                    "" => json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+                    m => serde_json::from_str(m).map_err(err)?,
+                };
                 let r = self.ask(
                     json!({"subtype": "mcp_message", "server_name": "detached-host",
                     "message": message}),
