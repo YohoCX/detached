@@ -1,7 +1,7 @@
 //! The user's `claude` on the scripted fake Messages API in a panel participant's seat, run by
 //! `make agent-test`: the sandbox's probe, an untrusted participant's isolation, a trusted
 //! verifier's sandbox and a finder in orchestrator mode. The sandbox needs macOS, or Linux with
-//! bubblewrap and socat.
+//! bubblewrap and socat; Windows runs it in WSL, which this step does not build yet.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -57,6 +57,7 @@ fn asked(s: &Entity<Session>, cx: &mut TestAppContext) -> bool {
     })
 }
 
+#[cfg(unix)]
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn the_probe_passes_with_cloud_names_and_a_base_url_in_the_app_s_env(cx: &mut TestAppContext) {
@@ -151,6 +152,7 @@ fn an_untrusted_participant_reads_toolchains_but_no_secret_writes_nothing_and_re
     assert!(!asked(&s, cx));
 }
 
+#[cfg(unix)]
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_sandboxed_trusted_verifier_cannot_write_the_tree_or_a_ref_and_is_not_asked(
@@ -161,6 +163,7 @@ fn a_sandboxed_trusted_verifier_cannot_write_the_tree_or_a_ref_and_is_not_asked(
         vec![
             bash("echo x > v.txt; echo W=$?"),
             bash("git branch evil; echo B=$?"),
+            bash("curl -fsS -m 5 http://example.com >/dev/null; echo CURL=$?"),
         ],
     );
     let repo = Path::new(&f.repo);
@@ -178,6 +181,7 @@ fn a_sandboxed_trusted_verifier_cannot_write_the_tree_or_a_ref_and_is_not_asked(
         .output()
         .unwrap();
     assert!(branches.stdout.is_empty(), "{results:?}");
+    // Under bypassPermissions its curl to an unlisted host runs, with no request: PLAN-PANELS P2.
     assert!(!asked(&s, cx));
 }
 
@@ -204,8 +208,9 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
     let (cwd, branch) =
         tree::finder(&f.core, Path::new(&f.repo), "real", "f1", sha.trim()).unwrap();
     let mcp = f.dir.path().join("mcp.json");
-    let server =
-        json!({"mcpServers": {"local": {"command": "cat", "env": {"TOKEN": "MCPSECRET-ENV"}}}});
+    // Made here, so no other process's command line names it.
+    let secret = format!("s{}", detached_core::panel::record::now() * 7919);
+    let server = json!({"mcpServers": {"local": {"command": "cat", "env": {"TOKEN": secret}}}});
     std::fs::write(&mcp, server.to_string()).unwrap();
     let mut spec = Spec::new(&CLAUDE, &cwd.display().to_string(), Kind::Chat);
     (spec.mode, spec.mcp, spec.trusted) = ("bypassPermissions".into(), Some(mcp), true);
@@ -218,13 +223,19 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "finder");
     assert!(!asked(&s, cx));
-    let ps = std::process::Command::new("ps")
-        .args(["-ww", "-A", "-o", "args"])
-        .output()
-        .unwrap();
-    assert!(!String::from_utf8_lossy(&ps.stdout).contains("MCPSECRET"));
+    #[cfg(unix)]
+    {
+        let ps = std::process::Command::new("ps")
+            .args(["-ww", "-A", "-o", "args"])
+            .output()
+            .unwrap();
+        let ps = String::from_utf8_lossy(&ps.stdout).into_owned();
+        let leak: Vec<&str> = ps.lines().filter(|l| l.contains(&secret)).collect();
+        assert!(leak.is_empty(), "{leak:?}");
+    }
 }
 
+#[cfg(unix)]
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut TestAppContext) {

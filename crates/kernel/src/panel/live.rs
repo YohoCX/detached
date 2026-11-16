@@ -591,7 +591,7 @@ impl Panel {
             session::State::Idle if !self.live[i].prompted && self.state.paused.is_none() => {
                 let so_far = self.reported_so_far(name);
                 let l = &mut self.live[i];
-                l.prompted = true;
+                (l.prompted, l.last) = (true, now);
                 let text = match (l.sid.is_some() && l.attempt > 1 && !l.restart, l.restart) {
                     (true, _) => CONTINUE.to_string(),
                     (_, true) => format!("{}\n\n{so_far}", l.brief),

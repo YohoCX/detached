@@ -28,6 +28,7 @@
 //! - `probe` does what the CLI does with the probe's responder: asks it, runs the Bash call it
 //!   returns, and sends the result back; sandboxed by `--settings`, the call writes elsewhere,
 //!   unless `fake.json`'s `sandbox` is `off`, or is not run when it is `unavailable`;
+//! - `fail <text>` fails the turn with the text;
 //! - `first <name> <step>` runs the step once, while `$CLAUDE_CONFIG_DIR/<name>` does not exist;
 //! - any other step says `said <step>`.
 //!
@@ -697,6 +698,7 @@ impl Turn<'_> {
                 self.say(&format!("{error}{text} "));
             }
             "probe" => self.probe().map_err(err)?,
+            "fail" => return Err(Stop::Error(rest.into())),
             "first" => {
                 let (name, step) = rest.split_once(' ').unwrap_or((rest, ""));
                 let marker = config_dir().join(name);

@@ -672,3 +672,59 @@ fn the_read_scope_gives_a_participant_its_own_findings_and_a_verifier_its_one(
     std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
     ended(&p, cx);
 }
+
+#[gpui::test]
+fn a_rate_limit_backs_off_without_an_attempt_and_out_of_extra_usage_waits_for_you(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx);
+    trust(&f);
+    mode(&f, "review", &["find"], &["f1"]);
+    role(
+        &f,
+        "f1",
+        &format!(
+            "fake: first limited fail 429 rate limit exceeded;{}",
+            done()
+        ),
+    );
+    let p = start(&f, "review", cx);
+    wait_for(cx, LONG, |cx| p.read(cx).state.paused.is_some());
+    p.read_with(cx, |p, _| {
+        assert_eq!(
+            p.state.paused.as_deref(),
+            Some("Rate limited: backing off 5 minutes")
+        );
+        assert_eq!(p.live[0].attempt, 1);
+    });
+    cx.executor()
+        .advance_clock(Duration::from_secs(5 * 60 + 10));
+    let s = ended(&p, cx);
+    assert_eq!(
+        (s.participants[0].status, s.participants[0].attempt),
+        (Status::Done, 1)
+    );
+
+    role(
+        &f,
+        "f1",
+        &format!("fake: first spent out-of-usage;{}", done()),
+    );
+    let p = start(&f, "review", cx);
+    wait_for(cx, LONG, |cx| p.read(cx).state.paused.is_some());
+    assert!(p.read_with(cx, |p, _| {
+        p.state
+            .paused
+            .clone()
+            .unwrap()
+            .contains("out of extra usage")
+    }));
+    cx.executor().advance_clock(Duration::from_secs(3600));
+    cx.run_until_parked();
+    assert!(
+        p.read_with(cx, |p, _| p.state.paused.is_some()),
+        "it waits for you"
+    );
+    p.update(cx, |p, cx| p.resume(cx));
+    assert_eq!(ended(&p, cx).participants[0].attempt, 1);
+}
