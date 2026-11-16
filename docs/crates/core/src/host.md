@@ -9,7 +9,7 @@ The host's tools as an MCP server: `detached_read` and `detached_act`. It turns 
 message into its response and hands each tool call, parsed, to a callback; transport, scope and
 the answers themselves belong to the caller. The kernel builds one per session
 (`crates/kernel/src/session.rs:242`), and `core::claude` serves it to the CLI as an SDK MCP server
-(`crates/core/src/claude.rs:299`).
+(`crates/core/src/claude.rs:303`).
 
 ## Public API
 - `READ`, `ACT` — the tool names, `"detached_read"` and `"detached_act"`.

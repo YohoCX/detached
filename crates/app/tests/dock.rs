@@ -154,18 +154,17 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
         ui_state::get::<serde_json::Value>("dock.layout", cx)
     });
     let mut saved = saved.unwrap();
-    let added = saved["left_dock"]["panel"]["children"]
+    let left = saved["left_dock"]["panel"]["children"]
         .as_array_mut()
-        .unwrap()
-        .pop()
         .unwrap();
+    let added = left.split_off(left.len() - 2);
+    let tab =
+        |name| serde_json::json!({"panel_name": name, "children": [], "info": {"panel": null}});
+    assert_eq!(added, [tab("panels"), tab("docs")]);
     assert_eq!(
-        added,
-        serde_json::json!({
-            "panel_name": "panels", "children": [], "info": {"panel": null}
-        })
+        saved, old,
+        "existing layout preserved, Panels and Docs appended"
     );
-    assert_eq!(saved, old, "existing layout preserved, Panels appended");
 }
 
 struct Stub;

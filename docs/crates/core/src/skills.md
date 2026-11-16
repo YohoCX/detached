@@ -10,7 +10,7 @@ Finds the skills a session may get, from a folder list in precedence order: the 
 (local, then shared), the repo's `.claude`, the user's Claude config dir, then `~/.agents`. It
 marks each skill trusted, broken or overridden, and copies one's files out for a session's plugin.
 Callers: the kernel's session start (`crates/kernel/src/session.rs:1054`), `core::claude`'s
-per-session plugin (`crates/core/src/claude.rs:428`), and `kernel::skills::get`, which wraps
+per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`, which wraps
 `Skills::load` as a `Resource` keyed `skills:<repo>`, reloaded when the repo's status loads
 (`crates/kernel/src/skills.rs:9`); the Settings page and `kernel::host` read that.
 
