@@ -10,13 +10,16 @@ use detached_core::host;
 use detached_core::panel::fix;
 use detached_core::panel::record::{Event, Subject};
 use detached_core::panel::run::{Preview, Start};
-use detached_core::state::Cancel;
+use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use super::live::{self, Panel};
+use crate::activity::Activity;
 use crate::blocking;
 use crate::host::Identity;
 use crate::session::{self, Item, Seat, Session};
+
+type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -92,13 +95,16 @@ pub fn start(
             _watch: None,
             tasks: vec![],
         };
-        let core = crate::core(cx).clone();
         let (run, finding) = (f.run.clone(), f.finding.clone());
-        let made = blocking::run(cx, move || {
-            fix::make(&core, &pv, &run, &finding, &Cancel::default())
+        let made = Activity::global(cx).update(cx, |a, cx| {
+            let op = move |core: &AppState, id, progress: Progress| {
+                core.op(id, |c| fix::make(core, &pv, [&run, &finding], c, progress))
+            };
+            a.run_op(&f.repo, "Make the Fix's worktree", op, cx)
         });
         f.tasks.push(cx.spawn(async move |this, cx| {
             let made = made.await;
+            cx.update(crate::invalidate::rescan);
             this.update(cx, |f: &mut Fix, cx| match made {
                 Ok(m) => f.made(m, brief, cx),
                 Err(e) => {
@@ -223,6 +229,7 @@ pub fn recheck(
         mode: "recheck".into(),
         untrusted: false,
         budget: None,
+        codex: false,
         roles: vec![role.into()],
     };
     let p = live::start(s, cx);
@@ -258,9 +265,32 @@ pub fn discard(ids: [&str; 4], tree: PathBuf, branch: String, cx: &mut App) -> T
             cx.notify();
         });
     }
-    let finding = ids[3].to_string();
-    live::append([ids[0], ids[1], ids[2]], cx, move |core, repo| {
-        fix::discard(core, repo, &tree, &branch)?;
-        Ok(Event::FixDiscarded { finding })
+    let repo = ids[0].to_string();
+    let op = move |core: &AppState, id, progress: Progress| {
+        let paths = [Path::new(&repo), &tree];
+        core.op(id, |c| fix::discard(core, paths, &branch, c, progress))
+    };
+    let removed =
+        Activity::global(cx).update(cx, |a, cx| a.run_op(ids[0], "Discard the Fix", op, cx));
+    let e = Event::FixDiscarded {
+        finding: ids[3].to_string(),
+    };
+    let ids = [ids[0], ids[1], ids[2]].map(String::from);
+    cx.spawn(async move |cx| {
+        let removed = removed.await;
+        let recorded = cx.update(|cx| {
+            crate::invalidate::rescan(cx);
+            let ids = ids.each_ref().map(|s| s.as_str());
+            removed.map(|()| live::append(ids, cx, move |_, _| Ok(e)))
+        })?;
+        recorded.await
+    })
+}
+
+/// Marks the repo trusted unless a mark already covers it.
+pub fn mark(repo: &str, cx: &App) -> Task<Result<()>> {
+    let (core, repo) = (crate::core(cx).clone(), repo.to_string());
+    blocking::run(cx, move || {
+        detached_core::panel::marks::mark_repo(&core, &repo)
     })
 }

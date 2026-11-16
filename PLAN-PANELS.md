@@ -793,7 +793,10 @@ The owner checks: a loop on a real branch.
   marking the repo, the brief shown and edited, commits, Merge, Discard, a changed
   `.claude/settings.json` asked first; a remote branch's Fix with no Merge).
 - Choices: a Fix starts from the subject's current head, refused if it moved since the owner looked;
-  a second Fix of a finding gets `-2`; the re-check starts by itself once the Fix's turn ends with
+  a second Fix of a finding gets `-2`; making and discarding a Fix are ops with an op id and cancel,
+  then a rescan; "Mark the repo trusted" shows only when no repo or workspace mark covers the repo,
+  and never rewrites one; a re-check that could not start shows why, with Re-check; the
+  re-check starts by itself once the Fix's turn ends with
   commits, with no budget, and none starts without commits; Merge does not need the re-check; a
   Fix's state lives in its finding's run, and the re-check is a run of its own task, named after the
   Fix branch.

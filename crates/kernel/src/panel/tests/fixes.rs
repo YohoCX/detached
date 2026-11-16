@@ -3,6 +3,8 @@
 use detached_core::panel::fix;
 use detached_core::panel::track::{self, Fate, Mark, Track};
 
+use gpui::App;
+
 use super::*;
 use crate::panel::fixes::{self, Fix, Phase as FixPhase};
 use crate::resource::Interest;
@@ -28,11 +30,7 @@ fn fixed(
     let [repo, task, run] = ids(p, cx);
     let s = p.read_with(cx, |p, _| p.state.clone());
     let found = s.found(id).unwrap().clone();
-    let role = (s.participants.iter())
-        .find(|x| x.name == found.participant)
-        .unwrap()
-        .role
-        .clone();
+    let role = s.role_of(id);
     let subject = s.started.unwrap().subject;
     let (pv, brief) = wait(
         cx.update(|cx| fixes::preview(subject, found.finding, cx)),
@@ -48,6 +46,13 @@ fn fixed(
     wait_for(cx, LONG, |cx| {
         matches!(fx.read(cx).phase, FixPhase::Ended(_) | FixPhase::Failed(_))
     });
+    let re = p
+        .read_with(cx, |p, _| p.state.fixes[id].recheck.clone())
+        .unwrap();
+    let re = cx
+        .update(|cx| live::find(cx, &repo, &fix_task(p, id, cx), &re))
+        .unwrap();
+    ended(&re, cx);
     assert_eq!(
         fx.read_with(cx, |f, _| f.phase.clone()),
         FixPhase::Ended("Its re-check ended".into())
@@ -55,11 +60,25 @@ fn fixed(
     (fx, session)
 }
 
+/// The findings of the repo's runs whose Fix passed its re-check.
+fn ready(f: &Fixture) -> std::collections::BTreeSet<String> {
+    let repo = Path::new(&f.repo);
+    let mut all = std::collections::BTreeMap::new();
+    for (task, run, dir) in detached_core::panel::run::records(&f.core, repo).unwrap() {
+        all.insert((task, run), State::replay(&record::read(&dir).unwrap()));
+    }
+    fix::ready(&f.core.env(), repo, &all)
+}
+
+fn fix_task(p: &Entity<Panel>, id: &str, cx: &App) -> String {
+    detached_core::panel::run::task(&p.read(cx).state.fixes[id].branch)
+}
+
 fn tracked(f: &Fixture) -> Track {
     let repo = Path::new(&f.repo);
     let rounds = track::rounds(&f.core, repo, "feat").unwrap();
     let refs: Vec<(&str, &State)> = rounds.iter().map(|(r, s)| (r.as_str(), s)).collect();
-    track::track(&refs, &fix::ready(&f.core, repo).unwrap())
+    track::track(&refs, &ready(f))
 }
 
 fn on_feat(f: &Fixture, args: &[&[&str]]) {
@@ -269,7 +288,7 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
             .iter()
             .all(|fx| matches!(fx.read(cx).phase, FixPhase::Ended(_)))
     });
-    let ready = fix::ready(&f.core, Path::new(&repo)).unwrap();
+    let ready = ready(&f);
     assert!(ready.contains(&format!("{run}/f1-1")) && ready.contains(&format!("{run}/f1-2")));
     let fixes = p.read_with(cx, |p, _| p.state.fixes.clone());
     let merge = |id: &str, cx: &mut TestAppContext| {
@@ -285,4 +304,64 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
     assert!(p.read_with(cx, |p, _| p.state.fixes["f1-1"].merged));
     let e = merge("f1-2", cx).unwrap_err().to_string();
     assert!(e.contains("not a fast-forward"), "{e}");
+}
+
+#[gpui::test]
+fn a_recheck_that_raises_the_finding_again_or_blocks_leaves_it_open(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    trust(&f);
+    mode(&f, "review", &["find", "verify"], &["f1"]);
+    mode(&f, "recheck", &["find", "verify", "gate"], &["bugs"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    role(&f, "bugs", &format!("fake: {}", done()));
+    let verify = format!(
+        "fake: {};{};{}",
+        verdict("f1-1", "confirmed"),
+        verdict("bugs-1", "confirmed"),
+        done()
+    );
+    role(&f, "verifier", &verify);
+    let p = start(&f, "review", cx);
+    ended(&p, cx);
+    let [repo, task, run] = ids(&p, cx);
+
+    // A minor at the finding's lines: the gate ships, but the re-check raised it there.
+    let minor = json!({"action": "report_finding", "args": {"severity": "minor",
+        "class": "correctness", "title": "still one", "body": "b", "file": "a.txt", "line": 1,
+        "quote": LINE, "lenses": ["bugs"]}});
+    role(&f, "f1", &format!("fake: act {minor};{}", done()));
+    fixed(&p, "f1-1", "write b.txt b;commit fix elsewhere", cx);
+    let check = p.read_with(cx, |p, _| p.state.fixes["f1-1"].clone());
+    let dir = record_dir(
+        &f,
+        &detached_core::panel::run::task(&check.branch),
+        check.recheck.as_ref().unwrap(),
+    );
+    let s = State::replay(&record::read(&dir).unwrap());
+    assert_eq!(
+        s.ended,
+        Some(End::Done {
+            gate: Some(Gate::Ship)
+        })
+    );
+    assert!(ready(&f).is_empty());
+    assert_eq!(tracked(&f).threads[0].fate, Fate::Open);
+
+    // A major elsewhere in its commits: nothing near the lines, but the gate blocks.
+    role(&f, "f1", &format!("fake: {}", done()));
+    let major = json!({"action": "report_finding", "args": {"severity": "major",
+        "class": "correctness", "title": "b breaks", "body": "b", "file": "b.txt", "line": 1,
+        "quote": "b", "lenses": ["bugs"]}});
+    role(&f, "bugs", &format!("fake: act {major};{}", done()));
+    let ids = [&*repo, &task, &run, "f1-1"];
+    let again = cx.update(|cx| fixes::recheck(ids, &check.branch, &check.base, "f1", cx));
+    let s = ended(&again, cx);
+    assert_eq!(
+        s.ended,
+        Some(End::Done {
+            gate: Some(Gate::Block)
+        })
+    );
+    assert!(ready(&f).is_empty());
+    assert_eq!(tracked(&f).threads[0].fate, Fate::Open);
 }

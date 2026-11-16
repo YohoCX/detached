@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::record::{self, End, Gate, State, Subject};
+use super::record::{End, Gate, State, Subject};
 use super::run::{self, Preview};
 use super::{brief, track, tree};
 use crate::env::Env;
@@ -15,6 +15,8 @@ use crate::host;
 use crate::state::{AppState, Cancel};
 
 pub const PREFIX: &str = "detached-fix";
+
+type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 
 /// Hook files a merge shows as their own diff first.
 const HOOKS: &[&str] = &[
@@ -58,10 +60,13 @@ pub struct Made {
 pub fn make(
     core: &AppState,
     pv: &Preview,
-    run: &str,
-    finding: &str,
+    [run, finding]: [&str; 2],
     cancel: &Cancel,
+    progress: Progress,
 ) -> Result<Made> {
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Error::Cancelled);
+    }
     let s = &pv.subject;
     let now = run::preview(core, &run::again(s))?;
     if !now.trust.trusted {
@@ -98,7 +103,7 @@ pub fn make(
         worktree::hookless(&env, repo, &["branch", &branch, brief::sha(&s.head_sha)?])
     })?;
     let (main, folder) = home(core, &s.repo);
-    let tree = match worktree::create(core, repo, &main, &folder, &branch, cancel, &|_| {}) {
+    let tree = match worktree::create(core, repo, &main, &folder, &branch, cancel, progress) {
         Ok(t) => t,
         Err(e) => {
             // Fails while a worktree has it, which the error then names.
@@ -154,9 +159,15 @@ pub fn merge(core: &AppState, s: &Subject, branch: &str) -> Result<()> {
 }
 
 /// Removes the Fix's worktree, changes and all, and its private files; the branch stays.
-pub fn discard(core: &AppState, repo: &Path, tree: &Path, branch: &str) -> Result<()> {
+pub fn discard(
+    core: &AppState,
+    [repo, tree]: [&Path; 2],
+    branch: &str,
+    cancel: &Cancel,
+    progress: Progress,
+) -> Result<()> {
     if tree.exists() {
-        worktree::remove(core, repo, tree, true, &Cancel::default(), &|_| {})?;
+        worktree::remove(core, repo, tree, true, cancel, progress)?;
     }
     _ = std::fs::remove_dir_all(core.data_dir.join("private").join(private(branch)));
     Ok(())
@@ -191,17 +202,9 @@ pub fn passed(env: &Env, repo: &Path, head: &str, f: &host::Finding, recheck: &S
     }
 }
 
-/// The findings of `repo`'s runs, as `<run>/<id>`, whose Fix passed its re-check.
-pub fn ready(core: &AppState, repo: &Path) -> Result<BTreeSet<String>> {
-    let mut all = std::collections::BTreeMap::new();
-    for (task, run, dir) in run::records(core, repo)? {
-        all.insert((task, run), State::replay(&record::read(&dir)?));
-    }
-    Ok(ready_in(&core.env(), repo, &all))
-}
-
-/// `ready` over records already read, by task and run.
-pub fn ready_in(
+/// The findings in `all`, the records by task and run, whose Fix passed its re-check, as
+/// `<run>/<id>`.
+pub fn ready(
     env: &Env,
     repo: &Path,
     all: &std::collections::BTreeMap<(String, String), State>,

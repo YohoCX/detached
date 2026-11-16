@@ -78,13 +78,23 @@ fn finding() -> host::Finding {
 fn made(sb: &Sandbox, repo: &Path, id: &str) -> Result<Made> {
     let at = subject(sb, repo, "feat");
     let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha)?;
-    make(&sb.state, &pv, "run1", id, &Cancel::default())
+    make(&sb.state, &pv, ["run1", id], &Cancel::default(), &|_| {})
 }
 
 #[test]
 fn a_fix_branches_from_the_head_into_a_managed_worktree_that_untrusted_runs_cannot_read() {
     let (sb, repo) = sandbox();
     trust(&sb, &repo);
+    let at = subject(&sb, &repo, "feat");
+    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha).unwrap();
+    let cancel = Cancel::default();
+    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = make(&sb.state, &pv, ["run1", "f1-1"], &cancel, &|_| {});
+    assert!(matches!(e, Err(Error::Cancelled)), "{:?}", e.err());
+    assert!(
+        sb.git(&repo, &["branch", "--list", "detached-fix/*"])
+            .is_empty()
+    );
     // Taken before the Fix, as by an untrusted run already going.
     let denied = root::denied(&sb.state).unwrap();
     let m = made(&sb, &repo, "f1-1").unwrap();
@@ -103,7 +113,14 @@ fn a_fix_branches_from_the_head_into_a_managed_worktree_that_untrusted_runs_cann
         "detached-fix/run1/f1-1-2",
         "a second Fix gets its own branch"
     );
-    discard(&sb.state, &repo, &m.tree, &m.branch).unwrap();
+    discard(
+        &sb.state,
+        [&repo, &m.tree],
+        &m.branch,
+        &Cancel::default(),
+        &|_| {},
+    )
+    .unwrap();
     assert!(!m.tree.exists());
     assert_eq!(
         sb.git(&repo, &["rev-parse", &format!("refs/heads/{}", m.branch)]),
@@ -126,15 +143,34 @@ fn an_untrusted_subject_a_moved_head_or_unaccepted_trust_files_get_no_fix() {
     let hook = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#;
     sb.commit(&repo, ".claude/settings.json", hook, "settings");
     sb.git(&repo, &["switch", "-q", "main"]);
-    let e = make(&sb.state, &pv, "run1", "f1-1", &Cancel::default());
+    let e = make(
+        &sb.state,
+        &pv,
+        ["run1", "f1-1"],
+        &Cancel::default(),
+        &|_| {},
+    );
     assert!(e.err().unwrap().to_string().contains("moved"));
     let at = subject(&sb, &repo, "feat");
     let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha).unwrap();
     assert!(!pv.accepted && !pv.items.is_empty(), "the Fix asks first");
-    let e = make(&sb.state, &pv, "run1", "f1-1", &Cancel::default());
+    let e = make(
+        &sb.state,
+        &pv,
+        ["run1", "f1-1"],
+        &Cancel::default(),
+        &|_| {},
+    );
     assert!(e.err().unwrap().to_string().contains("not accepted"));
     run::accept(&sb.state, &pv).unwrap();
-    make(&sb.state, &pv, "run1", "f1-1", &Cancel::default()).unwrap();
+    make(
+        &sb.state,
+        &pv,
+        ["run1", "f1-1"],
+        &Cancel::default(),
+        &|_| {},
+    )
+    .unwrap();
 }
 
 #[cfg(unix)]
@@ -202,6 +238,13 @@ fn merge_fast_forwards_with_hooks_off_shows_hook_files_refuses_dirty_or_diverged
         .unwrap_err()
         .to_string();
     assert!(e.contains("kept for you to push"), "{e}");
-    discard(&sb.state, &repo, &second.tree, &second.branch).unwrap();
+    discard(
+        &sb.state,
+        [&repo, &second.tree],
+        &second.branch,
+        &Cancel::default(),
+        &|_| {},
+    )
+    .unwrap();
     assert_eq!(remote(), pushed, "nothing pushes");
 }

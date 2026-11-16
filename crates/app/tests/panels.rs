@@ -1268,6 +1268,7 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
         mode: "review".into(),
         untrusted: false,
         budget: None,
+        codex: false,
         roles: vec![],
     };
     let (repo_id, task, round) = app.update(|_, cx| {
@@ -1292,4 +1293,44 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
     assert!(app.find("panel.fix.merge").is_none());
     let pushed = app.sb.git(&repo, &["ls-remote", "origin"]);
     assert!(!pushed.contains("detached-fix"), "nothing pushes: {pushed}");
+}
+
+#[gpui_kit::test]
+fn a_recheck_that_cannot_start_shows_why_and_offers_re_check(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        let r = repo(sb, "reviewed");
+        sb.git(&r, &["switch", "-qc", "feat"]);
+        sb.commit(&r, "a.txt", "let x = 1\n", "feat");
+        mark_trusted(sb, &r);
+        fix_mode(sb);
+    });
+    let repo = app.sb.path("repos/reviewed");
+    open_tab(&mut app, "tab.panels");
+    app.click("panels.new");
+    wait_until(&mut app, |cx| cx.find("panels.form.trust").is_some());
+    app.click("panels.form.start");
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    wait_until(&mut app, |cx| cx.find("panel.finding.f1-1").is_some());
+    app.click("panel.finding.f1-1");
+    wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
+    quiet(&app.sb);
+    // git cannot make the re-check's detached-run/… branches beside this one.
+    app.sb.git(&repo, &["branch", "detached-run"]);
+    app.click("panel.fix");
+    wait_until(&mut app, |cx| cx.find("panel.fix.brief").is_some());
+    app.click("panel.fix.brief");
+    app.input("\nfake: write a.txt let x = 2;commit fix x\n");
+    app.click("panel.fix.start");
+    wait_watched(&mut app, |cx| {
+        label(cx, "panel.fix.state").is_some_and(|l| l.contains("the re-check could not start"))
+    });
+    let state = label(&mut app, "panel.fix.state").unwrap();
+    assert!(state.contains("detached-run"), "{state}");
+    assert!(app.find("panel.fix.recheck").is_some());
+    app.sb.git(&repo, &["branch", "-D", "detached-run"]);
+    app.click("panel.fix.recheck");
+    wait_watched(&mut app, |cx| {
+        label(cx, "panel.fix.state").is_some_and(|l| l.ends_with("re-check passed: fix ready"))
+    });
 }

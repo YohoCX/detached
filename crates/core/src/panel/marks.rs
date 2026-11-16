@@ -74,6 +74,25 @@ pub fn change(core: &AppState, f: impl FnOnce(&mut Panels)) -> Result<()> {
     core.set_block(BLOCK, p).map(drop)
 }
 
+/// Marks `repo` trusted as a whole unless a repo or workspace mark already covers it, whose remote
+/// and forks stay as the owner set them.
+pub fn mark_repo(core: &AppState, repo: &str) -> Result<()> {
+    if whole(core, &load(core), repo).is_some() {
+        return Ok(());
+    }
+    change(core, |p| {
+        p.repos.push(Mark {
+            name: repo.into(),
+            ..Mark::default()
+        })
+    })
+}
+
+/// A repo or workspace mark trusts `repo` as a whole.
+pub fn covers(core: &AppState, repo: &str) -> bool {
+    whole(core, &load(core), repo).is_some()
+}
+
 /// What decides a subject's run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trust {
@@ -336,6 +355,47 @@ mod tests {
                 ..Panels::default()
             }
         }
+    }
+
+    #[test]
+    fn marking_a_repo_keeps_a_mark_that_covers_it_as_the_owner_set_it() {
+        let t = T::new();
+        let (core, repo) = (&t.sb.state, t.repo.display().to_string());
+        let own = Mark {
+            name: repo.clone(),
+            remote: Some("upstream".into()),
+            forks: true,
+        };
+        change(core, |p| p.repos.push(own.clone())).unwrap();
+        mark_repo(core, &repo).unwrap();
+        assert_eq!(load(core).repos, [own]);
+
+        change(core, |p| p.repos.clear()).unwrap();
+        let ws = t.repo.parent().unwrap().display().to_string();
+        core.add_folder("Work".into(), ws).unwrap();
+        let work = Mark {
+            name: "Work".into(),
+            forks: true,
+            ..Mark::default()
+        };
+        change(core, |p| p.workspaces.push(work)).unwrap();
+        assert!(covers(core, &repo));
+        mark_repo(core, &repo).unwrap();
+        assert!(
+            load(core).repos.is_empty(),
+            "the workspace mark stays the one that counts"
+        );
+
+        change(core, |p| p.workspaces.clear()).unwrap();
+        assert!(!covers(core, &repo));
+        mark_repo(core, &repo).unwrap();
+        assert_eq!(
+            load(core).repos,
+            [Mark {
+                name: repo,
+                ..Mark::default()
+            }]
+        );
     }
 
     #[test]

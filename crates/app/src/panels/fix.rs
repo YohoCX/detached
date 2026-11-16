@@ -1,7 +1,6 @@
 //! A finding's Fix on its card: the brief to see and edit first, the Fix's commits and re-check,
 //! Merge and Discard; on an untrusted subject, the two offers instead.
 
-use detached_core::panel::marks::Mark;
 use detached_core::panel::record::{self, State};
 use detached_core::panel::run::Preview;
 use gpui_kit::component::input::{Textarea, TextareaState};
@@ -83,11 +82,8 @@ impl FixCard {
         let (Some(Ok((pv, text))), Some(s)) = (self.form.take(), self.record(cx)) else {
             return;
         };
-        let by = s.found(&self.finding).map(|f| f.participant.clone());
-        let role = s.participants.iter().find(|p| Some(&p.name) == by.as_ref());
-        let role = role.map_or("bugs".to_string(), |p| p.role.clone());
         let brief = text.read(cx).value().to_string();
-        fixes::start(self.ids(), pv, brief, role, cx);
+        fixes::start(self.ids(), pv, brief, s.role_of(&self.finding), cx);
         cx.notify();
     }
 
@@ -110,6 +106,10 @@ impl FixCard {
     /// The two offers on an untrusted subject.
     fn untrusted(&self, cx: &Context<Self>) -> AnyElement {
         let repo = self.repo.clone();
+        let rounds = self.rounds.read(cx).value.as_ref();
+        let marked = rounds
+            .and_then(|r| r.tasks.get(&self.task))
+            .is_some_and(|t| t.marked);
         let Some(f) = self
             .record(cx)
             .and_then(|s| s.found(&self.finding).cloned())
@@ -135,21 +135,16 @@ impl FixCard {
                     .text_color(theme(cx).muted)
                     .child("Untrusted subject: no Fix"),
             )
-            .child(
-                ui::button("panel.fix.mark", "Mark the repo trusted", cx)
-                    .test_support()
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        let name = repo.clone();
-                        let t = live::change(cx, move |p| {
-                            p.repos.retain(|m| m.name != name);
-                            p.repos.push(Mark {
-                                name,
-                                ..Mark::default()
-                            });
-                        });
-                        v.after(t, cx);
-                    })),
-            )
+            .when(!marked, |d| {
+                d.child(
+                    ui::button("panel.fix.mark", "Mark the repo trusted", cx)
+                        .test_support()
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            let t = fixes::mark(&repo, cx);
+                            v.after(t, cx);
+                        })),
+                )
+            })
             .child(
                 ui::button("panel.fix.yourself", "Fix it yourself", cx)
                     .test_support()
@@ -296,13 +291,24 @@ impl Render for FixCard {
             );
         };
         let check = state.and_then(|s| s.check.as_ref());
+        let panel = check.and_then(|c| live::find(cx, &self.repo, &c.task, &c.run));
+        let failed = panel.as_ref().and_then(|p| match &p.read(cx).phase {
+            live::Phase::Failed(e) => Some(e.clone()),
+            _ => None,
+        });
+        let going = check.is_some_and(|c| {
+            c.passed.is_none() && failed.is_none() && (c.recorded || panel.is_some())
+        });
         let commits = state.map_or(&[][..], |s| &s.commits[..]);
         let said = match (&phase, check) {
             (Some(Phase::Working), _) => "working".to_string(),
             (Some(Phase::Making), _) => "making its worktree".into(),
-            (_, Some((_, _, None))) => "re-checking".into(),
-            (_, Some((_, _, Some(true)))) => "re-check passed: fix ready".into(),
-            (_, Some((_, _, Some(false)))) => "the re-check did not pass".into(),
+            _ if let Some(e) = &failed => format!("the re-check could not start: {e}"),
+            _ if going => "re-checking".into(),
+            (Some(Phase::Checking), None) => "re-checking".into(),
+            (_, Some(c)) if c.passed == Some(true) => "re-check passed: fix ready".into(),
+            (_, Some(c)) if c.passed == Some(false) => "the re-check did not pass".into(),
+            (_, Some(_)) => "the re-check did not start".into(),
             (Some(Phase::Ended(why)), None) => why.clone(),
             _ if commits.is_empty() => "no commits".into(),
             _ => "not re-checked".into(),
@@ -370,12 +376,10 @@ impl Render for FixCard {
                         })),
                 );
             }
-            let rechecking = matches!(check, Some((_, _, None) | (_, _, Some(true))));
-            if !rechecking && !matches!(phase, Some(Phase::Checking)) {
+            let passed = check.is_some_and(|c| c.passed == Some(true));
+            if !going && !passed && !matches!(phase, Some(Phase::Checking)) {
                 let (branch, base, ids) = (fixing.branch.clone(), fixing.base.clone(), ids());
-                let by = s.found(&self.finding).map(|f| f.participant.clone());
-                let role = s.participants.iter().find(|p| Some(&p.name) == by.as_ref());
-                let role = role.map_or("bugs".to_string(), |p| p.role.clone());
+                let role = s.role_of(&self.finding);
                 row = row.child(
                     ui::button("panel.fix.recheck", "Re-check", cx)
                         .test_support()
@@ -387,11 +391,11 @@ impl Render for FixCard {
                 );
             }
         }
-        if let Some((task, run, _)) = check {
+        if let Some(c) = check.filter(|c| c.recorded || panel.is_some()) {
             let doc = Doc::Panel {
                 repo: self.repo.clone(),
-                task: task.clone(),
-                round: run.clone(),
+                task: c.task.clone(),
+                round: c.run.clone(),
             };
             row = row.child(
                 ui::button("panel.fix.open", "Open the re-check", cx)

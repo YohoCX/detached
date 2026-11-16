@@ -581,6 +581,16 @@ impl State {
         self.findings.iter().find(|f| f.id == id)
     }
 
+    /// The role whose participant raised `id`, `bugs` when the record does not say.
+    pub fn role_of(&self, id: &str) -> String {
+        let by = self.found(id).map(|f| f.participant.as_str());
+        let p = self
+            .participants
+            .iter()
+            .find(|p| Some(p.name.as_str()) == by);
+        p.map_or("bugs".into(), |p| p.role.clone())
+    }
+
     /// Findings that stand: those not folded into another.
     pub fn heads(&self) -> impl Iterator<Item = &Found> {
         self.findings.iter().filter(|f| f.folded.is_none())

@@ -31,6 +31,8 @@ pub struct Task {
     pub track: Option<Track>,
     /// Its subject is trusted as it is now, so its findings can be fixed.
     pub trusted: bool,
+    /// A repo or workspace mark covers its repo.
+    pub marked: bool,
     /// A finding is fix ready and the subject's head moved since the latest round.
     pub due: bool,
     /// Each Fix of its findings, by run and finding.
@@ -43,8 +45,17 @@ pub struct FixState {
     pub commits: Vec<[String; 3]>,
     /// The diff of the hook files it changed.
     pub hooks: String,
-    /// Its re-check's task and run, and once that ended, whether it passed.
-    pub check: Option<(String, String, Option<bool>)>,
+    pub check: Option<Check>,
+}
+
+/// A Fix's latest re-check.
+pub struct Check {
+    pub task: String,
+    pub run: String,
+    /// Its record exists: it started.
+    pub recorded: bool,
+    /// Once it ended, whether it passed.
+    pub passed: Option<bool>,
 }
 
 impl Rounds {
@@ -100,7 +111,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                         }
                     }
                     let (env, path) = (core.env(), Path::new(&repo));
-                    let ready = fix::ready_in(&env, path, &records);
+                    let ready = fix::ready(&env, path, &records);
                     let mut tasks = BTreeMap::new();
                     let mut live: BTreeMap<&str, Vec<(&str, &State)>> = BTreeMap::new();
                     for ((task, run), s) in &records {
@@ -135,11 +146,15 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                             for (id, f) in &s.fixes {
                                 let key = format!("{run}/{id}");
                                 let check = f.recheck.as_ref().map(|r| {
-                                    let t = run::task(&f.branch);
-                                    let ended = records
-                                        .get(&(t.clone(), r.clone()))
-                                        .is_some_and(|c| c.ended.is_some());
-                                    (t, r.clone(), ended.then(|| ready.contains(&key)))
+                                    let task = run::task(&f.branch);
+                                    let c = records.get(&(task.clone(), r.clone()));
+                                    let ended = c.is_some_and(|c| c.ended.is_some());
+                                    Check {
+                                        recorded: c.is_some(),
+                                        passed: ended.then(|| ready.contains(&key)),
+                                        task,
+                                        run: r.clone(),
+                                    }
                                 });
                                 let state = FixState {
                                     commits: fix::commits(&env, path, &f.base, &f.branch)
@@ -161,6 +176,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 due: moved && waits,
                                 track: Some(track),
                                 trusted,
+                                marked: detached_core::panel::marks::covers(&core, &repo),
                                 fixing,
                             },
                         );
@@ -184,6 +200,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 threads: task.threads,
                                 track: None,
                                 trusted: false,
+                                marked: false,
                                 due: false,
                                 fixing: BTreeMap::new(),
                             }

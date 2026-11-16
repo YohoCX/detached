@@ -75,7 +75,7 @@ pub fn stats(records: &BTreeMap<(String, String), State>) -> Stats {
 }
 
 fn task(runs: &[(&str, &State)], rows: &mut Stats) {
-    let track = track::track(runs);
+    let track = track::track(runs, &BTreeSet::new());
     let n = track.threads.len();
     let (mut keys, mut confirmed) = (vec![BTreeSet::new(); n], vec![false; n]);
     let index = |run: &str, id: &str| {
