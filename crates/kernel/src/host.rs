@@ -20,7 +20,7 @@ use crate::resource::Interest;
 use crate::session::{self, Answer, Item, State};
 use crate::skills;
 use crate::workspace::Workspace;
-use exec::{Need, RepoSnap, SessionSnap, Snap};
+use exec::{FindingSnap, Need, PanelSnap, RepoSnap, SessionSnap, Snap};
 
 mod exec;
 #[cfg(test)]
@@ -243,7 +243,68 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
         repos: repos.collect(),
         current: w.current().filter(|c| sees(c)).map(String::from),
         sessions: sessions.collect(),
+        panels: panels(cx, who),
+        env: Some(crate::core(cx).env()),
     }
+}
+
+/// The live panels `who` reads: the owner every one, a participant its own run with its own
+/// findings, a verifier the one it judges; another session none.
+fn panels(cx: &App, who: &Identity) -> Vec<PanelSnap> {
+    if who.subject.is_some() && who.panel.is_none() {
+        return vec![];
+    }
+    let scope = who.panel.as_ref();
+    let mut all = vec![];
+    for p in crate::panel::live::all(cx) {
+        let p = p.read(cx);
+        if scope.is_some_and(|s| s.run != p.run) {
+            continue;
+        }
+        let mine = |f: &&detached_core::panel::record::Found| match scope {
+            None => true,
+            Some(s) => s
+                .finding
+                .as_ref()
+                .map_or(f.participant == s.participant, |id| f.id == *id),
+        };
+        let findings = p.state.findings.iter().filter(mine).map(|f| FindingSnap {
+            id: f.id.clone(),
+            severity: serde_json::to_value(f.finding.severity)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
+            file: f.finding.file.clone(),
+            line: f.finding.line,
+            title: f.finding.title.clone(),
+            body: f.finding.body.clone(),
+            verdict: f
+                .verdict
+                .as_ref()
+                .map(|_| detached_core::panel::record::verdict(f)),
+        });
+        let seen = p
+            .state
+            .participants
+            .iter()
+            .filter(|x| scope.is_none_or(|s| s.participant == x.name));
+        let participants = seen.map(|x| {
+            [
+                x.name.clone(),
+                x.role.clone(),
+                x.model.clone(),
+                format!("{:?}", x.status).to_lowercase(),
+            ]
+        });
+        all.push(PanelSnap {
+            run: p.run.clone(),
+            mode: p.start.mode.clone(),
+            stage: p.state.stage.map(|s| format!("{s:?}").to_lowercase()),
+            participants: participants.collect(),
+            findings: findings.collect(),
+        });
+    }
+    all
 }
 
 /// A held MR list as it loaded for this query, cut to `who`'s subject.

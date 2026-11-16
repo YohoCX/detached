@@ -590,3 +590,81 @@ fn an_untrusted_review_reads_an_export_that_is_no_worktree_and_removes_it(cx: &m
     assert!(record::verified(&s.findings[0]));
     assert!(!Path::new(&cwd).exists(), "the export goes with the run");
 }
+
+#[gpui::test]
+fn the_read_scope_gives_a_participant_its_own_findings_and_a_verifier_its_one(
+    cx: &mut TestAppContext,
+) {
+    use crate::host::{Identity, Scope};
+    let f = boot(cx);
+    trust(&f);
+    f.list(cx);
+    mode(&f, "review", &["find"], &["f1", "f2"]);
+    role(
+        &f,
+        "f1",
+        &format!("fake: {};wait go;{}", finding(1, LINE), done()),
+    );
+    role(&f, "f2", &format!("fake: {};{}", finding(1, LINE), done()));
+    let p = start(&f, "review", cx);
+    wait_for(cx, LONG, |cx| p.read(cx).state.findings.len() == 2);
+    let run = p.read_with(cx, |p, _| p.run.clone());
+    let q = "{ panels { run findings { id } participants { name } } }";
+    let ask = |who: Identity, cx: &mut TestAppContext| {
+        let t = cx.update(|cx| crate::host::query(cx, &who, q));
+        cx.executor().allow_parking();
+        cx.foreground_executor().block_test(t).unwrap()
+    };
+    let scope = |participant: &str, finding: Option<&str>| Scope {
+        run: run.clone(),
+        participant: participant.into(),
+        finding: finding.map(String::from),
+    };
+    let finder = Identity::participant(&f.repo, scope("f1", None), &["report_finding", "done"]);
+    let got = ask(finder, cx);
+    assert_eq!(
+        got["data"]["panels"][0]["findings"],
+        json!([{"id": "f1-1"}]),
+        "{got}"
+    );
+    assert_eq!(
+        got["data"]["panels"][0]["participants"],
+        json!([{"name": "f1"}])
+    );
+    let verifier = Identity::participant(
+        &f.repo,
+        scope("verify-f2-1", Some("f2-1")),
+        &["report_verdict", "done"],
+    );
+    let got = ask(verifier.clone(), cx);
+    assert_eq!(
+        got["data"]["panels"][0]["findings"],
+        json!([{"id": "f2-1"}])
+    );
+    let other = detached_core::host::Act::ReportVerdict(detached_core::host::Verdict {
+        finding: "f1-1".into(),
+        verdict: detached_core::host::Judged::Confirmed,
+        quote: LINE.into(),
+        body: None,
+    });
+    assert!(verifier.may(&other).unwrap_err().contains("f2-1"));
+    let elsewhere = Identity::participant(
+        &f.repo,
+        Scope {
+            run: "other".into(),
+            ..scope("f1", None)
+        },
+        &[],
+    );
+    assert_eq!(ask(elsewhere, cx)["data"]["panels"], json!([]));
+    let owner = ask(Identity::owner(), cx);
+    assert_eq!(
+        owner["data"]["panels"][0]["findings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    ended(&p, cx);
+}

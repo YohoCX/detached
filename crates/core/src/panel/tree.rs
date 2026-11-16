@@ -240,6 +240,76 @@ fn null() -> String {
     }
 }
 
+/// `base`..`head`'s diff of `path` or of everything, from raw blobs: no textconv, no external diff,
+/// no filter, hooks and the user's config off.
+pub fn diff(env: &Env, repo: &Path, base: &str, head: &str, path: Option<&str>) -> Result<String> {
+    let (base, head) = (crate::git::arg(base)?, crate::git::arg(head)?);
+    let mut args = vec![
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        base,
+        head,
+        "--",
+    ];
+    args.extend(path);
+    Ok(String::from_utf8_lossy(&bare(env, repo, &args, None)?).into_owned())
+}
+
+/// The commits of `range`, newest first: sha, author and subject.
+pub fn log(env: &Env, repo: &Path, range: &str, limit: usize) -> Result<Vec<[String; 3]>> {
+    let n = format!("-{limit}");
+    let args = [
+        "log",
+        &n,
+        "--format=%H%x00%an%x00%s",
+        crate::git::arg(range)?,
+        "--",
+    ];
+    let text = String::from_utf8_lossy(&bare(env, repo, &args, None)?).into_owned();
+    let rows = text.lines().filter_map(|l| {
+        let mut f = l.splitn(3, '\0').map(String::from);
+        Some([f.next()?, f.next()?, f.next()?])
+    });
+    Ok(rows.collect())
+}
+
+/// Lines of `rev`'s files that match `pattern`, read from raw blobs: path, line and text.
+pub fn search(
+    env: &Env,
+    repo: &Path,
+    rev: &str,
+    pattern: &str,
+    limit: usize,
+) -> Result<Vec<(String, u32, String)>> {
+    let rev = crate::git::arg(rev)?;
+    let args = [
+        "grep",
+        "-n",
+        "-I",
+        "--no-textconv",
+        "--no-color",
+        "-e",
+        pattern,
+        rev,
+        "--",
+    ];
+    let text = match bare(env, repo, &args, None) {
+        Ok(out) => String::from_utf8_lossy(&out).into_owned(),
+        // No match is git grep's exit 1.
+        Err(Error::Git { code: 1, .. }) => String::new(),
+        Err(e) => return Err(e),
+    };
+    let rows = text.lines().take(limit).filter_map(|l| {
+        let l = l.strip_prefix(rev)?.strip_prefix(':')?;
+        let (path, rest) = l.split_once(':')?;
+        let (line, text) = rest.split_once(':')?;
+        Some((path.into(), line.parse().ok()?, text.into()))
+    });
+    Ok(rows.collect())
+}
+
 /// A tree entry: mode, object id, size and path.
 pub struct Entry {
     pub mode: String,
@@ -488,5 +558,51 @@ mod tests {
         assert!(!dest.join(".git").exists());
         let list = sb.git(&repo, &["worktree", "list"]);
         assert!(!list.contains("export"), "{list}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reviewer_reads_take_raw_blobs_with_no_textconv_or_filter() {
+        let sb = Sandbox::new();
+        let repo = repo(&sb);
+        let base = sb.git(&repo, &["rev-parse", "HEAD"]);
+        let marker = sb.path("ran");
+        let tool = format!("sh -c 'touch {}; cat'", marker.display());
+        for (k, v) in [
+            ("diff.lfs.textconv", &tool),
+            ("filter.lfs.smudge", &tool),
+            ("filter.lfs.clean", &"cat".to_string()),
+        ] {
+            sb.git(&repo, &["config", k, v]);
+        }
+        fs::write(repo.join(".gitattributes"), "*.bin filter=lfs diff=lfs\n").unwrap();
+        fs::write(
+            repo.join("x.bin"),
+            "version https://git-lfs.github.com/spec/v1\noid sha256:abc\n",
+        )
+        .unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "lfs"]);
+        _ = fs::remove_file(&marker);
+        let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+        let env = sb.state.env();
+        let d = diff(&env, &repo, &base, &head, Some("x.bin")).unwrap();
+        assert!(d.contains("+oid sha256:abc"), "{d}");
+        let found = search(&env, &repo, &head, "sha256", 10).unwrap();
+        assert_eq!(
+            found,
+            [("x.bin".to_string(), 2, "oid sha256:abc".to_string())]
+        );
+        assert!(
+            search(&env, &repo, &head, "nowhere", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            log(&env, &repo, &format!("{base}..{head}"), 5).unwrap()[0][2],
+            "lfs"
+        );
+        assert!(!marker.exists(), "no textconv or filter ran");
+        assert!(diff(&env, &repo, "--output=/tmp/x", &head, None).is_err());
     }
 }
