@@ -230,3 +230,27 @@ fn a_settings_change_mid_turn_is_blocked_until_the_turn_ends_and_one_between_tur
         assert!(!s.items.iter().any(sent), "{:?}", s.items);
     });
 }
+
+#[gpui::test]
+fn a_resumed_session_shows_its_past_as_its_turns_did(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    turn(&s, "write a.txt made;say all done here", cx);
+    s.update(cx, |s, cx| {
+        s.prompt(r#"ask Bash {"command": "echo hi"}"#.into(), cx)
+    });
+    wait_until(cx, |cx| asked(&s, 0, cx).is_some());
+    let (at, _) = cx.read(|cx| asked(&s, 0, cx)).unwrap();
+    s.update(cx, |s, cx| s.answer(at, Answer::Once, cx));
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    let past = |s: &Session| {
+        let said = |i: &&Item| matches!(i, Item::User(_) | Item::Text(_) | Item::Tool(_));
+        s.items.iter().filter(said).cloned().collect::<Vec<_>>()
+    };
+    let (id, live) = s.read_with(cx, |s, _| (s.id.clone(), past(s)));
+    s.update(cx, |s, cx| s.end(cx));
+    let resumed = open_spec(f.spec(Kind::Chat), id, cx);
+    resumed.read_with(cx, |s, _| assert_eq!(s.items, live));
+    assert_eq!(lines(&live)[3], "Bash echo hi completed");
+    assert_eq!(turn(&resumed, "say again", cx), "again");
+}

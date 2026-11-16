@@ -27,6 +27,8 @@ pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past t
     this session drew from extra usage, and that has run out. Claude in a terminal tab (`claude`) \
     stays on the plan's limits.";
 
+pub const HISTORY_UNAVAILABLE: &str = "History unavailable: the session goes on without it.";
+
 const TRUST_CHANGED: &str = "The repo's agent settings changed, so the session ended. A new one \
     loads them only once you trust them.";
 
@@ -127,6 +129,8 @@ pub struct Session {
     pub limits: Option<Vec<Limit>>,
     /// What this session's agent turned out to lack.
     pub lacks: Vec<Piece>,
+    /// Waiting asks by item, with their keys; dropped before `open`, so their answers go out first.
+    replies: HashMap<usize, (backend::Reply, Option<String>)>,
     /// Dropped, it closes on its backend.
     open: Option<Box<dyn backend::Session>>,
     /// The trust files' fingerprint the session started on.
@@ -135,8 +139,6 @@ pub struct Session {
     blocks: &'static [&'static str],
     /// "Always allow" answers, kept by the host: the asks' keys.
     rules: Vec<String>,
-    /// Waiting asks by item, with their keys.
-    replies: HashMap<usize, (backend::Reply, Option<String>)>,
     /// When the running turn began, and the worktree's tree then.
     turn: Option<(Instant, Option<String>)>,
     /// Set while a running turn is cancelled to end the session.
@@ -362,6 +364,12 @@ impl Session {
         Some(&c.value)
     }
 
+    /// Whether the plan's limits are known, or will not be.
+    pub fn limits_settled(&self) -> bool {
+        let has = backend(self.spec.provider).caps().limits;
+        self.limits.is_some() || self.lacks.contains(&Piece::Limits) || !has
+    }
+
     /// Starts a turn: the trust check and the worktree's snapshot first, then the prompt.
     pub fn prompt(&mut self, text: String, cx: &mut Context<Self>) {
         if self.open.is_none() || self.state != State::Idle {
@@ -531,6 +539,9 @@ impl Session {
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
                 self.items.extend(o.note.map(Item::Note));
+                if o.unread {
+                    self.note(HISTORY_UNAVAILABLE.into());
+                }
                 if self.open.is_some() {
                     self.state = State::Idle;
                 }

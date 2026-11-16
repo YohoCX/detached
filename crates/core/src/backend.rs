@@ -111,6 +111,8 @@ pub struct Spec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub tools: Option<Tools>,
+    /// The WSL distro the agent runs in; None runs it on this machine.
+    pub wsl: Option<String>,
 }
 
 impl Spec {
@@ -125,6 +127,7 @@ impl Spec {
             model: None,
             effort: None,
             tools: None,
+            wsl: None,
         }
     }
 }
@@ -152,6 +155,8 @@ pub struct Opened {
     pub models: Vec<Model>,
     pub commands: Vec<SlashCommand>,
     pub account: Option<Account>,
+    /// A resume whose history could not be read: it goes on without it.
+    pub unread: bool,
 }
 
 /// Who the session runs as and what it draws from: "Claude Max", "Anthropic API", "Amazon Bedrock".

@@ -1,60 +1,19 @@
-//! `detached --session`, the debug builds' way to `kernel::Session`, on the fake ACP agent.
+//! `detached --session`, the debug builds' way to `kernel::Session`, on the fake CLI.
 #![cfg(debug_assertions)]
 
 use std::io::Write;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use detached_core::adapters::{self, BLOCK, CLAUDE, Config, Installed, Version};
+use detached_core::adapters::{BLOCK, CLAUDE, Config};
 use detached_core::git::testutil::Sandbox;
-use serde_json::Value;
 
 const USAGE: &str =
     "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]";
 
-/// `fake_acp`, built as its own crate's tests build it: the app does not depend on that crate.
-fn fake_acp() -> PathBuf {
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"));
-    let out = Command::new(env!("CARGO"))
-        .args(["build", "-p", "detached-acp", "--bin", "fake_acp"])
-        .args(["--message-format=json-render-diagnostics", "--target-dir"])
-        .arg(target.join("fake"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mut messages = stdout
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
-    let exe = messages.find(|m| m["target"]["name"] == "fake_acp" && m["executable"].is_string());
-    PathBuf::from(exe.unwrap()["executable"].as_str().unwrap())
-}
-
-/// A sandbox with a repo, `fake_acp` as Claude's adapter and CLI.
+/// A sandbox with a repo and `fake_claude` as Claude's CLI.
 fn sandbox() -> Sandbox {
     let sb = Sandbox::new();
-    let fake = fake_acp();
-    let v = Version::parse("1.0.0").unwrap();
-    let exe = adapters::exe(&sb.state.data_dir, CLAUDE.adapter, &v);
-    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(&fake, &exe).unwrap();
-    let installed = Installed {
-        current: Some(v),
-        previous: None,
-    };
-    let folder = sb.state.data_dir.join("adapters").join(CLAUDE.adapter);
-    std::fs::write(
-        folder.join("installed.json"),
-        serde_json::to_vec(&installed).unwrap(),
-    )
-    .unwrap();
+    let fake = detached_core::testutil::claude::fake();
     let cli = [(CLAUDE.id.into(), fake.display().to_string())].into();
     sb.state
         .set_block(BLOCK, Config { cli, codex: false })
@@ -96,17 +55,18 @@ fn session(sb: &Sandbox, args: &[&str], stdin: &str) -> (String, i32) {
 }
 
 #[test]
-fn a_session_runs_a_turn_answers_its_ask_from_stdin_and_resumes_with_its_history() {
+fn a_session_runs_a_turn_answers_its_ask_from_stdin_resumes_with_its_history_lists_and_deletes() {
     let sb = sandbox();
     let (out, code) = session(&sb, &["ask; say done"], "y\n");
     assert_eq!(code, 0, "{out}");
     for line in [
         "[session] ",
         "> ask; say done",
-        "[ask] edit Write notes.txt: y once, a always, n reject",
-        "picked allow_once",
-        "done\n[end] Some(EndTurn)",
-        "[usage] ",
+        "[ask] Write notes.txt: y once, a always, n reject",
+        "picked allow\ndone\n[end] Some(EndTurn)",
+        "[usage] 1200 of 200000 tokens, cost $0.0100",
+        "[limits] 5h 12.5%",
+        "[account] - on Anthropic API",
         "[ended] Closed",
     ] {
         assert!(out.contains(line), "{line:?} in {out}");
@@ -123,20 +83,19 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_and_resumes_with_its_history
     let (out, code) = session(&sb, &["--resume", id], "say again\n");
     assert_eq!(code, 0, "{out}");
     let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s:?} in {out}"));
-    assert!(at(&format!("[session] {id}")) < at("> earlier"));
-    assert!(at("> earlier") < at("replayed") && at("replayed") < at("> say again"));
+    assert!(at(&format!("[session] {id}")) < at("> ask; say done"));
+    assert!(at("[tool] Write notes.txt (completed)") < at("picked allow\ndone\n> say again"));
     assert!(out[at("> say again")..].contains("\nagain\n[end]"), "{out}");
 
     let (out, code) = session(&sb, &["--past"], "");
-    assert_eq!(
-        (out.trim(), code),
-        ("This agent lists no past sessions.", 1)
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.starts_with(id) && out.trim_end().ends_with("ask; say done"),
+        "{out}"
     );
     let (out, code) = session(&sb, &["--delete", id], "");
-    assert_eq!(
-        (out.trim(), code),
-        ("This agent deletes no past sessions.", 1)
-    );
+    assert_eq!((out.trim(), code), (format!("deleted {id}").as_str(), 0));
+    assert_eq!(session(&sb, &["--past"], ""), (String::new(), 0));
 }
 
 #[test]

@@ -289,3 +289,31 @@ fn a_rule_key_does_not_hang_on_the_order_of_the_input_s_fields() {
         r#"["Probe",{"a":0,"b":{"c":[{"e":3,"f":2}],"d":1}}]"#
     );
 }
+
+#[test]
+fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() {
+    let run = boot();
+    let mut spec = chat(&run);
+    spec.wsl = Some("Ubuntu".into());
+    let (program, args) = command(&spec, "claude".into(), flags(&spec, "s1", false));
+    assert_eq!(program, PathBuf::from("wsl.exe"));
+    let front = [
+        "-d", "Ubuntu", "--cd", &run.repo, "-e", "sh", "-c", LEASH, "leash", "claude",
+    ];
+    assert_eq!(args[..front.len()], front.map(OsString::from));
+    assert_eq!(
+        args[front.len()..front.len() + BASE.len()],
+        BASE.iter().map(OsString::from).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        args[args.len() - 2..],
+        ["--session-id", "s1"].map(OsString::from)
+    );
+    let vars = env(&run.sb.state, &spec);
+    let wslenv = vars.iter().find(|(k, _)| k == "WSLENV").unwrap();
+    let names: Vec<String> = CLAUDE.env.iter().map(|k| format!("{k}/u")).collect();
+    assert_eq!(wslenv.1, OsString::from(names.join(":")));
+    assert!(vars.iter().any(|(k, _)| k == "PATH"));
+    spec.wsl = None;
+    assert!(!env(&run.sb.state, &spec).iter().any(|(k, _)| k == "WSLENV"));
+}

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
@@ -16,7 +17,7 @@ use serde_json::{Value, json};
 use crate::adapters::{self, BLOCK, Cli};
 use crate::backend::{
     self, Account, Answer, Ask, Backend, Caps, Cause, Choice, Config, Event, Events, Exit, Failure,
-    Kind, Limit, Model, Opened, Part, Piece, Question, Reply, Setting, SlashCommand, Spec,
+    Kind, Limit, Model, Opened, Part, Past, Piece, Question, Reply, Setting, SlashCommand, Spec,
     StopReason, Task, Tool, Turn, Update,
 };
 use crate::error::{Error, Result};
@@ -24,6 +25,7 @@ use crate::proc::{self, GRACE, Proc};
 use crate::state::AppState;
 
 mod history;
+use history::Place;
 #[cfg(test)]
 mod tests;
 
@@ -51,7 +53,6 @@ const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk"];
 const SERVER: &str = "detached-host";
 /// The CLI on the leash's own stdin, SIGTERM once the host is gone; a background job's stdin is
 /// /dev/null unless redirected, hence fd 3.
-#[cfg(unix)]
 const LEASH: &str = "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; while kill -0 $! 2>/dev/null; do \
     kill -0 $PPID 2>/dev/null || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; \
     done; wait $!";
@@ -70,6 +71,9 @@ impl Backend for Direct {
             limits: true,
             stop_task: true,
             questions: true,
+            past: true,
+            delete: true,
+            wsl: true,
             blocks: &[
                 ".claude/settings.json",
                 ".claude/settings.local.json",
@@ -97,17 +101,115 @@ impl Backend for Direct {
     ) -> Result<Box<dyn backend::Session>> {
         Ok(Box::new(start(core, spec, Some(id), events)?))
     }
+
+    fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
+        place(spec, env(core, spec)).past(&spec.repo)
+    }
+
+    fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
+        place(spec, env(core, spec)).delete(id)
+    }
+}
+
+/// The CLI's env: the allowlist and the manifest's names; a distro gets the manifest's alone, through
+/// `WSLENV`.
+fn env(core: &AppState, spec: &Spec) -> Vec<(String, OsString)> {
+    let p = spec.provider;
+    let mut vars = proc::env(p.env, proc::parent(&core.env()));
+    if spec.wsl.is_some() {
+        let names = vars.iter().filter(|(k, _)| p.env.contains(&k.as_str()));
+        let names: Vec<String> = names.map(|(k, _)| format!("{k}/u")).collect();
+        vars.push(("WSLENV".into(), names.join(":").into()));
+    }
+    vars
+}
+
+/// Where the session's transcripts are: the CLI's config dir in `env`, or the distro's.
+fn place(spec: &Spec, env: Vec<(String, OsString)>) -> Place {
+    let Some(distro) = spec.wsl.clone() else {
+        let get = |k: &str| env.iter().find(|(n, v)| n == k && !v.is_empty());
+        let get = |k: &str| get(k).map(|(_, v)| PathBuf::from(v));
+        let home = get("HOME")
+            .or_else(|| get("USERPROFILE"))
+            .or_else(dirs::home_dir);
+        let dir = get("CLAUDE_CONFIG_DIR").or_else(|| Some(home?.join(".claude")));
+        return Place::Here(dir.unwrap_or_default());
+    };
+    Place::Wsl(distro, env)
+}
+
+/// `script` run by `sh` in `distro` with `args`, in `cwd` when given: its stdout.
+fn wsl(
+    distro: &str,
+    env: &[(String, OsString)],
+    cwd: Option<&str>,
+    script: &str,
+    args: &[&str],
+) -> Result<Vec<u8>> {
+    let mut c = Command::new("wsl.exe");
+    c.args(["-d", distro]);
+    if let Some(cwd) = cwd {
+        c.args(["--cd", cwd]);
+    }
+    let out = crate::os::group(&mut c)
+        .args(["-e", "sh", "-c", script, "sh"])
+        .args(args)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .output()?;
+    match out.status.success() {
+        true => Ok(out.stdout),
+        false => Err(Error::Other(format!(
+            "wsl.exe -d {distro}: {}",
+            last(&String::from_utf8_lossy(&out.stderr))
+        ))),
+    }
+}
+
+/// The distro's `claude`, on its PATH or where its installer puts it, and its version.
+fn distro_cli(distro: &str, env: &[(String, OsString)]) -> Result<(OsString, adapters::Version)> {
+    let script =
+        r#"c=$(command -v claude || echo "$HOME/.local/bin/claude"); echo "$c"; "$c" --version"#;
+    let out = String::from_utf8_lossy(&wsl(distro, env, None, script, &[])?).into_owned();
+    let (cli, version) = out.split_once('\n').unwrap_or((&out, ""));
+    let v = version.split_whitespace().find_map(|w| w.parse().ok());
+    let v = v.ok_or_else(|| Error::Other(format!("{cli} in {distro} printed no version")))?;
+    Ok((cli.into(), v))
+}
+
+/// The program and arguments that run `cli` with `flags` in the spec's place: under the leash, but on
+/// Windows, where the session's job holds it.
+fn command(spec: &Spec, cli: OsString, flags: Vec<String>) -> (PathBuf, Vec<OsString>) {
+    let flags = flags.into_iter().map(OsString::from);
+    let leash = ["-c", LEASH, "leash"].map(OsString::from).into_iter();
+    let leashed = leash.chain([cli.clone()]).chain(flags.clone());
+    match &spec.wsl {
+        Some(d) => {
+            let front = ["-d", d, "--cd", &spec.repo, "-e", "sh"].map(OsString::from);
+            ("wsl.exe".into(), front.into_iter().chain(leashed).collect())
+        }
+        None if cfg!(unix) => ("/bin/sh".into(), leashed.collect()),
+        None => (cli.into(), flags.collect()),
+    }
 }
 
 /// Checks the CLI, spawns it on `spec`'s flags and initializes it.
 fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> Result<Live> {
     let p = spec.provider;
-    let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
-    let env = core.env();
-    let setting = config.cli.get(p.id).map(String::as_str);
-    let cli = adapters::find_cli(p, setting, &env)
-        .ok_or_else(|| Error::Other(format!("{} has no CLI: see the Agents page", p.name)))?;
-    let has = adapters::cli_version(&cli, &env)?;
+    let env = env(core, spec);
+    let (cli, has) = match &spec.wsl {
+        Some(d) => distro_cli(d, &env)?,
+        None => {
+            let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
+            let setting = config.cli.get(p.id).map(String::as_str);
+            let cli = adapters::find_cli(p, setting, &core.env()).ok_or_else(|| {
+                Error::Other(format!("{} has no CLI: see the Agents page", p.name))
+            })?;
+            let has = adapters::cli_version(&cli, &core.env())?;
+            (cli.into_os_string(), has)
+        }
+    };
     let catalog = adapters::stored(&core.data_dir);
     let note = match adapters::check_own_cli(p, catalog.as_ref(), &has) {
         Cli::Ok => None,
@@ -128,22 +230,18 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
         )),
     };
     let id = resume.map_or_else(uuid, String::from);
-    let flags = flags(spec, &id, resume.is_some())
-        .into_iter()
-        .map(OsString::from);
-    #[cfg(unix)]
-    let (program, args) = {
-        let leash = ["-c", LEASH, "leash"].map(OsString::from);
-        let args = leash.into_iter().chain([cli.into_os_string()]).chain(flags);
-        (PathBuf::from("/bin/sh"), args.collect())
+    // Read before the CLI holds the file.
+    let history = resume.map(|id| place(spec, env.clone()).read(id));
+    let (program, args) = command(spec, cli, flags(spec, &id, resume.is_some()));
+    let cwd = match spec.wsl {
+        Some(_) => std::env::temp_dir(),
+        None => spec.repo.clone().into(),
     };
-    #[cfg(windows)]
-    let (program, args) = (cli, flags.collect());
     let proc = Proc::spawn(&proc::Spec {
         program,
         args,
-        cwd: spec.repo.clone().into(),
-        env: proc::env(p.env, proc::parent(&env)),
+        cwd,
+        env,
     })?;
     let live = Live::run(proc, spec)?;
     let mut init = json!({"subtype": "initialize"});
@@ -194,12 +292,14 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
         models: models.clone(),
         commands: commands(&init["commands"]),
         account: init.get("account").map(account),
+        unread: history.as_ref().is_some_and(Option::is_none),
     };
     {
         let mut st = live.0.state.lock().unwrap();
         (st.models, st.offered, st.config) = (models, offered, config);
     }
-    live.0.open(opened, events)?;
+    live.0
+        .open(opened, history.flatten().unwrap_or_default(), events)?;
     Ok(live)
 }
 
@@ -422,8 +522,8 @@ impl Client {
         self.emit(Event::Update(u));
     }
 
-    /// Hands the stream over with `Opened` first, unless the CLI is gone already.
-    fn open(&self, opened: Opened, mut events: Events) -> Result<()> {
+    /// Hands the stream over with `Opened` and the history first, unless the CLI is gone already.
+    fn open(&self, opened: Opened, history: Vec<Update>, mut events: Events) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.gone {
             return Err(Error::Other(format!(
@@ -432,6 +532,7 @@ impl Client {
             )));
         }
         events(Event::Opened(opened));
+        history.into_iter().for_each(|u| events(Event::Update(u)));
         st.sink = Some(events);
         Ok(())
     }
@@ -552,18 +653,17 @@ impl Client {
                     }
                     self.update(Update::Tool(Box::new(tool(&id, &name, &b["input"]))));
                 }
+                self.update(Update::Break);
             }
             "user" => {
                 for b in blocks.filter(|b| b["type"] == "tool_result") {
-                    let id = text(&b["tool_use_id"]);
-                    let bash = self.state.lock().unwrap().bash.contains(&id);
-                    let failed = b["is_error"] == true;
-                    self.update(Update::Tool(Box::new(Tool {
-                        id,
-                        status: Some(if failed { "failed" } else { "completed" }.into()),
-                        output: bash.then(|| Value::String(output(&b["content"]))),
-                        ..Tool::default()
-                    })));
+                    let bash = self
+                        .state
+                        .lock()
+                        .unwrap()
+                        .bash
+                        .contains(&text(&b["tool_use_id"]));
+                    self.update(Update::Tool(Box::new(result(b, bash))));
                 }
             }
             "result" => self.ended(v),
@@ -667,10 +767,8 @@ impl Client {
         }
         if !self.lacks(Piece::Limits) {
             self.request(json!({"subtype": "get_usage"}), |c, r| match r {
-                Ok(u) if u["rate_limits"].is_object() => {
-                    c.update(Update::Limits(limits(&u["rate_limits"])));
-                }
-                Ok(_) => {}
+                // An API key's account has no plan limits.
+                Ok(u) => c.update(Update::Limits(limits(&u["rate_limits"]))),
                 Err(e) => c.lost(&e, Piece::Limits),
             });
         }
@@ -883,6 +981,17 @@ fn tool(id: &str, name: &str, input: &Value) -> Tool {
         input: Some(input.clone()),
         output: None,
         lines,
+    }
+}
+
+/// A tool call's result: its status, and the end of what it printed for a command.
+fn result(b: &Value, bash: bool) -> Tool {
+    let failed = b["is_error"] == true;
+    Tool {
+        id: text(&b["tool_use_id"]),
+        status: Some(if failed { "failed" } else { "completed" }.into()),
+        output: bash.then(|| Value::String(output(&b["content"]))),
+        ..Tool::default()
     }
 }
 

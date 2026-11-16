@@ -106,7 +106,7 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
     });
     let one_shot = run.prompt.is_some();
     let (mut prompt, mut feed) = (run.prompt, Feed::default());
-    let (mut lines, mut eof, mut opened) = (VecDeque::new(), false, false);
+    let (mut lines, mut eof, mut opened, mut due) = (VecDeque::new(), false, false, false);
     cx.spawn(async move |cx| {
         while let Some(input) = rx.next().await {
             match input {
@@ -130,7 +130,12 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
                     }
                     State::Running => answer(&s, &mut lines, eof, cx),
                     State::Idle => {
-                        if ended {
+                        // The limits come just after the turn's end.
+                        due |= ended;
+                        if due && !s.read(cx).limits_settled() {
+                            return;
+                        }
+                        if std::mem::take(&mut due) {
                             report(s.read(cx));
                         }
                         let next = prompt
@@ -181,6 +186,27 @@ fn report(s: &Session) {
         .map_or("unknown".into(), |(u, n)| format!("{u} of {n} tokens"));
     let cost = s.cost.map_or("unknown".into(), |c| format!("${c:.4}"));
     println!("[usage] {usage}, cost {cost}");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.map_or(0, |d| d.as_millis() as u64);
+    let limits = s.limits.iter().flatten().map(|l| {
+        let resets = l.resets.map(|ms| ms.saturating_sub(now) / 60_000);
+        let resets = resets.map_or(String::new(), |m| format!(", resets in {m} min"));
+        format!("{} {}%{resets}", l.name, l.used)
+    });
+    let limits: Vec<String> = limits.collect();
+    match &s.limits {
+        Some(_) if limits.is_empty() => println!("[limits] none"),
+        Some(_) => println!("[limits] {}", limits.join("; ")),
+        None => println!("[limits] unknown"),
+    }
+    match &s.account {
+        Some(a) => println!(
+            "[account] {} on {}",
+            a.email.as_deref().unwrap_or("-"),
+            a.plan
+        ),
+        None => println!("[account] unknown"),
+    }
 }
 
 /// Prints the feed's items once each, the last one's text as it streams, and a tool call again

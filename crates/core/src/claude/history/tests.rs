@@ -5,6 +5,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::*;
+use crate::backend::Tool;
 
 const SUBAGENT: &str = "36022712-0b82-4d34-ae53-41a19e20f5e9";
 const COMPACTION: &str = "479bb84f-197d-4dc6-a6f8-6777d8a2bb05";
@@ -228,4 +229,24 @@ fn delete_removes_the_transcript_and_its_folder_and_never_follows_a_path() {
     assert!(past(dir.path(), cwd).is_empty());
     assert_eq!(read(dir.path(), SUBAGENT), None);
     assert!(delete(dir.path(), SUBAGENT).is_err());
+}
+
+#[test]
+fn a_distro_s_listing_reads_as_the_folder_does() {
+    let cwd = "/tmp/h4c/transcripts-titled/repo";
+    let dir = laid("titled", cwd);
+    let file = file(dir.path(), TITLED).unwrap();
+    let side = fs::read(file.with_extension("").join("custom-title.json")).unwrap();
+    let mut bytes = format!("{TITLED}\x001700000000\0").into_bytes();
+    bytes.extend(side);
+    bytes.push(0);
+    bytes.extend(fs::read(&file).unwrap());
+    bytes.extend(b"\0other\x001700000001\0\0not json\0");
+    let listed = listed(&bytes, cwd);
+    let here = past(dir.path(), cwd);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].modified, &listed[0].title, &listed[0].tag),
+        (1_700_000_000_000, &here[0].title, &here[0].tag)
+    );
 }

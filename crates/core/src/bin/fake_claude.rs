@@ -155,6 +155,7 @@ fn main() {
                         cancelled,
                         answers,
                         said: Mutex::new(String::new()),
+                        messages: Mutex::new(vec![]),
                     };
                     t.run(&text);
                 });
@@ -302,6 +303,8 @@ struct Turn<'a> {
     cancelled: Receiver<()>,
     answers: Receiver<Value>,
     said: Mutex<String>,
+    /// The turn's messages, for its transcript.
+    messages: Mutex<Vec<(&'static str, Value)>>,
 }
 
 impl Turn<'_> {
@@ -316,8 +319,8 @@ impl Turn<'_> {
         drop(s);
         self.send(init);
         let result = text.split(';').try_for_each(|step| self.step(step.trim()));
+        self.transcript(text);
         let said = self.said.lock().unwrap().clone();
-        self.transcript(text, &said);
         let id = self.shared.lock().unwrap().id.clone();
         let (subtype, error, result) = match result {
             Ok(()) => ("success", false, said),
@@ -342,7 +345,8 @@ impl Turn<'_> {
         self.said.lock().unwrap().push_str(text);
     }
 
-    fn message(&self, role: &str, content: Value) {
+    fn message(&self, role: &'static str, content: Value) {
+        self.messages.lock().unwrap().push((role, content.clone()));
         let message = json!({"role": role, "content": content});
         self.send(json!({"type": role, "message": message, "parent_tool_use_id": null}));
     }
@@ -536,8 +540,8 @@ impl Turn<'_> {
         Ok(())
     }
 
-    /// The turn's prompt and answer, appended to `projects/<cwd>/<id>.jsonl` as the CLI writes it.
-    fn transcript(&self, prompt: &str, said: &str) {
+    /// The turn's prompt and messages, appended to `projects/<cwd>/<id>.jsonl` as the CLI writes it.
+    fn transcript(&self, prompt: &str) {
         let Ok(cwd) = std::env::current_dir() else {
             return;
         };
@@ -552,10 +556,8 @@ impl Turn<'_> {
         let dir = config_dir().join("projects").join(name);
         let _ = std::fs::create_dir_all(&dir);
         let mut lines = String::new();
-        for (role, content) in [
-            ("user", json!(prompt)),
-            ("assistant", json!([{"type": "text", "text": said}])),
-        ] {
+        let messages = self.messages.lock().unwrap().clone();
+        for (role, content) in [("user", json!(prompt))].into_iter().chain(messages) {
             s.lines += 1;
             let uuid = format!("{}-{}", s.id, s.lines);
             let line = json!({"parentUuid": s.leaf, "isSidechain": false, "type": role,

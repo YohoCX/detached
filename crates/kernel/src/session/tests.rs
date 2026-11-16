@@ -89,13 +89,27 @@ fn boot_fake(cx: &mut TestAppContext, fake: Fake) -> Fixture {
     }
 }
 
-/// What a resumed session shows of its past: the ACP fake's replay; Claude's history is read from
-/// its transcript, which this stage does not yet.
-fn replay(fake: Fake) -> Vec<Item> {
-    match fake {
-        Fake::Acp => vec![Item::User("earlier".into()), Item::Text("replayed".into())],
-        Fake::Claude => vec![],
-    }
+/// Items as lines: a prompt, a text, a tool call by its kind, title and status, a note.
+fn lines(items: &[Item]) -> Vec<String> {
+    let line = |i: &Item| match i {
+        Item::User(t) => format!("> {t}"),
+        Item::Text(t) | Item::Note(t) => t.clone(),
+        Item::Tool(t) => [&t.kind, &t.title, &t.status]
+            .map(|f| f.as_deref().unwrap_or("-"))
+            .join(" "),
+        i => format!("{i:?}"),
+    };
+    items.iter().map(line).collect()
+}
+
+/// That a resumed session shows its past alone: the ACP fake's replay whatever it was, or `claude`,
+/// what the CLI's transcript holds.
+fn replayed(s: &Entity<Session>, fake: Fake, claude: &[&str], cx: &mut TestAppContext) {
+    let want = match fake {
+        Fake::Acp => &["> earlier", "replayed"][..],
+        Fake::Claude => claude,
+    };
+    s.read_with(cx, |s, _| assert_eq!(lines(&s.items), want));
 }
 
 /// Names an agent gets from the machine rather than from whoever runs the tests.
@@ -355,7 +369,8 @@ fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(
         });
         assert_eq!(cx.read(|cx| cx.global::<Sessions>().waiting.len()), 1);
         wait_until(cx, |cx| again.read(cx).state != State::Starting);
-        again.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
+        // Nothing was said, so there is no transcript.
+        replayed(&again, fake, &[HISTORY_UNAVAILABLE], cx);
         assert_eq!(turn(&again, "say again", cx), "again");
         if let Some(first) = first {
             assert_eq!(state(&first, cx), State::Ended(End::Closed));
@@ -431,7 +446,14 @@ fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(
     let other = open(&f, Kind::Chat, cx);
     let tool: fn(&Item) -> bool = |i| matches!(i, Item::Tool(_));
     let ask = |i: &Item| matches!(i, Item::Ask { .. });
-    for (step, at, dropped) in [("stall", tool, false), ("ask", ask, true)] {
+    let past = [
+        &["> stall", "Bash sleep failed"][..],
+        &["> ask", "Write notes.txt failed", "picked deny"],
+    ];
+    for ((step, at, dropped), past) in [("stall", tool, false), ("ask", ask, true)]
+        .into_iter()
+        .zip(past)
+    {
         let s = open(&f, Kind::Chat, cx);
         s.update(cx, |s, cx| s.prompt(step.into(), cx));
         wait_until(cx, |cx| s.read(cx).items.iter().any(at));
@@ -444,7 +466,7 @@ fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(
             s.update(cx, |s, cx| s.end(cx));
         }
         let loaded = open_spec(f.spec(Kind::Chat), id, cx);
-        loaded.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
+        replayed(&loaded, fake, past, cx);
         assert_eq!(turn(&loaded, "say again", cx), "again");
     }
     assert_eq!(turn(&other, "say still here", cx), "still here");
@@ -468,7 +490,7 @@ fn a_load_of_a_closing_session_waits_for_its_close(fake: Fake, cx: &mut TestAppC
     });
     assert_eq!(turn(&other, "say ping", cx), "ping");
     wait_until(cx, |cx| loaded.read(cx).state != State::Starting);
-    loaded.read_with(cx, |s, _| assert_eq!(s.items, replay(fake)));
+    replayed(&loaded, fake, &["> hold"], cx);
     assert_eq!(turn(&loaded, "say again", cx), "again");
 }
 

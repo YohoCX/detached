@@ -1,9 +1,9 @@
 //! The CLI's own transcripts: where a session's file is, a folder's past sessions, a session's
 //! history as a resume's first updates, and delete. The reader takes bytes, so a distro's files
 //! can be read through `wsl.exe`.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -11,8 +11,9 @@ use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 
+use super::{result, tool, wsl};
 use crate::agent::Past;
-use crate::backend::{Tool, Update};
+use crate::backend::Update;
 use crate::error::{Error, Result};
 
 /// Where the CLI cuts a project folder's name and adds a hash.
@@ -27,6 +28,70 @@ const NOISE: &[&str] = &[
     "<task-notification",
     "[Request interrupted",
 ];
+
+/// The distro's transcripts, where the CLI keeps them.
+const PROJECTS: &str = r#"p="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects""#;
+
+/// Where a session's transcripts are.
+pub(crate) enum Place {
+    /// This machine, in the CLI's config dir.
+    Here(PathBuf),
+    /// A WSL distro, through `wsl.exe` with the CLI's env.
+    Wsl(String, Vec<(String, OsString)>),
+}
+
+impl Place {
+    fn sh(&self, cwd: Option<&str>, script: &str, args: &[&str]) -> Result<Vec<u8>> {
+        let Place::Wsl(distro, env) = self else {
+            unreachable!("a script runs in a distro")
+        };
+        wsl(distro, env, cwd, &format!("{PROJECTS}; {script}"), args)
+    }
+
+    /// The history of session `id`; None when it cannot be read.
+    pub(crate) fn read(&self, id: &str) -> Option<Vec<Update>> {
+        match self {
+            Place::Here(dir) => read(dir, id),
+            _ if !valid(id) => None,
+            _ => {
+                let script =
+                    r#"for f in "$p"/*/"$1".jsonl; do [ -f "$f" ] && exec cat "$f"; done; exit 1"#;
+                history(&self.sh(None, script, &[id]).ok()?)
+            }
+        }
+    }
+
+    /// The past sessions of the folder `repo`, newest first.
+    pub(crate) fn past(&self, repo: &str) -> Result<Vec<Past>> {
+        let Place::Here(dir) = self else {
+            let cwd = String::from_utf8_lossy(&self.sh(Some(repo), "pwd -P", &[])?).into_owned();
+            let cwd = cwd.trim_end();
+            let script = format!(
+                r#"for f in "$p/$1"/*.jsonl; do [ -f "$f" ] || continue; i=${{f%.jsonl}}
+                printf '%s\0%s\0' "${{i##*/}}" "$(stat -c %Y "$f")"; cat "$i/custom-title.json" 2>/dev/null
+                printf '\0'; if [ "$(wc -c < "$f")" -le {} ]; then cat "$f"
+                else head -c {WINDOW} "$f"; echo; tail -c {WINDOW} "$f"; fi; printf '\0'; done"#,
+                2 * WINDOW
+            );
+            return Ok(listed(&self.sh(None, &script, &[&folder(cwd)])?, cwd));
+        };
+        let cwd = fs::canonicalize(repo).map_or(repo.into(), |p| p.display().to_string());
+        Ok(past(dir, cwd.trim_start_matches(r"\\?\")))
+    }
+
+    /// Removes session `id`'s transcript and its folder.
+    pub(crate) fn delete(&self, id: &str) -> Result<()> {
+        match self {
+            Place::Here(dir) => delete(dir, id),
+            _ if !valid(id) => Err(Error::Other(format!("No session {id}."))),
+            _ => {
+                let script = r#"for f in "$p"/*/"$1".jsonl; do
+                    [ -f "$f" ] && rm -rf "${f%.jsonl}" && exec rm "$f"; done; echo "No session $1." >&2; exit 1"#;
+                self.sh(None, script, &[id]).map(drop)
+            }
+        }
+    }
+}
 
 /// The project folder the CLI keeps `cwd`'s transcripts in; `cwd` as the CLI sees it, its symlinks
 /// resolved.
@@ -60,8 +125,7 @@ fn base36(mut n: u32) -> String {
 
 /// A session's transcript, in whichever project holds it.
 pub(crate) fn file(dir: &Path, id: &str) -> Option<PathBuf> {
-    // The id names files to delete: never a path.
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !valid(id) {
         return None;
     }
     let projects = fs::read_dir(dir.join("projects")).ok()?;
@@ -69,6 +133,11 @@ pub(crate) fn file(dir: &Path, id: &str) -> Option<PathBuf> {
         .flatten()
         .map(|p| p.path().join(format!("{id}.jsonl")));
     files.into_iter().find(|f| f.is_file())
+}
+
+/// The id names files to delete: never a path.
+fn valid(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// The history of session `id` under the CLI's config dir `dir`; None when it cannot be read.
@@ -95,16 +164,37 @@ pub(crate) fn past(dir: &Path, cwd: &str) -> Vec<Past> {
             let id = e.file_name().to_str()?.strip_suffix(".jsonl")?.to_string();
             let modified = e.metadata().ok()?.modified().ok()?;
             let modified = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
-            let named = fs::read(folder.join(&id).join("custom-title.json")).ok();
-            let named = named.and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-            let named = named.and_then(|v| v["customTitle"].as_str().map(String::from));
-            let mut p = summary(&ends(&e.path())?, named)?;
-            (p.id, p.modified, p.cwd) = (id, modified, Some(cwd.into()));
-            Some(p)
+            let side = fs::read(folder.join(&id).join("custom-title.json")).unwrap_or_default();
+            entry(id, modified, &side, &ends(&e.path())?, cwd)
         })
         .collect();
     all.sort_by_key(|p| std::cmp::Reverse(p.modified));
     all
+}
+
+/// The past sessions of `cwd` in a distro's listing: each transcript's id, mtime in seconds, side
+/// file and ends, each part ended by a NUL, which JSON lines never hold.
+fn listed(bytes: &[u8], cwd: &str) -> Vec<Past> {
+    let mut parts = bytes.split(|&b| b == 0);
+    let mut all = vec![];
+    while let (Some(id), Some(secs), Some(side), Some(ends)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    {
+        let secs = String::from_utf8_lossy(secs).trim().parse().unwrap_or(0u64);
+        let id = String::from_utf8_lossy(id).into_owned();
+        all.extend(entry(id, secs * 1000, side, ends, cwd));
+    }
+    all.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    all
+}
+
+/// A past session from its transcript's ends and the `custom-title.json` beside it.
+fn entry(id: String, modified: u64, side: &[u8], ends: &[u8], cwd: &str) -> Option<Past> {
+    let named = serde_json::from_slice::<Value>(side).ok();
+    let named = named.and_then(|v| v["customTitle"].as_str().map(String::from));
+    let mut p = summary(ends, named)?;
+    (p.id, p.modified, p.cwd) = (id, modified, Some(cwd.into()));
+    Some(p)
 }
 
 /// A transcript's title, tag and model, from its lines; None without a title, as the CLI lists it.
@@ -251,57 +341,21 @@ fn updates(l: &Value, names: &mut HashMap<String, String>, out: &mut Vec<Update>
             (Some("text"), false) => out.extend(text("text").map(Update::Text)),
             (Some("thinking"), false) => out.extend(text("thinking").map(Update::Thought)),
             (Some("tool_use"), false) => {
-                let (id, name) = (text("id").unwrap_or_default(), text("name"));
-                names.insert(id.clone(), name.clone().unwrap_or_default());
-                out.push(Update::Tool(Box::new(Tool {
-                    id,
-                    title: Some(detail(&b["input"])),
-                    kind: name,
-                    status: None,
-                    input: Some(b["input"].clone()),
-                    output: None,
-                    lines: None,
-                })));
+                let (id, name) = (
+                    text("id").unwrap_or_default(),
+                    text("name").unwrap_or_default(),
+                );
+                out.push(Update::Tool(Box::new(tool(&id, &name, &b["input"]))));
+                names.insert(id, name);
             }
             (Some("tool_result"), true) => {
                 let id = text("tool_use_id").unwrap_or_default();
                 let bash = names.get(&id).is_some_and(|n| n == "Bash");
-                let failed = b["is_error"] == true;
-                out.push(Update::Tool(Box::new(Tool {
-                    status: Some(if failed { "failed" } else { "completed" }.into()),
-                    output: bash.then(|| Value::String(output(&b["content"]))),
-                    id,
-                    ..Tool::default()
-                })));
+                out.push(Update::Tool(Box::new(result(b, bash))));
             }
             _ => {}
         }
     }
-}
-
-/// What the feed shows of a tool call: its file, command, pattern or description, one line.
-fn detail(input: &Value) -> String {
-    let keys = ["file_path", "command", "pattern", "description", "url"];
-    let found = keys
-        .iter()
-        .find_map(|k| input[k].as_str())
-        .unwrap_or_default();
-    found
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .take(CUT)
-        .collect()
-}
-
-/// The end of what a command printed.
-fn output(content: &Value) -> String {
-    let text = said(content).unwrap_or_default();
-    let lines: Vec<&str> = text.lines().collect();
-    let tail = lines[lines.len().saturating_sub(40)..].join("\n");
-    let skip = tail.chars().count().saturating_sub(4000);
-    tail.chars().skip(skip).collect()
 }
 
 #[cfg(test)]
