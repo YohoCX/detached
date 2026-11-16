@@ -247,7 +247,7 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
     ("Finding", "verdict", |_, n, _| val(&n.finding().verdict)),
     ("Repo", "diff", |c, n, a| {
         let (base, head) = (text(a, "base").unwrap_or(""), text(a, "head").unwrap_or(""));
-        let d = tree::diff(c.env()?, c.path(n), base, head, text(a, "path"));
+        let d = tree::diff(c.env()?, c.path(n), base, head, text(a, "path").as_slice());
         val(d.map_err(|e| e.to_string())?)
     }),
     ("Repo", "log", |c, n, a| {

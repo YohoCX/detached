@@ -1,7 +1,7 @@
 //! A task's rounds: each finding's file and lines mapped across heads, threads of one issue from
 //! round to round, the owner's dispositions, and whether the loop stops.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -152,6 +152,8 @@ impl Mark {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Fate {
     Open,
+    /// Its Fix passed its re-check; `fixed` waits for the subject's lines to change.
+    FixReady,
     Fixed,
     Dismissed(String),
     Deferred,
@@ -161,6 +163,7 @@ impl Fate {
     pub fn text(&self) -> String {
         match self {
             Fate::Open => "open".into(),
+            Fate::FixReady => "fix ready".into(),
             Fate::Fixed => "fixed".into(),
             Fate::Dismissed(why) => format!("dismissed: {why}"),
             Fate::Deferred => "deferred".into(),
@@ -229,8 +232,20 @@ fn standing(s: &State) -> impl Iterator<Item = &Found> {
         .filter(move |f| f.unverified.is_none() && !aside(f))
 }
 
-/// The task's threads from its rounds' records, in the order they started.
-pub fn track(rounds: &[(&str, &State)]) -> Track {
+/// Whether `s` raised a standing finding within a few lines of `f`'s.
+pub fn raises(s: &State, f: &host::Finding) -> bool {
+    let p = Prior {
+        key: String::new(),
+        finding: f.clone(),
+        gone: false,
+        changed: false,
+    };
+    standing(s).any(|x| !beside(std::slice::from_ref(&p), &x.finding).is_empty())
+}
+
+/// The task's threads from its rounds' records, in the order they started; `ready` holds the
+/// findings, as `<run>/<id>`, whose Fix passed its re-check.
+pub fn track(rounds: &[(&str, &State)], ready: &BTreeSet<String>) -> Track {
     let n = rounds.len();
     let mut threads: Vec<Thread> = vec![];
     let mut said = BTreeMap::new();
@@ -293,7 +308,7 @@ pub fn track(rounds: &[(&str, &State)]) -> Track {
         }
     }
     for t in &mut threads {
-        fate(t, &said);
+        fate(t, &said, ready);
     }
     let past: Vec<Option<String>> = (threads.iter())
         .map(|t| {
@@ -334,7 +349,7 @@ fn dismissal(t: &Thread, said: &Said) -> Option<String> {
 /// A thread's fate from the owner's latest disposition of any of its findings. A dismissal or
 /// deferral covers what the thread raised before it and later findings at that severity or lower;
 /// a later one at a higher severity reopens the thread.
-fn fate(t: &mut Thread, said: &Said) {
+fn fate(t: &mut Thread, said: &Said, ready: &BTreeSet<String>) {
     let mut by = latest(t, said)
         .filter(|d| d.1 != Disposition::Open)
         .cloned();
@@ -364,14 +379,16 @@ fn fate(t: &mut Thread, said: &Said) {
         Some((_, Disposition::Dismissed, why)) => Fate::Dismissed(why.unwrap_or_default()),
         Some(_) => Fate::Deferred,
         None if t.fixed => Fate::Fixed,
+        None if t.seen.iter().any(|x| ready.contains(&x.0)) => Fate::FixReady,
         None => Fate::Open,
     };
 }
 
 impl Track {
-    /// Open majors and criticals: the loop goes on while there is one.
+    /// Majors and criticals open or fix ready: the loop goes on while there is one.
     pub fn gating(&self) -> impl Iterator<Item = &Thread> {
-        let open = |t: &&Thread| t.fate == Fate::Open && rank(t.severity) > 0;
+        let open =
+            |t: &&Thread| matches!(t.fate, Fate::Open | Fate::FixReady) && rank(t.severity) > 0;
         self.threads.iter().filter(open)
     }
 
@@ -450,7 +467,11 @@ pub fn priors(core: &AppState, repo: &Path, task: &str, head: &str) -> Result<Ve
     let refs: Vec<(&str, &State)> = rounds.iter().map(|(r, s)| (r.as_str(), s)).collect();
     let env = core.env();
     let mut out = vec![];
-    for t in track(&refs).threads.iter().filter(|t| !t.fixed) {
+    for t in track(&refs, &BTreeSet::new())
+        .threads
+        .iter()
+        .filter(|t| !t.fixed)
+    {
         let Some((key, i, _, _)) = t.seen.last() else {
             continue;
         };

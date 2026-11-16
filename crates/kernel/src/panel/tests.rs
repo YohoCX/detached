@@ -18,6 +18,7 @@ use crate::wait_for;
 
 #[cfg(unix)]
 mod corpus;
+mod fixes;
 mod real;
 
 const LONG: Duration = Duration::from_secs(90);
@@ -126,6 +127,7 @@ fn run(
         untrusted: false,
         budget,
         codex,
+        roles: vec![],
     };
     cx.update(|cx| live::start(s, cx))
 }
@@ -1123,7 +1125,7 @@ fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
     let track = || {
         let rounds = track::rounds(&f.core, Path::new(&f.repo), "feat").unwrap();
         let refs: Vec<(&str, &State)> = rounds.iter().map(|(r, s)| (r.as_str(), s)).collect();
-        track::track(&refs)
+        track::track(&refs, &Default::default())
     };
 
     role(

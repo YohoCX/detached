@@ -77,6 +77,7 @@ impl Form {
             untrusted: self.untrusted,
             budget: text(&self.budget).parse().ok(),
             codex: self.codex,
+            roles: vec![],
         }
     }
 

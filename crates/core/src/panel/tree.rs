@@ -18,8 +18,8 @@ pub fn trusted_root(core: &AppState, run: &str) -> PathBuf {
     core.data_dir.join("trees/trusted").join(run)
 }
 
-/// Refuses a run when a branch named `detached-run` keeps git from making refs under it.
-pub fn check_prefix(env: &Env, repo: &Path) -> Result<()> {
+/// Refuses a run or a Fix when a branch named `prefix` keeps git from making refs under it.
+pub fn check_prefix(env: &Env, repo: &Path, prefix: &str) -> Result<()> {
     let r = runner::run(
         env,
         repo,
@@ -27,14 +27,14 @@ pub fn check_prefix(env: &Env, repo: &Path) -> Result<()> {
             "rev-parse",
             "--verify",
             "-q",
-            &format!("refs/heads/{PREFIX}"),
+            &format!("refs/heads/{prefix}"),
         ],
         Kind::Read,
         Opts::default(),
     )?;
     match r.code {
         0 => Err(Error::Other(format!(
-            "A branch named {PREFIX} exists, so git cannot make the run's {PREFIX}/… branches. Rename it to start a run."
+            "A branch named {prefix} exists, so git cannot make the {prefix}/… branches. Rename it to go on."
         ))),
         _ => Ok(()),
     }
@@ -247,9 +247,9 @@ fn null() -> String {
     }
 }
 
-/// `base`..`head`'s diff of `path` or of everything, from raw blobs: no textconv, no external diff,
-/// no filter, hooks and the user's config off.
-pub fn diff(env: &Env, repo: &Path, base: &str, head: &str, path: Option<&str>) -> Result<String> {
+/// `base`..`head`'s diff of `paths` or of everything, from raw blobs: no textconv, no external
+/// diff, no filter, hooks and the user's config off.
+pub fn diff(env: &Env, repo: &Path, base: &str, head: &str, paths: &[&str]) -> Result<String> {
     let (base, head) = (crate::git::arg(base)?, crate::git::arg(head)?);
     let mut args = vec![
         "diff",
@@ -260,7 +260,7 @@ pub fn diff(env: &Env, repo: &Path, base: &str, head: &str, path: Option<&str>) 
         head,
         "--",
     ];
-    args.extend(path);
+    args.extend(paths);
     Ok(String::from_utf8_lossy(&bare(env, repo, &args, None)?).into_owned())
 }
 
@@ -504,9 +504,9 @@ mod tests {
     fn a_branch_named_like_the_prefix_refuses_the_run() {
         let sb = Sandbox::new();
         let repo = repo(&sb);
-        check_prefix(&sb.state.env(), &repo).unwrap();
+        check_prefix(&sb.state.env(), &repo, PREFIX).unwrap();
         sb.git(&repo, &["branch", PREFIX]);
-        assert!(check_prefix(&sb.state.env(), &repo).is_err());
+        assert!(check_prefix(&sb.state.env(), &repo, PREFIX).is_err());
     }
 
     #[test]
@@ -608,7 +608,7 @@ mod tests {
         _ = fs::remove_file(&marker);
         let head = sb.git(&repo, &["rev-parse", "HEAD"]);
         let env = sb.state.env();
-        let d = diff(&env, &repo, &base, &head, Some("x.bin")).unwrap();
+        let d = diff(&env, &repo, &base, &head, &["x.bin"]).unwrap();
         assert!(d.contains("+oid sha256:abc"), "{d}");
         let found = search(&env, &repo, &head, "sha256", 10).unwrap();
         assert_eq!(
@@ -625,6 +625,6 @@ mod tests {
             "lfs"
         );
         assert!(!marker.exists(), "no textconv or filter ran");
-        assert!(diff(&env, &repo, "--output=/tmp/x", &head, None).is_err());
+        assert!(diff(&env, &repo, "--output=/tmp/x", &head, &[]).is_err());
     }
 }

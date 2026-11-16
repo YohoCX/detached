@@ -1,5 +1,6 @@
 //! A scripted `claude` on the stream-json frames, for the tests. A prompt is steps split by `;`:
 //! - `say <text>` streams the text in three chunks; `write <path> <text>` writes under the cwd;
+//!   `commit <message>` commits every change in the cwd with git;
 //! - `stall` runs a command until `interrupt`; `hang` ignores `interrupt` and stdin's EOF;
 //! - `die` exits with code 3 mid-turn;
 //! - `ask [<tool> <json input>]` asks for the tool (Write notes.txt), offering a rule, and says
@@ -559,6 +560,16 @@ impl Turn<'_> {
                     None if verb == "config" => self.say("config unreported "),
                     None => {}
                 }
+            }
+            "commit" => {
+                let git = |args: &[&str]| {
+                    let o = Command::new("git").args(args).current_dir(&cwd).output();
+                    o.map_err(err).map(|o| o.status.success())
+                };
+                let id = ["-c", "user.name=Fake", "-c", "user.email=fake@example.com"];
+                let ok =
+                    git(&["add", "-A"])? && git(&[&id[..], &["commit", "-qm", rest]].concat())?;
+                self.say(&format!("commit {ok} "));
             }
             "stall" => {
                 let mut child = me()

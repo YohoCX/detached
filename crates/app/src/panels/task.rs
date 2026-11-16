@@ -146,8 +146,10 @@ impl TaskView {
     /// Whether the loop stops, and Next round while it goes on.
     fn looping(&self, track: &Track, rounds: &Rounds, cx: &App) -> impl IntoElement {
         let open = track.gating().count();
+        let due = rounds.tasks.get(&self.task).is_some_and(|t| t.due);
         let (text, next) = match () {
             _ if track.running => ("Loop: the latest round is running".to_string(), false),
+            _ if due => ("Loop goes on: re-check due, the subject moved".into(), true),
             _ if !track.complete => ("Loop goes on: the latest round did not finish".into(), true),
             _ if open == 0 => ("Loop stops: no major or critical is open".into(), false),
             _ => (format!("Loop goes on: {open} major or critical open"), true),
@@ -179,7 +181,8 @@ impl TaskView {
                 } else {
                     ""
                 };
-                let label = format!("Next round: gate, {once}{estimate}");
+                let what = if due { "Re-check" } else { "Next round" };
+                let label = format!("{what}: gate, {once}{estimate}");
                 d.child(
                     ui::button("panel.task.next", label, cx)
                         .test_support()
