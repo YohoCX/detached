@@ -47,7 +47,7 @@ pub trait Backend: Send + Sync {
         Err(Error::Other("This agent deletes no past sessions.".into()))
     }
     /// Whether an untrusted participant's shell runs sandboxed in the distro `wsl`, or here: its
-    /// write to its own folder is denied. Ok(false) carries what failed in the error's place.
+    /// write to its own folder is denied. `Probe::Failed` says what the agent did instead.
     fn probe(&self, _core: &AppState, _wsl: Option<&str>) -> Result<Probe> {
         Err(Error::Other("This agent has no sandbox probe.".into()))
     }

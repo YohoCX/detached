@@ -361,14 +361,16 @@ impl State {
                 });
             }
             Event::Group { ids, .. } => {
-                let mut ids = ids
-                    .iter()
-                    .filter(|id| self.found(id).is_some_and(|f| f.folded.is_none()));
-                if let Some(head) = ids.next().cloned() {
-                    for id in ids.cloned().collect::<Vec<_>>() {
-                        if let Some(f) = self.findings.iter_mut().find(|f| f.id == id) {
-                            f.folded = Some(head.clone());
-                        }
+                let mut standing: Vec<&String> = vec![];
+                for id in ids {
+                    let stands = self.found(id).is_some_and(|f| f.folded.is_none());
+                    if stands && !standing.contains(&id) {
+                        standing.push(id);
+                    }
+                }
+                if let Some((head, rest)) = standing.split_first() {
+                    for f in self.findings.iter_mut().filter(|f| rest.contains(&&f.id)) {
+                        f.folded = Some(head.to_string());
                     }
                 }
             }
@@ -402,8 +404,14 @@ impl State {
             }
             Event::Degraded { participant, cause } => {
                 self.line(at, "agent_degraded", participant, cause.clone());
+                let mut merge = false;
                 if let Some(p) = self.participant(participant) {
                     (p.status, p.cause) = (Status::Degraded, cause.clone());
+                    merge = p.stage == Stage::Merge;
+                }
+                // A merge that did not finish leaves every finding standing.
+                if merge {
+                    self.findings.iter_mut().for_each(|f| f.folded = None);
                 }
             }
             Event::Paused { reason } => self.paused = Some(reason.clone()),
@@ -795,5 +803,37 @@ mod tests {
         assert_eq!(verifier(&vs, &[&sonnet]), ("opus".into(), None));
         assert!(verifier(&vs, &[&opus, &sonnet]).1.is_some());
         assert_eq!(corroboration(&[&opus, &sonnet]), 2);
+    }
+
+    #[test]
+    fn a_group_with_a_repeated_id_folds_the_others_into_it_and_a_degraded_merge_unfolds_all() {
+        let mut s = State::default();
+        for e in [
+            started("bugs", "opus", Stage::Find),
+            found("bugs", "bugs-1", Severity::Major),
+            found("bugs", "adv-1", Severity::Major),
+            started("merge", "sonnet", Stage::Merge),
+        ] {
+            s.apply(0, &e);
+        }
+        let ids = ["bugs-1", "bugs-1", "adv-1"].map(String::from).to_vec();
+        s.apply(
+            0,
+            &Event::Group {
+                participant: "merge".into(),
+                ids,
+            },
+        );
+        let heads: Vec<&str> = s.heads().map(|f| f.id.as_str()).collect();
+        assert_eq!(heads, ["bugs-1"]);
+        assert_eq!(s.found("adv-1").unwrap().folded.as_deref(), Some("bugs-1"));
+        s.apply(
+            0,
+            &Event::Degraded {
+                participant: "merge".into(),
+                cause: "x".into(),
+            },
+        );
+        assert_eq!(s.heads().count(), 2);
     }
 }

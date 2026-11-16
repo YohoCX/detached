@@ -66,6 +66,12 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    /// A finder's brief: an untrusted one reads its diff through the host's tools.
+    pub fn brief(&self, f: &Finder) -> String {
+        let export = (!self.trust.trusted).then_some(self.subject.repo.as_str());
+        brief::find(&self.mode, &f.role, &self.data, export)
+    }
+
     /// An untrusted participant's own temp dir, made.
     pub fn tmp(&self, name: &str) -> Option<PathBuf> {
         let dir = self.dir.as_ref()?.join("tmp").join(name);
@@ -143,7 +149,7 @@ pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
         },
         false => marks::classify(core, &p, &subject)?,
     };
-    let project = trust::at(&core.env(), Path::new(&s.repo), &subject.head_sha)?;
+    let project = head_trust(core, &subject)?;
     Ok(Preview {
         authors: marks::authors(&core.env(), &p, &subject)?,
         accepted: trust::trusted(&core.config_dir, &s.repo, &project),
@@ -156,8 +162,27 @@ pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
 /// Accepts the subject's trust files at its head for its repo.
 pub fn accept(core: &AppState, s: &Start) -> Result<()> {
     let subject = subject(core, s)?;
-    let project = trust::at(&core.env(), Path::new(&s.repo), &subject.head_sha)?;
+    let project = head_trust(core, &subject)?;
     trust::trust(&core.config_dir, &s.repo, &project)
+}
+
+/// What a finder's tree would load: the trust files at the head, raw, and the owner's gitignored
+/// `.claude/settings.local.json`, which each finder gets a copy of.
+fn head_trust(core: &AppState, s: &Subject) -> Result<trust::Project> {
+    let repo = Path::new(&s.repo);
+    let p = trust::at(&core.env(), repo, &s.head_sha)?;
+    trust::with_file(&core.env(), p, repo, LOCAL)
+}
+
+const LOCAL: &str = ".claude/settings.local.json";
+
+/// Copies the owner's local settings into a finder's tree.
+pub fn copy_local(repo: &Path, tree: &Path) -> Result<()> {
+    if let Ok(l) = fs::read(repo.join(LOCAL)) {
+        fs::create_dir_all(tree.join(".claude"))?;
+        fs::write(tree.join(LOCAL), l)?;
+    }
+    Ok(())
 }
 
 /// A run's id: its mode and the time, safe in a branch name.
@@ -239,13 +264,9 @@ pub fn prepare(
                 .push("Verifiers run without the sandbox: the state check stands in for it".into());
         }
         p.pinned = tree::pinned(core, repo, run, &sha)?;
-        let local = fs::read(repo.join(".claude/settings.local.json")).ok();
         for (name, role, seat) in seats {
             let (cwd, branch) = tree::finder(core, repo, run, &name, &sha)?;
-            if let Some(l) = &local {
-                fs::create_dir_all(cwd.join(".claude"))?;
-                fs::write(cwd.join(".claude/settings.local.json"), l)?;
-            }
+            copy_local(repo, &cwd)?;
             p.finders.push(Finder {
                 name,
                 role,
@@ -265,7 +286,7 @@ pub fn prepare(
                 )));
             }
         }
-        let root = root::root();
+        let root = root::root(core);
         let lock = root::lock(&root, cancelled)?;
         root::clean(&lock, &root)?;
         let dir = root.join(run);
@@ -290,7 +311,7 @@ pub fn prepare(
     for f in &p.finders {
         fs::write(
             p.record.dir.join("brief").join(format!("{}.md", f.name)),
-            brief::find(&p.mode, &f.role, &p.data),
+            p.brief(f),
         )?;
     }
     Ok(p)
@@ -413,4 +434,45 @@ pub fn unique(taken: &[String], want: &str) -> String {
     n.into_iter()
         .find(|n| !taken.contains(n))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::testutil::Sandbox;
+
+    #[test]
+    fn accepting_a_head_covers_the_local_settings_its_finders_get() {
+        let sb = Sandbox::new();
+        let repo = sb.path("r");
+        fs::create_dir_all(repo.join(".claude")).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        fs::write(repo.join(".gitignore"), "settings.local.json\n").unwrap();
+        let hook = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#;
+        fs::write(repo.join(".claude/settings.json"), hook).unwrap();
+        sb.git(&repo, &["add", "-A"]);
+        sb.git(&repo, &["commit", "-qm", "a"]);
+        fs::write(repo.join(LOCAL), r#"{"env": {"FROM_LOCAL": "yes"}}"#).unwrap();
+        let s = Start {
+            repo: repo.display().to_string(),
+            branch: "main".into(),
+            remote: false,
+            base: "main".into(),
+            mode: "review".into(),
+            untrusted: false,
+            budget: None,
+        };
+        let pv = preview(&sb.state, &s).unwrap();
+        assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
+        accept(&sb.state, &s).unwrap();
+        let head = pv.subject.head_sha;
+        let (tree, _) = tree::finder(&sb.state, &repo, "run", "f1", &head).unwrap();
+        copy_local(&repo, &tree).unwrap();
+        let p = trust::project(&sb.state.env(), &tree).unwrap();
+        assert!(
+            trust::trusted(&sb.state.config_dir, &s.repo, &p),
+            "{}",
+            p.fingerprint
+        );
+    }
 }

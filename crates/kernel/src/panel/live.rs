@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use detached_core::adapters::CLAUDE;
@@ -49,8 +50,9 @@ pub(crate) fn init(cx: &mut App) {
         reach: Arc::new(reachable),
         wall: Arc::new(record::now),
     });
-    blocking::run(cx, || {
-        detached_core::panel::root::clean_if_free(&detached_core::panel::root::root())
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || {
+        detached_core::panel::root::clean_if_free(&detached_core::panel::root::root(&core))
     })
     .detach();
 }
@@ -168,6 +170,8 @@ pub struct Panel {
     probed: Instant,
     queue: Vec<(i64, Event)>,
     flushing: bool,
+    /// Set by a cancel while it prepares, which also ends a wait for the untrusted root.
+    cancelled: Arc<AtomicBool>,
     tasks: Vec<Task<()>>,
 }
 
@@ -200,12 +204,13 @@ pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
             probed: now,
             queue: vec![],
             flushing: false,
+            cancelled: Arc::default(),
             tasks: vec![],
         };
         let core = crate::core(cx).clone();
         let cached = cx.global::<Panels>().probe.clone();
-        let me = cx.weak_entity();
-        let cancelled = move || me.upgrade().is_none();
+        let flag = p.cancelled.clone();
+        let cancelled = move || flag.load(Ordering::SeqCst);
         let prepared = blocking::run(cx, move || {
             let probe = || match cached.clone() {
                 Some(p) => Ok(p),
@@ -315,8 +320,13 @@ impl Panel {
     }
 
     fn begin(&mut self, prepared: Result<Prepared>, cx: &mut Context<Self>) {
+        let cancelled = self.cancelled.load(Ordering::SeqCst);
         let p = match prepared {
             Ok(p) => Arc::new(p),
+            Err(_) if cancelled => {
+                self.phase = Phase::Failed("Cancelled before it started".into());
+                return cx.notify();
+            }
             Err(e) => {
                 self.phase = Phase::Failed(e.to_string());
                 return cx.notify();
@@ -338,22 +348,21 @@ impl Panel {
             prompts: p
                 .finders
                 .iter()
-                .map(|f| {
-                    (
-                        f.name.clone(),
-                        brief::hash(&brief::find(&p.mode, &f.role, &p.data)),
-                    )
-                })
+                .map(|f| (f.name.clone(), brief::hash(&p.brief(f))))
                 .collect(),
             cli: None,
             schema: record::SCHEMA,
             limits,
         };
         self.emit(Event::RunStarted(started), cx);
+        // Cancelled while it prepared: its trees go at once.
+        if cancelled {
+            return self.end(End::Cancelled, cx);
+        }
         self.emit(Event::Stage { stage: Stage::Find }, cx);
         let now = Self::now(cx);
         for f in &p.finders {
-            let brief = brief::find(&p.mode, &f.role, &p.data);
+            let brief = p.brief(f);
             self.live.push(live(
                 &f.name,
                 &f.role.name,
@@ -370,9 +379,15 @@ impl Panel {
     }
 
     /// Starts queued participants while the cap has room, and moves on once a stage is over.
-    fn schedule(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn schedule(&mut self, cx: &mut Context<Self>) {
         if self.phase != Phase::Running || self.state.paused.is_some() || self.offline.is_some() {
             return;
+        }
+        // Checked before anyone else starts: a finished turn may have spent the budget.
+        if let Some(b) = self.budget.filter(|b| self.tokens(cx) >= *b) {
+            self.budget = None;
+            let reason = format!("The budget of {b} tokens is reached: resume to go on");
+            return self.pause(reason, cx);
         }
         let mine = self.live.iter().filter(|l| l.session.is_some()).count();
         let mut room = room(cx, cx.entity_id(), mine);
@@ -476,6 +491,7 @@ impl Panel {
         let l = &mut self.live[i];
         (l.session, l._watch, l.status, l.last) = (Some(s), Some(watch), Status::Running, now);
         (l.read, l.prompted, l.counted, l.pulse) = (0, false, 0, (0, 0));
+        l.reported = false;
         self.emit(started, cx);
     }
 
@@ -645,6 +661,13 @@ impl Panel {
         cx: &mut Context<Self>,
     ) {
         let Some(i) = self.find(name) else { return };
+        let judged = self.live[i]
+            .finding
+            .as_ref()
+            .is_none_or(|f| self.state.found(f).is_some_and(|f| f.verdict.is_some()));
+        if self.live[i].reported && !judged {
+            return self.fail(name, "It called `done` without a verdict.".into(), cx);
+        }
         if self.live[i].reported {
             self.live[i].status = Status::Done;
             self.close(i, cx);
@@ -927,13 +950,6 @@ impl Panel {
         if self.until.is_some_and(|u| now >= u) {
             self.resume(cx);
         }
-        if let Some(b) = self.budget.filter(|b| self.tokens(cx) >= *b) {
-            self.budget = None;
-            self.pause(
-                format!("The budget of {b} tokens is reached: resume to go on"),
-                cx,
-            );
-        }
         let paused = self.state.paused.is_some();
         let stalled: Vec<(String, Duration)> = (self.live.iter())
             .filter(|l| l.status == Status::Running && !paused)
@@ -1096,6 +1112,8 @@ impl Panel {
             return;
         };
         let (core, run) = (crate::core(cx).clone(), self.run.clone());
+        // Held until the check is in, so no tick moves the run on meanwhile.
+        self.checking += 1;
         let checked = blocking::run(cx, move || {
             let now = tree::state(&core.env(), &p.pinned)?;
             if now == before {
@@ -1106,26 +1124,55 @@ impl Panel {
         });
         self.task(cx, async move |this, cx| {
             let changed = checked.await;
-            this.update(cx, |p, cx| match changed {
-                Ok(false) => p.advance(cx),
-                Ok(true) if p.drops == 0 => {
-                    p.drops += 1;
-                    let reason = "A verifier changed the pinned tree, so this stage's verdicts are dropped and it runs again".to_string();
-                    p.emit(Event::Dropped { reason }, cx);
-                    p.live.retain(|l| l.stage != Stage::Verify);
-                    if let Some(prep) = p.prepared.clone() {
-                        p.verify(&prep, cx);
-                    }
-                }
-                Ok(true) => p.end(End::Failed { reason: "verify failed: a verifier changed the pinned tree again".into() }, cx),
-                Err(e) => p.end(End::Failed { reason: e.to_string() }, cx),
+            this.update(cx, |p, cx| {
+                p.checking -= 1;
+                p.checked(changed, cx)
             })
             .ok();
         });
     }
 
+    /// The state check's answer: on, once more on a rebuilt tree, or "verify failed".
+    fn checked(&mut self, changed: Result<bool>, cx: &mut Context<Self>) {
+        if self.phase != Phase::Running {
+            return;
+        }
+        match changed {
+            Ok(false) => self.advance(cx),
+            Ok(true) if self.drops == 0 => {
+                self.drops += 1;
+                let reason = "A verifier changed the pinned tree, so this stage's verdicts are \
+                    dropped and it runs again";
+                self.emit(
+                    Event::Dropped {
+                        reason: reason.into(),
+                    },
+                    cx,
+                );
+                self.live.retain(|l| l.stage != Stage::Verify);
+                if let Some(prep) = self.prepared.clone() {
+                    self.verify(&prep, cx);
+                }
+            }
+            Ok(true) => {
+                let reason = "verify failed: a verifier changed the pinned tree again".into();
+                self.end(End::Failed { reason }, cx)
+            }
+            Err(e) => self.end(
+                End::Failed {
+                    reason: e.to_string(),
+                },
+                cx,
+            ),
+        }
+    }
+
     /// Cancels each participant, closes its session and ends the run with what it had.
     pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.phase == Phase::Preparing {
+            self.cancelled.store(true, Ordering::SeqCst);
+            return cx.notify();
+        }
         self.end(End::Cancelled, cx);
     }
 
@@ -1286,11 +1333,10 @@ fn size(i: &Item) -> usize {
     }
 }
 
-fn last_sentence(text: &str) -> String {
+pub(crate) fn last_sentence(text: &str) -> String {
     let t = text.trim();
-    let cut = t[..t.len().saturating_sub(1)]
-        .rfind(['.', '!', '?', '\n'])
-        .map_or(0, |i| i + 1);
+    let end = t.char_indices().last().map_or(0, |(i, _)| i);
+    let cut = t[..end].rfind(['.', '!', '?', '\n']).map_or(0, |i| i + 1);
     t[cut..].trim().chars().take(160).collect()
 }
 

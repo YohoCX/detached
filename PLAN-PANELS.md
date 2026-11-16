@@ -544,11 +544,12 @@ left; waiting for the owner's check.**
   with no request (claude 2.1.325, macOS). The sandbox's proxy answers an untrusted participant's
   `curl` with an error, so only `curl -f` fails.
 - Choices: the merge stage is a participant (`report_group`) that is skipped below two findings, and
-  a degraded merge leaves every finding standing; a quote that fails its check is `unverified` and
+  a degraded merge drops its groups, so every finding stands; a verifier's `done` without a verdict fails its attempt; a quote that fails its check is `unverified` and
   never reaches a verifier; a gate with a degraded participant ends `incomplete`, a second state
   change of verify ends the run "verify failed"; run ids are `<mode>-<date>-<time>-<ms>`, tasks are
   the branch's name; the estimate is the mean of the repo's earlier runs of the mode, tokens only;
-  the probe's pass is kept in memory (TECHDEBT); finder settings are accepted per repo for the
+  the probe's pass is kept in memory (TECHDEBT); tests set `DETACHED_UNTRUSTED_ROOT` to a
+  root of their own, so they never take the owner's lock; finder settings are accepted per repo for the
   head's trust files; the reflog rule takes `commit:` and `commit (amend):` entries alone.
 - Left: item 5 (Detached's distro and "WSL ready", a session through `wsl.exe` there, the firewall
   step, native Windows' job per attempt), so untrusted runs refuse on Windows; Codex rows (H13a);

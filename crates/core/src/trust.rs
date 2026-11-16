@@ -124,6 +124,24 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
     Ok(Project { items, fingerprint })
 }
 
+/// `p` with `repo`'s file `rel` as it is on disk, when it exists, in the order `project` reads.
+pub fn with_file(env: &Env, mut p: Project, repo: &Path, rel: &str) -> Result<Project> {
+    let Ok(text) = fs::read_to_string(repo.join(rel)) else {
+        return Ok(p);
+    };
+    settings(rel, &text, &mut p.items);
+    let id = out(env, repo, &["hash-object", "--", rel], Kind::Read)?;
+    let mut lines: Vec<String> = p.fingerprint.lines().map(|l| format!("{l}\n")).collect();
+    lines.push(format!("{} {rel}\n", id.trim()));
+    lines.sort_by(|a, b| {
+        a.split_once(' ')
+            .map(|x| x.1)
+            .cmp(&b.split_once(' ').map(|x| x.1))
+    });
+    p.fingerprint = lines.concat();
+    Ok(p)
+}
+
 /// True when there is nothing to trust, or the user trusted exactly this.
 pub fn trusted(config_dir: &Path, repo: &str, p: &Project) -> bool {
     p.items.is_empty() || load(config_dir).get(repo) == Some(&p.fingerprint)

@@ -45,12 +45,20 @@ fn data(v: &Value) -> String {
     )
 }
 
-/// A finder's brief.
-pub fn find(mode: &Mode, role: &Role, subject: &Value) -> String {
+/// A finder's brief; `export` is the repo's path when its tree is an export with no git.
+pub fn find(mode: &Mode, role: &Role, subject: &Value, export: Option<&str>) -> String {
+    let tree = match export {
+        None => "Your working tree is the current directory, checked out at `head_sha`. The diff \
+            to review is `git diff base_sha head_sha`."
+            .to_string(),
+        Some(repo) => format!(
+            "The current directory holds the files at `head_sha`, with no git. Read the diff and \
+             the history with `detached_read`: `{{ repo(path: {repo:?}) {{ diff(base: \"<base_sha>\", \
+             head: \"<head_sha>\") }} }}`, and `log` and `search` beside `diff`."
+        ),
+    };
     format!(
-        "{}\n\n{}\n\nYour lenses: {}. Finding nothing is a valid answer.\n\nYour working tree is \
-         the current directory, checked out at `head_sha`. The diff to review is `git diff \
-         base_sha head_sha`.\n\n{}",
+        "{}\n\n{}\n\nYour lenses: {}. Finding nothing is a valid answer.\n\n{tree}\n\n{}",
         mode.text,
         role.text,
         role.lenses.join(", "),
@@ -190,7 +198,8 @@ mod tests {
         )
         .unwrap();
         let role = super::super::mode::parse_role("r", "+++\n+++\nYour lens.").unwrap();
-        let brief = find(&mode, &role, &v);
+        let brief = find(&mode, &role, &v, None);
+        assert!(find(&mode, &role, &v, Some("/r")).contains(r#"repo(path: "/r")"#));
         assert!(brief.starts_with("Review it."));
         let at = brief.find(DATA).unwrap();
         assert!(

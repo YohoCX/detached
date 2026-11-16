@@ -96,6 +96,15 @@ fn trust(f: &Fixture) {
 }
 
 fn start(f: &Fixture, mode: &str, cx: &mut TestAppContext) -> Entity<Panel> {
+    start_with(f, mode, None, cx)
+}
+
+fn start_with(
+    f: &Fixture,
+    mode: &str,
+    budget: Option<u64>,
+    cx: &mut TestAppContext,
+) -> Entity<Panel> {
     let s = Start {
         repo: f.repo.clone(),
         branch: "feat".into(),
@@ -103,7 +112,7 @@ fn start(f: &Fixture, mode: &str, cx: &mut TestAppContext) -> Entity<Panel> {
         base: "main".into(),
         mode: mode.into(),
         untrusted: false,
-        budget: None,
+        budget,
     };
     cx.update(|cx| live::start(s, cx))
 }
@@ -284,6 +293,16 @@ fn a_crashed_participant_resumes_on_its_own_model_and_finishes(cx: &mut TestAppC
     let s = ended(&p, cx);
     let f1 = &s.participants[0];
     assert_eq!((f1.status, f1.attempt), (Status::Done, 2));
+    // The resumed turn said its model and mode in the CLI's transcript.
+    let projects = f.dir.path().join("claude-config/projects");
+    let said: String = walk(&projects)
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    assert!(
+        said.contains("opus bypassPermissions") && !said.contains("fallback"),
+        "{said}"
+    );
     let said = p.read_with(cx, |p, _| {
         p.state
             .timeline
@@ -589,7 +608,11 @@ fn an_untrusted_review_reads_an_export_that_is_no_worktree_and_removes_it(cx: &m
         (s.spec.repo.clone(), text)
     });
     assert!(
-        cwd.starts_with(&detached_core::panel::root::root().display().to_string()),
+        cwd.starts_with(
+            &detached_core::panel::root::root(&f.core)
+                .display()
+                .to_string()
+        ),
         "{cwd}"
     );
     assert!(
@@ -779,4 +802,139 @@ fn a_run_left_without_an_end_closes_as_interrupted_and_its_trees_go(cx: &mut Tes
     assert_eq!(s.ended, Some(End::Interrupted));
     assert_eq!(s.kept, [("f1".to_string(), branch, true)]);
     assert!(!pinned.exists() && work.join("b.txt").exists());
+}
+
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let all = std::fs::read_dir(dir).into_iter().flatten().flatten();
+    all.flat_map(|e| match e.path().is_dir() {
+        true => walk(&e.path()),
+        false => vec![e.path()],
+    })
+    .collect()
+}
+
+#[test]
+fn activity_cuts_a_sentence_that_ends_in_a_multibyte_char() {
+    assert_eq!(live::last_sentence("Checking…"), "Checking…");
+    assert_eq!(
+        live::last_sentence("Done. Now checking the cache…"),
+        "Now checking the cache…"
+    );
+    assert_eq!(live::last_sentence("é"), "é");
+}
+
+#[gpui::test]
+fn the_state_check_holds_the_run_until_it_is_in(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    trust(&f);
+    std::fs::write(
+        f.dir.path().join("claude-config/fake.json"),
+        json!({"sandbox": "off"}).to_string(),
+    )
+    .unwrap();
+    mode(&f, "gate", &["find", "verify", "gate"], &["f1"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    let write = format!(
+        "fake: write junk.txt x;{};{}",
+        verdict("f1-1", "confirmed"),
+        done()
+    );
+    role(&f, "verifier", &write);
+    let p = start(&f, "gate", cx);
+    cx.executor().allow_parking();
+    // A tick may come at any time, the check's included.
+    while !matches!(
+        p.read_with(cx, |p, _| p.phase.clone()),
+        Phase::Ended | Phase::Failed(_)
+    ) {
+        p.update(cx, |p, cx| p.schedule(cx));
+        let t = cx.executor().timer(Duration::from_millis(5));
+        cx.foreground_executor().block_test(t);
+    }
+    let s = p.read_with(cx, |p, _| p.state.clone());
+    let reason = "verify failed: a verifier changed the pinned tree again".to_string();
+    assert_eq!(s.ended, Some(End::Failed { reason }));
+}
+
+#[gpui::test]
+fn a_cancel_while_it_waits_for_the_untrusted_root_ends_it_unstarted(cx: &mut TestAppContext) {
+    use detached_core::panel::root;
+    let f = boot(cx);
+    mode(&f, "review", &["find"], &["f1"]);
+    role(&f, "f1", &format!("fake: {}", done()));
+    let held = root::lock(&root::root(&f.core), &|| false).unwrap();
+    let p = start(&f, "review", cx);
+    for _ in 0..50 {
+        let t = cx.executor().timer(Duration::from_millis(20));
+        cx.executor().allow_parking();
+        cx.foreground_executor().block_test(t);
+    }
+    assert_eq!(p.read_with(cx, |p, _| p.phase.clone()), Phase::Preparing);
+    p.update(cx, |p, cx| p.cancel(cx));
+    wait_for(cx, LONG, |cx| p.read(cx).phase != Phase::Preparing);
+    assert_eq!(
+        p.read_with(cx, |p, _| p.phase.clone()),
+        Phase::Failed("Cancelled before it started".into())
+    );
+    assert!(p.read_with(cx, |p, _| p.live.is_empty()));
+    drop(held);
+}
+
+#[gpui::test]
+fn a_spent_budget_pauses_before_the_next_participant_starts(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    trust(&f);
+    mode(&f, "review", &["find", "verify"], &["f1"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    role(
+        &f,
+        "verifier",
+        &format!("fake: {};{}", verdict("f1-1", "confirmed"), done()),
+    );
+    let p = start_with(&f, "review", Some(50), cx);
+    wait_for(cx, LONG, |cx| p.read(cx).state.paused.is_some());
+    p.read_with(cx, |p, _| {
+        assert!(
+            p.state
+                .paused
+                .as_deref()
+                .unwrap()
+                .starts_with("The budget of 50 tokens")
+        );
+        assert!(
+            p.live.iter().all(|l| l.stage == Stage::Find),
+            "no verifier started"
+        );
+    });
+    p.update(cx, |p, cx| p.resume(cx));
+    assert!(record::verified(&ended(&p, cx).findings[0]));
+}
+
+#[gpui::test]
+fn a_verifier_done_without_a_verdict_fails_and_the_gate_is_incomplete(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    trust(&f);
+    mode(&f, "gate", &["find", "verify", "gate"], &["f1"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    let done = done();
+    role(
+        &f,
+        "verifier",
+        &format!("fake: {done}\nfake-resume: {done}"),
+    );
+    let p = start(&f, "gate", cx);
+    let s = ended(&p, cx);
+    let v = s
+        .participants
+        .iter()
+        .find(|p| p.stage == Stage::Verify)
+        .unwrap();
+    assert_eq!((v.status, v.attempt), (Status::Degraded, 3));
+    assert!(v.cause.contains("without a verdict"), "{}", v.cause);
+    assert_eq!(
+        s.ended,
+        Some(End::Done {
+            gate: Some(Gate::Incomplete)
+        })
+    );
 }

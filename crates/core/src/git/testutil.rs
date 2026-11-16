@@ -43,6 +43,7 @@ impl Sandbox {
             ("DETACHED_CONFIG_DIR", "config"),
             ("DETACHED_DATA_DIR", "data"),
             ("DETACHED_CACHE_DIR", "cache"),
+            ("DETACHED_UNTRUSTED_ROOT", "untrusted/root"),
         ] {
             vars.push((key.into(), s(&dir.path().join(folder))));
         }

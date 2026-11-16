@@ -34,7 +34,13 @@ fn boot(cx: &mut TestAppContext, script: Vec<Value>) -> (Fixture, Api) {
 }
 
 /// A participant's session in its seat, one turn run to its end; the tool results it got.
-fn run(spec: Spec, api: &Api, cx: &mut TestAppContext) -> (Entity<Session>, Vec<String>) {
+/// `accept` is the repo whose acceptance of the tree's trust files counts.
+fn run(
+    spec: Spec,
+    accept: Option<String>,
+    api: &Api,
+    cx: &mut TestAppContext,
+) -> (Entity<Session>, Vec<String>) {
     let scope = Scope {
         run: "r".into(),
         participant: "p".into(),
@@ -42,7 +48,7 @@ fn run(spec: Spec, api: &Api, cx: &mut TestAppContext) -> (Entity<Session>, Vec<
     };
     let seat = Seat {
         who: Identity::participant(&spec.repo, scope, &["report_finding", "done"]),
-        accept: None,
+        accept,
     };
     let s = cx.update(|cx| Session::open_as(spec, None, Some(seat), cx));
     wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
@@ -138,7 +144,7 @@ fn an_untrusted_participant_reads_toolchains_but_no_secret_writes_nothing_and_re
         deny_write: vec![],
         tmp: Some(f.dir.path().join("tmp/p1")),
     });
-    let (s, results) = run(spec, &api2, cx);
+    let (s, results) = run(spec, None, &api2, cx);
     let all = results.join("\n");
     assert!(!tree.join("written.txt").exists(), "{all}");
     assert!(
@@ -173,7 +179,7 @@ fn a_sandboxed_trusted_verifier_cannot_write_the_tree_or_a_ref_and_is_not_asked(
         deny_write: vec![repo.join(".git")],
         ..Sandbox::default()
     });
-    let (s, results) = run(spec, &api, cx);
+    let (s, results) = run(spec, None, &api, cx);
     assert!(!repo.join("v.txt").exists(), "{results:?}");
     let branches = std::process::Command::new("git")
         .args(["branch", "--list", "evil"])
@@ -193,9 +199,55 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
     let (f, api) = boot(
         cx,
         vec![bash(
-            "echo y > f.txt && git add f.txt && git commit -qm finder && echo COMMIT=$?",
+            "echo P=$FROM_PROJECT L=$FROM_LOCAL; echo y > f.txt && git add f.txt && git commit -qm finder && echo COMMIT=$?",
         )],
     );
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&f.repo)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    // The project's settings committed, the owner's local ones beside them, both accepted.
+    let dot = Path::new(&f.repo).join(".claude");
+    std::fs::create_dir_all(&dot).unwrap();
+    std::fs::write(
+        dot.join("settings.json"),
+        r#"{"env": {"FROM_PROJECT": "yes"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        Path::new(&f.repo).join(".gitignore"),
+        "settings.local.json\n",
+    )
+    .unwrap();
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=T",
+        "commit",
+        "-qm",
+        "settings",
+    ]);
+    std::fs::write(
+        dot.join("settings.local.json"),
+        r#"{"env": {"FROM_LOCAL": "yes"}}"#,
+    )
+    .unwrap();
+    let start = detached_core::panel::run::Start {
+        repo: f.repo.clone(),
+        branch: "main".into(),
+        remote: false,
+        base: "main".into(),
+        mode: "review".into(),
+        untrusted: false,
+        budget: None,
+    };
+    detached_core::panel::run::accept(&f.core, &start).unwrap();
     let sha = String::from_utf8(
         std::process::Command::new("git")
             .args(["rev-parse", "HEAD"])
@@ -207,15 +259,21 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
     .unwrap();
     let (cwd, branch) =
         tree::finder(&f.core, Path::new(&f.repo), "real", "f1", sha.trim()).unwrap();
+    detached_core::panel::run::copy_local(Path::new(&f.repo), &cwd).unwrap();
     let mcp = f.dir.path().join("mcp.json");
     // Made here, so no other process's command line names it.
     let secret = format!("s{}", detached_core::panel::record::now() * 7919);
     let server = json!({"mcpServers": {"local": {"command": "cat", "env": {"TOKEN": secret}}}});
     std::fs::write(&mcp, server.to_string()).unwrap();
     let mut spec = Spec::new(&CLAUDE, &cwd.display().to_string(), Kind::Chat);
-    (spec.mode, spec.mcp, spec.trusted) = ("bypassPermissions".into(), Some(mcp), true);
-    let (s, results) = run(spec, &api, cx);
-    assert!(results.join("\n").contains("COMMIT=0"), "{results:?}");
+    (spec.mode, spec.mcp) = ("bypassPermissions".into(), Some(mcp));
+    let (s, results) = run(spec, Some(f.repo.clone()), &api, cx);
+    let all = results.join("\n");
+    assert!(
+        all.contains("P=yes L=yes") && all.contains("COMMIT=0"),
+        "{all}"
+    );
+    assert!(s.read_with(cx, |s, _| s.spec.trusted));
     let log = std::process::Command::new("git")
         .args(["log", "-1", "--format=%s", &branch])
         .current_dir(&f.repo)

@@ -8,8 +8,17 @@ use std::time::Duration;
 
 use crate::error::{Error, Result};
 
-/// `/private/tmp/detached-<uid>/untrusted` on macOS, `/tmp/detached-<uid>/untrusted` elsewhere.
-pub fn root() -> PathBuf {
+/// `/private/tmp/detached-<uid>/untrusted` on macOS, `/tmp/detached-<uid>/untrusted` elsewhere;
+/// tests set `DETACHED_UNTRUSTED_ROOT`, so they never share the owner's app's root or lock.
+pub fn root(core: &crate::state::AppState) -> PathBuf {
+    let set = core
+        .env()
+        .vars
+        .into_iter()
+        .find(|(k, _)| k == "DETACHED_UNTRUSTED_ROOT");
+    if let Some((_, dir)) = set.filter(|(_, v)| !v.is_empty()) {
+        return dir.into();
+    }
     let tmp = if cfg!(target_os = "macos") {
         "/private/tmp"
     } else {
@@ -258,7 +267,7 @@ pub fn denied(core: &crate::state::AppState) -> Result<Vec<PathBuf>> {
         .flat_map(|w| w.folders.iter().map(PathBuf::from));
     for f in folders {
         let holds = |p: &Path| p.starts_with(&f);
-        if f == home || tiers.iter().any(|t| holds(t)) || holds(&root()) {
+        if f == home || tiers.iter().any(|t| holds(t)) || holds(&root(core)) {
             return Err(Error::Other(format!(
                 "The workspace folder {} holds your home, Detached's data or the untrusted root, \
                  which an untrusted run would read: narrow it to the folders that hold repos",
