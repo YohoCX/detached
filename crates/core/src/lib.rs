@@ -11,6 +11,7 @@ pub mod error;
 pub mod forge;
 pub mod git;
 pub mod os;
+pub mod owner;
 pub mod panel;
 pub mod paths;
 pub mod proc;
