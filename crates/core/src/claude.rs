@@ -2,7 +2,7 @@
 //! session in its own group under a leash, its control requests answered here. Frames are loose
 //! JSON: what is not known is skipped, and a request the CLI lacks drops that piece alone.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -138,19 +138,34 @@ fn env(core: &AppState, spec: &Spec) -> Vec<(String, OsString)> {
 
 /// Where the session's transcripts are: the CLI's config dir in `env`, or the distro's.
 fn place(spec: &Spec, env: Vec<(String, OsString)>) -> Place {
-    let Some(distro) = spec.wsl.clone() else {
-        let get = |k: &str| env.iter().find(|(n, v)| n == k && !v.is_empty());
-        let get = |k: &str| get(k).map(|(_, v)| PathBuf::from(v));
-        // The CLI's home dir is USERPROFILE on Windows, whatever HOME says.
-        let [a, b] = match cfg!(windows) {
-            true => ["USERPROFILE", "HOME"],
-            false => ["HOME", "USERPROFILE"],
-        };
-        let home = get(a).or_else(|| get(b)).or_else(dirs::home_dir);
-        let dir = get("CLAUDE_CONFIG_DIR").or_else(|| Some(home?.join(".claude")));
-        return Place::Here(dir.unwrap_or_default());
+    match spec.wsl.clone() {
+        Some(distro) => Place::Wsl(distro, env),
+        None => Place::Here(config_dir(&lookup(&env), false).unwrap_or_default()),
+    }
+}
+
+fn lookup(env: &[(String, OsString)]) -> impl Fn(&str) -> Option<OsString> + '_ {
+    |k| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+}
+
+/// The home dir in the env `get`: USERPROFILE on Windows, whatever HOME says.
+pub(crate) fn home(get: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let get = |k: &str| get(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let [a, b] = match cfg!(windows) {
+        true => ["USERPROFILE", "HOME"],
+        false => ["HOME", "USERPROFILE"],
     };
-    Place::Wsl(distro, env)
+    get(a).or_else(|| get(b)).or_else(dirs::home_dir)
+}
+
+/// The CLI's config dir in its env `get` as this machine reaches it; None for a distro's own.
+pub(crate) fn config_dir(get: &dyn Fn(&str) -> Option<OsString>, wsl: bool) -> Option<PathBuf> {
+    let dir = get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty());
+    match (dir, wsl) {
+        (Some(dir), _) => Some(dir.into()),
+        (None, true) => None,
+        (None, false) => Some(home(get)?.join(".claude")),
+    }
 }
 
 /// `script` run by `sh` in `distro` with `args`, in `cwd` when given: its stdout.
@@ -247,10 +262,19 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     let id = resume.map_or_else(uuid, String::from);
     // Read before the CLI holds the file.
     let history = resume.map(|id| place(spec, env.clone()).read(id));
-    let plugin = plugin(core, spec, &id)?;
+    let (pass, off) = skills(spec, &env);
+    let plugin = plugin(core, &id, &pass)?;
     let mut flags = flags(spec, &id, resume.is_some());
     if let Some(dir) = &plugin {
         flags.extend(["--plugin-dir".into(), mounted(spec, dir.path())]);
+    }
+    // The Untrusted kind's own `--settings` never meets this: its CLI reads no skills.
+    if !off.is_empty() {
+        let off: serde_json::Map<_, _> = off.into_iter().map(|n| (n, json!("off"))).collect();
+        flags.extend([
+            "--settings".into(),
+            json!({"skillOverrides": off}).to_string(),
+        ]);
     }
     let (program, args) = command(spec, cli, flags);
     let cwd = match spec.wsl {
@@ -323,15 +347,30 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     Ok(live)
 }
 
-/// The skills the CLI does not read itself under `spec`, copied as a plugin into a folder of the
-/// session's own; a skill that fails to copy, as a store item changed since accepted, is left out.
-fn plugin(core: &AppState, spec: &Spec, id: &str) -> Result<Option<TempDir>> {
-    let reads = |s: &&Skill| match s.source {
-        Source::Project => true,
-        Source::User => spec.kind != Kind::Untrusted,
+/// The skills of `spec` that load and its CLI does not read itself, and the names the CLI would read
+/// itself that must not load: overridden or not loading, the one that loads in their place passed.
+fn skills<'a>(spec: &'a Spec, env: &[(String, OsString)]) -> (Vec<&'a Skill>, BTreeSet<String>) {
+    let sources = sources(spec);
+    let has = |source| sources.split(',').any(|s| s == source);
+    let user = config_dir(&lookup(env), spec.wsl.is_some()).map(|d| d.join("skills"));
+    let reads = |s: &Skill| match s.source {
+        Source::Project => has("project"),
+        Source::User => has("user") && s.path.parent() == user.as_deref(),
         _ => false,
     };
-    let skills: Vec<&Skill> = spec.skills.iter().filter(|s| !reads(s)).collect();
+    let off: BTreeSet<String> = (spec.skills.iter())
+        .filter(|s| reads(s) && !s.loads())
+        .map(|s| s.name.clone())
+        .collect();
+    let pass = (spec.skills.iter())
+        .filter(|s| s.loads() && (!reads(s) || off.contains(&s.name)))
+        .collect();
+    (pass, off)
+}
+
+/// `skills` copied as a plugin into a folder of the session's own; a skill that fails to copy, as a
+/// store item changed since accepted, is left out.
+fn plugin(core: &AppState, id: &str, skills: &[&Skill]) -> Result<Option<TempDir>> {
     if skills.is_empty() {
         return Ok(None);
     }
@@ -360,14 +399,18 @@ fn mounted(spec: &Spec, path: &Path) -> String {
     }
 }
 
+/// The CLI's setting sources under the kind and the repo's trust.
+fn sources(spec: &Spec) -> &'static str {
+    match spec.kind {
+        Kind::Chat if spec.trusted => "user,project,local",
+        Kind::Chat | Kind::Verifier => "user",
+        Kind::Untrusted => "",
+    }
+}
+
 /// `spec` as flags, all of them again on a resume: the CLI keeps none of them.
 fn flags(spec: &Spec, id: &str, resume: bool) -> Vec<String> {
-    let (sources, strict) = match spec.kind {
-        Kind::Chat if spec.trusted => ("user,project,local", false),
-        Kind::Chat => ("user", false),
-        Kind::Verifier => ("user", true),
-        Kind::Untrusted => ("", true),
-    };
+    let (sources, strict) = (sources(spec), spec.kind != Kind::Chat);
     let mut a: Vec<String> = BASE.iter().map(|s| s.to_string()).collect();
     a.extend(
         [

@@ -230,22 +230,27 @@ impl RepoStore {
                 let name = name
                     .into_string()
                     .map_err(|_| Error::Other("Invalid item name".into()))?;
-                let path = self.path(state, kind, scope, &name)?;
-                let hash = hash(&read(&path)?);
-                let trusted = scope == Scope::Personal || accepted(state, &path, &hash);
-                let overridden = !seen.insert(name.clone());
-                items.push(Item {
-                    kind,
-                    name,
-                    scope,
-                    path,
-                    hash,
-                    trusted,
-                    overridden,
-                });
+                let mut item = self.item(state, kind, scope, &name)?;
+                item.overridden = !seen.insert(name);
+                items.push(item);
             }
         }
         Ok(items)
+    }
+
+    /// The item `name` in `scope`, not overridden.
+    pub fn item(&self, state: &AppState, kind: Kind, scope: Scope, name: &str) -> Result<Item> {
+        let path = self.path(state, kind, scope, name)?;
+        let hash = hash(&read(&path)?);
+        Ok(Item {
+            kind,
+            name: name.into(),
+            scope,
+            trusted: scope == Scope::Personal || accepted(state, &path, &hash),
+            path,
+            hash,
+            overridden: false,
+        })
     }
 
     pub fn load(

@@ -856,8 +856,8 @@ fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
 fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) -> Result<Started> {
     let project = trust::project(&core.env(), Path::new(&spec.repo))?;
     spec.trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
-    let skills = Skills::load(core, Some(&spec.repo))?;
-    spec.skills = skills.active().cloned().collect();
+    // Skills never stop a session: a bad item is listed with its error, and the CLI reads its own.
+    spec.skills = Skills::load(core, Some(&spec.repo)).map_or_else(|_| vec![], |s| s.all);
     let b = backend(spec.provider);
     let session = match past {
         Some(id) => b.resume(core, &spec, id, events)?,

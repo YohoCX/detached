@@ -35,6 +35,7 @@ impl Sandbox {
         let s = |p: &Path| p.display().to_string();
         let mut vars = vec![
             ("HOME".into(), s(&home)),
+            ("USERPROFILE".into(), s(&home)),
             ("GIT_CONFIG_GLOBAL".into(), s(&global)),
             ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
         ];

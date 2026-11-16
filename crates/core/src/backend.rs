@@ -112,7 +112,8 @@ pub struct Spec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub tools: Option<Tools>,
-    /// The skills it gets, of which a backend passes those its agent does not read itself.
+    /// The folder list's skills, of which a backend passes those that load and its agent does not
+    /// read itself.
     pub skills: Vec<Skill>,
     /// The WSL distro the agent runs in; None runs it on this machine.
     pub wsl: Option<String>,

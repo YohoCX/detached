@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::state::AppState;
 use crate::store::{self, Kind, RepoStore, Scope};
-use crate::{proc, trust};
+use crate::{claude, proc, trust};
 
 pub const BLOCK: &str = "skills";
 
@@ -65,7 +65,9 @@ pub struct Skill {
     /// A store item's accepted hash, which its copy must still have.
     pub hash: Option<String>,
     pub trusted: bool,
-    /// The source of the skill of the same name that loads instead.
+    /// Why it cannot be read: a link or a special file inside, a store item that does not open.
+    pub error: Option<String>,
+    /// The source of the earlier skill of the same name that loads instead.
     pub overridden: Option<Source>,
 }
 
@@ -79,43 +81,45 @@ impl Skills {
     /// The folder list and every skill in it; `repo` adds the repo's folders.
     pub fn load(core: &AppState, repo: Option<&str>) -> Result<Skills> {
         let env = core.env();
-        let var = |k: &str| {
-            proc::parent(&env)(k)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        let home = var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).or_else(dirs::home_dir);
-        let claude = var("CLAUDE_CONFIG_DIR").or_else(|| Some(home.clone()?.join(".claude")));
+        let get = proc::parent(&env);
+        let home = claude::home(&get);
         let config: Config = core.get_settings().block(BLOCK).unwrap_or_default();
         let mut s = Skills::default();
-        let mut personal = vec![];
+        let mut folders = vec![];
         if let Some(repo) = repo {
             let store = RepoStore::open(core, repo.as_ref())?;
-            for (source, path) in [
-                (Source::Local, store.local.join("local/skills")),
-                (Source::Shared, store.shared.join("skills")),
+            for (source, scope, path) in [
+                (
+                    Source::Local,
+                    Scope::Local,
+                    store.local.join("local/skills"),
+                ),
+                (Source::Shared, Scope::Shared, store.shared.join("skills")),
             ] {
-                let on = true;
-                s.folders.push(Folder { source, path, on });
-            }
-            for item in store.list(core, Kind::Skills)? {
-                let source = match item.scope {
-                    Scope::Local => Source::Local,
-                    _ => Source::Shared,
-                };
-                if item.path.join("SKILL.md").is_file() {
-                    s.add(source, item.name, item.path, Some(item.hash), item.trusted);
+                s.folders.push(Folder {
+                    source,
+                    path: path.clone(),
+                    on: true,
+                });
+                for (name, path) in entries(&path) {
+                    match store.item(core, Kind::Skills, scope, &name) {
+                        Ok(i) if path.join("SKILL.md").is_file() => {
+                            s.add(source, name, path, Some(i.hash), i.trusted, None)
+                        }
+                        Ok(_) => {}
+                        Err(e) => s.add(source, name, path, None, false, Some(e.to_string())),
+                    }
                 }
             }
             let project = trust::project(&env, repo.as_ref())?;
             let trusted = trust::trusted(&core.config_dir, repo, &project);
-            let project_dir = Path::new(repo).join(".claude");
-            personal.push((Source::Project, Some(project_dir), true, trusted));
+            let project = Path::new(repo).join(".claude");
+            folders.push((Source::Project, Some(project), true, trusted));
         }
-        personal.push((Source::User, claude, true, true));
+        folders.push((Source::User, claude::config_dir(&get, false), true, true));
         let agents = home.map(|h| h.join(".agents"));
-        personal.push((Source::Agents, agents, config.agents, true));
-        for (source, dir, on, trusted) in personal {
+        folders.push((Source::Agents, agents, config.agents, true));
+        for (source, dir, on, trusted) in folders {
             let Some(path) = dir.map(|d| d.join("skills")) else {
                 continue;
             };
@@ -127,16 +131,12 @@ impl Skills {
             if !on {
                 continue;
             }
-            let mut names: Vec<_> = fs::read_dir(&path)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .collect();
-            names.sort_by_key(|e| e.file_name());
-            for e in names {
-                let (name, path) = (e.file_name().to_string_lossy().into_owned(), e.path());
+            for (name, path) in entries(&path) {
                 if path.join("SKILL.md").is_file() {
-                    s.add(source, name, path, None, trusted);
+                    let files = path.canonicalize().map_err(Error::from);
+                    let error = files.and_then(|p| store::read(&p)).err();
+                    let error = error.map(|e| e.to_string());
+                    s.add(source, name, path, None, trusted, error);
                 }
             }
         }
@@ -150,25 +150,42 @@ impl Skills {
         path: PathBuf,
         hash: Option<String>,
         trusted: bool,
+        error: Option<String>,
     ) {
-        let overridden = self.all.iter().find(|s| s.name == name).map(|s| s.source);
+        let by = self.all.iter().find(|s| s.name == name && s.loads());
         self.all.push(Skill {
             description: description(&path),
+            overridden: by.map(|s| s.source),
             name,
             source,
             path,
             hash,
             trusted,
-            overridden,
+            error,
         });
     }
 
-    /// The skills a session gets: trusted, and not overridden.
+    /// The skills a session gets.
     pub fn active(&self) -> impl Iterator<Item = &Skill> {
-        self.all
-            .iter()
-            .filter(|s| s.trusted && s.overridden.is_none())
+        self.all.iter().filter(|s| s.loads())
     }
+}
+
+impl Skill {
+    /// Trusted, readable and not overridden.
+    pub fn loads(&self) -> bool {
+        self.trusted && self.error.is_none() && self.overridden.is_none()
+    }
+}
+
+/// The entries of `dir` by name.
+fn entries(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut all: Vec<_> = (fs::read_dir(dir).into_iter().flatten().flatten())
+        .filter(|e| e.file_name() != ".detached-trash")
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        .collect();
+    all.sort();
+    all
 }
 
 /// The SKILL.md front matter's `description`.
@@ -286,10 +303,13 @@ mod tests {
                 ("y".into(), Source::Project, false, None),
                 ("x".into(), Source::User, true, Some(Source::Local)),
                 ("x".into(), Source::Agents, true, Some(Source::Local)),
-                ("y".into(), Source::Agents, true, Some(Source::Project)),
+                ("y".into(), Source::Agents, true, None),
             ]
         );
-        assert_eq!(active(&sb.state, &repo), [("x".into(), Source::Local)]);
+        assert_eq!(
+            active(&sb.state, &repo),
+            [("x".into(), Source::Local), ("y".into(), Source::Agents)]
+        );
         let project = trust::project(&sb.state.env(), repo.as_ref()).unwrap();
         trust::trust(&sb.state.config_dir, &repo, &project).unwrap();
         assert_eq!(
@@ -353,6 +373,26 @@ mod tests {
         assert_eq!(
             active(&sb.state, &repo),
             [("foreign".into(), Source::Local)]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_skill_with_a_link_inside_is_listed_with_why_and_overrides_nothing() {
+        let (sb, repo) = setup();
+        for dir in ["repo/.detached/skills/bad", "claude/skills/z"] {
+            put(&sb.path(dir).join("SKILL.md"), "s");
+            std::os::unix::fs::symlink("SKILL.md", sb.path(dir).join("more")).unwrap();
+        }
+        for dir in ["home/.agents/skills/bad", "home/.agents/skills/z"] {
+            put(&sb.path(dir).join("SKILL.md"), "s");
+        }
+        let s = Skills::load(&sb.state, Some(&repo)).unwrap();
+        let errors: Vec<_> = s.all.iter().map(|s| s.error.is_some()).collect();
+        assert_eq!(errors, [true, true, false, false]);
+        assert_eq!(
+            active(&sb.state, &repo),
+            [("bad".into(), Source::Agents), ("z".into(), Source::Agents)]
         );
     }
 }

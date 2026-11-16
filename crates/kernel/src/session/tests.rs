@@ -158,7 +158,6 @@ fn boot_on(
     let dirs = [
         ("CLAUDE_CONFIG_DIR", at("claude-config")),
         ("CLAUDE_CODE_TMPDIR", at("claude-tmp")),
-        ("USERPROFILE", at("home")),
         ("APPDATA", at("home/AppData/Roaming")),
         ("LOCALAPPDATA", at("home/AppData/Local")),
         ("XDG_CONFIG_HOME", at("home/.config")),

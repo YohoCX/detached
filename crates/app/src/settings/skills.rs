@@ -117,16 +117,16 @@ impl Render for Page {
             page = page.child(labeled(format!("skills.folder.{:?}", f.source), text));
         }
         for s in &value.all {
-            let mut text = format!("{} · {}", s.name, s.source.title());
-            if let Some(by) = s.overridden {
-                text.push_str(&format!(" · overridden by {}", by.title()));
-            }
-            if !s.trusted {
-                text.push_str(match s.source {
-                    Source::Project => " · the repo's Claude settings are not trusted",
-                    _ => " · needs acceptance on the Sharing page",
-                });
-            }
+            let why = match (&s.error, s.overridden, s.trusted, s.source) {
+                (Some(e), ..) => format!(" · not passed: {e}"),
+                (_, Some(by), ..) => format!(" · overridden by {}", by.title()),
+                (_, _, false, Source::Project) => {
+                    " · the repo's Claude settings are not trusted".into()
+                }
+                (_, _, false, _) => " · needs acceptance on the Sharing page".into(),
+                _ => String::new(),
+            };
+            let text = format!("{} · {}{why}", s.name, s.source.title());
             let id = SharedString::from(format!("skills.{:?}.{}", s.source, s.name));
             let description = s.description.clone().unwrap_or_default();
             page = page.child(

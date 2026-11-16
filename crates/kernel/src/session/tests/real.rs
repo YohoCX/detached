@@ -12,6 +12,7 @@ use detached_acp::testutil::from_catalog;
 use detached_core::adapters::{CATALOG_KEY, Installed, Version};
 use detached_core::backend;
 use detached_core::env::Env;
+use detached_core::store::{Kind as StoreKind, RepoStore};
 use detached_core::testutil::api::Api;
 
 use super::*;
@@ -55,22 +56,32 @@ both!(
 );
 
 /// The Done of PLAN-AGENT-HOST's H8: Claude reads no `~/.agents`, so the skill came through the
-/// session's plugin, under the chat's setting sources and under none.
+/// session's plugin, under the chat's setting sources and under none; a local skill turns off the
+/// `~/.claude` one of its name.
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppContext) {
     let (f, _api) = boot(cx, Real::Direct, json!([]));
-    let dir = f.dir.path().join("home/.agents/skills/hello");
-    std::fs::create_dir_all(&dir).unwrap();
-    let text = "---\nname: hello\ndescription: Says hello\n---\nSay hello.\n";
-    std::fs::write(dir.join("SKILL.md"), text).unwrap();
+    let skill = |dir: PathBuf, name: &str| {
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = format!("---\nname: {name}\ndescription: Says {name}\n---\nSay it.\n");
+        std::fs::write(dir.join("SKILL.md"), text).unwrap();
+    };
+    skill(f.dir.path().join("home/.agents/skills/hello"), "hello");
+    skill(f.dir.path().join("claude-config/skills/mine"), "mine");
+    let store = RepoStore::open(&f.core, f.repo.as_ref()).unwrap();
+    let mine = [("SKILL.md".into(), b"---\nname: mine\n---\nMine.\n".to_vec())].into();
+    store
+        .write(&f.core, StoreKind::Skills, "mine", &mine)
+        .unwrap();
     for kind in [Kind::Chat, Kind::Untrusted] {
         let s = open(&f, kind, cx);
         let names: Vec<String> = s.read_with(cx, |s, _| {
             s.commands.iter().map(|c| c.name.clone()).collect()
         });
+        let has = |n: &str| names.iter().any(|m| m == n);
         assert!(
-            names.iter().any(|n| n == "detached:hello"),
+            has("detached:hello") && has("detached:mine") && !has("mine"),
             "{kind:?}: {names:?}"
         );
     }

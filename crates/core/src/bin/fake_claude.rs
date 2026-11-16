@@ -251,14 +251,18 @@ fn command(name: &str, description: &str, hint: &str) -> Value {
     json!({"name": name, "description": description, "argumentHint": hint})
 }
 
-/// The skills the CLI loads, as commands: the user's and the project's by the setting sources, and a
-/// plugin's as `<plugin>:<skill>`.
+/// The skills the CLI loads, as commands: the user's and the project's by the setting sources, the
+/// user's first of one name, less those `--settings` turns off, and a plugin's as `<plugin>:<skill>`.
 fn skills(s: &Shared) -> Vec<Value> {
     let sources = s
         .flags
         .get("--setting-sources")
         .map_or("user,project", |v| v);
     let has = |source| sources.split(',').any(|x| x == source);
+    let settings: Value = (s.flags.get("--settings"))
+        .and_then(|v| serde_json::from_str(v).ok())
+        .unwrap_or_default();
+    let off = |n: &str| settings["skillOverrides"][n] == "off";
     let mut dirs = vec![];
     if has("user") {
         dirs.push((String::new(), config_dir().join("skills")));
@@ -272,16 +276,17 @@ fn skills(s: &Shared) -> Vec<Value> {
         let name = manifest["name"].as_str().unwrap_or_default();
         dirs.push((format!("{name}:"), plugin.join("skills")));
     }
-    let mut all = vec![];
+    let mut all: Vec<String> = vec![];
     for (prefix, dir) in dirs {
         let mut names: Vec<String> = (std::fs::read_dir(dir).into_iter().flatten().flatten())
             .filter(|e| e.path().join("SKILL.md").is_file())
             .map(|e| format!("{prefix}{}", e.file_name().to_string_lossy()))
+            .filter(|n| !all.contains(n) && (!prefix.is_empty() || !off(n)))
             .collect();
         names.sort();
-        all.extend(names.iter().map(|n| command(n, "", "")));
+        all.extend(names);
     }
-    all
+    all.iter().map(|n| command(n, "", "")).collect()
 }
 
 fn config_dir() -> PathBuf {

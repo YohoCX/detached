@@ -821,6 +821,12 @@ Later steps add to the SDL:
 - **Claude** gets the folders it does not read itself as a local plugin, through `--plugin-dir`
   (not run in spike 0c; H4c part 0 runs it). The plugin folder is per session in
   `cache/plugins/<id>/`, with the skills copied in, not linked, for Windows.
+- **What loads is what the Skills page shows.** Only a skill that loads overrides: trusted, and a
+  plain folder (a link or special file inside is listed with why and not passed). A skill Claude
+  reads itself that does not load is turned off by name (`skillOverrides`), and the one that loads
+  in its place comes through the plugin as `detached:<name>`; so the repo's `.claude` wins over
+  `~/.claude`, which the CLI alone would not do. A bad store item is listed with its error and never
+  stops a session.
 - **Codex** reads `<dir>/.agents/skills` and `CODEX_HOME`'s. Other skills come through
   `detached_read skills`, on request. No directory is added to a Codex session for skills: added
   directories become writable roots.
@@ -1681,9 +1687,10 @@ The owner checks: asks a headless session (H4c's `make agent-login`) for a repo'
 `core::skills` reads the folder list by §10's precedence: the repo's local and shared stores,
 `<repo>/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills`, and `~/.agents/skills`
 unless the Skills page turns it off. A session's `Spec` carries its trusted skills that are not
-overridden. Claude's backend copies those its CLI does not read itself under the kind into
-`cache/plugins/<id>.*/`, the plugin `detached` (its skills are `detached:<name>`), passes it with
-`--plugin-dir` and removes it with the session; ACP renders none. `skills` sits on the read tool's
+overridden. Claude's backend copies those its CLI does not read itself under the kind's setting
+sources into `cache/plugins/<id>.*/`, the plugin `detached` (its skills are `detached:<name>`),
+passes it with `--plugin-dir` and removes it with the session, and turns off by `skillOverrides` a
+name the CLI reads itself that does not load (§11); ACP renders none. `skills` sits on the read tool's
 `Repo`. The real test passed on macOS with claude 2.1.325, under the chat's sources and under `[]`.
 Open: an untrusted participant's `--tools` has no `Skill`, so it lists skills it cannot call (P2);
 in a WSL distro the plugin's path assumes `/mnt` (docs/TECHDEBT.md).

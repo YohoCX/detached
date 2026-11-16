@@ -127,6 +127,48 @@ fn skills_the_cli_does_not_read_itself_reach_it_as_a_plugin_and_an_untrusted_sha
 }
 
 #[gpui::test]
+fn a_skill_the_cli_reads_itself_loads_only_where_it_wins_and_each_kind_gets_the_repo_s(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    for name in ["p", "u", "x"] {
+        skill(&f.dir.path().join("claude-config/skills").join(name));
+    }
+    for name in ["p", "q"] {
+        skill(&Path::new(&f.repo).join(".claude/skills").join(name));
+    }
+    let store = RepoStore::open(&f.core, f.repo.as_ref()).unwrap();
+    let x = [("SKILL.md".into(), b"x".to_vec())].into();
+    store.write(&f.core, StoreKind::Skills, "x", &x).unwrap();
+    let skills = |kind: Kind, cx: &mut TestAppContext| {
+        let s = open(&f, kind, cx);
+        let names: Vec<String> = s.read_with(cx, |s, _| {
+            s.commands.iter().map(|c| c.name.clone()).collect()
+        });
+        s.update(cx, |s, cx| s.end(cx));
+        names
+    };
+    assert_eq!(
+        skills(Kind::Chat, cx),
+        ["review", "u", "q", "detached:p", "detached:x"]
+    );
+    assert_eq!(
+        skills(Kind::Verifier, cx),
+        ["review", "u", "detached:p", "detached:q", "detached:x"]
+    );
+    assert_eq!(
+        skills(Kind::Untrusted, cx),
+        [
+            "review",
+            "detached:p",
+            "detached:q",
+            "detached:u",
+            "detached:x"
+        ]
+    );
+}
+
+#[gpui::test]
 fn a_resume_passes_every_flag_of_its_spawn_again_and_runs_on_its_model(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     untrust(&f);

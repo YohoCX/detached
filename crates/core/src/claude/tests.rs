@@ -326,3 +326,29 @@ fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() 
     spec.wsl = None;
     assert!(!env(&run.sb.state, &spec).iter().any(|(k, _)| k == "WSLENV"));
 }
+
+#[test]
+fn a_distro_gets_the_user_s_skills_through_the_plugin_unless_its_cli_reads_their_folder() {
+    let run = boot();
+    let mut spec = chat(&run);
+    spec.skills = vec![Skill {
+        name: "mine".into(),
+        source: Source::User,
+        path: run.sb.path("claude-config/skills/mine"),
+        description: None,
+        hash: None,
+        trusted: true,
+        error: None,
+        overridden: None,
+    }];
+    let passed = |spec: &Spec, env: &[(String, OsString)]| skills(spec, env).0.len();
+    let env = env(&run.sb.state, &spec);
+    assert_eq!(passed(&spec, &env), 0);
+    spec.wsl = Some("Ubuntu".into());
+    assert_eq!(passed(&spec, &env), 0);
+    let env: Vec<_> = env
+        .into_iter()
+        .filter(|(k, _)| k != "CLAUDE_CONFIG_DIR")
+        .collect();
+    assert_eq!(passed(&spec, &env), 1);
+}
