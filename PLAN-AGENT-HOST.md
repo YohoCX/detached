@@ -121,7 +121,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     | folders, plugins | the cwd, `--add-dir`, `--plugin-dir` | `cwd` |
     | host tools | `sdkMcpServers` in `initialize` | `mcpServers`, the session's URL (§7) |
     | a new id, a resume | `--session-id`, `--resume` | `session/new`, `session/load` |
-    | place | `wsl.exe -d <distro> --` and `WSLENV` | this machine only |
+    | place | `wsl.exe -d <distro> --cd <dir> -e sh` before the leash, and `WSLENV` | this machine only |
     | MCP config file | `--mcp-config <path>` | the file's servers in `mcpServers` |
     | the probe | an untrusted participant's flags; the env without the login, cloud and proxy names, with a dummy key and the responder's `ANTHROPIC_BASE_URL` | none |
   - **Who adds what.**
@@ -538,7 +538,7 @@ a session loads none of it.
         login run in a `wsl.exe -d detached` terminal tab.
       - `bubblewrap`, `socat` and `git`.
       - Each participant's `CLAUDE_CODE_TMPDIR`.
-    - **The CLI** starts with `wsl.exe -d detached -- <leash> claude …` over stdio, the variables
+    - **The CLI** starts with `wsl.exe -d detached --cd <dir> -e sh -c <leash> leash claude …` over stdio, the variables
       passed through `WSLENV`. The Windows job ends `wsl.exe`, not the Linux processes, and EOF
       does not end a busy CLI, so the leash runs inside the distro (§1; H4c part 0).
     - **Its transcripts** are in the distro's filesystem; the host reads and removes them through
@@ -1322,31 +1322,40 @@ holds the trait and keeps the wait for an id's `Closed`. The fake Messages API i
 `testutil::api`. In `core::backend`'s tests, the source scan and the test on `crates/app/Cargo.toml`;
 `core::claude` joins private in part b. The sixteen session tests pass in the kernel, the
 adapter's eight and the split halves in `crates/acp`, and `make agent-test` on macOS with `claude`
-2.1.325: the kernel's eight and the AIR test in `crates/acp`. Of part b, the reader is built:
-`core::claude::history`, crate-private, with §6's path rule (its hash checked against part 0's long
-cwd), the list (title, tag, model, from a transcript's head and tail as the SDK reads them),
-history as updates and delete, tested on part 0's macOS fixtures; the seam's `past` and `delete`
-take the `Spec`, whose folder and place they need, and default to "none" for ACP. Each message of
-the history ends with the seam's `Break`, and a parallel call's result off the chain is read too.
-Item 9's `detached --session` is built with `make agent-login`, tested on the fake ACP agent: it
-prints usage and cost after a turn, and the limits, account and pool join it with item 2's types.
-ACP's replay sends no `Break` yet, so adjacent messages of one kind join there. Part 0 and the
-rest of part b are next.**
+2.1.325: the kernel's eight and the AIR test in `crates/acp`.**
 
-**Status (2026-11-16): part b's client is built, history and the WSL place aside.** `core::claude`
-behind `backend::direct()`: the spawn under the `sh` leash with every flag again on `--resume`, the
-asks and their keys, the `ConfigChange` block, the host tools on the control channel, §1's close; the
-seam's remaining types but past sessions; `bin/fake_claude.rs`; Claude's `cli` list in the signed
-catalog with the floor in the manifest, as choice 2 recommends; Foundry's names and
-`CLAUDE_CODE_TMPDIR` in the manifest; `backend = "direct"`, and `CLAUDE_ACP`, the test-only manifest,
-for the fake-ACP tests and the adapter's nine. `kernel::Session` lets a turn go on when every trust
-path that moved is one its backend blocks. In `make check`: the seam's ten on both fakes, ACP's own
-six, and Claude's own but history, `--session` and the WSL argv. `make agent-test` on macOS with
-`claude` 2.1.325: H4's seven on the adapter and on the direct backend, the mid-turn settings block
-and a host tool call on the direct one, the adapter's catalog test and the AIR test. Open in part b:
-items 5 and 9 (history, the list and delete, `--session`), 7 (the WSL place), 11 (`agent-vet.yml`),
-and the real `stop_task`, killed-host and history tests; a resumed Claude session shows no history
-until item 5.
+**Status (2026-11-16): part b is built; the gate is next.** `core::claude` behind
+`backend::direct()`: the spawn under the `sh` leash with every flag again on `--resume`, the asks and
+their keys, the `ConfigChange` block, the host tools on the control channel, §1's close; the seam's
+remaining types; `bin/fake_claude.rs`, whose transcript holds each turn's messages; Claude's `cli`
+list in the signed catalog with the floor in the manifest, as choice 2 recommends; Foundry's names
+and `CLAUDE_CODE_TMPDIR` in the manifest; `backend = "direct"`, and `CLAUDE_ACP`, the test-only
+manifest, for the fake-ACP tests and the adapter's nine. `kernel::Session` lets a turn go on when
+every trust path that moved is one its backend blocks.
+- **History** (items 5 and 9, choice 1's reader): `core::claude::history` with §6's path rule (its
+  hash checked against part 0's long cwd), the list from a transcript's head and tail as the SDK
+  reads them, history and delete; the seam's `past(Spec)` and `delete(Spec, id)`, "none" on ACP. A
+  resume streams the history as its first updates, or `Opened` says it could not be read and the
+  kernel notes "history unavailable". The reader and the live client end each message with a
+  `Break` and map tool calls one way, so a resumed session shows what its turns showed: on the fake
+  CLI and on `claude` 2.1.325. `detached --session`, with `make agent-login`, prints usage, the
+  limits, the account and its pool after a turn.
+- **The WSL place** (item 7): `Spec.wsl`; the spawn as `wsl.exe -d <distro> --cd <dir> -e sh -c
+  <leash> leash claude …`, the manifest's names alone through `WSLENV`; the distro's own `claude`,
+  checked against the floor; the reader, the list and delete through `wsl.exe` on bytes.
+- **Vetting** (item 11): `agent-vet.yml` daily at the floor and the latest `claude`, at main and,
+  from 0.6.0, at the latest release tag on its own tests; the adapter's entries as before.
+- **Tests.** In `make check`: the seam's ten on both fakes with Claude's real replay, ACP's own six,
+  and Claude's own, history on part 0's fixtures, a distro's listing, the WSL argv and `--session`
+  on the fake CLI among them. `make agent-test` on macOS with `claude` 2.1.325: H4's seven on the
+  adapter and on the direct backend, the mid-turn settings block, a host tool call and a real
+  session's history, list entry and delete on the direct one, the adapter's catalog test and the
+  AIR test. `agent.yml`'s Windows job runs the direct set again with the CLI in Ubuntu 24.04, the
+  fake API on the distro's gateway address; it has not run yet.
+
+Open for the gate: part 0's answers (CI's reruns, row 4 in the WSL shape among them), the real
+`stop_task` and killed-host tests, the WSL shape's first green run, a `Break` in ACP's replay, then
+gate steps 3 and 4.
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
@@ -1455,8 +1464,8 @@ Work:
 5. History as a resume's first updates, the list and delete, per the owner's choice (§6).
 6. Claude's `min_cli` and `blocked_cli`, per the owner's choice (§3).
 7. **The WSL place** (§1, §5): what P2's participants run through, built and tested here.
-   - the spawn as `wsl.exe -d <distro> -- <leash> claude …`, the allowlisted names through
-     `WSLENV`, the cwd a path in the distro;
+   - the spawn as `wsl.exe -d <distro> --cd <dir> -e sh -c <leash> leash claude …`, the
+     manifest's names through `WSLENV`, the cwd a path in the distro;
    - the leash in the distro, and the close and a killed host through it, as part 0 row 4 found
      them;
    - the reader, the list and delete over `wsl.exe`, on bytes (§6);
@@ -1551,7 +1560,7 @@ Tests:
     - history, the list and delete on part 0's fixtures: the long path, the subagent, the
       compaction, the `archived` tag; a file of unknown lines shows "history unavailable";
     - a blocked `claude` and one below the floor, from a locally signed catalog;
-    - a WSL place renders `wsl.exe -d <distro> --` before the leash and names the env through
+    - a WSL place renders `wsl.exe -d <distro> --cd <dir> -e sh` before the leash and names the env through
       `WSLENV`: the argv alone, so it runs on every OS;
     - `--session` on the fake CLI prints a turn, the list and a delete.
 - under `make agent-test`, on the real `claude` and the fake Messages API, on every OS of §17:
