@@ -176,6 +176,7 @@ fn answer(s: &Entity<Session>, lines: &mut VecDeque<String>, eof: bool, cx: &mut
         "n" => Answer::Rejected,
         _ => Answer::Gone,
     };
+    println!("[answer] {answer:?} for \"{}\"", line.escape_default());
     s.update(cx, |s, cx| s.answer(item, answer, cx));
 }
 
