@@ -347,6 +347,7 @@ fn line(item: &Item) -> String {
         }
         Item::End { stop, ms } => format!("[end] {stop:?} in {ms} ms"),
         Item::Note(t) => format!("[note] {t}"),
+        Item::Act(a) => format!("[act] {a:?}"),
         Item::Text(t) | Item::Thought(t) => t.clone(),
     }
 }

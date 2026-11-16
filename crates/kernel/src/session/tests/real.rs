@@ -229,6 +229,15 @@ fn commands(marker: &str) -> Vec<String> {
     lines.map(String::from).collect()
 }
 
+#[cfg(unix)]
+fn pgrep(args: &[&str]) -> Vec<String> {
+    let out = Command::new("pgrep").args(args).output().unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
 /// A chat whose turn runs `perl -e 'sleep 600' <marker>`, once that command runs.
 fn mid_command(
     real: Real,
@@ -458,39 +467,78 @@ fn a_settings_hook_written_mid_turn_never_runs_and_the_session_ends_with_its_tur
     assert!(!Path::new(&f.repo).join("pre-settings").exists());
 }
 
-/// The host's tools ride the session's own pipes: no listener, nothing in argv.
+/// A real `claude` reads a repo's status through the host's tools, on the session's own pipes: no
+/// listener, nothing in argv. Pre-allowed, the call does not ask; under an ask rule, which beats the
+/// pre-allow as its absence would, it asks, and the model gets the answer both times.
 #[gpui::test]
 #[ignore = "make agent-test"]
-fn a_host_tool_call_needs_no_listener_and_puts_nothing_in_argv(cx: &mut TestAppContext) {
-    let call =
-        json!({"tool": "mcp__detached-host__detached_read", "input": {"query": "{ workspace }"}});
+fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppContext) {
+    let query = "{ workspace { repos { name status { changed } } } }";
+    let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
     let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
-    let mut spec = f.spec(Kind::Chat);
-    spec.tools = Some(Arc::new(|m: Value| {
-        let result = match m["method"].as_str() {
-            Some("initialize") => json!({"protocolVersion": m["params"]["protocolVersion"],
-                "capabilities": {"tools": {}}, "serverInfo": {"name": "detached-host", "version": "0"}}),
-            Some("tools/list") => json!({"tools": [{"name": "detached_read",
-                "description": "Reads Detached's data.",
-                "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}}]}),
-            Some("tools/call") => json!({"content": [{"type": "text", "text": "host answered"}]}),
-            _ => json!({}),
-        };
-        json!({"jsonrpc": "2.0", "id": m.get("id").cloned().unwrap_or(json!(0)), "result": result})
-    }));
-    let s = open_spec(spec, None, cx);
+    f.write("new.txt", "x");
+    f.list(cx);
+    // The tool's answer, as a JSON string in a request after `from`.
+    let answered = |from: usize| {
+        let status = r#"{\"name\":\"repo\",\"status\":{\"changed\":1}}"#;
+        let sent = api.requests()[from..]
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>();
+        assert!(sent.iter().any(|r| r.contains(status)), "{sent:?}");
+    };
+    let s = open(&f, Kind::Chat, cx);
     let id = s.read_with(cx, |s, _| s.id.clone()).unwrap();
-    assert!(running(&id));
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| s.read(cx).state != State::Running);
-    assert!(cx.read(|cx| waiting(&s, cx)).is_none());
-    let results = api.results();
-    assert!(
-        results.iter().any(|r| r.contains("host answered")),
-        "{results:?}"
-    );
-    let argv = commands(&id);
-    assert!(argv.iter().all(|l| !l.contains("http")), "{argv:?}");
+    let asked = |s: &Entity<Session>, cx: &mut TestAppContext| {
+        s.read_with(cx, |s, _| {
+            s.items.iter().any(|i| matches!(i, Item::Ask { .. }))
+        })
+    };
+    assert!(!asked(&s, cx));
+    answered(0);
+    let named = [
+        "http",
+        "detached_read",
+        "detached_act",
+        "fixture-not-for-agents",
+    ];
+    let mut argv = commands(&id);
+    #[cfg(unix)]
+    if wsl().is_none() {
+        // The session's processes and every one they spawned.
+        let mut pids = pgrep(&["-f", &id]);
+        for i in 0.. {
+            let Some(p) = pids.get(i).cloned() else { break };
+            pids.extend(pgrep(&["-P", &p]));
+        }
+        let pids = pids.join(",");
+        let ps = Command::new("ps")
+            .args(["-ww", "-o", "command=", "-p", &pids])
+            .output();
+        argv = String::from_utf8_lossy(&ps.unwrap().stdout)
+            .lines()
+            .map(String::from)
+            .collect();
+        let lsof = ["-nP", "-a", "-p", &pids, "-iTCP", "-sTCP:LISTEN"];
+        let listening = Command::new("lsof").args(lsof).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&listening.stdout), "", "{pids}");
+    }
+    let leaked = |l: &String| named.iter().any(|n| l.contains(n));
+    assert!(!argv.is_empty() && !argv.iter().any(leaked), "{argv:?}");
+    s.update(cx, |s, cx| s.end(cx));
+    let rule = json!({"permissions": {"ask": ["mcp__detached-host__detached_read"]}});
+    std::fs::write(f.claude_dir().join("settings.json"), rule.to_string()).unwrap();
+    let from = api.requests().len();
+    let s = open(&f, Kind::Chat, cx);
+    s.update(cx, |s, cx| s.prompt("go".into(), cx));
+    wait_for(cx, START, |cx| waiting(&s, cx).is_some());
+    let at = cx.read(|cx| waiting(&s, cx)).unwrap();
+    s.update(cx, |s, cx| s.answer(at, Answer::Once, cx));
+    wait_for(cx, START, |cx| s.read(cx).state != State::Running);
+    assert!(asked(&s, cx));
+    answered(from);
 }
 
 #[gpui::test]

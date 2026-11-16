@@ -67,6 +67,18 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Lists the repo in the workspace, its status loaded.
+    fn list(&self, cx: &mut TestAppContext) {
+        self.core
+            .add_folder("Default".into(), self.repo.clone())
+            .unwrap();
+        cx.update(crate::invalidate::rescan);
+        wait_until(cx, |cx| {
+            let repo = crate::repo::Repo::get(cx, &self.repo);
+            repo.is_some_and(|r| r.status().is_some()) && !crate::invalidate::rescanning(cx)
+        });
+    }
+
     fn spec(&self, kind: Kind) -> Spec {
         let mut spec = Spec::new(self.provider, &self.repo, kind);
         spec.wsl = self.wsl.clone();

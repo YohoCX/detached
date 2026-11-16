@@ -8,6 +8,7 @@ pub mod blocking;
 pub mod crash;
 pub mod doc;
 pub mod forge;
+pub mod host;
 pub mod invalidate;
 pub mod nav;
 pub mod panel;

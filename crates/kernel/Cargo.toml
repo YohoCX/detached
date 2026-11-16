@@ -12,6 +12,7 @@ detached-core.workspace = true
 futures = "0.3"
 # GPUI alone: the kit's crates stay out, and clippy.toml keeps the drawing parts out.
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+graphql-parser = "=0.4.1"
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
