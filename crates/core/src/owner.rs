@@ -73,13 +73,24 @@ pub fn serve(path: &Path, tabs: Arc<Tabs>, handle: Handler) -> Result<Server> {
     std::thread::Builder::new()
         .name("owner socket".into())
         .spawn(move || {
-            while let Ok((conn, pid)) = listener.accept() {
+            loop {
+                let accepted = listener.accept();
                 if stopped.load(Ordering::SeqCst) {
                     return;
                 }
-                let tab = pid.and_then(|p| tabs.of(p));
-                let handle = handle.clone();
-                std::thread::spawn(move || answer(conn, tab, &handle));
+                match accepted {
+                    Ok((conn, pid)) => {
+                        let tab = pid.and_then(|p| tabs.of(p));
+                        let handle = handle.clone();
+                        let _ =
+                            std::thread::Builder::new().spawn(move || answer(conn, tab, &handle));
+                    }
+                    Err(e) => {
+                        eprintln!("owner socket: {e}");
+                        // Out of descriptors lasts a while: no busy loop meanwhile.
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
             }
         })?;
     Ok(Server {
@@ -92,6 +103,8 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = sys::connect(&self.path);
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -145,24 +158,19 @@ pub fn install(exe_dir: &Path, env: &Env) -> Result<String> {
     {
         std::fs::create_dir_all(&dir)?;
         let link = dir.join("detached-cli");
-        let _ = std::fs::remove_file(&link);
-        std::os::unix::fs::symlink(&cli, &link)?;
-    }
-    #[cfg(windows)]
-    {
-        let d = dir.display().to_string().replace('\'', "''");
-        let script = format!(
-            "$p = [Environment]::GetEnvironmentVariable('Path', 'User'); \
-             if (($p -split ';') -notcontains '{d}') {{ \
-             [Environment]::SetEnvironmentVariable('Path', ((@($p, '{d}') -ne '') -join ';'), 'User') }}"
-        );
-        let mut cmd = std::process::Command::new("powershell");
-        let out = os::group(cmd.args(["-NoProfile", "-Command", &script])).output()?;
-        if !out.status.success() {
-            let e = String::from_utf8_lossy(&out.stderr);
-            return Err(Error::Other(e.trim().into()));
+        if std::fs::read_link(&link).ok().as_ref() != Some(&cli) {
+            if link.exists() {
+                let e = format!("{} is there already; move it away first.", link.display());
+                return Err(Error::Other(e));
+            }
+            if link.symlink_metadata().is_ok() {
+                std::fs::remove_file(&link)?;
+            }
+            std::os::unix::fs::symlink(&cli, &link)?;
         }
     }
+    #[cfg(windows)]
+    sys::add_to_user_path(&dir.display().to_string())?;
     let todo = if cfg!(windows) {
         "Terminals see it once Detached restarts."
     } else {
@@ -172,6 +180,19 @@ pub fn install(exe_dir: &Path, env: &Env) -> Result<String> {
         true => format!("detached-cli is on the PATH, in {}.", dir.display()),
         false => format!("detached-cli is in {}. {todo}", dir.display()),
     })
+}
+
+/// The user's raw Path with `dir` added, and whether it expands `%VAR%`; None when it has `dir`.
+#[cfg(any(windows, test))]
+fn path_with(old: Option<(&str, bool)>, dir: &str) -> Option<(String, bool)> {
+    let (path, expand) = old.unwrap_or(("", true));
+    let trim = |e: &str| e.trim_end_matches('\\').to_lowercase();
+    if path.split(';').any(|e| trim(e) == trim(dir)) {
+        return None;
+    }
+    let path = path.trim_end_matches(';');
+    let sep = if path.is_empty() { "" } else { ";" };
+    Some((format!("{path}{sep}{dir}"), expand))
 }
 
 #[cfg(unix)]
@@ -190,6 +211,10 @@ mod sys {
         let dir = path.parent().unwrap_or(Path::new("."));
         DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
         set_permissions(dir, Permissions::from_mode(0o700))?;
+        if connect(path).is_ok() {
+            let e = "another Detached answers on this data folder";
+            return Err(io::Error::new(io::ErrorKind::AddrInUse, e));
+        }
         let _ = std::fs::remove_file(path);
         let listener = UnixListener::bind(path)?;
         set_permissions(path, Permissions::from_mode(0o600))?;
@@ -238,11 +263,11 @@ mod sys {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
     use std::path::Path;
-    use std::ptr::null_mut;
+    use std::ptr::{null, null_mut};
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
-        INVALID_HANDLE_VALUE, LocalFree,
+        CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -358,6 +383,79 @@ mod sys {
         Ok(pipe)
     }
 
+    /// Adds `dir` to the user's Path as it is stored, unexpanded, and tells running programs.
+    pub fn add_to_user_path(dir: &str) -> io::Result<()> {
+        use windows_sys::Win32::System::Registry::{
+            HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
+            RegCreateKeyExW, RegQueryValueExW, RegSetValueExW,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
+        };
+        let win = |r: u32| match r {
+            0 => Ok(()),
+            r => Err(io::Error::from_raw_os_error(r as i32)),
+        };
+        let (env, name) = (wide("Environment".as_ref()), wide("Path".as_ref()));
+        let mut key = null_mut();
+        win(unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                env.as_ptr(),
+                0,
+                null(),
+                0,
+                KEY_QUERY_VALUE | KEY_SET_VALUE,
+                null(),
+                &mut key,
+                null_mut(),
+            )
+        })?;
+        let added = (|| -> io::Result<bool> {
+            let (mut kind, mut len) = (0, 0);
+            let query = |kind: &mut u32, data: *mut u8, len: &mut u32| unsafe {
+                RegQueryValueExW(key, name.as_ptr(), null(), kind, data, len)
+            };
+            let old = match query(&mut kind, null_mut(), &mut len) {
+                ERROR_FILE_NOT_FOUND => None,
+                r => {
+                    win(r)?;
+                    let mut buf = vec![0u16; len as usize / 2 + 1];
+                    win(query(&mut kind, buf.as_mut_ptr().cast(), &mut len))?;
+                    buf.truncate(len as usize / 2);
+                    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                    Some(String::from_utf16_lossy(&buf[..n]))
+                }
+            };
+            let old = old.as_deref().map(|p| (p, kind == REG_EXPAND_SZ));
+            let Some((path, expand)) = super::path_with(old, dir) else {
+                return Ok(false);
+            };
+            let data = wide(path.as_ref());
+            let kind = if expand { REG_EXPAND_SZ } else { REG_SZ };
+            let len = (data.len() * 2) as u32;
+            win(unsafe { RegSetValueExW(key, name.as_ptr(), 0, kind, data.as_ptr().cast(), len) })?;
+            Ok(true)
+        })();
+        unsafe { RegCloseKey(key) };
+        if added? {
+            let mut r = 0;
+            let env = env.as_ptr() as isize;
+            unsafe {
+                SendMessageTimeoutW(
+                    HWND_BROADCAST,
+                    WM_SETTINGCHANGE,
+                    0,
+                    env,
+                    SMTO_ABORTIFHUNG,
+                    5000,
+                    &mut r,
+                )
+            };
+        }
+        Ok(())
+    }
+
     /// A DACL that grants the current user alone, and no one inherits.
     fn owner_only() -> io::Result<PSECURITY_DESCRIPTOR> {
         unsafe {
@@ -426,7 +524,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn install_links_the_cli_into_local_bin_and_says_when_path_lacks_it() {
+    fn install_links_the_cli_into_local_bin_and_keeps_a_file_that_is_not_its_link() {
         let dir = tempfile::tempdir().unwrap();
         let (exe, home) = (dir.path().join("app"), dir.path().join("home"));
         let env = |path: String| Env {
@@ -443,10 +541,56 @@ mod tests {
         assert_eq!(std::fs::read_link(&link).unwrap(), exe.join("detached-cli"));
         let path = format!("/usr/bin:{}", home.join(".local/bin").display());
         assert!(
-            install(&exe, &env(path))
+            install(&exe, &env(path.clone()))
                 .unwrap()
                 .contains("is on the PATH")
         );
+        let theirs = dir.path().join("theirs");
+        std::fs::write(&theirs, "").unwrap();
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&theirs, &link).unwrap();
+        let refused = install(&exe, &env(path.clone())).unwrap_err().to_string();
+        assert!(refused.contains(&link.display().to_string()), "{refused}");
+        assert_eq!(std::fs::read_link(&link).unwrap(), theirs);
+        std::fs::remove_file(&theirs).unwrap();
+        install(&exe, &env(path.clone())).unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), exe.join("detached-cli"));
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, "a script").unwrap();
+        assert!(install(&exe, &env(path)).is_err());
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "a script");
+    }
+
+    #[test]
+    fn a_second_server_is_refused_and_the_first_removes_its_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = socket(dir.path());
+        let null = || -> Handler { Box::new(|_, _| Ok(Value::Null)) };
+        let first = serve(&path, Default::default(), null()).unwrap();
+        assert!(serve(&path, Default::default(), null()).is_err());
+        let q = Ask::Q("x".into());
+        assert_eq!(ask(&path, &q).unwrap_err().to_string(), REFUSED);
+        drop(first);
+        #[cfg(unix)]
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_path_keeps_its_entries_unexpanded_and_gets_the_folder_once() {
+        let apps = r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps";
+        let dir = r"C:\Program Files\Detached";
+        let added = path_with(Some((&format!("{apps};"), true)), dir);
+        assert_eq!(added, Some((format!("{apps};{dir}"), true)));
+        let (path, _) = added.unwrap();
+        assert_eq!(path_with(Some((&path, true)), dir), None);
+        let other_case = format!("{apps};{}\\", dir.to_uppercase());
+        assert_eq!(path_with(Some((&other_case, true)), dir), None);
+        assert_eq!(
+            path_with(Some(("C:\\bin", false)), dir),
+            Some((format!("C:\\bin;{dir}"), false))
+        );
+        assert_eq!(path_with(None, dir), Some((dir.into(), true)));
+        assert_eq!(path_with(Some(("", false)), dir), Some((dir.into(), false)));
     }
 
     #[cfg(unix)]

@@ -49,6 +49,14 @@ fn rows(cx: &mut VisualTestContext) -> Vec<String> {
     })
 }
 
+/// The rows where `env run` answered past the owner's prompt.
+fn stubbed(cx: &mut VisualTestContext) -> usize {
+    let rows = rows(cx);
+    rows.iter()
+        .filter(|r| r.contains("No env store yet"))
+        .count()
+}
+
 fn wait_for_row(cx: &mut VisualTestContext, row: impl Fn(&str) -> bool) {
     wait_until(cx, |cx| rows(cx).iter().any(|r| row(r)));
 }
@@ -147,12 +155,6 @@ fn q_refuses_a_double_fork_or_setsid_outside_and_setsid_inside_a_tab(cx: &mut Te
 fn env_run_asks_the_owner_once_per_tab(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let run = "env run dev -- git --version";
-    let stubbed = |cx: &mut VisualTestContext| {
-        let rows = rows(cx);
-        rows.iter()
-            .filter(|r| r.contains("No env store yet"))
-            .count()
-    };
     cli_in_tab(&mut app, run);
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Allow");
@@ -165,6 +167,20 @@ fn env_run_asks_the_owner_once_per_tab(cx: &mut TestAppContext) {
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Deny");
     wait_for_row(&mut app, |r| r.contains("did not allow"));
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn env_run_twice_at_once_asks_once(cx: &mut TestAppContext) {
+    let (mut app, _) = open(cx);
+    cli_in_tab(
+        &mut app,
+        &format!("env run dev -- true & '{CLI}' env run dev -- true"),
+    );
+    wait_until(&mut app, |cx| cx.has_pending_prompt());
+    app.simulate_prompt_answer("Allow");
+    wait_until(&mut app, |cx| stubbed(cx) == 2);
+    assert!(!app.has_pending_prompt());
 }
 
 #[gpui_kit::test]

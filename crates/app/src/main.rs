@@ -55,6 +55,12 @@ fn main() {
             }
         })
         .detach();
+        // Before the window: the tabs it restores start their shells as it opens.
+        if !smoke {
+            let no_reads =
+                |_: &_, _: &mut _| Task::ready(Err(Error::Other("No reads yet.".into())));
+            owner::start(no_reads, cx).detach();
+        }
         if let Err(e) = shell::open(cx) {
             fail(e);
         }
@@ -65,9 +71,6 @@ fn main() {
         } else {
             kernel::update::start(cx);
             kernel::agents::start(cx);
-            let no_reads =
-                |_: &_, _: &mut _| Task::ready(Err(Error::Other("No reads yet.".into())));
-            owner::start(no_reads, cx).detach();
         }
         cx.activate(true);
     });

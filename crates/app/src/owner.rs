@@ -1,7 +1,7 @@
 //! The owner socket's end in the app: `detached-cli` in a terminal tab reads with the owner's view
 //! and asks for `env run`, once per tab.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc as reply;
@@ -9,8 +9,9 @@ use std::sync::mpsc as reply;
 use detached_core::error::{Error, Result};
 use detached_core::os;
 use detached_core::owner::{self, Ask, Server, Tabs};
-use futures::StreamExt;
 use futures::channel::mpsc;
+use futures::future::Shared;
+use futures::{FutureExt, StreamExt};
 use gpui_kit::{App, Global, PromptLevel, Task, Window};
 use kernel::activity::Activity;
 use kernel::blocking;
@@ -19,8 +20,8 @@ use serde_json::Value;
 struct Owner {
     socket: PathBuf,
     tabs: Arc<Tabs>,
-    /// Tabs the owner let `env run` in.
-    allowed: HashSet<u64>,
+    /// Each tab's answer to `env run`, asked once and shared while it waits.
+    allowed: HashMap<u64, Shared<Task<std::result::Result<(), &'static str>>>>,
     _server: Option<Server>,
 }
 
@@ -45,7 +46,7 @@ pub fn start(
     cx.set_global(Owner {
         socket: socket.clone(),
         tabs: tabs.clone(),
-        allowed: HashSet::new(),
+        allowed: HashMap::new(),
         _server: None,
     });
     cx.spawn(async move |cx| {
@@ -83,25 +84,43 @@ pub fn add_tab(id: u64, shell: &Arc<os::Session>, cx: &App) {
 }
 
 fn env(tab: u64, profile: String, cx: &mut App) -> Task<Result<Value>> {
-    let window = cx.active_window().or_else(|| cx.windows().first().copied());
-    let prompt = (!cx.global::<Owner>().allowed.contains(&tab)).then(|| {
-        let msg = format!("A terminal tab asks for the env profile \"{profile}\".");
-        let detail = Some("Allow `detached-cli env run` in this tab until it closes?");
-        let answers = ["Allow", "Deny"];
-        let prompt = |_, w: &mut Window, cx: &mut App| {
-            w.prompt(PromptLevel::Warning, &msg, detail, &answers, cx)
-        };
-        window?.update(cx, prompt).ok()
-    });
-    cx.spawn(async move |cx| {
-        if let Some(prompt) = prompt {
-            let answer = prompt.ok_or_else(|| Error::Other("No window to ask in.".into()))?;
-            if answer.await != Ok(0) {
-                return Err(Error::Other("The owner did not allow it.".into()));
-            }
-            cx.update_global::<Owner, _>(|o, _| o.allowed.insert(tab));
+    let allowed = match cx.global::<Owner>().allowed.get(&tab) {
+        Some(allowed) => allowed.clone(),
+        None => {
+            let allowed = ask(tab, &profile, cx).shared();
+            cx.global_mut::<Owner>()
+                .allowed
+                .insert(tab, allowed.clone());
+            allowed
         }
+    };
+    cx.spawn(async move |_| {
+        allowed.await.map_err(|e| Error::Other(e.into()))?;
         let e = format!("No env store yet: profile \"{profile}\" cannot be read.");
         Err(Error::Other(e))
+    })
+}
+
+/// Asks the owner to allow `env run` in `tab`; a refusal is forgotten, so the next run asks again.
+fn ask(tab: u64, profile: &str, cx: &mut App) -> Task<std::result::Result<(), &'static str>> {
+    let window = cx.active_window().or_else(|| cx.windows().first().copied());
+    let msg = format!("A terminal tab asks for the env profile \"{profile}\".");
+    let detail = Some("Allow `detached-cli env run` in this tab until it closes?");
+    let prompt = |_, w: &mut Window, cx: &mut App| {
+        w.prompt(PromptLevel::Warning, &msg, detail, &["Allow", "Deny"], cx)
+    };
+    let prompt = window.and_then(|w| w.update(cx, prompt).ok());
+    cx.spawn(async move |cx| {
+        let answer = match prompt {
+            None => Err("No window to ask in."),
+            Some(p) => match p.await {
+                Ok(0) => Ok(()),
+                _ => Err("The owner did not allow it."),
+            },
+        };
+        if answer.is_err() {
+            cx.update_global::<Owner, _>(|o, _| o.allowed.remove(&tab));
+        }
+        answer
     })
 }
