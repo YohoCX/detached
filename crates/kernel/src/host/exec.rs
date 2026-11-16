@@ -1,6 +1,6 @@
 //! The read tool's executor: a query of the subset, checked against the SDL and run over a snapshot.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
@@ -11,7 +11,7 @@ use graphql_parser::schema::{self, ObjectType, Type, TypeDefinition, parse_schem
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-pub const SDL: &str = include_str!("schema.graphql");
+const SDL: &str = include_str!("schema.graphql");
 const DEPTH: usize = 8;
 const SIZE: usize = 256 * 1024;
 
@@ -59,16 +59,17 @@ pub fn run(snap: &Snap, query: &str) -> Result<(Value, Vec<Need>), String> {
         snap,
         needs: RefCell::default(),
         errors: RefCell::default(),
+        size: Cell::default(),
     };
     let mut out = json!({"data": object(&c, "Query", Node::Query, set, &mut vec![])});
-    let errors = c.errors.into_inner();
-    if !errors.is_empty() {
-        out["errors"] = errors.into();
-    }
-    if out.to_string().len() > SIZE {
+    if c.over() {
         return Err(
             "The result is larger than 256 KB: select fewer fields or pass a limit.".into(),
         );
+    }
+    let errors = c.errors.into_inner();
+    if !errors.is_empty() {
+        out["errors"] = errors.into();
     }
     Ok((out, c.needs.into_inner()))
 }
@@ -77,6 +78,8 @@ struct Ctx<'a> {
     snap: &'a Snap,
     needs: RefCell<Vec<Need>>,
     errors: RefCell<Vec<Value>>,
+    /// The serialized result's bytes so far; the build stops once past SIZE.
+    size: Cell<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -248,7 +251,16 @@ impl<'a> Ctx<'a> {
 
     fn error(&self, message: String, path: &[Value]) {
         let e = json!({"message": message, "path": path});
+        self.charge(e.to_string().len() + 1);
         self.errors.borrow_mut().push(e);
+    }
+
+    fn charge(&self, bytes: usize) {
+        self.size.set(self.size.get() + bytes);
+    }
+
+    fn over(&self) -> bool {
+        self.size.get() > SIZE
     }
 }
 
@@ -305,18 +317,27 @@ fn object<'a, 'q>(
     path: &mut Vec<Value>,
 ) -> Value {
     let mut out = Map::new();
+    c.charge("{},".len());
     for f in set.items.iter().filter_map(|s| match s {
         Selection::Field(f) => Some(f),
         _ => None,
     }) {
+        if c.over() {
+            break;
+        }
         let key = f.alias.unwrap_or(f.name);
+        c.charge(key.len() + 4);
         path.push(key.into());
         let field = field(ty, f.name).expect("checked");
         let resolve = resolver(ty, f.name).expect("every field has a resolver");
         let v = match resolve(c, node, &f.arguments) {
-            Ok(Out::Value(v)) => v,
+            Ok(Out::Value(v)) => {
+                c.charge(v.to_string().len());
+                v
+            }
             Ok(Out::Node(n)) => object(c, named(&field.field_type), n, &f.selection_set, path),
             Ok(Out::List(nodes)) => {
+                c.charge("[]".len());
                 let items = nodes.into_iter().enumerate().map(|(i, n)| {
                     path.push(i.into());
                     let v = object(c, named(&field.field_type), n, &f.selection_set, path);
@@ -616,5 +637,25 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn aliases_stop_the_build_once_past_the_limit() {
+        let mut snap = snap();
+        snap.repos[0].status = None;
+        let aliases: String = (0..20_000)
+            .map(|i| format!("s{i}: status {{ changed }} "))
+            .collect();
+        let query = format!("{{ workspace {{ repos {{ {aliases} }} }} }}");
+        assert!(run(&snap, &query).unwrap_err().contains("256 KB"));
+        let doc = parse_query::<&str>(&query).unwrap();
+        let c = Ctx {
+            snap: &snap,
+            needs: RefCell::default(),
+            errors: RefCell::default(),
+            size: Cell::default(),
+        };
+        object(&c, "Query", Node::Query, check(&doc).unwrap(), &mut vec![]);
+        assert!(c.needs.borrow().len() < 5000);
     }
 }

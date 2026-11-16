@@ -23,8 +23,6 @@ mod exec;
 #[cfg(test)]
 mod tests;
 
-pub use exec::SDL;
-
 const WAIT: Duration = Duration::from_secs(10);
 const REPORTS: &[&str] = &["report_finding", "report_verdict", "done"];
 
