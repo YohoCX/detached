@@ -175,6 +175,25 @@ pub enum Event {
         disposition: Disposition,
         reason: Option<String>,
     },
+    /// A Fix of `finding`: its own branch from the subject's head `base`, checked out in the
+    /// managed worktree `tree`.
+    Fix {
+        finding: String,
+        branch: String,
+        tree: String,
+        base: String,
+    },
+    /// The Fix's re-check, a run of its own over the Fix's commits.
+    Recheck {
+        finding: String,
+        run: String,
+    },
+    FixMerged {
+        finding: String,
+    },
+    FixDiscarded {
+        finding: String,
+    },
     RunEnded(End),
 }
 
@@ -282,6 +301,17 @@ impl Found {
     }
 }
 
+/// A finding's latest Fix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fixing {
+    pub branch: String,
+    pub tree: String,
+    pub base: String,
+    pub recheck: Option<String>,
+    pub merged: bool,
+    pub discarded: bool,
+}
+
 /// A run as its log says it went.
 #[derive(Clone, Debug, Default)]
 pub struct State {
@@ -299,6 +329,7 @@ pub struct State {
     pub timeline: Vec<super::Event>,
     /// The owner's latest disposition of each finding, with its time.
     pub dispositions: BTreeMap<String, (i64, Disposition, Option<String>)>,
+    pub fixes: BTreeMap<String, Fixing>,
 }
 
 impl State {
@@ -492,6 +523,37 @@ impl State {
             } => {
                 _ = (self.dispositions).insert(finding.clone(), (at, *disposition, reason.clone()))
             }
+            Event::Fix {
+                finding,
+                branch,
+                tree,
+                base,
+            } => {
+                let f = Fixing {
+                    branch: branch.clone(),
+                    tree: tree.clone(),
+                    base: base.clone(),
+                    recheck: None,
+                    merged: false,
+                    discarded: false,
+                };
+                self.fixes.insert(finding.clone(), f);
+            }
+            Event::Recheck { finding, run } => {
+                if let Some(f) = self.fixes.get_mut(finding) {
+                    f.recheck = Some(run.clone());
+                }
+            }
+            Event::FixMerged { finding } => {
+                if let Some(f) = self.fixes.get_mut(finding) {
+                    f.merged = true;
+                }
+            }
+            Event::FixDiscarded { finding } => {
+                if let Some(f) = self.fixes.get_mut(finding) {
+                    f.discarded = true;
+                }
+            }
             Event::RunEnded(end) => {
                 self.ended = Some(end.clone());
                 self.paused = None;
@@ -517,6 +579,16 @@ impl State {
 
     pub fn found(&self, id: &str) -> Option<&Found> {
         self.findings.iter().find(|f| f.id == id)
+    }
+
+    /// The role whose participant raised `id`, `bugs` when the record does not say.
+    pub fn role_of(&self, id: &str) -> String {
+        let by = self.found(id).map(|f| f.participant.as_str());
+        let p = self
+            .participants
+            .iter()
+            .find(|p| Some(p.name.as_str()) == by);
+        p.map_or("bugs".into(), |p| p.role.clone())
     }
 
     /// Findings that stand: those not folded into another.

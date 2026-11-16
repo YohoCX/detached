@@ -13,6 +13,7 @@ use crate::store::{Files, Kind, RepoStore};
 const BUILTIN: &[(&str, &str)] = &[
     ("review", include_str!("builtin/review.md")),
     ("gate", include_str!("builtin/gate.md")),
+    ("recheck", include_str!("builtin/recheck.md")),
     ("bugs", include_str!("builtin/bugs.md")),
     ("architecture", include_str!("builtin/architecture.md")),
     ("docs", include_str!("builtin/docs.md")),
@@ -182,11 +183,16 @@ mod tests {
     fn the_built_in_modes_and_roles_parse() {
         for (name, text) in BUILTIN {
             match *name {
-                "review" | "gate" => _ = parse_mode(name, text).unwrap(),
+                "review" | "gate" | "recheck" => _ = parse_mode(name, text).unwrap(),
                 _ => _ = parse_role(name, text).unwrap(),
             }
         }
         let gate = parse_mode("gate", BUILTIN[1].1).unwrap();
+        let recheck = parse_mode("recheck", BUILTIN[2].1).unwrap();
+        assert_eq!(
+            recheck.roster[0].role, "bugs",
+            "impl is the bugs role's lens"
+        );
         assert_eq!(gate.graph.last(), Some(&Stage::Gate));
         assert_eq!(gate.roster.len(), 2);
         assert_eq!(gate.block, ["critical", "major"]);

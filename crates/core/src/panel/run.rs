@@ -35,6 +35,8 @@ pub struct Start {
     pub budget: Option<u64>,
     /// Codex verifies before the mode's verifiers.
     pub codex: bool,
+    /// Roles seated beside the mode's, each once, on its first seat's model.
+    pub roles: Vec<String>,
 }
 
 /// A finder: its name, role, seat and tree, and its branch on a trusted run.
@@ -104,6 +106,21 @@ pub fn dir(core: &AppState, repo: &Path, task: &str, run: &str) -> Result<PathBu
         .join("detached/panels")
         .join(task)
         .join(run))
+}
+
+/// A review of `s`'s branch as it is now.
+pub fn again(s: &Subject) -> Start {
+    Start {
+        repo: s.repo.clone(),
+        branch: s.branch.clone(),
+        remote: s.remote,
+        base: s.base.clone(),
+        mode: "review".into(),
+        untrusted: false,
+        budget: None,
+        codex: false,
+        roles: vec![],
+    }
 }
 
 /// The subject at its two SHAs: the branch's head, and where it left its base.
@@ -246,6 +263,15 @@ pub fn prepare(
     let subject = pv.subject;
     brief::sha(&subject.head_sha)?;
     let mut mode = mode::mode(core, repo, &s.mode)?;
+    for r in &s.roles {
+        if !mode.roster.iter().any(|x| &x.role == r) {
+            let seat = Seat {
+                role: r.clone(),
+                ..mode.roster[0].clone()
+            };
+            mode.roster.push(seat);
+        }
+    }
     if s.codex {
         mode.verifiers.insert(0, CODEX.id.into());
     }
@@ -291,7 +317,7 @@ pub fn prepare(
                 "The subject's agent settings at its head are not accepted yet".into(),
             ));
         }
-        tree::check_prefix(&env, repo)?;
+        tree::check_prefix(&env, repo, tree::PREFIX)?;
         p.sandboxed = probing(probe, cancelled)? == Probe::Passed;
         if !p.sandboxed {
             limits
@@ -401,7 +427,7 @@ fn claude_only(m: &mut Mode) -> bool {
 
 /// The repo's MCP servers, from `.mcp.json` at the subject's head and the CLI's entry for the repo's
 /// path, never its login, in a 0600 file under `data/private/<run>/`; None when there are none.
-fn mcp(core: &AppState, repo: &Path, tree: &Path, run: &str) -> Result<Option<PathBuf>> {
+pub fn mcp(core: &AppState, repo: &Path, tree: &Path, run: &str) -> Result<Option<PathBuf>> {
     let read = |p: &Path| -> Value {
         fs::read(p)
             .ok()
@@ -572,6 +598,7 @@ mod tests {
             untrusted: false,
             budget: None,
             codex: false,
+            roles: vec![],
         };
         let pv = preview(&sb.state, &s).unwrap();
         assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
@@ -610,6 +637,7 @@ mod tests {
             untrusted: false,
             budget: None,
             codex: false,
+            roles: vec![],
         };
         let shown = preview(&sb.state, &s).unwrap();
         fs::write(repo.join(".claude/settings.json"), settings("never shown")).unwrap();
@@ -648,6 +676,7 @@ mod tests {
             untrusted: false,
             budget: None,
             codex: false,
+            roles: vec![],
         };
         let stop = Arc::new(AtomicBool::new(false));
         let later = stop.clone();

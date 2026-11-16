@@ -1316,7 +1316,7 @@ pub fn limits(cx: &App) -> marks::Panels {
 }
 
 /// Room under the cap: live participants of every panel, `mine` of the one asking, and running
-/// chat turns count.
+/// chat and Fix turns count.
 fn room(cx: &App, me: gpui::EntityId, mine: usize) -> usize {
     let cap = limits(cx).cap;
     let others = all(cx).into_iter().filter(|p| p.entity_id() != me);
@@ -1332,7 +1332,7 @@ fn room(cx: &App, me: gpui::EntityId, mine: usize) -> usize {
             .sum::<usize>();
     let chats = session::all(cx).filter(|s| {
         let s = s.read(cx);
-        s.seat.is_none() && s.state == session::State::Running
+        s.seat.as_ref().is_none_or(|s| s.who.panel.is_none()) && s.state == session::State::Running
     });
     cap.saturating_sub(panels + chats.count())
 }
@@ -1454,7 +1454,7 @@ pub fn dispose(
 
 /// Runs `op` off the main thread and appends the event it returns to the run's record and to its
 /// live panel's state.
-fn append(
+pub(super) fn append(
     [repo, task, run]: [&str; 3],
     cx: &mut App,
     op: impl FnOnce(&AppState, &Path) -> Result<Event> + Send + 'static,

@@ -4,13 +4,14 @@ use std::time::Duration;
 
 use detached_core::panel::record::{self, End, State};
 use detached_core::panel::run::Start;
-use detached_core::panel::track::{self, Track};
-use detached_core::panel::{self, Counts, Fix, Run, Thread, run};
+use detached_core::panel::track::{self, Fate, Track};
+use detached_core::panel::{self, Counts, Fix, Run, Thread, fix, run};
 use gpui::{App, Entity};
 
 use crate::resource::{self, Policy, Resource};
 
 pub mod corpus;
+pub mod fixes;
 pub mod live;
 
 pub struct Rounds {
@@ -28,6 +29,33 @@ pub struct Task {
     pub fixes: Vec<Option<Fix>>,
     /// A task of live runs: its threads by fingerprint, their dispositions and the loop.
     pub track: Option<Track>,
+    /// Its subject is trusted as it is now, so its findings can be fixed.
+    pub trusted: bool,
+    /// A repo or workspace mark covers its repo.
+    pub marked: bool,
+    /// A finding is fix ready and the subject's head moved since the latest round.
+    pub due: bool,
+    /// Each Fix of its findings, by run and finding.
+    pub fixing: BTreeMap<(String, String), FixState>,
+}
+
+/// A Fix as git and the records say.
+pub struct FixState {
+    /// Its commits, newest first: sha, author and subject.
+    pub commits: Vec<[String; 3]>,
+    /// The diff of the hook files it changed.
+    pub hooks: String,
+    pub check: Option<Check>,
+}
+
+/// A Fix's latest re-check.
+pub struct Check {
+    pub task: String,
+    pub run: String,
+    /// Its record exists: it started.
+    pub recorded: bool,
+    /// Once it ended, whether it passed.
+    pub passed: Option<bool>,
 }
 
 impl Rounds {
@@ -39,14 +67,11 @@ impl Rounds {
         let started = last.started.as_ref()?;
         let s = &started.subject;
         Some(Start {
-            repo: s.repo.clone(),
-            branch: s.branch.clone(),
-            remote: s.remote,
-            base: s.base.clone(),
             mode: "gate".into(),
             untrusted: started.untrusted,
             budget: started.budget,
             codex: started.codex,
+            ..run::again(s)
         })
     }
 
@@ -85,6 +110,8 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                             Err(e) => rounds.errors.push(format!("{task}/{run}: {e}")),
                         }
                     }
+                    let (env, path) = (core.env(), Path::new(&repo));
+                    let ready = fix::ready(&env, path, &records);
                     let mut tasks = BTreeMap::new();
                     let mut live: BTreeMap<&str, Vec<(&str, &State)>> = BTreeMap::new();
                     for ((task, run), s) in &records {
@@ -92,7 +119,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                     }
                     for (task, mut runs) in live {
                         runs.sort_by(|a, b| (a.1.at, a.0).cmp(&(b.1.at, b.0)));
-                        let track = track::track(&runs);
+                        let track = track::track(&runs, &ready);
                         let mut counts = vec![];
                         for (round, _) in &runs {
                             let one = |r: &&mut Run| r.task == task && r.round == *round;
@@ -110,6 +137,35 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                         let fixes = (runs.windows(2))
                             .map(|w| format!("git diff {}..{}", head(w[0].1), head(w[1].1)))
                             .map(|range| panel::fix(&core, &repo, &range));
+                        let last = runs.last().and_then(|(_, s)| s.started.as_ref());
+                        let (trusted, moved) =
+                            last.map_or((false, false), |s| fix::now(&core, &s.subject));
+                        let waits = track.threads.iter().any(|t| t.fate == Fate::FixReady);
+                        let mut fixing = BTreeMap::new();
+                        for (run, s) in &runs {
+                            for (id, f) in &s.fixes {
+                                let key = format!("{run}/{id}");
+                                let check = f.recheck.as_ref().map(|r| {
+                                    let task = run::task(&f.branch);
+                                    let c = records.get(&(task.clone(), r.clone()));
+                                    let ended = c.is_some_and(|c| c.ended.is_some());
+                                    Check {
+                                        recorded: c.is_some(),
+                                        passed: ended.then(|| ready.contains(&key)),
+                                        task,
+                                        run: r.clone(),
+                                    }
+                                });
+                                let state = FixState {
+                                    commits: fix::commits(&env, path, &f.base, &f.branch)
+                                        .unwrap_or_default(),
+                                    hooks: fix::hooks(&env, path, &f.base, &f.branch)
+                                        .unwrap_or_default(),
+                                    check,
+                                };
+                                fixing.insert((run.to_string(), id.clone()), state);
+                            }
+                        }
                         tasks.insert(
                             task.to_string(),
                             Task {
@@ -117,7 +173,11 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 counts,
                                 threads: vec![],
                                 fixes: std::iter::once(None).chain(fixes).collect(),
+                                due: moved && waits,
                                 track: Some(track),
+                                trusted,
+                                marked: detached_core::panel::marks::covers(&core, &repo),
+                                fixing,
                             },
                         );
                     }
@@ -139,6 +199,10 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 counts: task.counts,
                                 threads: task.threads,
                                 track: None,
+                                trusted: false,
+                                marked: false,
+                                due: false,
+                                fixing: BTreeMap::new(),
                             }
                         });
                     }

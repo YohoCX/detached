@@ -154,7 +154,7 @@ impl Rounds {
     fn track(&self) -> Track {
         let rounds = self.rounds();
         let refs: Vec<(&str, &State)> = rounds.iter().map(|(r, s)| (r.as_str(), s)).collect();
-        track(&refs)
+        track(&refs, &Default::default())
     }
 
     fn commit(&self, file: &str, text: &str) {

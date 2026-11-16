@@ -247,6 +247,7 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         untrusted: false,
         budget: None,
         codex: false,
+        roles: vec![],
     };
     let shown = detached_core::panel::run::preview(&f.core, &start).unwrap();
     detached_core::panel::run::accept(&f.core, &shown).unwrap();
@@ -347,6 +348,7 @@ fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut Tes
             untrusted: false,
             budget: None,
             codex: false,
+            roles: vec![],
         };
         let p = cx.update(|cx| super::super::live::start(start, cx));
         wait_for(cx, START, |cx| {
@@ -368,4 +370,107 @@ fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut Tes
             assert_eq!(p.state.started.as_ref().unwrap().trusted, trusted);
         });
     }
+}
+
+#[cfg(unix)]
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_after_it_started(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::git::runner::{self, Kind as Git};
+    use detached_core::panel::{fix, marks, root, run};
+    let (f, api) = boot(cx, vec![]);
+    let ws = f.dir.path().join("ws");
+    let repo = ws.join("r");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| runner::out(&f.core.env(), &repo, args, Git::Write).unwrap();
+    git(&["init", "-q"]);
+    std::fs::write(repo.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(repo.join("a.txt"), "FIX-TREE-A\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "a"]);
+    git(&["switch", "-qc", "feat"]);
+    std::fs::write(repo.join(".env"), "SECRET-ENV\n").unwrap();
+    let path = repo.display().to_string();
+    let recipe = [(Default::default(), b"copies = [\".env\"]\n".to_vec())].into();
+    detached_core::store::RepoStore::open(&f.core, &repo)
+        .unwrap()
+        .write(
+            &f.core,
+            detached_core::store::Kind::Recipes,
+            detached_core::git::worktree::RECIPE,
+            &recipe,
+        )
+        .unwrap();
+    f.core
+        .add_folder("Default".into(), ws.display().to_string())
+        .unwrap();
+    let mark = marks::Mark {
+        name: path.clone(),
+        ..Default::default()
+    };
+    marks::change(&f.core, |p| p.repos.push(mark)).unwrap();
+    let tree = ws.join("worktrees/r/detached-fix/run1/f1-1");
+    let script = vec![
+        bash(&format!("cat {}/.env; echo CAT=$?", tree.display())),
+        bash(&format!("ls {}; echo LS=$?", tree.display())),
+        read(&tree.join(".env")),
+        read(&tree.join("a.txt")),
+    ];
+    let api2 = Api::serve(Value::Array(script));
+    {
+        let mut env = f.core.env.write().unwrap();
+        env.vars.retain(|(k, _)| k != "ANTHROPIC_BASE_URL");
+        env.vars
+            .push(("ANTHROPIC_BASE_URL".into(), api2.url.clone()));
+    }
+    drop(api);
+    let export = f.dir.path().join("export");
+    std::fs::create_dir_all(&export).unwrap();
+    std::fs::write(export.join("x.txt"), "x").unwrap();
+    let mut spec = Spec::new(&CLAUDE, &export.display().to_string(), Kind::Untrusted);
+    spec.sandbox = Some(Sandbox {
+        deny_read: root::denied(&f.core).unwrap(),
+        deny_write: vec![],
+        tmp: Some(f.dir.path().join("tmp/p1")),
+    });
+    let scope = Scope {
+        run: "r".into(),
+        participant: "p".into(),
+        finding: None,
+    };
+    let seat = Seat {
+        who: Identity::participant(&spec.repo, scope, &["report_finding", "done"]),
+        accept: None,
+    };
+    let s = cx.update(|cx| Session::open_as(spec, None, Some(seat), cx));
+    wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
+    // The Fix and its `.env` copy come after the untrusted session started.
+    let start = run::Start {
+        branch: "feat".into(),
+        ..run::again(&detached_core::panel::record::Subject {
+            repo: path,
+            branch: String::new(),
+            remote: false,
+            base: "main".into(),
+            base_sha: String::new(),
+            head_sha: String::new(),
+        })
+    };
+    let subject = run::subject(&f.core, &start).unwrap();
+    let finding: detached_core::host::Finding = serde_json::from_value(json!({
+        "severity": "major", "class": "correctness", "title": "t", "body": "b", "file": "a.txt",
+        "line": 1, "quote": "a", "lenses": []}))
+    .unwrap();
+    let (pv, _) = fix::preview(&f.core, &subject, &finding, &subject.head_sha).unwrap();
+    let made = fix::make(&f.core, &pv, ["run1", "f1-1"], &Default::default(), &|_| {}).unwrap();
+    assert_eq!(made.tree, tree);
+    assert!(tree.join(".env").exists());
+    s.update(cx, |s, cx| s.prompt("go".into(), cx));
+    wait_for(cx, START, |cx| s.read(cx).state != State::Running);
+    let all = api2.results().join("\n");
+    assert!(!all.contains("SECRET-ENV"), "{all}");
+    assert!(!all.contains("LS=0"), "{all}");
+    assert!(all.contains("CAT=") && !all.contains("FIX-TREE-A"), "{all}");
 }

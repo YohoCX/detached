@@ -177,6 +177,7 @@ impl Corpus {
             untrusted: true,
             budget: Some(self.budget - self.spent),
             codex: false,
+            roles: vec![],
         };
         let p = live::start(s, cx);
         self._watch = Some(cx.observe(&p, |c: &mut Corpus, p, cx| {

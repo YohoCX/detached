@@ -21,6 +21,7 @@ impl DocKind for PanelDocs {
             }),
             confirm: None,
             reason: None,
+            fix: None,
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             mode: kernel::ui_state::get("panels.mode", cx).unwrap_or(2),
             repo,
@@ -72,6 +73,8 @@ pub(super) struct RunView {
     confirm: Option<String>,
     /// The finding being dismissed, and its reason's field.
     reason: Option<(String, Entity<InputState>)>,
+    /// The selected finding's Fix, on a live run's card.
+    fix: Option<Entity<super::fix::FixCard>>,
     pub repo: String,
     task: String,
     round: String,
@@ -122,6 +125,14 @@ impl RunView {
     fn mark(&self, id: &str, cx: &App) -> Option<(String, Fate)> {
         let (thread, mark) = self.track(cx)?.of(&self.round, id)?;
         let mut text = format!("{} · {}", mark.text(), thread.fate.text());
+        let rounds = self.rounds.read(cx).value.as_ref();
+        if thread.fate == Fate::FixReady
+            && rounds
+                .and_then(|r| r.tasks.get(&self.task))
+                .is_some_and(|t| t.due)
+        {
+            text.push_str(" · re-check due");
+        }
         if let Some(why) = &thread.past {
             text.push_str(&format!(" · dismissed nearby before: {why}"));
         }
@@ -160,7 +171,7 @@ impl RunView {
                 .child(text),
         );
         match fate {
-            Fate::Open => {
+            Fate::Open | Fate::FixReady => {
                 let reason = (self.reason.as_ref()).filter(|(r, _)| *r == f.id);
                 row = match reason {
                     Some((_, input)) => row
@@ -266,6 +277,12 @@ impl RunView {
         let range = run.and_then(|r| r.reviewed_range.clone());
         if run.is_some_and(|r| r.set_aside.iter().any(|a| a.id == f.id)) {
             self.show_aside = true;
+        }
+        if self.selected.as_ref() != Some(&f.id) {
+            self.fix = self.record(cx).is_some().then(|| {
+                let ids = [&*self.repo, &self.task, &self.round, &f.id];
+                cx.new(|cx| super::fix::FixCard::new(ids, cx))
+            });
         }
         self.selected = Some(f.id.clone());
         self.selected_data = Some(f.clone());
@@ -448,6 +465,7 @@ impl RunView {
                         .child(format!("Sources: {}", f.sources.join(", "))),
                 )
                 .children(self.dispositions(f, cx))
+                .children(self.fix.clone())
             })
             .when_some(self.markdown.clone(), |d, m| {
                 d.child(

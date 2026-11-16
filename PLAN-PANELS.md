@@ -762,6 +762,46 @@ The owner checks: a loop on a real branch.
 
 ### Step P4. Fix
 
+**Status (2026-11-17): built; waiting for the owner's check.**
+- Built: `core::panel::fix` makes the Fix's branch `detached-fix/<run>/<finding>` at the head the
+  owner saw and checks it out as an H6 managed worktree (recipe copies and install included), with
+  the owner's `settings.local.json` and the repo's MCP file; the brief (`brief::fix`) holds the
+  finding as JSON-quoted data labelled as another agent's. The card (`panels/fix.rs`) shows the
+  brief to edit, asks to accept changed trust files first, and on an untrusted subject offers "Mark
+  the repo trusted" and "Fix it yourself" (opens the file at the line). `kernel::panel::fixes` runs
+  the session in orchestrator mode (`bypassPermissions`, counted under the cap as a chat turn),
+  then the re-check: the built-in `recheck` mode (find → merge → verify → gate, the `bugs` role,
+  whose lenses are bugs and impl) over `<head>..<fix branch>`, with the role that raised the
+  finding seated beside it (`Start::roles`). The record gets `fix`, `recheck`, `fix_merged` and
+  `fix_discarded`; a finding is `fix ready` (`Fate::FixReady`, gating) once its latest Fix's
+  re-check said ship and raised nothing near its mapped lines; the task shows "re-check due" when
+  the subject's head moved, and its button reads "Re-check" (a gate round, §8's estimate and
+  budget); `fixed` then follows P3's rule. The card lists the Fix's commits and its changed hook
+  files as their own diff, Merge (P2's fast-forward, hooks off) or "kept for you to push" on a
+  remote subject, Re-check, Open the re-check, and Discard after a confirm (worktree gone, branch
+  kept).
+- Tests: `core::panel::fix` (branch and managed worktree, the untrusted deny list taken before it
+  covers the tree and its `.env` copy, untrusted, a moved head and unaccepted trust files refused,
+  Merge hooks off with the hook diff, refused dirty and not fast-forward, a remote subject's branch
+  kept, Discard keeps the branch, nothing pushes), `brief` (quoted data), `kernel::panel::tests::fixes`
+  on `fake_claude` (a Fix commits on its branch with no prompt, its re-check runs `bugs` and the
+  raising role on its commits alone and passes; Discard; a head move that leaves the range alone
+  starts nothing and keeps it `fix ready` through a round; a squash onto the subject then the
+  owner's re-check makes it `fixed` and the loop stops; two Fixes in parallel, one merged, the other
+  no fast-forward), `tests::real` on the real `claude` (an untrusted session started before the Fix
+  cannot list or read its worktree or `.env`), `tests/panels.rs` (the untrusted card's two offers,
+  marking the repo, the brief shown and edited, commits, Merge, Discard, a changed
+  `.claude/settings.json` asked first; a remote branch's Fix with no Merge).
+- Choices: a Fix starts from the subject's current head, refused if it moved since the owner looked;
+  a second Fix of a finding gets `-2`; making and discarding a Fix are ops with an op id and cancel,
+  then a rescan; "Mark the repo trusted" shows only when no repo or workspace mark covers the repo,
+  and never rewrites one; a re-check that could not start shows why, with Re-check; the
+  re-check starts by itself once the Fix's turn ends with
+  commits, with no budget, and none starts without commits; Merge does not need the re-check; a
+  Fix's state lives in its finding's run, and the re-check is a run of its own task, named after the
+  Fix branch.
+- The owner checks: the same on a real branch in a trusted workspace.
+
 Work: Fix from a card on a trusted subject, the brief shown and editable, the worktree, the commits
 on the card, the re-check, merge and discard; the untrusted card's two offers.
 
