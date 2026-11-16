@@ -10,6 +10,7 @@ use super::record::{Found, Subject};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::runner::{self, Kind, Opts};
+use crate::host;
 
 /// How far from its line a quote may be found.
 const SLACK: usize = 3;
@@ -81,17 +82,33 @@ pub fn merge(role: &Role, found: &[&Found]) -> String {
     )
 }
 
-/// A verifier's brief over one finding, with no word of who raised it.
-pub fn verify(role: &Role, subject: &Value, f: &Found) -> String {
-    let finding = json!({"id": f.id, "file": f.finding.file, "line": f.finding.line,
-        "end_line": f.finding.end_line, "severity": f.finding.severity, "class": f.finding.class,
-        "title": f.finding.title, "body": f.finding.body, "quote": f.finding.quote});
+/// A verifier's brief over one finding, with no word of who raised it; `earlier` are past rounds'
+/// findings near it, their lines mapped to this head.
+pub fn verify(role: &Role, subject: &Value, f: &Found, earlier: &[&host::Finding]) -> String {
+    let finding = |id: String, f: &host::Finding| {
+        json!({"id": id, "file": f.file, "line": f.line, "end_line": f.end_line,
+            "severity": f.severity, "class": f.class, "title": f.title, "body": f.body,
+            "quote": f.quote})
+    };
+    let mut data = json!({"subject": subject, "finding": finding(f.id.clone(), &f.finding)});
+    let mut text = role.text.clone();
+    if !earlier.is_empty() {
+        let refs = earlier.iter().enumerate();
+        data["earlier"] = refs
+            .map(|(i, e)| finding(format!("e{}", i + 1), e))
+            .collect();
+        text.push_str(EARLIER);
+    }
     format!(
-        "{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
-        role.text,
-        data(&json!({"subject": subject, "finding": finding}))
+        "{text}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
+        self::data(&data)
     )
 }
+
+const EARLIER: &str = "\n\nBeside the finding is `earlier`: findings earlier rounds reported near the \
+    same lines, mapped to this head. In your verdict, set `same_as` to the `id` of the one the \
+    finding is the same issue as, however worded, whatever its lens or class; leave it out when it \
+    is none of them.";
 
 /// Whether `quote` is in `file` at `sha` within a few lines of `line`..`end`; Err says why not. The
 /// blob is read raw, with no filter.

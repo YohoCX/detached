@@ -1,7 +1,11 @@
 use super::*;
 use crate::files::{Links, Markdown};
+use detached_core::panel::record::{Disposition, State};
+use detached_core::panel::track::{self, Fate, Track};
 use detached_core::panel::{Finding, Run};
-use gpui_kit::{AnyElement, component::tooltip::Tooltip};
+use gpui_kit::component::input::InputState;
+use gpui_kit::{AnyElement, ClipboardItem, component::tooltip::Tooltip};
+use kernel::panel::live;
 
 pub(super) struct PanelDocs;
 impl DocKind for PanelDocs {
@@ -16,6 +20,7 @@ impl DocKind for PanelDocs {
                 (p, watch, super::live::ticking(cx))
             }),
             confirm: None,
+            reason: None,
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             mode: kernel::ui_state::get("panels.mode", cx).unwrap_or(2),
             repo,
@@ -65,6 +70,8 @@ pub(super) struct RunView {
     )>,
     /// A kept branch whose Discard waits for a second click.
     confirm: Option<String>,
+    /// The finding being dismissed, and its reason's field.
+    reason: Option<(String, Entity<InputState>)>,
     pub repo: String,
     task: String,
     round: String,
@@ -79,17 +86,136 @@ pub(super) struct RunView {
 }
 
 impl RunView {
-    /// The run: as the live panel has it, else as its record or archive reads.
+    /// The run: as the live panel has it, else as its record or archive reads, with the findings a
+    /// dismissal covers set aside.
     fn run(&self, cx: &App) -> Option<Run> {
+        let mut run = match &self.live {
+            Some((p, ..)) => p.read(cx).state.run(&self.task, &self.round),
+            None => {
+                let rounds = self.rounds.read(cx).value.as_ref()?;
+                let one = |r: &&Run| r.task == self.task && r.round == self.round;
+                rounds.runs.iter().find(one)?.clone()
+            }
+        };
+        if let Some(t) = self.track(cx) {
+            t.apply(&mut run);
+        }
+        Some(run)
+    }
+
+    /// The task's threads, when its runs are live ones.
+    fn track<'a>(&self, cx: &'a App) -> Option<&'a Track> {
+        let rounds = self.rounds.read(cx).value.as_ref()?;
+        rounds.tasks.get(&self.task)?.track.as_ref()
+    }
+
+    /// The run's record as it replays.
+    fn record<'a>(&self, cx: &'a App) -> Option<&'a State> {
         if let Some((p, ..)) = &self.live {
-            return Some(p.read(cx).state.run(&self.task, &self.round));
+            return Some(&p.read(cx).state);
         }
         let rounds = self.rounds.read(cx).value.as_ref()?;
-        let run = rounds
-            .runs
-            .iter()
-            .find(|r| r.task == self.task && r.round == self.round);
-        run.cloned()
+        rounds.records.get(&(self.task.clone(), self.round.clone()))
+    }
+
+    /// "new · open": the finding's mark in this round and where its thread stands.
+    fn mark(&self, id: &str, cx: &App) -> Option<(String, Fate)> {
+        let (thread, mark) = self.track(cx)?.of(&self.round, id)?;
+        let mut text = format!("{} · {}", mark.text(), thread.fate.text());
+        if let Some(why) = &thread.past {
+            text.push_str(&format!(" · dismissed nearby before: {why}"));
+        }
+        Some((text, thread.fate.clone()))
+    }
+
+    fn dispose(&mut self, id: &str, d: Disposition, why: Option<String>, cx: &mut Context<Self>) {
+        let ids = [&*self.repo, &self.task, &self.round, id];
+        let t = live::dispose(ids, d, why, cx);
+        let t = cx.spawn(async move |this, cx| {
+            t.await?;
+            this.update(cx, |v, cx| {
+                v.reason = None;
+                cx.notify();
+            })
+            .ok();
+            Ok(())
+        });
+        super::live::report(t, cx);
+    }
+
+    /// Dismiss with its reason, Defer, or Reopen, for a finding of a live run.
+    fn dispositions(&self, f: &Finding, cx: &Context<Self>) -> Option<AnyElement> {
+        let (text, fate) = self.mark(&f.id, cx)?;
+        let verified = self.record(cx)?.found(&f.id)?.verdict.is_some();
+        let id = f.id.clone();
+        let mut row = div().flex().flex_wrap().gap(GAP).items_center().child(
+            div()
+                .id("panel.disposition")
+                .test_support()
+                .aria_label(text.clone())
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(theme(cx).muted)
+                .child(text),
+        );
+        match fate {
+            Fate::Open => {
+                let reason = (self.reason.as_ref()).filter(|(r, _)| *r == f.id);
+                row = match reason {
+                    Some((_, input)) => row
+                        .child(div().w(theme::graph::CHART).child(ui::input(input, cx)))
+                        .child(
+                            ui::button("panel.dismiss.confirm", "Dismiss", cx)
+                                .test_support()
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    let why = v
+                                        .reason
+                                        .as_ref()
+                                        .map(|(_, i)| i.read(cx).value().to_string());
+                                    v.dispose(&id, Disposition::Dismissed, why, cx);
+                                })),
+                        ),
+                    None => row.child(
+                        ui::button("panel.dismiss", "Dismiss…", cx)
+                            .test_support()
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                let input = cx.new(|cx| {
+                                    InputState::new(window, cx).placeholder("Why dismiss it?")
+                                });
+                                input.update(cx, |s, cx| s.focus(window, cx));
+                                v.reason = Some((id.clone(), input));
+                                cx.notify();
+                            })),
+                    ),
+                };
+                if verified {
+                    let (row_text, id) = (track::techdebt(f, &self.round), f.id.clone());
+                    row = row.child(
+                        ui::button("panel.defer", "Defer", cx)
+                            .test_support()
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(row_text.clone()));
+                                let a = kernel::activity::Activity::global(cx);
+                                let said = "Copied a docs/TECHDEBT.md row".to_string();
+                                a.update(cx, |a, cx| a.say(said, false, cx));
+                                v.dispose(&id, Disposition::Deferred, None, cx);
+                            })),
+                    );
+                }
+            }
+            Fate::Dismissed(_) | Fate::Deferred => {
+                row = row.child(
+                    ui::button("panel.reopen", "Reopen", cx)
+                        .test_support()
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.dispose(&id, Disposition::Open, None, cx)
+                        })),
+                );
+            }
+            Fate::Fixed => {}
+        }
+        Some(row.into_any_element())
     }
 
     fn sync_selection(&mut self, cx: &mut Context<Self>) {
@@ -241,6 +367,18 @@ impl RunView {
                         .child(format!("{}:{}", f.file, f.line)),
                 ),
             )
+            .children(self.mark(&f.id, cx).map(|(m, _)| {
+                div()
+                    .id(SharedString::from(format!("panel.mark.{}", f.id)))
+                    .test_support()
+                    .aria_label(m.clone())
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(text::SMALL)
+                    .text_color(theme(cx).muted)
+                    .child(m)
+            }))
             .on_click(cx.listener(move |v, _, _, cx| v.select(&finding, cx)))
         };
         let list = div()
@@ -309,6 +447,7 @@ impl RunView {
                         .text_color(theme(cx).muted)
                         .child(format!("Sources: {}", f.sources.join(", "))),
                 )
+                .children(self.dispositions(f, cx))
             })
             .when_some(self.markdown.clone(), |d, m| {
                 d.child(
@@ -375,16 +514,10 @@ impl Render for RunView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_selection(cx);
         let run = self.run(cx);
+        let compare = self.track(cx).and_then(|t| t.compare(&self.round));
         let resource = self.rounds.read(cx);
         let error = resource.error.clone();
-        let record = match &self.live {
-            Some((p, ..)) => Some(p.read(cx).state.clone()),
-            None => (resource.value.as_ref()).and_then(|r| {
-                r.records
-                    .get(&(self.task.clone(), self.round.clone()))
-                    .cloned()
-            }),
-        };
+        let record = self.record(cx).cloned();
         let mut content = div()
             .id("panel.content")
             .test_support()
@@ -450,6 +583,19 @@ impl Render for RunView {
                         )))
                         .child(div().flex_none().child(count_badges(run.counts(), cx))),
                 )
+                .when_some(compare, |d, c| {
+                    d.child(
+                        div()
+                            .id("panel.compare")
+                            .test_support()
+                            .aria_label(c.clone())
+                            .flex_none()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme(cx).muted)
+                            .child(c),
+                    )
+                })
                 .when_some(self.live.as_ref(), |d, (p, ..)| {
                     d.child(super::live::header(p, cx))
                 })

@@ -934,3 +934,104 @@ fn a_live_review_starts_from_the_panels_app_and_ends_with_a_verified_card_whose_
         "agent text fetches nothing"
     );
 }
+
+#[gpui_kit::test]
+fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_round(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::panel::marks::{BLOCK, Mark, Panels};
+    use serde_json::json;
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        let r = repo(sb, "reviewed");
+        sb.git(&r, &["switch", "-qc", "feat"]);
+        sb.commit(&r, "a.txt", "let x = 1\n", "feat");
+        let mark = Mark {
+            name: r.display().to_string(),
+            ..Mark::default()
+        };
+        let p = Panels {
+            repos: vec![mark],
+            ..Panels::default()
+        };
+        sb.state.set_block(BLOCK, p).unwrap();
+        let finding = json!({"action": "report_finding", "args": {"severity": "major",
+            "class": "correctness", "title": "x is one", "body": "It is one.", "file": "a.txt",
+            "line": 1, "quote": "let x = 1", "lenses": ["bugs"]}});
+        let done = json!({"action": "done", "args": {"nothing_found": false}});
+        let verdict = json!({"action": "report_verdict", "args": {"finding": "f1-1",
+            "verdict": "confirmed", "quote": "let x = 1", "same_as": "e1"}});
+        live_mode(
+            sb,
+            &format!("act {finding};act {done}"),
+            &format!("act {verdict};act {done}"),
+        );
+        // The next round is a gate, here on the same roster.
+        let modes = sb.state.config_dir.join("modes");
+        fs::copy(modes.join("review.md"), modes.join("gate.md")).unwrap();
+    });
+    let repo = app.sb.path("repos/reviewed");
+    let label = |app: &mut VisualTestContext, id: &str| {
+        app.find(id.to_string())
+            .and_then(|e| e.label().map(String::from))
+    };
+    open_tab(&mut app, "tab.panels");
+    app.click("panels.new");
+    wait_until(&mut app, |cx| cx.find("panels.form.trust").is_some());
+    app.click("panels.form.start");
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.mark.f1-1").as_deref() == Some("new · open")
+    });
+    app.click("panel.finding.f1-1");
+    app.click("panel.defer");
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.disposition").as_deref() == Some("new · deferred")
+    });
+    assert_eq!(
+        app.read_from_clipboard()
+            .and_then(|c| c.text())
+            .as_deref()
+            .map(|t| t.split(" Deferred").next().unwrap().to_string()),
+        Some("| x is one | `a.txt:1` | It is one.".into())
+    );
+    assert_eq!(
+        app.sb.git(&repo, &["status", "--porcelain"]),
+        "",
+        "Defer writes nothing"
+    );
+    assert!(!repo.join("docs/TECHDEBT.md").exists());
+    app.click("panel.reopen");
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.disposition").as_deref() == Some("new · open")
+    });
+
+    let doc = Doc::PanelTask {
+        repo: repo.display().to_string(),
+        task: "feat".into(),
+    };
+    app.workspace(|w, cx| w.show(doc.clone(), cx));
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.task.loop").as_deref() == Some("Loop goes on: 1 major or critical open")
+    });
+    app.click("panel.task.next");
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.compare").is_some_and(|c| {
+            c.ends_with(": 0 new, 1 still open, 0 dismissed before, 0 fixed, 0 not raised")
+        })
+    });
+    app.click("panel.finding.f1-1");
+    app.click("panel.dismiss");
+    app.input("the caller checks the bound");
+    app.click("panel.dismiss.confirm");
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.disposition").as_deref()
+            == Some("still open · dismissed: the caller checks the bound")
+    });
+    app.workspace(|w, cx| w.show(doc, cx));
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.task.loop").as_deref() == Some("Loop stops: no major or critical is open")
+    });
+    assert!(app.find("panel.task.next").is_none());
+}

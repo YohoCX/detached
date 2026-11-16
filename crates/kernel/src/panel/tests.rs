@@ -130,15 +130,18 @@ fn ended(p: &Entity<Panel>, cx: &mut TestAppContext) -> State {
 /// The run's record as its file replays.
 fn replayed(f: &Fixture, p: &Entity<Panel>, cx: &mut TestAppContext) -> State {
     let (task, run) = p.read_with(cx, |p, _| (p.task.clone(), p.run.clone()));
+    State::replay(&record::read(&record_dir(f, &task, &run)).unwrap())
+}
+
+fn record_dir(f: &Fixture, task: &str, run: &str) -> std::path::PathBuf {
     let common = git(
         f,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     );
-    let dir = Path::new(common.trim())
+    Path::new(common.trim())
         .join("detached/panels")
         .join(task)
-        .join(run);
-    State::replay(&record::read(&dir).unwrap())
+        .join(run)
 }
 
 #[gpui::test]
@@ -703,6 +706,7 @@ fn the_read_scope_gives_a_participant_its_own_findings_and_a_verifier_its_one(
         verdict: detached_core::host::Judged::Confirmed,
         quote: LINE.into(),
         body: None,
+        same_as: None,
     });
     assert!(verifier.may(&other).unwrap_err().contains("f2-1"));
     let elsewhere = Identity::participant(
@@ -811,6 +815,9 @@ fn a_run_left_without_an_end_closes_as_interrupted_and_its_trees_go(cx: &mut Tes
         cli: None,
         schema: record::SCHEMA,
         limits: vec![],
+        priors: vec![],
+        untrusted: false,
+        budget: None,
     };
     r.append(record::now(), &Event::RunStarted(started))
         .unwrap();
@@ -959,4 +966,153 @@ fn a_verifier_done_without_a_verdict_fails_and_the_gate_is_incomplete(cx: &mut T
             gate: Some(Gate::Incomplete)
         })
     );
+}
+
+#[gpui::test]
+fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::panel::record::Disposition;
+    use detached_core::panel::track::{self, Fate, Mark};
+    let f = boot(cx);
+    trust(&f);
+    let lines: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let commit = |file: &str, text: &str| {
+        git(&f, &["switch", "-q", "feat"]);
+        std::fs::write(Path::new(&f.repo).join(file), text).unwrap();
+        git(&f, &["add", "-A"]);
+        git(&f, &["commit", "-qm", "edit"]);
+        git(&f, &["switch", "-q", "main"]);
+    };
+    commit("b.txt", &lines);
+    mode(&f, "gate", &["find", "verify", "gate"], &["f1"]);
+    let b = |title: &str| {
+        let args = json!({"severity": "major", "class": "correctness", "title": title,
+            "body": "b", "file": "b.txt", "line": 5, "quote": "line 5", "lenses": ["bugs"]});
+        format!("act {}", json!({"action": "report_finding", "args": args}))
+    };
+    let same = |id: &str| {
+        let args = json!({"finding": id, "verdict": "confirmed", "quote": "line 5",
+            "same_as": "e1"});
+        format!("act {}", json!({"action": "report_verdict", "args": args}))
+    };
+    let verify = format!(
+        "fake: {};{};{};{}",
+        verdict("f1-1", "confirmed"),
+        same("f1-1"),
+        same("f1-2"),
+        done()
+    );
+    role(&f, "verifier", &verify);
+    let track = || {
+        let rounds = track::rounds(&f.core, Path::new(&f.repo), "feat").unwrap();
+        let refs: Vec<(&str, &State)> = rounds.iter().map(|(r, s)| (r.as_str(), s)).collect();
+        track::track(&refs)
+    };
+
+    role(
+        &f,
+        "f1",
+        &format!(
+            "fake: {};{};{}",
+            finding(1, LINE),
+            b("Index past the end"),
+            done()
+        ),
+    );
+    ended(&start(&f, "gate", cx), cx);
+    assert_eq!(track().gating().count(), 2);
+
+    // The owner fixes the first by hand.
+    commit("a.txt", "let x = 2\n");
+    role(
+        &f,
+        "f1",
+        &format!("fake: {};{}", b("Reads one past the end"), done()),
+    );
+    let p = start(&f, "gate", cx);
+    ended(&p, cx);
+    let (task, run) = p.read_with(cx, |p, _| (p.task.clone(), p.run.clone()));
+    let brief = std::fs::read_to_string(record_dir(&f, &task, &run).join("brief/verify-f1-1.md"));
+    assert!(
+        brief.unwrap().contains(r#""earlier": ["#),
+        "the verifier sees the earlier one"
+    );
+    let k = track();
+    assert_eq!(k.threads[0].fate, Fate::Fixed);
+    assert_eq!(k.threads[1].marks[1], Some(Mark::StillOpen("f1-1".into())));
+    assert!(!k.stops(), "the second is still open");
+
+    let why = "the caller checks the bound".to_string();
+    let t = cx.update(|cx| {
+        live::dispose(
+            [&f.repo, &task, &run, "f1-1"],
+            Disposition::Dismissed,
+            Some(why.clone()),
+            cx,
+        )
+    });
+    cx.executor().allow_parking();
+    cx.foreground_executor().block_test(t).unwrap();
+    assert_eq!(p.read_with(cx, |p, _| p.state.dispositions.len()), 1);
+
+    role(
+        &f,
+        "f1",
+        &format!("fake: {};{}", b("Off by one in the index"), done()),
+    );
+    ended(&start(&f, "gate", cx), cx);
+    let k = track();
+    assert_eq!(k.threads.len(), 2);
+    assert_eq!(
+        k.threads[0].marks,
+        [Some(Mark::New("f1-1".into())), Some(Mark::Fixed), None]
+    );
+    assert_eq!(k.threads[1].fate, Fate::Dismissed(why));
+    assert_eq!(
+        k.threads[1].marks[2],
+        Some(Mark::DismissedBefore("f1-1".into()))
+    );
+    assert!(k.stops());
+}
+
+#[test]
+fn the_next_round_keeps_the_owner_s_trust_choice_and_budget() {
+    use detached_core::panel::record::{Event, Started, Subject};
+    let started = |untrusted: bool, budget| {
+        let subject = Subject {
+            repo: "/r".into(),
+            branch: "feat".into(),
+            remote: false,
+            base: "main".into(),
+            base_sha: "a".into(),
+            head_sha: "b".into(),
+        };
+        let e = Event::RunStarted(Started {
+            subject,
+            mode: "review".into(),
+            trusted: !untrusted,
+            seats: vec![],
+            prompts: Default::default(),
+            cli: None,
+            schema: record::SCHEMA,
+            limits: vec![],
+            priors: vec![],
+            untrusted,
+            budget,
+        });
+        State::replay(&[(1, e)])
+    };
+    let rounds = |s: State| super::Rounds {
+        runs: vec![],
+        errors: vec![],
+        tasks: Default::default(),
+        records: [(("feat".to_string(), "r1".to_string()), s)].into(),
+    };
+    let next = rounds(started(true, Some(9))).next("feat").unwrap();
+    assert_eq!(
+        (next.mode.as_str(), next.untrusted, next.budget),
+        ("gate", true, Some(9))
+    );
+    assert!(!rounds(started(false, None)).next("feat").unwrap().untrusted);
 }

@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use super::marks::{self, Trust};
 use super::mode::{self, Mode, Role, Seat};
 use super::record::{Event, Record, Subject};
+use super::track::{self, Prior};
 use super::{brief, root, tree};
 use crate::backend::Probe;
 use crate::error::{Error, Result};
@@ -64,6 +65,8 @@ pub struct Prepared {
     /// The untrusted root's lock, held until the run's teardown.
     pub lock: Option<root::Lock>,
     pub limits: Vec<String>,
+    /// The task's earlier findings still tracked, mapped to this head.
+    pub priors: Vec<Prior>,
 }
 
 impl Prepared {
@@ -90,6 +93,14 @@ pub fn common(core: &AppState, repo: &Path) -> Result<PathBuf> {
         Kind::Read,
     )?;
     Ok(PathBuf::from(c.trim()))
+}
+
+/// A run's record folder.
+pub fn dir(core: &AppState, repo: &Path, task: &str, run: &str) -> Result<PathBuf> {
+    Ok(common(core, repo)?
+        .join("detached/panels")
+        .join(task)
+        .join(run))
 }
 
 /// The subject at its two SHAs: the branch's head, and where it left its base.
@@ -233,8 +244,9 @@ pub fn prepare(
     brief::sha(&subject.head_sha)?;
     let mode = mode::mode(core, repo, &s.mode)?;
     let role = |n: &str| mode::role(core, repo, n);
+    let priors = track::priors(core, repo, task, &subject.head_sha)?;
     let common = common(core, repo)?;
-    let record = Record::create(&common.join("detached/panels").join(task).join(run))?;
+    let record = Record::create(&dir(core, repo, task, run)?)?;
     let mut names: Vec<String> = vec![];
     let mut seats = vec![];
     for seat in &mode.roster {
@@ -259,6 +271,7 @@ pub fn prepare(
         sandboxed: false,
         lock: None,
         limits: vec![],
+        priors,
         mode,
     };
     let sha = p.subject.head_sha.clone();

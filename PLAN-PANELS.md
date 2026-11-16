@@ -712,6 +712,35 @@ Windows 11, an untrusted review in WSL2, with mirrored networking and the Hyper-
 
 ### Step P3. Dispositions, rounds and the loop
 
+**Status (2026-11-17): built, with the review round's fixes; waiting for the owner's check.**
+- Built: `core::panel::track` maps a finding's file and lines from its round's head to the new one
+  through a raw `git diff -U0` of that literal path, with no diff setting of the owner's shaping
+  the hunks; `run_started` records the task's tracked findings so mapped (`priors`) and the owner's
+  trust choice and budget; the verifier sees up to 3 within 3 lines, nearest first, as `earlier`
+  (`e1`…) and names the same issue in `report_verdict`'s `same_as`, and the verdict event keeps
+  which ones it saw. Threads, `new`, `still open`, `not raised`, `fixed` and "dismissed before"
+  derive from the records alone. Dismiss (with a reason), Defer and Reopen are `disposition`
+  events in the finding's run; Defer also copies a TECHDEBT.md row. The round tab compares with
+  the round before and marks each card; the task tab shows each finding's fate and the loop, with
+  Next round while it goes on.
+- Tests: `core::panel::track` (fingerprints, literal paths and diff settings, and every row above
+  on written records, the owner's latest disposition on any round's card, a dismissed neighbour
+  beside an open one, a new finding on changed lines), `kernel::panel::tests` (a three-round loop on
+  `fake_claude`: one major fixed by hand, one dismissed, the loop stops; Next round's trust and
+  budget), `tests/panels.rs` (Defer, Reopen, Dismiss and Next round in the UI).
+- Choices: a finding takes part when it stands alone, its quote holds and no verdict set it aside;
+  a link needs the verifier's `same_as`, so no ruling makes a new thread; the owner's latest
+  disposition of any of a thread's findings decides it, and covers what the thread raised before it
+  and later findings at that severity or lower, a later higher one reopens the thread, marked with
+  the dismissal, and a new thread beside a dismissed one is marked too; a deferred thread does not
+  gate; `fixed` needs a round that ended done with every finder reported and raised nothing within
+  3 lines of the mapped range; a renamed file reads as gone, and a head that cannot be diffed
+  leaves its finding unmapped and open until dismissed; Next round is a gate on the task's subject
+  (§8's re-review roster), with the round before's trust choice and budget, behind the estimate on
+  its button; Defer writes the disposition to the run's record in the git dir and nothing to the
+  tree. Fix is P4's.
+- The owner checks: a loop on a real branch.
+
 Work: dispositions; Defer's clipboard row; fingerprints; round compare; suppression; the loop.
 
 Tests:

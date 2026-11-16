@@ -274,7 +274,8 @@ pub struct Task<'a> {
     pub threads: Vec<Thread>,
 }
 
-/// Threads use file and title overlap until P3 supplies fingerprints.
+/// An imported task's threads, by file and title overlap: an archive pins no heads to map lines
+/// through. Live tasks thread by `track`.
 pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
     let mut rounds: Vec<_> = runs.iter().filter(|r| r.task == name).collect();
     rounds.sort_by(|a, b| (a.started_at, &a.round).cmp(&(b.started_at, &b.round)));
