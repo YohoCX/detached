@@ -412,3 +412,15 @@ fn a_denied_call_stays_denied_with_its_reason() {
     assert_eq!(denied.output, Some(json!("needs approval")));
     assert_eq!((&result.status, &result.output), (&None, &None));
 }
+
+#[test]
+fn a_config_change_the_cli_reports_is_blocked_and_asks_for_a_trust_recheck() {
+    let run = boot();
+    let mut spec = chat(&run);
+    spec.trusted = true;
+    let s = open(&run, &spec).unwrap();
+    let (said, events) = turn(&s, "config .claude/commands/hi.md x;config .mcp.json {}");
+    assert_eq!(said, "config block config unreported ");
+    let recheck = |e: &&Event| matches!(e, Event::Update(Update::Trust));
+    assert_eq!(events.iter().filter(recheck).count(), 1);
+}

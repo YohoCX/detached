@@ -696,7 +696,7 @@ fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(
     let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
     let write = match fake {
         Fake::Acp => format!("write .claude/settings.json {hook}"),
-        Fake::Claude => "write .claude/commands/hi.md Say hi.".into(),
+        Fake::Claude => "config .claude/commands/hi.md Say hi.".into(),
     };
     s.update(cx, |s, cx| s.prompt(format!("{write};stall"), cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));

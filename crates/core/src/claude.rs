@@ -960,14 +960,17 @@ impl Client {
             ("can_use_tool", _) => self.ask(rid.clone(), r),
             ("hook_callback", _) => {
                 let i = &r["input"];
-                let block = i["hook_event_name"] == "ConfigChange"
-                    && BLOCKED.contains(&i["source"].as_str().unwrap_or_default());
+                let change = i["hook_event_name"] == "ConfigChange";
+                let block = change && BLOCKED.contains(&i["source"].as_str().unwrap_or_default());
                 let reason = "Detached loads changed project settings once you trust them";
                 let answer = match block {
                     true => json!({"decision": "block", "reason": reason}),
                     false => json!({}),
                 };
                 self.respond(rid, answer);
+                if change {
+                    self.update(Update::Trust);
+                }
             }
             ("mcp_message", Some(tools)) => {
                 self.respond(rid, json!({"mcp_response": tools(r["message"].clone())}));

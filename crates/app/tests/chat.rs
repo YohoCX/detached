@@ -881,9 +881,9 @@ fn a_settings_change_mid_turn_keeps_the_turn_and_a_changed_command_ends_the_sess
         &format!("config .claude/settings.json {hook}; wait go; say still going"),
     );
     let seen = |cx: &mut VisualTestContext, s: &str| items(cx).iter().any(|i| i.contains(s));
-    wait_watched(cx, |cx| seen(cx, "changed mid-turn"));
+    wait_until(cx, |cx| seen(cx, "changed mid-turn"));
     std::fs::write(cx.sb.path("claude/go"), "").unwrap();
-    wait_watched(cx, |cx| seen(cx, "settings changed, so the session ended"));
+    wait_until(cx, |cx| seen(cx, "settings changed, so the session ended"));
     let got = items(cx);
     let at = |s: &str| (got.iter().skip(1).position(|i| i.contains(s))).unwrap();
     let order = [
@@ -899,8 +899,10 @@ fn a_settings_change_mid_turn_keeps_the_turn_and_a_changed_command_ends_the_sess
     );
     idle(cx);
 
-    say(cx, &format!("write .claude/commands/hi.md Say hi.; {HANG}"));
-    wait_watched(cx, |cx| {
+    wait_until(cx, |cx| cx.find("chat.trust").is_some());
+    cx.click("chat.trust.accept");
+    say(cx, &format!("config .claude/commands/hi.md hi; {HANG}"));
+    wait_until(cx, |cx| {
         let got = items(cx);
         got.iter()
             .filter(|i| i.contains("settings changed, so the session ended"))

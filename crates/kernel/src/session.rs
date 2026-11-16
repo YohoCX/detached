@@ -180,6 +180,10 @@ pub struct Session {
     whole: usize,
     /// The running turn reported `done`.
     done: bool,
+    /// Asks for a trust recheck, from the watcher or the agent's own report.
+    changed: mpsc::UnboundedSender<()>,
+    /// Taken by the recheck loop once the session started.
+    changes: Option<mpsc::UnboundedReceiver<()>>,
     _watch: Option<trust::Watch>,
     _tasks: Vec<Task<()>>,
 }
@@ -312,7 +316,7 @@ struct Started {
     session: Box<dyn backend::Session>,
     trust: String,
     trusted: bool,
-    watch: Option<(trust::Watch, mpsc::UnboundedReceiver<()>)>,
+    watch: Option<trust::Watch>,
 }
 
 impl Session {
@@ -322,6 +326,7 @@ impl Session {
             let who = Identity::of(spec.kind, &spec.repo);
             let tx = cx.global::<Sessions>().tx.clone();
             spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
+            let (changed, changes) = mpsc::unbounded();
             let mut s = Session {
                 spec: spec.clone(),
                 who,
@@ -353,6 +358,8 @@ impl Session {
                 cancelled: false,
                 whole: 0,
                 done: false,
+                changed,
+                changes: Some(changes),
                 _watch: None,
                 _tasks: vec![],
             };
@@ -378,17 +385,16 @@ impl Session {
         {
             return g.waiting.push(me);
         }
-        let (tx, spec) = (g.tx.clone(), self.spec.clone());
+        let (tx, spec, changed) = (g.tx.clone(), self.spec.clone(), self.changed.clone());
         blocking::run(cx, move || {
             let events = events(me.clone(), past.clone(), tx.clone());
             let started = start(&core, spec.clone(), past.as_deref(), events);
             let started = started.map(|mut s| {
-                let (changed, changes) = mpsc::unbounded();
                 let tree = Path::new(&spec.repo);
                 let watch = trust::watch(tree, spec.provider.trust, move || {
                     let _ = changed.unbounded_send(());
                 });
-                s.watch = watch.ok().map(|w| (w, changes));
+                s.watch = watch.ok();
                 s
             });
             let _ = tx.unbounded_send(Box::new(move |cx| {
@@ -423,10 +429,10 @@ impl Session {
             self.ready(cx);
         }
         cx.notify();
-        let Some((watch, mut changes)) = s.watch else {
+        self._watch = s.watch;
+        let Some(mut changes) = self.changes.take() else {
             return;
         };
-        self._watch = Some(watch);
         // One recheck at a time, for every change that came while one ran.
         self.task(cx, async move |this, cx| {
             while changes.next().await.is_some() {
@@ -705,7 +711,7 @@ impl Session {
     /// A trust file changed: a different fingerprint cancels the turn and ends the session, unless
     /// the backend blocks every path that moved; then the turn goes on and its end re-hash ends it.
     fn recheck(&mut self, found: Option<String>, cx: &mut Context<Self>) {
-        let Some(found) = found.filter(|f| *f != self.trust) else {
+        let Some(found) = found.filter(|f| *f != self.trust && self.ending.is_none()) else {
             return;
         };
         if blocked(self.blocks, &self.trust, &found) {
@@ -826,6 +832,7 @@ impl Session {
             (Update::Tasks(t), _) => self.tasks = t,
             (Update::Limits(l), _) => self.limits = Some(l),
             (Update::Lacks(p), _) => self.lacks.push(p),
+            (Update::Trust, _) => _ = self.changed.unbounded_send(()),
             (Update::Config(c), _) => self.config = c,
             (Update::Mode(m), _) => {
                 if let Some(c) = self.config.iter_mut().find(|c| c.id == "mode") {

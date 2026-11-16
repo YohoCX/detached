@@ -367,7 +367,8 @@ a session loads none of it.
   - **Claude blocks what the CLI reports.** A session registers the `ConfigChange` callback at
     `initialize` and answers `block` for `project_settings`, `local_settings` and `skills`, as the
     sidecar does. The CLI keeps what it loaded and the turn goes on. The tree's acceptance is
-    stale, and the feed says so.
+    stale, and the feed says so. Each callback also rechecks the tree at once, so neither the note
+    nor a changed command's end waits for the OS's file events.
   - **The block carries the running turn, no further.** The turn's end re-hash (§6) finds the
     moved fingerprint and ends the session there, as `kernel::Session` does today for any path:
     the chat goes on in a new session without the project's settings until the owner accepts. No

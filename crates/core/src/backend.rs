@@ -205,6 +205,8 @@ pub enum Update {
     Limits(Vec<Limit>),
     /// The agent lacks this piece: it is gone for the session.
     Lacks(Piece),
+    /// The agent saw its project config change: the host rechecks the tree's trust now.
+    Trust,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

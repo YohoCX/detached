@@ -487,7 +487,13 @@ impl Turn<'_> {
                 let source = match path {
                     ".claude/settings.json" => Some("project_settings"),
                     ".claude/settings.local.json" => Some("local_settings"),
-                    p if p.starts_with(".claude/skills/") => Some("skills"),
+                    // Commands and agents reload with the skills, as the CLI's do.
+                    p if [".claude/skills/", ".claude/commands/", ".claude/agents/"]
+                        .iter()
+                        .any(|d| p.starts_with(d)) =>
+                    {
+                        Some("skills")
+                    }
                     _ => None,
                 };
                 let hooked = self.shared.lock().unwrap().hooks;
