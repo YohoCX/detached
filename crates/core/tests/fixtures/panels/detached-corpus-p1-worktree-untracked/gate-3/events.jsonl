@@ -1,0 +1,11 @@
+{"at": "2026-11-01T00:03:20.000Z", "kind": "run_started", "subject": {"repo": "/r", "branch": "detached-corpus/p1/worktree-untracked", "remote": false, "base": "main", "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "head_sha": "1111111111111111111111111111111111111111"}, "mode": "gate", "trusted": true, "seats": [], "prompts": {}, "cli": null, "schema": 1, "priors": []}
+{"at": "2026-11-01T00:03:21.000Z", "kind": "stage", "stage": "find"}
+{"at": "2026-11-01T00:03:22.000Z", "kind": "participant_started", "participant": "f1", "role": "bugs", "lenses": ["bugs"], "stage": "find", "model": "opus", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:03:23.000Z", "kind": "finding", "participant": "f1", "id": "f1-1", "finding": {"severity": "major", "class": "correctness", "title": "untracked files", "body": "b", "fix": null, "file": "crates/core/src/git/worktree.rs", "line": 275, "end_line": 275, "quote": "q", "lenses": ["bugs"]}, "unverified": null}
+{"at": "2026-11-01T00:03:24.000Z", "kind": "usage", "participant": "f1", "tokens": 900000, "cost": null}
+{"at": "2026-11-01T00:03:25.000Z", "kind": "reported", "participant": "f1", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:03:26.000Z", "kind": "stage", "stage": "verify"}
+{"at": "2026-11-01T00:03:27.000Z", "kind": "participant_started", "participant": "v1", "role": "verifier", "lenses": [], "stage": "verify", "model": "sonnet", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:03:28.000Z", "kind": "verdict", "participant": "v1", "model": "sonnet", "verdict": {"finding": "f1-1", "verdict": "confirmed", "quote": "q", "body": null, "same_as": null}, "earlier": []}
+{"at": "2026-11-01T00:03:29.000Z", "kind": "reported", "participant": "v1", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:03:30.000Z", "kind": "run_ended", "end": "done", "gate": "block"}

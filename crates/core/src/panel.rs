@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub mod brief;
+pub mod corpus;
 mod graphs;
 pub mod marks;
 pub mod mode;
 pub mod record;
 pub mod root;
 pub mod run;
+pub mod stats;
 pub mod track;
 pub mod tree;
 pub use graphs::*;

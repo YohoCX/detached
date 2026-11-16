@@ -1,6 +1,7 @@
 pub mod flow;
 pub mod live;
 mod round;
+mod stats;
 mod task;
 pub mod timeline;
 
@@ -36,6 +37,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     );
     dock::register_doc(cx, "panel", round::PanelDocs);
     dock::register_doc(cx, "panel-task", task::TaskDocs);
+    dock::register_doc(cx, "panel-stats", stats::StatsDocs);
     vec![]
 }
 
@@ -112,7 +114,10 @@ impl Render for List {
                 .into()
             });
             if let Some(rounds) = &resource.value {
+                let corpus =
+                    detached_core::panel::run::task(detached_core::panel::corpus::BRANCHES);
                 let mut tasks: Vec<_> = rounds.runs.iter().map(|r| r.task.clone()).collect();
+                tasks.retain(|t| !t.starts_with(&corpus));
                 tasks.sort();
                 tasks.dedup();
                 tasks.sort_by_key(|task| {
@@ -199,6 +204,15 @@ impl Render for List {
                         ui::button("panels.new", "New run", cx)
                             .test_support()
                             .on_click(cx.listener(|v, _, window, cx| v.toggle_form(window, cx))),
+                    )
+                    .child(
+                        ui::button("panels.stats", "Stats", cx)
+                            .test_support()
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                if let Some(repo) = &v.repo {
+                                    stats::open(repo, cx);
+                                }
+                            })),
                     )
                     .child(
                         ui::icon_button("panels.refresh", ui::Icon::Refresh, cx)
