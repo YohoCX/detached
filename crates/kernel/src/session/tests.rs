@@ -277,7 +277,7 @@ fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestA
         matches!(
             &s.read(cx).items[2],
             Item::Changes {
-                back: Back::Done,
+                back: Back::Done { .. },
                 ..
             }
         )
@@ -725,5 +725,10 @@ fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(
         assert_eq!(s.state, State::Ended(End::Trust));
         let sent = |i: &Item| matches!(i, Item::Text(_) | Item::End { .. });
         assert!(!s.items.iter().any(sent), "{:?}", s.items);
+        assert_eq!(
+            s.unsent.as_deref(),
+            Some("say not sent"),
+            "kept for the next session"
+        );
     });
 }

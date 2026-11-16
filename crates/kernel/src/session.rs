@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use detached_core::adapters::Provider;
 use detached_core::api;
@@ -15,6 +15,7 @@ use detached_core::backend::{
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
 use detached_core::host::{self as tools, Act, Call};
+use detached_core::sessions;
 use detached_core::skills::Skills;
 use detached_core::state::AppState;
 use detached_core::trust;
@@ -25,6 +26,11 @@ use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
 
 use crate::blocking::{self, FRAME};
 use crate::host::Identity;
+use crate::resource::{self, Policy, Resource};
+use crate::workspace::Workspace;
+
+/// The mode that `set` takes back after a model without it.
+pub const AUTO: &str = "auto";
 
 pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past the plan's limits \
     this session drew from extra usage, and that has run out. Claude in a terminal tab (`claude`) \
@@ -36,6 +42,9 @@ const TRUST_CHANGED: &str = "The repo's agent settings changed, so the session e
     loads them only once you trust them.";
 
 pub const NO_DONE: &str = "The turn ended without `done`.";
+
+const RESTORE_STALE: &str =
+    "The files changed since that list, so nothing was restored. Check the new one.";
 
 pub const TRUST_STALE: &str = "The repo's agent settings changed mid-turn. The agent keeps the ones \
     it started with, and the session ends with this turn.";
@@ -80,7 +89,11 @@ pub enum Back {
     Working,
     /// For the user to confirm.
     Planned(Restore),
-    Done,
+    /// Restored; going back from `undo` to `after` undoes it.
+    Done {
+        undo: String,
+        after: String,
+    },
     Failed(String),
 }
 
@@ -96,8 +109,9 @@ pub enum Item {
         /// Questions for the user, answered by `answer_questions`.
         questions: Vec<Question>,
     },
-    /// What a turn changed in the worktree, between two snapshots.
+    /// What a turn changed in one repo's worktree, between two snapshots.
     Changes {
+        repo: String,
         start: String,
         end: String,
         files: Vec<FileChange>,
@@ -138,6 +152,12 @@ pub struct Session {
     pub limits: Option<Vec<Limit>>,
     /// What this session's agent turned out to lack.
     pub lacks: Vec<Piece>,
+    /// Items before this came before the session started: on a resume, its history.
+    pub history: usize,
+    /// A prompt given while the session starts, sent once it has.
+    pub queued: Option<String>,
+    /// A prompt the session ended on before it went out.
+    pub unsent: Option<String>,
     /// Waiting asks by item, with their keys; dropped before `open`, so their answers go out first.
     replies: HashMap<usize, (backend::Reply, Option<String>)>,
     /// Dropped, it closes on its backend.
@@ -148,8 +168,8 @@ pub struct Session {
     blocks: &'static [&'static str],
     /// "Always allow" answers, kept by the host: the asks' keys.
     rules: Vec<String>,
-    /// When the running turn began, and the worktree's tree then.
-    turn: Option<(Instant, Option<String>)>,
+    /// When the running turn began, and each repo's tree then.
+    turn: Option<(Instant, Vec<(String, String)>)>,
     /// Set while a running turn is cancelled to end the session.
     ending: Option<End>,
     /// The running turn was cancelled; a cancel asked before its prompt went out follows it.
@@ -289,6 +309,7 @@ fn crashed(x: &Exit) -> String {
 struct Started {
     session: Box<dyn backend::Session>,
     trust: String,
+    trusted: bool,
     watch: Option<(trust::Watch, mpsc::UnboundedReceiver<()>)>,
 }
 
@@ -316,6 +337,9 @@ impl Session {
                 parts: vec![],
                 limits: None,
                 lacks: vec![],
+                history: 0,
+                queued: None,
+                unsent: None,
                 open: None,
                 trust: String::new(),
                 blocks: backend(spec.provider).caps().blocks,
@@ -385,14 +409,15 @@ impl Session {
             Ok(s) => s,
             Err(e) => {
                 self.state = State::Ended(End::Failed(e.to_string()));
+                self.items.extend(self.queued.take().map(Item::User));
                 self.items.push(Item::Note(e.to_string()));
                 return cx.notify();
             }
         };
-        (self.open, self.trust) = (Some(s.session), s.trust);
+        (self.open, self.trust, self.spec.trusted) = (Some(s.session), s.trust, s.trusted);
         // Its `Opened` may come before this or after.
         if self.version.is_some() {
-            self.state = State::Idle;
+            self.ready(cx);
         }
         cx.notify();
         let Some((watch, mut changes)) = s.watch else {
@@ -429,45 +454,106 @@ impl Session {
         self.limits.is_some() || self.lacks.contains(&Piece::Limits) || !has
     }
 
-    /// Starts a turn: the trust check and the worktree's snapshot first, then the prompt.
+    /// Started: idle, its history before it, and a queued prompt sent.
+    fn ready(&mut self, cx: &mut Context<Self>) {
+        (self.state, self.history) = (State::Idle, self.items.len());
+        if let Some(text) = self.queued.take() {
+            self.prompt(text, cx);
+        }
+    }
+
+    /// A turn runs, or waits for the session to start.
+    pub fn busy(&self) -> bool {
+        self.state == State::Running || self.queued.is_some()
+    }
+
+    /// The repos the session works in: its own, or each one the workspace has in its folder.
+    pub fn repos(&self, cx: &App) -> Vec<String> {
+        let all = Workspace::get(cx).repos();
+        if all.iter().any(|r| r.path == self.spec.repo) {
+            return vec![self.spec.repo.clone()];
+        }
+        let folder = Path::new(&self.spec.repo);
+        let inside = all
+            .iter()
+            .filter(|r| Path::new(&r.path).starts_with(folder));
+        let inside: Vec<String> = inside.map(|r| r.path.clone()).collect();
+        match inside.is_empty() {
+            true => vec![self.spec.repo.clone()],
+            false => inside,
+        }
+    }
+
+    /// Starts a turn: the trust check and the worktrees' snapshots first, then the prompt. While the
+    /// session starts, the prompt waits for it.
     pub fn prompt(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.state == State::Starting && self.queued.is_none() {
+            self.queued = Some(text);
+            return cx.notify();
+        }
         if self.open.is_none() || self.state != State::Idle {
             return;
         }
         self.items.push(Item::User(text.clone()));
         (self.state, self.cancelled, self.done) = (State::Running, false, false);
         let core = crate::core(cx).clone();
-        let (repo, trust) = (self.spec.repo.clone(), self.trust.clone());
+        let (repo, trust, repos) = (self.spec.repo.clone(), self.trust.clone(), self.repos(cx));
         let ready = blocking::run(cx, move || {
             let moved = fingerprint(&core, &repo).is_some_and(|f| f != trust);
-            (!moved).then(|| api::snapshot(&core, &repo))
+            let snap = |r: String| (api::snapshot(&core, &r), r);
+            (!moved).then(|| repos.into_iter().map(snap).collect())
         });
         self.task(cx, async move |this, cx| {
             let ready = ready.await;
-            this.update(cx, |s, cx| s.send(ready, &text, cx)).ok();
+            this.update(cx, |s, cx| s.send(ready, text, cx)).ok();
         });
         cx.notify();
     }
 
-    /// Sends the prompt once the turn's snapshot is taken; None when the trust files moved.
-    fn send(&mut self, ready: Option<Result<String>>, text: &str, cx: &mut Context<Self>) {
-        let Some(tree) = ready else {
-            return self.close(End::Trust, cx);
+    /// Sends the prompt once the turn's snapshots are taken; None when the trust files moved.
+    fn send(
+        &mut self,
+        ready: Option<Vec<(Result<String>, String)>>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        let end = match (ready, self.ending.take()) {
+            (None, _) => Some(End::Trust),
+            (Some(_), Some(end)) => Some(end),
+            (Some(trees), None) => return self.prompted(trees, text, cx),
         };
-        if let Some(end) = self.ending.take() {
-            return self.close(end, cx);
+        if self.items.last() == Some(&Item::User(text.clone())) {
+            self.items.pop();
         }
+        self.unsent = Some(text);
+        self.close(end.unwrap_or(End::Closed), cx);
+    }
+
+    fn prompted(
+        &mut self,
+        trees: Vec<(Result<String>, String)>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(o) = self.open.as_ref().filter(|_| self.state == State::Running) else {
             return;
         };
-        let sent = o.prompt(text);
+        let sent = o.prompt(&text);
         if sent.is_ok() && self.cancelled {
             o.cancel();
         }
         match sent {
             Ok(()) => {
-                let tree = tree.map_err(|e| self.note(format!("No snapshot for this turn: {e}")));
-                self.turn = Some((Instant::now(), tree.ok()));
+                let mut starts = vec![];
+                for (tree, repo) in trees {
+                    match tree {
+                        Ok(t) => starts.push((repo, t)),
+                        Err(e) => {
+                            self.note(format!("No snapshot of {} for this turn: {e}", name(&repo)))
+                        }
+                    }
+                }
+                self.turn = Some((Instant::now(), starts));
             }
             Err(e) => {
                 self.state = State::Idle;
@@ -477,8 +563,12 @@ impl Session {
         cx.notify();
     }
 
-    /// Ends the running turn and its foreground command, and answers its asks `cancelled`.
+    /// Ends the running turn and its foreground command, and answers its asks `cancelled`; a
+    /// queued prompt goes.
     pub fn cancel(&mut self) {
+        if let Some(text) = self.queued.take() {
+            self.items.push(Item::User(text));
+        }
         let (Some(o), State::Running) = (&self.open, &self.state) else {
             return;
         };
@@ -527,13 +617,26 @@ impl Session {
         cx.notify();
     }
 
-    /// Switches the model, effort or mode; its new value comes as a config update.
+    /// Switches the model, effort or mode, and keeps it for a resume; its new value comes as a
+    /// config update. A model with `auto` takes it back when it was asked for.
     pub fn set(&mut self, setting: Setting) -> Result<()> {
         let o = self
             .open
             .as_ref()
             .ok_or(Error::Other("The session is not open".into()))?;
-        o.set(setting)
+        o.set(setting.clone())?;
+        match setting {
+            Setting::Model(m) => {
+                let auto = self.models.iter().any(|x| x.value == m && x.auto);
+                if self.spec.mode == AUTO && auto {
+                    o.set(Setting::Mode(AUTO.into()))?;
+                }
+                self.spec.model = Some(m);
+            }
+            Setting::Effort(e) => self.spec.effort = Some(e),
+            Setting::Mode(m) => self.spec.mode = m,
+        }
+        Ok(())
     }
 
     pub fn stop_task(&self, id: &str) {
@@ -545,6 +648,21 @@ impl Session {
     /// Ends the session and the CLI it ran on.
     pub fn end(&mut self, cx: &mut Context<Self>) {
         self.close(End::Closed, cx);
+    }
+
+    /// Cancels the running turn and ends the session once the turn has listed its changes; at
+    /// once when idle.
+    pub fn cancel_and_end(&mut self, cx: &mut Context<Self>) {
+        self.wind_up(End::Closed, cx);
+    }
+
+    fn wind_up(&mut self, end: End, cx: &mut Context<Self>) {
+        if self.state == State::Running {
+            self.ending = Some(end);
+            self.cancel();
+        } else {
+            self.close(end, cx);
+        }
     }
 
     fn close(&mut self, end: End, cx: &mut Context<Self>) {
@@ -579,18 +697,14 @@ impl Session {
             }
             return;
         }
-        if self.state == State::Running {
-            self.ending = Some(End::Trust);
-            self.cancel();
-        } else {
-            self.close(End::Trust, cx);
-        }
+        self.wind_up(End::Trust, cx);
     }
 
     fn on(&mut self, e: Event, cx: &mut Context<Self>) {
         if matches!(self.state, State::Ended(_)) {
             return;
         }
+        let mode = self.option("mode").map(String::from);
         match e {
             Event::Opened(o) => {
                 self.id = Some(o.id);
@@ -602,7 +716,7 @@ impl Session {
                     self.note(HISTORY_UNAVAILABLE.into());
                 }
                 if self.open.is_some() {
-                    self.state = State::Idle;
+                    self.ready(cx);
                 }
             }
             Event::Update(u) => self.update(u),
@@ -636,6 +750,12 @@ impl Session {
                 self.note(said.clone());
                 self.close(End::Crashed(said), cx);
             }
+        }
+        // The agent drops a mode by itself, as `auto` on a model without it.
+        let now = self.option("mode");
+        if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != self.spec.mode) {
+            let note = format!("Asked for {}, the session runs in {now}.", self.spec.mode);
+            self.note(note);
         }
         cx.notify();
     }
@@ -694,10 +814,10 @@ impl Session {
         }
     }
 
-    /// The turn's end: its snapshot, what it changed and the trust re-hash, then idle again.
+    /// The turn's end: its snapshots, what it changed and the trust re-hash, then idle again.
     fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
         self.drop_replies();
-        let (began, start) = self.turn.take().unwrap_or((Instant::now(), None));
+        let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
         let stop = match r {
             Ok(t) => Some(t.stop),
             Err(f) if f.cause == Some(Cause::OutOfExtraUsage) => {
@@ -717,33 +837,44 @@ impl Session {
         let core = crate::core(cx).clone();
         let repo = self.spec.repo.clone();
         let found = blocking::run(cx, move || {
-            let changes = start.map(|start| {
-                let end = api::snapshot(&core, &repo)?;
+            let changes = |repo: &str, start: String| {
+                let end = api::snapshot(&core, repo)?;
                 let (from, to) = (
                     Side::Rev { rev: start.clone() },
                     Side::Rev { rev: end.clone() },
                 );
-                let files = api::list_changes(&core, &repo, &from, &to)?;
+                let files = api::list_changes(&core, repo, &from, &to)?;
                 Ok::<_, Error>((start, end, files))
-            });
-            (changes, fingerprint(&core, &repo))
+            };
+            let all: Vec<_> = (starts.into_iter())
+                .map(|(r, start)| (changes(&r, start), r))
+                .collect();
+            (all, fingerprint(&core, &repo))
         });
         self.task(cx, async move |this, cx| {
-            let (changes, trust) = found.await;
+            let (all, trust) = found.await;
             this.update(cx, |s, cx| {
-                match changes {
-                    Some(Ok((start, end, files))) if !files.is_empty() => {
-                        let back = Back::Idle;
-                        let changes = Item::Changes {
-                            start,
-                            end,
-                            files,
-                            back,
-                        };
-                        s.items.insert(s.items.len() - 1, changes);
+                for (changes, repo) in all {
+                    crate::invalidate::status(cx, &repo).detach();
+                    match changes {
+                        Ok((start, end, files)) if !files.is_empty() => {
+                            let back = Back::Idle;
+                            let changes = Item::Changes {
+                                repo,
+                                start,
+                                end,
+                                files,
+                                back,
+                            };
+                            let at = s.items.iter().rposition(|i| matches!(i, Item::End { .. }));
+                            s.items.insert(at.unwrap_or(s.items.len()), changes);
+                        }
+                        Err(e) => s.note(format!(
+                            "No snapshot of {} after the turn: {e}",
+                            name(&repo)
+                        )),
+                        _ => {}
                     }
-                    Some(Err(e)) => s.note(format!("No snapshot after the turn: {e}")),
-                    _ => {}
                 }
                 let trust_moved = trust.is_some_and(|f| f != s.trust);
                 match s.ending.take() {
@@ -758,59 +889,73 @@ impl Session {
         });
     }
 
-    /// Lists what going back to before the turn of the `Changes` at `item` would change.
+    /// Lists what going back to before the turn of the `Changes` at `item` would change, or what
+    /// undoing its restore would.
     pub fn plan_back(&mut self, item: usize, cx: &mut Context<Self>) {
         let Some(Item::Changes {
-            start, end, back, ..
+            repo,
+            start,
+            end,
+            back,
+            ..
         }) = self.items.get_mut(item)
         else {
             return;
         };
-        if !matches!(back, Back::Idle | Back::Failed(_) | Back::Done) {
-            return;
-        }
+        let (to, end) = match back {
+            Back::Idle | Back::Failed(_) => (start.clone(), end.clone()),
+            Back::Done { undo, after } => (undo.clone(), after.clone()),
+            _ => return,
+        };
         *back = Back::Working;
-        let (core, repo) = (crate::core(cx).clone(), self.spec.repo.clone());
-        let (to, end) = (start.clone(), end.clone());
+        let (core, repo) = (crate::core(cx).clone(), repo.clone());
         let plan = blocking::run(cx, move || api::plan_restore(&core, &repo, &to, &end));
-        self.back(item, async { plan.await.map(Back::Planned) }, cx);
+        self.back(item, async { plan.await.map(Back::Planned) }, false, cx);
     }
 
-    /// Applies the planned restore; nothing when the files changed since the plan.
+    /// Applies the planned restore; when the files changed since the plan, nothing, and a new plan.
     pub fn confirm_back(&mut self, item: usize, cx: &mut Context<Self>) {
-        let Some(Item::Changes { back, .. }) = self.items.get_mut(item) else {
+        let Some(Item::Changes { back, repo, .. }) = self.items.get_mut(item) else {
             return;
         };
         let Back::Planned(plan) = std::mem::replace(back, Back::Working) else {
             return;
         };
-        let (core, repo) = (crate::core(cx).clone(), self.spec.repo.clone());
-        let done = blocking::run(cx, move || api::restore(&core, &repo, &plan));
-        let done = async {
-            match done.await? {
-                Some(_) => Ok(Back::Done),
-                None => Err(Error::Other(
-                    "The files changed since that list, so nothing was restored.".into(),
-                )),
-            }
-        };
-        self.back(item, done, cx);
+        let (core, repo) = (crate::core(cx).clone(), repo.clone());
+        let done = blocking::run(cx, move || match api::restore(&core, &repo, &plan)? {
+            Some(after) => Ok(Back::Done {
+                undo: plan.undo,
+                after,
+            }),
+            None => api::plan_restore(&core, &repo, &plan.to, &plan.end).map(Back::Planned),
+        });
+        self.back(item, done, true, cx);
+    }
+
+    pub fn cancel_back(&mut self, item: usize, cx: &mut Context<Self>) {
+        if let Some(Item::Changes { back, .. }) = self.items.get_mut(item) {
+            *back = Back::Idle;
+        }
+        cx.notify();
     }
 
     fn back(
         &mut self,
         item: usize,
         done: impl Future<Output = Result<Back>> + 'static,
+        confirmed: bool,
         cx: &mut Context<Self>,
     ) {
-        let repo = self.spec.repo.clone();
         self.task(cx, async move |this, cx| {
             let done = done.await;
             this.update(cx, |s, cx| {
-                if let Some(Item::Changes { back, .. }) = s.items.get_mut(item) {
-                    *back = done.unwrap_or_else(|e| Back::Failed(e.to_string()));
+                if confirmed && matches!(done, Ok(Back::Planned(_))) {
+                    s.note(RESTORE_STALE.into());
                 }
-                crate::invalidate::status(cx, &repo).detach();
+                if let Some(Item::Changes { back, repo, .. }) = s.items.get_mut(item) {
+                    *back = done.unwrap_or_else(|e| Back::Failed(e.to_string()));
+                    crate::invalidate::status(cx, repo).detach();
+                }
                 cx.notify();
             })
             .ok();
@@ -832,7 +977,8 @@ impl Session {
         }
     }
 
-    fn note(&mut self, text: String) {
+    /// Adds a note to the feed.
+    pub fn note(&mut self, text: String) {
         self.items.push(Item::Note(text));
     }
 
@@ -846,6 +992,12 @@ impl Session {
     }
 }
 
+/// A repo's folder name.
+fn name(repo: &str) -> String {
+    let name = Path::new(repo).file_name();
+    name.map_or(repo.into(), |n| n.to_string_lossy().into())
+}
+
 /// The trust files' fingerprint now; None when they cannot be read, which changes nothing.
 fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
     let p = trust::project(&core.env(), Path::new(repo)).ok()?;
@@ -856,6 +1008,7 @@ fn fingerprint(core: &AppState, repo: &str) -> Option<String> {
 fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) -> Result<Started> {
     let project = trust::project(&core.env(), Path::new(&spec.repo))?;
     spec.trusted = trust::trusted(&core.config_dir, &spec.repo, &project);
+    let trusted = spec.trusted;
     // Skills never stop a session: a bad item is listed with its error, and the CLI reads its own.
     spec.skills = Skills::load(core, Some(&spec.repo)).map_or_else(|_| vec![], |s| s.all);
     let b = backend(spec.provider);
@@ -866,6 +1019,7 @@ fn start(core: &AppState, mut spec: Spec, past: Option<&str>, events: Events) ->
     Ok(Started {
         session,
         trust: project.fingerprint,
+        trusted,
         watch: None,
     })
 }
@@ -878,16 +1032,58 @@ fn blocked(blocks: &[&str], was: &str, now: &str) -> bool {
     moved.all(|f| blocks.iter().any(|g| trust::names(g, Path::new(&f))))
 }
 
-/// The past sessions in the spec's folder, newest first.
+/// The past sessions in the spec's folder, newest first, each archived as the host's index says.
 pub fn past(spec: Spec, cx: &App) -> Task<Result<Vec<backend::Past>>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || backend(spec.provider).past(&core, &spec))
+    blocking::run(cx, move || listed(&core, &spec))
 }
 
-/// Removes the past session `id` of the spec's provider.
+fn listed(core: &AppState, spec: &Spec) -> Result<Vec<backend::Past>> {
+    let mut all = backend(spec.provider).past(core, spec)?;
+    let index = sessions::index(core);
+    for p in &mut all {
+        p.cwd = Some(spec.repo.clone());
+        if let Some(e) = index.get(&p.id) {
+            p.tag = e.archived.then(|| "archived".into());
+        }
+    }
+    Ok(all)
+}
+
+/// The past sessions of `folder` on `provider`, as `past` lists them.
+pub fn past_of(
+    provider: &'static Provider,
+    folder: &str,
+    cx: &mut App,
+) -> Entity<Resource<Vec<backend::Past>>> {
+    let folder = folder.to_string();
+    let key = format!("past:{}:{folder}", provider.id);
+    resource::get(cx, key, || {
+        let policy = Policy {
+            fresh_for: Some(Duration::from_secs(60)),
+            poll: None,
+        };
+        Resource::new(policy, move |cx| {
+            let core = crate::core(cx).clone();
+            let spec = Spec::new(provider, &folder, backend::Kind::Chat);
+            move || listed(&core, &spec)
+        })
+    })
+}
+
+/// Archives or unarchives the past session `id` in the host's index.
+pub fn archive(id: String, archived: bool, cx: &App) -> Task<Result<()>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || sessions::archive(&core, &id, archived))
+}
+
+/// Removes the past session `id` of the spec's provider, and its entry in the host's index.
 pub fn delete(spec: Spec, id: String, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || backend(spec.provider).delete(&core, &spec, &id))
+    blocking::run(cx, move || {
+        backend(spec.provider).delete(&core, &spec, &id)?;
+        sessions::forget(&core, &id)
+    })
 }
 
 /// The backend the provider's manifest names.
