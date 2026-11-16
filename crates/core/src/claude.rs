@@ -49,7 +49,7 @@ const DENIED: &[&str] = &[
     "Bash(tail *.env*)",
 ];
 /// The `ConfigChange` sources answered `block`: the CLI keeps what it loaded, and the turn's end
-/// re-hash ends the session.
+/// re-hash ends the session. Commands and agents reload through `skills`.
 const BLOCKED: &[&str] = &["project_settings", "local_settings", "skills"];
 const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk"];
 const SERVER: &str = "detached-host";
@@ -88,6 +88,10 @@ impl Backend for Direct {
                 ".claude/settings.json",
                 ".claude/settings.local.json",
                 ".claude/skills/*/SKILL.md",
+                ".claude/commands/**",
+                ".claude/agents/**",
+                // Never reloaded mid-session: the next spawn's start check covers it.
+                ".mcp.json",
             ],
             ..Caps::default()
         }

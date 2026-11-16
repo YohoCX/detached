@@ -365,25 +365,24 @@ a session loads none of it.
   until accepted, unless the session's backend blocks that path:
   - **Claude blocks what the CLI reports.** A session registers the `ConfigChange` callback at
     `initialize` and answers `block` for `project_settings`, `local_settings` and `skills`, as the
-    sidecar does. The CLI keeps what it loaded and the turn goes on. The tree's acceptance is
-    stale, and the feed says so. Each callback also rechecks the tree at once, so neither the note
-    nor a changed command's end waits for the OS's file events.
+    sidecar does. Commands and agents reload through `skills`, so the block keeps them too. The
+    CLI keeps what it loaded and the turn goes on. The tree's acceptance is stale, and the feed
+    says so. Each callback also rechecks the tree at once, so the note does not wait for the OS's
+    file events.
+  - **Claude's blocked paths:** `.claude/settings.json`, `.claude/settings.local.json`,
+    `.claude/skills/*/SKILL.md`, `.claude/commands/**`, `.claude/agents/**` and `.mcp.json`, which
+    the CLI never reloads mid-session. ACP names none, so any trust change ends an ACP session at
+    once ([decision](docs/decisions/2026-11-16-configchange-narrowed.md)).
   - **The block carries the running turn, no further.** The turn's end re-hash (§6) finds the
     moved fingerprint and ends the session there, as `kernel::Session` does today for any path:
     the chat goes on in a new session without the project's settings until the owner accepts. No
     prompt is lost to it.
   - **A change made between turns** ends the session unsent at the next turn's start check (§6),
     whichever path it is, as today's chat does.
-  - **What the CLI does not report still ends the session:** `.claude/commands/**`,
-    `.claude/agents/**` and `.mcp.json` have no `ConfigChange` source. So the built rule splits by
-    path, not by provider: a backend names the trust paths it blocks (§1), and ACP names none.
-  - **Unproven until H4c part 0.** Spike 0c blocked one change to the project's settings, made by
-    the test between turns. An agent's own write followed at once by a tool call, a `PreToolUse`
-    hook and the other two sources run there. A source whose block comes too late ends the
-    session like a command does, and until that row is answered the trust prompt keeps its
-    sentence about a window in which a new hook can fire.
-  - **Regression, stated in §13.** Today a changed command or agent file reloads and the turn
-    goes on; here it ends the session. Instruction files and docs never do.
+  - **H4c part 0 row 5** ran it on every OS: no new hook ran before its block, from settings or a
+    skill, by the Write tool or a Bash redirect
+    ([ANSWERS-H4c §5](spikes/claude-direct/ANSWERS-H4c.md)). Windows' Write-tool rows wait for the
+    long path. Instruction files and docs never end a session.
 
 ## 5. Permissions and read-only
 
@@ -874,7 +873,7 @@ On Claude's direct backend. Codex's column comes with H13b.
 | The name | "Claude" | open (§2) |
 | System prompt | the CLI's own default | **a change**: today's chat sends one line, since the SDK's default is empty; here it gets what `claude` in a terminal has |
 | Untrusted repo | `--setting-sources user` | none; the repo's `CLAUDE.md` is not sent under it |
-| `ConfigChange` block | the hook callback | settings and skills are blocked as today. **A changed command, agent file or `.mcp.json` ends the session** (§4) |
+| `ConfigChange` block | the hook callback | settings, skills, commands, agents and `.mcp.json` are blocked mid-turn; the session ends with the turn (§4) |
 | Env allowlist, the kill on close, `.env` deny, always-rules in the session | §1, §2, §5 | EOF is not a kill for the CLI: §1's close and leash |
 | Extra folders, host tools | `--add-dir`; the control channel (§7) | none; `--add-dir` is H4c part 0's row |
 
@@ -938,7 +937,7 @@ settings, ops and invalidation findings.
 | Finding | Answer |
 | --- | --- |
 | claude-agent-acp writes "Always allow" into `.claude/settings.local.json` | §5: `allow_once` only |
-| No `ConfigChange` block | §4: untrusted repos load nothing; the window and the regression stated |
+| No `ConfigChange` block | §4: untrusted repos load nothing; Claude blocks a mid-turn change, and the session ends with the turn |
 | codex-acp force-trusts roots | §4: Codex only in accepted trees |
 | Unparsed provider files count as nothing to trust | §4: an unparsed config file is an item |
 | Gateways expose `repo.checkout` | §7: no repo writes |
@@ -1366,6 +1365,12 @@ under `make agent-test` on macOS with `claude` 2.1.325, and `--session` takes `/
 `/stop <task id>` between turns and prints the config and the tasks as they change, for gate step
 3's turn in `auto`.
 
+**Status (2026-11-16):** a mid-turn change to commands, agents or `.mcp.json` no longer ends a
+Claude session ([decision](docs/decisions/2026-11-16-configchange-narrowed.md)): Claude's backend
+names them among its blocked paths, so the turn goes on and its end re-hash ends the session. On
+`fake_claude` in the kernel and in `tests/chat.rs`; the ACP test keeps the session's end at once.
+The owner's check: a changed command mid-turn in the chat on `claude`.
+
 Open for the gate: part 0's answers (CI's reruns, row 4 in the WSL shape among them), the WSL
 shape's first green run, a `Break` in ACP's replay, then gate steps 3 and 4.
 
@@ -1568,7 +1573,7 @@ Tests:
     - a model missing from `initialize.models` is refused by the host;
     - a settings change mid-turn is blocked: the turn goes on, the acceptance is stale, and the
       session ends on trust when the turn does. The same change between turns ends it unsent at
-      the next prompt. A changed command ends it at once;
+      the next prompt. A changed command and `.mcp.json` are blocked the same way;
     - history, the list and delete on part 0's fixtures: the long path, the subagent, the
       compaction, the `archived` tag; a file of unknown lines shows "history unavailable";
     - a blocked `claude` and one below the floor, from a locally signed catalog;
@@ -1770,8 +1775,8 @@ Tests:
   - the `AskUserQuestion` ask;
   - the `.env` deny;
   - an `allow` with no rule for "Always allow";
-  - a settings change mid-turn keeps the turn and ends the session after it, and a changed
-    command ends the chat at once;
+  - a settings change mid-turn keeps the turn and ends the session after it, and so does a
+    changed command;
   - the context breakdown;
   - the `min_cli` warning, and the message for a `claude` the client cannot talk to (§2);
   - the label (§2);

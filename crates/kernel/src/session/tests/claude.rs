@@ -312,6 +312,36 @@ fn a_settings_change_mid_turn_is_blocked_until_the_turn_ends_and_one_between_tur
 }
 
 #[gpui::test]
+fn a_command_and_mcp_json_changed_mid_turn_keep_the_turn_and_end_the_session_with_it(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    let s = open(&f, Kind::Chat, cx);
+    assert_eq!(turn(&s, "write CLAUDE.md Be terse.;say noted", cx), "noted");
+    let from = s.read_with(cx, |s, _| s.items.len());
+    let prompt =
+        "config .mcp.json {};config .claude/commands/hi.md Say hi.;wait go;say still going";
+    s.update(cx, |s, cx| s.prompt(prompt.into(), cx));
+    let stale = Item::Note(TRUST_STALE.into());
+    wait_until(cx, |cx| s.read(cx).items.contains(&stale));
+    assert_eq!(state(&s, cx), State::Running);
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.state, State::Ended(End::Trust));
+        let stop = s.items.iter().rev().find_map(|i| match i {
+            Item::End { stop, .. } => Some(*stop),
+            _ => None,
+        });
+        assert_eq!(stop, Some(Some(StopReason::EndTurn)), "{:?}", s.items);
+    });
+    assert_eq!(
+        said(&s, from, cx),
+        "config unreported config block still going"
+    );
+}
+
+#[gpui::test]
 fn a_resumed_session_shows_its_past_as_its_turns_did(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);

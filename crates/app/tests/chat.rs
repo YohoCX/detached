@@ -871,46 +871,49 @@ fn the_repo_s_settings_load_once_trusted_and_a_change_asks_again(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn a_settings_change_mid_turn_keeps_the_turn_and_a_changed_command_ends_the_session_at_once(
+fn a_settings_or_command_change_mid_turn_keeps_the_turn_and_ends_the_session_after_it(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open(cx);
     let hook = HOOK.replace("Stop", "PreToolUse");
-    say(
-        cx,
-        &format!("config .claude/settings.json {hook}; wait go; say still going"),
-    );
-    let seen = |cx: &mut VisualTestContext, s: &str| items(cx).iter().any(|i| i.contains(s));
-    wait_until(cx, |cx| seen(cx, "changed mid-turn"));
-    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
-    wait_until(cx, |cx| seen(cx, "settings changed, so the session ended"));
-    let got = items(cx);
-    let at = |s: &str| (got.iter().skip(1).position(|i| i.contains(s))).unwrap();
-    let order = [
-        "config block",
-        "changed mid-turn",
-        "still going",
-        "Done in ",
-        "so the session ended",
-    ];
-    assert!(
-        order.windows(2).all(|w| at(w[0]) < at(w[1])),
-        "the turn went on: {got:?}"
-    );
-    idle(cx);
-
-    wait_until(cx, |cx| cx.find("chat.trust").is_some());
-    cx.click("chat.trust.accept");
-    say(cx, &format!("config .claude/commands/hi.md hi; {HANG}"));
-    wait_until(cx, |cx| {
-        let got = items(cx);
-        got.iter()
-            .filter(|i| i.contains("settings changed, so the session ended"))
-            .count()
-            == 2
-    });
-    idle(cx);
-    assert!(items(cx).iter().any(|i| i.starts_with("Stopped after ")));
+    let ended = "settings changed, so the session ended";
+    for (n, write) in [
+        format!(".claude/settings.json {hook}"),
+        ".claude/commands/hi.md hi".into(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let from = items(cx).len();
+        say(cx, &format!("config {write}; wait go; say still going"));
+        wait_until(cx, |cx| {
+            items(cx)[from..]
+                .iter()
+                .any(|i| i.contains("changed mid-turn"))
+        });
+        std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+        wait_until(cx, |cx| {
+            items(cx).iter().filter(|i| i.contains(ended)).count() == n + 1
+        });
+        let got = items(cx)[from..].to_vec();
+        let at = |s: &str| (got.iter().skip(1).position(|i| i.contains(s))).unwrap();
+        let order = [
+            "config block",
+            "changed mid-turn",
+            "still going",
+            "Done in ",
+            "so the session ended",
+        ];
+        assert!(
+            order.windows(2).all(|w| at(w[0]) < at(w[1])),
+            "the turn went on: {got:?}"
+        );
+        idle(cx);
+        std::fs::remove_file(cx.sb.path("claude/go")).unwrap();
+        wait_until(cx, |cx| cx.find("chat.trust").is_some());
+        cx.click("chat.trust.accept");
+    }
+    assert!(!items(cx).iter().any(|i| i.starts_with("Stopped after ")));
 }
 
 #[gpui_kit::test]

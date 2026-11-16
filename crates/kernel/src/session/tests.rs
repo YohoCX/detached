@@ -51,7 +51,6 @@ both!(
     a_reload_waits_for_a_load_ended_or_dropped_while_it_started,
     always_allow_stays_a_host_rule,
     out_of_extra_usage_names_the_pool_and_the_fallback,
-    a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not,
     a_trust_change_before_the_prompt_went_out_ends_the_session_unsent,
 );
 
@@ -684,21 +683,16 @@ fn out_of_extra_usage_names_the_pool_and_the_fallback(fake: Fake, cx: &mut TestA
     });
 }
 
-/// On a trust path the backend does not block: Claude's blocks its settings, not a command.
-fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(
-    fake: Fake,
-    cx: &mut TestAppContext,
-) {
-    let f = boot_fake(cx, fake);
+/// ACP blocks no trust path; Claude's mid-turn block is its own test.
+#[gpui::test]
+fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mut TestAppContext) {
+    let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
     assert_eq!(turn(&s, "write CLAUDE.md Be terse.;say noted", cx), "noted");
     assert_eq!(state(&s, cx), State::Idle);
     let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
-    let write = match fake {
-        Fake::Acp => format!("write .claude/settings.json {hook}"),
-        Fake::Claude => "config .claude/commands/hi.md Say hi.".into(),
-    };
-    s.update(cx, |s, cx| s.prompt(format!("{write};stall"), cx));
+    let write = format!("write .claude/settings.json {hook};stall");
+    s.update(cx, |s, cx| s.prompt(write, cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     s.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Trust));
