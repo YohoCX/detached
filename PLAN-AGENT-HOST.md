@@ -1614,6 +1614,16 @@ mid-command and finds no process; that session's history under `--resume`, and i
 
 ### Step H5. Host tools and the owner socket
 
+**Status (2026-11-16): items 1–5 are built; 6 and 7 are next.** `core::host` is the MCP server of
+`detached_read` and `detached_act`, which every `kernel::Session` gets on its control channel as
+its kind's `Identity` (the chat the owner's view, any other kind its repo alone, with the reports).
+`kernel::host::query(cx, who, query)` runs the two phases over
+`crates/kernel/src/host/schema.graphql`, and the owner socket calls it as `Identity::owner()`. The
+SDL is §7's without `pipelines`, `Pipeline` and `Job`, which come with a Resource for a pipeline's
+jobs. A turn of a session that may report `done` and did not ends with a note. The tests above
+for items 1–5 pass, the real ones under `make agent-test`; "asks without `--allowedTools`" is
+tested as an ask rule in the user's settings, which beats the pre-allow as its absence would.
+
 Work:
 1. `core::host`: the tools' MCP handler, and Claude's transport on the session's control channel
    (§7). The HTTP listener, its single-use secrets and the Host and Origin check are H13a's.
