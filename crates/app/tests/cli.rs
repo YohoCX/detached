@@ -173,13 +173,17 @@ fn env_run_asks_the_owner_once_per_tab(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn env_run_twice_at_once_asks_once(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
+    // Each run's own file: the two answers come at once, and the tab may show their lines torn.
+    let said = ["one", "two"].map(|f| app.sb.path(f));
+    let [one, two] = said.each_ref().map(|p| p.display().to_string());
     cli_in_tab(
         &mut app,
-        &format!("env run dev -- true & '{CLI}' env run dev -- true"),
+        &format!("env run dev -- true 2>'{one}' & '{CLI}' env run dev -- true 2>'{two}'"),
     );
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Allow");
-    wait_until(&mut app, |cx| stubbed(cx) == 2);
+    let stubbed = |p| std::fs::read_to_string(p).is_ok_and(|s| s.contains("No env store yet"));
+    wait_until(&mut app, |_| said.iter().all(stubbed));
     assert!(!app.has_pending_prompt());
 }
 

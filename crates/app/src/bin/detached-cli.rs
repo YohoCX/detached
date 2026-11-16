@@ -1,5 +1,6 @@
 //! The console client of the owner socket, answered only in a Detached terminal tab.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -30,7 +31,8 @@ fn main() -> ExitCode {
         }
     };
     done.unwrap_or_else(|e| {
-        eprintln!("detached-cli: {e}");
+        // One write: `eprintln!` writes in pieces, which a run beside it in the tab tears apart.
+        _ = std::io::stderr().write_all(format!("detached-cli: {e}\n").as_bytes());
         ExitCode::FAILURE
     })
 }
