@@ -99,6 +99,16 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_resumes_with_its_history_lis
 }
 
 #[test]
+fn an_unknown_answer_asks_again_and_a_cyrillic_y_allows() {
+    let sb = sandbox();
+    let (out, code) = session(&sb, &["ask; say done"], "yes\n\u{443}\n");
+    assert_eq!(code, 0, "{out}");
+    let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s:?} in {out}"));
+    assert!(at("[ask] \"yes\": y once") < at("[answer] Once"));
+    assert!(at("[answer] Once") < at("picked allow\ndone"));
+}
+
+#[test]
 fn a_missing_id_a_mistyped_flag_or_two_actions_print_the_usage_and_open_nothing() {
     let sb = sandbox();
     for args in [

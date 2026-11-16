@@ -154,8 +154,8 @@ fn chat(spec: Spec, run: Run, cx: &mut App) {
     .detach();
 }
 
-/// Answers the waiting ask with the next line: y once, a always, n reject, anything else or
-/// stdin's end cancel.
+/// Answers the waiting ask with the next line: y once, a always, n reject; another line asks
+/// again, and stdin's end cancels.
 fn answer(s: &Entity<Session>, lines: &mut VecDeque<String>, eof: bool, cx: &mut App) {
     let waiting = s.read(cx).items.iter().position(|i| {
         matches!(
@@ -166,17 +166,26 @@ fn answer(s: &Entity<Session>, lines: &mut VecDeque<String>, eof: bool, cx: &mut
             }
         )
     });
-    let Some(item) = waiting.filter(|_| eof || !lines.is_empty()) else {
+    let Some(item) = waiting else {
         return;
     };
-    let line = lines.pop_front().unwrap_or_default();
-    let answer = match line.trim() {
-        "y" => Answer::Once,
-        "a" => Answer::Always,
-        "n" => Answer::Rejected,
-        _ => Answer::Gone,
+    // Cyrillic у and а look like y and a and come from a Russian layout.
+    let answer = loop {
+        match lines.pop_front().as_deref().map(str::trim) {
+            Some("y" | "у") => break Answer::Once,
+            Some("a" | "а") => break Answer::Always,
+            Some("n") => break Answer::Rejected,
+            Some(other) => {
+                println!(
+                    "[ask] \"{}\": y once, a always, n reject",
+                    other.escape_default()
+                )
+            }
+            None if eof => break Answer::Gone,
+            None => return,
+        }
     };
-    println!("[answer] {answer:?} for \"{}\"", line.escape_default());
+    println!("[answer] {answer:?}");
     s.update(cx, |s, cx| s.answer(item, answer, cx));
 }
 
