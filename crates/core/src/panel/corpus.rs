@@ -3,12 +3,13 @@
 //! model's catch and false-confirm rates.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::brief;
 use super::record::{self, End, Found, State};
+use super::{brief, run};
 use crate::error::{Error, Result};
 use crate::git::runner::{self, Kind, Opts};
 use crate::host::Severity;
@@ -111,7 +112,7 @@ pub fn check(core: &AppState, repo: &Path, subjects: &[Subject]) -> Result<()> {
     }
 }
 
-/// Makes the subject's branch for `pass`: its commit, or its bug put back on top of it. Returns the
+/// Makes the subject's branch in the pass's clone: its commit, or its bug put back on top of it. Returns the
 /// branch and the base to review it against.
 pub fn branch(core: &AppState, repo: &Path, pass: &str, s: &Subject) -> Result<(String, String)> {
     let env = core.env();
@@ -172,15 +173,57 @@ fn put_back(core: &AppState, repo: &Path, commit: &str, b: &Bug) -> Result<Strin
     Ok(head.trim().into())
 }
 
-pub fn remove(core: &AppState, repo: &Path, branch: &str) -> Result<()> {
-    let r = format!("refs/heads/{branch}");
-    runner::out(&core.env(), repo, &["update-ref", "-d", &r], Kind::Write).map(drop)
+/// Where a pass's clone lives. One pass runs at a time, so anything left there is a crashed pass's.
+fn clones(core: &AppState) -> PathBuf {
+    core.cache_dir.join("corpus")
+}
+
+/// A clone of `repo` for one pass that borrows its objects: the patched commits and the subjects'
+/// branches go there, and the owner's repo gets no ref and no object. A crashed pass's goes first.
+pub fn clone(core: &AppState, repo: &Path, pass: &str) -> Result<PathBuf> {
+    sweep(core)?;
+    let root = clones(core);
+    fs::create_dir_all(&root)?;
+    let dir = root.join(pass);
+    let (from, to) = (repo.display().to_string(), dir.display().to_string());
+    let args = ["clone", "-q", "--shared", "--no-checkout", "--", &from, &to];
+    runner::out(&core.env(), &root, &args, Kind::Write)?;
+    Ok(dir)
+}
+
+/// Removes every pass's clone.
+pub fn sweep(core: &AppState) -> Result<()> {
+    match fs::remove_dir_all(clones(core)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Copies a run's record from the pass's clone into the owner's repo, where the stats read it.
+pub fn keep(core: &AppState, clone: &Path, repo: &Path, task: &str, run: &str) -> Result<()> {
+    fn copy(from: &Path, to: &Path) -> Result<()> {
+        fs::create_dir_all(to)?;
+        for e in fs::read_dir(from)? {
+            let e = e?;
+            match e.file_type()?.is_dir() {
+                true => copy(&e.path(), &to.join(e.file_name()))?,
+                false => _ = fs::copy(e.path(), to.join(e.file_name()))?,
+            }
+        }
+        Ok(())
+    }
+    copy(
+        &run::dir(core, clone, task, run)?,
+        &run::dir(core, repo, task, run)?,
+    )
 }
 
 /// One pass of the corpus.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Pass {
     pub pass: String,
+    /// When its first run started, in ms.
+    pub at: i64,
     pub mode: String,
     pub started: usize,
     /// Its runs that ended done.
@@ -224,9 +267,11 @@ pub fn calibrate(records: &BTreeMap<(String, String), State>, subjects: &[Subjec
         };
         let p = passes.entry(pass.into()).or_insert_with(|| Pass {
             pass: pass.into(),
+            at: s.at,
             mode: started.mode.clone(),
             ..Pass::default()
         });
+        p.at = p.at.min(s.at);
         p.started += 1;
         p.tokens += s.tokens();
         if !matches!(s.ended, Some(End::Done { .. })) {
@@ -268,7 +313,9 @@ pub fn calibrate(records: &BTreeMap<(String, String), State>, subjects: &[Subjec
             }
         }
     }
-    passes.into_values().rev().collect()
+    let mut all: Vec<Pass> = passes.into_values().collect();
+    all.sort_by_key(|p| std::cmp::Reverse(p.at));
+    all
 }
 
 #[cfg(test)]

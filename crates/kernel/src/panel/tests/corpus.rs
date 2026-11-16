@@ -52,8 +52,13 @@ fn records(f: &Fixture) -> BTreeMap<(String, String), State> {
         .collect()
 }
 
-fn branches(f: &Fixture) -> String {
-    git(f, &["branch", "--list", "detached-corpus/*"])
+fn refs(f: &Fixture) -> String {
+    git(f, &["for-each-ref"])
+}
+
+/// The pass's clone is gone.
+fn swept(f: &Fixture) -> bool {
+    !f.core.cache_dir.join("corpus").exists()
 }
 
 #[gpui::test]
@@ -61,15 +66,25 @@ fn the_corpus_runs_each_subject_read_only_in_turn_and_scores_the_pass(cx: &mut T
     let f = boot(cx);
     gate(&f);
     let all = subjects(&f);
-    let c =
-        cx.update(|cx| runner::start(f.repo.clone(), "gate".into(), 10_000_000, all.clone(), cx));
+    let before = refs(&f);
+    let start =
+        |cx: &mut App| runner::start(f.repo.clone(), "gate".into(), 10_000_000, all.clone(), cx);
+    let c = cx.update(start).unwrap();
+    let again = cx.update(start).map(drop).unwrap_err().to_string();
+    assert!(again.ends_with("one runs at a time"), "{again}");
+    assert_eq!(
+        cx.update(|cx| runner::current(cx)),
+        Some(c.clone()),
+        "the pass keeps its handle"
+    );
     wait_for(cx, LONG, |cx| c.read(cx).ended.is_some());
     c.read_with(cx, |c, _| {
         assert_eq!(c.ended.as_deref(), Some("done"));
         assert_eq!((c.finished, c.total), (2, 2));
         assert!(c.spent > 0);
     });
-    wait_for(cx, LONG, |_| branches(&f).is_empty());
+    wait_for(cx, LONG, |_| swept(&f));
+    assert_eq!(refs(&f), before, "no ref in the owner's repo");
     let records = records(&f);
     let mut runs: Vec<&State> = records.values().collect();
     assert_eq!(runs.len(), 2);
@@ -85,6 +100,17 @@ fn the_corpus_runs_each_subject_read_only_in_turn_and_scores_the_pass(cx: &mut T
     );
     let v = &p.verifiers["sonnet"];
     assert_eq!((v.bugs, v.caught, v.clean, v.false_confirms), (1, 1, 1, 1));
+    for s in runs {
+        let head = &s.started.as_ref().unwrap().subject.head_sha;
+        let o = out(
+            &f.core.env(),
+            Path::new(&f.repo),
+            &["cat-file", "-e", head],
+            Kind::Read,
+        );
+        let put_back = s.started.as_ref().unwrap().subject.branch.ends_with("/bug");
+        assert_eq!(o.is_err(), put_back, "no object in the owner's repo");
+    }
 }
 
 #[gpui::test]
@@ -94,6 +120,7 @@ fn a_spent_budget_ends_the_corpus_before_its_next_subject_and_a_cancel_ends_it_n
     let f = boot(cx);
     gate(&f);
     let c = cx.update(|cx| runner::start(f.repo.clone(), "gate".into(), 50, subjects(&f), cx));
+    let c = c.unwrap();
     let paused = |cx: &App| {
         let c = c.read(cx);
         (c.current.as_ref()).is_some_and(|(_, p)| p.read(cx).state.paused.is_some())
@@ -106,10 +133,11 @@ fn a_spent_budget_ends_the_corpus_before_its_next_subject_and_a_cancel_ends_it_n
         assert_eq!(c.ended.as_deref(), Some("The budget of 50 tokens is spent"));
         assert_eq!(c.finished, 1);
     });
-    assert_eq!(records(&f).len(), 1);
+    wait_for(cx, LONG, |_| swept(&f) && records(&f).len() == 1);
 
     let c =
         cx.update(|cx| runner::start(f.repo.clone(), "gate".into(), 10_000_000, subjects(&f), cx));
+    let c = c.unwrap();
     let started = |cx: &App| {
         let c = c.read(cx);
         (c.current.as_ref()).is_some_and(|(_, p)| p.read(cx).state.started.is_some())
@@ -121,6 +149,5 @@ fn a_spent_budget_ends_the_corpus_before_its_next_subject_and_a_cancel_ends_it_n
         assert_eq!(c.ended.as_deref(), Some("cancelled"));
         assert_eq!(c.finished, 1);
     });
-    wait_for(cx, LONG, |_| branches(&f).is_empty());
-    assert_eq!(records(&f).len(), 2);
+    wait_for(cx, LONG, |_| swept(&f) && records(&f).len() == 2);
 }

@@ -26,6 +26,7 @@ impl DocKind for StatsDocs {
             stats: Stats::new(),
             passes: vec![],
             corpus: None,
+            refused: None,
         })
         .into()
     }
@@ -54,6 +55,8 @@ struct StatsView {
     stats: Stats,
     passes: Vec<Pass>,
     corpus: Option<(EntityId, Subscription)>,
+    /// Why Run was refused.
+    refused: Option<String>,
 }
 
 fn pct(a: usize, n: usize) -> String {
@@ -142,7 +145,7 @@ impl StatsView {
     /// The corpus's run going on, or the button that starts one behind its estimate.
     fn corpus(&mut self, cx: &mut Context<Self>) -> Div {
         let mut out = div().flex().flex_col().gap(GAP).min_w_0();
-        let c = kernel::panel::corpus::current(cx).filter(|c| c.read(cx).repo == self.repo);
+        let c = kernel::panel::corpus::current(cx);
         if let Some(c) = &c
             && self.corpus.as_ref().map(|w| w.0) != Some(c.entity_id())
         {
@@ -152,6 +155,7 @@ impl StatsView {
         match c.as_ref().map(|c| c.read(cx)) {
             Some(c) if c.ended.is_none() => out.child(self.running(c, cx)),
             last => {
+                let last = last.filter(|c| c.repo == self.repo);
                 let mode = if self.gate { "gate" } else { "review" };
                 let n = corpus::subjects().len();
                 let rounds = self.rounds.read(cx).value.as_ref();
@@ -191,16 +195,26 @@ impl StatsView {
                         "Run the {mode} over the corpus's {n} subjects: about {} tokens, its budget",
                         tokens(e)
                     );
-                    let repo = self.repo.clone();
                     ui::button("panel.stats.corpus", label.clone(), cx)
                         .test_support()
                         .aria_label(label)
-                        .on_click(move |_, _, cx| {
+                        .on_click(cx.listener(move |v, _, _, cx| {
                             let all = corpus::subjects();
-                            kernel::panel::corpus::start(repo.clone(), mode.into(), e, all, cx);
-                        })
+                            let started =
+                                kernel::panel::corpus::start(v.repo.clone(), mode.into(), e, all, cx);
+                            v.refused = started.err().map(|e| e.to_string());
+                            cx.notify();
+                        }))
                 });
-                out.child(
+                let refused = self.refused.clone().map(|e| {
+                    div()
+                        .id("panel.stats.refused")
+                        .test_support()
+                        .aria_label(e.clone())
+                        .text_color(theme(cx).error)
+                        .child(e)
+                });
+                out.children(refused).child(
                     div()
                         .flex()
                         .gap(GAP)
@@ -217,22 +231,23 @@ impl StatsView {
             Some((branch, p)) => {
                 let p = p.read(cx);
                 let name = corpus::of(branch).map_or(branch.as_str(), |x| x.1);
-                (
-                    name.to_string(),
-                    Some((p.task.clone(), p.run.clone(), p.tokens(cx))),
-                )
+                let run = (p.repo.clone(), p.task.clone(), p.run.clone(), p.tokens(cx));
+                (name.to_string(), Some(run))
             }
             None => ("preparing".into(), None),
         };
-        let spent = c.spent + run.as_ref().map_or(0, |r| r.2);
+        let spent = c.spent + run.as_ref().map_or(0, |r| r.3);
+        let elsewhere = match c.repo == self.repo {
+            true => String::new(),
+            false => format!(" on {}", c.repo),
+        };
         let text = format!(
-            "Corpus: {} of {}, {name}, {} of {} tokens",
+            "Corpus{elsewhere}: {} of {}, {name}, {} of {} tokens",
             (c.finished + 1).min(c.total),
             c.total,
             tokens(spent),
             tokens(c.budget)
         );
-        let repo = self.repo.clone();
         let this = kernel::panel::corpus::current(cx);
         div()
             .flex()
@@ -249,7 +264,7 @@ impl StatsView {
                     .truncate()
                     .cursor_pointer()
                     .child(text)
-                    .when_some(run, |d, (task, round, _)| {
+                    .when_some(run, |d, (repo, task, round, _)| {
                         d.on_click(move |_, _, cx| {
                             let doc = Doc::Panel {
                                 repo: repo.clone(),

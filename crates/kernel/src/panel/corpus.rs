@@ -1,8 +1,9 @@
-//! The corpus runner: a mode over the corpus's subjects, one read-only run at a time, each on its
-//! own branch for the run's length, within one budget.
+//! The corpus runner: a mode over the corpus's subjects, one pass in the app at a time and one
+//! read-only run at a time, in a clone that borrows the repo's objects, within one budget.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use detached_core::error::{Error, Result};
 use detached_core::panel::corpus::{self, Subject};
 use detached_core::panel::record::{self, End, State};
 use detached_core::panel::run::{self, Start};
@@ -21,6 +22,8 @@ impl Global for Current {}
 
 pub struct Corpus {
     pub repo: String,
+    /// The pass's clone, where its branches and runs are.
+    clone: Option<PathBuf>,
     pub mode: String,
     pub pass: String,
     pub budget: u64,
@@ -36,7 +39,7 @@ pub struct Corpus {
     _task: Option<Task<()>>,
 }
 
-/// This app's latest corpus run.
+/// This app's latest corpus pass.
 pub fn current(cx: &App) -> Option<Entity<Corpus>> {
     cx.try_global::<Current>().map(|c| c.0.clone())
 }
@@ -62,18 +65,29 @@ pub fn estimate(rounds: &Rounds, mode: &str, n: usize) -> u64 {
     each * n as u64
 }
 
-/// Runs `mode` over `subjects` of `repo`, read-only, until done, cancelled or `budget` is spent.
+/// Runs `mode` over `subjects` of `repo`, read-only, until done, cancelled or `budget` is spent;
+/// refused while another pass goes on.
 pub fn start(
     repo: String,
     mode: String,
     budget: u64,
     subjects: Vec<Subject>,
     cx: &mut App,
-) -> Entity<Corpus> {
+) -> Result<Entity<Corpus>> {
+    if let Some(c) = current(cx)
+        .map(|c| c.read(cx))
+        .filter(|c| c.ended.is_none())
+    {
+        return Err(Error::Other(format!(
+            "A corpus pass is running on {}; one runs at a time",
+            c.repo
+        )));
+    }
     let c = cx.new(|cx: &mut Context<Corpus>| {
         let mut c = Corpus {
             pass: run::id(&mode, record::now()),
             repo,
+            clone: None,
             mode,
             budget,
             total: subjects.len(),
@@ -85,12 +99,19 @@ pub fn start(
             _watch: None,
             _task: None,
         };
-        let (core, repo, all) = (crate::core(cx).clone(), c.repo.clone(), c.queue.clone());
-        let checked = blocking::run(cx, move || corpus::check(&core, Path::new(&repo), &all));
+        let core = crate::core(cx).clone();
+        let (repo, pass, all) = (c.repo.clone(), c.pass.clone(), c.queue.clone());
+        let made = blocking::run(cx, move || {
+            corpus::check(&core, Path::new(&repo), &all)?;
+            corpus::clone(&core, Path::new(&repo), &pass)
+        });
         c._task = Some(cx.spawn(async move |this, cx| {
-            let checked = checked.await;
-            this.update(cx, |c, cx| match checked {
-                Ok(()) => c.next(cx),
+            let made = made.await;
+            this.update(cx, |c, cx| match made {
+                Ok(dir) => {
+                    c.clone = Some(dir);
+                    c.next(cx);
+                }
                 Err(e) => c.end(e.to_string(), cx),
             })
             .ok();
@@ -98,7 +119,7 @@ pub fn start(
         c
     });
     cx.set_global(Current(c.clone()));
-    c
+    Ok(c)
 }
 
 impl Corpus {
@@ -110,15 +131,20 @@ impl Corpus {
         }
     }
 
+    /// Ends the pass; its clone goes once no run uses it.
     fn end(&mut self, why: String, cx: &mut Context<Self>) {
         self.ended.get_or_insert(why);
+        if self.current.is_none() {
+            let core = crate::core(cx).clone();
+            blocking::run(cx, move || corpus::sweep(&core)).detach();
+        }
         cx.notify();
     }
 
     fn next(&mut self, cx: &mut Context<Self>) {
-        if self.ended.is_some() {
-            return;
-        }
+        let Some(dir) = self.clone.clone().filter(|_| self.ended.is_none()) else {
+            return self.end("cancelled".into(), cx);
+        };
         if self.spent >= self.budget {
             return self.end(format!("The budget of {} tokens is spent", self.budget), cx);
         }
@@ -126,19 +152,12 @@ impl Corpus {
             return self.end("done".into(), cx);
         }
         let s = self.queue.remove(0);
-        let (core, repo, pass) = (
-            crate::core(cx).clone(),
-            self.repo.clone(),
-            self.pass.clone(),
-        );
-        let made = blocking::run(cx, move || {
-            corpus::branch(&core, Path::new(&repo), &pass, &s)
-        });
+        let (core, pass) = (crate::core(cx).clone(), self.pass.clone());
+        let made = blocking::run(cx, move || corpus::branch(&core, &dir, &pass, &s));
         self._task = Some(cx.spawn(async move |this, cx| {
             let made = made.await;
             this.update(cx, |c, cx| match made {
                 Err(e) => c.end(e.to_string(), cx),
-                Ok((branch, _)) if c.ended.is_some() => c.remove(branch, cx),
                 Ok((branch, base)) => c.run(branch, base, cx),
             })
             .ok();
@@ -146,8 +165,11 @@ impl Corpus {
     }
 
     fn run(&mut self, branch: String, base: String, cx: &mut Context<Self>) {
+        let Some(dir) = self.clone.clone().filter(|_| self.ended.is_none()) else {
+            return self.end("cancelled".into(), cx);
+        };
         let s = Start {
-            repo: self.repo.clone(),
+            repo: dir.display().to_string(),
             branch: branch.clone(),
             remote: false,
             base,
@@ -167,21 +189,34 @@ impl Corpus {
                 return;
             };
             c._watch = None;
-            c.spent += p.read(cx).tokens(cx);
+            let (tokens, task, run) = {
+                let p = p.read(cx);
+                (p.tokens(cx), p.task.clone(), p.run.clone())
+            };
+            c.spent += tokens;
             c.finished += 1;
             if let Some(why) = failed {
-                c.end(format!("{branch}: {why}"), cx);
+                c.ended.get_or_insert(format!("{branch}: {why}"));
             }
-            c.remove(branch, cx);
-            c.next(cx);
+            let (core, repo) = (crate::core(cx).clone(), c.repo.clone());
+            let dir = c.clone.clone().unwrap_or_default();
+            let kept = blocking::run(cx, move || {
+                corpus::keep(&core, &dir, Path::new(&repo), &task, &run)
+            });
+            c._task = Some(cx.spawn(async move |this, cx| {
+                let kept = kept.await;
+                this.update(cx, |c, cx| {
+                    if let Err(e) = kept {
+                        c.ended
+                            .get_or_insert(format!("The run's record was not kept: {e}"));
+                    }
+                    super::refresh(cx, &c.repo);
+                    c.next(cx);
+                })
+                .ok();
+            }));
         }));
         self.current = Some((branch, p));
-        cx.notify();
-    }
-
-    fn remove(&mut self, branch: String, cx: &mut Context<Self>) {
-        let (core, repo) = (crate::core(cx).clone(), self.repo.clone());
-        blocking::run(cx, move || corpus::remove(&core, Path::new(&repo), &branch)).detach();
         cx.notify();
     }
 }

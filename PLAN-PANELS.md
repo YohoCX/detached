@@ -827,22 +827,26 @@ waiting for the owner's run and check.**
   bug back on top as a commit of its own (`worktree-untracked`, `store-link-escape`,
   `hidden-name-slash`, `fix-range-commits`, `folder-backslash`, `watch-made-again`,
   `chat-list-stdin`, `forge-form-key`, `update-cancel`, `files-stale-fallback`), reviewed against the
-  fix, and 10 clean commits against their parents. `kernel::panel::corpus` runs a mode over it one
-  run at a time within one budget; the Stats page (Panels → Stats, `Doc::PanelStats`) shows the one
+  fix, and 10 clean commits against their parents. `kernel::panel::corpus` runs a mode over it, one
+  pass in the app and one run at a time, within one budget; the Stats page (Panels → Stats, `Doc::PanelStats`) shows the one
   suggestion, the dispositions by role, lens, model, mode and verifier (`core::panel::stats`), each
   pass's catch and false-confirm rates per verifier model (`corpus::calibrate`), and the Run button
   with the estimate, which is the budget.
 - Tests: `core::panel::corpus` (the corpus's shape and bug lines, a bug put back as the same commit
-  each pass, its branch removed, calibration on a written corpus run), `core::panel::stats` (every
+  each pass in a clone that leaves the repo without a new ref or object, calibration on a written
+  corpus run, passes latest first by time), `core::panel::stats` (every
   column from the fixture of dispositions under `tests/fixtures/panels`, each suggestion),
   `kernel::panel::tests::corpus` (two subjects on `fake_claude`, one at a time, scored; the budget
-  and a cancel end it), `tests/panels.rs` (the Stats page, and Run refused on a repo without the
+  and a cancel end it, a second pass is refused while one runs, the repo's refs are unchanged),
+  `tests/panels.rs` (the Stats page, and Run refused on a repo without the
   history).
 - Choices: a bug subject is the fix's commit with the bug's patch on top, so its diff is the bug
   alone; the patch's commit has a fixed author and date, so every pass reviews the same SHA. Corpus
-  runs are untrusted (read-only, no trust files to accept per head) and sequential, on
-  `detached-corpus/<pass>/<subject>` branches that exist only for their run; their tasks stay off
-  the Panels list and out of the disposition stats. A finding is about the bug within 3 lines of the
+  runs are untrusted (read-only, no trust files to accept per head) and sequential, in a
+  `git clone --shared` under the cache tier that holds the patched commits and the
+  `detached-corpus/<pass>/<subject>` branches; each run's record is copied into the repo's
+  `detached/panels`, and the clone goes at the pass's end or the next start after a crash. Their
+  tasks stay off the Panels list and out of the disposition stats. A finding is about the bug within 3 lines of the
   patch's changed lines. Catch: the bug's subject got a verified major or critical there; a
   verifier's catch rate is its confirms of findings at a bug, its false-confirm rate its confirms
   of majors and criticals on clean subjects. The estimate is the mean of earlier corpus runs of the
