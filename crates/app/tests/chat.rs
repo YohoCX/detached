@@ -1244,7 +1244,8 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
 ) {
     let cx = &mut open(cx);
     say(cx, "say here");
-    wait_for_item(cx, "here");
+    wait_for_item(cx, "Done in");
+    idle(cx);
     cx.click("chat.new");
     let solo = cx.sb.solo().display().to_string();
     cx.update(|_, cx| {

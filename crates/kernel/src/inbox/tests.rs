@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use detached_core::adapters::CLAUDE;
-use detached_core::backend::{Kind, Spec, StopReason};
+use detached_core::backend::{Kind, Setting, Spec, StopReason};
 use detached_core::host::Act;
 use detached_core::processes::{self, Agents, Definition};
 use detached_core::testutil::claude;
@@ -274,6 +274,50 @@ fn a_receiver_in_auto_is_woken_asking_and_auto_is_back_after_the_turn(cx: &mut T
 }
 
 #[gpui::test]
+fn back_to_back_woken_turns_both_ask_and_a_model_picked_meanwhile_waits_for_their_end(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx);
+    let (a, x) = open(&f, "default", "say here", cx);
+    let (b, y) = open(
+        &f,
+        "auto",
+        "fake: say ready\nfake-wake: bash touch y;model",
+        cx,
+    );
+    group(&[&x, &y], &[&y], cx);
+    let from = b.read_with(cx, |s, _| s.items.len());
+    turn(&a, &send(&y, "one"), cx);
+    let first = waiting(&b, from, cx);
+    b.update(cx, |s, _| s.set(Setting::Model("haiku".into())))
+        .unwrap();
+    turn(&a, &send(&y, "two"), cx);
+    b.update(cx, |s, cx| s.answer(first, Answer::Once, cx));
+    let second = waiting(&b, first + 1, cx);
+    b.update(cx, |s, cx| s.answer(second, Answer::Once, cx));
+    settled(&[&a, &b], cx);
+    let ran = b.read_with(cx, |s, _| {
+        let said = s.items[from..]
+            .iter()
+            .filter(|i| matches!(i, Item::Text(t) if t == "default default"));
+        said.count()
+    });
+    assert_eq!(cx.read(|cx| woken(&b, cx)), 2);
+    assert_eq!(ran, 2, "both in default, on the model they began with");
+    let now = |cx: &App| {
+        let s = b.read(cx);
+        (
+            s.option("model").map(String::from),
+            s.option("mode").map(String::from),
+        )
+    };
+    wait_until(cx, |cx| {
+        now(cx) == (Some("haiku".into()), Some("auto".into()))
+    });
+    assert_eq!(turn(&b, "fake: model", cx), "haiku auto");
+}
+
+#[gpui::test]
 fn two_grouped_sessions_finish_one_change_by_messages_and_one_stop_ends_both(
     cx: &mut TestAppContext,
 ) {
@@ -330,6 +374,7 @@ fn two_grouped_sessions_finish_one_change_by_messages_and_one_stop_ends_both(
     assert!(c.read_with(cx, |s, _| s.items.contains(&Item::Note(HELD.into()))));
 }
 
+#[cfg(unix)]
 #[gpui::test]
 fn a_process_becoming_ready_puts_one_message_into_the_watcher_s_inbox(cx: &mut TestAppContext) {
     let f = boot(cx);
@@ -367,44 +412,61 @@ fn a_process_becoming_ready_puts_one_message_into_the_watcher_s_inbox(cx: &mut T
 }
 
 #[gpui::test]
-fn a_pipeline_ending_puts_one_message_into_the_watcher_s_inbox(cx: &mut TestAppContext) {
+fn a_pipeline_ending_after_the_watch_puts_one_message_into_the_watcher_s_inbox(
+    cx: &mut TestAppContext,
+) {
     let (_dir, forge, a, _) = crate::host::tests::boot(cx);
     let sha = cx.read(|cx| crate::repo::Repo::get(cx, &a).unwrap().status.clone());
     let sha = match sha {
         Some(Ok(s)) => s.head.unwrap_or_default(),
         _ => String::new(),
     };
-    let seed = |status| Seed {
+    let pipeline = |id, status| Seeded {
+        id,
+        r#ref: "main".into(),
+        sha: sha.clone(),
+        status,
+        jobs: vec![],
+        source: None,
+    };
+    let seed = |pipelines| Seed {
         user: "tester".into(),
         projects: vec![Project {
             forge: Forge::Gitlab,
             path: "group/app".into(),
             default_branch: "main".into(),
             mrs: vec![],
-            pipelines: vec![Seeded {
-                id: 7,
-                r#ref: "main".into(),
-                sha: sha.clone(),
-                status,
-                jobs: vec![],
-                source: None,
-            }],
+            pipelines,
         }],
     };
-    forge.reset(seed(Status::Running));
+    // A view loaded the branch's pipelines before: the newest of them has ended.
+    forge.reset(seed(vec![pipeline(6, Status::Success)]));
+    let held = cx.update(|cx| Interest::new(forge::pipelines(cx, &a, None, false), cx));
+    wait_until(cx, |cx| held.loaded(cx).is_some_and(|r| r.value.is_some()));
     let w = WatchAct {
         repo: a.clone(),
         process: None,
         pipeline: None,
     };
-    cx.update(|cx| watch(cx, "w", &w)).unwrap();
-    let held = cx.update(|cx| Interest::new(forge::pipelines(cx, &a, None, false), cx));
-    wait_until(cx, |cx| held.loaded(cx).is_some_and(|r| r.value.is_some()));
-    assert!(inbox_of("w", cx).is_empty());
-    forge.reset(seed(Status::Success));
-    for _ in 0..3 {
-        cx.executor().advance_clock(Duration::from_secs(5));
+    let tick = |cx: &mut TestAppContext| {
+        cx.executor().advance_clock(Duration::from_secs(10));
         wait_until(cx, |cx| !held.read(cx).loading());
+    };
+    cx.update(|cx| watch(cx, "w", &w)).unwrap();
+    tick(cx);
+    assert!(inbox_of("w", cx).is_empty(), "the pipeline that had ended");
+    forge.reset(seed(vec![
+        pipeline(7, Status::Running),
+        pipeline(6, Status::Success),
+    ]));
+    tick(cx);
+    assert!(inbox_of("w", cx).is_empty(), "the new one runs");
+    forge.reset(seed(vec![
+        pipeline(7, Status::Success),
+        pipeline(6, Status::Success),
+    ]));
+    for _ in 0..3 {
+        tick(cx);
     }
     let got = inbox_of("w", cx);
     assert_eq!(got.len(), 1, "{got:?}");

@@ -1977,17 +1977,19 @@ unread messages and marks what it returned read, `Message { id from replyTo text
 `detached` for a watch), and `group`, the sessions `send` reaches, which the plan did not list: an
 agent needs its mates' ids. Wake: a message to a session with wake on starts, when it is idle, a
 woken turn whose prompt is the fixed line and whose feed item is `Woken`; a busy or starting one
-takes it once its turn ends. A woken turn first sets `default` through the backend's mode switch
-(on Claude `set_permission_mode`, sent before the prompt), takes no always-rule, sets the mode it
-found back when it ends, and keeps a mode the owner picks meanwhile for then; a frame naming another
-mode during it cancels it. The ACP backend switches no mode yet, so an ACP session not already in
-its asking mode takes a note instead of the turn (TECHDEBT). The cap counts woken turns per group,
+takes it once its turn ends. Each woken turn first sets `default` through the backend's mode switch
+(on Claude `set_permission_mode`, sent before every wake prompt, whatever the kernel's copy of the
+mode says) and takes no always-rule. Woken turns that follow one another keep `default`; after the
+last, the owner's mode comes back, then any mode, model or effort the owner picked meanwhile, which
+waits until then. A frame naming another mode during a woken turn cancels it. The ACP backend
+switches no mode yet, so an ACP session is never woken (TECHDEBT). The cap counts woken turns per group,
 or per lone session for a watch's wake; the sixth gets a note and the messages wait, and a user
 turn in the group lets five more run. Stop in a chat cancels every running turn of its group, drops
 the wakes due and holds the group like the cap until the owner's next message. `watch { repo,
 process | pipeline }` puts one message from `detached` into the watcher's inbox: a running process
-once ready (or its exit or failure first), a pipeline of the repo's branch (the newest, or the id
-given) once no longer pending or running, through the pipelines resource and its 5 s poll. The chat
+once ready (or its exit or failure first), a pipeline of the repo's branch once it ends, judged on a load
+made after the watch: the newest then if it runs, else the next one (or the id given, or a newer
+one), with the watch reloading the list every 10 s. The chat
 has a group menu under the box (join, new group, leave, wake on messages), and its feed shows `To
 <chat>: <text>` and "Woken by new messages". `fake_claude` gains `bash` (asks unless in `auto` or
 `bypassPermissions`), `reply`, and `fake-wake:` lines for the wake prompt. Tested in

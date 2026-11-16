@@ -29,19 +29,21 @@ wake with its cap, a group's Stop, and `watch`. A message is data the receiver r
    open session.
 2. `Session::wake`: busy or starting, it sets `wake_due` and is woken when its turn ends; idle,
    `spend` counts the turn against the group's cap (a lone session counts alone), the backend's
-   mode switch sets `ASKING`, and the turn runs with `WAKE` and an `Item::Woken`.
-3. In a woken turn the session's always-rules are not consulted, a frame naming another mode
-   cancels the turn, and the mode found before is set back at `Ended`.
+   mode switch sets `ASKING` before every wake prompt, and the turn runs with `WAKE` and an
+   `Item::Woken`.
+3. In woken turns the session's always-rules are not consulted, a frame naming another mode
+   cancels the turn, and `Session::set` holds every setting. Once idle with no wake due, `unwake`
+   sets the owner's mode back and applies what was held.
 4. A user's prompt in any member (`user_turn`) clears the group's count; `stop` sets it to `CAP`.
-5. `watch` observes the `Proc` entity, or holds an `Interest` in `forge::pipelines(repo)` and
-   observes it; the first change that answers delivers once and drops the watch.
+5. `watch` observes the `Proc` entity, or holds an `Interest` in `forge::pipelines(repo)`, reloads
+   it every 10 s and reads only loads made after the watch: the first fresh list fixes the lowest
+   id that counts (its newest if that runs, else the next). The first answer delivers once and
+   drops the watch.
 
 ## Gotchas
 - Inboxes, groups and wake are kept by conversation id and live for the run, not across restarts;
   `Chat::end` takes its sessions out of their group and turns wake off.
-- `Session::set(Mode)` during a woken turn only records the mode for the turn's end.
-- On ACP the mode switch fails today, so only a session already in `default` is woken there.
-- A pipeline watch polls with the pipelines resource: every 5 s while it runs and the window shows.
+- On ACP the mode switch fails today, so no ACP session is woken.
 
 ## Tests
 - `crates/kernel/src/inbox/tests.rs` on `fake_claude` (`fake-wake:`, `reply`, `bash`): a message is

@@ -9,12 +9,11 @@ use std::rc::Rc;
 
 use detached_core::error::{Error, Result};
 use detached_core::host::{SendAct, WatchAct};
-use detached_core::types::Pipeline;
 use gpui::{App, AppContext, Entity, Global};
 
 use crate::forge;
-use crate::proc::{self, Proc};
-use crate::resource::{Interest, Resource};
+use crate::proc;
+use crate::resource::Interest;
 use crate::session::{self, Session, State};
 use crate::workspace::Workspace;
 
@@ -22,6 +21,8 @@ use crate::workspace::Workspace;
 pub const WAKE: &str = "You have new messages";
 /// Woken turns a group runs without a user turn between.
 pub const CAP: u32 = 5;
+/// How often a pipeline watch reloads the branch's pipelines.
+const POLL: std::time::Duration = std::time::Duration::from_secs(10);
 /// The sender of what `watch` puts in an inbox.
 pub const DETACHED: &str = "detached";
 
@@ -245,14 +246,17 @@ pub fn watch(cx: &mut App, watcher: &str, w: &WatchAct) -> Result<String> {
         let p = proc::get(cx, &w.repo, name).filter(|p| p.read(cx).running());
         let p = p.ok_or_else(|| Error::Other(format!("{name} does not run in {repo}.")))?;
         let said = format!("The process {name} in {repo}");
-        on_change(cx, watcher, &p, (), move |p: &Proc| match &p.state {
-            _ if p.ready => Some(format!("{said} is ready.")),
-            proc::State::Exited(code) => {
-                let code = code.map_or("a signal".into(), |c| format!("code {c}"));
-                Some(format!("{said} exited with {code} before it was ready."))
+        let run = p.clone();
+        on_change(cx, watcher, &p, (), move |cx: &App| {
+            match &run.read(cx).state {
+                _ if run.read(cx).ready => Some(format!("{said} is ready.")),
+                proc::State::Exited(code) => {
+                    let code = code.map_or("a signal".into(), |c| format!("code {c}"));
+                    Some(format!("{said} exited with {code} before it was ready."))
+                }
+                proc::State::Failed(e) => Some(format!("{said} did not start: {e}")),
+                _ => None,
             }
-            proc::State::Failed(e) => Some(format!("{said} did not start: {e}")),
-            _ => None,
         });
         return Ok(format!(
             "Watching {name} in {repo}: one message once it is ready."
@@ -264,41 +268,57 @@ pub fn watch(cx: &mut App, watcher: &str, w: &WatchAct) -> Result<String> {
                 .map_err(|_| Error::Other(format!("No pipeline {p}.")))
         })
         .transpose()?;
-    let which = given.map_or("its newest pipeline".into(), |p| format!("pipeline {p}"));
+    let which = given.map_or("its next pipeline to end".into(), |p| {
+        format!("pipeline {p}")
+    });
     let said = format!("Watching {which} in {repo}: one message once it ends.");
     let r = forge::pipelines(cx, &w.repo, None, false);
-    let held = Interest::new(r.clone(), cx);
-    let target = Cell::new(given);
-    on_change(cx, watcher, &r, held, move |r: &Resource<Vec<Pipeline>>| {
-        let list = match (&r.value, &r.error) {
-            (Some(l), _) => l,
-            (None, Some(e)) => return Some(format!("{repo}'s pipelines did not load: {e}")),
+    let held = Rc::new(Interest::new(r.clone(), cx));
+    // A new pipeline appears only on a reload, which nothing else asks for while none runs.
+    let reload = held.clone();
+    let poll = cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(POLL).await;
+            cx.update(|cx| reload.refresh(cx));
+        }
+    });
+    // The lowest id that counts: the newest at the watch while it runs, else the next one.
+    let start = Cell::new(given);
+    let check = move |cx: &App| {
+        let r = held.loaded(cx)?;
+        let list = match (&r.error, &r.value) {
+            (Some(e), _) => return Some(format!("{repo}'s pipelines did not load: {e}")),
+            (None, Some(l)) => l,
             (None, None) => return None,
         };
-        let id = target.get().or(list.first().map(|p| p.id))?;
-        target.set(Some(id));
-        let Some(p) = list.iter().find(|p| p.id == id) else {
-            return Some(format!("Pipeline {id} is not one of {repo}'s branch's."));
-        };
+        let newest = list.iter().max_by_key(|p| p.id);
+        let newest = newest.map_or(0, |p| p.id + !forge::active(&p.status) as u64);
+        let from = start.get().unwrap_or(newest);
+        start.set(Some(from));
+        let ended = list
+            .iter()
+            .filter(|p| p.id >= from && !forge::active(&p.status));
+        let p = ended.max_by_key(|p| p.id)?;
         let status = format!("{:?}", p.status).to_lowercase();
-        let on = &p.ref_;
-        (!forge::active(&p.status)).then(|| format!("Pipeline {id} on {on} in {repo}: {status}."))
-    });
+        let (id, on) = (p.id, &p.ref_);
+        Some(format!("Pipeline {id} on {on} in {repo}: {status}."))
+    };
+    on_change(cx, watcher, &r, poll, check);
     Ok(said)
 }
 
-/// Delivers what `check` says of `e`, now or at a later change, once.
+/// Delivers what `check` says, now or at a later change of `e`, once.
 fn on_change<T: 'static>(
     cx: &mut App,
     watcher: &str,
     e: &Entity<T>,
     keep: impl Any,
-    check: impl Fn(&T) -> Option<String> + 'static,
+    check: impl Fn(&App) -> Option<String> + 'static,
 ) {
     let (watcher, fired) = (watcher.to_string(), Rc::new(Cell::new(false)));
     let n = Messages::global(cx).update(cx, |m, _| m.next());
-    let fire = Rc::new(move |e: &Entity<T>, cx: &mut App| {
-        let Some(text) = check(e.read(cx)).filter(|_| !fired.get()) else {
+    let fire = Rc::new(move |cx: &mut App| {
+        let Some(text) = check(cx).filter(|_| !fired.get()) else {
             return;
         };
         fired.set(true);
@@ -308,9 +328,9 @@ fn on_change<T: 'static>(
         });
     });
     let on = fire.clone();
-    let sub = cx.observe(e, move |e, cx| on(&e, cx));
+    let sub = cx.observe(e, move |_, cx| on(cx));
     Messages::global(cx).update(cx, |m, _| m.watches.push((n, Box::new((sub, keep)))));
-    fire(e, cx);
+    fire(cx);
 }
 
 #[cfg(test)]

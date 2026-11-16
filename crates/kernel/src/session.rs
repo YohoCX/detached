@@ -179,7 +179,8 @@ pub struct Session {
     pub queued: Option<String>,
     /// A prompt the session ended on before it went out.
     pub unsent: Option<String>,
-    /// Settings picked while the session starts, applied once it has.
+    /// Settings picked while the session starts or woken turns run, applied once it has or they
+    /// ended.
     picked: Vec<Setting>,
     /// Waiting asks by item, with their keys; dropped before `open`, so their answers go out first.
     replies: HashMap<usize, (backend::Reply, Option<String>)>,
@@ -201,8 +202,8 @@ pub struct Session {
     whole: usize,
     /// The running turn reported `done`.
     done: bool,
-    /// While a woken turn runs: the mode to set back when it ends.
-    woken: Option<String>,
+    /// Woken turns run, one after another: the owner's mode comes back after the last.
+    woken: bool,
     /// New messages came while it was busy: it is woken once idle.
     pub(crate) wake_due: bool,
     /// Asks for a trust recheck, from the watcher or the agent's own report.
@@ -438,7 +439,7 @@ impl Session {
                 cancelled: false,
                 whole: 0,
                 done: false,
-                woken: None,
+                woken: false,
                 wake_due: false,
                 changed,
                 changes: Some(changes),
@@ -621,31 +622,35 @@ impl Session {
         };
         if !crate::inbox::spend(cx, &id) {
             self.note(crate::inbox::HELD.into());
+            self.unwake();
             return cx.notify();
         }
-        let was = self.option("mode").unwrap_or(&self.spec.mode).to_string();
-        if was != ASKING
-            && let Err(e) = o.set(Setting::Mode(ASKING.into()))
-        {
+        // Sent before every woken prompt: the kernel's copy of the mode may lag the agent's.
+        if let Err(e) = o.set(Setting::Mode(ASKING.into())) {
             self.note(format!(
                 "Not woken: the agent cannot switch to asking first: {e}"
             ));
+            self.unwake();
             return cx.notify();
         }
-        self.woken = Some(was);
+        self.woken = true;
         self.items.push(Item::Woken);
         self.begin(crate::inbox::WAKE.into(), cx);
     }
 
-    /// Sets the mode a woken turn left back.
-    fn unwake(&mut self, was: Option<String>) {
-        let Some(was) = was.filter(|m| m != ASKING) else {
+    /// After the last woken turn: the owner's mode back, then what the owner picked meanwhile.
+    fn unwake(&mut self) {
+        if !std::mem::take(&mut self.woken) {
             return;
-        };
-        if let Some(Err(e)) = self.open.as_ref().map(|o| o.set(Setting::Mode(was))) {
-            self.note(format!(
-                "The mode did not come back after the woken turn: {e}"
-            ));
+        }
+        let picked = std::mem::take(&mut self.picked);
+        let mode = picked.iter().any(|s| matches!(s, Setting::Mode(_)));
+        let back =
+            (!mode && self.spec.mode != ASKING).then(|| Setting::Mode(self.spec.mode.clone()));
+        for setting in back.into_iter().chain(picked) {
+            if let Err(e) = self.set(setting) {
+                self.note(format!("Not set after the woken turns: {e}"));
+            }
         }
     }
 
@@ -682,7 +687,7 @@ impl Session {
             (Some(_), Some(end)) => Some(end),
             (Some(trees), None) => return self.prompted(trees, text, cx),
         };
-        if self.woken.take().is_none() {
+        if !self.woken {
             if self.items.last() == Some(&Item::User(text.clone())) {
                 self.items.pop();
             }
@@ -720,8 +725,7 @@ impl Session {
             Err(e) => {
                 self.state = State::Idle;
                 self.note(format!("The prompt did not reach the agent: {e}"));
-                let was = self.woken.take();
-                self.unwake(was);
+                self.unwake();
             }
         }
         cx.notify();
@@ -782,15 +786,11 @@ impl Session {
         cx.notify();
     }
 
-    /// Switches the model, effort or mode, at once or, while the session starts, once it has; its
-    /// new value comes as a config update. A model with `auto` takes it back when it was asked for.
+    /// Switches the model, effort or mode, at once or, while the session starts or woken turns
+    /// run, once that is over; its new value comes as a config update. A model with `auto` takes it back when it was asked for.
     pub fn set(&mut self, setting: Setting) -> Result<()> {
-        if self.state == State::Starting {
+        if self.state == State::Starting || self.woken {
             self.picked.push(setting);
-            return Ok(());
-        }
-        if let (Setting::Mode(m), Some(was)) = (&setting, &mut self.woken) {
-            (*was, self.spec.mode) = (m.clone(), m.clone());
             return Ok(());
         }
         let o = self
@@ -907,9 +907,7 @@ impl Session {
                 // A dropped reply answers `cancelled`.
                 let answer = if self.cancelled {
                     Answer::Gone
-                } else if self.woken.is_none()
-                    && key.as_ref().is_some_and(|k| self.rules.contains(k))
-                {
+                } else if !self.woken && key.as_ref().is_some_and(|k| self.rules.contains(k)) {
                     reply.send(backend::Answer::Allow);
                     Answer::Always
                 } else {
@@ -932,8 +930,8 @@ impl Session {
         }
         // The agent drops a mode by itself, as `auto` on a model without it.
         let want = match self.woken {
-            Some(_) => ASKING.to_string(),
-            None => self.spec.mode.clone(),
+            true => ASKING.to_string(),
+            false => self.spec.mode.clone(),
         };
         let now = self.option("mode");
         if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != want) {
@@ -995,7 +993,7 @@ impl Session {
             (Update::Trust, _) => _ = self.changed.unbounded_send(()),
             (Update::Config(c), _) => self.config = c,
             (Update::Mode(m), _) => {
-                if self.woken.is_some() && m != ASKING {
+                if self.woken && m != ASKING {
                     self.note(format!(
                         "The woken turn ran in {m}, not asking first, so it stopped."
                     ));
@@ -1011,8 +1009,6 @@ impl Session {
     /// The turn's end: its snapshots, what it changed and the trust re-hash, then idle again.
     fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
         self.drop_replies();
-        let was = self.woken.take();
-        self.unwake(was);
         let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
         self.failure = r.as_ref().err().cloned();
         let stop = match r {
@@ -1097,8 +1093,9 @@ impl Session {
                     None if trust_moved => s.close(End::Trust, cx),
                     None if s.state == State::Running => {
                         s.state = State::Idle;
-                        if s.wake_due {
-                            s.wake(cx);
+                        match s.wake_due {
+                            true => s.wake(cx),
+                            false => s.unwake(),
                         }
                     }
                     None => {}
