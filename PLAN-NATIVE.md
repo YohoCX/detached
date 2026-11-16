@@ -1,3 +1,7 @@
+---
+covers:
+  - crates/app
+---
 # Detached — native client plan
 
 The same client without a browser: a Rust UI on GPUI (via gpui-kit) instead of Tauri, Svelte,

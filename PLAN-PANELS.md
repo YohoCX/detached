@@ -1,3 +1,10 @@
+---
+covers:
+  - crates/core/src/panel.rs
+  - crates/core/src/panel
+  - crates/kernel/src/panel.rs
+  - crates/app/src/panels
+---
 # Detached — panels plan
 
 Groups of agents over one subject, as stage graphs on one engine: review, pre-merge gate, triage,

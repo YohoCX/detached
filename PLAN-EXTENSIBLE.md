@@ -1,3 +1,9 @@
+---
+covers:
+  - crates/app/src/chat
+  - crates/app/src/dock
+  - crates/app/src/ui/theme.rs
+---
 # Detached — extensibility plan
 
 An AI chat in the client, a look and layout the user can change, and plugins for the rest. Built in
