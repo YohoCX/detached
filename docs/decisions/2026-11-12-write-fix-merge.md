@@ -1,6 +1,6 @@
 # Write: merging a Fix into the subject's branch
 
-Proposed on 2026-11-12, decided at the agent host's H1.
+Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 
 - What: a fast-forward of the subject's branch to the Fix branch, on the owner's button only, and
   only when the subject is a local branch. For a remote branch or an MR, the Fix branch is kept for

@@ -12,10 +12,9 @@ Agents as first-class participants of the client:
 [PLAN-PANELS.md](PLAN-PANELS.md) builds multi-agent panels on it. The two plans share one order
 (§14).
 
-**Status (2026-11-12): draft, not accepted. Steps H0 and H0b are answered (§17), and the sections
-their answers change are rewritten. Review rounds 01–16 are fixed; H1 is next.
-No choice is open (§14).
-Codex stays off until H13a. Nothing is built.**
+**Status (2026-11-16): accepted by the owner at H1, with the seven write decisions of §16
+([decision](docs/decisions/2026-11-16-plans-accepted.md)). Review rounds 01–16 are fixed. Codex
+stays off until H13a. Each step carries its own status.**
 
 **Status (2026-11-16): Claude takes a direct connection behind the backend seam
 ([decision](docs/decisions/2026-11-16-claude-direct-connection.md)). §1 to §7, §11, §13, §14 and
@@ -36,7 +35,7 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - Claude through the user's own `claude`, on any login;
   - the chat on ACP first, and spike 0b before H1;
   - panels isolate by trust, with WSL2 on Windows, and agents keep the shell everywhere;
-  - the seven repo writes of §16, proposed until H1;
+  - the seven repo writes of §16, accepted at H1 on 2026-11-16;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
   - managed worktrees go in `<folder>/worktrees/<repo>/<branch>` for a workspace folder that holds
@@ -1117,6 +1116,8 @@ Also found:
 
 ### Step H1. The owner accepts the plans
 
+**Status (2026-11-16): done. The owner accepted both plans and the seven write decisions.**
+
 Both plans, after a review round with no major finding (round 04 or later). The owner accepts the
 seven write decisions; each goes to `docs/decisions/`.
 
@@ -1899,9 +1900,9 @@ Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with eve
 
 - **Personal builds** use the subscription login now
   ([decision](docs/decisions/2026-11-12-claude-own-cli.md)).
-- **The letter to Anthropic and the Commercial Terms. Open**
-  ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), choice 5): only the owner
-  can send the one or accept the other. The letter is drafted and not sent.
+- **The letter to Anthropic and the Commercial Terms**
+  ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), choice 5): the owner wrote
+  the letter on 2026-11-16; the answer is awaited. The Commercial Terms stay open.
   - Recommended: the letter goes now, not here. It asks three things: whether a desktop client
     running the user's own unmodified `claude` on the user's own login is covered; whether
     panels' parallel sessions are "ordinary, individual usage"; and the label.

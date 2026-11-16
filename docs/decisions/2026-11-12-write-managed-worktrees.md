@@ -1,6 +1,6 @@
 # Write: managed worktrees and their recipe
 
-Proposed on 2026-11-12, decided at the agent host's H1.
+Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 
 - What:
   - `git worktree add` and `remove` under `<folder>/worktrees/<repo>/<branch>` for a workspace

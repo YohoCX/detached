@@ -1,6 +1,6 @@
 # Write: a tree of its own for each panel participant
 
-Proposed on 2026-11-12, decided at the agent host's H1.
+Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 
 - What:
   - **Every run:** a pinned tree at the subject's SHA, made with hooks off

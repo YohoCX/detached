@@ -1,6 +1,6 @@
 # Write: fetching an MR's head for a panel
 
-Proposed on 2026-11-12, decided at the agent host's H1.
+Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 
 - What: `git fetch <remote> <MR head ref>` into `refs/detached/subjects/<run>`, removed with the
   run. Nothing else in the repo changes.

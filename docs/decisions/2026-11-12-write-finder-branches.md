@@ -1,6 +1,6 @@
 # Write: merging or discarding a trusted finder's branch
 
-Proposed on 2026-11-12, decided at the agent host's H1.
+Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 
 - What: the run view lists each kept `detached-run/<run>/<participant>` branch with two buttons.
   - **Merge** fast-forwards the subject's branch to it, with hooks off. It exists only when the

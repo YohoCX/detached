@@ -4,8 +4,9 @@ Groups of agents over one subject, as stage graphs on one engine: review, pre-me
 plan review, dialectic and brainstorm. Ideas come from revmux; the design is ours. It runs on
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
 
-**Status (2026-11-13): draft, not accepted. The host's spike 0b is answered and §3, §4 and §7
-follow it. Review rounds 01–16 are fixed in this text. No choice is open.
+**Status (2026-11-16): accepted by the owner at the host's H1
+([decision](docs/decisions/2026-11-16-plans-accepted.md)). The host's spike 0b is answered and §3,
+§4 and §7 follow it. Review rounds 01–16 are fixed in this text.
 Settled on 2026-11-12:
 - the chat moves to ACP before P2, and spike 0b runs before H1 (host §14);
 - isolation by trust, with WSL2 on Windows, and agents keep the shell (§3);
