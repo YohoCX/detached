@@ -13,9 +13,6 @@ use crate::error::{Error, Result};
 use crate::skills::Skill;
 use crate::state::AppState;
 
-/// The mode in which whatever needs approval asks: a new session's, and every woken turn's.
-pub const ASKING: &str = "default";
-
 /// The backend a provider's manifest names.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Name {
@@ -156,7 +153,7 @@ impl Spec {
             repo: repo.into(),
             kind,
             trusted: false,
-            mode: ASKING.into(),
+            mode: provider.ask.into(),
             model: None,
             effort: None,
             tools: None,
@@ -238,6 +235,8 @@ pub enum Update {
     Lacks(Piece),
     /// The agent saw its project config change: the host rechecks the tree's trust now.
     Trust,
+    /// The agent refused a switch: what it said. The session keeps what it had.
+    Refused(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

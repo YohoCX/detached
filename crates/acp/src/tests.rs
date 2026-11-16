@@ -566,6 +566,7 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
     let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Untrusted);
     spec.sandbox = Some(backend::Sandbox {
         deny_read: vec!["/home/u/.ssh".into(), "/r/a \"b\"".into()],
+        tmp: Some(sb.path("tmp/p1")),
         ..Default::default()
     });
     let (tx, rx) = mpsc::channel();
@@ -577,7 +578,7 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
     });
     assert_eq!(config[0].value, "read-only");
     open.prompt("model").unwrap();
-    assert_eq!(said(&rx), "default read-only");
+    assert_eq!(said(&rx), "gpt-5.5 read-only");
     let layer = std::fs::read_to_string(repo.join(".codex/config.toml")).unwrap();
     let want = "default_permissions = \"detached-reviewer\"\n\
         [permissions.detached-reviewer]\nextends = \":read-only\"\n\
@@ -606,7 +607,7 @@ fn codex_open(
     model: Option<&str>,
 ) -> (Result<Open>, Receiver<backend::Event>) {
     let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
-    spec.mode = "plan".into();
+    spec.trusted = true;
     spec.effort = Some(effort.into());
     spec.model = model.map(String::from);
     let (tx, rx) = mpsc::channel();
@@ -623,7 +624,7 @@ fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
         backend::Event::Opened(o) => Some(o.config),
         _ => None,
     });
-    let effort = config.iter().find(|c| c.id == "reasoning_effort").unwrap();
+    let effort = config.iter().find(|c| c.id == "effort").unwrap();
     assert_eq!(effort.value, "high");
     open.prompt("effort").unwrap();
     assert_eq!(said(&rx), "high");
@@ -759,7 +760,7 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
         cwd: repo.into(),
         config: config_of(&spec),
         meta: meta(&spec, None),
-        server: None,
+        ..Options::default()
     };
     let opened = adapter.new_session(&options).unwrap();
     let (mut said, mut tools) = (vec![format!("{:?}", opened.config)], BTreeMap::new());
@@ -792,7 +793,7 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
                 said.push(format!("{end:?}"));
                 break;
             }
-            Event::Closed(_) | Event::Exited(..) => {}
+            Event::Closed(_) | Event::Exited(..) | Event::Output(..) => {}
         }
     }
     (said, tools)
@@ -829,5 +830,248 @@ fn the_air_declaration_changes_tool_output_and_nothing_else_seen() {
         assert!(t.output.is_some(), "{t:?}");
         t.output = None;
         assert_eq!(tools[&id], t);
+    }
+}
+
+/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI, Codex on, and its sessions kept
+/// in a Codex home of the sandbox's.
+fn codex() -> Sandbox {
+    let sb = Sandbox::new();
+    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
+    let config = adapters::Config {
+        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
+        codex: true,
+    };
+    sb.state.set_block(BLOCK, config).unwrap();
+    let home = sb.path("codex-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = ("CODEX_HOME".into(), home.display().to_string());
+    sb.state.env.write().unwrap().vars.push(home);
+    sb
+}
+
+/// A trusted Codex chat in the sandbox, in Codex's chat mode.
+fn codex_chat(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Opened) {
+    let (tx, rx) = mpsc::channel();
+    let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
+    (spec.trusted, spec.mode) = (true, CODEX.chat.into());
+    let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    let open = open.unwrap();
+    let opened = until(&rx, |e| match e {
+        backend::Event::Opened(o) => Some(o),
+        _ => None,
+    });
+    (open, rx, opened)
+}
+
+fn option<'a>(config: &'a [Config], id: &str) -> &'a str {
+    let c = config.iter().find(|c| c.id == id);
+    c.map(|c| c.value.as_str()).unwrap_or_default()
+}
+
+#[test]
+fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_options() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, opened) = codex_chat(&acp, &sb);
+    assert_eq!(option(&opened.config, "mode"), "agent");
+    assert_eq!(option(&opened.config, "effort"), "medium");
+    let models: Vec<_> = opened.models.iter().map(|m| m.label.as_str()).collect();
+    assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini"]);
+    for (setting, id, value) in [
+        (Setting::Mode("read-only".into()), "mode", "read-only"),
+        (Setting::Effort("high".into()), "effort", "high"),
+        (
+            Setting::Model("gpt-5.5-mini".into()),
+            "model",
+            "gpt-5.5-mini",
+        ),
+    ] {
+        open.set(setting).unwrap();
+        let config = until(&rx, |e| match e {
+            backend::Event::Update(Update::Config(c)) => Some(c),
+            _ => None,
+        });
+        assert_eq!(option(&config, id), value);
+    }
+    let refused = open.set(Setting::Model("opus".into())).unwrap_err();
+    assert_eq!(refused.to_string(), "This agent offers no model opus");
+    assert!(open.set(Setting::Mode("default".into())).is_err());
+}
+
+#[test]
+fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, _) = codex_chat(&acp, &sb);
+    open.prompt("run hi").unwrap();
+    let mut seen = Tool::default();
+    until(&rx, |e| match e {
+        backend::Event::Update(Update::Tool(t)) => {
+            seen.output = t.output.or(seen.output.take());
+            seen.status = t.status.or(seen.status.take());
+            None
+        }
+        backend::Event::Ended(_) => Some(()),
+        _ => None,
+    });
+    assert_eq!(seen.output, Some(json!("hi\nhi\n")));
+    assert_eq!(seen.status.as_deref(), Some("completed"));
+}
+
+#[test]
+fn codex_lists_the_host_s_own_sessions_of_the_folder_and_its_delete_archives() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, opened) = codex_chat(&acp, &sb);
+    open.prompt("say hello").unwrap();
+    said(&rx);
+    let repo = sb.dir.path().display().to_string();
+    let file = sb.path("codex-home/fake-sessions.json");
+    let mut all: Vec<Value> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    all.push(json!({"sessionId": "from-the-cli", "cwd": repo, "title": "mine"}));
+    std::fs::write(&file, Value::from(all).to_string()).unwrap();
+    sessions::seen(&sb.state, &opened.id).unwrap();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let past = acp.past(&sb.state, &spec).unwrap();
+    let listed: Vec<_> = past
+        .iter()
+        .map(|p| (p.id.as_str(), p.title.as_str()))
+        .collect();
+    assert_eq!(listed, [(opened.id.as_str(), "say hello")]);
+    assert!(past[0].modified > 0);
+    acp.delete(&sb.state, &spec, &opened.id).unwrap();
+    assert!(acp.past(&sb.state, &spec).unwrap().is_empty());
+}
+
+#[test]
+fn codex_refuses_a_chat_in_a_repo_whose_settings_are_not_trusted() {
+    let sb = codex();
+    let spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
+    let r = Acp::default().start(&sb.state, &spec, None, Box::new(|_| {}));
+    let e = r.err().unwrap().to_string();
+    assert!(e.contains("runs here only once you trust them"), "{e}");
+}
+
+#[test]
+fn a_run_s_mcp_file_reaches_codex_as_its_servers() {
+    let sb = codex();
+    let file = sb.path("mcp.json");
+    let servers = json!({"mcpServers": {
+        "local": {"command": "srv", "args": ["-v"], "env": {"TOKEN": "t"}},
+        "web": {"type": "http", "url": "https://x.test/mcp", "headers": {"Authorization": "b"}},
+    }});
+    std::fs::write(&file, servers.to_string()).unwrap();
+    let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
+    (spec.trusted, spec.mcp) = (true, Some(file));
+    let (tx, rx) = mpsc::channel();
+    let open = Acp::default().start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    let open = open.unwrap();
+    open.prompt("params").unwrap();
+    let params: Value = serde_json::from_str(&said(&rx)).unwrap();
+    let want = json!([
+        {"name": "local", "command": "srv", "args": ["-v"], "env": [{"name": "TOKEN", "value": "t"}]},
+        {"type": "http", "name": "web", "url": "https://x.test/mcp",
+            "headers": [{"name": "Authorization", "value": "b"}]},
+    ]);
+    assert_eq!(params["mcpServers"], want);
+}
+
+#[test]
+fn a_codex_participant_reads_in_codex_s_sandbox_and_a_chat_in_its_mode() {
+    let mode = |kind| {
+        let mut spec = Spec::new(&CODEX, "/r", kind);
+        spec.mode = CODEX.full.into();
+        config_of(&spec)[0].1.clone()
+    };
+    assert_eq!(mode(Kind::Verifier), "read-only");
+    assert_eq!(mode(Kind::Untrusted), "read-only");
+    assert_eq!(mode(Kind::Chat), "agent-full-access");
+}
+
+#[test]
+fn concurrent_untrusted_codex_participants_share_one_profile_written_once() {
+    let sb = codex();
+    let repo = sb.path("tree");
+    std::fs::create_dir_all(repo.join(".codex")).unwrap();
+    std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.repo]\n").unwrap();
+    let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Untrusted);
+    spec.sandbox = Some(backend::Sandbox {
+        deny_read: vec!["/home/u/.ssh".into()],
+        tmp: Some(sb.path("tmp/p1")),
+        ..Default::default()
+    });
+    let acp = Acp::default();
+    let opened: Vec<Open> = std::thread::scope(|s| {
+        let starts: Vec<_> = (0..4)
+            .map(|_| s.spawn(|| acp.start(&sb.state, &spec, None, Box::new(|_| {})).unwrap()))
+            .collect();
+        starts.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+    assert_eq!(opened.len(), 4);
+    let layer = std::fs::read_to_string(repo.join(".codex/config.toml")).unwrap();
+    assert!(layer.ends_with("\"/home/u/.ssh\" = \"deny\"\n"), "{layer}");
+    let files: Vec<_> = std::fs::read_dir(repo.join(".codex"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(files.len(), 1, "no temp file is left");
+}
+
+#[test]
+fn a_switch_the_agent_refuses_comes_back_as_refused() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, _) = codex_chat(&acp, &sb);
+    open.set(Setting::Mode("workspace-write".into())).unwrap();
+    let why = until(&rx, |e| match e {
+        backend::Event::Update(Update::Refused(why)) => Some(why),
+        _ => None,
+    });
+    assert!(why.contains("no such value"), "{why}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_untrusted_codex_participant_runs_on_a_home_of_its_own_with_the_login_alone() {
+    let sb = codex();
+    let owner = sb.path("codex-home");
+    std::fs::create_dir_all(owner.join("rules")).unwrap();
+    let rule = "prefix_rule(pattern = [\"make\"], decision = \"allow\")\n";
+    std::fs::write(owner.join("rules/default.rules"), rule).unwrap();
+    std::fs::write(owner.join("config.toml"), "model = \"x\"\n").unwrap();
+    std::fs::write(owner.join("auth.json"), "{}").unwrap();
+    let tree = sb.path("tree");
+    std::fs::create_dir_all(&tree).unwrap();
+    let tmp = sb.path("run/tmp/p1");
+    let mut spec = Spec::new(&CODEX, &tree.display().to_string(), Kind::Untrusted);
+    spec.sandbox = Some(backend::Sandbox {
+        deny_read: vec![sb.path("run/tmp"), owner.join("auth.json")],
+        tmp: Some(tmp.clone()),
+        ..Default::default()
+    });
+    let (tx, rx) = mpsc::channel();
+    let acp = Acp::default();
+    let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    let open = open.unwrap();
+    open.prompt("home").unwrap();
+    // Its own sessions file aside, the fake's history.
+    let home = said(&rx);
+    assert!(home.starts_with("auth.json"), "{home}");
+    assert!(
+        !home.contains("rules") && !home.contains("config.toml"),
+        "{home}"
+    );
+    let link = std::fs::read_link(tmp.join("codex-home/auth.json")).unwrap();
+    assert_eq!(link, owner.join("auth.json"));
+    let (chat, rx, _) = codex_chat(&acp, &sb);
+    chat.prompt("home").unwrap();
+    assert!(
+        said(&rx).contains("rules"),
+        "a chat runs on the owner's home"
+    );
+    let layer = std::fs::read_to_string(tree.join(".codex/config.toml")).unwrap();
+    for denied in ["run/tmp", "codex-home/auth.json"] {
+        let path = sb.path(denied).display().to_string();
+        assert!(
+            layer.contains(&json!(path).to_string()),
+            "{denied}: {layer}"
+        );
     }
 }

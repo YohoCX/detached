@@ -3,15 +3,15 @@
 
 use std::collections::BTreeMap;
 
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::{CLAUDE, Provider};
 use detached_core::backend::{Kind, Setting, SlashCommand, Spec};
 use detached_core::trust::{self, Project};
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 use kernel::blocking;
-use kernel::session::{AUTO, Answer, End, Item, Session, State as Run};
+use kernel::session::{Answer, End, Item, Session, State as Run};
 use kernel::ui_state;
 
-/// The last commands each repo's session listed, for `/` before this one's lists them.
+/// The last commands each repo's Claude session listed, for `/` before this one's lists them.
 const COMMANDS: &str = "chat.commands";
 
 /// A trust check's number, what it read, and whether that is trusted.
@@ -30,6 +30,8 @@ pub enum State {
 
 pub struct Chat {
     pub repo: String,
+    /// Who answers: picked while nothing is said.
+    pub provider: &'static Provider,
     /// The conversation's sessions, oldest first: one that ended goes on in a resume after it.
     pub sessions: Vec<Entity<Session>>,
     /// The first thing the user said here.
@@ -63,9 +65,10 @@ impl Chat {
         Chat {
             cached: all.remove(&repo).unwrap_or_default(),
             repo,
+            provider: &CLAUDE,
             sessions: vec![],
             topic: None,
-            mode: AUTO.into(),
+            mode: CLAUDE.chat.into(),
             model: None,
             effort: None,
             review: None,
@@ -93,7 +96,7 @@ impl Chat {
 
     /// Opens a session after the ones there, resuming `past` when given.
     fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
-        let mut spec = Spec::new(&CLAUDE, &self.repo, Kind::Chat);
+        let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
         (spec.mode, spec.model, spec.effort) =
             (self.mode.clone(), self.model.clone(), self.effort.clone());
         let s = Session::open(spec, past, cx);
@@ -124,11 +127,20 @@ impl Chat {
 
     fn changed(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         if Some(&s) == self.current() {
-            let (commands, unsent, ended) = s.update(cx, |s, _| {
+            let (commands, unsent, ended, kept) = s.update(cx, |s, _| {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
-                (s.commands.clone(), s.unsent.take(), ended)
+                // What the agent kept after a refused switch, for the next session too.
+                let kept = std::mem::take(&mut s.refused)
+                    .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
+                (s.commands.clone(), s.unsent.take(), ended, kept)
             });
-            if !commands.is_empty() && commands != self.cached {
+            if let Some([mode, model, effort]) = kept {
+                self.mode = mode.unwrap_or(self.mode.clone());
+                (self.model, self.effort) =
+                    (model.or(self.model.take()), effort.or(self.effort.take()));
+            }
+            // Kept for Claude's, the chat's first provider.
+            if !commands.is_empty() && commands != self.cached && self.provider.id == CLAUDE.id {
                 let mut all: BTreeMap<String, Vec<SlashCommand>> =
                     ui_state::get(COMMANDS, cx).unwrap_or_default();
                 all.insert(self.repo.clone(), commands.clone());
@@ -146,7 +158,13 @@ impl Chat {
             let state = self.state(cx);
             if self.was.0 == State::Working && state != State::Working {
                 let topic = self.topic(cx).map(String::from);
-                super::alert(&self.repo, state, topic, &cx.entity(), cx);
+                super::alert(
+                    (&self.repo, self.provider.name),
+                    state,
+                    topic,
+                    &cx.entity(),
+                    cx,
+                );
             }
             self.was = (state, busy);
         }
@@ -165,11 +183,25 @@ impl Chat {
         self.current().is_some_and(|s| s.read(cx).busy())
     }
 
-    /// Stops the turn, and every turn of the session's group.
+    /// Stops the turn, and every turn of the session's group. A backend that cannot stop a
+    /// background command alone ends the session too, which ends its commands; the next message
+    /// resumes it.
     pub fn stop(&self, cx: &mut Context<Self>) {
         if let Some(s) = self.current() {
             kernel::inbox::stop(cx, s);
         }
+    }
+
+    /// Hands a chat with nothing in it to `p`, in `p`'s chat mode.
+    pub fn set_provider(&mut self, p: &'static Provider, cx: &mut Context<Self>) {
+        if self.provider.id == p.id || !self.is_new(cx) {
+            return;
+        }
+        self.end(cx);
+        (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
+        self.cached.clear();
+        self.open(None, cx);
+        self.check_trust(cx);
     }
 
     /// Switches the mode, model or effort, for this session and the next.
@@ -321,9 +353,12 @@ impl Chat {
         self._work.push(cx.spawn(f));
     }
 
-    /// Shows the past conversation `id` in place of this one; the next message goes on with it.
-    pub fn open_past(&mut self, id: String, cx: &mut Context<Self>) {
+    /// Shows `p`'s past conversation `id` in place of this one; the next message goes on with it.
+    pub fn open_past(&mut self, p: &'static Provider, id: String, cx: &mut Context<Self>) {
         self.end(cx);
+        if self.provider.id != p.id {
+            (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
+        }
         self.resumed = true;
         self.open(Some(id), cx);
     }

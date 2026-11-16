@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config};
 use detached_core::git::runner::{Kind, out};
 use detached_core::panel::marks::{self, Mark, Panels};
 use detached_core::panel::mode::Stage;
@@ -107,6 +107,16 @@ fn start_with(
     budget: Option<u64>,
     cx: &mut TestAppContext,
 ) -> Entity<Panel> {
+    run(f, mode, budget, false, cx)
+}
+
+fn run(
+    f: &Fixture,
+    mode: &str,
+    budget: Option<u64>,
+    codex: bool,
+    cx: &mut TestAppContext,
+) -> Entity<Panel> {
     let s = Start {
         repo: f.repo.clone(),
         branch: "feat".into(),
@@ -115,8 +125,25 @@ fn start_with(
         mode: mode.into(),
         untrusted: false,
         budget,
+        codex,
     };
     cx.update(|cx| live::start(s, cx))
+}
+
+/// Codex on, `fake_acp` its adapter and CLI.
+fn codex(f: &Fixture) {
+    let fake = detached_acp::testutil::fake();
+    detached_acp::testutil::install_as(&f.core, CODEX.adapter, &fake, "2.6.0");
+    let cli = detached_core::testutil::claude::fake();
+    let config = Config {
+        cli: [
+            (CLAUDE.id.into(), cli.display().to_string()),
+            (CODEX.id.into(), fake.display().to_string()),
+        ]
+        .into(),
+        codex: true,
+    };
+    f.core.set_block(BLOCK, config).unwrap();
 }
 
 fn ended(p: &Entity<Panel>, cx: &mut TestAppContext) -> State {
@@ -193,6 +220,92 @@ fn a_trusted_review_ends_with_one_verified_card_from_two_sources_and_leaves_no_t
     // Finders ran in their own worktrees with no prompt, on the user's, project's and local settings.
     let started = s.participants.iter().find(|p| p.name == "f1").unwrap();
     assert_eq!(started.status, Status::Done);
+}
+
+#[gpui::test]
+fn codex_verifies_claude_s_findings_on_a_trusted_subject(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    codex(&f);
+    trust(&f);
+    mode(&f, "review", &["find", "verify"], &["f1"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    let verdict = format!("{};{}", verdict("f1-1", "confirmed"), done());
+    role(
+        &f,
+        "verifier",
+        &format!("fake: {verdict}\nacp: model;{verdict}"),
+    );
+    let p = run(&f, "review", None, true, cx);
+    let s = ended(&p, cx);
+    let head = s.heads().next().unwrap();
+    assert!(record::verified(head));
+    assert_eq!(head.verdict.as_ref().unwrap().1, "codex");
+    assert_eq!(record::corroboration(&s.sources(&head.id)), 1);
+    let verifier = s.participants.iter().find(|p| p.name == "verify-f1-1");
+    assert_eq!(verifier.unwrap().model, "codex");
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn on_a_subject_whose_settings_are_not_accepted_claude_stands_in_for_codex(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx);
+    codex(&f);
+    git(&f, &["switch", "-q", "feat"]);
+    let repo = Path::new(&f.repo);
+    std::fs::create_dir_all(repo.join(".codex")).unwrap();
+    std::fs::write(repo.join(".codex/config.toml"), "model = \"x\"\n").unwrap();
+    git(&f, &["add", "-A"]);
+    git(&f, &["commit", "-qm", "codex config"]);
+    git(&f, &["switch", "-q", "main"]);
+    mode(&f, "review", &["find", "verify"], &["f1"]);
+    role(&f, "f1", &format!("fake: {};{}", finding(1, LINE), done()));
+    let verdict = format!("{};{}", verdict("f1-1", "confirmed"), done());
+    role(&f, "verifier", &format!("fake: {verdict}\nacp: {verdict}"));
+    let p = run(&f, "review", None, true, cx);
+    let s = ended(&p, cx);
+    let limits = &s.started.as_ref().unwrap().limits;
+    assert!(
+        limits
+            .iter()
+            .any(|l| l.starts_with("cross-provider verification unavailable")),
+        "{limits:?}"
+    );
+    let head = s.heads().next().unwrap();
+    assert_ne!(head.verdict.as_ref().unwrap().1, "codex");
+}
+
+/// Codex's profile is the shared tree's: every untrusted Codex participant sends the same deny
+/// list, each with a temp dir of its own for its Codex home.
+#[cfg(unix)]
+#[gpui::test]
+fn untrusted_codex_participants_share_one_deny_list(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    codex(&f);
+    let seats = "[[seat]]\nrole = \"c1\"\nmodel = \"\"\nprovider = \"codex\"\n\
+                 [[seat]]\nrole = \"c2\"\nmodel = \"\"\nprovider = \"codex\"\n";
+    let dir = f.core.config_dir.join("modes");
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = format!("+++\ngraph = [\"find\"]\n{seats}+++\nReview it.\n");
+    std::fs::write(dir.join("review.md"), text).unwrap();
+    let script = format!("acp: {};{}", finding(1, LINE), done());
+    role(&f, "c1", &script);
+    role(&f, "c2", &script);
+    let p = start(&f, "review", cx);
+    let sandboxes = |cx: &gpui::App| {
+        let live = &p.read(cx).live;
+        let specs = live.iter().filter_map(|l| l.session.as_ref());
+        specs
+            .filter_map(|s| s.read(cx).spec.sandbox.clone())
+            .collect::<Vec<_>>()
+    };
+    wait_for(cx, LONG, |cx| sandboxes(cx).len() == 2);
+    let [a, b] = <[_; 2]>::try_from(cx.read(sandboxes)).unwrap();
+    assert_eq!(a.deny_read, b.deny_read);
+    assert_ne!(a.tmp, b.tmp);
+    let s = ended(&p, cx);
+    assert_eq!(s.findings.len(), 2, "{:?}", s.notes);
 }
 
 #[gpui::test]
@@ -820,6 +933,7 @@ fn a_run_left_without_an_end_closes_as_interrupted_and_its_trees_go(cx: &mut Tes
         priors: vec![],
         untrusted: false,
         budget: None,
+        codex: false,
     };
     r.append(record::now(), &Event::RunStarted(started))
         .unwrap();
@@ -1079,7 +1193,7 @@ fn a_three_round_loop_ends_with_its_majors_fixed_or_dismissed_with_reasons(
 }
 
 #[test]
-fn the_next_round_keeps_the_owner_s_trust_choice_and_budget() {
+fn the_next_round_keeps_the_owner_s_trust_choice_budget_and_codex() {
     use detached_core::panel::record::{Event, Started, Subject};
     let started = |untrusted: bool, budget| {
         let subject = Subject {
@@ -1102,6 +1216,7 @@ fn the_next_round_keeps_the_owner_s_trust_choice_and_budget() {
             priors: vec![],
             untrusted,
             budget,
+            codex: untrusted,
         });
         State::replay(&[(1, e)])
     };
@@ -1113,8 +1228,9 @@ fn the_next_round_keeps_the_owner_s_trust_choice_and_budget() {
     };
     let next = rounds(started(true, Some(9))).next("feat").unwrap();
     assert_eq!(
-        (next.mode.as_str(), next.untrusted, next.budget),
-        ("gate", true, Some(9))
+        (next.mode.as_str(), next.untrusted, next.budget, next.codex),
+        ("gate", true, Some(9), true)
     );
-    assert!(!rounds(started(false, None)).next("feat").unwrap().untrusted);
+    let next = rounds(started(false, None)).next("feat").unwrap();
+    assert!(!next.untrusted && !next.codex);
 }

@@ -232,7 +232,12 @@ pub fn stop(cx: &mut App, s: &Entity<Session>) {
         all.extend(mates.iter().filter_map(|x| live(cx, x)).filter(|x| x != s));
     }
     for s in all {
-        s.update(cx, |s, _| s.cancel());
+        s.update(cx, |s, cx| {
+            match crate::session::caps(s.spec.provider).stop_task {
+                true => s.cancel(),
+                false => s.cancel_and_end(cx),
+            }
+        });
     }
 }
 

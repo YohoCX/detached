@@ -32,7 +32,7 @@ pub struct Task {
 
 impl Rounds {
     /// The next round of a live task: a gate on its subject, the roster re-reviews default to, with
-    /// the owner's trust choice and budget of the round before.
+    /// the owner's trust choice, budget and "Codex verifies" of the round before.
     pub fn next(&self, task: &str) -> Option<Start> {
         let runs = self.records.iter().filter(|((t, _), _)| t == task);
         let last = runs.max_by_key(|((_, run), s)| (s.at, run.clone()))?.1;
@@ -46,6 +46,7 @@ impl Rounds {
             mode: "gate".into(),
             untrusted: started.untrusted,
             budget: started.budget,
+            codex: started.codex,
         })
     }
 

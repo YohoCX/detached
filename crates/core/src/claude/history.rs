@@ -257,6 +257,7 @@ fn summary(bytes: &[u8], named: Option<String>) -> Option<Past> {
         cwd: None,
         tag: tag.map(String::from),
         model: model.map(String::from),
+        provider: String::new(),
     })
 }
 

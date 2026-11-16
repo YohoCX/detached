@@ -1,6 +1,6 @@
-//! Which repos may load their own Claude settings: what those would run, and the user's yes to it.
+//! Which repos may load their own agent settings: what those would run, and the user's yes to it.
 //!
-//! An SDK session shows no trust dialog, so a repo's hooks would run unasked.
+//! A session shows no trust dialog, so a repo's hooks would run unasked.
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
@@ -17,7 +17,15 @@ use crate::git::runner::{Kind, out};
 
 const FILE: &str = "agent-trust.json";
 const SETTINGS: &[&str] = &[".claude/settings.json", ".claude/settings.local.json"];
-const MARKDOWN: &[&str] = &[".claude/skills", ".claude/agents", ".claude/commands"];
+const MARKDOWN: &[&str] = &[
+    ".claude/skills",
+    ".claude/agents",
+    ".claude/commands",
+    ".agents/skills",
+];
+/// Codex's project layer (config, rules, hooks), which no parser here reads: each file is listed
+/// whole when it says anything.
+const CODEX: &str = ".codex";
 /// Settings that run nothing and grant nothing.
 const QUIET: &[&str] = &[
     "$schema",
@@ -50,15 +58,24 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     for dir in MARKDOWN {
         markdown(repo, &repo.join(dir), &mut files);
     }
+    layer(repo, &repo.join(CODEX), &mut files)?;
+    let size = |f: &String| fs::metadata(repo.join(f)).map_or(0, |m| m.len());
+    if files
+        .iter()
+        .filter(|f| f.starts_with(CODEX))
+        .map(size)
+        .sum::<u64>()
+        > 1 << 20
+    {
+        return Err(Error::Other(format!(
+            "{CODEX} is over 1 MiB: the scan refuses it"
+        )));
+    }
     files.sort();
     let mut items = vec![];
     for f in &files {
         let text = fs::read_to_string(repo.join(f)).unwrap_or_default();
-        match f.as_str() {
-            ".mcp.json" => mcp(&text, &mut items),
-            f if f.ends_with(".json") => settings(f, &text, &mut items),
-            f => front(f, &text, &mut items),
-        }
+        scan(f, &text, &mut items);
     }
     let fingerprint = match files.is_empty() {
         true => String::new(),
@@ -82,14 +99,16 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
 /// than 1 MiB of them refuses the scan.
 pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
     use crate::panel::tree;
-    let all = tree::entries(env, repo, sha, &[".claude", ".mcp.json"])?;
+    let roots = [".claude", ".mcp.json", ".codex", ".agents"];
+    let all = tree::entries(env, repo, sha, &roots)?;
     let wanted = |p: &str| {
         SETTINGS.contains(&p)
             || p == ".mcp.json"
+            || p.starts_with(&format!("{CODEX}/"))
             || (MARKDOWN.iter().any(|d| p.starts_with(&format!("{d}/"))) && p.ends_with(".md"))
     };
     let link = |p: &str| {
-        p == ".claude"
+        roots.contains(&p)
             || MARKDOWN
                 .iter()
                 .any(|d| d.starts_with(p) || p.starts_with(d))
@@ -113,12 +132,7 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
     let mut items = vec![];
     let mut fingerprint = String::new();
     for (e, body) in files.iter().zip(bodies) {
-        let text = String::from_utf8_lossy(&body);
-        match e.path.as_str() {
-            ".mcp.json" => mcp(&text, &mut items),
-            f if f.ends_with(".json") => settings(f, &text, &mut items),
-            f => front(f, &text, &mut items),
-        }
+        scan(&e.path, &String::from_utf8_lossy(&body), &mut items);
         fingerprint.push_str(&format!("{} {}\n", e.oid, e.path));
     }
     Ok(Project { items, fingerprint })
@@ -170,6 +184,28 @@ fn load(config_dir: &Path) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Every file under Codex's layer `dir`, read whole: a link in it, or it a link, refuses the scan.
+fn layer(repo: &Path, dir: &Path, files: &mut Vec<String>) -> Result<()> {
+    let Ok(m) = dir.symlink_metadata() else {
+        return Ok(());
+    };
+    let refuse = |p: &Path| Error::Other(format!("{} is a link: the scan refuses it", p.display()));
+    if m.file_type().is_symlink() {
+        return Err(refuse(dir));
+    }
+    for e in fs::read_dir(dir)?.flatten() {
+        let (path, kind) = (e.path(), e.file_type()?);
+        if kind.is_symlink() {
+            return Err(refuse(&path));
+        } else if kind.is_dir() {
+            layer(repo, &path, files)?;
+        } else if let Some(rel) = path.strip_prefix(repo).ok().and_then(|p| p.to_str()) {
+            files.push(crate::git::files::slashed(rel));
+        }
+    }
+    Ok(())
+}
+
 fn markdown(repo: &Path, dir: &Path, files: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -183,6 +219,20 @@ fn markdown(repo: &Path, dir: &Path, files: &mut Vec<String>) {
         {
             files.push(crate::git::files::slashed(rel));
         }
+    }
+}
+
+/// What the trust file `file` would bring in.
+fn scan(file: &str, text: &str, items: &mut Vec<String>) {
+    match file {
+        ".mcp.json" => mcp(text, items),
+        f if f.starts_with(&format!("{CODEX}/")) => {
+            if !text.trim().is_empty() {
+                items.push(format!("{f}: unparsed"));
+            }
+        }
+        f if f.ends_with(".json") => settings(f, text, items),
+        f => front(f, text, items),
     }
 }
 
@@ -486,6 +536,65 @@ mod tests {
         }
         let folded = named(".Claude/SETTINGS.local.json");
         assert_eq!(folded, cfg!(any(target_os = "macos", windows)));
+    }
+
+    #[test]
+    fn codex_s_project_layer_and_skills_are_trust_files_on_disk_and_at_a_sha() {
+        let sb = Sandbox::new();
+        let r = sb.path("r");
+        fs::create_dir_all(&r).unwrap();
+        sb.git(&r, &["init", "-q"]);
+        write(&r, ".codex/config.toml", "  \n");
+        write(&r, ".agents/skills/y/SKILL.md", "---\nhooks: x\n---\n");
+        let env = sb.state.env();
+        let p = project(&env, &r).unwrap();
+        assert_eq!(p.items, [".agents/skills/y/SKILL.md: hooks: x"]);
+        assert_eq!(p.fingerprint.lines().count(), 2, "an empty file is hashed");
+        let repo = r.display().to_string();
+        let layer = [
+            (".codex/config.toml", "[mcp_servers.x]\ncommand = \"x\"\n"),
+            (
+                ".codex/rules/x.rules",
+                "prefix_rule(pattern = [\"rm\"], decision = \"allow\")\n",
+            ),
+            (".codex/hooks.json", "{\"hooks\": {}}\n"),
+        ];
+        for (file, text) in layer {
+            trust(&sb.state.config_dir, &repo, &project(&env, &r).unwrap()).unwrap();
+            write(&r, file, text);
+            let p = project(&env, &r).unwrap();
+            assert!(
+                p.items.contains(&format!("{file}: unparsed")),
+                "{:?}",
+                p.items
+            );
+            assert!(
+                !trusted(&sb.state.config_dir, &repo, &p),
+                "{file} asks again"
+            );
+        }
+        sb.git(&r, &["add", "-A"]);
+        sb.git(&r, &["commit", "-qm", "a"]);
+        let head = sb.git(&r, &["rev-parse", "HEAD"]);
+        assert_eq!(at(&env, &r, &head).unwrap(), project(&env, &r).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scan_on_disk_refuses_a_link_in_or_as_codex_s_layer_and_its_size() {
+        let sb = Sandbox::new();
+        let r = sb.path("r");
+        fs::create_dir_all(r.join(".codex")).unwrap();
+        sb.git(&r, &["init", "-q"]);
+        let env = sb.state.env();
+        std::os::unix::fs::symlink("/dev/zero", r.join(".codex/hooks.json")).unwrap();
+        assert!(project(&env, &r).unwrap_err().to_string().contains("link"));
+        fs::remove_dir_all(r.join(".codex")).unwrap();
+        std::os::unix::fs::symlink("/", r.join(".codex")).unwrap();
+        assert!(project(&env, &r).unwrap_err().to_string().contains("link"));
+        fs::remove_file(r.join(".codex")).unwrap();
+        write(&r, ".codex/config.toml", &"#\n".repeat(1 << 20));
+        assert!(project(&env, &r).unwrap_err().to_string().contains("1 MiB"));
     }
 
     #[cfg(unix)]

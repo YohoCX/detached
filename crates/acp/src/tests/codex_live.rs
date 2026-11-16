@@ -202,7 +202,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_session_s_close_its_command() {
     let sb = codex();
     let repo = std::fs::canonicalize(sb.dir.path()).unwrap();
     let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Chat);
-    spec.mode = "read-only".into();
+    (spec.trusted, spec.mode) = (true, "read-only".into());
     let marker = format!("H13A{}", std::process::id());
     let prompt = format!(
         "Run exactly this shell command and wait for it to finish: perl -e 'sleep 600' {marker}"
@@ -261,7 +261,7 @@ fn codex_calls_the_host_tools_over_http_and_no_argv_holds_their_secret() {
     let sb = codex();
     let repo = std::fs::canonicalize(sb.dir.path()).unwrap();
     let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Chat);
-    spec.mode = "read-only".into();
+    (spec.trusted, spec.mode) = (true, "read-only".into());
     let (tools, calls) = tools();
     spec.tools = Some(tools);
     let prompt = "Call the detached_act tool once, with action \"done\" and args \
@@ -276,5 +276,31 @@ fn codex_calls_the_host_tools_over_http_and_no_argv_holds_their_secret() {
     let url = open._route.as_ref().unwrap().url.clone();
     let secret = url.rsplit('/').next().unwrap();
     assert!(!argvs().contains(secret));
+    assert!(config() == before, "the user's config.toml changed");
+}
+
+/// H13b's row: a chat in Codex's own mode shows a command's output, switches its mode, and lists
+/// itself once the host's index knows it.
+#[test]
+#[ignore = "make codex-live"]
+fn a_codex_chat_shows_a_command_s_output_switches_its_mode_and_lists_itself() {
+    let before = config();
+    let sb = codex();
+    let repo = std::fs::canonicalize(sb.dir.path()).unwrap();
+    let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Chat);
+    (spec.trusted, spec.mode) = (true, CODEX.chat.into());
+    let prompt = "Run exactly this shell command and reply with one word, ok: echo H13B-OUT";
+    let (seen, open) = turn(&sb, &spec, prompt, Answer::Allow, |_, _| {});
+    assert_eq!(mode(&seen), "agent");
+    let out = seen.tools.values().filter_map(|t| t.output.as_ref());
+    assert!(
+        out.map(Value::to_string).any(|o| o.contains("H13B-OUT")),
+        "{:?}",
+        seen.tools
+    );
+    open.set(Setting::Mode("read-only".into())).unwrap();
+    sessions::seen(&sb.state, &open.id).unwrap();
+    let past = Acp::default().past(&sb.state, &spec).unwrap();
+    assert!(past.iter().any(|p| p.id == open.id), "{past:?}");
     assert!(config() == before, "the user's config.toml changed");
 }

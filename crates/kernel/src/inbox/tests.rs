@@ -498,3 +498,44 @@ fn a_woken_turn_that_reports_another_mode_than_asking_is_stopped(cx: &mut TestAp
         assert_eq!(last, Some(Some(StopReason::Cancelled)));
     });
 }
+
+/// A Codex session is woken in Codex's asking mode, switched through its config option, and its
+/// own mode is back after the turn.
+#[gpui::test]
+fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::adapters::{BLOCK, CODEX, Config};
+    let f = boot(cx);
+    let fake = detached_acp::testutil::fake();
+    detached_acp::testutil::install_as(&f.core, CODEX.adapter, &fake, "2.6.0");
+    let config = Config {
+        cli: [
+            (CLAUDE.id.into(), claude::fake().display().to_string()),
+            (CODEX.id.into(), fake.display().to_string()),
+        ]
+        .into(),
+        codex: true,
+    };
+    f.core.set_block(BLOCK, config).unwrap();
+    let (a, x) = open(&f, "default", "say here", cx);
+    let mut spec = Spec::new(&CODEX, &f.repo, Kind::Chat);
+    spec.mode = CODEX.chat.into();
+    let b = cx.update(|cx| Session::open(spec, None, cx));
+    wait_for(cx, Duration::from_secs(60), |cx| {
+        b.read(cx).state == State::Idle
+    });
+    turn(&b, "acp: say ready\nacp-wake: model", cx);
+    let y = b.read_with(cx, |s, _| s.id.clone().unwrap());
+    group(&[&x, &y], &[&y], cx);
+    turn(&a, &send(&y, "go"), cx);
+    wait_until(cx, |cx| woken(&b, cx) == 1);
+    settled(&[&a, &b], cx);
+    assert_eq!(said_since_woken(&b, cx), "gpt-5.5 read-only");
+    let mode = |cx: &App| b.read(cx).option("mode").map(String::from);
+    wait_until(cx, |cx| mode(cx).as_deref() == Some("agent"));
+    b.read_with(cx, |s, _| {
+        let notes = s.items.iter().filter(|i| matches!(i, Item::Note(_)));
+        assert_eq!(notes.count(), 0, "{:?}", s.items);
+    });
+}

@@ -903,6 +903,10 @@ fn a_live_review_starts_from_the_panels_app_and_ends_with_a_verified_card_whose_
         .unwrap()
         .to_string();
     assert!(trust.starts_with("Trusted (trusted by repo"), "{trust}");
+    assert!(
+        app.find("panels.form.verifier").is_none(),
+        "Codex verifies only once it is on"
+    );
     app.click("panels.form.start");
     wait_until(&mut app, |cx| cx.find("panel.live").is_some());
     wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());

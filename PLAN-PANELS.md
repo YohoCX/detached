@@ -552,7 +552,7 @@ left; waiting for the owner's check.**
   root of their own, so they never take the owner's lock; finder settings are accepted per repo for the
   head's trust files; the reflog rule takes `commit:` and `commit (amend):` entries alone.
 - Left: item 5 (Detached's distro and "WSL ready", a session through `wsl.exe` there, the firewall
-  step, native Windows' job per attempt), so untrusted runs refuse on Windows; Codex rows (H13a);
+  step, native Windows' job per attempt), so untrusted runs refuse on Windows; Codex rows (H13a; Codex participants and "Codex verifies" came with host H13b, on the fake ACP agent);
   a click on a participant opening its transcript; the actual model on a row; a rate limit's reset
   time; the remaining real-claude rows of the test list (each deny-list entry through Bash and
   `Read`, the workspace `.env` made after start, another run's MCP file, two instances on one lock,

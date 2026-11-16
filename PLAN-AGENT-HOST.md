@@ -234,7 +234,7 @@ env     = […]                          # the login, cloud and proxy names belo
 backend = "acp"
 adapter = "codex-acp"                  # installed per §3
 login   = ["codex", "login"]
-trust   = [".codex/config.toml", ".agents/skills/*/SKILL.md"]
+trust   = [".codex/**", ".agents/skills/*/SKILL.md"]
 env     = ["CODEX_HOME", "CODEX_PATH"]
 ```
 
@@ -244,7 +244,7 @@ What every provider must do; the host holds each row:
 | --- | --- |
 | Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; Claude's CLI is spawned with it, and an ACP adapter passes its whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_RESOURCE`, `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; Foundry's five are not in the built list and join it at H4c part b; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
 | Dies with the host, no orphan | §1: Claude's close, its leash and its job; an adapter's shutdown |
-| Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one. Codex (H13a, live): the cancel ends the turn at once, but its command runs on as a background terminal until it ends or the session closes, which ends it in 20 ms; the per-task stop is AIR's `asyncTasks`, H13b's |
+| Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one. Codex (H13a, live): the cancel ends the turn at once, but its command runs on as a background terminal until it ends or the session closes, which ends it in 20 ms. The per-task stop is AIR's `asyncTasks`, whose update the client cannot parse, so a Codex chat's Stop cancels and ends the session, which ends its commands, and the next message resumes it (H13b) |
 | "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]`. Claude: `--setting-sources` on every spawn, `""` for none; with no flag the CLI loads everything |
 | MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
@@ -901,7 +901,14 @@ Later steps add to the SDL:
 
 ## 13. The chat on `kernel::Session`
 
-On Claude's direct backend. Codex's column comes with H13b.
+On Claude's direct backend. Codex (H13b) differs where its adapter does: modes, model and effort
+are its config options (`agent` to start, `reasoning_effort` as effort); a command's output comes in
+pieces beside the call's updates; Stop ends the session, and the next message resumes it with a
+`session/load`; the list is `session/list` narrowed to the sessions the host's index knows, so the
+CLI's and other clients' are hidden; delete archives the conversation in Codex's own history, and
+the confirm says so; no plan limits, context breakdown, questions or per-task stop; a Codex chat
+starts only in a repo whose trust files, `.codex/config.toml` and `.agents/skills` among them, are
+trusted.
 
 | Today on the sidecar | On the direct backend | Gap and what the host does |
 | --- | --- | --- |
@@ -2049,6 +2056,65 @@ WSL run is open.**
 - **H13b takes:** Codex's mode for a chat (`Spec::new`'s `default` is Claude's), a command's
   output (Codex sends it in `_meta.terminal_output_delta`), the per-task stop, and P2's `Spec.mcp`
   as `mcpServers`.
+
+**Status (2026-11-17): H13b built on `agent-host/h13b-codex`, on `fake_acp` only: the owner's
+Codex account is out of usage until 2026-11-19, so no live turn ran.**
+- **Built:**
+  - Each manifest names its modes, its asking mode (`Spec::new`'s), its chat mode and its
+    full-access mode: Claude `default`, `auto`, `bypassPermissions`; Codex `read-only`, `agent`,
+    `agent-full-access`.
+  - The ACP backend: switches through `set_config_option`, checked against the options last
+    reported, a refused one coming back as `Update::Refused`, which the feed notes; the chat takes
+    back what the agent kept, so its next session (a resume after Stop) opens with it. A woken
+    turn (H10) runs in its provider's asking mode, Codex's `read-only` through that switch, and a
+    refused switch stops it (Codex's `reasoning_effort` is the seam's `effort`); models from the `model` option
+    with their names; a command's output from `_meta.terminal_output_delta`, its last 64 KiB whole
+    in the call's output; `/` commands from `available_commands_update`; past sessions from
+    `session/list` narrowed to those in the host's index, which now lists every chat session at
+    its open; delete through `session/delete`; a run's MCP file as `mcpServers`, stdio and HTTP.
+  - A Codex verifier or untrusted participant runs in `read-only`, Codex's own sandbox; a trusted
+    finder runs in `agent-full-access` (below). Only an untrusted one gets the deny profile, the
+    same for every Codex participant of the run (the shared tree's layer denies every temp dir),
+    written once by an atomic rename under a lock; never into a trusted run's pinned worktree.
+    Each untrusted Codex participant runs on a Codex home of its own in its temp dir, on an adapter
+    of its own: the owner's `auth.json` linked and nothing else, so the owner's rules (an "allow"
+    runs outside the sandbox), config, hooks, MCP servers and history do not load. The run's
+    temp root and `~/.codex/auth.json` are both denied reads, so neither path to the login reads
+    from inside the sandbox. Whether Codex logs in through the link, and what a token refresh
+    does to it, is the owner's live check; the fallback is an override that turns user rules off.
+  - Trust: every file of Codex's project layer `.codex/` (`config.toml`, `rules/**`,
+    `hooks.json`, …) is one item, "unparsed", when it says anything, and is fingerprinted; the
+    manifest's trust globs say `.codex/**`. On disk a link in or as `.codex/`, or more than 1 MiB
+    of it, refuses the scan, as at a SHA. `.agents/skills` front matter is read as
+    `.claude/skills`'. All of it on disk and at a SHA. A Codex chat
+    refuses a repo whose trust files are not trusted, and its card says Codex runs once they are.
+  - The chat: a new chat picks Claude or, once Codex is on, Codex beside the provider's name;
+    modes, efforts, the header, the alerts, the past list and the trust card follow the chat's
+    provider. The Chats app lists each place's past conversations per provider. Codex's delete
+    confirm says Codex keeps it archived.
+  - Panels: a model names its provider (`codex:<model>`, or `codex` for Codex's default); a seat's
+    `provider` reaches its session; trusted Codex work runs in `agent-full-access`; a family drops
+    the provider, so Codex and Opus corroborate twice. The start form has "Codex verifies" once
+    Codex is on, which puts Codex first among the verifiers. On a subject whose trust files are not
+    accepted, Claude stands in for every Codex seat, merge and verifier, and the header says
+    "cross-provider verification unavailable".
+- **Stop: the session is closed and resumed** rather than the AIR notification parsed by hand.
+  A backend without a per-task stop (`Caps.stop_task`) makes the chat's Stop cancel and end the
+  session; its close ends Codex's background terminals, as H13a measured, and the next message
+  resumes the conversation with a `session/load`, its replay left out of the feed. AIR stays off
+  for Codex, so its standard fields keep the output.
+- **Tests** (`fake_acp` as Codex: its modes, models, `reasoning_effort`, `session/list` and
+  `session/delete` over a `CODEX_HOME` file, `run` with output pieces, `bg` a cancel spares and a
+  close ends, `act` over the host's HTTP route, `acp:` script lines): the backend's switches,
+  output, list, delete, refusal and MCP file; core's trust files and model names; the kernel's
+  Codex stop and resume, a trusted review that Codex verifies, Claude standing in on an unaccepted
+  subject; the chat picking Codex, showing a command's output, Stop ending its background command
+  and the next message resuming.
+- **Left:** a `codex-live` row (a Codex chat's output, mode switch and list) is written but did not
+  run; Codex's catalog vetting (§3) waits for a signed Codex entry, of which the catalog has none
+  yet.
+- **The owner checks:** `make codex-live` once the account is back, its new row included; a Codex
+  chat; a review with Codex verifying on a trusted subject.
 
 When the owner enables Codex. Until H13a passes, Codex rows stay off: no Codex chat, no Codex
 participant, and line 4 of PLAN-PANELS §4 does not hold for Codex.
