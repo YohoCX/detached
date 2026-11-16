@@ -311,6 +311,51 @@ fn a_settings_change_mid_turn_is_blocked_until_the_turn_ends_and_one_between_tur
     });
 }
 
+/// Each turn's last write is one the CLI reports, so its recheck sees every path that moved.
+#[gpui::test]
+fn a_command_agent_and_mcp_json_changed_mid_turn_keep_the_turn_and_end_the_session_with_it(
+    cx: &mut TestAppContext,
+) {
+    let f = boot(cx, &[]);
+    let mut s = open(&f, Kind::Chat, cx);
+    assert_eq!(turn(&s, "write CLAUDE.md Be terse.;say noted", cx), "noted");
+    let go = f.dir.path().join("claude-config/go");
+    let turns = [
+        (
+            "config .mcp.json {};config .claude/commands/hi.md Say hi.",
+            "config unreported config block still going",
+        ),
+        (
+            "config .claude/agents/rev.md Review.",
+            "config block still going",
+        ),
+    ];
+    for (n, (write, said_)) in turns.into_iter().enumerate() {
+        if n > 0 {
+            s = open(&f, Kind::Chat, cx);
+        }
+        let from = s.read_with(cx, |s, _| s.items.len());
+        s.update(cx, |s, cx| {
+            s.prompt(format!("{write};wait go;say still going"), cx)
+        });
+        let stale = Item::Note(TRUST_STALE.into());
+        wait_until(cx, |cx| s.read(cx).items.contains(&stale));
+        assert_eq!(state(&s, cx), State::Running);
+        std::fs::write(&go, "").unwrap();
+        wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
+        s.read_with(cx, |s, _| {
+            assert_eq!(s.state, State::Ended(End::Trust));
+            let stop = s.items.iter().rev().find_map(|i| match i {
+                Item::End { stop, .. } => Some(*stop),
+                _ => None,
+            });
+            assert_eq!(stop, Some(Some(StopReason::EndTurn)), "{:?}", s.items);
+        });
+        assert_eq!(said(&s, from, cx), said_);
+        std::fs::remove_file(&go).unwrap();
+    }
+}
+
 #[gpui::test]
 fn a_resumed_session_shows_its_past_as_its_turns_did(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
