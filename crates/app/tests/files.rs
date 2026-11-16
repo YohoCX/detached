@@ -1151,7 +1151,7 @@ fn a_file_saved_in_the_current_repo_shows_in_changes_by_itself(cx: &mut TestAppC
         cx.update(|_, cx| invalidate::watching(cx)) && cx.find("changes.empty").is_some()
     });
     write(&cx.sb.path("repos/solo"), [("new.txt", "x\n")]);
-    wait_until(cx, |cx| {
+    wait_watched(cx, |cx| {
         changes(cx) == ["Unversioned Files: 1 file", "new.txt untracked"]
     });
 }
