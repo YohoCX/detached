@@ -2,6 +2,7 @@
 //! types, in a session's terms. No flag, field or frame of a protocol is named here.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -45,6 +46,18 @@ pub trait Backend: Send + Sync {
     fn delete(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<()> {
         Err(Error::Other("This agent deletes no past sessions.".into()))
     }
+    /// Whether an untrusted participant's shell runs sandboxed in the distro `wsl`, or here: its
+    /// write to its own folder is denied. Ok(false) carries what failed in the error's place.
+    fn probe(&self, _core: &AppState, _wsl: Option<&str>) -> Result<Probe> {
+        Err(Error::Other("This agent has no sandbox probe.".into()))
+    }
+}
+
+/// The probe's answer: passed, or what the agent said instead.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Probe {
+    Passed,
+    Failed(String),
 }
 
 /// A session open on its backend; dropped, it closes there and `Closed` follows.
@@ -99,6 +112,15 @@ pub enum Kind {
     Untrusted,
 }
 
+/// What an isolated session may not read or write, and its own temp dir.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sandbox {
+    pub deny_read: Vec<PathBuf>,
+    /// Besides its cwd, which it never writes.
+    pub deny_write: Vec<PathBuf>,
+    pub tmp: Option<PathBuf>,
+}
+
 /// What a session wants, never how a protocol says it.
 #[derive(Clone)]
 pub struct Spec {
@@ -117,6 +139,10 @@ pub struct Spec {
     pub skills: Vec<Skill>,
     /// The WSL distro the agent runs in; None runs it on this machine.
     pub wsl: Option<String>,
+    /// The sandbox: an untrusted participant runs in one always, a verifier where the probe passed.
+    pub sandbox: Option<Sandbox>,
+    /// A run's MCP servers, in a file the agent reads by path.
+    pub mcp: Option<PathBuf>,
 }
 
 impl Spec {
@@ -133,6 +159,8 @@ impl Spec {
             tools: None,
             skills: vec![],
             wsl: None,
+            sandbox: None,
+            mcp: None,
         }
     }
 }

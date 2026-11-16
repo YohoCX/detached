@@ -23,7 +23,16 @@
 //! - `settings` says whether the project's settings load, `effort` the effort, `session` whether
 //!   it resumed and its id;
 //! - `background <text>` starts a task that runs until `stop_task`;
+//! - `act <json>` calls the host's `detached_act` with those arguments, `query <q>` its
+//!   `detached_read`, and says the answer;
+//! - `probe` does what the CLI does with the probe's responder: asks it, runs the Bash call it
+//!   returns, and sends the result back; sandboxed by `--settings`, the call writes elsewhere,
+//!   unless `fake.json`'s `sandbox` is `off`, or is not run when it is `unavailable`;
+//! - `first <name> <step>` runs the step once, while `$CLAUDE_CONFIG_DIR/<name>` does not exist;
 //! - any other step says `said <step>`.
+//!
+//! A prompt with a line `fake: <steps>` runs those steps alone. A resumed session given a prompt
+//! without one runs its first prompt's `fake-resume: <steps>` line, as a model remembers its brief.
 //!
 //! `fake.json` in the config dir sets what `initialize` answers as `account`, the `rate_limits`
 //! and `context` of `get_usage` and `get_context_usage`, the requests it `lacks` from the start, and
@@ -59,6 +68,7 @@ const VALUED: &[&str] = &[
     "--allowedTools",
     "--add-dir",
     "--plugin-dir",
+    "--mcp-config",
 ];
 const BARE: &[&str] = &[
     "--verbose",
@@ -426,12 +436,25 @@ impl Turn<'_> {
     }
 
     fn run(&self, text: &str) {
+        let script = |prefix: &str, t: &str| {
+            t.lines()
+                .find_map(|l| l.strip_prefix(prefix))
+                .map(String::from)
+        };
+        let steps = script("fake: ", text)
+            .or_else(|| {
+                script(
+                    "fake-resume: ",
+                    &first_prompt(&self.shared.lock().unwrap().id),
+                )
+            })
+            .unwrap_or_else(|| text.to_string());
         let s = self.shared.lock().unwrap();
         let init = json!({"type": "system", "subtype": "init", "session_id": s.id,
             "model": s.model, "permissionMode": s.mode});
         drop(s);
         self.send(init);
-        let result = text.split(';').try_for_each(|step| self.step(step.trim()));
+        let result = steps.split(';').try_for_each(|step| self.step(step.trim()));
         self.transcript(text);
         let said = self.said.lock().unwrap().clone();
         let id = self.shared.lock().unwrap().id.clone();
@@ -651,6 +674,35 @@ impl Turn<'_> {
                 )?;
                 self.say(&r["response"]["mcp_response"].to_string());
             }
+            "act" | "query" if self.shared.lock().unwrap().mcp => {
+                let (name, arguments) = match verb {
+                    "act" => ("detached_act", serde_json::from_str(rest).map_err(err)?),
+                    _ => ("detached_read", json!({"query": rest})),
+                };
+                let message = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments}});
+                let r = self.ask(
+                    json!({"subtype": "mcp_message", "server_name": "detached-host",
+                    "message": message}),
+                )?;
+                let result = &r["response"]["mcp_response"]["result"];
+                let text = result["content"][0]["text"].as_str().unwrap_or_default();
+                let error = if result["isError"] == true {
+                    "error: "
+                } else {
+                    ""
+                };
+                self.say(&format!("{error}{text} "));
+            }
+            "probe" => self.probe().map_err(err)?,
+            "first" => {
+                let (name, step) = rest.split_once(' ').unwrap_or((rest, ""));
+                let marker = config_dir().join(name);
+                if !marker.exists() {
+                    std::fs::write(&marker, "").map_err(err)?;
+                    return self.step(step);
+                }
+            }
             "out-of-usage" => {
                 return Err(Stop::Error(
                     "You're out of extra usage · resets 5pm (Europe/Berlin)".into(),
@@ -738,6 +790,42 @@ impl Turn<'_> {
         Ok(())
     }
 
+    /// The CLI's turn against the probe's responder: its call run as the sandbox would have it.
+    fn probe(&self) -> std::io::Result<()> {
+        let s = self.shared.lock().unwrap();
+        let settings: Value = (s.flags.get("--settings"))
+            .and_then(|v| serde_json::from_str(v).ok())
+            .unwrap_or_default();
+        let sandbox = settings["sandbox"]["enabled"] == true;
+        let mode = s.fake["sandbox"].as_str().unwrap_or("works").to_string();
+        let model = s.model.clone();
+        drop(s);
+        let mut req = json!({"model": model, "max_tokens": 100, "tools": [{"name": "Bash"}],
+            "messages": [{"role": "user", "content": "probe"}]});
+        let reply = post(&req)?;
+        let Some(call) =
+            (reply["content"].as_array().into_iter().flatten()).find(|c| c["type"] == "tool_use")
+        else {
+            self.say("no call");
+            return Ok(());
+        };
+        let command = call["input"]["command"].as_str().unwrap_or_default();
+        let elsewhere = tempfile_dir()?;
+        let (out, error) = match (sandbox, mode.as_str()) {
+            (true, "unavailable") => ("sandbox_required_unavailable".to_string(), true),
+            (true, "works") => (sh(command, &elsewhere)?, false),
+            _ => (sh(command, &std::env::current_dir()?)?, false),
+        };
+        _ = std::fs::remove_dir_all(&elsewhere);
+        let messages = req["messages"].as_array_mut().unwrap();
+        messages.push(json!({"role": "assistant", "content": reply["content"]}));
+        messages.push(json!({"role": "user", "content": [{"type": "tool_result",
+            "tool_use_id": call["id"], "content": out, "is_error": error}]}));
+        post(&req)?;
+        self.say("probed");
+        Ok(())
+    }
+
     /// A tool call and its result.
     fn tool(&self, id: &str, name: &str, input: Value, out: Result<&str, &str>) {
         let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
@@ -809,6 +897,62 @@ fn me() -> Command {
 
 fn err(e: impl std::fmt::Display) -> Stop {
     Stop::Error(e.to_string())
+}
+
+/// The first prompt of the transcript of session `id`, if it has one.
+fn first_prompt(id: &str) -> String {
+    let projects = config_dir().join("projects");
+    let files = (std::fs::read_dir(projects).into_iter().flatten().flatten())
+        .map(|d| d.path().join(format!("{id}.jsonl")));
+    let text = files
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .next()
+        .unwrap_or_default();
+    let first: Value = text
+        .lines()
+        .next()
+        .and_then(|l| serde_json::from_str(l).ok())
+        .unwrap_or_default();
+    first["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn tempfile_dir() -> std::io::Result<PathBuf> {
+    let d = std::env::temp_dir().join(format!("fake-claude-{}", std::process::id()));
+    std::fs::create_dir_all(&d)?;
+    Ok(d)
+}
+
+/// `command` run by `sh` in `dir`: its output.
+fn sh(command: &str, dir: &Path) -> std::io::Result<String> {
+    let o = Command::new("sh")
+        .args(["-c", command])
+        .current_dir(dir)
+        .output()?;
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    ))
+}
+
+/// A Messages request to the API the env names, by hand: its JSON answer.
+fn post(body: &Value) -> std::io::Result<Value> {
+    let base = std::env::var("ANTHROPIC_BASE_URL").map_err(std::io::Error::other)?;
+    let host = base.trim_start_matches("http://").trim_end_matches('/');
+    let mut s = std::net::TcpStream::connect(host)?;
+    let body = body.to_string();
+    write!(
+        s,
+        "POST /v1/messages HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut reply = String::new();
+    s.read_to_string(&mut reply)?;
+    let (_, json) = reply.split_once("\r\n\r\n").unwrap_or_default();
+    serde_json::from_str(json).map_err(std::io::Error::other)
 }
 
 /// One request to the Messages API the env names, by hand: the fake has no HTTP client.

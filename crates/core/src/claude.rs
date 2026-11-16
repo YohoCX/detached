@@ -27,6 +27,8 @@ use crate::skills::{self, Skill, Source};
 use crate::state::AppState;
 
 mod history;
+mod probe;
+pub(crate) mod responder;
 use history::Place;
 #[cfg(test)]
 mod tests;
@@ -84,6 +86,7 @@ impl Backend for Direct {
             past: true,
             delete: true,
             wsl: true,
+            probe: true,
             blocks: &[
                 ".claude/settings.json",
                 ".claude/settings.local.json",
@@ -93,7 +96,6 @@ impl Backend for Direct {
                 // Never reloaded mid-session: the next spawn's start check covers it.
                 ".mcp.json",
             ],
-            ..Caps::default()
         }
     }
 
@@ -123,6 +125,10 @@ impl Backend for Direct {
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
         place(spec, env(core, spec)).delete(id)
     }
+
+    fn probe(&self, core: &AppState, wsl: Option<&str>) -> Result<backend::Probe> {
+        probe::run(core, wsl)
+    }
 }
 
 /// The CLI's env: the allowlist and the manifest's names; a distro gets the manifest's alone, through
@@ -130,6 +136,10 @@ impl Backend for Direct {
 fn env(core: &AppState, spec: &Spec) -> Vec<(String, OsString)> {
     let p = spec.provider;
     let mut vars = proc::env(p.env, proc::parent(&core.env()));
+    if let Some(tmp) = spec.sandbox.as_ref().and_then(|s| s.tmp.clone()) {
+        vars.retain(|(k, _)| k != "CLAUDE_CODE_TMPDIR");
+        vars.push(("CLAUDE_CODE_TMPDIR".into(), tmp.into()));
+    }
     if spec.wsl.is_some() {
         let names = vars.iter().filter(|(k, _)| p.env.contains(&k.as_str()));
         let flag = |k: &str| if PATHS.contains(&k) { "up" } else { "u" };
@@ -230,8 +240,17 @@ fn command(spec: &Spec, cli: OsString, flags: Vec<String>) -> (PathBuf, Vec<OsSt
 
 /// Checks the CLI, spawns it on `spec`'s flags and initializes it.
 fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> Result<Live> {
+    start_in(core, spec, resume, events, env(core, spec))
+}
+
+fn start_in(
+    core: &AppState,
+    spec: &Spec,
+    resume: Option<&str>,
+    events: Events,
+    env: Vec<(String, OsString)>,
+) -> Result<Live> {
     let p = spec.provider;
-    let env = env(core, spec);
     let (cli, has) = match &spec.wsl {
         Some(d) => distro_cli(d, &env)?,
         None => {
@@ -272,17 +291,9 @@ fn start(core: &AppState, spec: &Spec, resume: Option<&str>, events: Events) -> 
     let history = resume.map(|id| place(spec, env.clone()).read(id));
     let (pass, off) = skills(spec, &env);
     let plugin = plugin(core, &id, &pass)?;
-    let mut flags = flags(spec, &id, resume.is_some());
+    let mut flags = flags(spec, &id, resume.is_some(), off);
     if let Some(dir) = &plugin {
         flags.extend(["--plugin-dir".into(), mounted(spec, dir.path())]);
-    }
-    // The Untrusted kind's own `--settings` never meets this: its CLI reads no skills.
-    if !off.is_empty() {
-        let off: serde_json::Map<_, _> = off.into_iter().map(|n| (n, json!("off"))).collect();
-        flags.extend([
-            "--settings".into(),
-            json!({"skillOverrides": off}).to_string(),
-        ]);
     }
     let (program, args) = command(spec, cli, flags);
     let cwd = match spec.wsl {
@@ -454,8 +465,9 @@ fn sources(spec: &Spec) -> &'static str {
     }
 }
 
-/// `spec` as flags, all of them again on a resume: the CLI keeps none of them.
-fn flags(spec: &Spec, id: &str, resume: bool) -> Vec<String> {
+/// `spec` as flags, all of them again on a resume: the CLI keeps none of them. `off` are the skills
+/// it would read itself that must not load.
+fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<String> {
     let (sources, strict) = (sources(spec), spec.kind != Kind::Chat);
     let mut a: Vec<String> = BASE.iter().map(|s| s.to_string()).collect();
     a.extend(
@@ -470,14 +482,43 @@ fn flags(spec: &Spec, id: &str, resume: bool) -> Vec<String> {
     if strict {
         a.push("--strict-mcp-config".into());
     }
-    a.push(format!("--disallowedTools={}", DENIED.join(",")));
-    if spec.kind == Kind::Untrusted {
-        let repo = std::fs::canonicalize(&spec.repo).unwrap_or_else(|_| spec.repo.clone().into());
-        let sandbox = json!({"sandbox": {"enabled": true, "failIfUnavailable": true,
+    let mut denied: Vec<String> = DENIED.iter().map(|d| d.to_string()).collect();
+    let mut settings = serde_json::Map::new();
+    if !off.is_empty() {
+        let off: serde_json::Map<_, _> = off.into_iter().map(|n| (n, json!("off"))).collect();
+        settings.insert("skillOverrides".into(), off.into());
+    }
+    if spec.kind != Kind::Chat {
+        a.extend(["--tools", "Read,Grep,Glob,Bash"].map(String::from));
+    }
+    let sandbox = match spec.kind {
+        Kind::Untrusted => Some(spec.sandbox.clone().unwrap_or_default()),
+        _ => spec.sandbox.clone(),
+    };
+    if let Some(sb) = sandbox {
+        let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.into());
+        let write: Vec<PathBuf> = std::iter::once(real(Path::new(&spec.repo)))
+            .chain(sb.deny_write.iter().map(|p| real(p)))
+            .collect();
+        let mut s = json!({"enabled": true, "failIfUnavailable": true,
             "autoAllowBashIfSandboxed": true, "allowUnsandboxedCommands": false,
-            "network": {"strictAllowlist": true}, "filesystem": {"denyWrite": [repo]}}});
-        let tools = ["--tools", "Read,Grep,Glob,Bash", "--settings"].map(String::from);
-        a.extend(tools.into_iter().chain([sandbox.to_string()]));
+            "filesystem": {"denyWrite": write, "denyRead": sb.deny_read}});
+        if spec.kind == Kind::Untrusted {
+            s["network"] = json!({"strictAllowlist": true});
+        }
+        settings.insert("sandbox".into(), s);
+        // An absolute path's rule starts with two slashes.
+        for p in &sb.deny_read {
+            let p = p.to_string_lossy().replace('\\', "/");
+            denied.extend([format!("Read(/{p})"), format!("Read(/{p}/**)")]);
+        }
+    }
+    a.push(format!("--disallowedTools={}", denied.join(",")));
+    if !settings.is_empty() {
+        a.extend(["--settings".into(), Value::Object(settings).to_string()]);
+    }
+    if let Some(m) = &spec.mcp {
+        a.extend(["--mcp-config".into(), mounted(spec, m)]);
     }
     if spec.tools.is_some() {
         a.extend(["--allowedTools".into(), format!("mcp__{SERVER}__*")]);
