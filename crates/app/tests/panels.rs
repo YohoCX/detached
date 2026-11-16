@@ -1035,3 +1035,69 @@ fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_rou
     });
     assert!(app.find("panel.task.next").is_none());
 }
+
+#[gpui_kit::test]
+fn the_stats_page_shows_dispositions_and_the_corpus_pass_and_its_run_checks_the_history(
+    cx: &mut TestAppContext,
+) {
+    let mut app = open_app_with(cx, |sb| {
+        let repo = repo(sb, "reviewed");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/panels");
+        for task in fs::read_dir(&source).unwrap() {
+            for run in fs::read_dir(task.unwrap().path()).unwrap() {
+                let run = run.unwrap().path();
+                let rel = run.strip_prefix(&source).unwrap();
+                let dest = repo.join(".git/detached/panels").join(rel);
+                fs::create_dir_all(&dest).unwrap();
+                fs::copy(run.join("events.jsonl"), dest.join("events.jsonl")).unwrap();
+            }
+        }
+    });
+    let label = |app: &mut VisualTestContext, id: &str| {
+        app.find(id.to_string())
+            .and_then(|e| e.label().map(String::from))
+    };
+    open_tab(&mut app, "tab.panels");
+    wait_until(&mut app, |cx| cx.find("panels.task.feat").is_some());
+    assert!(
+        app.find("panels.task.detached-corpus-p1-worktree-untracked")
+            .is_none(),
+        "corpus runs show on the Stats page"
+    );
+    app.click("panels.stats");
+    wait_until(&mut app, |cx| cx.find("panel.stats.role.bugs").is_some());
+    assert_eq!(
+        label(&mut app, "panel.stats.role.bugs").as_deref(),
+        Some(
+            "bugs · 2 raised · 50% fixed · 50%, 1 confirmed by verify, most often \"the name is the API's\" dismissed · 1.5 M per fixed"
+        )
+    );
+    assert_eq!(
+        label(&mut app, "panel.stats.verifier.opus").as_deref(),
+        Some("opus · 2 judged · 0% fixed · 0% dismissed · – per fixed")
+    );
+    assert_eq!(
+        label(&mut app, "panel.stats.suggestion").as_deref(),
+        Some("No change to suggest: none has five findings or more behind it.")
+    );
+    assert_eq!(
+        app.find(("panel.stats.pass", 0usize)).unwrap().label(),
+        Some("p1: caught 1 of 1 bugs, blocked 0 of 0 clean, 1 of 1 runs done, 900.0 K tokens")
+    );
+    assert_eq!(
+        label(&mut app, "panel.stats.pass.0.sonnet").as_deref(),
+        Some("sonnet: catch 1 of 1 (100%), false confirms 0 of 0 (–)")
+    );
+    let run = "Run the gate over the corpus's 20 subjects: about 18.0 M tokens, its budget";
+    assert_eq!(label(&mut app, "panel.stats.corpus").as_deref(), Some(run));
+    app.click("panel.stats.corpus");
+    wait_until(&mut app, |cx| cx.find("panel.stats.last").is_some());
+    let last = label(&mut app, "panel.stats.last").unwrap();
+    assert!(
+        last.starts_with(
+            "Last corpus run: The corpus runs on Detached's own history, and this repo lacks"
+        ),
+        "{last}"
+    );
+    assert!(last.ends_with("0 of 20 subjects, 0 tokens"), "{last}");
+}

@@ -1,0 +1,26 @@
+{"at": "2026-11-01T00:00:00.000Z", "kind": "run_started", "subject": {"repo": "/r", "branch": "feat", "remote": false, "base": "main", "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "head_sha": "1111111111111111111111111111111111111111"}, "mode": "review", "trusted": true, "seats": [], "prompts": {}, "cli": null, "schema": 1, "priors": []}
+{"at": "2026-11-01T00:00:01.000Z", "kind": "stage", "stage": "find"}
+{"at": "2026-11-01T00:00:02.000Z", "kind": "participant_started", "participant": "f1", "role": "bugs", "lenses": ["bugs", "impl"], "stage": "find", "model": "opus", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:00:03.000Z", "kind": "participant_started", "participant": "f2", "role": "docs", "lenses": ["docs"], "stage": "find", "model": "sonnet", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:00:04.000Z", "kind": "finding", "participant": "f1", "id": "f1-1", "finding": {"severity": "major", "class": "correctness", "title": "overflow", "body": "b", "fix": null, "file": "a.rs", "line": 10, "end_line": 10, "quote": "q", "lenses": ["bugs"]}, "unverified": null}
+{"at": "2026-11-01T00:00:05.000Z", "kind": "finding", "participant": "f1", "id": "f1-2", "finding": {"severity": "minor", "class": "correctness", "title": "naming", "body": "b", "fix": null, "file": "a.rs", "line": 40, "end_line": 40, "quote": "q", "lenses": ["impl"]}, "unverified": null}
+{"at": "2026-11-01T00:00:06.000Z", "kind": "finding", "participant": "f2", "id": "f2-1", "finding": {"severity": "minor", "class": "correctness", "title": "typo", "body": "b", "fix": null, "file": "README.md", "line": 3, "end_line": 3, "quote": "q", "lenses": ["docs"]}, "unverified": null}
+{"at": "2026-11-01T00:00:07.000Z", "kind": "finding", "participant": "f2", "id": "f2-2", "finding": {"severity": "minor", "class": "correctness", "title": "stale doc", "body": "b", "fix": null, "file": "b.rs", "line": 5, "end_line": 5, "quote": "q", "lenses": ["docs"]}, "unverified": null}
+{"at": "2026-11-01T00:00:08.000Z", "kind": "usage", "participant": "f1", "tokens": 1000000, "cost": null}
+{"at": "2026-11-01T00:00:09.000Z", "kind": "usage", "participant": "f2", "tokens": 400000, "cost": null}
+{"at": "2026-11-01T00:00:10.000Z", "kind": "reported", "participant": "f1", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:00:11.000Z", "kind": "reported", "participant": "f2", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:00:12.000Z", "kind": "stage", "stage": "verify"}
+{"at": "2026-11-01T00:00:13.000Z", "kind": "participant_started", "participant": "v1", "role": "verifier", "lenses": [], "stage": "verify", "model": "sonnet", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:00:14.000Z", "kind": "verdict", "participant": "v1", "model": "sonnet", "verdict": {"finding": "f1-1", "verdict": "confirmed", "quote": "q", "body": null, "same_as": null}, "earlier": []}
+{"at": "2026-11-01T00:00:15.000Z", "kind": "verdict", "participant": "v1", "model": "sonnet", "verdict": {"finding": "f1-2", "verdict": "refined", "quote": "q", "body": null, "same_as": null}, "earlier": []}
+{"at": "2026-11-01T00:00:16.000Z", "kind": "usage", "participant": "v1", "tokens": 100000, "cost": null}
+{"at": "2026-11-01T00:00:17.000Z", "kind": "reported", "participant": "v1", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:00:18.000Z", "kind": "participant_started", "participant": "v2", "role": "verifier", "lenses": [], "stage": "verify", "model": "opus", "actual": null, "attempt": 1, "session": null}
+{"at": "2026-11-01T00:00:19.000Z", "kind": "verdict", "participant": "v2", "model": "opus", "verdict": {"finding": "f2-1", "verdict": "rejected", "quote": "q", "body": null, "same_as": null}, "earlier": []}
+{"at": "2026-11-01T00:00:20.000Z", "kind": "verdict", "participant": "v2", "model": "opus", "verdict": {"finding": "f2-2", "verdict": "confirmed", "quote": "q", "body": null, "same_as": null}, "earlier": []}
+{"at": "2026-11-01T00:00:21.000Z", "kind": "usage", "participant": "v2", "tokens": 100000, "cost": null}
+{"at": "2026-11-01T00:00:22.000Z", "kind": "reported", "participant": "v2", "nothing_found": false, "note": null}
+{"at": "2026-11-01T00:00:23.000Z", "kind": "run_ended", "end": "done", "gate": null}
+{"at": "2026-11-01T00:00:24.000Z", "kind": "disposition", "finding": "f1-2", "disposition": "dismissed", "reason": "the name is the API's"}
+{"at": "2026-11-01T00:00:25.000Z", "kind": "disposition", "finding": "f2-2", "disposition": "deferred", "reason": null}

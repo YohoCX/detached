@@ -49,6 +49,9 @@ pub enum Doc {
         repo: String,
         task: String,
     },
+    PanelStats {
+        repo: String,
+    },
     Diff(DiffDoc),
     Mr {
         repo: String,
@@ -75,7 +78,7 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 8] = [
+    pub const KINDS: [&str; 9] = [
         "file",
         "diff",
         "mr",
@@ -84,6 +87,7 @@ impl Doc {
         "terminal",
         "panel",
         "panel-task",
+        "panel-stats",
     ];
 
     /// The name the dock finds this document's behavior by.
@@ -92,6 +96,7 @@ impl Doc {
             Doc::File(_) => "file",
             Doc::Panel { .. } => "panel",
             Doc::PanelTask { .. } => "panel-task",
+            Doc::PanelStats { .. } => "panel-stats",
             Doc::Diff(_) => "diff",
             Doc::Mr { .. } => "mr",
             Doc::Job { .. } => "job",

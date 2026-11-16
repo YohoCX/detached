@@ -821,6 +821,37 @@ The owner checks: a dialectic on an open question of these plans; a brainstorm o
 
 ### Step P7. Corpus, calibration and stats
 
+**Status (2026-11-17): built; the corpus has not run on real agents, so its rates are not written yet;
+waiting for the owner's run and check.**
+- Built: `core::panel::corpus` with `corpus.toml`: 10 fix commits, each with a patch that puts its
+  bug back on top as a commit of its own (`worktree-untracked`, `store-link-escape`,
+  `hidden-name-slash`, `fix-range-commits`, `folder-backslash`, `watch-made-again`,
+  `chat-list-stdin`, `forge-form-key`, `update-cancel`, `files-stale-fallback`), reviewed against the
+  fix, and 10 clean commits against their parents. `kernel::panel::corpus` runs a mode over it one
+  run at a time within one budget; the Stats page (Panels → Stats, `Doc::PanelStats`) shows the one
+  suggestion, the dispositions by role, lens, model, mode and verifier (`core::panel::stats`), each
+  pass's catch and false-confirm rates per verifier model (`corpus::calibrate`), and the Run button
+  with the estimate, which is the budget.
+- Tests: `core::panel::corpus` (the corpus's shape and bug lines, a bug put back as the same commit
+  each pass, its branch removed, calibration on a written corpus run), `core::panel::stats` (every
+  column from the fixture of dispositions under `tests/fixtures/panels`, each suggestion),
+  `kernel::panel::tests::corpus` (two subjects on `fake_claude`, one at a time, scored; the budget
+  and a cancel end it), `tests/panels.rs` (the Stats page, and Run refused on a repo without the
+  history).
+- Choices: a bug subject is the fix's commit with the bug's patch on top, so its diff is the bug
+  alone; the patch's commit has a fixed author and date, so every pass reviews the same SHA. Corpus
+  runs are untrusted (read-only, no trust files to accept per head) and sequential, on
+  `detached-corpus/<pass>/<subject>` branches that exist only for their run; their tasks stay off
+  the Panels list and out of the disposition stats. A finding is about the bug within 3 lines of the
+  patch's changed lines. Catch: the bug's subject got a verified major or critical there; a
+  verifier's catch rate is its confirms of findings at a bug, its false-confirm rate its confirms
+  of majors and criticals on clean subjects. The estimate is the mean of earlier corpus runs of the
+  mode, else of the repo's runs of it, else 3 M a subject. Stats count an issue once across rounds,
+  under the role, model and lenses that raised it; a suggestion needs 5 findings behind it, and the
+  corpus's rates come first.
+- The owner checks: a gate pass over the corpus from the Stats page, then its rates written here;
+  the comparison with revmux is not built.
+
 Work:
 1. A corpus of 20 subjects from this repo: 10 commits with a known bug put back, 10 clean.
 2. A command that runs a mode over it.
