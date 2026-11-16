@@ -20,6 +20,7 @@ pub mod search;
 #[cfg(unix)]
 pub mod selftest;
 pub mod settings;
+pub mod skills;
 pub mod state;
 pub mod store;
 #[cfg(any(test, feature = "testutil"))]

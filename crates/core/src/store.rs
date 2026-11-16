@@ -428,7 +428,7 @@ fn no_links(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read(path: &Path) -> Result<Files> {
+pub(crate) fn read(path: &Path) -> Result<Files> {
     fn walk(root: &Path, path: &Path, files: &mut Files) -> Result<()> {
         let meta = fs::symlink_metadata(path)?;
         if meta.is_dir() {
@@ -451,7 +451,7 @@ fn read(path: &Path) -> Result<Files> {
     Ok(files)
 }
 
-fn hash(files: &Files) -> String {
+pub(crate) fn hash(files: &Files) -> String {
     let mut hash = Sha256::new();
     for (path, bytes) in files {
         let path = path.as_os_str().as_encoded_bytes();
