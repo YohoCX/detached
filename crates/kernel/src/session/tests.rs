@@ -16,7 +16,7 @@ use super::*;
 use crate::{wait_for, wait_until};
 
 mod claude;
-mod real;
+pub(crate) mod real;
 
 /// The fakes the seam's tests run on, each through the same body.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -217,7 +217,7 @@ fn open_spec(spec: Spec, past: Option<String>, cx: &mut TestAppContext) -> Entit
 }
 
 /// Runs a turn to its end; returns the text it said.
-fn turn(s: &Entity<Session>, prompt: &str, cx: &mut TestAppContext) -> String {
+pub(crate) fn turn(s: &Entity<Session>, prompt: &str, cx: &mut TestAppContext) -> String {
     let from = s.read_with(cx, |s, _| s.items.len());
     s.update(cx, |s, cx| s.prompt(prompt.into(), cx));
     wait_until(cx, |cx| s.read(cx).state != State::Running);

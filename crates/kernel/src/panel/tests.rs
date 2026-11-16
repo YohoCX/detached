@@ -16,6 +16,8 @@ use super::live::{self, Panel, Phase};
 use crate::session::tests::{Fixture, boot_on};
 use crate::wait_for;
 
+mod real;
+
 const LONG: Duration = Duration::from_secs(90);
 const LINE: &str = "let x = 1";
 

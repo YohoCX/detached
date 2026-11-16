@@ -167,7 +167,7 @@ fn boot(cx: &mut TestAppContext, real: Real, script: Value) -> (Fixture, Api) {
     }
 }
 
-fn boot_with(
+pub(crate) fn boot_with(
     cx: &mut TestAppContext,
     script: Value,
     provider: &'static Provider,

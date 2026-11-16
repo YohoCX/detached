@@ -24,6 +24,7 @@ ui-test:
 agent-test:
 	./scripts/adapter-build.sh claude-agent-acp
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
+	cargo test -p detached-kernel --lib panel::tests::real -- --ignored
 	cargo test -p detached-acp -- --ignored
 
 # The owner's, never CI's or an agent's: `detached --session` on his own `claude` and login, in a
