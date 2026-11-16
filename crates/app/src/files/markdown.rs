@@ -15,10 +15,10 @@ use futures::channel::oneshot;
 use gpui_kit::base::markdown_ast::Node;
 use gpui_kit::base::{MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle};
 use gpui_kit::{
-    AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, HighlightStyle, Image,
-    ImageFormat, ImageSource, InteractiveElement, IntoElement, ListOffset, ParentElement, Pixels,
-    Render, SharedString, SharedUri, StatefulInteractiveElement, StyleRefinement, Styled, Task,
-    WeakEntity, Window, div, img, px, relative,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, Global,
+    HighlightStyle, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement, ListOffset,
+    ParentElement, Pixels, Render, SharedString, SharedUri, StatefulInteractiveElement,
+    StyleRefinement, Styled, Task, WeakEntity, Window, div, img, px, relative,
 };
 use markdown::ParseOptions;
 use percent_encoding::percent_decode_str;
@@ -31,6 +31,13 @@ use crate::ui::{self, Icon};
 use kernel::blocking;
 
 type Diagram = Result<Arc<Image>, SharedString>;
+type Fetched = Option<Arc<Image>>;
+
+/// How web images load, set as a global in place of the network; tests record with it.
+#[derive(Clone)]
+pub struct ImageFetch(pub Arc<dyn Fn(&str) -> Fetched + Send + Sync>);
+
+impl Global for ImageFetch {}
 
 pub struct Markdown {
     links: Links,
@@ -464,7 +471,7 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> String {
                 }));
             }
             Node::Html(h) if matches!(links, Links::Agent) => {
-                edits.push((span, h.value.replace('<', "&lt;").replace('>', "&gt;")));
+                edits.push((span, agent_html(&h.value)));
             }
             Node::Code(c) => edits.extend(fence(text, span, c.lang.as_deref())),
             Node::Image(i) => edits.extend(image_link(links, &i.url, &i.alt, span)),
@@ -584,8 +591,12 @@ fn image_link(
     if image_url(links, url).is_some() {
         return None;
     }
-    let href = resolve_url(url, links);
-    let label = if alt.is_empty() { &href } else { alt };
+    Some((span, link(alt, &resolve_url(url, links))))
+}
+
+/// A link to `href`, labeled `label` or else `href`.
+fn link(label: &str, href: &str) -> String {
+    let label = if label.is_empty() { href } else { label };
     let label: String = label
         .chars()
         .flat_map(|c| {
@@ -596,7 +607,44 @@ fn image_link(
         })
         .collect();
     let href = href.replace('<', "%3C").replace('>', "%3E");
-    Some((span, format!("[{label}](<{href}>)")))
+    format!("[{label}](<{href}>)")
+}
+
+/// Raw HTML as text, each `<img>` a link to its source.
+fn agent_html(html: &str) -> String {
+    let escape = |s: &str| s.replace('<', "&lt;").replace('>', "&gt;");
+    let lower = html.to_ascii_lowercase();
+    let (mut out, mut at, mut from) = (String::new(), 0, 0);
+    while let Some(start) = lower[from..].find("<img").map(|i| from + i) {
+        from = start + 4;
+        if !lower[from..].starts_with(|c: char| c.is_whitespace() || c == '/' || c == '>') {
+            continue;
+        }
+        let Some(end) = lower[start..].find('>').map(|i| start + i + 1) else {
+            break;
+        };
+        let tag = &html[start..end];
+        out += &escape(&html[at..start]);
+        if let Some(src) = attr(tag, "src").filter(|s| !s.is_empty()) {
+            out += &link(attr(tag, "alt").unwrap_or_default(), src);
+        }
+        (at, from) = (end, end);
+    }
+    out + &escape(&html[at..])
+}
+
+/// A tag's attribute value, quoted or not.
+fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let lower = tag.to_ascii_lowercase();
+    lower.match_indices(name).find_map(|(i, _)| {
+        lower[..i].ends_with(char::is_whitespace).then_some(())?;
+        let rest = lower[i + name.len()..].trim_start().strip_prefix('=')?;
+        let value = &tag[tag.len() - rest.trim_start().len()..];
+        match value.chars().next()? {
+            q @ ('"' | '\'') => value[1..].split(q).next(),
+            _ => value.split(|c: char| c.is_whitespace() || c == '>').next(),
+        }
+    })
 }
 
 /// Where an image loads from: a data or https URL, or a path in the repo; None when it does not.
@@ -634,8 +682,8 @@ fn fetch(core: &AppState, links: &Links, from: &str) -> Option<Arc<Image>> {
 
 /// Web images load a few at a time on threads of their own, so a slow host cannot hold core's
 /// pool.
-fn web_image(cx: &App, url: String) -> Task<Option<Arc<Image>>> {
-    type Job = (String, oneshot::Sender<Option<Arc<Image>>>);
+fn web_image(cx: &App, url: String) -> Task<Fetched> {
+    type Job = (String, Option<ImageFetch>, oneshot::Sender<Fetched>);
     static QUEUE: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
     let queue = QUEUE.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
@@ -647,8 +695,11 @@ fn web_image(cx: &App, url: String) -> Task<Option<Arc<Image>>> {
             let work = move || {
                 loop {
                     let job = rx.lock().map(|rx| rx.recv());
-                    let Ok(Ok((url, tx))) = job else { return };
-                    tx.send(get(&agent, &url)).ok();
+                    let Ok(Ok((url, fetch, tx))) = job else {
+                        return;
+                    };
+                    tx.send(fetch.map_or_else(|| get(&agent, &url), |f| f.0(&url)))
+                        .ok();
                 }
             };
             thread::Builder::new()
@@ -659,7 +710,7 @@ fn web_image(cx: &App, url: String) -> Task<Option<Arc<Image>>> {
         tx
     });
     let (tx, rx) = oneshot::channel();
-    queue.send((url, tx)).ok();
+    queue.send((url, cx.try_global().cloned(), tx)).ok();
     cx.foreground_executor()
         .spawn(async move { rx.await.ok().flatten() })
 }
@@ -899,6 +950,17 @@ mod tests {
         assert!(!text.contains("!["), "{text}");
         assert!(!text.contains("<img"), "{text}");
         assert!(text.contains("https://example.invalid/a.png"));
+        let html = [
+            (
+                "<p><img alt=\"a b\" src='https://x/a.png'/></p>",
+                r"&lt;p&gt;[a b](<https://x/a.png>)&lt;/p&gt;",
+            ),
+            ("<IMG\nSRC=//x/b.png>", r"[\/\/x\/b\.png](<//x/b.png>)"),
+            ("<img src=\"\"><imgur srcset=x>", "&lt;imgur srcset=x&gt;"),
+        ];
+        for (raw, want) in html {
+            assert_eq!(agent_html(raw), want, "{raw}");
+        }
     }
 
     #[test]

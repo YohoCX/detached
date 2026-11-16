@@ -3,11 +3,13 @@ mod common;
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use common::*;
 use detached_app::actions::{self, Group, Registration};
 use detached_app::files::{
-    self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Location, Markdown, Side,
+    self, Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, ImageFetch, Links, Location,
+    Markdown, Side,
 };
 use detached_core::git::runner::{Kind, Opts, run};
 use gpui_kit::base::TestSupportExt;
@@ -796,6 +798,63 @@ fn forge_markdown_breaks_lines_and_opens_only_web_links(cx: &mut TestAppContext)
         cx.opened_url().as_deref(),
         Some(docs),
         "javascript: does nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn agent_markdown_links_every_image_and_fetches_none(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    app.cx.update(|_, cx| {
+        cx.set_global(ImageFetch(Arc::new(move |url| {
+            log.lock().unwrap().push(url.into());
+            None
+        })))
+    });
+    let images = [
+        ("f", None),
+        ("a", Some("https://x.invalid/a.png")),
+        ("b", Some("http://x.invalid/b.png")),
+        ("c", Some("https://x.invalid/c.png")),
+        ("d", Some("https://x.invalid/d.png")),
+        ("e inline", Some("https://x.invalid/e.png")),
+    ];
+    let text = "![a](https://x.invalid/a.png)\n\n![b](http://x.invalid/b.png)\n\n![c][r]\n\n\
+        <img src=\"https://x.invalid/d.png\" alt=\"d\">\n\n<img alt=e src='https://x.invalid/e.png'> inline\n\n\
+        ![f](//x.invalid/f.png)\n\n[r]: https://x.invalid/c.png\n";
+    let agent = app
+        .cx
+        .add_window_view(|_, cx| Markdown::new(text, Links::Agent, true, cx))
+        .1;
+    for (label, url) in images {
+        wait_until(agent, |cx| visible(cx, label));
+        click_text(agent, label, 0.5);
+        assert_eq!(agent.opened_url().as_deref(), url, "{label}");
+    }
+    assert_eq!(
+        *asked.lock().unwrap(),
+        Vec::<String>::new(),
+        "agent text fetches nothing"
+    );
+
+    let links = Links::Forge {
+        project_url: "https://github.com/owner/app".into(),
+        base_url: "https://github.com".into(),
+        gitlab: false,
+    };
+    let forge = app
+        .cx
+        .add_window_view(|_, cx| Markdown::new(text, links, true, cx))
+        .1;
+    wait_until(forge, |_| asked.lock().unwrap().len() >= 4);
+    settle(forge);
+    let mut fetched = asked.lock().unwrap().clone();
+    fetched.sort();
+    let https = ["a", "c", "d", "e"].map(|n| format!("https://x.invalid/{n}.png"));
+    assert_eq!(
+        fetched, https,
+        "a file's or MR's https images load; http and // do not"
     );
 }
 
