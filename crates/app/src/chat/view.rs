@@ -456,14 +456,7 @@ impl ChatView {
         for (key, text) in whole {
             let md = match texts.remove(&key) {
                 Some((was, md)) if was == text => md,
-                _ => {
-                    let links = Links::Forge {
-                        project_url: String::new(),
-                        base_url: String::new(),
-                        gitlab: false,
-                    };
-                    cx.new(|cx| Markdown::new(text.clone(), links, true, cx))
-                }
+                _ => cx.new(|cx| Markdown::new(text.clone(), Links::Agent, true, cx)),
             };
             self.texts.insert(key, (text, md));
         }

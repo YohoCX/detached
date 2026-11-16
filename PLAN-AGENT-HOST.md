@@ -1712,7 +1712,7 @@ The owner checks: the same, through H4c's `make agent-login`. The in-chat check 
 
 ### Step H11. The chat on `kernel::Session`
 
-**Status (2026-11-16): items 1 to 3 are built; item 4, `Markdown`'s agent mode, is next.** The chat
+**Status (2026-11-16): items 1 to 4 are built.** The chat
 holds its conversation's `kernel::Session`s, the first opened when it shows; one that ended goes on
 in a resume after it, its history left out of the feed. `kernel::Session` takes a prompt while it
 starts, keeps one a trust change refused for the next session, snapshots each repo of a folder,
@@ -1723,8 +1723,9 @@ is a `Resource` per provider and folder. Claude's backend asks `get_usage` at op
 denied call with its reason (`Tool.status` `denied`, the seam's one addition), warns a chat below
 `min_cli` and refuses other kinds, and says of a `claude` it cannot talk to that it is not supported
 yet, with the terminal and the floor's installer. The label is `CLAUDE.name`. `tests/chat.rs` runs on
-`fake_claude`: all its tests, `dock.rs`'s, and one per row below but Codex's delete (H13) and the
-images (item 4). Open: the sidecar's removal, the follow-up below.
+`fake_claude`: all its tests, `dock.rs`'s, and one per row below but Codex's delete (H13). `Links::Agent` makes every image in agent text a link (inline, reference, raw `<img>`, any scheme);
+`ImageFetch`, a global, replaces `web_image`'s network in tests. Open: the sidecar's removal, the
+follow-up below.
 
 Work:
 1. The chat view on `kernel::Session`.

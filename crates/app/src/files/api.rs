@@ -8,7 +8,7 @@ pub use detached_core::types::Side;
 pub use gpui_kit::component::diff::DiffSide;
 
 pub use super::diff::DiffView;
-pub use super::markdown::Markdown;
+pub use super::markdown::{ImageFetch, Markdown};
 use super::viewer::FocusDiff;
 use kernel::doc::Doc;
 pub use kernel::doc::{DiffDoc, DocRef, Location};

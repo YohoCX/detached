@@ -1135,3 +1135,26 @@ fn an_open_chat_shows_whether_it_waits_for_you_or_is_done(cx: &mut TestAppContex
     idle(cx);
     assert_eq!(state(cx).as_deref(), Some("Done"));
 }
+
+#[gpui_kit::test]
+fn an_agent_reply_s_images_are_links_and_nothing_is_fetched(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    cx.update(|_, cx| {
+        cx.set_global(detached_app::files::ImageFetch(std::sync::Arc::new(
+            move |url: &str| {
+                log.lock().unwrap().push(url.into());
+                None
+            },
+        )))
+    });
+    say(
+        cx,
+        "say ![pic](https://x.invalid/a.png) ![old](http://x.invalid/b.png) <img src=\"https://x.invalid/c.png\" alt=\"raw\">",
+    );
+    wait_for_item(cx, "pic");
+    idle(cx);
+    cx.update(|w, cx| w.render_frame(cx));
+    assert_eq!(*asked.lock().unwrap(), Vec::<String>::new());
+}
