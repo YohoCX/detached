@@ -454,8 +454,14 @@ pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
         } else if meta.is_symlink() {
             let target = fs::read_link(path)?;
             let inside = path.canonicalize().is_ok_and(|p| p.starts_with(root));
-            // An absolute link would point back at the original once the item is moved or copied.
-            if !out && !(inside && target.is_relative()) {
+            // Only `..`s up to the root, then names: any other path may resolve elsewhere once the
+            // item is moved or copied.
+            let up = (target
+                .components()
+                .take_while(|c| *c == Component::ParentDir))
+            .count();
+            let down = (target.components().skip(up)).all(|c| matches!(c, Component::Normal(_)));
+            if !out && !(inside && up < rel.components().count() && down) {
                 return Err(Error::Other(
                     "A link in an item must lead inside its folder by a relative path".into(),
                 ));

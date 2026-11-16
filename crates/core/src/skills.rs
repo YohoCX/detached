@@ -405,9 +405,12 @@ mod tests {
         let store = RepoStore::open(&sb.state, repo.as_ref()).unwrap();
         put(&sb.path("LICENSE"), "license");
         let shared = store.shared.join("skills");
-        for dir in ["abs", "empty", "in", "out"].map(|n| shared.join(n)) {
+        for dir in ["abs", "back", "detour", "empty", "in", "out"].map(|n| shared.join(n)) {
             put(&dir.join("SKILL.md"), "s");
         }
+        symlink("../back/SKILL.md", shared.join("back/more")).unwrap();
+        fs::create_dir(shared.join("detour/data")).unwrap();
+        symlink("data/../SKILL.md", shared.join("detour/alias")).unwrap();
         symlink(shared.join("abs/SKILL.md"), shared.join("abs/more")).unwrap();
         fs::create_dir(shared.join("empty/data")).unwrap();
         symlink("data", shared.join("empty/alias")).unwrap();
@@ -442,6 +445,8 @@ mod tests {
         let special = "Items cannot contain special files";
         let want = [
             ("abs", out),
+            ("back", out),
+            ("detour", out),
             ("empty", empty),
             ("in", ""),
             ("out", out),
