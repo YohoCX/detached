@@ -14,12 +14,17 @@ pub fn fake() -> PathBuf {
 
 /// `fake_acp` as Claude's adapter at `version`, the current one; the one before is kept.
 pub fn install(core: &AppState, version: &str) {
+    install_as(core, CLAUDE.adapter, &fake(), version);
+}
+
+/// `program` as the adapter `name` at `version`, the current one; the one before is kept.
+pub fn install_as(core: &AppState, name: &str, program: &Path, version: &str) {
     let v = Version::parse(version).unwrap();
-    let exe = adapters::exe(&core.data_dir, CLAUDE.adapter, &v);
+    let exe = adapters::exe(&core.data_dir, name, &v);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(fake(), &exe).unwrap();
-    let folder = core.data_dir.join("adapters").join(CLAUDE.adapter);
-    let before = adapters::installed(&core.data_dir, CLAUDE.adapter).current;
+    std::fs::copy(program, &exe).unwrap();
+    let folder = core.data_dir.join("adapters").join(name);
+    let before = adapters::installed(&core.data_dir, name).current;
     let kept = Installed {
         current: Some(v),
         previous: before,

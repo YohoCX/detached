@@ -244,11 +244,11 @@ What every provider must do; the host holds each row:
 | --- | --- |
 | Env is the allowlist plus the manifest's names | `core::proc` builds it from nothing; Claude's CLI is spawned with it, and an ACP adapter passes its whole env on. The manifest's names carry the login, cloud and proxy variables the provider documents (Claude: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `AWS_PROFILE`, `AWS_REGION`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_RESOURCE`, `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`), passed when set; Foundry's five are not in the built list and join it at H4c part b; the env store's values never are. The test harness sets `ANTHROPIC_BASE_URL` and a dummy key through the same names |
 | Dies with the host, no orphan | §1: Claude's close, its leash and its job; an adapter's shutdown |
-| Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one |
+| Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one. Codex (H13a, live): the cancel ends the turn at once, but its command runs on as a background terminal until it ends or the session closes, which ends it in 20 ms; the per-task stop is AIR's `asyncTasks`, H13b's |
 | "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]`. Claude: `--setting-sources` on every spawn, `""` for none; with no flag the CLI loads everything |
 | MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
-| Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `configOptions` on `session/new` and every `session/load`, `set_config_option` after |
+| Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `configOptions` on `session/new` and every `session/load`, `set_config_option` after. Codex's adapter reads no `configOptions` there (H13a, live), so the backend sets each listed option that differs right after; Codex's effort is `reasoning_effort` |
 | Questions reach the host | Claude: an ask for `AskUserQuestion`, answered in `updatedInput.answers`. ACP: the client declares `elicitation.form` |
 | Usage is reported | Claude: `result`'s usage and cost, `get_context_usage`, `get_usage`. ACP: `usage_update`, `config_option_update`, `current_mode_update`. Missing means unknown, never zero |
 
@@ -383,7 +383,7 @@ a session loads none of it.
   parse raw Git blobs at the pinned SHA, never exported paths: refuse symlink trust entries or
   ancestors; reject blob sizes or reads over 1 MiB total per scan. Hash the same bytes without filters.
   A changed `.claude/settings.json` needs acceptance; a refused scan cannot start a participant.
-- **Codex** marks its roots trusted and loads the project layer (from source). So Codex runs only
+- **Codex** marks its roots trusted and loads the project layer (live in H13a). So Codex runs only
   in a tree whose trust files hash to an accepted set. A server named like one in the user's
   `config.toml` is skipped silently, so the host's server is `detached-host-<id>`.
 - **Mid-session.** The watcher's list grows by the trust paths of every live session's tree. A
@@ -422,7 +422,12 @@ a session loads none of it.
     - Claude: for `Bash`, the tool's name and the whole `command`, every line; for any other tool,
       its name and its whole input as canonical JSON.
     - ACP: the kind, the title and the whole raw input. An ask with no raw input takes no rule:
-      "Always" allows that one call. What Codex's asks carry is H13a's row.
+      "Always" allows that one call.
+    - **Codex** asks with the call's id, kind and status alone, AIR or not (H13a, live). Its
+      `tool_call` update of the same id came first with the title and raw input, so the backend
+      fills the ask from it before it builds the key. An MCP call's raw input is `{server, tool,
+      arguments}`; its options are Allow, Allow for this session, Always allow (written to
+      Codex's `config.toml`, so never picked) and Cancel.
     - The title is for the card. On Claude it is the sidecar's cut, a first line of at most 200
       characters, which two commands can share.
     - Narrower than today's chat, where the CLI's own suggested rule decides what "Always" covers
@@ -596,9 +601,16 @@ a session loads none of it.
   - **Codex:** `read-only` (no write, no network) with a permission profile that also denies reads
     (spike 0b row 7): `[permissions.reviewer] extends = ":read-only"`, and under
     `[permissions.reviewer.filesystem]`, `"<path>" = "deny"` for the same paths as Claude's.
-    - That blocked those reads on macOS and 22.04 (`codex sandbox`). Through the adapter it is
-      checked live in H13a.
-    - The host approves host-tool calls and denies every request to leave the sandbox.
+    - That blocked those reads on macOS and 22.04 (`codex sandbox`).
+    - **It is the project layer of the tree the host made**, `<cwd>/.codex/config.toml` with
+      `default_permissions` naming it, written by the backend in place of the repo's own. Codex's
+      adapter offers a profile as a mode only from the user's, the system's or a user-trusted
+      project's config, read before the thread starts, and a session passes nothing else; the
+      adapter's thread-level trust of the cwd loads the layer. Through the adapter with the turn
+      in `read-only` (H13a, live, macOS): the write, the egress and the three denied reads were
+      refused, the tree's own file was read, and the user's `config.toml` stayed as it was.
+    - The host approves host-tool calls and denies every request to leave the sandbox. The
+      backend allows a call of the session's own server unasked; the kernel never sees it.
   - Plan mode and a policy on command strings are not enforcement: in the spike both let files be
     written.
 - **A woken turn (§9)** runs with the host's always-rules suspended and in the provider's asking
@@ -669,12 +681,14 @@ Agents get Detached's data and a closed list of actions as tools.
     backend answers from its read loop (spike 0c row 9).
     - No listener, no secret and nothing in argv; the session is the identity.
     - `--strict-mcp-config` drops the user's servers and keeps this one.
-  - **ACP providers: Streamable HTTP on `127.0.0.1`** inside the app, built with Codex in H13a.
+  - **ACP providers: Streamable HTTP on `127.0.0.1`** inside the app, built with Codex in H13a
+    (`crates/acp`'s `mcp`): one listener for the process, plain JSON answers, `GET` refused.
     Each session has a path with a random secret, passed in `session/new`'s `mcpServers`; Codex
     gets it as thread config over JSON-RPC, not in argv.
     - **The secret is single-use.** One `initialize` binds the path to the `Mcp-Session-Id` it
       returns; later requests without that id are refused, and a second `initialize` on a bound
-      path ends the session, failing closed.
+      path ends the session, failing closed: its turn fails with the reason, and it closes.
+    - **The server's name** is `detached-host-<8 random hex>`, apart from the secret.
     - **Every `session/load` passes a new secret.**
     - **Untested:** a reconnect after a long idle or a server error. A refused reconnect fails the
       session's tools; a panel attempt then resumes with a new secret, and a chat offers the same.
@@ -1046,7 +1060,8 @@ PLAN-FOUNDATION §12's gate, with these changes:
   crate 5.2.0.
 - **How:** `node dist/index.js` through `AcpAgent`, real calls on Claude Haiku on macOS; Linux and
   Windows in CI (`initialize` and `session/new` only).
-- **Codex** answers come from its source and are marked *(source)*; H13a checks them live.
+- **Codex** answers come from its source and are marked *(source)*; H13a checked them live (its
+  status).
 
 | # | Question | Answer | Changed |
 | --- | --- | --- | --- |
@@ -1968,6 +1983,40 @@ Done when two grouped sessions finish one change by messages and one Stop ends b
 The owner checks: the same.
 
 ### Step H13. Codex live
+
+**Status (2026-11-17): H13a built on `agent-host/h13a-codex`, its rows passing on macOS with
+`codex-cli` 0.167.2, our bun build of `codex-acp` 2.6.0 and the owner's login; the owner's Linux or
+WSL run is open.**
+- **Built:** §7's HTTP transport in `crates/acp` with its tests on `fake_acp` (a second
+  `initialize`, a request without the bound id, `Origin`, another `Host`, a closed session's path,
+  a load's new path, no secret in any argv); Codex's rendering of `Spec` (below); `make
+  codex-live`, the owner's alone, with three rows of one short turn each: the deny profile (write,
+  egress, three cross-reads), a cancel mid-command, an HTTP call of the host's tool with no secret
+  in any argv. Each checks the user's `config.toml` unchanged. `make agent-test` and CI skip them.
+- ***(source)* answers that held live:** Codex takes the HTTP server as thread config, not argv,
+  and initializes it once at `session/new`; cancel is `turn/interrupt`, and the turn ends
+  `cancelled` at once; background terminals stop on `session/close`; the adapter trusts the cwd,
+  so its project layer loads; `read-only` stops writes and egress; `config.toml` gets no entry.
+- **What was wrong, with the code and the text fixed:**
+  - `configOptions` on `session/new` are ignored (the session came up in `agent`): the backend
+    sets each listed option that differs with `set_config_option` (§2). Effort is
+    `reasoning_effort`.
+  - A cancelled command runs on to its end (60 s of 60) unless the session closes, which ended it
+    in 20 ms (§2, TECHDEBT).
+  - A permission profile reaches a session only through the user's, the system's or a
+    user-trusted project's config, so the backend writes it as the project layer of the tree the
+    host made (§5).
+  - Asks carry the call's id, kind and status alone: the backend fills them from the call's
+    update (§5).
+- **Choices:**
+  - Codex renders P2's `Spec.sandbox` as `read-only` plus the profile of its denied reads.
+  - AIR is declared for Claude's adapter alone: Codex's asks are bare either way, and AIR moves
+    a command's output out of the standard fields.
+  - The backend allows the session's own server's calls unasked.
+  - A breach fails the turn with its reason and closes the session.
+- **H13b takes:** Codex's mode for a chat (`Spec::new`'s `default` is Claude's), a command's
+  output (Codex sends it in `_meta.terminal_output_delta`), the per-task stop, and P2's `Spec.mcp`
+  as `mcpServers`.
 
 When the owner enables Codex. Until H13a passes, Codex rows stay off: no Codex chat, no Codex
 participant, and line 4 of PLAN-PANELS §4 does not hold for Codex.

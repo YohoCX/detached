@@ -9,9 +9,12 @@ use detached_core::adapters::testutil::CLAUDE_ACP;
 use detached_core::backend::Session as _;
 use detached_core::env::Env;
 use detached_core::git::testutil::Sandbox;
+use detached_core::host::Call;
 use detached_core::testutil::api::Api;
 
 use super::*;
+
+mod codex_live;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -31,7 +34,7 @@ fn spec(cwd: &Path) -> proc::Spec {
 
 fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec(cwd), move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&spec(cwd), true, move |e| _ = tx.send(e)).unwrap();
     let options = Options {
         cwd: cwd.into(),
         ..Default::default()
@@ -321,7 +324,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
         ..Opened::default()
     };
     let mut demux = s.live.demux.lock().unwrap();
-    demux.open(Some(opened), Box::new(move |e| _ = tx.send(e)));
+    demux.open(Some(opened), None, Box::new(move |e| _ = tx.send(e)));
     drop(demux);
     let Ok(backend::Event::Exited(x)) = late.try_recv() else {
         panic!("the late open's stream did not end Exited");
@@ -361,6 +364,257 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly() {
         .got(Event::Exited(exit, true));
     let e = new_rx.recv_timeout(WAIT).unwrap();
     assert!(matches!(e, backend::Event::Closed));
+}
+
+/// A chat with the host's tools, which record each call, and its tools' URL as its agent got it.
+fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, String, Receiver<Call>) {
+    let (tx, rx) = mpsc::channel();
+    let (called, calls) = mpsc::channel();
+    let repo = sb.dir.path().display().to_string();
+    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let called = Mutex::new(called);
+    spec.tools = Some(detached_core::host::server(move |c| {
+        _ = called.lock().unwrap().send(c);
+        Ok(json!("recorded"))
+    }));
+    let open = acp.start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    let open = open.unwrap();
+    open.prompt("params").unwrap();
+    let params: Value = serde_json::from_str(&said(&rx)).unwrap();
+    let server = &params["mcpServers"][0];
+    assert_eq!(server["type"], "http");
+    let name = server["name"].as_str().unwrap();
+    assert!(name.starts_with("detached-host-"), "{name}");
+    let allowed = &params["_meta"]["claudeCode"]["options"]["allowedTools"];
+    assert_eq!(allowed, &json!([format!("mcp__{name}__*")]));
+    let url = server["url"].as_str().unwrap().to_string();
+    (open, rx, url, calls)
+}
+
+struct Http {
+    status: u16,
+    session: Option<String>,
+    body: String,
+}
+
+/// One HTTP request to `url` with `headers`, a JSON-RPC message as its body; `host` is the URL's
+/// own unless given.
+fn post(url: &str, method: &str, headers: &[(&str, &str)], body: &Value) -> Http {
+    let rest = url.trim_start_matches("http://");
+    let (host, path) = rest.split_at(rest.find('/').unwrap());
+    let mut s = std::net::TcpStream::connect(host).unwrap();
+    let body = body.to_string();
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    if !headers.iter().any(|(k, _)| *k == "Host") {
+        head.push_str(&format!("Host: {host}\r\n"));
+    }
+    for (k, v) in headers {
+        head.push_str(&format!("{k}: {v}\r\n"));
+    }
+    std::io::Write::write_all(&mut s, format!("{head}\r\n{body}").as_bytes()).unwrap();
+    let mut r = std::io::BufReader::new(s);
+    let mut line = String::new();
+    std::io::BufRead::read_line(&mut r, &mut line).unwrap();
+    let status = line.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let (mut len, mut session) = (0, None);
+    loop {
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut r, &mut line).unwrap();
+        let Some((k, v)) = line.trim_end().split_once(": ") else {
+            break;
+        };
+        match k.to_ascii_lowercase().as_str() {
+            "content-length" => len = v.parse().unwrap(),
+            "mcp-session-id" => session = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    let mut body = vec![0; len];
+    std::io::Read::read_exact(&mut r, &mut body).unwrap();
+    let body = String::from_utf8(body).unwrap();
+    Http {
+        status,
+        session,
+        body,
+    }
+}
+
+fn rpc(method: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": {"protocolVersion": "2025-06-18"}})
+}
+
+#[test]
+fn the_host_tools_answer_the_client_that_initialized_first_and_no_other() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (_open, _rx, url, calls) = with_tools(&acp, &sb);
+    assert_eq!(post(&url, "POST", &[], &rpc("tools/list")).status, 404);
+    let init = post(&url, "POST", &[], &rpc("initialize"));
+    assert_eq!(init.status, 200);
+    assert!(init.body.contains("detached-host"), "{}", init.body);
+    let id = init.session.unwrap();
+    let bound = [("Mcp-Session-Id", id.as_str())];
+    let note = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    assert_eq!(post(&url, "POST", &bound, &note).status, 202);
+    let read = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "detached_read", "arguments": {"query": "{ schema }"}}});
+    let answer = post(&url, "POST", &bound, &read);
+    assert_eq!(answer.status, 200);
+    assert!(answer.body.contains("recorded"), "{}", answer.body);
+    assert_eq!(
+        calls.recv_timeout(WAIT).unwrap(),
+        Call::Read("{ schema }".into())
+    );
+    assert_eq!(post(&url, "POST", &[], &read).status, 404);
+    assert_eq!(
+        post(&url, "POST", &[("Mcp-Session-Id", "other")], &read).status,
+        404
+    );
+    let wrong = url.replace("/mcp/", "/mcp/0");
+    assert_eq!(post(&wrong, "POST", &bound, &read).status, 404);
+    assert_eq!(post(&url, "GET", &bound, &json!(null)).status, 405);
+    let origin = [bound[0], ("Origin", "http://127.0.0.1")];
+    assert_eq!(post(&url, "POST", &origin, &read).status, 403);
+    let port = url.split(':').nth(2).unwrap().split('/').next().unwrap();
+    let localhost = format!("localhost:{port}");
+    let host = [bound[0], ("Host", localhost.as_str())];
+    assert_eq!(post(&url, "POST", &host, &read).status, 403);
+    assert!(calls.try_recv().is_err());
+}
+
+#[test]
+fn a_second_initialize_ends_the_session_and_refuses_its_tools_after() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (_open, rx, url, _calls) = with_tools(&acp, &sb);
+    let id = post(&url, "POST", &[], &rpc("initialize")).session.unwrap();
+    assert_eq!(post(&url, "POST", &[], &rpc("initialize")).status, 404);
+    let failed = until(&rx, |e| match e {
+        backend::Event::Ended(Err(f)) => Some(f.text),
+        _ => None,
+    });
+    assert!(failed.contains("host tools"), "{failed}");
+    closed(&rx);
+    let list = post(&url, "POST", &[("Mcp-Session-Id", &id)], &rpc("tools/list"));
+    assert_eq!(list.status, 404);
+}
+
+#[test]
+fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (open, rx, url, _calls) = with_tools(&acp, &sb);
+    let id = open.id.clone();
+    drop(open);
+    closed(&rx);
+    assert_eq!(post(&url, "POST", &[], &rpc("initialize")).status, 404);
+    let (tx, rx) = mpsc::channel();
+    let repo = sb.dir.path().display().to_string();
+    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    spec.tools = Some(detached_core::host::server(|_| Ok(json!(""))));
+    let open = acp.start(
+        &sb.state,
+        &spec,
+        Some(&id),
+        Box::new(move |e| _ = tx.send(e)),
+    );
+    let open = open.unwrap();
+    open.prompt("params").unwrap();
+    let params = said(&rx);
+    let params: Value = serde_json::from_str(params.trim_start_matches("replayed")).unwrap();
+    let again = params["mcpServers"][0]["url"].as_str().unwrap();
+    assert_ne!(again, url);
+}
+
+#[test]
+fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowed_unasked() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (open, rx, _url, _calls) = with_tools(&acp, &sb);
+    open.prompt("bare").unwrap();
+    let (ask, reply) = until(&rx, |e| match e {
+        backend::Event::Ask(ask, reply) => Some((ask, reply)),
+        _ => None,
+    });
+    assert_eq!(ask.tool.title.as_deref(), Some("Run make"));
+    assert_eq!(ask.tool.input, Some(json!({"command": "make"})));
+    assert_eq!(
+        ask.key,
+        Some(json!(["execute", "Run make", {"command": "make"}]).to_string())
+    );
+    reply.send(Answer::Reject);
+    assert_eq!(said(&rx), "picked reject_once");
+    open.prompt("host-ask").unwrap();
+    let mut asked = false;
+    let text = until(&rx, |e| match e {
+        backend::Event::Ask(..) => {
+            asked = true;
+            None
+        }
+        backend::Event::Update(Update::Text(t)) => Some(t),
+        _ => None,
+    });
+    assert!(!asked);
+    assert_eq!(text, "picked allow_once");
+}
+
+#[test]
+fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_reads() {
+    let sb = Sandbox::new();
+    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
+    let config = adapters::Config {
+        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
+        codex: true,
+    };
+    sb.state.set_block(BLOCK, config).unwrap();
+    let repo = sb.path("tree");
+    std::fs::create_dir_all(repo.join(".codex")).unwrap();
+    std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.repo]\n").unwrap();
+    let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Untrusted);
+    spec.sandbox = Some(backend::Sandbox {
+        deny_read: vec!["/home/u/.ssh".into(), "/r/a \"b\"".into()],
+        ..Default::default()
+    });
+    let (tx, rx) = mpsc::channel();
+    let open = Acp::default().start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
+    let open = open.unwrap();
+    let config = until(&rx, |e| match e {
+        backend::Event::Opened(o) => Some(o.config),
+        _ => None,
+    });
+    assert_eq!(config[0].value, "read-only");
+    open.prompt("model").unwrap();
+    assert_eq!(said(&rx), "default read-only");
+    let layer = std::fs::read_to_string(repo.join(".codex/config.toml")).unwrap();
+    let want = "default_permissions = \"detached-reviewer\"\n\
+        [permissions.detached-reviewer]\nextends = \":read-only\"\n\
+        [permissions.detached-reviewer.filesystem]\n\
+        \"/home/u/.ssh\" = \"deny\"\n\"/r/a \\\"b\\\"\" = \"deny\"\n";
+    assert_eq!(layer, want);
+}
+
+/// Every process's command line.
+fn argvs() -> String {
+    let out = match cfg!(windows) {
+        true => Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process | % CommandLine",
+            ])
+            .output(),
+        false => Command::new("ps").args(["-axww", "-o", "args="]).output(),
+    };
+    String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
+}
+
+#[test]
+fn no_argv_holds_the_host_tools_secret() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (_open, _rx, url, _calls) = with_tools(&acp, &sb);
+    let secret = url.rsplit('/').next().unwrap();
+    let all = argvs();
+    assert!(all.contains("fake_acp") || all.contains("1.0.0"), "{all}");
+    assert!(!all.contains(secret));
 }
 
 /// A real adapter and `claude` may take this long to start or answer.
@@ -449,14 +703,15 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
         env: claude_env(sb.dir.path(), api),
     };
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start_as(&spec_proc, air, move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&spec_proc, air, move |e| _ = tx.send(e)).unwrap();
     let repo = sb.path("repo").display().to_string();
     let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
     spec.trusted = true;
     let options = Options {
         cwd: repo.into(),
         config: config_of(&spec),
-        meta: meta(&spec),
+        meta: meta(&spec, None),
+        server: None,
     };
     let opened = adapter.new_session(&options).unwrap();
     let (mut said, mut tools) = (vec![format!("{:?}", opened.config)], BTreeMap::new());

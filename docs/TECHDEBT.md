@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Stop on a Codex chat leaves the turn's command running | `crates/acp` | Codex's `session/cancel` ends the turn at once, but its command goes on as a background terminal until it ends or the session closes (H13a, live). The per-task stop is the adapter's `_session/async_task/stop` for an AIR client with `asyncTasks`, whose `async_task_spawned` update `agent-client-protocol` 5.2.0 cannot parse. Panels close a participant's session when it reports, which ends it. H13b. |
 | The sandbox probe's pass is kept in memory, keyed by nothing | `kernel::panel::live` | PLAN-AGENT-HOST §5 keys it by the app's and `claude`'s versions, the boot and the sandbox setup. Here a pass holds until the app quits or a sandboxed session fails on its sandbox, which runs the probe again; a failure is never kept, so each run probes again. |
 | A rate limit's reset time is not read | `kernel::panel::live` | Every limit backs off 5, 15 and 30 minutes, then asks; no capture of a real limit error names its reset yet (PLAN-PANELS §7). |
 | A participant's actual model is not recorded | `kernel::panel::live`, `core::claude` | `participant_started`'s `actual` stays empty: the backend does not pass on the model the CLI's `init` names, so the row never flags a model that differs. |

@@ -33,7 +33,7 @@ cli() {
 real() {
   cargo test -p detached-kernel --lib session::tests::real -- --ignored
   cargo test -p detached-kernel --lib panel::tests::real -- --ignored
-  cargo test -p detached-acp -- --ignored
+  cargo test -p detached-acp -- --ignored --skip codex_live
 }
 # Claude's floor: the manifest's, or the signed catalog's when that is higher.
 floor() {
