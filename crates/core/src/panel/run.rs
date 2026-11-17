@@ -411,10 +411,10 @@ pub fn task_of(s: &Start) -> String {
     }
 }
 
-/// A task's name: the subject's branch, as a folder name.
+/// A task's name: the subject's branch, as a folder name. A trailing dot goes, since Windows
+/// strips it from a folder's name.
 pub fn task(branch: &str) -> String {
-    branch
-        .chars()
+    let name: String = (branch.chars())
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
                 c
@@ -422,7 +422,8 @@ pub fn task(branch: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+    name.trim_end_matches('.').into()
 }
 
 /// Everything a run needs before its first participant: `probe` answers whether the sandbox works,
@@ -792,6 +793,24 @@ mod tests {
                 "{branch}"
             );
         }
+    }
+
+    #[test]
+    fn a_task_s_name_never_ends_in_a_dot_or_a_space() {
+        let q = |text: &str| {
+            task_of(&Start {
+                over: Over::Question(text.into()),
+                ..Start::default()
+            })
+        };
+        assert_eq!(q("Is it done. Or is it?"), "question_Is-it-done.-Or-is-it-");
+        assert_eq!(q("Keep x one..."), "question_Keep-x-one");
+        assert_eq!(
+            q(&format!("{}. and more", "a".repeat(39))),
+            format!("question_{}", "a".repeat(39))
+        );
+        assert_eq!(q("x "), "question_x-");
+        assert_eq!(task("PLAN."), "PLAN");
     }
 
     #[test]
