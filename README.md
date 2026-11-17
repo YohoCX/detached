@@ -46,12 +46,13 @@ made or endorsed by Anthropic.
   other commands and scripts are not, so a `.env` is not safe from an agent that runs commands
   without asking.
 - **Panels** put several agents on one subject: a review or a pre-merge gate of a branch, triage of
-  a merge request or an issue, a review of a plan or any document. Each finding is checked by
-  another agent before you see it; you Fix, Dismiss or Defer it. A Fix runs in a worktree on its
-  own branch and is checked again. A subject you have not marked trusted, such as a merge request
-  from a fork, gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and
-  model did, and past revmux rounds can be imported. Panels run on macOS and Linux; Windows is not
-  done yet.
+  a merge request or an issue, a review of a plan or any document. On a question, a dialectic has
+  two agents argue opposite sides and rebut each other, and a judge weighs them; a brainstorm
+  collects ideas, groups them and ranks them by value and cost. Each finding is checked by another
+  agent before you see it; you Fix, Dismiss or Defer it. A Fix runs in a worktree on its own branch
+  and is checked again. A subject you have not marked trusted, such as a merge request from a fork,
+  gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and model did, and
+  past revmux rounds can be imported. Panels run on macOS and Linux; Windows is not done yet.
 - **Agents read the client, not pasted text:** branches, merge requests, pipelines, docs and
   processes come to them through a read-only tool. Chats you put in one group can message each
   other.
