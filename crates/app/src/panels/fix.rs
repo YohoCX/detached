@@ -20,6 +20,8 @@ pub(super) struct FixCard {
     /// The brief and trust of a Fix about to start.
     form: Option<std::result::Result<(Preview, Entity<TextareaState>), String>>,
     confirm: bool,
+    /// Its brief is loading.
+    opening: bool,
     /// The live Fix it redraws with.
     watched: Option<(Entity<fixes::Fix>, Subscription)>,
     _tasks: Vec<Task<()>>,
@@ -35,6 +37,7 @@ impl FixCard {
             finding: finding.into(),
             form: None,
             confirm: false,
+            opening: false,
             watched: None,
             _tasks: vec![],
         }
@@ -61,9 +64,11 @@ impl FixCard {
             return;
         };
         let t = fixes::preview(started.subject, f.finding.clone(), cx);
+        self.opening = true;
         self._tasks.push(cx.spawn_in(window, async move |this, cx| {
             let r = t.await;
             this.update_in(cx, |v, window, cx| {
+                v.opening = false;
                 v.form = Some(match r {
                     Ok((pv, brief)) => {
                         let text = cx.new(|cx| TextareaState::new(window, cx).rows(12));
@@ -299,6 +304,9 @@ impl Render for FixCard {
                 );
             } else if !task.is_some_and(|k| k.trusted) {
                 return out.child(self.untrusted(cx));
+            }
+            if self.opening {
+                return out.child(div().text_color(t.muted).child("Loading the Fix's brief…"));
             }
             return out.child(
                 ui::button("panel.fix", "Fix…", cx)

@@ -233,11 +233,9 @@ impl RunView {
         let key = selection_key(&self.repo, &self.task, &self.round);
         let id: Option<String> = kernel::ui_state::get(&key, cx);
         if let Some(id) = id {
-            let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
-                r.runs
-                    .iter()
-                    .find(|r| r.task == self.task && r.round == self.round)
-            });
+            // The run as the view draws it: a live run's state leads its record's reload.
+            let run = self.run(cx);
+            let run = run.as_ref();
             let range = run.and_then(|r| r.reviewed_range.clone());
             let f = run
                 .and_then(|r| {
@@ -256,7 +254,7 @@ impl RunView {
                     self.mode = mode;
                     kernel::ui_state::set("panels.mode", mode, cx);
                 }
-                None if self.rounds.read(cx).value.is_some() => {
+                None if run.is_some() => {
                     self.selected = None;
                     self.selected_data = None;
                     self.markdown = None;
@@ -269,11 +267,8 @@ impl RunView {
     }
 
     pub fn select(&mut self, f: &Finding, cx: &mut Context<Self>) {
-        let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
-            r.runs
-                .iter()
-                .find(|r| r.task == self.task && r.round == self.round)
-        });
+        let run = self.run(cx);
+        let run = run.as_ref();
         let range = run.and_then(|r| r.reviewed_range.clone());
         if run.is_some_and(|r| r.set_aside.iter().any(|a| a.id == f.id)) {
             self.show_aside = true;

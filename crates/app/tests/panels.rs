@@ -1453,13 +1453,7 @@ fn an_mr_s_triage_from_the_panels_app_shows_six_answers_and_its_fix_keeps_its_br
     app.click("panel.finding.f1-1");
     wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
     quiet(&app.sb);
-    // The card redraws while the MR's task reloads, which can swallow a click.
-    wait_until(&mut app, |cx| {
-        if cx.find("panel.fix.form").is_none() && cx.find("panel.fix").is_some() {
-            cx.click("panel.fix");
-        }
-        cx.find("panel.fix.form").is_some()
-    });
+    app.click("panel.fix");
     start_fix(&mut app, "write a.txt let x = 2;commit fix x");
     assert!(app.find("panel.fix.kept").is_some());
     assert!(app.find("panel.fix.merge").is_none());

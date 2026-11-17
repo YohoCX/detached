@@ -256,7 +256,7 @@ fn fetch(core: &AppState, repo: &Path, remote: &str, refspecs: &[&str]) -> Resul
 }
 
 /// Where an MR's head stays for its run.
-pub fn pin_ref(run: &str) -> String {
+fn pin_ref(run: &str) -> String {
     format!("refs/detached/subjects/{run}")
 }
 
