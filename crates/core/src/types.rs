@@ -275,7 +275,6 @@ pub struct FileEntry {
 pub struct FileMatch {
     pub repo: String,
     pub path: String,
-    pub score: u32,
     /// Char indices into `path` that matched.
     pub indices: Vec<u32>,
 }

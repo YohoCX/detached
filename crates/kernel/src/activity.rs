@@ -2,7 +2,7 @@
 //! errors and warnings the Events app shows.
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
@@ -116,9 +116,8 @@ impl Activity {
 
     /// Keeps an error or warning for the Events app.
     pub fn record(&mut self, level: Level, text: impl Into<String>, cx: &mut Context<Self>) {
-        let at = SystemTime::now().duration_since(UNIX_EPOCH);
         self.log.push(Logged {
-            at: at.map_or(0, |d| d.as_secs() as i64),
+            at: detached_core::os::now(),
             level,
             text: text.into(),
         });

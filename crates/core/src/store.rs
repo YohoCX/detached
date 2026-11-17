@@ -128,7 +128,6 @@ pub enum Scope {
     Local,
     Shared,
     Personal,
-    BuiltIn,
 }
 
 /// An empty path holds a single-file item; other paths are relative to the item folder.
@@ -507,7 +506,7 @@ pub(crate) fn hash(files: &Files, links: &Links) -> String {
         hash.update(u64::MAX.to_le_bytes());
         (links.iter()).for_each(|(p, t)| put(&mut hash, p, t.as_os_str().as_encoded_bytes()));
     }
-    format!("{:x}", hash.finalize())
+    hex::encode(hash.finalize())
 }
 
 /// A link at `at` to `target`; Windows makes none without developer mode, so it refuses.

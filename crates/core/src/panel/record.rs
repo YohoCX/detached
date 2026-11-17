@@ -868,7 +868,6 @@ impl State {
             .map(|p| Row {
                 name: p.name.clone(),
                 lenses: p.lenses.clone(),
-                executor: "claude".into(),
                 requested_model: p.model.clone(),
                 actual_model: p.actual.clone().unwrap_or_else(|| p.model.clone()),
                 effort: String::new(),
@@ -946,6 +945,7 @@ pub fn verdict(f: &Found) -> String {
 }
 
 /// How many models stand behind a group: two sources on one model count once.
+#[cfg(any(test, feature = "testutil"))]
 pub fn corroboration(sources: &[&Found]) -> usize {
     let mut models: Vec<String> = sources.iter().map(|f| family(&f.model)).collect();
     models.sort();

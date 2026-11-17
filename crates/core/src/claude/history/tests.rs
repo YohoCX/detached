@@ -13,7 +13,7 @@ const TITLED: &str = "f5dfa2ed-e3fa-45bd-a26e-8ca5fb27f700";
 const WORKTREE: &str = "38d60b10-15d8-4def-a954-2ffb285421d1";
 const LONG: &str = "8d01a7e2-5bd9-4eb4-af6d-a0c4614f6a93";
 
-/// The CLI's config dir with part 0's transcripts of `case` in `cwd`'s project folder.
+/// The CLI's config dir with the captured transcripts of `case` in `cwd`'s project folder.
 fn laid(case: &str, cwd: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let from = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -46,7 +46,7 @@ fn texts(h: &[Update]) -> Vec<String> {
 #[test]
 fn a_long_cwd_s_folder_is_cut_at_200_with_its_hash_and_lists_its_sessions() {
     assert_eq!(folder("/tmp/a b/.c"), "-tmp-a-b--c");
-    // The cwd and folder part 0 saw on macOS with claude 2.1.325.
+    // The cwd and folder captured on macOS with claude 2.1.325.
     let cwd = format!(
         "/private/var/folders/vn/c7s5y01s7nb7b6bd_lf__cbh0000gn/T/claude-direct-h4c41056/\
          transcripts-long-{}/repo",

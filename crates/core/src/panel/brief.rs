@@ -1,5 +1,5 @@
 //! Each participant's brief, assembled from the client's state: fixed instructions first, the
-//! subject's own text below them as JSON-quoted data. And the quote check of §6.
+//! subject's own text below them as JSON-quoted data. And the check of a finding's quote.
 
 use std::path::Path;
 
@@ -276,7 +276,7 @@ pub fn quote(
 /// A prompt's hash, as the record keeps it.
 pub fn hash(text: &str) -> String {
     use sha2::Digest;
-    format!("{:x}", sha2::Sha256::digest(text.as_bytes()))[..16].to_string()
+    hex::encode(&sha2::Sha256::digest(text.as_bytes())[..8])
 }
 
 /// Fails on a SHA that is not a full object id, so no ref name reaches git as one.

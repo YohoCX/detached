@@ -237,8 +237,7 @@ fn report(s: &Session) {
         .map_or("unknown".into(), |(u, n)| format!("{u} of {n} tokens"));
     let cost = s.cost.map_or("unknown".into(), |c| format!("${c:.4}"));
     println!("[usage] {usage}, cost {cost}");
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-    let now = now.map_or(0, |d| d.as_millis() as u64);
+    let now = detached_core::os::now() as u64 * 1000;
     let limits = s.limits.iter().flatten().map(|l| {
         let resets = l.resets.map(|ms| ms.saturating_sub(now) / 60_000);
         let resets = resets.map_or(String::new(), |m| format!(", resets in {m} min"));

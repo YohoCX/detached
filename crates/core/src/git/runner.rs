@@ -1,4 +1,10 @@
-//! The only place that spawns git. See PLAN.md "Git runner" for the rules this must follow.
+//! The only place that spawns git, and its rules:
+//! - git runs in its own process group, so a kill reaches remote helpers and LFS filters too;
+//! - a call returns once git exits, after at most `DRAIN` more reading: a hook's background job can
+//!   hold the pipes open forever, so the readers drain to EOF and it never writes into a closed pipe;
+//! - the account token goes to network calls, and to switch, merge and `cat-file --filters` only
+//!   when LFS is in play (`remotes::lfs_cred`), since hooks inherit git's environment;
+//! - writes run under the repo's lock (`git::locked`) and are never killed mid-write.
 
 use std::io::Read;
 use std::path::Path;

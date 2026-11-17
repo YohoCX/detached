@@ -90,7 +90,7 @@ impl Fixture {
         let artifact = Artifact {
             url: format!("{}{path}", self.server.base),
             size: bytes.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            sha256: hex::encode(Sha256::digest(&bytes)),
         };
         self.server.put(&path, bytes);
         Entry {

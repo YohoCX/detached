@@ -1,5 +1,5 @@
-//! A repo's docs as PLAN-AGENT-HOST §12 lays them out: `docs/INDEX.md` and its module docs, the
-//! plans, the decisions and the contracts. Read only; agents write docs, the host never does.
+//! A repo's docs: `docs/INDEX.md` and its module docs, the plans, the decisions and the contracts.
+//! Read only; agents write docs, the host never does.
 
 use std::fs;
 use std::path::{Component, Path};

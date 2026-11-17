@@ -413,21 +413,16 @@ fn reply_headers_go_over_the_wire() {
 }
 
 #[test]
-fn starts_on_a_given_port_and_stops_on_drop() {
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let f = Forge::start_on(port).unwrap();
-    let url = format!("http://127.0.0.1:{port}");
+fn serves_both_forges_and_stops_on_drop() {
+    let f = Forge::start().unwrap();
+    let (url, addr) = (format!("http://{}", f.addr), f.addr);
     assert_eq!(
         (f.url(), f.gitlab(), f.ghe()),
         (url.clone(), format!("{url}/gitlab"), format!("{url}/ghe"))
     );
     assert_eq!(get(&f, "/health", &[]).0, 200);
     drop(f);
-    assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    assert!(TcpStream::connect(addr).is_err());
 }
 
 /// Both forges with MR 1 (`feature` at `h` into `main` at `b`) and pipelines 100 (failed, on

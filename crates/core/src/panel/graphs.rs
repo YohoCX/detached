@@ -265,7 +265,6 @@ pub struct Thread {
     pub title: String,
     pub file: String,
     pub rounds: Vec<Option<Occurrence>>,
-    pub born_after_fix: bool,
 }
 
 pub struct Task<'a> {
@@ -315,13 +314,6 @@ pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
                 });
                 last[j] = (f, title);
             } else {
-                let born_after_fix = last.iter().enumerate().any(|(j, (old, _))| {
-                    old.file == f.file
-                        && i > 0
-                        && threads[j].rounds[i - 1]
-                            .as_ref()
-                            .is_some_and(|o| o.mark == ThreadMark::Fixed)
-                });
                 let mut cells = vec![None; rounds.len()];
                 cells[i] = Some(Occurrence {
                     finding: Some(f.id.clone()),
@@ -331,7 +323,6 @@ pub fn task<'a>(runs: &'a [Run], name: &str) -> Task<'a> {
                     title: f.title.clone(),
                     file: f.file.clone(),
                     rounds: cells,
-                    born_after_fix,
                 });
                 last.push((f, title));
             }
@@ -512,7 +503,6 @@ mod tests {
             [None, None, Some(ThreadMark::New), Some(ThreadMark::Carried)]
         );
         assert_eq!(marks(3), [None, None, None, Some(ThreadMark::New)]);
-        assert!(t.threads[3].born_after_fix);
         assert_eq!(
             t.threads[0].rounds[3].as_ref().unwrap().finding.as_deref(),
             Some("a4")

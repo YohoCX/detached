@@ -20,13 +20,11 @@ pub(crate) fn override_dir(key: &str) -> Result<Option<PathBuf>> {
     }
 }
 
-/// Settings under a former identifier move over once, the newest first.
+/// Settings under the former identifier move over once.
 pub(crate) fn in_base(base: &Path) -> PathBuf {
     let dir = base.join(IDENTIFIER);
-    for old in ["dev.wdevs.detached", "dev.wdevs.workbench"] {
-        if !dir.exists() {
-            let _ = std::fs::rename(base.join(old), &dir);
-        }
+    if !dir.exists() {
+        let _ = std::fs::rename(base.join("dev.wdevs.detached"), &dir);
     }
     dir
 }
@@ -38,7 +36,6 @@ mod tests {
     #[test]
     fn a_former_dir_moves_over_once() {
         let base = tempfile::tempdir().unwrap();
-        std::fs::create_dir(base.path().join("dev.wdevs.workbench")).unwrap();
         let old = base.path().join("dev.wdevs.detached");
         std::fs::create_dir(&old).unwrap();
         std::fs::write(old.join("settings.json"), "{}").unwrap();

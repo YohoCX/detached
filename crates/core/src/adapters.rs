@@ -456,7 +456,7 @@ fn download(
     if received != artifact.size {
         return wrong("size");
     }
-    if format!("{:x}", hash.finalize()) != artifact.sha256.to_ascii_lowercase() {
+    if hex::encode(hash.finalize()) != artifact.sha256.to_ascii_lowercase() {
         return wrong("sha256");
     }
     Ok(())

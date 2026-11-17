@@ -1,4 +1,4 @@
-//! Which git calls carry the account token (PLAN.md "Git runner"): hooks see it only when LFS is in play.
+//! Which git calls carry the account token, by `runner`'s rules: hooks see it only when LFS is in play.
 
 use std::path::{Path, PathBuf};
 

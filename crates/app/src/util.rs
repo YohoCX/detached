@@ -1,5 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
+pub use detached_core::os::now;
 use detached_core::types::FileChange;
 
 pub fn base_name(p: &str) -> &str {
@@ -124,12 +123,6 @@ pub fn span(s: i64) -> String {
         60..1440 => format!("{} h {} min", m / 60, m % 60),
         _ => format!("{} d {} h", m / 1440, m % 1440 / 60),
     }
-}
-
-/// Unix seconds.
-pub fn now() -> i64 {
-    let since = SystemTime::now().duration_since(UNIX_EPOCH);
-    since.map_or(0, |d| d.as_secs() as i64)
 }
 
 fn stamp(year: i32, month: i32, day: i32, hour: i32, min: i32) -> String {

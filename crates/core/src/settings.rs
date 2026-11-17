@@ -47,9 +47,6 @@ pub struct Workspace {
 }
 
 const FILE: &str = "settings.json";
-const DEFAULT: &str = "Default";
-/// Keys from before workspaces: their folders become the first workspace.
-const LEGACY: [&str; 2] = ["folders", "excludedRepos"];
 
 impl Settings {
     /// A file that doesn't parse is moved to `settings.json.bad`, so the next save can't destroy it.
@@ -58,28 +55,11 @@ impl Settings {
         let Ok(bytes) = std::fs::read(&path) else {
             return Settings::default();
         };
-        let mut s: Settings = match serde_json::from_slice(&bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("settings.json is invalid ({e}); moved to settings.json.bad");
-                let _ = std::fs::rename(&path, dir.join(format!("{FILE}.bad")));
-                return Settings::default();
-            }
-        };
-        let [folders, excluded_repos] = LEGACY.map(|k| {
-            let v = s.other.remove(k);
-            v.and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-                .unwrap_or_default()
-        });
-        if s.workspaces.is_empty() && !folders.is_empty() {
-            s.workspaces.push(Workspace {
-                name: DEFAULT.into(),
-                folders,
-                excluded_repos,
-                active: true,
-            });
-        }
-        s
+        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            eprintln!("settings.json is invalid ({e}); moved to settings.json.bad");
+            let _ = std::fs::rename(&path, dir.join(format!("{FILE}.bad")));
+            Settings::default()
+        })
     }
 
     /// The block a module keeps under its own top-level key; None when absent or not a `T`.
@@ -120,7 +100,7 @@ impl AppState {
     /// Writes a module's block; a key this build knows is not one.
     pub fn set_block(&self, name: &str, value: impl Serialize) -> Result<Settings> {
         let known = serde_json::to_value(Settings::default())?;
-        if known.get(name).is_some() || LEGACY.contains(&name) {
+        if known.get(name).is_some() {
             return Err(Error::Other(format!("{name} is not a block")));
         }
         let value = serde_json::to_value(value)?;
@@ -278,7 +258,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trips_and_moves_old_folders_into_a_workspace() {
+    fn round_trips() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Settings::load(dir.path()), Settings::default());
         let s = Settings {
@@ -291,19 +271,6 @@ mod tests {
         };
         s.save(dir.path()).unwrap();
         assert_eq!(Settings::load(dir.path()), s);
-        let old = r#"{"folders":["/b"],"excludedRepos":["/b/x"],"gitPath":"/git"}"#;
-        std::fs::write(dir.path().join(FILE), old).unwrap();
-        let s = Settings::load(dir.path());
-        assert_eq!(s.git_path.as_deref(), Some("/git"));
-        assert_eq!(
-            s.workspaces,
-            [Workspace {
-                name: "Default".into(),
-                folders: vec!["/b".into()],
-                excluded_repos: vec!["/b/x".into()],
-                active: true,
-            }]
-        );
     }
 
     #[test]
@@ -471,17 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_keys_do_not_bring_a_workspace_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let old = r#"{"folders":["/b"],"excludedRepos":["/b/x"]}"#;
-        std::fs::write(dir.path().join(FILE), old).unwrap();
-        let state = memory_state(dir.path().into());
-        assert_eq!(state.get_settings().workspaces.len(), 1);
-        state.remove_workspace(DEFAULT.into()).unwrap();
-        assert_eq!(Settings::load(dir.path()), Settings::default());
-    }
-
-    #[test]
     fn a_block_is_kept_under_its_name_and_a_known_key_is_not_one() {
         let dir = tempfile::tempdir().unwrap();
         let state = memory_state(dir.path().into());
@@ -491,7 +447,6 @@ mod tests {
         assert_eq!(s.block::<Value>("agent"), Some(block));
         assert_eq!(s.block::<u32>("agent"), None);
         assert!(state.set_block("gitPath", 1).is_err());
-        assert!(state.set_block("folders", 1).is_err());
         assert_eq!(state.revision(), 1);
     }
 }

@@ -1,11 +1,12 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use ureq::Agent;
 use ureq::http::{HeaderMap, Request};
 
 use crate::error::{Error, Result};
+use crate::os::now;
 use crate::types::{Account, Provider};
 
 const PAGES: usize = 50;
@@ -29,12 +30,6 @@ pub struct Api {
     base: String,
     token: String,
     cache: Arc<super::Cache>,
-}
-
-pub fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
 }
 
 pub(super) fn agent(log: bool) -> Agent {
