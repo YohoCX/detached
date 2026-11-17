@@ -1,4 +1,35 @@
 {
-  "serial": 1,
-  "adapters": []
+  "serial": 2,
+  "adapters": [
+    {
+      "name": "codex-acp",
+      "version": "2.6.0",
+      "published": "2026-11-17",
+      "min_app": "0.6.0",
+      "min_cli": null,
+      "blocked_cli": [],
+      "artifacts": {
+        "linux-x86_64-gnu": {
+          "url": "https://github.com/YohoCX/detached/releases/download/adapters-codex-acp-2.6.0/codex-acp-2.6.0-linux-x86_64-gnu.tar.gz",
+          "size": 52159653,
+          "sha256": "005269f812ccaeff37664389d70923b4c836dd5ef2d264a4d5f3886c6fc8024d"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/YohoCX/detached/releases/download/adapters-codex-acp-2.6.0/codex-acp-2.6.0-macos-aarch64.tar.gz",
+          "size": 41210405,
+          "sha256": "3f21ca906a1ede2e4d8e60c821cdd980bc8c72ca757d880bb1a285bf88526d23"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/YohoCX/detached/releases/download/adapters-codex-acp-2.6.0/codex-acp-2.6.0-macos-x86_64.tar.gz",
+          "size": 43811056,
+          "sha256": "c1349362234acc0aeaa291e64682af27eaead421c282495447b99ac67ba3e6fc"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/YohoCX/detached/releases/download/adapters-codex-acp-2.6.0/codex-acp-2.6.0-windows-x86_64.tar.gz",
+          "size": 55092427,
+          "sha256": "1961368b1ced20f24dc809b311a9fcfc4d5436417fdeb38cd8b05b4e3608054c"
+        }
+      }
+    }
+  ]
 }
