@@ -9,32 +9,32 @@ covers:
 The read side of the host tools: who asks (`Identity`), what that identity may see and do, and
 the answer to a `detached_read` query. A query is checked against the SDL in
 `crates/kernel/src/host/schema.graphql` and run over a snapshot of the kernel's state on the pool.
-Callers: a session's host tools (`crates/kernel/src/session.rs:242`) and the owner socket that
+Callers: a session's host tools (`crates/kernel/src/session.rs:264`) and the owner socket that
 answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `core::host`.
 
 ## Public API
 - `Identity { subject, can, panel, session }` — who asks: `subject: None` reads the whole
   workspace; `can` lists the action names it may take; `session` is the asking session's id, which
-  `inbox` and `group` read, set by the session's tools at each read (`crates/kernel/src/host.rs:34`).
+  `inbox` and `group` read, set by the session's tools at each read (`crates/kernel/src/host.rs:35`).
 - `Subject { repo, mr }` — a review's repo path and its MR number, if any.
 - `Identity::owner()` — the workspace, no action.
 - `Identity::subject(repo, mr)` — that repo alone, that MR alone, no sessions; may
   `report_finding`, `report_verdict`, `done`.
 - `Identity::of(kind, repo)` — `Kind::Chat` reads as the owner and may `proc`, which
-  `kernel::proc::act` runs, and `send` and `watch`, which `kernel::inbox` runs; `Verifier` and `Untrusted` as `subject(repo, None)` (`crates/kernel/src/host.rs:66`).
+  `kernel::proc::act` runs, and `send` and `watch`, which `kernel::inbox` runs; `Verifier` and `Untrusted` as `subject(repo, None)` (`crates/kernel/src/host.rs:93`).
 - `Identity::may(&Act)` — `Err("This session cannot <name>.")` unless the act's name is in `can`.
 - `query(cx, who, query) -> Task<Result<Value>>` — the GraphQL answer `{data, errors?}`; `Err`
-  when the query is refused (parse, subset, limits) (`crates/kernel/src/host.rs:82`).
+  when the query is refused (parse, subset, limits) (`crates/kernel/src/host.rs:121`).
 
 ## Flow
 1. `query` builds a `Snap` on the main thread with an empty `Held`: repos and current repo cut to
    `who`, statuses as loaded, sessions only for the owner, no MRs, skills, docs or processes
-   (`crates/kernel/src/host.rs:147`).
+   (`crates/kernel/src/host.rs:198`).
 2. `exec::run` runs on the pool: parse, `check` against the SDL, then `object` walks the
-   selection and calls each field's resolver (`crates/kernel/src/host/exec.rs:63`).
+   selection and calls each field's resolver (`crates/kernel/src/host/exec.rs:108`).
 3. A resolver that finds its data missing pushes a `Need` (`Status`, `Mrs(repo, open)`, `Skills`, `Docs`,
    `Processes`),
-   and the field becomes `null` with an error carrying its path (`crates/kernel/src/host/exec.rs:276`).
+   and the field becomes `null` with an error carrying its path (`crates/kernel/src/host/exec.rs:690`).
 4. No needs: the answer is returned as is.
 5. Otherwise `hold` takes one kernel `Interest` per distinct need: `forge::mrs` with
    `MrFilter::Open` or `All`, `skills::get(repo)`, `docs::get(repo)`, `proc::definitions(repo)`; statuses are not held, the repo loads them.
@@ -45,7 +45,7 @@ answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `cor
 
 ### Adding a field
 - Add it to `schema.graphql` and its resolver row to `RESOLVERS`
-  (`crates/kernel/src/host/exec.rs:117`), keyed by type and field name; a test fails on either alone.
+  (`crates/kernel/src/host/exec.rs:174`), keyed by type and field name; a test fails on either alone.
 - A resolver gets `(&Ctx, Node, args)` and returns `Out::Value`, `Out::Node` or `Out::List`;
   object types need a `Node` variant and its accessor.
 - Data already in the kernel goes into `RepoSnap`/`SessionSnap`/`Snap`, filled in `snapshot`.
@@ -56,14 +56,14 @@ answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `cor
 ## Gotchas
 - The executor sees only `Snap`, owned data built on the main thread; it never reads entities.
 - A subject's MR filter is `s.mr == Some(number)`: `subject(repo, None)` sees `mrs` as `[]`, not
-  all (`crates/kernel/src/host.rs:235`).
+  all (`crates/kernel/src/host.rs:390`).
 - `repo(path)` for a repo outside the scope is `null` without an error.
 - `mrs(state: OPENED)` holds the open list; any other state or none holds the full list and
   filters by state in the executor.
 - Errors differ by phase: a field missing in a snapshot says "did not load in time"; a held MR
   list still loading after 10 s says "not loaded in 10 s".
 - The 256 KB limit counts the result and its errors while building; past it the whole query is
-  refused, not truncated (`crates/kernel/src/host/exec.rs:73`).
+  refused, not truncated (`crates/kernel/src/host/exec.rs:118`).
 - Refused before running: fragments, variables, directives, introspection (`{ schema }` returns
   the SDL text), mutations, subscriptions, more than one operation, depth over 8, unknown fields,
   wrong or missing arguments (enums checked against the SDL), a missing or extra selection.

@@ -8,8 +8,8 @@ covers:
 The host's tools as an MCP server: `detached_read` and `detached_act`. It turns one JSON-RPC
 message into its response and hands each tool call, parsed, to a callback; transport, scope and
 the answers themselves belong to the caller. The kernel builds one per session
-(`crates/kernel/src/session.rs:242`). `core::claude` serves it to the CLI as an SDK MCP server
-(`crates/core/src/claude.rs:303`); `crates/acp`'s `mcp` serves it to ACP agents (Codex) over
+(`crates/kernel/src/session.rs:264`). `core::claude` serves it to the CLI as an SDK MCP server
+(`crates/core/src/claude.rs:315`); `crates/acp`'s `mcp` serves it to ACP agents (Codex) over
 Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/mcp.rs`).
 
 ## Public API
@@ -32,18 +32,18 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
 - `Judged` — `confirmed`, `refined`, `rejected`, `immaterial`, `pre_existing`.
 - `Done` — `nothing_found`, optional note.
 - `ProcAct` — `op` (`Op`: `start`, `stop`, `restart`), the repo's path and the process's name; the
-  kernel runs it only where the definition's `agents` is `start` (`crates/core/src/host.rs:100`).
+  kernel runs it only where the definition's `agents` is `start` (`crates/core/src/host.rs:223`).
 - `SendAct` — `to` (a session's id), `text`, optional `reply_to` (a message's id); the kernel
   delivers it only within the sender's group (`kernel::inbox::send`).
 - `WatchAct` — the repo's path and `process` (a running one's name) or `pipeline` (an id; the
   branch's newest when neither is given); one message comes back through the inbox.
 - `server(answer) -> backend::Tools` — the server; `answer(Call)` returns the result or an error
-  string the agent sees (`crates/core/src/host.rs:115`).
+  string the agent sees (`crates/core/src/host.rs:255`).
 
 ## Flow
 1. `initialize` echoes the client's `protocolVersion`, declares `tools`, names `detached-host`.
 2. `tools/list` returns both tools with their JSON schemas and descriptions
-   (`crates/core/src/host.rs:154`).
+   (`crates/core/src/host.rs:294`).
 3. `tools/call`: `detached_read` takes `arguments.query` as a string; `detached_act` deserializes
    `arguments` into `Act`; any other name is an error.
 4. The parsed `Call` goes to `answer`. A string result is the text as is; other JSON is
@@ -71,5 +71,5 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
   method's `-32601`, and that `report_finding` parses.
 - Run: `cargo test -p detached-core host::`. How `Tools` reach the CLI is tested with a stub, not
   this server: `the_host_tools_answer_on_the_session_s_own_pipes_with_nothing_in_argv`
-  (`crates/core/src/claude/tests.rs:166`); over HTTP by `crates/acp`'s
+  (`crates/core/src/claude/tests.rs:168`); over HTTP by `crates/acp`'s
   `the_host_tools_answer_the_client_that_initialized_first_and_no_other` and the tests after it.

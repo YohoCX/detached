@@ -16,25 +16,25 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
   load succeeded.
 - `On` (`crates/kernel/src/resource.rs:26`): `Status(repo)`, the repo's status loaded;
   `Head(repo)`, its head or branch moved.
-- `get(cx, key, make)` (`crates/kernel/src/resource.rs:75`): the resource under `key`, made by
+- `get(cx, key, make)` (`crates/kernel/src/resource.rs:82`): the resource under `key`, made by
   `make` the first time and registered in the `Resources` global. Loads nothing.
-- `Resource::new(policy, load)` (`crates/kernel/src/resource.rs:104`): `load` runs on the UI thread
+- `Resource::new(policy, load)` (`crates/kernel/src/resource.rs:111`): `load` runs on the UI thread
   and returns the blocking job, which runs through `blocking::run`.
-- `Resource::on(on)` (`crates/kernel/src/resource.rs:125`): also reload on that `On` input.
+- `Resource::on(on)` (`crates/kernel/src/resource.rs:135`): also reload on that `On` input.
 - `Resource::value`, `error`, `at` (pub fields), `loading()`, and `refresh(cx)`
-  (`crates/kernel/src/resource.rs:141`), which loads now whatever the age.
+  (`crates/kernel/src/resource.rs:153`), which loads now whatever the age.
 - `Resource::edit(f, cx)`: changes the value at once, ahead of the write it stands for; a load
   running then read before the write, so its value is dropped. The caller refreshes once the write
   is done (the Chats list's archive and delete).
-- `Interest::new(resource, cx)` (`crates/kernel/src/resource.rs:206`): holds the resource,
+- `Interest::new(resource, cx)` (`crates/kernel/src/resource.rs:238`): holds the resource,
   refreshes it (now, or after the load that runs) and starts its poll.
-- `Interest::view(resource, cx)` (`crates/kernel/src/resource.rs:222`): the same, and the view
+- `Interest::view(resource, cx)` (`crates/kernel/src/resource.rs:253`): the same, and the view
   redraws when the resource changes.
-- `Interest::resource`, `read`, `loaded` (`crates/kernel/src/resource.rs:240`): `loaded` is `Some`
+- `Interest::resource`, `read`, `loaded` (`crates/kernel/src/resource.rs:261`): `loaded` is `Some`
   only after a load that started after this interest was taken has ended.
-- `Interest::refresh(cx)` (`crates/kernel/src/resource.rs:246`): for a Refresh button; while a load
+- `Interest::refresh(cx)` (`crates/kernel/src/resource.rs:277`): for a Refresh button; while a load
   runs, one more follows it.
-- `input(cx, Input)` (`crates/kernel/src/resource.rs:94`, crate-only): hands `Input::Activated` or
+- `input(cx, Input)` (`crates/kernel/src/resource.rs:101`, crate-only): hands `Input::Activated` or
   `Input::On(on)` to every registered resource.
 
 ## Flow
@@ -50,17 +50,17 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
 4. The shell's window activation observer (`crates/app/src/shell.rs:119`) calls
    `invalidate::activated`, which sends `Input::Activated`
    (`crates/kernel/src/invalidate.rs:190`).
-5. `Resource::input` (`crates/kernel/src/resource.rs:161`) reloads when the input matches: `On`
+5. `Resource::input` (`crates/kernel/src/resource.rs:193`) reloads when the input matches: `On`
    equal to the resource's own, or activation with `fresh_for` set, no load running and the value
    at least that old (or never loaded). Either way only while an interest holds it.
-6. The poll (`crates/kernel/src/resource.rs:176`) ticks every period on the background clock and
+6. The poll (`crates/kernel/src/resource.rs:208`) ticks every period on the background clock and
    reloads while an interest is held, `When` holds for the value, no load runs and the window shows
    (`invalidate::set_visible`, from the shell's visibility observer). It stops at the first tick that
    finds the interest gone or `When` false; the next load restarts it.
 
 ## Gotchas
 - One type per key: `get` panics if a key is reused with another `T`
-  (`crates/kernel/src/resource.rs:81`). Keys carry the repo and parameters, e.g.
+  (`crates/kernel/src/resource.rs:88`). Keys carry the repo and parameters, e.g.
   `format!("sharing:{repo}")`.
 - Resources are never removed from `Resources`; dropping every interest only stops reloads. A value
   read without an interest may be stale, which is why `loaded` waits for a load that started after
@@ -75,7 +75,7 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
   `advance_clock`.
 
 ## Tests
-Unit tests in `crates/kernel/src/resource.rs:251`, in GPUI's test context on a counter resource:
+Unit tests in `crates/kernel/src/resource.rs:283`, in GPUI's test context on a counter resource:
 - `activation_skips_a_resource_fresher_than_its_policy_and_refresh_never_skips`: `fresh_for`,
   `Interest::refresh`, and no reload once the interest is dropped.
 - `a_poll_ticks_while_an_interest_is_held_and_the_window_shows`: hidden window, dropped interest

@@ -9,8 +9,8 @@ covers:
 Finds the skills a session may get, from a folder list in precedence order: the repo's store
 (local, then shared), the repo's `.claude`, the user's Claude config dir, then `~/.agents`. It
 marks each skill trusted, broken or overridden, and copies one's files out for a session's plugin.
-Callers: the kernel's session start (`crates/kernel/src/session.rs:1061`), `core::claude`'s
-per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`, which wraps
+Callers: the kernel's session start (`crates/kernel/src/session.rs:1266`), `core::claude`'s
+per-session plugin (`crates/core/src/claude.rs:430`), and `kernel::skills::get`, which wraps
 `Skills::load` as a `Resource` keyed `skills:<repo>`, reloaded when the repo's status loads
 (`crates/kernel/src/skills.rs:9`); the Settings page and `kernel::host` read that.
 
@@ -54,7 +54,7 @@ per-session plugin (`crates/core/src/claude.rs:432`), and `kernel::skills::get`,
 - `copy` checks the hash only for store items (`hash: Some`); other skills copy as read.
 - `description` is a plain line scan, not YAML: it strips quotes, nothing more.
 - Session start ignores a load error and starts with no skills
-  (`crates/kernel/src/session.rs:1061`).
+  (`crates/kernel/src/session.rs:1266`).
 
 ## Tests
 - Unit tests in `crates/core/src/skills.rs`, on `Sandbox` with its own `CLAUDE_CONFIG_DIR`:

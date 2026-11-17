@@ -5,7 +5,7 @@
 .idea/
 
 .claude/worktrees/
-.revmux/tasks/
+.revmux/
 
 # The release signing key stays local.
 /minisign.key
