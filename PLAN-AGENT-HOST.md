@@ -2146,6 +2146,14 @@ The owner checks: a Codex chat and a review with a Codex verifier on a trusted s
 
 ### Step H12. Release
 
+**Status (2026-11-17): ready for `make release`.** 0.6.0 ships as a regular release with Codex,
+without waiting for the letter's answer ([decision](docs/decisions/2026-11-17-release-0.6.0.md)).
+- **Done since:** `CATALOG_KEY` and the catalog signed in CI (serial 1); CLAUDE.md's first line
+  names the panels' writes; the notes and README name Codex and drop what the cleanup removed.
+- **The owner's:** the `adapters-codex-acp-2.6.0` tag, since the catalog has no Codex entry yet
+  and Codex cannot install without one; daily use on this build; `make release`; after 2026-11-19
+  `make codex-live`; the letter's answer, the Commercial Terms and the label.
+
 **Status (2026-11-17): merged; ready for the owner's acts.**
 - **Built:** version 0.6.0; the README says what a user installs and gets, and in plain text that
   Detached runs the user's installed Claude Code, with no logo and no claim of a partnership; the

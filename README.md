@@ -5,7 +5,7 @@ native (GPU-drawn, no web view), with AI agents beside your repos: one sidebar f
 your folders with fetch and pull all, branches and smart checkout, diffs, file browsing and find in
 files at any ref, the git log, merge requests and pipelines for GitLab and GitHub (including
 self-hosted GitLab and GitHub Enterprise), terminal tabs in the current repo, chats with Claude
-Code, and panels of agents that review your branches. Default shortcuts:
+Code and Codex, and panels of agents that review your branches. Default shortcuts:
 [docs/KEYMAP.md](docs/KEYMAP.md); Settings › Keymap lists them all, and `keymap.json` in the config
 folder overrides them.
 
@@ -32,19 +32,23 @@ Detached runs the Claude Code you installed: the `claude` command on your PATH, 
 Settings › Agents, version 2.1.322 or later, on your own login and plan. It ships no copy of Claude
 Code, never reads your login, and does not change what Claude Code sends. Settings › Agents runs
 Anthropic's installer and logs you in from a terminal tab. Detached is an independent project, not
-made or endorsed by Anthropic.
+made or endorsed by Anthropic or OpenAI.
+
+Codex is optional and off until `settings.json` has `"agents": {"codex": true}`. It runs on your
+`codex`, 0.166.0 or later, and its login, through its ACP adapter `codex-acp`, which Settings ›
+Agents installs from Detached's signed adapter catalog.
 
 - **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. Each
   tool call that needs permission asks you; "Always" is kept by Detached for that exact call, never
   written into the repo's settings. Each turn's changes are snapshotted, so you can restore them.
-  The bar shows what is left of your plan's 5-hour and weekly limits. Past conversations, Claude
-  Code's own from a terminal included, can be resumed, archived or deleted. Images in an agent's
-  reply show as links and never load by themselves.
+  For Claude, the bar shows what is left of your plan's 5-hour and weekly limits. Past
+  conversations, Claude Code's own from a terminal included, can be resumed, archived or deleted.
+  Images in an agent's reply show as links and never load by themselves.
 - **Trust.** A repo's own agent settings (hooks, MCP servers, permissions, skills, commands) load
   only once you accept them, and a change to them asks again.
   Claude Code's Read tool and a plain `cat`, `head`, `tail` or `less` of a `.env` file are refused;
   other commands and scripts are not, so a `.env` is not safe from an agent that runs commands
-  without asking.
+  without asking. Codex chats have no such refusal.
 - **Panels** put several agents on one subject: a review or a pre-merge gate of a branch, triage of
   a merge request or an issue, a review of a plan or any document. On a question, a dialectic has
   two agents argue opposite sides and rebut each other, and a judge weighs them; a brainstorm
@@ -52,7 +56,8 @@ made or endorsed by Anthropic.
   agent before you see it; you Fix, Dismiss or Defer it. A Fix runs in a worktree on its own branch
   and is checked again. A subject you have not marked trusted, such as a merge request from a fork,
   gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and model did, and
-  past revmux rounds can be imported. Panels run on macOS and Linux; Windows is not done yet.
+  past revmux rounds can be imported. With Codex on, Codex can verify the findings. On Windows a
+  panel reviews only subjects you trusted; the sandboxed review needs WSL, not built yet.
 - **Agents read the client, not pasted text:** branches, merge requests, pipelines, docs and
   processes come to them through a read-only tool. Chats you put in one group can message each
   other.
@@ -70,8 +75,6 @@ made or endorsed by Anthropic.
 - **`detached-cli`** (Settings › Command line installs it on PATH) lets a script in a Detached
   terminal tab ask the client what it knows, and run a command with an env profile after you
   confirm.
-
-Codex support is built but stays off in this release.
 
 ## Install
 
@@ -98,8 +101,8 @@ Windows 10+ and Linux (x86-64, with a Vulkan or GL driver) packages are on the
 `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
 Credential Manager or the Secret Service (GNOME Keyring, KWallet).
 
-Chats and panels need Claude Code, which Settings › Agents installs and logs in to; everything else
-works without it. The agents have been used by hand on macOS only; on Windows and Linux they have
+Chats and panels need Claude Code, which Settings › Agents installs and logs in to; Codex is
+optional, and everything else works without either. The agents have been used by hand on macOS only; on Windows and Linux they have
 passed the automated tests alone.
 
 The app looks for a new release at launch and daily and offers it in the status bar, which opens
@@ -166,6 +169,10 @@ Then keep `minisign.key` in a password manager and delete the file: an installed
 updates signed with the key it was built with.
 
 Running the workflow by hand (`gh workflow run release.yml`) only builds, with the files as run artifacts.
+
+The adapters catalog, from which Codex's adapter installs, is signed by
+`.github/workflows/adapters.yml` in the `adapters` environment; its setup is in
+[the decision](docs/decisions/2026-11-17-catalog-signed-in-ci.md).
 
 A panic leaves a report in `crashes/` of the config directory (on macOS `~/Library/Application
 Support/com.w-devs.detached`). Release builds carry no symbols, so its backtrace is addresses; on
