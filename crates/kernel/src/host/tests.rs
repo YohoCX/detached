@@ -128,7 +128,7 @@ fn a_subject_reads_its_repo_alone_and_its_mr_alone(cx: &mut TestAppContext) {
     let (_dir, _forge, a, b) = boot(cx);
     let q = format!(
         r#"{{ workspace {{ repos {{ name mrs {{ id }} }} current {{ name }} }}
-            other: repo(path: "{b}") {{ name }} mine: repo(path: "{a}") {{ name }} }}"#
+            other: repo(path: {b:?}) {{ name }} mine: repo(path: {a:?}) {{ name }} }}"#
     );
     let out = ask(cx, &Identity::subject(&a, Some(2)), &q);
     assert_eq!(
@@ -145,7 +145,7 @@ fn a_subject_reads_its_repo_alone_and_its_mr_alone(cx: &mut TestAppContext) {
     let out = ask(
         cx,
         &Identity::subject(&a, None),
-        &format!(r#"{{ repo(path: "{a}") {{ mrs {{ id }} }} }}"#),
+        &format!(r#"{{ repo(path: {a:?}) {{ mrs {{ id }} }} }}"#),
     );
     assert_eq!(out["data"]["repo"]["mrs"], json!([]));
     let out = ask(cx, &Identity::owner(), &q);
@@ -158,10 +158,15 @@ fn a_subject_reads_its_repo_alone_and_its_mr_alone(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_repo_s_skills_load_within_the_wait_for_the_owner_and_its_subject(cx: &mut TestAppContext) {
     let (dir, _forge, a, _) = boot(cx);
-    let lint = dir.path().join("home/.agents/skills/lint");
+    let lint = dir
+        .path()
+        .join("home")
+        .join(".agents")
+        .join("skills")
+        .join("lint");
     std::fs::create_dir_all(&lint).unwrap();
     std::fs::write(lint.join("SKILL.md"), "---\ndescription: Lints\n---\nLint.").unwrap();
-    let q = format!(r#"{{ repo(path: "{a}") {{ skills {{ name source description path }} }} }}"#);
+    let q = format!(r#"{{ repo(path: {a:?}) {{ skills {{ name source description path }} }} }}"#);
     for who in [Identity::owner(), Identity::subject(&a, None)] {
         let out = ask(cx, &who, &q);
         assert_eq!(
@@ -212,7 +217,7 @@ fn docs_route_by_read_when_to_one_section_flag_a_stale_doc_and_write_nothing(
     git(&a, &["commit", "-qam", "f moved"]);
     let q = |repo: &str| {
         format!(
-            r#"{{ repo(path: "{repo}") {{ docs(query: "how does the watcher handle events") {{
+            r#"{{ repo(path: {repo:?}) {{ docs(query: "how does the watcher handle events") {{
                 path heading line text stale }} }} }}"#
         )
     };

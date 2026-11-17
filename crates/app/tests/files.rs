@@ -1178,6 +1178,11 @@ fn tree_row(cx: &mut VisualTestContext, name: &str) -> (usize, ElementSnapshot) 
     row.unwrap_or_else(|| panic!("no row {name}"))
 }
 
+/// Whether the row named `name` is drawn with `description`; a reload may hide it a moment.
+fn described(cx: &mut VisualTestContext, name: &str, description: &str) -> bool {
+    (tree_rows(cx).iter()).any(|e| e.label() == Some(name) && e.description() == Some(description))
+}
+
 fn click_row(cx: &mut VisualTestContext, name: &str) {
     let i = tree_row(cx, name).0;
     cx.click(("tree.row", i));
@@ -1531,14 +1536,10 @@ fn ignored_dot_folders_expand_lazily_refresh_and_hide_in_every_repo(cx: &mut Tes
     wait_until(cx, |cx| tree(cx).contains(&"new.log".into()));
     write(&cx.sb.repo("app"), [(".gitignore", "")]);
     cx.update(|_, cx| invalidate::status(cx, &repo).detach());
-    wait_until(cx, |cx| {
-        tree_row(cx, "note.log").1.description() == Some("untracked")
-    });
+    wait_until(cx, |cx| described(cx, "note.log", "untracked"));
     write(&cx.sb.repo("app"), [(".gitignore", ".claude/\n")]);
     cx.update(|_, cx| invalidate::status(cx, &repo).detach());
-    wait_until(cx, |cx| {
-        tree_row(cx, ".claude").1.description() == Some("ignored")
-    });
+    wait_until(cx, |cx| described(cx, ".claude", "ignored"));
     let i = tree_row(cx, ".claude").0;
     cx.update(|w, cx| w.right_click(("tree.row", i), cx));
     cx.update(|w, cx| {

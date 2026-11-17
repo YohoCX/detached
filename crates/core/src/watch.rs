@@ -401,16 +401,9 @@ fn run(rx: Receiver<notify::Result<Event>>, inner: Weak<Inner>, on_batch: impl F
     }
 }
 
-/// The path as events name it: real, and on Windows without the `\\?\` that `canonicalize` adds.
+/// The path as events name it.
 fn canon(p: impl AsRef<Path>) -> Option<PathBuf> {
-    let p = p.as_ref().canonicalize().ok()?;
-    #[cfg(windows)]
-    if let Some(s) = p.to_str().and_then(|s| s.strip_prefix(r"\\?\"))
-        && s.as_bytes().get(1) == Some(&b':')
-    {
-        return Some(PathBuf::from(s));
-    }
-    Some(p)
+    crate::os::canonical(p.as_ref()).ok()
 }
 
 #[cfg(test)]
@@ -521,10 +514,7 @@ mod tests {
     #[test]
     fn trash_filter_is_limited_to_store_roots() {
         let sb = Sandbox::new();
-        let root = sb
-            .dir
-            .path()
-            .canonicalize()
+        let root = canon(sb.dir.path())
             .unwrap()
             .join(".detached-trash/project");
         fs::create_dir_all(&root).unwrap();

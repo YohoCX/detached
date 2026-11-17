@@ -1033,6 +1033,7 @@ fn the_state_check_holds_the_run_until_it_is_in(cx: &mut TestAppContext) {
     assert_eq!(s.ended, Some(End::Failed { reason }));
 }
 
+#[cfg(unix)]
 #[gpui::test]
 fn a_cancel_while_it_waits_for_the_untrusted_root_ends_it_unstarted(cx: &mut TestAppContext) {
     use detached_core::panel::root;
