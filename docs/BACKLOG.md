@@ -11,6 +11,6 @@ Features after milestone 1, newest first. Milestone 2 scope is in [PLAN-M2.md](.
 | Density and a spacing scale | The ~530 `px()` in views onto tokens; many are geometry rather than spacing, such as the 90 px traffic light inset. |
 | Plugin catalog | Plugins in GitHub Releases, a signed JSON index with a sequence number in a `detached-plugins` repo, moderated by PR, its own minisign key, a revocation list. The index URL can move to a VPS later. |
 | Plugin install with account tokens | From a private repo with a connected account's token. |
-| Process plugins and host widgets | JSON over stdio with a version handshake, host widgets `chat`, `diff`, `markdown`, `list`, `tree`, `table`. Extract from chat's private protocol when a second real consumer appears. |
+| Process plugins and host widgets | JSON over stdio with a version handshake, host widgets `chat`, `diff`, `markdown`, `list`, `tree`, `table`. |
 | Local env store, the rest | H9 built the store: named profiles, their names in Settings, values encrypted in `data/secrets` under a key in the OS store, run with a defined process or by `detached-cli env run`. Still open: profiles per git repo, worktree overrides, a `.env` written on demand, and whether it sits beside envault or replaces it. |
 | Auto-fetch | Fetches the active workspaces' repos every N seconds, 300 by default, 0 turns it off; a setting. Quiet: no top-bar progress and no toast per run, failures show on the repo. Skips a run while a fetch or pull is going; the branch widget's ahead/behind and the MR chip refresh after it. |

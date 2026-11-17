@@ -35,7 +35,7 @@ const PAGES: usize = 20;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 
-/// Claude's `.env` deny, the sidecar's: it stops literal paths only, so it is a mitigation.
+/// Claude's `.env` deny: it stops literal paths only, so it is a mitigation.
 const DENIED: &[&str] = &[
     "Read(//**/.env*)",
     "Bash(cat *.env*)",

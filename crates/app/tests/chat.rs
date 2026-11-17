@@ -152,7 +152,7 @@ fn floor(sb: &Sandbox, min: &str) {
 }
 
 #[gpui_kit::test]
-fn without_a_sidecar_it_says_how_to_get_one(cx: &mut TestAppContext) {
+fn without_a_cli_it_says_how_to_get_one(cx: &mut TestAppContext) {
     let cx = &mut open_bare(cx);
     say(cx, "hello");
     wait_for_item(cx, "has no CLI: see the Agents page");
@@ -416,7 +416,7 @@ fn the_end_of_a_turn_refreshes_the_repo(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar(cx: &mut TestAppContext) {
+fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_session(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");
     wait_for_item(cx, "said hello");

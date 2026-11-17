@@ -177,7 +177,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
   settled by the owner on 2026-11-16), since a seam with one implementation stops being one.
 - **Claude is one CLI per session**, spawned by core in its own process group, on Windows in its
   own job held for the session's life. No adapter stands beside it, and a CLI's exit ends its own
-  session only. `core::agent`, the sidecar's protocol, still goes at §13's end condition.
+  session only.
 - **The rest of this section is for ACP providers**, Codex today, except where it names Claude.
 - **Core keeps "no async runtime"** (CLAUDE.md). The crate's async dependencies stay in
   `crates/acp`: `futures` and `async-io` (137 crates in the spike, with `AcpAgent`). We connect
@@ -931,7 +931,8 @@ trusted.
 
 The chat leaves the sidecar at H11. The sidecar, `core::agent` and `bin/fake_sidecar.rs` go when
 every row holds and the owner has used the chat on `kernel::Session` daily for at least 5 working
-days without going back.
+days without going back. Done 2026-11-17: the owner had them removed without waiting for the 5
+days.
 
 ## 14. Order and the owner's choices
 
@@ -1795,8 +1796,7 @@ denied call with its reason (`Tool.status` `denied`, the seam's one addition), w
 yet, with the terminal and the floor's installer, when it refuses `initialize` or answers in
 something other than frames; another failure says what failed. The label is `CLAUDE.name`.
 `tests/chat.rs` runs on `fake_claude`: all its tests, `dock.rs`'s, and one per row below but Codex's delete (H13). `Links::Agent` makes every image in agent text a link (inline, reference, raw `<img>`, any scheme);
-`ImageFetch`, a global, replaces `web_image`'s network in tests. Open: the sidecar's removal, the
-follow-up below.
+`ImageFetch`, a global, replaces `web_image`'s network in tests.
 
 Work:
 1. The chat view on `kernel::Session`.
@@ -1810,7 +1810,7 @@ Tests:
 - **All 36 tests of `crates/app/tests/chat.rs`, and `dock.rs`'s
   `a_running_chat_moves_to_another_zone_with_its_turn_going_on`, move to the fake CLI.**
   These change in what they assert:
-  - `without_a_sidecar_it_says_how_to_get_one`: no `claude`, or one below `min_cli`, points to the
+  - `without_a_cli_it_says_how_to_get_one`: no `claude`, or one below `min_cli`, points to the
     Agents page;
   - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from `get_usage`,
     and unknown when it has none or the CLI lacks the request;
@@ -1820,7 +1820,7 @@ Tests:
     receives an `allow` with no rule, and the repeated request is answered without a prompt. A
     command with the same first line and another body still asks, and the Stop half moves to
     it;
-  - `the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar`: ending one ends its own
+  - `the_plus_opens_another_chat_beside_and_ending_one_stops_its_session`: ending one ends its own
     CLI, and the other's runs on;
   - `an_active_chat_archives_or_deletes_its_conversation_and_ends` and
     `a_past_chat_archives_unarchives_and_deletes_after_a_confirm`: archive is the host index's
@@ -1850,7 +1850,7 @@ The owner checks: daily use of that chat; a personal skill reaching it (H8).
 
 Follow-up, which P2 does not wait for: the sidecar, `core::agent` and `bin/fake_sidecar.rs` are
 removed at §13's end condition, in their own commit, after a grep of `crates/app/tests` for
-`fake_sidecar` and `agent::` finds nothing left.
+`fake_sidecar` and `agent::` finds nothing left. **Done 2026-11-17**, on the owner's call.
 
 ### Step H6. Managed worktrees and recipes
 
@@ -2151,8 +2151,7 @@ The owner checks: a Codex chat and a review with a Codex verifier on a trusted s
   directory. `make build` on macOS gave both zips, signed by "Detached Dev", and `make e2e-app`
   passed.
 - **The owner's:** the letter's answer and the Commercial Terms; the label (`CLAUDE.name` is still
-  "Claude Agent"); daily use on this build; the sidecar's removal (H11's follow-up) after the
-  check of the new chat; `CATALOG_KEY` and the signed catalog (H3), without which Codex cannot
+  "Claude Agent"); daily use on this build; `CATALOG_KEY` and the signed catalog (H3), without which Codex cannot
   install, so the README says Codex stays off; CLAUDE.md's first line, which lacks the panels'
   writes of §16; `make release`.
 

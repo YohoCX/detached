@@ -95,14 +95,14 @@ fn the_agents_page_installs_updates_and_rolls_back_claudes_adapter(cx: &mut Test
     assert!(adapters::exe(&data, CLAUDE.adapter, &"0.1.0".parse().unwrap()).is_file());
 }
 
-/// Every source file under `dir` with one of `exts`, but the test folders.
-fn sources(dir: &Path, exts: &[&str], out: &mut Vec<(String, String)>) {
+/// Every Rust file under `dir`, but the test folders.
+fn sources(dir: &Path, out: &mut Vec<(String, String)>) {
     for e in fs::read_dir(dir).unwrap().flatten() {
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if path.is_dir() && !["tests", "node_modules", "target"].contains(&name.as_str()) {
-            sources(&path, exts, out);
-        } else if exts.iter().any(|x| name.ends_with(x)) {
+        if path.is_dir() && name != "tests" {
+            sources(&path, out);
+        } else if name.ends_with(".rs") {
             let text = fs::read_to_string(&path).unwrap_or_default();
             out.push((path.display().to_string(), text));
         }
@@ -113,10 +113,10 @@ fn repo() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
 
-fn found(dirs: &[&str], exts: &[&str], needle: &str) -> Vec<String> {
+fn found(dirs: &[&str], needle: &str) -> Vec<String> {
     let mut files = vec![];
     for d in dirs {
-        sources(&repo().join(d), exts, &mut files);
+        sources(&repo().join(d), &mut files);
     }
     assert!(!files.is_empty());
     files
@@ -130,23 +130,15 @@ fn found(dirs: &[&str], exts: &[&str], needle: &str) -> Vec<String> {
 #[test]
 fn the_ui_never_says_claude_code() {
     let name = ["Claude", " Code"].concat();
-    let dirs = [
-        "crates/app/src",
-        "crates/kernel/src",
-        "crates/core/src",
-        "sidecars/claude",
-    ];
-    assert_eq!(found(&dirs, &[".rs", ".ts"], &name), Vec::<String>::new());
+    let dirs = ["crates/app/src", "crates/kernel/src", "crates/core/src"];
+    assert_eq!(found(&dirs, &name), Vec::<String>::new());
 }
 
 /// macOS keeps the login in this Keychain service; the host never reads it.
 #[test]
 fn the_keychain_login_is_named_only_in_tests() {
     let service = ["Claude Code", "-credentials"].concat();
-    assert_eq!(
-        found(&["crates", "sidecars"], &[".rs", ".ts"], &service),
-        Vec::<String>::new()
-    );
+    assert_eq!(found(&["crates"], &service), Vec::<String>::new());
 }
 
 #[gpui_kit::test]

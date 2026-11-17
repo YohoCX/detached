@@ -1,4 +1,4 @@
-.PHONY: check app ui-test agent-test codex-live agent-login warm ramdisk smoke sidecar e2e-app fmt build sign-setup release adapters-sign
+.PHONY: check app ui-test agent-test codex-live agent-login warm ramdisk smoke e2e-app fmt build sign-setup release adapters-sign
 
 # The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
 # runs first without it, so the linker's temp files stay off it.
@@ -50,10 +50,6 @@ warm:
 # Once per boot, macOS: a RAM disk the tests' sandboxes go on.
 ramdisk:
 	./scripts/ramdisk.sh
-
-# The Claude sidecar, into plugins/claude of the config directory (the owner's unless DETACHED_CONFIG_DIR is set).
-sidecar:
-	./scripts/sidecar.sh
 
 # Boots, draws one frame and exits, on a throwaway config directory.
 smoke:
