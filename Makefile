@@ -9,7 +9,7 @@ check:
 	cargo clippy --workspace --all-targets -- -D warnings
 # Core alone with e2e and testutil on, so no other crate is built with them.
 	cargo clippy -p detached-core --all-targets --all-features -- -D warnings
-	$(call TESTS,--workspace)
+	$(call TESTS,--workspace --no-fail-fast)
 
 # Release speed, on the real config directory.
 app:
