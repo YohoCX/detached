@@ -148,10 +148,7 @@ impl ChatList {
     fn edit(&self, cwd: &str, p: &Provider, f: impl FnOnce(&mut Vec<Past>), cx: &mut App) {
         let key = (cwd.to_string(), p.id);
         if let Some((_, p)) = self.past.iter().find(|(k, _)| *k == key) {
-            p.resource().update(cx, |r, cx| {
-                r.value.as_mut().map(f);
-                cx.notify();
-            });
+            p.resource().update(cx, |r, cx| r.edit(f, cx));
         }
     }
 

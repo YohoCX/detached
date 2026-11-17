@@ -184,7 +184,7 @@ mod tests {
     use crate::activity::Activity;
     use crate::repo::{Outcome, Repo};
     use crate::settings::Settings;
-    use crate::wait_until;
+    use crate::{wait_until, wait_watched};
 
     /// The kernel over repos `a` and `b` in an active workspace, every status loaded; `a` is current.
     fn boot(cx: &mut TestAppContext) -> (TempDir, String, String) {
@@ -474,18 +474,18 @@ mod tests {
         let (_dir, a, b) = boot(cx);
         watch(cx);
         std::fs::write(Path::new(&a).join("new"), "x").unwrap();
-        wait_until(cx, |cx| changes(cx, &a) == 1);
+        wait_watched(cx, |cx| changes(cx, &a) == 1);
         let head = |cx: &App| Repo::get(cx, &b).unwrap().status().unwrap().head.clone();
         let before = cx.read(head);
         let env = cx.read(|cx| crate::core(cx).env());
         let git = |args: &[&str]| out(&env, Path::new(&b), args, Kind::Write).unwrap();
         git(&["commit", "-qm", "outside", "--allow-empty"]);
-        wait_until(cx, |cx| head(cx) != before);
+        wait_watched(cx, |cx| head(cx) != before);
         let workspace = cx.read(Workspace::global);
         workspace.update(cx, |w, cx| w.set_current(Some(b.clone()), cx));
         wait_until(cx, crate::invalidate::watching);
         std::fs::write(Path::new(&b).join("new"), "x").unwrap();
-        wait_until(cx, |cx| changes(cx, &b) == 1);
+        wait_watched(cx, |cx| changes(cx, &b) == 1);
     }
 
     #[gpui::test]
@@ -497,7 +497,7 @@ mod tests {
         wait_until(cx, |cx| names(cx).is_some());
         let env = cx.read(|cx| crate::core(cx).env());
         out(&env, Path::new(&a), &["branch", "topic"], Kind::Write).unwrap();
-        wait_until(cx, |cx| names(cx).unwrap().contains(&"topic".into()));
+        wait_watched(cx, |cx| names(cx).unwrap().contains(&"topic".into()));
     }
 
     #[gpui::test]

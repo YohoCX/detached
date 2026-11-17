@@ -50,6 +50,8 @@ pub struct Resource<T> {
     loading: Option<Task<()>>,
     /// A refresh came while a load ran: another follows it.
     again: bool,
+    /// The value was edited while a load ran, which read before the edit: its value is dropped.
+    edited: bool,
     held: Rc<()>,
     polling: bool,
 }
@@ -124,6 +126,7 @@ impl<T: Send + 'static> Resource<T> {
             }),
             loading: None,
             again: false,
+            edited: false,
             held: Rc::default(),
             polling: false,
         }
@@ -161,9 +164,11 @@ impl<T: Send + 'static> Resource<T> {
                 this.at = Some(cx.background_executor().now());
                 this.loads += 1;
                 match r {
+                    Ok(_) if this.edited => {}
                     Ok(v) => (this.value, this.error) = (Some(v), None),
                     Err(e) => this.error = Some(e),
                 }
+                this.edited = false;
                 if std::mem::take(&mut this.again) {
                     this.refresh(cx);
                 }
@@ -172,6 +177,16 @@ impl<T: Send + 'static> Resource<T> {
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    /// Changes the value at once, ahead of the write it stands for; the caller refreshes once that
+    /// write is done.
+    pub fn edit(&mut self, f: impl FnOnce(&mut T), cx: &mut Context<Self>) {
+        if let Some(v) = &mut self.value {
+            f(v);
+        }
+        self.edited = self.loading.is_some();
         cx.notify();
     }
 
@@ -371,6 +386,26 @@ mod tests {
             3,
             "the first, one of the ten, then one for the other nine"
         );
+        assert_eq!(value(cx, &r), Some(3));
+    }
+
+    #[gpui::test]
+    fn an_edit_while_a_load_runs_drops_that_load_s_value(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let policy = Policy {
+            fresh_for: None,
+            poll: None,
+        };
+        let (r, ..) = counter(cx, policy);
+        let _held = interest(cx, &r);
+        r.update(cx, |r, cx| {
+            r.refresh(cx);
+            r.edit(|v| *v = 10, cx);
+        });
+        settle(cx, &r);
+        assert_eq!(value(cx, &r), Some(10), "the load read before the edit");
+        r.update(cx, |r, cx| r.refresh(cx));
+        settle(cx, &r);
         assert_eq!(value(cx, &r), Some(3));
     }
 

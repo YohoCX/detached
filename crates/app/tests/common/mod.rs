@@ -456,7 +456,8 @@ pub fn settle(cx: &TestAppContext) {
     cx.run_until_parked();
 }
 
-/// Runs the app and lets core's threads work until `done` holds; panics after 10 s of waiting.
+/// Runs the app and lets core's threads work until `done` holds; panics after 10 s of waiting, more
+/// on a loaded machine.
 #[track_caller]
 pub fn wait_until(cx: &mut VisualTestContext, done: impl FnMut(&mut VisualTestContext) -> bool) {
     wait_for(cx, Duration::from_secs(10), done);
@@ -479,7 +480,11 @@ fn wait_for(
     let start = cx.executor().now();
     while !done(cx) {
         let waited = cx.executor().now() - start;
-        assert!(waited < limit, "wait_until timed out after {limit:?}");
+        let scaled = detached_core::testutil::scaled(limit);
+        assert!(
+            waited < scaled,
+            "wait_until timed out after {limit:?} ({scaled:?})"
+        );
         let tick = cx.executor().timer(Duration::from_millis(10));
         cx.foreground_executor().block_test(tick);
     }
