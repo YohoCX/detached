@@ -183,8 +183,17 @@ fn a_brainstorm_clusters_and_ranks_its_ideas_and_a_rank_without_a_reason_is_refu
     assert_eq!(order[1].0, "C");
     let ranks = s.timeline.iter().filter(|e| e.kind == "rank").count();
     assert_eq!(ranks, 2, "the blank reason was refused");
-    let ranked = data(&f, &p, "rank", cx);
-    assert_eq!(ranked["ideas"][0]["variants"][0]["id"], "smallest-1");
+    // The generators report in parallel, so the brief's order is theirs.
+    let ranked = data(&f, &p, "rank", cx)["ideas"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let lead = ranked.iter().find(|i| i["id"] == "user-1").unwrap();
+    assert_eq!(
+        lead["variants"],
+        json!([{"id": "smallest-1", "title": "A", "body": "how"}])
+    );
+    assert_eq!(ranked.len(), 2);
     assert_eq!(
         data(&f, &p, "cluster", cx)["ideas"]
             .as_array()
