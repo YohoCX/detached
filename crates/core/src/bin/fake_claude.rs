@@ -908,11 +908,14 @@ impl Turn<'_> {
     /// The turn's prompt or its messages so far, appended to `projects/<cwd>/<id>.jsonl` as the CLI
     /// writes them.
     fn transcript(&self, prompt: Option<&str>) {
-        let Ok(cwd) = std::env::current_dir() else {
+        // Resolved as getcwd is on Unix: Windows keeps 8.3 names such as RUNNER~1.
+        let Ok(cwd) = std::env::current_dir().and_then(std::fs::canonicalize) else {
             return;
         };
+        let cwd = cwd.display().to_string();
+        let cwd = cwd.trim_start_matches(r"\\?\");
         let mut s = self.shared.lock().unwrap();
-        let name: String = (cwd.to_string_lossy().chars())
+        let name: String = (cwd.chars())
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect();
         let name = match name.char_indices().nth(200) {
