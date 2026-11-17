@@ -18,7 +18,7 @@ done
 if [ ! -f "$key" ]; then
   mkdir -p "$dir"
   chmod 700 "$dir"
-  minisign -G -p "$pub" -s "$key"
+  minisign -G -W -p "$pub" -s "$key"
   echo "Set CATALOG_KEY in crates/core/src/adapters.rs to:"
   sed -n 2p "$pub"
   exit 0

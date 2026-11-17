@@ -34,9 +34,11 @@
 1. Settings → Environments → New environment → `adapters`.
 2. Required reviewers: add yourself.
 3. Deployment branches and tags → Selected: branch `main` and tag `adapters-*`.
-4. `gh secret set ADAPTERS_SIGNING_KEY --env adapters < key`, with `key` the minisign secret key
+4. CI signs with an empty password. A key with a password loses it first:
+   `minisign -C -W -s key` asks for the old one. The current key has none.
+5. `gh secret set ADAPTERS_SIGNING_KEY --env adapters < key`, with `key` the minisign secret key
    file.
-5. `gh secret delete ADAPTERS_SIGNING_KEY`, the repository copy, which any workflow could read.
+6. `gh secret delete ADAPTERS_SIGNING_KEY`, the repository copy, which any workflow could read.
 
 ## Why
 

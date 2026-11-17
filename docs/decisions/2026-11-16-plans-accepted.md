@@ -18,6 +18,6 @@ listed to him: "сделай всё, письмо я уже написал." (Do
 
 ## Still the owner's
 
-The adapters catalog's minisign key: `make adapters-sign` makes it on the first run and asks for its
-password, so only the owner runs it. Nothing waits on it while Codex is off. Since 2026-11-17 CI
+The adapters catalog's minisign key: `make adapters-sign` makes it on the first run, without a
+password, outside the repo, so only the owner runs it. Nothing waits on it while Codex is off. Since 2026-11-17 CI
 signs with it: [own decision](2026-11-17-catalog-signed-in-ci.md).
