@@ -130,6 +130,7 @@ fn run(
         codex,
         roles: vec![],
         over: Default::default(),
+        head: None,
     };
     cx.update(|cx| live::start(s, cx))
 }
@@ -1239,4 +1240,30 @@ fn the_next_round_keeps_the_owner_s_trust_choice_budget_and_codex() {
     );
     let next = rounds(started(false, None)).next("feat").unwrap();
     assert!(!next.untrusted && !next.codex);
+    let over = |of: record::Of| {
+        let mut s = started(false, None);
+        s.started.as_mut().unwrap().subject.of = of;
+        rounds(s).next("feat").map(|n| n.over)
+    };
+    let issue = record::Of::Issue {
+        number: 3,
+        title: String::new(),
+        author: String::new(),
+        url: String::new(),
+    };
+    assert_eq!(over(issue), None, "an issue has no diff to gate");
+    let doc = record::Of::Document {
+        path: "PLAN.md".into(),
+    };
+    assert_eq!(over(doc), None);
+    let mr = record::Of::Mr {
+        number: 7,
+        title: String::new(),
+        author: String::new(),
+        url: String::new(),
+        remote: "origin".into(),
+        head_ref: String::new(),
+        fork: false,
+    };
+    assert_eq!(over(mr), Some(detached_core::panel::run::Over::Mr(7)));
 }

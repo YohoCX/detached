@@ -58,9 +58,11 @@ fn row(id: SharedString, label: String, body: String, strong: bool, cx: &App) ->
 /// The six answers with their arguments, the recommended one marked, then each finder's case.
 fn triage(state: &State, cx: &App) -> AnyElement {
     let Some(o) = &state.outcome else {
-        let waits = div()
-            .text_color(theme(cx).muted)
-            .child("The six answers come once the synthesis reports.");
+        let text = match state.ended {
+            Some(_) => "The run ended without the six answers.",
+            None => "The six answers come once the synthesis reports.",
+        };
+        let waits = div().text_color(theme(cx).muted).child(text);
         return block(
             "panel.outcome",
             String::new(),

@@ -1271,6 +1271,7 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
         codex: false,
         roles: vec![],
         over: Default::default(),
+        head: None,
     };
     let (repo_id, task, round) = app.update(|_, cx| {
         let p = kernel::panel::live::start(start, cx);

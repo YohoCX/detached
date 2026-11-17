@@ -211,15 +211,14 @@ pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
         };
         let core = crate::core(cx).clone();
         let cached = cx.global::<Panels>().probe.clone();
-        let flag = p.cancelled.clone();
-        let cancelled = move || flag.load(Ordering::SeqCst);
+        let cancel = p.cancelled.clone();
         let prepared = blocking::run(cx, move || {
             let c = core.clone();
             let probe = Arc::new(move || match cached.clone() {
                 Some(p) => Ok(p),
                 None => backend::direct().probe(&c, None),
             });
-            run::prepare(&core, &s, &task, &run, probe, &cancelled)
+            run::prepare(&core, &s, &task, &run, probe, &cancel)
         });
         p.task(cx, async move |this, cx| {
             let prepared = prepared.await;
@@ -1586,7 +1585,7 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
 /// What the start dialog shows for `s`.
 pub fn preview(s: Start, cx: &App) -> Task<Result<run::Preview>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || run::preview(&core, &s))
+    blocking::run(cx, move || run::preview(&core, &s, &Default::default()))
 }
 
 /// Accepts the trust files the preview showed.

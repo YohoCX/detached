@@ -16,8 +16,8 @@ use crate::adapters::{CLAUDE, CODEX};
 use crate::backend::Probe;
 use crate::error::{Error, Result};
 use crate::git::runner::{Kind, out};
-use crate::git::{self, remotes::network};
-use crate::state::AppState;
+use crate::git::{self, remotes};
+use crate::state::{AppState, Cancel};
 use crate::{forge, trust};
 
 /// What the owner asked for.
@@ -39,6 +39,8 @@ pub struct Start {
     /// Roles seated beside the mode's, each once, on its first seat's model.
     pub roles: Vec<String>,
     pub over: Over,
+    /// The head the owner saw in the preview; the run refuses another.
+    pub head: Option<String>,
 }
 
 /// What a run is over: the branch's diff, an MR, an issue or a document.
@@ -121,7 +123,7 @@ pub fn dir(core: &AppState, repo: &Path, task: &str, run: &str) -> Result<PathBu
         .join(run))
 }
 
-/// A review of `s`'s branch as it is now.
+/// A review of `s`'s subject as it is now.
 pub fn again(s: &Subject) -> Start {
     Start {
         repo: s.repo.clone(),
@@ -139,14 +141,16 @@ pub fn again(s: &Subject) -> Start {
             Of::Issue { number, .. } => Over::Issue(*number),
             Of::Document { path } => Over::Document(path.clone()),
         },
+        head: None,
     }
 }
 
 /// The subject at its two SHAs: the branch's head, and where it left its base. An issue and a
-/// document have no diff: both SHAs are the branch's head.
-pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
+/// document have no diff: both SHAs are the branch's head. An MR the repo lacks is fetched only
+/// with `fetch`.
+pub fn subject(core: &AppState, s: &Start, fetch: Option<&Cancel>) -> Result<Subject> {
     if let Over::Mr(n) = s.over {
-        return mr(core, Path::new(&s.repo), n);
+        return mr(core, Path::new(&s.repo), n, fetch);
     }
     let (env, repo) = (core.env(), Path::new(&s.repo));
     let at = |full: String| {
@@ -206,7 +210,7 @@ pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
 }
 
 /// MR `n` at its head on the forge, fetched with its target branch when the repo lacks either.
-fn mr(core: &AppState, repo: &Path, n: u64) -> Result<Subject> {
+fn mr(core: &AppState, repo: &Path, n: u64, fetch: Option<&Cancel>) -> Result<Subject> {
     let m = forge::get_mr(core, repo, n)?;
     let (head, target) = (brief::sha(&m.head_sha)?, brief::sha(&m.base_sha)?);
     let remote = forge::mr_remote(core, repo)?;
@@ -216,21 +220,35 @@ fn mr(core: &AppState, repo: &Path, n: u64) -> Result<Subject> {
         let args = ["cat-file", "-e", &format!("{sha}^{{commit}}")];
         out(&env, repo, &args, Kind::Read).is_ok()
     };
-    if !has(head) || !has(target) {
-        let branch = format!("refs/heads/{}", m.target_branch);
-        fetch(core, repo, &remote, &[&head_ref, &branch])?;
+    if let Some(cancel) = fetch.filter(|_| !has(head) || !has(target)) {
+        remotes::fetch_mr(
+            core,
+            repo,
+            &remote,
+            &head_ref,
+            &m.target_branch,
+            cancel,
+            &|_| {},
+        )?;
     }
-    let base = out(&env, repo, &["merge-base", target, head], Kind::Read)?;
+    // Without the fetch the objects may be missing: the target then stands for the base.
+    let base = out(&env, repo, &["merge-base", target, head], Kind::Read);
+    let (src, dst) = (&m.source_project, &m.target_project);
+    // Only a source the forge names as the MR's own project is a colleague's; a deleted fork has
+    // none.
+    let own = !src.path.is_empty()
+        && src.host.eq_ignore_ascii_case(&dst.host)
+        && src.path.eq_ignore_ascii_case(&dst.path);
     Ok(Subject {
         repo: repo.display().to_string(),
         branch: m.source_branch.clone(),
         remote: true,
         base: m.target_branch.clone(),
-        base_sha: base.trim().into(),
+        base_sha: base.map_or(target.into(), |b| b.trim().into()),
         head_sha: head.into(),
         of: Of::Mr {
             number: n,
-            fork: m.source_project != m.target_project,
+            fork: !own,
             title: m.title,
             author: m.author,
             url: m.web_url,
@@ -240,28 +258,12 @@ fn mr(core: &AppState, repo: &Path, n: u64) -> Result<Subject> {
     })
 }
 
-/// Fetches `refspecs` from `remote`, writing no `FETCH_HEAD`.
-fn fetch(core: &AppState, repo: &Path, remote: &str, refspecs: &[&str]) -> Result<()> {
-    let mut args = vec![
-        "fetch",
-        "--no-write-fetch-head",
-        "--no-tags",
-        git::arg(remote)?,
-    ];
-    args.extend(refspecs);
-    let cancel = Default::default();
-    git::locked(core, repo, || {
-        network(core, repo, &args, Some(remote), &cancel, &|_| {}).map(drop)
-    })
-}
-
-/// Where an MR's head stays for its run.
 fn pin_ref(run: &str) -> String {
     format!("refs/detached/subjects/{run}")
 }
 
-/// Fetches an MR subject's head into the run's ref; refused when it moved since `s` was resolved.
-fn pin(core: &AppState, s: &Subject, run: &str) -> Result<()> {
+/// Fetches an MR subject's head and keeps it in the run's ref; refused when it moved.
+fn pin(core: &AppState, s: &Subject, run: &str, cancel: &Cancel) -> Result<()> {
     let Of::Mr {
         number,
         remote,
@@ -271,15 +273,15 @@ fn pin(core: &AppState, s: &Subject, run: &str) -> Result<()> {
     else {
         return Ok(());
     };
-    let (repo, to) = (Path::new(&s.repo), pin_ref(run));
-    fetch(core, repo, remote, &[&format!("+{head_ref}:{to}")])?;
-    let at = out(&core.env(), repo, &["rev-parse", &to], Kind::Read)?;
-    match at.trim() == s.head_sha {
-        true => Ok(()),
-        false => Err(Error::Other(format!(
+    let repo = Path::new(&s.repo);
+    let at = remotes::fetch_mr(core, repo, remote, head_ref, &s.base, cancel, &|_| {})?;
+    if at != s.head_sha {
+        return Err(Error::Other(format!(
             "!{number} moved since you looked: check it again"
-        ))),
+        )));
     }
+    let args = ["update-ref", &pin_ref(run), &at];
+    git::locked(core, repo, || out(&core.env(), repo, &args, Kind::Write)).map(drop)
 }
 
 /// Removes the run's MR head, if it has one.
@@ -334,8 +336,9 @@ pub struct Preview {
     pub refused: Option<String>,
 }
 
-pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
-    let subject = subject(core, s)?;
+/// The preview of `s`, its MR fetched when the repo lacks it.
+pub fn preview(core: &AppState, s: &Start, cancel: &Cancel) -> Result<Preview> {
+    let subject = subject(core, s, Some(cancel))?;
     let p = marks::load(core);
     let trust = match s.untrusted {
         true => Trust {
@@ -395,13 +398,14 @@ pub fn id(mode: &str, ms: i64) -> String {
     format!("{mode}-{}", t.format("%Y%m%d-%H%M%S-%3f"))
 }
 
-/// The task of what `s` asks for: its MR, issue, document or branch.
+/// The task of what `s` asks for: its MR, issue, document or branch. `task` never makes a `_`, so
+/// the kinds' names cannot meet a branch's.
 pub fn task_of(s: &Start) -> String {
     match &s.over {
         Over::Branch => task(&s.branch),
-        Over::Mr(n) => format!("mr-{n}"),
-        Over::Issue(n) => format!("issue-{n}"),
-        Over::Document(path) => task(path),
+        Over::Mr(n) => format!("mr_{n}"),
+        Over::Issue(n) => format!("issue_{n}"),
+        Over::Document(path) => format!("doc_{}", task(path)),
     }
 }
 
@@ -427,13 +431,19 @@ pub fn prepare(
     task: &str,
     run: &str,
     probe: Arc<dyn Fn() -> Result<Probe> + Send + Sync>,
-    cancelled: &dyn Fn() -> bool,
+    cancel: &Cancel,
 ) -> Result<Prepared> {
+    let cancelled = &|| cancel.load(std::sync::atomic::Ordering::SeqCst);
     let env = core.env();
     let repo = Path::new(&s.repo);
-    let pv = preview(core, s)?;
+    let pv = preview(core, s, cancel)?;
     let subject = pv.subject;
     brief::sha(&subject.head_sha)?;
+    if s.head.as_ref().is_some_and(|h| *h != subject.head_sha) {
+        return Err(Error::Other(
+            "The subject moved since you looked: check it again".into(),
+        ));
+    }
     let mut mode = mode::mode(core, repo, &s.mode)?;
     for r in &s.roles {
         if !mode.roster.iter().any(|x| &x.role == r) {
@@ -508,7 +518,7 @@ pub fn prepare(
         }
         let trees = || {
             halt(cancelled)?;
-            pin(core, &p.subject, run)?;
+            pin(core, &p.subject, run, cancel)?;
             p.pinned = tree::pinned(core, repo, run, &sha)?;
             for (name, role, seat) in seats {
                 halt(cancelled)?;
@@ -546,7 +556,7 @@ pub fn prepare(
         let dir = root.join(run);
         p.pinned = dir.join("pinned");
         (p.dir, p.lock) = (Some(dir), Some(lock));
-        let export = pin(core, &p.subject, run)
+        let export = pin(core, &p.subject, run, cancel)
             .and_then(|_| tree::export(&env, repo, &sha, &p.pinned, cancelled));
         if let Err(e) = export {
             teardown(core, &p, run);
@@ -605,9 +615,12 @@ fn claude_only(m: &mut Mode) -> bool {
     for s in m.roster.iter_mut().filter(|s| s.provider != CLAUDE.id) {
         (s.provider, s.model, changed) = (CLAUDE.id.into(), "opus".into(), true);
     }
-    changed |= m.verifiers.iter().any(other) || m.merge.as_ref().is_some_and(other);
+    changed |= m.verifiers.iter().any(other)
+        || m.merge.as_ref().is_some_and(other)
+        || m.synthesizer.as_ref().is_some_and(other);
     m.verifiers.retain(|v| !other(v));
     m.merge = m.merge.take().filter(|v| !other(v));
+    m.synthesizer = m.synthesizer.take().filter(|v| !other(v));
     changed
 }
 
@@ -739,6 +752,21 @@ mod tests {
     use crate::git::testutil::Sandbox;
 
     #[test]
+    fn an_mr_s_issue_s_or_document_s_task_is_never_a_branch_s() {
+        let of = |over| {
+            task_of(&Start {
+                over,
+                ..Start::default()
+            })
+        };
+        let (mr, issue) = (of(Over::Mr(7)), of(Over::Issue(7)));
+        let doc = of(Over::Document("PLAN.md".into()));
+        for branch in ["mr-7", "mr/7", "mr_7", "issue_7", "doc_PLAN.md", "PLAN.md"] {
+            assert!(![&mr, &issue, &doc].contains(&&task(branch)), "{branch}");
+        }
+    }
+
+    #[test]
     fn claude_stands_in_for_every_other_provider() {
         let seat = |provider: &str, model: &str| Seat {
             role: "bugs".into(),
@@ -751,7 +779,7 @@ mod tests {
             graph: vec![],
             roster: vec![seat("claude", "sonnet"), seat("codex", "gpt-5.5")],
             merge: Some("codex".into()),
-            synthesizer: None,
+            synthesizer: Some("codex:gpt-5.5".into()),
             verifiers: vec!["codex:gpt-5.5".into(), "opus".into()],
             block: vec![],
             text: String::new(),
@@ -761,8 +789,8 @@ mod tests {
         let models: Vec<String> = m.roster.iter().map(Seat::model).collect();
         assert_eq!(models, ["sonnet", "opus"]);
         assert_eq!(
-            (&m.merge, &m.verifiers[..]),
-            (&None, &["opus".to_string()][..])
+            (&m.merge, &m.synthesizer, &m.verifiers[..]),
+            (&None, &None, &["opus".to_string()][..])
         );
         assert!(!claude_only(&mut m));
     }
@@ -790,8 +818,9 @@ mod tests {
             codex: false,
             roles: vec![],
             over: Default::default(),
+            head: None,
         };
-        let pv = preview(&sb.state, &s).unwrap();
+        let pv = preview(&sb.state, &s, &Default::default()).unwrap();
         assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
         accept(&sb.state, &pv).unwrap();
         let head = pv.subject.head_sha.clone();
@@ -830,17 +859,24 @@ mod tests {
             codex: false,
             roles: vec![],
             over: Default::default(),
+            head: None,
         };
-        let shown = preview(&sb.state, &s).unwrap();
+        let shown = preview(&sb.state, &s, &Default::default()).unwrap();
         fs::write(repo.join(".claude/settings.json"), settings("never shown")).unwrap();
         sb.git(&repo, &["commit", "-qam", "b"]);
         accept(&sb.state, &shown).unwrap();
         assert!(
-            !preview(&sb.state, &s).unwrap().accepted,
+            !preview(&sb.state, &s, &Default::default())
+                .unwrap()
+                .accepted,
             "the moved head is not accepted"
         );
         sb.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
-        assert!(preview(&sb.state, &s).unwrap().accepted);
+        assert!(
+            preview(&sb.state, &s, &Default::default())
+                .unwrap()
+                .accepted
+        );
     }
 
     #[test]
@@ -870,6 +906,7 @@ mod tests {
             codex: false,
             roles: vec![],
             over: Default::default(),
+            head: None,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let later = stop.clone();
@@ -882,9 +919,7 @@ mod tests {
             Ok(Probe::Passed)
         });
         let began = std::time::Instant::now();
-        let r = prepare(&sb.state, &s, "t", "run", hung, &|| {
-            stop.load(Ordering::SeqCst)
-        });
+        let r = prepare(&sb.state, &s, "t", "run", hung, &stop);
         assert!(matches!(r, Err(Error::Cancelled)));
         assert!(began.elapsed() < std::time::Duration::from_secs(5));
         assert!(!tree::trusted_root(&sb.state, "run").exists());

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use detached_core::panel::record::{self, End, State};
+use detached_core::panel::record::{self, End, Of, State};
 use detached_core::panel::run::Start;
 use detached_core::panel::track::{self, Fate, Track};
 use detached_core::panel::{self, Counts, Fix, Run, Thread, fix, run};
@@ -63,11 +63,15 @@ pub struct Check {
 impl Rounds {
     /// The next round of a live task: a gate on its subject, the roster re-reviews default to, with
     /// the owner's trust choice, budget and "Codex verifies" of the round before.
+    /// None for an issue or a document, which have no diff to gate.
     pub fn next(&self, task: &str) -> Option<Start> {
         let runs = self.records.iter().filter(|((t, _), _)| t == task);
         let last = runs.max_by_key(|((_, run), s)| (s.at, run.clone()))?.1;
         let started = last.started.as_ref()?;
         let s = &started.subject;
+        if matches!(s.of, Of::Issue { .. } | Of::Document { .. }) {
+            return None;
+        }
         Some(Start {
             mode: "gate".into(),
             untrusted: started.untrusted,

@@ -149,13 +149,10 @@ impl GitHub {
             state,
             draft: v["draft"] == true,
             author: s(&v["user"]["login"]),
+            // Empty when GitHub no longer names it: the fork was deleted.
             source_project: Project {
                 host: p.host.clone(),
-                path: if src_name.is_empty() {
-                    p.path.clone()
-                } else {
-                    src_name
-                },
+                path: src_name,
             },
             source_branch: s(&v["head"]["ref"]),
             target_project: p.clone(),

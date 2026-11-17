@@ -474,9 +474,10 @@ impl MrPage {
 
     fn meta(&self, m: &MergeRequest, cx: &Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let source = match m.source_project.path == m.target_project.path {
-            true => m.source_branch.clone(),
-            false => format!("{}:{}", m.source_project.path, m.source_branch),
+        let source = match m.source_project.path.as_str() {
+            p if p == m.target_project.path => m.source_branch.clone(),
+            "" => format!("a deleted fork:{}", m.source_branch),
+            p => format!("{p}:{}", m.source_branch),
         };
         let updated = format!("· updated {}", ago_text(m.updated, now()));
         let said = format!(

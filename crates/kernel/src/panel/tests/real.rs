@@ -249,8 +249,9 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         codex: false,
         roles: vec![],
         over: Default::default(),
+        head: None,
     };
-    let shown = detached_core::panel::run::preview(&f.core, &start).unwrap();
+    let shown = detached_core::panel::run::preview(&f.core, &start, &Default::default()).unwrap();
     detached_core::panel::run::accept(&f.core, &shown).unwrap();
     let sha = String::from_utf8(
         std::process::Command::new("git")
@@ -351,6 +352,7 @@ fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut Tes
             codex: false,
             roles: vec![],
             over: Default::default(),
+            head: None,
         };
         let p = cx.update(|cx| super::super::live::start(start, cx));
         wait_for(cx, START, |cx| {
@@ -461,7 +463,7 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
             of: Default::default(),
         })
     };
-    let subject = run::subject(&f.core, &start).unwrap();
+    let subject = run::subject(&f.core, &start, None).unwrap();
     let finding: detached_core::host::Finding = serde_json::from_value(json!({
         "severity": "major", "class": "correctness", "title": "t", "body": "b", "file": "a.txt",
         "line": 1, "quote": "a", "lenses": []}))

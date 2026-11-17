@@ -47,7 +47,8 @@ pub struct Mr {
     pub target_branch: String,
     pub base_sha: String,
     pub head_sha: String,
-    /// The fork it comes from, a project of the seed by path; its own project when None.
+    /// The fork it comes from, a project of the seed by path, or a deleted one when the seed lacks
+    /// it; its own project when None.
     #[serde(default)]
     pub source: Option<String>,
 }

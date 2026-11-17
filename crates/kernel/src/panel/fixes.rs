@@ -232,6 +232,7 @@ pub fn recheck(
         codex: false,
         roles: vec![role.into()],
         over: Default::default(),
+        head: None,
     };
     let p = live::start(s, cx);
     let e = Event::Recheck {

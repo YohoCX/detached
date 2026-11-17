@@ -929,7 +929,7 @@ fn gl_mr(s: &State, p: usize, m: &Mr) -> Value {
         "description": m.description, "state": gl_state(m), "draft": m.draft,
         "work_in_progress": m.draft, "author": { "username": m.author },
         "source_branch": m.source_branch, "target_branch": m.target_branch,
-        "source_project_id": fork(s, p, m) + 1, "target_project_id": p + 1, "sha": m.head_sha, "diff_refs": diff,
+        "source_project_id": fork(s, p, m).map(|i| i + 1), "target_project_id": p + 1, "sha": m.head_sha, "diff_refs": diff,
         "labels": [], "reviewers": [], "detailed_merge_status": status,
         "merge_when_pipeline_succeeds": live(s, p, m.number).auto_merge, "head_pipeline": pl,
         "web_url": format!("{}/-/merge_requests/{}", web(s, p, "gitlab"), m.number),
@@ -953,7 +953,7 @@ fn gh_pr(s: &State, p: usize, m: &Mr) -> Value {
         "number": m.number, "title": m.title, "body": m.description, "state": gh_state(m),
         "merged": merged, "merged_at": merged.then_some(T), "draft": m.draft,
         "user": { "login": m.author }, "labels": [], "requested_reviewers": [], "assignees": [],
-        "head": { "ref": m.source_branch, "sha": m.head_sha, "repo": ghe::repo(s, fork(s, p, m)) },
+        "head": { "ref": m.source_branch, "sha": m.head_sha, "repo": fork(s, p, m).map(|i| ghe::repo(s, i)) },
         "base": { "ref": m.target_branch, "sha": m.base_sha, "repo": repo },
         "mergeable": open.then_some(true), "mergeable_state": mergeable,
         "auto_merge": live(s, p, m.number).auto_merge.then(|| json!({ "merge_method": "merge" })),
@@ -962,14 +962,16 @@ fn gh_pr(s: &State, p: usize, m: &Mr) -> Value {
     })
 }
 
-/// The index of the project `m` comes from: its fork's, else its own.
-fn fork(s: &State, p: usize, m: &Mr) -> usize {
-    let found = |path: &String| {
-        s.projects
-            .iter()
-            .position(|x| x.forge == s.projects[p].forge && x.path == *path)
+/// The index of the project `m` comes from: its own, its fork's, or None for a fork the seed lacks,
+/// as a deleted one reads.
+fn fork(s: &State, p: usize, m: &Mr) -> Option<usize> {
+    let Some(path) = &m.source else {
+        return Some(p);
     };
-    m.source.as_ref().and_then(found).unwrap_or(p)
+    let forge = s.projects[p].forge;
+    s.projects
+        .iter()
+        .position(|x| x.forge == forge && x.path == *path)
 }
 
 fn issue(s: &State, p: usize, n: &str) -> Option<Issue> {

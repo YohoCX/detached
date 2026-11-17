@@ -108,6 +108,7 @@ impl Form {
             codex: self.codex,
             roles: vec![],
             over,
+            head: None,
         })
     }
 
@@ -350,7 +351,10 @@ impl Render for Form {
                         .when(!ready, |b| b.opacity(0.5))
                         .when(ready, |b| {
                             b.on_click(cx.listener(|f, _, _, cx| {
-                                let Ok(s) = f.start(cx) else { return };
+                                let Ok(mut s) = f.start(cx) else { return };
+                                if let Some(Ok(p)) = &f.preview {
+                                    s.head = Some(p.subject.head_sha.clone());
+                                }
                                 let p = live::start(s, cx);
                                 let (repo, task, round) = {
                                     let p = p.read(cx);
