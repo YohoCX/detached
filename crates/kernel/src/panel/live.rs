@@ -179,7 +179,7 @@ pub struct Panel {
 
 /// Starts a run: its trees and record are made off the main thread, then its finders queue.
 pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
-    let run = run::id(&s.mode, record::now());
+    let run = run::id(&s.mode);
     let task = run::task_of(&s);
     let now = cx.background_executor().now();
     let p = cx.new(|cx| {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use detached_core::error::{Error, Result};
 use detached_core::panel::corpus::{self, Subject};
-use detached_core::panel::record::{self, End, State};
+use detached_core::panel::record::{End, State};
 use detached_core::panel::run::{self, Start};
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
@@ -85,7 +85,7 @@ pub fn start(
     }
     let c = cx.new(|cx: &mut Context<Corpus>| {
         let mut c = Corpus {
-            pass: run::id(&mode, record::now()),
+            pass: run::id(&mode),
             repo,
             clone: None,
             mode,

@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 
@@ -393,9 +393,13 @@ pub fn copy_local(repo: &Path, tree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A run's id: its mode and the time, safe in a branch name.
-pub fn id(mode: &str, ms: i64) -> String {
-    let t = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
+/// A run's id: its mode and the time, safe in a branch name; a run started in the same
+/// millisecond as the last one takes the next.
+pub fn id(mode: &str) -> String {
+    static LAST: Mutex<i64> = Mutex::new(0);
+    let mut last = LAST.lock().unwrap();
+    *last = super::record::now().max(*last + 1);
+    let t = chrono::DateTime::from_timestamp_millis(*last).unwrap_or_default();
     format!("{mode}-{}", t.format("%Y%m%d-%H%M%S-%3f"))
 }
 
