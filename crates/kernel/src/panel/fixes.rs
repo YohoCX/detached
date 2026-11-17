@@ -141,7 +141,7 @@ impl Fix {
         }));
         let tree = m.tree.display().to_string();
         let mut spec = Spec::new(&CLAUDE, &tree, Kind::Chat);
-        (spec.mode, spec.mcp) = ("bypassPermissions".into(), m.mcp);
+        (spec.mode, spec.mcp) = (CLAUDE.full.into(), m.mcp);
         let seat = Seat {
             who: Identity::of(Kind::Chat, &tree),
             accept: Some(self.repo.clone()),

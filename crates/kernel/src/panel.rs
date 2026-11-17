@@ -31,6 +31,8 @@ pub struct Task {
     pub track: Option<Track>,
     /// Its subject is trusted as it is now, so its findings can be fixed.
     pub trusted: bool,
+    /// Why its subject cannot be read as it is now: its branch is gone, say.
+    pub unread: Option<String>,
     /// A repo or workspace mark covers its repo.
     pub marked: bool,
     /// A finding is fix ready and the subject's head moved since the latest round.
@@ -138,8 +140,11 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                             .map(|w| format!("git diff {}..{}", head(w[0].1), head(w[1].1)))
                             .map(|range| panel::fix(&core, &repo, &range));
                         let last = runs.last().and_then(|(_, s)| s.started.as_ref());
-                        let (trusted, moved) =
-                            last.map_or((false, false), |s| fix::now(&core, &s.subject));
+                        let now = last.map(|s| fix::now(&core, &s.subject));
+                        let (trusted, moved) = match &now {
+                            Some(Ok(t)) => *t,
+                            _ => (false, false),
+                        };
                         let waits = track.threads.iter().any(|t| t.fate == Fate::FixReady);
                         let mut fixing = BTreeMap::new();
                         for (run, s) in &runs {
@@ -176,6 +181,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 due: moved && waits,
                                 track: Some(track),
                                 trusted,
+                                unread: now.and_then(|n| n.err()).map(|e| e.to_string()),
                                 marked: detached_core::panel::marks::covers(&core, &repo),
                                 fixing,
                             },
@@ -200,6 +206,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                                 threads: task.threads,
                                 track: None,
                                 trusted: false,
+                                unread: None,
                                 marked: false,
                                 due: false,
                                 fixing: BTreeMap::new(),

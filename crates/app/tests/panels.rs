@@ -1286,6 +1286,22 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
     wait_until(&mut app, |cx| cx.find("panel.finding.f1-1").is_some());
     app.click("panel.finding.f1-1");
     wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
+
+    // A subject branch gone reads as gone, not as untrusted.
+    let head = app.sb.git(&repo, &["rev-parse", "origin/feat"]);
+    app.sb
+        .git(&repo, &["update-ref", "-d", "refs/remotes/origin/feat"]);
+    let path = repo.display().to_string();
+    app.update(|_, cx| kernel::panel::refresh(cx, &path));
+    wait_until(&mut app, |cx| {
+        label(cx, "panel.fix.unread").is_some_and(|l| l.contains("No branch origin/feat"))
+    });
+    assert!(app.find("panel.fix.untrusted").is_none() && app.find("panel.fix").is_some());
+    app.sb
+        .git(&repo, &["update-ref", "refs/remotes/origin/feat", &head]);
+    app.update(|_, cx| kernel::panel::refresh(cx, &path));
+    wait_until(&mut app, |cx| cx.find("panel.fix.unread").is_none());
+
     quiet(&app.sb);
     app.click("panel.fix");
     start_fix(&mut app, "write a.txt let x = 2;commit fix x");

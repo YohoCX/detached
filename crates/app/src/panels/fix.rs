@@ -281,7 +281,17 @@ impl Render for FixCard {
             if !s.found(&self.finding).is_some_and(record::verified) {
                 return out;
             }
-            if !task.is_some_and(|k| k.trusted) {
+            let unread = task.and_then(|k| k.unread.clone());
+            if let Some(why) = &unread {
+                out = out.child(
+                    div()
+                        .id("panel.fix.unread")
+                        .test_support()
+                        .aria_label(why.clone())
+                        .text_color(t.warning)
+                        .child(why.clone()),
+                );
+            } else if !task.is_some_and(|k| k.trusted) {
                 return out.child(self.untrusted(cx));
             }
             return out.child(
@@ -296,9 +306,8 @@ impl Render for FixCard {
             live::Phase::Failed(e) => Some(e.clone()),
             _ => None,
         });
-        let going = check.is_some_and(|c| {
-            c.passed.is_none() && failed.is_none() && (c.recorded || panel.is_some())
-        });
+        let going =
+            check.is_some_and(|c| c.passed.is_none() && failed.is_none() && panel.is_some());
         let commits = state.map_or(&[][..], |s| &s.commits[..]);
         let said = match (&phase, check) {
             (Some(Phase::Working), _) => "working".to_string(),
@@ -308,6 +317,7 @@ impl Render for FixCard {
             (Some(Phase::Checking), None) => "re-checking".into(),
             (_, Some(c)) if c.passed == Some(true) => "re-check passed: fix ready".into(),
             (_, Some(c)) if c.passed == Some(false) => "the re-check did not pass".into(),
+            (_, Some(c)) if c.recorded => "the re-check was interrupted".into(),
             (_, Some(_)) => "the re-check did not start".into(),
             (Some(Phase::Ended(why)), None) => why.clone(),
             _ if commits.is_empty() => "no commits".into(),
