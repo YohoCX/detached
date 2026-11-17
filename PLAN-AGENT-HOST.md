@@ -1435,6 +1435,7 @@ told otherwise.
 The Claude-on-ACP code went too: the `claudeCode` `_meta` with its `.env` deny, the extra-usage
 match and the config options on new and load; `CLAUDE_ACP` is gone, and the fake-ACP tests and
 `fake_acp` take Codex's shape.
+Part 0's rerun is dropped: `spikes/claude-direct` and `h4c-evidence.yml` are gone.
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
