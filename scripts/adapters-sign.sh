@@ -1,8 +1,9 @@
 #!/bin/sh
-# Signs adapters/adapters.json with the catalog's own minisign key, which stays on this machine
-# outside the repo; the first run makes the key and prints its public half for core's CATALOG_KEY.
-# With an entry.json from an adapters-* release, the entry goes in first, replacing the same name
-# and version. Every signing raises the serial by one.
+# Signs adapters/adapters.json with the catalog's own minisign key, kept outside the repo: CI's
+# fallback, and what adapters.yml runs with the key from ADAPTERS_SIGNING_KEY. The first run makes
+# the key and prints its public half for core's CATALOG_KEY. With an entry.json from an adapters-*
+# release, the entry goes in first, replacing the same name and version. Every signing raises the
+# serial by one.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -17,7 +18,7 @@ done
 if [ ! -f "$key" ]; then
   mkdir -p "$dir"
   chmod 700 "$dir"
-  minisign -G -p "$pub" -s "$key"
+  minisign -G -W -p "$pub" -s "$key"
   echo "Set CATALOG_KEY in crates/core/src/adapters.rs to:"
   sed -n 2p "$pub"
   exit 0

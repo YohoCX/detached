@@ -35,8 +35,8 @@ make build    # the packages for this OS under target/package (scripts/package.s
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
 make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses
 make release  # tags v<version in Cargo.toml>; release.yml builds, signs and publishes it
-make adapters-sign  # the owner's machine: signs adapters/adapters.json (entry=<entry.json> adds one);
-                    # the first run makes the catalog's key outside the repo
+make adapters-sign  # the owner's fallback to adapters.yml, which signs in CI: signs
+                    # adapters/adapters.json (entry=<entry.json> adds one); the first run makes the key
 ```
 
 Keep this list in sync with the Makefile.

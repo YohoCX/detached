@@ -315,9 +315,11 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - **Claude's `min_cli` and `blocked_cli`. Open** (the decision's choice 2). Recommended: a `cli`
     list of its own in the same signed file, read by every app version, under the same key, serial
     and fetch. The floor is the oldest `claude` the vetting passes on.
-  - **Signing stays off CI.** The catalog's minisign key lives on the owner's machine, and
-    `make adapters-sign` signs the file there. `adapters.yml` only uploads a catalog that is
-    already signed and committed, so no secret and no model credential is ever in CI.
+  - **Signing in CI** ([decision](docs/decisions/2026-11-17-catalog-signed-in-ci.md)).
+    `adapters.yml` signs the catalog with the `ADAPTERS_SIGNING_KEY` secret in the `adapters`
+    environment, after adding every `adapters-*` release's entry it lacks, commits the catalog to
+    main and uploads it.
+    `make adapters-sign` is the manual fallback. No model credential is ever in CI.
   - **Vetting of `claude`** (H4c) runs daily, since the CLI releases most days: the floor and the
     latest `claude`, through Claude's backend at main and at the latest release tag, on every OS
     of §17.
@@ -325,7 +327,7 @@ Node-free, from the Settings "Agents" page; built in step H3.
       the tag is older than 0.6.0, the first with Claude's backend: until then vetting runs at
       main alone.
     - A failure opens an issue for the owner; nothing is published by itself. The owner decides
-      whether to add that version to `blocked_cli`, signs and pushes.
+      whether to add that version to `blocked_cli` and pushes; CI signs.
   - **The vetted version is the floor**: the `cli` list's `min_cli`, else the manifest's. It is
     the one `claude` every day's vetting passes on, so it is the version a message names. No
     "last vetted" value is kept anywhere; a floor that fails is the owner's to raise.
@@ -355,7 +357,8 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - A new version starts its own adapter process.
   - Running sessions finish on the old one.
   - The previous version is kept for rollback; older ones are removed.
-- **CI vetting**, with no model calls and no secrets in CI (the owner's rule):
+- **CI vetting**, with no model calls and no model credentials in CI; the release and catalog
+  signing keys are secrets of the `release` and `adapters` environments (the owner's rule):
   - `claude`: installed with the official installer and run through Claude's backend against the
     scripted fake Messages API (§17) on every OS of §17: H4c's real tests.
   - an ACP entry, on each catalog bump: download and verify; Codex's `session/new` runs on a
@@ -1040,8 +1043,9 @@ settings, ops and invalidation findings.
 PLAN-FOUNDATION §12's gate, with these changes:
 - Branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`.
 - **revmux stays.** From P3 on, a step also runs through the panels' gate for comparison.
-- **Real-agent tests need no credentials.** The owner's rule is no model calls and no secrets in
-  CI.
+- **Real-agent tests need no credentials.** The owner's rule is no model calls and no model
+  credentials in CI; the release and catalog signing keys are secrets of the `release` and
+  `adapters` environments.
   - They drive the user's real `claude` through Claude's backend against a scripted fake Messages
     API: the spike's `src/fake.rs`, pointed at by `ANTHROPIC_BASE_URL`. The CLI runs the scripted
     tool calls with its real permissions and sandbox. Through H4 they ran through the real
