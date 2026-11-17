@@ -1586,7 +1586,7 @@ Work:
 
 Tests:
 - in `make check`:
-  - **the seam's ten of H4's sixteen**, one body each on both fakes, each fake's own words
+  - **the seam's nine of H4's sixteen**, one body each on both fakes, each fake's own words
     aside:
     - `a_turn_streams_lists_what_it_changed_and_goes_back`;
     - `cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks`;
@@ -1595,19 +1595,17 @@ Tests:
     - `a_load_of_a_closing_session_waits_for_its_close`;
     - `a_reload_waits_for_a_load_ended_or_dropped_while_it_started`;
     - `always_allow_stays_a_host_rule`;
-    - `out_of_extra_usage_names_the_pool_and_the_fallback`;
     - `a_trust_item_changed_mid_turn_ends_the_session_and_agents_md_does_not`, on a trust path
       the backend does not block;
     - `a_trust_change_before_the_prompt_went_out_ends_the_session_unsent`;
-  - **ACP's own six**, on the fake ACP agent alone, the first two in the kernel and in
+  - **ACP's own five**, on the fake ACP agent alone, the first two in the kernel and in
     `crates/acp` as part a split them:
     - `a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_anew`;
     - `an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly`;
     - `an_adapter_crash_ends_every_session_on_it_with_its_cause`;
     - `an_old_adapter_keeps_its_sessions_while_a_new_version_starts`;
-    - `an_untrusted_repo_s_chat_loads_the_user_s_settings_and_a_participant_none`, which reads
-      `_meta`;
-    - `the_adapter_gets_only_allowed_names_and_reaches_the_api_through_them`;
+    - `the_adapter_gets_only_allowed_names`: under core's env with a `GITHUB_TOKEN` and a
+      `DETACHED_SECRET`, Codex's adapter sees the allowlist, `CODEX_HOME` and `CODEX_PATH` alone;
   - **Claude's own**, on the fake CLI, the first three from its reported argv and env:
     - the env holds only allowlisted and manifest names under a parent env full of others, a
       `GITHUB_TOKEN` and an env-store value among them, a set `CLAUDE_CODE_USE_FOUNDRY` passes,
@@ -1623,6 +1621,7 @@ Tests:
       whose title is empty;
     - an unknown frame and an `unsupported_request` leave the session running, without that
       capability;
+    - `out_of_extra_usage_names_the_pool_and_the_fallback`;
     - a CLI gone mid-turn ends its own session and no other;
     - a close with a command in front leaves no process and never sends SIGKILL first; a killed
       host leaves none (both against the fake's own-group child);

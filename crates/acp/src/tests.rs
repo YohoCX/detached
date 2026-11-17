@@ -225,7 +225,8 @@ fn a_killed_host_leaves_no_process() {
     }
 }
 
-/// Core on a sandbox, `fake_acp` installed as Codex's adapter at 1.0.0 and as its CLI, Codex on.
+/// Core on a sandbox, `fake_acp` installed as Codex's adapter at 1.0.0 and as its CLI, Codex on,
+/// `CODEX_HOME` empty so the caller's own is never touched.
 fn sandbox() -> Sandbox {
     let sb = Sandbox::new();
     let fake = testutil::fake().display().to_string();
@@ -235,6 +236,8 @@ fn sandbox() -> Sandbox {
     };
     sb.state.set_block(BLOCK, config).unwrap();
     testutil::install(&sb.state, "1.0.0");
+    let blank = ("CODEX_HOME".into(), String::new());
+    sb.state.env.write().unwrap().vars.push(blank);
     sb
 }
 
@@ -641,8 +644,14 @@ fn codex() -> Sandbox {
     let sb = sandbox();
     let home = sb.path("codex-home");
     std::fs::create_dir_all(&home).unwrap();
-    let home = ("CODEX_HOME".into(), home.display().to_string());
-    sb.state.env.write().unwrap().vars.push(home);
+    let mut env = sb.state.env.write().unwrap();
+    let (_, v) = env
+        .vars
+        .iter_mut()
+        .find(|(k, _)| k == "CODEX_HOME")
+        .unwrap();
+    *v = home.display().to_string();
+    drop(env);
     sb
 }
 

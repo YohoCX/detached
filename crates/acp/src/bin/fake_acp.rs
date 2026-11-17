@@ -10,8 +10,9 @@
 //!   first MCP server's tool;
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
-//! - `params` says all of its `session/new` or `session/load`; `model` its model and mode, `effort`
-//!   its effort; `home` the names in its `CODEX_HOME`; `sessions` the count of its open sessions;
+//! - `env` says the names in its env; `params` all of its `session/new` or `session/load`; `model`
+//!   its model and mode, `effort` its effort; `home` the names in its `CODEX_HOME`; `sessions` the
+//!   count of its open sessions;
 //! - `write <path> <text>` writes a file under the cwd;
 //! - `hold-close` answers the session's close only once the next prompt, of any session, comes;
 //! - `run <text>` runs a command whose output, `<text>` and a newline twice, comes in pieces beside
@@ -486,6 +487,13 @@ impl Turn<'_> {
                 std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
                 let child = cmd.spawn().map_err(err)?;
                 self.say(&format!("child {}", child.id()));
+            }
+            "env" => {
+                let mut names: Vec<String> = std::env::vars_os()
+                    .map(|(k, _)| k.to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                self.say(&names.join(","));
             }
             "params" => self.say(&self.session(|s| s.params.to_string())),
             "hold-close" => {

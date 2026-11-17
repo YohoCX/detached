@@ -165,7 +165,7 @@ pub(crate) fn boot_on(
     env.vars
         .extend(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     env.vars.extend(dirs.map(|(k, v)| (k.to_string(), v)));
-    for k in proc::ALLOWED.iter().chain(CLAUDE.env) {
+    for k in proc::ALLOWED.iter().chain(CLAUDE.env).chain(CODEX.env) {
         if !OS.contains(k) && !env.vars.iter().any(|(n, _)| n == k) {
             env.vars.push((k.to_string(), String::new()));
         }
@@ -604,6 +604,25 @@ fn api() -> (String, std::sync::mpsc::Receiver<String>) {
 }
 
 #[gpui::test]
+fn the_adapter_gets_only_allowed_names(cx: &mut TestAppContext) {
+    let f = boot(
+        cx,
+        &[
+            ("GITHUB_TOKEN", "ghp-not-for-agents"),
+            ("DETACHED_SECRET", "nope"),
+        ],
+    );
+    let names = turn(&open(&f, Kind::Chat, cx), "env", cx);
+    let allowed: Vec<&str> = (proc::ALLOWED.iter().chain(CODEX.env))
+        .copied()
+        .chain([CODEX.cli_var])
+        .collect();
+    let names: Vec<&str> = names.split(',').collect();
+    assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
+    assert!(names.contains(&"CODEX_HOME") && names.contains(&CODEX.cli_var));
+}
+
+#[gpui::test]
 fn an_old_adapter_keeps_its_sessions_while_a_new_version_starts(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let old = open(&f, Kind::Chat, cx);
@@ -779,8 +798,10 @@ fn boot_codex(cx: &mut TestAppContext) -> Fixture {
         install(core, "1.0.0");
         let home = core.data_dir.join("codex-home");
         std::fs::create_dir_all(&home).unwrap();
-        let home = ("CODEX_HOME".into(), home.display().to_string());
-        core.env.write().unwrap().vars.push(home);
+        let mut env = core.env.write().unwrap();
+        env.vars.retain(|(k, _)| k != "CODEX_HOME");
+        env.vars
+            .push(("CODEX_HOME".into(), home.display().to_string()));
     })
 }
 
