@@ -239,7 +239,12 @@ impl Render for TaskView {
                     .truncate()
                     .child(header),
             );
-            if let Some(track) = &task.track {
+            // An issue's or a document's task has no loop: no round gates it.
+            if let Some(track) = task
+                .track
+                .as_ref()
+                .filter(|_| rounds.next(&self.task).is_some())
+            {
                 content = content.child(self.looping(track, rounds, cx));
             }
             let now = std::time::SystemTime::now()

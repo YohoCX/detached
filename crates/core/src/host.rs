@@ -24,6 +24,7 @@ pub enum Act {
     ReportFinding(Finding),
     ReportVerdict(Verdict),
     ReportGroup(Group),
+    ReportOutcome(Outcome),
     Done(Done),
     Proc(ProcAct),
     Send(SendAct),
@@ -36,6 +37,7 @@ impl Act {
             Act::ReportFinding(_) => "report_finding",
             Act::ReportVerdict(_) => "report_verdict",
             Act::ReportGroup(_) => "report_group",
+            Act::ReportOutcome(_) => "report_outcome",
             Act::Done(_) => "done",
             Act::Proc(_) => "proc",
             Act::Send(_) => "send",
@@ -101,6 +103,63 @@ pub enum Judged {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub ids: Vec<String>,
+}
+
+/// A triage's outcome: an argument for each of the six answers, and the one it recommends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub recommend: Answer,
+    pub accept: String,
+    pub decline: String,
+    pub defer: String,
+    pub ask_author: String,
+    pub split: String,
+    pub duplicate: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    Accept,
+    Decline,
+    Defer,
+    AskAuthor,
+    Split,
+    Duplicate,
+}
+
+impl Answer {
+    pub fn text(self) -> &'static str {
+        match self {
+            Answer::Accept => "Accept",
+            Answer::Decline => "Decline",
+            Answer::Defer => "Defer",
+            Answer::AskAuthor => "Ask the author",
+            Answer::Split => "Split",
+            Answer::Duplicate => "Duplicate",
+        }
+    }
+}
+
+impl Outcome {
+    /// Each answer with its argument, in the order the maintainer reads them.
+    pub fn answers(&self) -> [(Answer, &str); 6] {
+        [
+            (Answer::Accept, &self.accept),
+            (Answer::Decline, &self.decline),
+            (Answer::Defer, &self.defer),
+            (Answer::AskAuthor, &self.ask_author),
+            (Answer::Split, &self.split),
+            (Answer::Duplicate, &self.duplicate),
+        ]
+    }
+
+    pub fn check(&self) -> Result<(), String> {
+        match self.answers().iter().find(|(_, a)| a.trim().is_empty()) {
+            Some((a, _)) => Err(format!("{} has no argument: argue each answer.", a.text())),
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -210,8 +269,24 @@ fn tools() -> Value {
             "description": "The findings' ids, the best-described first"}}),
         &["ids"],
     );
+    let answer = |d: &str| s(&format!("The case for {d}"));
+    let outcome = object(
+        json!({"recommend": one_of(&["accept", "decline", "defer", "ask_author", "split", "duplicate"]),
+            "accept": answer("accepting it"), "decline": answer("declining it"),
+            "defer": answer("deferring it"), "ask_author": answer("asking its author first"),
+            "split": answer("splitting it"), "duplicate": answer("closing it as a duplicate, and of what")}),
+        &[
+            "recommend",
+            "accept",
+            "decline",
+            "defer",
+            "ask_author",
+            "split",
+            "duplicate",
+        ],
+    );
     let done = object(
-        json!({"nothing_found": {"type": "boolean"}, "note": s("Anything to add")}),
+        json!({"nothing_found": {"type": "boolean"}, "note": s("Your case, or anything to add")}),
         &["nothing_found"],
     );
     let proc = object(
@@ -234,9 +309,9 @@ fn tools() -> Value {
         &["query"],
     );
     let act = object(
-        json!({"action": one_of(&["report_finding", "report_verdict", "report_group", "done",
-                "proc", "send", "watch"]),
-            "args": {"anyOf": [finding, verdict, group, done, proc, send, watch],
+        json!({"action": one_of(&["report_finding", "report_verdict", "report_group",
+                "report_outcome", "done", "proc", "send", "watch"]),
+            "args": {"anyOf": [finding, verdict, group, outcome, done, proc, send, watch],
                 "description": "The action's arguments"}}),
         &["action", "args"],
     );
@@ -248,7 +323,7 @@ fn tools() -> Value {
             the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
-            verdict on a finding, a group of duplicate findings, or `done` at the end of the work, which every turn of a review \
+            verdict on a finding, a group of duplicate findings, a triage's outcome, or `done` at the end of the work, which every turn of a review \
             ends with; `proc` starts, stops or restarts a defined process where its definition \
             lets agents; `send` messages a session of this one's group; `watch` puts one message \
             into this session's inbox when a process is ready or a pipeline ends."},
@@ -324,5 +399,26 @@ mod tests {
             panic!("{got:?}")
         };
         assert_eq!(f.name(), "report_finding");
+    }
+
+    #[test]
+    fn an_outcome_argues_all_six_answers() {
+        let mut args = json!({"recommend": "split", "accept": "a", "decline": "d", "defer": "f",
+            "ask_author": "q", "split": "s", "duplicate": "none"});
+        let act = |args: &Value| {
+            serde_json::from_value::<Act>(json!({"action": "report_outcome", "args": args}))
+        };
+        let Ok(Act::ReportOutcome(o)) = act(&args) else {
+            panic!("{:?}", act(&args))
+        };
+        assert_eq!(o.check(), Ok(()));
+        assert_eq!(o.answers()[4], (Answer::Split, "s"));
+        let blank = Outcome {
+            ask_author: " ".into(),
+            ..o
+        };
+        assert!(blank.check().unwrap_err().starts_with("Ask the author"));
+        args.as_object_mut().unwrap().remove("duplicate");
+        assert!(act(&args).unwrap_err().to_string().contains("duplicate"));
     }
 }

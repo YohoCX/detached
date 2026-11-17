@@ -1442,3 +1442,41 @@ fn ghe_graphql_review_threads_resolve_and_pr_mutations() {
     assert_eq!(pr(&f)["auto_merge"], json!({ "merge_method": "merge" }));
     assert!(on_pr("convertPullRequestToDraft", "PR_9_1")["errors"].is_array());
 }
+
+#[test]
+fn issues_forks_and_a_seeded_repo_s_files() {
+    let dir = std::env::temp_dir().join(format!("forge-fake-git-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("info")).unwrap();
+    std::fs::write(dir.join("info/refs"), "abc\trefs/heads/main\n").unwrap();
+    let mut s = seed();
+    let issue = json!({ "number": 3, "title": "Tabs", "description": "Please", "author": "ann",
+        "comments": [{ "author": "bob", "body": "+1" }] });
+    s["projects"][0]["issues"] = json!([issue.clone()]);
+    s["projects"][0]["git"] = json!(dir.display().to_string());
+    s["projects"][1]["issues"] = json!([issue]);
+    s["projects"][1]["mrs"][0]["source"] = json!("fork/app");
+    s["projects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "forge": "ghe", "path": "fork/app", "defaultBranch": "main" }));
+    let f = Forge::start().unwrap();
+    f.reset(serde_json::from_value(s).unwrap());
+    let gl = "/gitlab/api/v4/projects/group%2Fapp/issues/3";
+    assert_eq!(get(&f, gl, &[GL]).1["author"]["username"], "ann");
+    assert_eq!(get(&f, &format!("{gl}/notes"), &[GL]).1[0]["body"], "+1");
+    let gh = "/ghe/api/v3/repos/owner/app";
+    assert_eq!(
+        get(&f, &format!("{gh}/issues/3"), &[GH]).1["user"]["login"],
+        "ann"
+    );
+    let comments = get(&f, &format!("{gh}/issues/3/comments"), &[GH]).1;
+    assert_eq!(comments[0]["user"]["login"], "bob");
+    let pr = get(&f, &format!("{gh}/pulls/1"), &[GH]).1;
+    assert_eq!(pr["head"]["repo"]["full_name"], "fork/app");
+    let (status, _, refs) = get_text(&f, "/gitlab/group/app.git/info/refs", &[]);
+    assert_eq!((status, refs.as_str()), (200, "abc\trefs/heads/main\n"));
+    assert_eq!(get_text(&f, "/gitlab/group/app.git/../x", &[]).0, 404);
+    assert_eq!(get_text(&f, "/ghe/owner/app.git/info/refs", &[]).0, 404);
+    assert!(f.requests().iter().all(|r| !r.path.contains(".git/")));
+    std::fs::remove_dir_all(dir).unwrap();
+}

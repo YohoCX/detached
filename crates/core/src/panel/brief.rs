@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::mode::{Mode, Role};
-use super::record::{Found, Subject};
+use super::record::{Found, Of, Subject};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::runner::{self, Kind, Opts};
@@ -33,10 +33,12 @@ pub fn subject(env: &Env, s: &Subject) -> Result<Value> {
             Some(json!({"sha": f.next()?, "author": f.next()?, "subject": f.next()?}))
         })
         .collect();
-    Ok(
-        json!({"branch": s.branch, "base": s.base, "base_sha": s.base_sha, "head_sha": s.head_sha,
-        "commits": commits}),
-    )
+    let mut v = json!({"branch": s.branch, "base": s.base, "base_sha": s.base_sha,
+        "head_sha": s.head_sha, "commits": commits});
+    if let Of::Document { path } = &s.of {
+        v["document"] = json!(path);
+    }
+    Ok(v)
 }
 
 fn data(v: &Value) -> String {
@@ -48,10 +50,19 @@ fn data(v: &Value) -> String {
 
 /// A finder's brief; `export` is the repo's path when its tree is an export with no git.
 pub fn find(mode: &Mode, role: &Role, subject: &Value, export: Option<&str>) -> String {
+    let diff = subject["base_sha"] != subject["head_sha"];
     let tree = match export {
+        None if !diff => {
+            "Your working tree is the current directory, checked out at `head_sha`.".to_string()
+        }
         None => "Your working tree is the current directory, checked out at `head_sha`. The diff \
             to review is `git diff base_sha head_sha`."
             .to_string(),
+        Some(repo) if !diff => format!(
+            "The current directory holds the files at `head_sha`, with no git. Read the history \
+             with `detached_read`: `{{ repo(path: {repo:?}) {{ log(range: \"<head_sha>\", limit: 20) }} }}`, \
+             and `search` beside `log`."
+        ),
         Some(repo) => format!(
             "The current directory holds the files at `head_sha`, with no git. Read the diff and \
              the history with `detached_read`: `{{ repo(path: {repo:?}) {{ diff(base: \"<base_sha>\", \
@@ -79,6 +90,30 @@ pub fn merge(role: &Role, found: &[&Found]) -> String {
         "{}\n\nFinding no duplicates is a valid answer.\n\n{}",
         role.text,
         data(&json!({"findings": all}))
+    )
+}
+
+/// The synthesizer's brief: the subject, every finding and each finder's case.
+pub fn synthesize(
+    role: &Role,
+    subject: &Value,
+    found: &[&Found],
+    cases: &[(String, String)],
+) -> String {
+    let findings: Vec<Value> = (found.iter())
+        .map(|f| {
+            json!({"file": f.finding.file, "line": f.finding.line, "severity": f.finding.severity,
+            "title": f.finding.title, "body": f.finding.body, "by": f.participant})
+        })
+        .collect();
+    let cases: Vec<Value> = (cases.iter())
+        .map(|(by, case)| json!({"by": by, "case": case}))
+        .collect();
+    let all = json!({"subject": subject, "findings": findings, "cases": cases});
+    format!(
+        "{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
+        role.text,
+        data(&all)
     )
 }
 
@@ -266,6 +301,7 @@ mod tests {
             base: "main~1".into(),
             base_sha: base,
             head_sha: head,
+            of: Default::default(),
         };
         let v = subject(&sb.state.env(), &s).unwrap();
         let mode = super::super::mode::parse_mode(

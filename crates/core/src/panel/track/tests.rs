@@ -65,6 +65,7 @@ impl Rounds {
             base: "main".into(),
             base_sha: head.clone(),
             head_sha: head,
+            of: Default::default(),
         };
         let mut events = vec![
             Event::RunStarted(Started {

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::record::Subject;
+use super::record::{Of, Subject};
 use crate::env::Env;
 use crate::error::Result;
 use crate::git::runner::{self, Kind, Opts, out};
@@ -130,6 +130,17 @@ fn whole<'a>(core: &AppState, p: &'a Panels, repo: &str) -> Option<(&'a Mark, St
 pub fn classify(core: &AppState, p: &Panels, s: &Subject) -> Result<Trust> {
     let env = core.env();
     let repo = Path::new(&s.repo);
+    if let Of::Mr { remote, fork, .. } = &s.of {
+        let Some((m, why)) = whole(core, p, &s.repo) else {
+            return no("an MR of a repo not marked trusted".into());
+        };
+        let own = m.remote.as_deref().unwrap_or("origin");
+        return match (remote == own, *fork && !m.forks) {
+            (false, _) => no(format!("an MR on {remote}, not on {own}")),
+            (_, true) => no("an MR from a fork, and forks are not included".into()),
+            _ => yes(why),
+        };
+    }
     let mark = |why: String| match branch_mark(&env, p, s) {
         Some(Ok(())) => yes("marked trusted by you".into()),
         Some(Err(dropped)) => no(format!("your mark dropped: {dropped}")),
@@ -333,6 +344,7 @@ mod tests {
                 base: "main".into(),
                 base_sha: String::new(),
                 head_sha: String::new(),
+                of: Default::default(),
             }
         }
 
@@ -428,6 +440,31 @@ mod tests {
                 why: "trusted by workspace Work".into()
             }
         );
+    }
+
+    #[test]
+    fn an_mr_is_trusted_from_the_own_remote_of_a_marked_repo_and_from_a_fork_only_with_forks() {
+        let t = T::new();
+        let mr = |remote: &str, fork: bool| Subject {
+            of: Of::Mr {
+                number: 7,
+                title: "t".into(),
+                author: "a".into(),
+                url: String::new(),
+                remote: remote.into(),
+                head_ref: "refs/merge-requests/7/head".into(),
+                fork,
+            },
+            ..t.subject("feature", true)
+        };
+        let trusted = |p: &Panels, s: &Subject| classify(&t.sb.state, p, s).unwrap().trusted;
+        let mut p = t.whole();
+        assert!(trusted(&p, &mr("origin", false)), "a colleague's MR");
+        assert!(!trusted(&p, &mr("origin", true)), "a fork's MR");
+        assert!(!trusted(&p, &mr("upstream", false)), "another remote's");
+        p.repos[0].forks = true;
+        assert!(trusted(&p, &mr("origin", true)));
+        assert!(!trusted(&Panels::default(), &mr("origin", false)));
     }
 
     #[test]

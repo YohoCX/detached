@@ -283,6 +283,28 @@ impl Forge for GitLab {
         self.full(p, &self.mr_json(p, n)?, &self.api.get(&pr(p))?)
     }
 
+    fn issue(&self, p: &Project, n: u64) -> Result<Issue> {
+        let v = self.api.get(&format!("{}/issues/{n}", pr(p)))?;
+        let path = format!("{}/issues/{n}/notes?sort=asc&per_page=100", pr(p));
+        let notes = (self.api.list(&path, None, usize::MAX)?.iter())
+            .filter(|n| n["system"] != true)
+            .map(|n| Note {
+                id: n["id"].to_string(),
+                author: s(&n["author"]["username"]),
+                body: s(&n["body"]),
+                time: time(&n["created_at"]),
+            })
+            .collect();
+        Ok(Issue {
+            number: n,
+            title: s(&v["title"]),
+            description: s(&v["description"]),
+            author: s(&v["author"]["username"]),
+            web_url: s(&v["web_url"]),
+            notes,
+        })
+    }
+
     fn threads(&self, p: &Project, n: u64) -> Result<Vec<Thread>> {
         let head = self.mr_json(p, n)?["diff_refs"]["head_sha"].clone();
         let path = format!("{}/merge_requests/{n}/discussions?per_page=100", pr(p));

@@ -233,11 +233,9 @@ impl RunView {
         let key = selection_key(&self.repo, &self.task, &self.round);
         let id: Option<String> = kernel::ui_state::get(&key, cx);
         if let Some(id) = id {
-            let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
-                r.runs
-                    .iter()
-                    .find(|r| r.task == self.task && r.round == self.round)
-            });
+            // The run as the view draws it: a live run's state leads its record's reload.
+            let run = self.run(cx);
+            let run = run.as_ref();
             let range = run.and_then(|r| r.reviewed_range.clone());
             let f = run
                 .and_then(|r| {
@@ -256,7 +254,7 @@ impl RunView {
                     self.mode = mode;
                     kernel::ui_state::set("panels.mode", mode, cx);
                 }
-                None if self.rounds.read(cx).value.is_some() => {
+                None if run.is_some() => {
                     self.selected = None;
                     self.selected_data = None;
                     self.markdown = None;
@@ -269,11 +267,8 @@ impl RunView {
     }
 
     pub fn select(&mut self, f: &Finding, cx: &mut Context<Self>) {
-        let run = self.rounds.read(cx).value.as_ref().and_then(|r| {
-            r.runs
-                .iter()
-                .find(|r| r.task == self.task && r.round == self.round)
-        });
+        let run = self.run(cx);
+        let run = run.as_ref();
         let range = run.and_then(|r| r.reviewed_range.clone());
         if run.is_some_and(|r| r.set_aside.iter().any(|a| a.id == f.id)) {
             self.show_aside = true;
@@ -547,6 +542,7 @@ impl Render for RunView {
             .overflow_hidden()
             .gap(GAP);
         if let Some(run) = run {
+            let outcome = (record.as_ref()).and_then(|s| super::outcome::render(s, &run, cx));
             if self.selected.is_none()
                 && self.mode == 2
                 && let Some(f) = run.findings.first()
@@ -720,7 +716,16 @@ impl Render for RunView {
                         super::timeline::render(&run, cx)
                     })
                     .into_any_element(),
-                _ => self.findings(&run, cx),
+                _ => div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .gap(GAP)
+                    .children(outcome)
+                    .child(self.findings(&run, cx))
+                    .into_any_element(),
             });
         } else {
             content = content.child(error.unwrap_or_else(|| "Loading round…".into()));

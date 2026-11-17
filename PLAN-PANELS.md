@@ -831,6 +831,49 @@ The owner checks: the same on a real branch in a trusted workspace.
 
 ### Step P5. Triage and plan review
 
+**Status (2026-11-17): built, with the review round's fixes; waiting for the owner's check.**
+- Built: a subject is a branch, an MR, an issue or a document (`record::Of`, `run::Over`). An MR
+  is read from the forge with its thread. `remotes::fetch_mr` fetches its head and target with an
+  empty refmap and no tags, so no ref of the owner's moves, under the run's cancel; a preview
+  fetches only when the repo lacks them, and the Panels list's reload never fetches. At the run's
+  start the head is fetched again and kept in `refs/detached/subjects/<run>` until teardown or the
+  close of an interrupted run. The run refuses a head other than the one the start form's preview
+  showed (`Start::head`). An issue and a document are read at a branch's head, with no diff. The
+  MR's or issue's title, description and thread join the subject's JSON-quoted data; the header
+  says line 5 is a mitigation. MR trust: untrusted in an unmarked repo; trusted from the mark's own
+  remote when the forge names its source as the MR's own project, so a deleted fork, which GitHub no
+  longer names, counts as a fork; a fork's only with "include forks". The `synthesize` stage and
+  `report_outcome` (the six answers, each argued, and the one recommended; `Identity::may` refuses
+  a blank one); a `done` without it fails the attempt, and `claude_only` replaces a non-Claude
+  synthesizer too. The built-in `triage` (facts, thesis, antithesis, cost, then the synthesizer)
+  and `plan-review` (consistency, gaps, risks, feasibility; find → merge → verify) modes and their
+  roles. The start form picks Branch, MR, Issue or Document and the modes each takes; the Findings
+  tab shows a triage's six answers and the finders' cases (or that it ended without them), a plan
+  review's verified edits with Copy edits. The forge reads issues (`forge::get_issue`); the forge
+  fake seeds issues, fork and deleted-fork MRs, and serves a seeded bare repo over git's dumb HTTP,
+  so the MR fetch is real in tests.
+- Tests: `kernel::panel::tests::triage` on `fake_claude` and the forge fake (a colleague's MR gets six
+  answers, its brief and the synthesizer's hold the hostile description and commit as quoted data
+  under the label, its head is fetched and no ref of the repo moved, the run's own gone; an issue's
+  comments; a synthesis without an outcome fails; MR trust by mark, fork and forks, and a deleted
+  fork's PR on GitHub is untrusted; a fork's MR runs sandboxed; a cancel stops an MR's fetch; a head
+  other than the one shown is refused; a plan review ends with a verified edit), the next round
+  (none for an issue or a document), `run` (task names, `claude_only`), `remotes` (the MR fetch
+  moves no ref), `marks` (MR trust), `host` (the outcome's six answers), `forge::tests` (issues on
+  both forges), the fake's own, `tests/panels.rs` (an MR triage from the Panels app shows the six
+  answers, and the MR's Fix offers no Merge and keeps its branch), and on the real `claude` against
+  the fake Messages API (`make agent-test`): an MR on the forge fake gets six answers and a plan
+  gets a verified edit.
+- Choices: a triage finder's case is its `done` note, and the facts it reports are findings; the
+  six answers are one object with a field each, so a missing one is a schema error; agent text in
+  the outcome shows as plain text; an MR subject is a remote one, so a Fix keeps its branch for the
+  owner to push; tasks are `mr_<n>`, `issue_<n>` and `doc_<path>`, where a branch's task never
+  holds a `_`; an issue's or a document's task has no loop and no Next round, since nothing gates
+  it; the synthesizer runs on the mode's `synthesizer` model, opus by default.
+- Left: starting a triage from the MR page or a plan review from Files (the Panels app's form does
+  both).
+- The owner checks: triages a real MR; reviews these plans.
+
 Work: MR and issue subjects with their thread (MR heads fetched per
 [the decision](docs/decisions/2026-11-12-write-mr-fetch.md)); a document subject at a SHA; both
 modes and their outcome views.

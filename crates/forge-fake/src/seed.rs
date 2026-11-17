@@ -19,6 +19,12 @@ pub struct Project {
     pub mrs: Vec<Mr>,
     #[serde(default)]
     pub pipelines: Vec<Pipeline>,
+    #[serde(default)]
+    pub issues: Vec<Issue>,
+    /// A bare repo, served read-only over git's dumb HTTP at `<base URL>/<path>.git`; it needs
+    /// `git update-server-info` after each change.
+    #[serde(default)]
+    pub git: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -41,6 +47,26 @@ pub struct Mr {
     pub target_branch: String,
     pub base_sha: String,
     pub head_sha: String,
+    /// The fork it comes from, a project of the seed by path, or a deleted one when the seed lacks
+    /// it; its own project when None.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub description: String,
+    pub author: String,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Comment {
+    pub author: String,
+    pub body: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]

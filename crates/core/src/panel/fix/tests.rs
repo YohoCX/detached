@@ -55,9 +55,10 @@ fn subject(sb: &Sandbox, repo: &Path, branch: &str) -> Subject {
             base: "main".into(),
             base_sha: String::new(),
             head_sha: String::new(),
+            of: Default::default(),
         })
     };
-    run::subject(&sb.state, &s).unwrap()
+    run::subject(&sb.state, &s, None).unwrap()
 }
 
 fn finding() -> host::Finding {

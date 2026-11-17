@@ -83,7 +83,8 @@ pub fn network(
     run(&state.env(), repo, args, Kind::Network, opts)?.ok()
 }
 
-/// `git fetch <remote> <head_ref> <target_branch>` with no destination ref; the fetched head's SHA.
+/// `git fetch <remote> <head_ref> <target_branch>` with no destination ref, and an empty refmap so
+/// no remote-tracking ref moves either; the fetched head's SHA.
 pub fn fetch_mr(
     state: &AppState,
     repo: &Path,
@@ -94,7 +95,14 @@ pub fn fetch_mr(
     progress: &(dyn Fn(&str) + Sync),
 ) -> Result<String> {
     locked(state, repo, || {
-        let args = ["fetch", arg(remote)?, arg(head_ref)?, arg(target_branch)?];
+        let args = [
+            "fetch",
+            "--refmap=",
+            "--no-tags",
+            arg(remote)?,
+            arg(head_ref)?,
+            arg(target_branch)?,
+        ];
         network(state, repo, &args, Some(remote), cancel, progress)?;
         // FETCH_HEAD lists the fetched refs in command-line order.
         let head = out(&state.env(), repo, &["rev-parse", "FETCH_HEAD"], Kind::Read)?;
@@ -133,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn mr_fetch_goes_to_the_given_remote_and_adds_no_ref() {
+    fn mr_fetch_goes_to_the_given_remote_and_moves_no_ref() {
         let sb = Sandbox::new();
         let work = sb.clone_pair("work");
         let (root, seed) = (sb.dir.path(), sb.path("seed"));
@@ -149,6 +157,9 @@ mod tests {
         let target = sb.commit(&seed, "h", "target\n", "target");
         sb.git(&seed, &["push", "-q", upstream, "HEAD:main"]);
         sb.git(&work, &["remote", "add", "upstream", upstream]);
+        let pulls = "+refs/pull/*/head:refs/remotes/upstream/pr/*";
+        sb.git(&work, &["config", "--add", "remote.upstream.fetch", pulls]);
+        let refs = sb.git(&work, &["for-each-ref"]);
         let head = fetch_mr(
             &sb.state,
             &work,
@@ -161,7 +172,11 @@ mod tests {
         .unwrap();
         assert_eq!(head, pr);
         sb.git(&work, &["cat-file", "-e", &target]);
-        assert!(!sb.git(&work, &["for-each-ref"]).contains("pull"));
+        assert_eq!(
+            sb.git(&work, &["for-each-ref"]),
+            refs,
+            "no remote-tracking ref moves"
+        );
         let r = fetch_mr(
             &sb.state,
             &work,

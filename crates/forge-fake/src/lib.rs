@@ -1,7 +1,8 @@
 //! Fake GitLab (under `/gitlab`) and GitHub Enterprise (under `/ghe`) APIs for tests, seeded by
 //! `POST /reset` or [`Forge::reset`]. `GET /__requests` lists every API request since the reset
 //! (method and decoded path, no query), `GET /__writes` the non-GET ones with their bodies except
-//! GraphQL queries; `POST /__delay {ms}` slows API replies.
+//! GraphQL queries; `POST /__delay {ms}` slows API replies and git's files. A project seeded with `git` serves that
+//! bare repo over git's dumb HTTP.
 
 mod ghe;
 mod gitlab;
@@ -201,6 +202,12 @@ fn handle(state: &Mutex<State>, req: &Req) -> Reply {
             };
         }
         _ => {}
+    }
+    if req.path.contains(".git/") {
+        let delay = Duration::from_millis(s.delay);
+        drop(s);
+        thread::sleep(delay);
+        s = lock(state);
     }
     if let Some(r) = mrs::control(&mut s, req) {
         return r;

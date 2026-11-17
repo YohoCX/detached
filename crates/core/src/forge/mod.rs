@@ -68,6 +68,7 @@ pub trait Forge: Sync {
     fn find_mr(&self, p: &Project, source: &Project, branch: &str) -> Result<Option<MergeRequest>>;
     fn mr(&self, p: &Project, n: u64) -> Result<MergeRequest>;
     fn threads(&self, p: &Project, n: u64) -> Result<Vec<Thread>>;
+    fn issue(&self, p: &Project, n: u64) -> Result<Issue>;
     fn act(&self, p: &Project, n: u64, a: &MrAction) -> Result<()>;
     fn default_branch(&self, p: &Project) -> Result<String>;
     fn create(
@@ -216,6 +217,26 @@ pub fn get_mr(state: &AppState, repo: &Path, number: u64) -> Result<MergeRequest
 pub fn mr_threads(state: &AppState, repo: &Path, number: u64) -> Result<Vec<Thread>> {
     let (f, p) = mr_forge(state, repo)?;
     f.threads(&p, number)
+}
+
+pub fn get_issue(state: &AppState, repo: &Path, number: u64) -> Result<Issue> {
+    let (f, p) = mr_forge(state, repo)?;
+    f.issue(&p, number)
+}
+
+/// The ref holding MR `number`'s head on its forge.
+pub fn head_ref(m: &MergeRequest) -> String {
+    match m.provider {
+        Provider::Github | Provider::GithubEnterprise => format!("refs/pull/{}/head", m.number),
+        Provider::Gitlab | Provider::GitlabSelfHosted => {
+            format!("refs/merge-requests/{}/head", m.number)
+        }
+    }
+}
+
+/// The name of the remote that holds the repo's MRs.
+pub fn mr_remote(state: &AppState, repo: &Path) -> Result<String> {
+    Ok(project::mr(state, repo)?.name)
 }
 
 pub fn mr_action(state: &AppState, repo: &Path, number: u64, action: &MrAction) -> Result<()> {

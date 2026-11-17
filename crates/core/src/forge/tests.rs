@@ -1532,3 +1532,40 @@ fn network_error_is_a_failed_result() {
         "{r:?}"
     );
 }
+
+#[test]
+fn issues_come_with_their_comments_and_without_gitlab_s_system_notes() {
+    let t = gitlab(vec![
+        get(
+            &format!("{GL}/issues/3"),
+            json!({"iid": 3, "title": "Tabs", "description": "Please", "web_url": "u",
+                "author": {"username": "ann"}}),
+        ),
+        get(
+            &format!("{GL}/issues/3/notes"),
+            json!([gl_note(1, "+1", Value::Null),
+                {"id": 2, "body": "changed the title", "system": true, "author": {"username": "x"}}]),
+        ),
+    ]);
+    let i = get_issue(&t.sb.state, &t.repo, 3).unwrap();
+    assert_eq!((i.title.as_str(), i.author.as_str()), ("Tabs", "ann"));
+    assert_eq!(i.notes.len(), 1);
+    assert_eq!(i.notes[0].body, "+1");
+
+    let t = github(vec![
+        get(
+            &format!("{GH}/issues/3"),
+            json!({"number": 3, "title": "Tabs", "body": "Please", "html_url": "u",
+                "user": {"login": "ann"}}),
+        ),
+        get(
+            &format!("{GH}/issues/3/comments"),
+            json!([{"id": 9, "body": "+1", "user": {"login": "bob"}, "created_at": T0}]),
+        ),
+    ]);
+    let i = get_issue(&t.sb.state, &t.repo, 3).unwrap();
+    assert_eq!(
+        (i.description.as_str(), i.notes[0].author.as_str()),
+        ("Please", "bob")
+    );
+}

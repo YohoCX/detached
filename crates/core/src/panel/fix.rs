@@ -33,15 +33,15 @@ pub fn preview(
     f: &host::Finding,
     at: &str,
 ) -> Result<(Preview, String)> {
-    let pv = run::preview(core, &run::again(s))?;
+    let pv = run::preview(core, &run::again(s), &Cancel::default())?;
     let brief = brief::fix(f, &pv.subject.head_sha, at);
     Ok((pv, brief))
 }
 
-/// Whether `s`'s branch is trusted as it is now, and whether its head moved since `s` was pinned;
-/// an error when the branch is gone or cannot be read.
+/// Whether `s`'s subject is trusted as it is now, and whether its head moved since `s` was pinned,
+/// with no fetch; an error when the branch is gone or cannot be read.
 pub fn now(core: &AppState, s: &Subject) -> Result<(bool, bool)> {
-    let now = run::subject(core, &run::again(s))?;
+    let now = run::subject(core, &run::again(s), None)?;
     let trust = super::marks::classify(core, &super::marks::load(core), &now)?;
     Ok((trust.trusted, now.head_sha != s.head_sha))
 }
@@ -67,7 +67,7 @@ pub fn make(
         return Err(Error::Cancelled);
     }
     let s = &pv.subject;
-    let now = run::preview(core, &run::again(s))?;
+    let now = run::preview(core, &run::again(s), cancel)?;
     if !now.trust.trusted {
         return Err(Error::Other(format!(
             "{} is untrusted ({}), so it gets no Fix",

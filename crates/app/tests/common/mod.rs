@@ -334,6 +334,7 @@ fn make_forge(sb: &Sandbox) -> (Forge, Seed) {
                     target_branch: "main".into(),
                     base_sha,
                     head_sha: head_sha.clone(),
+                    source: None,
                 }],
                 pipelines: vec![Pipeline {
                     id,
@@ -343,6 +344,8 @@ fn make_forge(sb: &Sandbox) -> (Forge, Seed) {
                     jobs: vec![job],
                     source: None,
                 }],
+                issues: vec![],
+                git: None,
             }
         });
     let projects = projects.collect();

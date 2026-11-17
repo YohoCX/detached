@@ -47,7 +47,7 @@ pub(crate) struct Reply {
     /// Sent as JSON; an empty body when `None`.
     pub body: Option<Value>,
     /// Sent as text/plain instead of `body`.
-    pub text: Option<String>,
+    pub text: Option<Vec<u8>>,
 }
 
 impl Reply {
@@ -133,7 +133,7 @@ pub(crate) fn send(mut conn: &TcpStream, r: Reply) -> io::Result<()> {
         (Some(text), _) => ("text/plain", text),
         (None, body) => (
             "application/json",
-            body.map(|v| v.to_string()).unwrap_or_default(),
+            body.map(|v| v.to_string().into_bytes()).unwrap_or_default(),
         ),
     };
     let mut head = format!(
@@ -144,5 +144,6 @@ pub(crate) fn send(mut conn: &TcpStream, r: Reply) -> io::Result<()> {
     for (k, v) in r.headers {
         head += &format!("{k}: {v}\r\n");
     }
-    conn.write_all(format!("{head}\r\n{body}").as_bytes())
+    conn.write_all(format!("{head}\r\n").as_bytes())?;
+    conn.write_all(&body)
 }

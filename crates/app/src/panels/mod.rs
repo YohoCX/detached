@@ -1,6 +1,7 @@
 mod fix;
 pub mod flow;
 pub mod live;
+mod outcome;
 mod round;
 mod stats;
 mod task;

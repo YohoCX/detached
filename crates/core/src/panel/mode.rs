@@ -14,12 +14,23 @@ const BUILTIN: &[(&str, &str)] = &[
     ("review", include_str!("builtin/review.md")),
     ("gate", include_str!("builtin/gate.md")),
     ("recheck", include_str!("builtin/recheck.md")),
+    ("triage", include_str!("builtin/triage.md")),
+    ("plan-review", include_str!("builtin/plan-review.md")),
     ("bugs", include_str!("builtin/bugs.md")),
     ("architecture", include_str!("builtin/architecture.md")),
     ("docs", include_str!("builtin/docs.md")),
     ("adversarial", include_str!("builtin/adversarial.md")),
     ("verifier", include_str!("builtin/verifier.md")),
     ("merge", include_str!("builtin/merge.md")),
+    ("facts", include_str!("builtin/facts.md")),
+    ("thesis", include_str!("builtin/thesis.md")),
+    ("antithesis", include_str!("builtin/antithesis.md")),
+    ("cost", include_str!("builtin/cost.md")),
+    ("synthesizer", include_str!("builtin/synthesizer.md")),
+    ("consistency", include_str!("builtin/consistency.md")),
+    ("gaps", include_str!("builtin/gaps.md")),
+    ("risks", include_str!("builtin/risks.md")),
+    ("feasibility", include_str!("builtin/feasibility.md")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +39,7 @@ pub enum Stage {
     Find,
     Merge,
     Verify,
+    Synthesize,
     Gate,
 }
 
@@ -79,6 +91,7 @@ struct Head {
     #[serde(default)]
     seat: Vec<Seat>,
     merge: Option<String>,
+    synthesizer: Option<String>,
     #[serde(default)]
     verifiers: Vec<String>,
     #[serde(default)]
@@ -92,6 +105,8 @@ pub struct Mode {
     pub roster: Vec<Seat>,
     /// The merge participant's model.
     pub merge: Option<String>,
+    /// The synthesize participant's model.
+    pub synthesizer: Option<String>,
     /// Verifier models, in order of preference.
     pub verifiers: Vec<String>,
     /// The severities a verified finding blocks the gate with.
@@ -134,6 +149,7 @@ pub fn parse_mode(name: &str, text: &str) -> Result<Mode> {
         graph: h.graph,
         roster: h.seat,
         merge: h.merge,
+        synthesizer: h.synthesizer,
         verifiers: h.verifiers,
         block: h.block,
         text: text.into(),
@@ -183,7 +199,9 @@ mod tests {
     fn the_built_in_modes_and_roles_parse() {
         for (name, text) in BUILTIN {
             match *name {
-                "review" | "gate" | "recheck" => _ = parse_mode(name, text).unwrap(),
+                "review" | "gate" | "recheck" | "triage" | "plan-review" => {
+                    _ = parse_mode(name, text).unwrap()
+                }
                 _ => _ = parse_role(name, text).unwrap(),
             }
         }

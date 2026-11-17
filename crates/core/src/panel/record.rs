@@ -16,17 +16,47 @@ use crate::host::{self, Judged};
 
 pub const SCHEMA: u32 = 1;
 
-/// What a run reviews: a branch against its base, at two SHAs.
+/// What a run reviews: a branch against its base, at two SHAs; an MR, an issue or a document read
+/// in the tree at `head_sha`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Subject {
     /// The owner's repo.
     pub repo: String,
-    /// A local branch, or a remote one as `<remote>/<branch>`.
+    /// A local branch, or a remote one as `<remote>/<branch>`; an MR's source branch.
     pub branch: String,
     pub remote: bool,
     pub base: String,
     pub base_sha: String,
     pub head_sha: String,
+    #[serde(default)]
+    pub of: Of,
+}
+
+/// What the subject is beyond its tree.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Of {
+    #[default]
+    Branch,
+    /// Its head is fetched from `remote`'s `head_ref` into `refs/detached/subjects/<run>` for the
+    /// run.
+    Mr {
+        number: u64,
+        title: String,
+        author: String,
+        url: String,
+        remote: String,
+        head_ref: String,
+        fork: bool,
+    },
+    Issue {
+        number: u64,
+        title: String,
+        author: String,
+        url: String,
+    },
+    /// A file of the tree.
+    Document { path: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +157,10 @@ pub enum Event {
     Group {
         participant: String,
         ids: Vec<String>,
+    },
+    Outcome {
+        participant: String,
+        outcome: host::Outcome,
     },
     Verdict {
         participant: String,
@@ -274,6 +308,8 @@ pub struct Participant {
     pub cost: f64,
     pub cause: String,
     pub session: Option<String>,
+    /// What it said with `done`: a triage finder's case.
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -330,6 +366,7 @@ pub struct State {
     /// The owner's latest disposition of each finding, with its time.
     pub dispositions: BTreeMap<String, (i64, Disposition, Option<String>)>,
     pub fixes: BTreeMap<String, Fixing>,
+    pub outcome: Option<host::Outcome>,
 }
 
 impl State {
@@ -378,6 +415,7 @@ impl State {
                     cost: 0.,
                     cause: String::new(),
                     session: session.clone(),
+                    note: None,
                 };
                 match self.participant(participant) {
                     Some(was) => {
@@ -451,6 +489,18 @@ impl State {
                     }
                 }
             }
+            Event::Outcome {
+                participant,
+                outcome,
+            } => {
+                self.line(
+                    at,
+                    "outcome",
+                    participant,
+                    format!("{:?}", outcome.recommend),
+                );
+                self.outcome = Some(outcome.clone());
+            }
             Event::Verdict {
                 model,
                 verdict,
@@ -472,7 +522,7 @@ impl State {
                     note.clone().unwrap_or_default(),
                 );
                 if let Some(p) = self.participant(participant) {
-                    p.status = Status::Done;
+                    (p.status, p.note) = (Status::Done, note.clone());
                 }
             }
             Event::Attempt {
@@ -600,6 +650,13 @@ impl State {
     pub fn sources(&self, head: &str) -> Vec<&Found> {
         let of = |f: &&Found| f.id == head || f.folded.as_deref() == Some(head);
         self.findings.iter().filter(of).collect()
+    }
+
+    /// Each finder's case, the note it reported `done` with.
+    pub fn cases(&self) -> Vec<(String, String)> {
+        let finders = self.participants.iter().filter(|p| p.stage == Stage::Find);
+        let case = |p: &Participant| Some((p.name.clone(), p.note.clone()?));
+        finders.filter_map(case).collect()
     }
 
     /// "3 of 4 reported" for the stage's participants.

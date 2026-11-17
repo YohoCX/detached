@@ -549,6 +549,19 @@ pub struct Note {
     pub time: i64,
 }
 
+/// An issue with its comments, oldest first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    /// Markdown.
+    pub description: String,
+    pub author: String,
+    pub web_url: String,
+    pub notes: Vec<Note>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {

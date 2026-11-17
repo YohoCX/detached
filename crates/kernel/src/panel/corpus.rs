@@ -178,6 +178,8 @@ impl Corpus {
             budget: Some(self.budget - self.spent),
             codex: false,
             roles: vec![],
+            over: Default::default(),
+            head: None,
         };
         let p = live::start(s, cx);
         self._watch = Some(cx.observe(&p, |c: &mut Corpus, p, cx| {

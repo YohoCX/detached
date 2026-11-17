@@ -248,8 +248,10 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
         budget: None,
         codex: false,
         roles: vec![],
+        over: Default::default(),
+        head: None,
     };
-    let shown = detached_core::panel::run::preview(&f.core, &start).unwrap();
+    let shown = detached_core::panel::run::preview(&f.core, &start, &Default::default()).unwrap();
     detached_core::panel::run::accept(&f.core, &shown).unwrap();
     let sha = String::from_utf8(
         std::process::Command::new("git")
@@ -349,6 +351,8 @@ fn the_built_in_gate_says_ship_on_a_clean_branch_on_the_real_claude(cx: &mut Tes
             budget: None,
             codex: false,
             roles: vec![],
+            over: Default::default(),
+            head: None,
         };
         let p = cx.update(|cx| super::super::live::start(start, cx));
         wait_for(cx, START, |cx| {
@@ -456,9 +460,10 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
             base: "main".into(),
             base_sha: String::new(),
             head_sha: String::new(),
+            of: Default::default(),
         })
     };
-    let subject = run::subject(&f.core, &start).unwrap();
+    let subject = run::subject(&f.core, &start, None).unwrap();
     let finding: detached_core::host::Finding = serde_json::from_value(json!({
         "severity": "major", "class": "correctness", "title": "t", "body": "b", "file": "a.txt",
         "line": 1, "quote": "a", "lenses": []}))
@@ -473,4 +478,83 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
     assert!(!all.contains("SECRET-ENV"), "{all}");
     assert!(!all.contains("LS=0"), "{all}");
     assert!(all.contains("CAT=") && !all.contains("FIX-TREE-A"), "{all}");
+}
+
+/// One step every participant of a run takes: each call but its own is refused, then `done`.
+fn acts(calls: &[Value]) -> Vec<Value> {
+    let tool = |input: &Value| json!({"tool": "mcp__detached-host__detached_act", "input": input});
+    vec![Value::Array(calls.iter().map(tool).collect())]
+}
+
+#[cfg(unix)]
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn an_mr_on_the_forge_fake_gets_six_answers_from_the_real_claude(cx: &mut TestAppContext) {
+    let says = |a: &str| format!("the case to {a}");
+    let outcome = json!({"action": "report_outcome", "args": {"recommend": "defer",
+        "accept": says("accept"), "decline": says("decline"), "defer": says("defer"),
+        "ask_author": says("ask"), "split": says("split"), "duplicate": "none"}});
+    let done = json!({"action": "done", "args": {"nothing_found": true, "note": "my case"}});
+    let (f, _api) = boot(cx, acts(&[outcome, done]));
+    let (_forge, [head, _]) = super::triage::on_forge(&f);
+    super::trust(&f);
+    cx.update(|cx| super::super::live::set_reach(cx, || true));
+    let start = detached_core::panel::run::Start {
+        repo: f.repo.clone(),
+        mode: "triage".into(),
+        over: detached_core::panel::run::Over::Mr(7),
+        ..Default::default()
+    };
+    let p = cx.update(|cx| super::super::live::start(start, cx));
+    let s = super::ended(&p, cx);
+    assert_eq!(s.started.as_ref().unwrap().subject.head_sha, head);
+    let o = s.outcome.clone().expect("the six answers");
+    assert_eq!(o.recommend, detached_core::host::Answer::Defer);
+    assert_eq!(s.cases().len(), 4, "{:?}", s.timeline);
+}
+
+#[cfg(unix)]
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_plan_gets_a_verified_edit_from_the_real_claude(cx: &mut TestAppContext) {
+    let quote = "Step 2: test it after release.";
+    let finding = json!({"action": "report_finding", "args": {"severity": "major",
+        "class": "docs", "title": "Tests come after release", "body": "b",
+        "fix": "Step 2: test it before release.", "file": "PLAN.md", "line": 3, "quote": quote,
+        "lenses": ["gaps"]}});
+    let ids: Vec<String> = ["consistency", "gaps", "risks", "feasibility"]
+        .iter()
+        .map(|n| format!("{n}-1"))
+        .collect();
+    let group = json!({"action": "report_group", "args": {"ids": ids}});
+    let verdict = json!({"action": "report_verdict", "args": {"finding": "consistency-1",
+        "verdict": "confirmed", "quote": quote}});
+    let done = json!({"action": "done", "args": {"nothing_found": false}});
+    let (f, _api) = boot(cx, acts(&[finding, group, verdict, done]));
+    std::fs::write(
+        Path::new(&f.repo).join("PLAN.md"),
+        format!("# Plan\nStep 1: build it.\n{quote}\n"),
+    )
+    .unwrap();
+    super::git(&f, &["add", "PLAN.md"]);
+    super::git(&f, &["commit", "-qm", "plan"]);
+    super::trust(&f);
+    cx.update(|cx| super::super::live::set_reach(cx, || true));
+    let start = detached_core::panel::run::Start {
+        repo: f.repo.clone(),
+        branch: "main".into(),
+        base: "main".into(),
+        mode: "plan-review".into(),
+        over: detached_core::panel::run::Over::Document("PLAN.md".into()),
+        ..Default::default()
+    };
+    let p = cx.update(|cx| super::super::live::start(start, cx));
+    let s = super::ended(&p, cx);
+    let heads: Vec<_> = s.heads().collect();
+    assert_eq!(heads.len(), 1, "{:?}", s.timeline);
+    assert!(detached_core::panel::record::verified(heads[0]));
+    assert_eq!(
+        heads[0].finding.fix.as_deref(),
+        Some("Step 2: test it before release.")
+    );
 }

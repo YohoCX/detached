@@ -281,6 +281,7 @@ mod tests {
             target_branch: "main".into(),
             base_sha: sha.clone(),
             head_sha: sha,
+            source: None,
         };
         forge.reset(Seed {
             user: "tester".into(),
@@ -290,6 +291,8 @@ mod tests {
                 default_branch: "main".into(),
                 mrs: vec![mr],
                 pipelines: vec![],
+                issues: vec![],
+                git: None,
             }],
         });
         let account = AccountInput {
