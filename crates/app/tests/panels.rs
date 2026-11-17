@@ -1510,3 +1510,111 @@ fn an_mr_s_triage_from_the_panels_app_shows_six_answers_and_its_fix_keeps_its_br
 
     drop(forged);
 }
+
+#[gpui_kit::test]
+fn a_dialectic_and_a_brainstorm_on_a_question_from_the_panels_app_show_their_outcomes(
+    cx: &mut TestAppContext,
+) {
+    use serde_json::json;
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        let r = repo(sb, "reviewed");
+        mark_trusted(sb, &r);
+        let noted = |note: &str| {
+            json!({"action": "done", "args": {"nothing_found": false, "note": note}}).to_string()
+        };
+        let idea = |title: &str| {
+            json!({"action": "report_idea", "args": {"title": title, "body": "how"}}).to_string()
+        };
+        let synthesis = json!({"action": "report_synthesis", "args": {
+            "recommendation": "Keep it", "why": "The case against holds"}});
+        let group = json!({"action": "report_group", "args": {"ids": ["user-1", "smallest-1"]}});
+        let rank = |id: &str, value: u8, cost: u8| {
+            json!({"action": "report_rank", "args": {"idea": id, "value": value, "cost": cost,
+                "reason": format!("{id} is worth it")}})
+        };
+        let roles = [
+            ("thesis", format!("act {}", noted("for it"))),
+            ("antithesis", format!("act {}", noted("against it"))),
+            ("rebuttal", format!("act {}", noted("not so"))),
+            ("judge", format!("act {synthesis};act {DONE}")),
+            ("smallest", format!("act {};act {DONE}", idea("Small"))),
+            ("user", format!("act {};act {DONE}", idea("Ask the user"))),
+            ("bold", format!("act {};act {DONE}", idea("Rewrite"))),
+            ("prior-art", format!("act {DONE}")),
+            ("cluster", format!("act {group};act {DONE}")),
+            (
+                "ranker",
+                format!(
+                    "act {};act {};act {DONE}",
+                    rank("bold-1", 3, 5),
+                    rank("user-1", 4, 1)
+                ),
+            ),
+        ];
+        for (name, script) in roles {
+            let text = format!("+++\nlenses = [\"{name}\"]\n+++\nfake: {script}\n");
+            write(
+                &sb.state.config_dir.join("roles"),
+                [(format!("{name}.md"), text)],
+            );
+        }
+    });
+    let ask = |app: &mut VisualTestContext, mode: usize| {
+        open_tab(app, "tab.panels");
+        app.click("panels.new");
+        wait_until(app, |cx| cx.find("panels.form").is_some());
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            w.within("panels.form.subject").click(4usize, cx)
+        });
+        settle(app);
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            w.within("panels.form.mode").click(mode, cx)
+        });
+        settle(app);
+        app.click("panels.form.item");
+        app.input("Should x stay one?");
+        app.click("panels.form.check");
+        wait_until(app, |cx| cx.find("panels.form.trust").is_some());
+        app.click("panels.form.start");
+        wait_watched(app, |cx| cx.find("panel.ended").is_some());
+        wait_until(app, |cx| cx.find("panel.outcome").is_some());
+    };
+
+    ask(&mut app, 0);
+    assert_eq!(
+        label(&mut app, "panel.outcome").as_deref(),
+        Some("Recommended: Keep it")
+    );
+    assert_eq!(
+        label(&mut app, "panel.synthesis").as_deref(),
+        Some("Recommended: Keep it · The case against holds")
+    );
+    assert_eq!(
+        label(&mut app, "panel.case.antithesis").as_deref(),
+        Some("antithesis's case · against it")
+    );
+    assert_eq!(
+        label(&mut app, "panel.rebuttal.thesis").as_deref(),
+        Some("thesis's rebuttal · not so")
+    );
+
+    ask(&mut app, 1);
+    assert_eq!(
+        label(&mut app, "panel.outcome").as_deref(),
+        Some("2 of 2 ideas ranked")
+    );
+    let first = label(&mut app, "panel.idea.user-1").unwrap();
+    assert!(
+        first.starts_with("1. Ask the user · value 4, cost 1 · how\n\nWhy: user-1 is worth it"),
+        "{first}"
+    );
+    assert!(first.ends_with("Variants: Small"), "{first}");
+    let second = label(&mut app, "panel.idea.bold-1").unwrap();
+    assert!(
+        second.starts_with("2. Rewrite · value 3, cost 5"),
+        "{second}"
+    );
+}

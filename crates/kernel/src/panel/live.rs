@@ -14,7 +14,7 @@ use detached_core::host::Act;
 use detached_core::panel::brief;
 use detached_core::panel::marks;
 use detached_core::panel::mode::{self, Stage};
-use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, Of, State};
+use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, Idea, Of, State};
 use detached_core::panel::run::{self, Over, Prepared, Start};
 use detached_core::panel::{track, tree};
 use detached_core::state::AppState;
@@ -259,6 +259,10 @@ impl Panel {
             Over::Mr(n) => format!("!{n}"),
             Over::Issue(n) => format!("#{n}"),
             Over::Document(path) => format!("`{path}`"),
+            Over::Question(q) => match q.chars().count() > 40 {
+                true => format!("“{}…”", q.chars().take(40).collect::<String>().trim_end()),
+                false => format!("“{q}”"),
+            },
         };
         format!("{mode} {what}")
     }
@@ -484,10 +488,14 @@ impl Panel {
             _ => None,
         };
         let can: &'static [&'static str] = match l.stage {
+            Stage::Find if p.mode.ideas() => &["report_idea", "done"],
             Stage::Find => &["report_finding", "done"],
-            Stage::Merge => &["report_group", "done"],
+            Stage::Merge | Stage::Cluster => &["report_group", "done"],
+            Stage::Synthesize if p.mode.debate() => &["report_synthesis", "done"],
             Stage::Synthesize => &["report_outcome", "done"],
-            _ => &["report_verdict", "done"],
+            Stage::Rebut => &["done"],
+            Stage::Rank => &["report_rank", "done"],
+            Stage::Verify | Stage::Gate => &["report_verdict", "done"],
         };
         let scope = Scope {
             run: self.run.clone(),
@@ -659,17 +667,21 @@ impl Panel {
         }
     }
 
-    /// The findings a restarted participant reported before, so it does not report them again.
+    /// The findings and ideas a restarted participant reported before, so it does not report them
+    /// again.
     fn reported_so_far(&self, name: &str) -> String {
-        let mine: Vec<String> = (self.state.findings.iter())
+        let findings = (self.state.findings.iter())
             .filter(|f| f.participant == name)
             .map(|f| {
                 format!(
                     "- {}:{} {}",
                     f.finding.file, f.finding.line, f.finding.title
                 )
-            })
-            .collect();
+            });
+        let ideas = (self.state.ideas.iter())
+            .filter(|i| i.participant == name)
+            .map(|i| format!("- {}", i.idea.title));
+        let mine: Vec<String> = findings.chain(ideas).collect();
         match mine.is_empty() {
             true => String::new(),
             false => format!(
@@ -686,18 +698,10 @@ impl Panel {
         cx: &mut Context<Self>,
     ) {
         let Some(i) = self.find(name) else { return };
-        let judged = self.live[i]
-            .finding
-            .as_ref()
-            .is_none_or(|f| self.state.found(f).is_some_and(|f| f.verdict.is_some()));
-        if self.live[i].reported && !judged {
-            return self.fail(name, "It called `done` without a verdict.".into(), cx);
-        }
         if self.live[i].reported
-            && self.live[i].stage == Stage::Synthesize
-            && self.state.outcome.is_none()
+            && let Some(what) = self.missing(i)
         {
-            return self.fail(name, "It called `done` without an outcome.".into(), cx);
+            return self.fail(name, format!("It called `done` without {what}."), cx);
         }
         if self.live[i].reported {
             self.live[i].status = Status::Done;
@@ -712,6 +716,25 @@ impl Panel {
             Some(f) if limited(&f.text) => self.back_off(cx),
             Some(f) => self.fail(name, format!("The turn failed: {}", f.text), cx),
             None => self.fail(name, session::NO_DONE.into(), cx),
+        }
+    }
+
+    /// What the participant's stage needed from it before `done` and did not get.
+    fn missing(&self, i: usize) -> Option<&'static str> {
+        let l = &self.live[i];
+        let debate = self.prepared.as_ref().is_some_and(|p| p.mode.debate());
+        let judged = (l.finding.as_ref())
+            .is_none_or(|f| self.state.found(f).is_some_and(|f| f.verdict.is_some()));
+        let noted = (self.state.participants.iter())
+            .any(|p| p.name == l.name && p.note.as_ref().is_some_and(|n| !n.trim().is_empty()));
+        let unranked = || (self.state.clusters().iter()).any(|(c, _)| c.rank.is_none());
+        match l.stage {
+            _ if !judged => Some("a verdict"),
+            Stage::Synthesize if debate && self.state.synthesis.is_none() => Some("a synthesis"),
+            Stage::Synthesize if !debate && self.state.outcome.is_none() => Some("an outcome"),
+            Stage::Rebut if !noted => Some("a rebuttal"),
+            Stage::Rank if unranked() => Some("ranking every idea"),
+            _ => None,
         }
     }
 
@@ -790,6 +813,33 @@ impl Panel {
                 Event::Outcome {
                     participant: name.into(),
                     outcome,
+                },
+                cx,
+            ),
+            Act::ReportSynthesis(synthesis) => self.emit(
+                Event::Synthesis {
+                    participant: name.into(),
+                    synthesis,
+                },
+                cx,
+            ),
+            Act::ReportIdea(idea) => {
+                self.live[i].raised += 1;
+                let id = format!("{name}-{}", self.live[i].raised);
+                let participant = name.into();
+                self.emit(
+                    Event::Idea {
+                        participant,
+                        id,
+                        idea,
+                    },
+                    cx,
+                );
+            }
+            Act::ReportRank(rank) => self.emit(
+                Event::Rank {
+                    participant: name.into(),
+                    rank,
                 },
                 cx,
             ),
@@ -1062,9 +1112,75 @@ impl Panel {
                 );
             }
             Stage::Verify => self.verify(&p, cx),
+            Stage::Rebut => {
+                // Each finder, whether it reported, and its output: its case and findings.
+                let sides: Vec<_> = (p.finders.iter())
+                    .map(|f| {
+                        let p = self.state.participants.iter().find(|p| p.name == f.name);
+                        let done = p.is_some_and(|p| p.status == record::Status::Done);
+                        let mine = self
+                            .state
+                            .findings
+                            .iter()
+                            .filter(|x| x.participant == f.name);
+                        let case = p.and_then(|p| p.note.clone());
+                        (
+                            f,
+                            done,
+                            (f.name.clone(), case, mine.collect::<Vec<&Found>>()),
+                        )
+                    })
+                    .collect();
+                let add: Vec<_> = (sides.iter())
+                    .filter(|(_, done, _)| *done)
+                    .map(|(f, ..)| {
+                        let others: Vec<_> = (sides.iter())
+                            .filter(|(o, ..)| o.name != f.name)
+                            .map(|(.., out)| out.clone())
+                            .collect();
+                        let brief = brief::rebut(&p.rebuttal, &f.role, &p.data, &others);
+                        let name = format!("{}{}", record::REBUT, f.name);
+                        (name, f.role.name.clone(), f.seat.model(), brief)
+                    })
+                    .collect();
+                for (name, role, model, brief) in add {
+                    self.add(&p, &name, &role, next, &model, brief, (None, vec![]), cx);
+                }
+                self.schedule(cx);
+            }
+            Stage::Cluster => {
+                let all: Vec<&Idea> = self.state.ideas.iter().collect();
+                if all.len() >= 2 {
+                    let brief = brief::cluster(&p.cluster, &p.data, &all);
+                    let model = p.mode.cluster.clone().unwrap_or_else(|| "sonnet".into());
+                    let role = p.cluster.name.clone();
+                    self.add(
+                        &p,
+                        "cluster",
+                        &role,
+                        next,
+                        &model,
+                        brief,
+                        (None, vec![]),
+                        cx,
+                    );
+                }
+                self.schedule(cx);
+            }
+            Stage::Rank => {
+                let clusters = self.state.clusters();
+                if !clusters.is_empty() {
+                    let brief = brief::rank(&p.ranker, &p.data, &clusters);
+                    let model = p.mode.rank.clone().unwrap_or_else(|| "opus".into());
+                    let role = p.ranker.name.clone();
+                    self.add(&p, "rank", &role, next, &model, brief, (None, vec![]), cx);
+                }
+                self.schedule(cx);
+            }
             Stage::Synthesize => {
                 let found: Vec<&Found> = self.state.heads().collect();
-                let brief = brief::synthesize(&p.synthesizer, &p.data, &found, &self.state.cases());
+                let (cases, rebuttals) = (self.state.cases(), self.state.rebuttals());
+                let brief = brief::synthesize(&p.synthesizer, &p.data, &found, &cases, &rebuttals);
                 let model = p.mode.synthesizer.clone().unwrap_or_else(|| "opus".into());
                 let role = p.synthesizer.name.clone();
                 self.add(

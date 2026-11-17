@@ -22,7 +22,7 @@ use crate::ui::theme::{GAP, text};
 use crate::ui::{self, theme};
 
 /// What a run can be over, and the modes each takes, the first the default.
-const SUBJECTS: [(&str, &[(&str, &str)]); 4] = [
+const SUBJECTS: [(&str, &[(&str, &str)]); 5] = [
     ("Branch", &[("review", "Review"), ("gate", "Gate")]),
     (
         "MR",
@@ -30,6 +30,10 @@ const SUBJECTS: [(&str, &[(&str, &str)]); 4] = [
     ),
     ("Issue", &[("triage", "Triage")]),
     ("Document", &[("plan-review", "Plan review")]),
+    (
+        "Question",
+        &[("dialectic", "Dialectic"), ("brainstorm", "Brainstorm")],
+    ),
 ];
 
 /// The start form: the subject, the mode, what its trust makes of it, and the estimate.
@@ -40,7 +44,7 @@ pub(super) struct Form {
     mode: &'static str,
     branch: Entity<InputState>,
     base: Entity<InputState>,
-    /// An MR's or an issue's number, or a document's path.
+    /// An MR's or an issue's number, a document's path or the question.
     item: Entity<InputState>,
     budget: Entity<InputState>,
     untrusted: bool,
@@ -67,7 +71,12 @@ impl Form {
         let mut f = Form {
             branch: input(&branch, "Branch", window, cx),
             base: input("main", "Base", window, cx),
-            item: input("", "MR or issue number, or the document's path", window, cx),
+            item: input(
+                "",
+                "MR or issue number, the document's path, or your question",
+                window,
+                cx,
+            ),
             budget: input("", "Budget in tokens (optional)", window, cx),
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             repo,
@@ -93,8 +102,10 @@ impl Form {
             0 => Over::Branch,
             1 => Over::Mr(number().map_err(|_| "Enter the MR's number")?),
             2 => Over::Issue(number().map_err(|_| "Enter the issue's number")?),
-            _ if item.is_empty() => return Err("Enter the document's path".into()),
-            _ => Over::Document(item),
+            3 if item.is_empty() => return Err("Enter the document's path".into()),
+            3 => Over::Document(item),
+            _ if item.is_empty() => return Err("Enter your question".into()),
+            _ => Over::Question(item),
         };
         Ok(Start {
             repo: self.repo.clone(),
@@ -169,19 +180,22 @@ impl Render for Form {
         let kinds: Vec<(usize, &str)> = SUBJECTS.iter().map(|s| s.0).enumerate().collect();
         let (me, again) = (cx.entity().downgrade(), cx.entity().downgrade());
         body = body
-            .child(ui::segmented(
-                "panels.form.subject",
-                &kinds,
-                self.kind,
-                move |kind, _, cx| {
-                    me.update(cx, |f, cx| {
-                        (f.kind, f.mode) = (kind, SUBJECTS[kind].1[0].0);
-                        f.check(cx);
-                    })
-                    .ok();
-                },
-                cx,
-            ))
+            .child(
+                ui::segmented(
+                    "panels.form.subject",
+                    &kinds,
+                    self.kind,
+                    move |kind, _, cx| {
+                        me.update(cx, |f, cx| {
+                            (f.kind, f.mode) = (kind, SUBJECTS[kind].1[0].0);
+                            f.check(cx);
+                        })
+                        .ok();
+                    },
+                    cx,
+                )
+                .flex_wrap(),
+            )
             .when(self.kind != 1, |b| b.child(ui::input(&self.branch, cx)))
             .when(self.kind == 0, |b| b.child(ui::input(&self.base, cx)))
             .when(self.kind != 0, |b| {

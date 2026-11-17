@@ -110,6 +110,8 @@ impl Identity {
                 Err(format!("This session judges finding {f} alone."))
             }
             (Act::ReportOutcome(o), _) => o.check(),
+            (Act::ReportSynthesis(s), _) => s.check(),
+            (Act::ReportRank(r), _) => r.check(),
             _ => Ok(()),
         }
     }

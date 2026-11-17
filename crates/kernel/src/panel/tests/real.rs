@@ -565,3 +565,52 @@ fn a_plan_gets_a_verified_edit_from_the_real_claude(cx: &mut TestAppContext) {
         Some("Step 2: test it before release.")
     );
 }
+
+fn ask(f: &Fixture, mode: &str, cx: &mut TestAppContext) -> detached_core::panel::record::State {
+    super::trust(f);
+    cx.update(|cx| super::super::live::set_reach(cx, || true));
+    let start = detached_core::panel::run::Start {
+        repo: f.repo.clone(),
+        branch: "main".into(),
+        base: "main".into(),
+        mode: mode.into(),
+        over: detached_core::panel::run::Over::Question("Should x stay one?".into()),
+        ..Default::default()
+    };
+    let p = cx.update(|cx| super::super::live::start(start, cx));
+    super::ended(&p, cx)
+}
+
+#[cfg(unix)]
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_dialectic_ends_with_its_synthesis_from_the_real_claude(cx: &mut TestAppContext) {
+    let synthesis = json!({"action": "report_synthesis", "args": {"recommendation": "Keep it",
+        "why": "The case against holds"}});
+    let done = json!({"action": "done", "args": {"nothing_found": false, "note": "my side"}});
+    let (f, _api) = boot(cx, acts(&[synthesis, done]));
+    let s = ask(&f, "dialectic", cx);
+    let got = s.synthesis.clone().expect("the synthesis");
+    assert_eq!(got.recommendation, "Keep it");
+    assert_eq!(s.cases().len(), 2, "{:?}", s.timeline);
+    assert_eq!(s.rebuttals().len(), 2, "{:?}", s.timeline);
+}
+
+#[cfg(unix)]
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_brainstorm_ends_with_ranked_ideas_from_the_real_claude(cx: &mut TestAppContext) {
+    let idea = json!({"action": "report_idea", "args": {"title": "An idea", "body": "how"}});
+    let ids = ["smallest-1", "user-1", "bold-1", "prior-art-1"];
+    let group = json!({"action": "report_group", "args": {"ids": ids}});
+    let rank = json!({"action": "report_rank", "args": {"idea": "smallest-1", "value": 4,
+        "cost": 2, "reason": "cheap and useful"}});
+    let done = json!({"action": "done", "args": {"nothing_found": false}});
+    let (f, _api) = boot(cx, acts(&[idea, group, rank, done]));
+    let s = ask(&f, "brainstorm", cx);
+    let clusters = s.clusters();
+    assert_eq!(clusters.len(), 1, "{:?}", s.timeline);
+    assert_eq!(clusters[0].1.len(), 3);
+    let rank = clusters[0].0.rank.as_ref().expect("ranked");
+    assert_eq!((rank.value, rank.cost), (4, 2));
+}

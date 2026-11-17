@@ -15,11 +15,15 @@ Streamable HTTP on 127.0.0.1, a path with a secret per session (`crates/acp/src/
 ## Public API
 - `READ`, `ACT` — the tool names, `"detached_read"` and `"detached_act"`.
 - `Call` — a parsed tool call: `Read(query)` or `Act(Act)`.
-- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `ReportGroup(Group)`, `Done(Done)`,
-  `Proc(ProcAct)`, `Send(SendAct)`, `Watch(WatchAct)`;
+- `Act` — `ReportFinding(Finding)`, `ReportVerdict(Verdict)`, `ReportGroup(Group)`,
+  `ReportOutcome(Outcome)`, `ReportSynthesis(Synthesis)`, `ReportIdea(Idea)`, `ReportRank(Rank)`,
+  `Done(Done)`, `Proc(ProcAct)`, `Send(SendAct)`, `Watch(WatchAct)`;
   serde-tagged as `{"action": "<snake_case>", "args": {...}}` (`crates/core/src/host.rs:23`).
-- `Act::name()` — `"report_finding"`, `"report_verdict"`, `"report_group"`, `"done"`, `"proc"`,
-  `"send"` or `"watch"`; what `Identity::may` checks.
+- `Act::name()` — the action's snake_case name, such as `"report_rank"`; what `Identity::may`
+  checks, with `Outcome::check`, `Synthesis::check` and `Rank::check` refusing blank arguments.
+- `Outcome` — a triage's six answers, each argued, and the one recommended; `Synthesis` — a
+  dialectic's recommendation and why; `Idea` — a brainstorm's title and body; `Rank` — an idea's
+  id, value and cost from 1 to 5, and the reason, which may not be blank.
 - `Finding` — severity, class, title, body, optional fix, file, line, optional end line, quote,
   lenses.
 - `Severity` (`critical`, `major`, `minor`), `Class` (`correctness` … `tests`).

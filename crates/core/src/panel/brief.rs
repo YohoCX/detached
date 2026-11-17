@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::mode::{Mode, Role};
-use super::record::{Found, Of, Subject};
+use super::record::{Found, Idea, Of, Subject};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::runner::{self, Kind, Opts};
@@ -35,8 +35,10 @@ pub fn subject(env: &Env, s: &Subject) -> Result<Value> {
         .collect();
     let mut v = json!({"branch": s.branch, "base": s.base, "base_sha": s.base_sha,
         "head_sha": s.head_sha, "commits": commits});
-    if let Of::Document { path } = &s.of {
-        v["document"] = json!(path);
+    match &s.of {
+        Of::Document { path } => v["document"] = json!(path),
+        Of::Question { text } => v["question"] = json!(text),
+        _ => {}
     }
     Ok(v)
 }
@@ -93,27 +95,86 @@ pub fn merge(role: &Role, found: &[&Found]) -> String {
     )
 }
 
-/// The synthesizer's brief: the subject, every finding and each finder's case.
+fn facts(found: &[&Found]) -> Vec<Value> {
+    (found.iter())
+        .map(|f| {
+            json!({"file": f.finding.file, "line": f.finding.line, "severity": f.finding.severity,
+            "title": f.finding.title, "body": f.finding.body, "by": f.participant})
+        })
+        .collect()
+}
+
+/// The synthesizer's brief: the subject, every finding, each finder's case and, in a debate, each
+/// side's rebuttal.
 pub fn synthesize(
     role: &Role,
     subject: &Value,
     found: &[&Found],
     cases: &[(String, String)],
+    rebuttals: &[(String, String)],
 ) -> String {
-    let findings: Vec<Value> = (found.iter())
-        .map(|f| {
-            json!({"file": f.finding.file, "line": f.finding.line, "severity": f.finding.severity,
-            "title": f.finding.title, "body": f.finding.body, "by": f.participant})
-        })
-        .collect();
     let cases: Vec<Value> = (cases.iter())
         .map(|(by, case)| json!({"by": by, "case": case}))
         .collect();
-    let all = json!({"subject": subject, "findings": findings, "cases": cases});
+    let mut all = json!({"subject": subject, "findings": facts(found), "cases": cases});
+    if !rebuttals.is_empty() {
+        all["rebuttals"] = (rebuttals.iter())
+            .map(|(by, r)| json!({"by": by, "rebuttal": r}))
+            .collect();
+    }
     format!(
         "{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
         role.text,
         data(&all)
+    )
+}
+
+/// A side's rebuttal brief: its lens, and exactly the other sides' output, each its case and the
+/// facts it reported.
+pub fn rebut(
+    stage: &Role,
+    side: &Role,
+    subject: &Value,
+    others: &[(String, Option<String>, Vec<&Found>)],
+) -> String {
+    let others: Vec<Value> = (others.iter())
+        .map(|(by, case, found)| json!({"by": by, "case": case, "findings": facts(found)}))
+        .collect();
+    format!(
+        "{}\n\n{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
+        stage.text,
+        side.text,
+        data(&json!({"subject": subject, "others": others}))
+    )
+}
+
+fn ideas(all: &[&Idea]) -> Vec<Value> {
+    (all.iter())
+        .map(|i| json!({"id": i.id, "title": i.idea.title, "body": i.idea.body}))
+        .collect()
+}
+
+/// The cluster participant's brief over every idea.
+pub fn cluster(role: &Role, subject: &Value, all: &[&Idea]) -> String {
+    format!(
+        "{}\n\nFinding no ideas to group is a valid answer.\n\n{}",
+        role.text,
+        data(&json!({"subject": subject, "ideas": ideas(all)}))
+    )
+}
+
+/// The ranker's brief: each cluster's lead, with its variants.
+pub fn rank(role: &Role, subject: &Value, clusters: &[(&Idea, Vec<&Idea>)]) -> String {
+    let all: Vec<Value> = (clusters.iter())
+        .map(|(lead, rest)| {
+            json!({"id": lead.id, "title": lead.idea.title, "body": lead.idea.body,
+                "variants": ideas(rest)})
+        })
+        .collect();
+    format!(
+        "{}\n\nYour tree is the current directory, at `head_sha`.\n\n{}",
+        role.text,
+        data(&json!({"subject": subject, "ideas": all}))
     )
 }
 

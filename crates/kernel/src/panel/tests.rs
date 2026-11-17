@@ -19,6 +19,7 @@ use crate::wait_for;
 #[cfg(unix)]
 mod corpus;
 mod fixes;
+mod modes;
 mod real;
 mod triage;
 

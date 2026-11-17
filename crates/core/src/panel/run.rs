@@ -43,7 +43,7 @@ pub struct Start {
     pub head: Option<String>,
 }
 
-/// What a run is over: the branch's diff, an MR, an issue or a document.
+/// What a run is over: the branch's diff, an MR, an issue, a document or the owner's question.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Over {
     #[default]
@@ -51,6 +51,7 @@ pub enum Over {
     Mr(u64),
     Issue(u64),
     Document(String),
+    Question(String),
 }
 
 /// A finder: its name, role, seat and tree, and its branch on a trusted run.
@@ -70,7 +71,11 @@ pub struct Prepared {
     pub mode: Mode,
     pub verifier: Role,
     pub merge: Role,
+    /// A triage's synthesizer, or a debate's judge.
     pub synthesizer: Role,
+    pub rebuttal: Role,
+    pub cluster: Role,
+    pub ranker: Role,
     pub trust: Trust,
     /// The tree verifiers and the merge read: a worktree on a trusted run, the export else.
     pub pinned: PathBuf,
@@ -140,13 +145,14 @@ pub fn again(s: &Subject) -> Start {
             Of::Mr { number, .. } => Over::Mr(*number),
             Of::Issue { number, .. } => Over::Issue(*number),
             Of::Document { path } => Over::Document(path.clone()),
+            Of::Question { text } => Over::Question(text.clone()),
         },
         head: None,
     }
 }
 
-/// The subject at its two SHAs: the branch's head, and where it left its base. An issue and a
-/// document have no diff: both SHAs are the branch's head. An MR the repo lacks is fetched only
+/// The subject at its two SHAs: the branch's head, and where it left its base. An issue, a
+/// document and a question have no diff: both SHAs are the branch's head. An MR the repo lacks is fetched only
 /// with `fetch`.
 pub fn subject(core: &AppState, s: &Start, fetch: Option<&Cancel>) -> Result<Subject> {
     if let Over::Mr(n) = s.over {
@@ -190,6 +196,7 @@ pub fn subject(core: &AppState, s: &Start, fetch: Option<&Cancel>) -> Result<Sub
                 .map_err(|_| Error::Other(format!("No {path} on {}", s.branch)))?;
             Of::Document { path: path.clone() }
         }
+        Over::Question(text) => Of::Question { text: text.clone() },
     };
     let base = match of {
         Of::Branch => {
@@ -392,7 +399,7 @@ pub fn id(mode: &str, ms: i64) -> String {
     format!("{mode}-{}", t.format("%Y%m%d-%H%M%S-%3f"))
 }
 
-/// The task of what `s` asks for: its MR, issue, document or branch. `task` never makes a `_`, so
+/// The task of what `s` asks for: its MR, issue, document, question or branch. `task` never makes a `_`, so
 /// the kinds' names cannot meet a branch's.
 pub fn task_of(s: &Start) -> String {
     match &s.over {
@@ -400,6 +407,7 @@ pub fn task_of(s: &Start) -> String {
         Over::Mr(n) => format!("mr_{n}"),
         Over::Issue(n) => format!("issue_{n}"),
         Over::Document(path) => format!("doc_{}", task(path)),
+        Over::Question(q) => format!("question_{}", task(&q.chars().take(40).collect::<String>())),
     }
 }
 
@@ -463,6 +471,11 @@ pub fn prepare(
         ));
     }
     let role = |n: &str| mode::role(core, repo, n);
+    let synthesizer = role(if mode.debate() {
+        "judge"
+    } else {
+        "synthesizer"
+    })?;
     let priors = track::priors(core, repo, task, &subject.head_sha)?;
     let common = common(core, repo)?;
     let record = Record::create(&dir(core, repo, task, run)?)?;
@@ -483,7 +496,10 @@ pub fn prepare(
         subject,
         verifier: role("verifier")?,
         merge: role("merge")?,
-        synthesizer: role("synthesizer")?,
+        synthesizer,
+        rebuttal: role("rebuttal")?,
+        cluster: role("cluster")?,
+        ranker: role("ranker")?,
         trust: pv.trust,
         pinned: PathBuf::new(),
         finders: vec![],
@@ -609,12 +625,17 @@ fn claude_only(m: &mut Mode) -> bool {
     for s in m.roster.iter_mut().filter(|s| s.provider != CLAUDE.id) {
         (s.provider, s.model, changed) = (CLAUDE.id.into(), "opus".into(), true);
     }
-    changed |= m.verifiers.iter().any(other)
-        || m.merge.as_ref().is_some_and(other)
-        || m.synthesizer.as_ref().is_some_and(other);
+    changed |= m.verifiers.iter().any(other);
     m.verifiers.retain(|v| !other(v));
-    m.merge = m.merge.take().filter(|v| !other(v));
-    m.synthesizer = m.synthesizer.take().filter(|v| !other(v));
+    for one in [
+        &mut m.merge,
+        &mut m.synthesizer,
+        &mut m.cluster,
+        &mut m.rank,
+    ] {
+        changed |= one.as_ref().is_some_and(other);
+        *one = one.take().filter(|v| !other(v));
+    }
     changed
 }
 
@@ -746,7 +767,7 @@ mod tests {
     use crate::git::testutil::Sandbox;
 
     #[test]
-    fn an_mr_s_issue_s_or_document_s_task_is_never_a_branch_s() {
+    fn an_mr_s_issue_s_document_s_or_question_s_task_is_never_a_branch_s() {
         let of = |over| {
             task_of(&Start {
                 over,
@@ -755,8 +776,21 @@ mod tests {
         };
         let (mr, issue) = (of(Over::Mr(7)), of(Over::Issue(7)));
         let doc = of(Over::Document("PLAN.md".into()));
-        for branch in ["mr-7", "mr/7", "mr_7", "issue_7", "doc_PLAN.md", "PLAN.md"] {
-            assert!(![&mr, &issue, &doc].contains(&&task(branch)), "{branch}");
+        let q = of(Over::Question("Why? ".repeat(20)));
+        assert_eq!(q, format!("question_{}", "Why--".repeat(8)));
+        for branch in [
+            "mr-7",
+            "mr/7",
+            "mr_7",
+            "issue_7",
+            "doc_PLAN.md",
+            "PLAN.md",
+            &q,
+        ] {
+            assert!(
+                ![&mr, &issue, &doc, &q].contains(&&task(branch)),
+                "{branch}"
+            );
         }
     }
 
@@ -774,6 +808,8 @@ mod tests {
             roster: vec![seat("claude", "sonnet"), seat("codex", "gpt-5.5")],
             merge: Some("codex".into()),
             synthesizer: Some("codex:gpt-5.5".into()),
+            cluster: None,
+            rank: Some("codex".into()),
             verifiers: vec!["codex:gpt-5.5".into(), "opus".into()],
             block: vec![],
             text: String::new(),
@@ -783,8 +819,8 @@ mod tests {
         let models: Vec<String> = m.roster.iter().map(Seat::model).collect();
         assert_eq!(models, ["sonnet", "opus"]);
         assert_eq!(
-            (&m.merge, &m.synthesizer, &m.verifiers[..]),
-            (&None, &None, &["opus".to_string()][..])
+            (&m.merge, &m.synthesizer, &m.rank, &m.verifiers[..]),
+            (&None, &None, &None, &["opus".to_string()][..])
         );
         assert!(!claude_only(&mut m));
     }

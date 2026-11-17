@@ -274,8 +274,9 @@ done           { nothing_found: bool, note? }
 - The tools are pre-allowed. The host checks the schema and returns errors to the agent.
 - **A turn that ends (`end_turn`) without `done` fails its attempt.** Prose is ignored: the spike's
   agent wrote prose even after `done`.
-- `merge`, `synthesize`, `cluster` and `rank` report through `report_group`, `report_outcome` and
-  `report_rank`. Each is a participant with attempts.
+- `merge`, `synthesize`, `cluster` and `rank` report through `report_group`, `report_outcome` (a
+  dialectic's `report_synthesis`) and `report_rank`; a brainstorm's finders report `report_idea`.
+  Each is a participant with attempts.
 
 ## 6. Verification that can reject
 
@@ -893,6 +894,36 @@ Done when an MR on the forge fake gets six answers and a plan gets edits, from r
 The owner checks: triages a real MR; reviews these plans.
 
 ### Step P6. Dialectic and brainstorm
+
+**Status (2026-11-17): built; waiting for the owner's check.**
+- Built: a question subject (`Over::Question`, `Of::Question`), read at a branch's head with no
+  diff, its text the brief's `question`, its task `question_<its first 40 chars>`, no next round.
+  The stages `rebut`, `cluster` and `rank` on the engine, and `synthesize` in a debate. The
+  built-in `dialectic` (thesis and antithesis on opus, find → rebut → synthesize, the `judge` role
+  on sonnet) and `brainstorm` (generators `smallest`, `user`, `bold`, `prior-art`, find → cluster
+  → rank, cluster on sonnet, rank on opus). The acts `report_synthesis` (recommendation and why),
+  `report_idea` (title and body) and `report_rank` (an idea, value and cost 1–5, and a reason;
+  `Identity::may` refuses a blank reason or a score out of range). The start form's Question with
+  Dialectic and Brainstorm (its subject row wraps now); the Findings tab shows a dialectic's
+  synthesis, both cases and both rebuttals, and a brainstorm's clusters best first with value,
+  cost, why and variants.
+- Tests: `kernel::panel::tests::modes` on `fake_claude` (find briefs hold neither side's output; each
+  rebut brief's `others` is exactly the other side's case and findings; the judge gets cases and
+  rebuttals; done without a rebuttal, a synthesis or every idea ranked fails; a blank reason is
+  refused and a variant's rank is its lead's), `record` (clusters, ranks, a degraded cluster),
+  `host` (a rank without a reason), `mode`, `run` (the question's task), `tests/panels.rs` (both
+  modes from the Panels app's form show their outcomes), and on the real `claude` against the fake
+  Messages API (`make agent-test`): a dialectic ends with its synthesis, a brainstorm with a ranked
+  cluster.
+- Choices: a rebut participant (`rebut-<side>`) is a fresh session in the pinned tree that sees its
+  lens and the other sides' cases and findings, not its own; its rebuttal is its `done` note and it
+  reports nothing else. A synthesize after `rebut` uses the `judge` role and `report_synthesis`
+  instead of the six answers (`Mode::debate`); a mode with `cluster` or `rank` takes ideas in find
+  (`Mode::ideas`). Cluster reuses `report_group` and is skipped below two ideas; a degraded cluster
+  leaves every idea standing. A rank lands on its idea's cluster lead; clusters sort by value less
+  cost, then value, unranked last, and all of them are the short list. The question is one line of
+  the form.
+- The owner checks: a dialectic on an open question of these plans; a brainstorm on a feature.
 
 Work: `rebut`, `synthesize`, `cluster`, `rank`; both modes and their views.
 

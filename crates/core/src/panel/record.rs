@@ -16,8 +16,8 @@ use crate::host::{self, Judged};
 
 pub const SCHEMA: u32 = 1;
 
-/// What a run reviews: a branch against its base, at two SHAs; an MR, an issue or a document read
-/// in the tree at `head_sha`.
+/// What a run reviews: a branch against its base, at two SHAs; an MR, an issue, a document or a
+/// question read in the tree at `head_sha`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Subject {
     /// The owner's repo.
@@ -57,6 +57,8 @@ pub enum Of {
     },
     /// A file of the tree.
     Document { path: String },
+    /// The owner's question, for a dialectic or a brainstorm.
+    Question { text: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -161,6 +163,19 @@ pub enum Event {
     Outcome {
         participant: String,
         outcome: host::Outcome,
+    },
+    Synthesis {
+        participant: String,
+        synthesis: host::Synthesis,
+    },
+    Idea {
+        participant: String,
+        id: String,
+        idea: host::Idea,
+    },
+    Rank {
+        participant: String,
+        rank: host::Rank,
     },
     Verdict {
         participant: String,
@@ -337,6 +352,17 @@ impl Found {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Idea {
+    pub id: String,
+    pub participant: String,
+    pub idea: host::Idea,
+    /// Its cluster's first idea, when this one folded into it.
+    pub folded: Option<String>,
+    /// A cluster's lead's rank.
+    pub rank: Option<host::Rank>,
+}
+
 /// A finding's latest Fix.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fixing {
@@ -367,6 +393,8 @@ pub struct State {
     pub dispositions: BTreeMap<String, (i64, Disposition, Option<String>)>,
     pub fixes: BTreeMap<String, Fixing>,
     pub outcome: Option<host::Outcome>,
+    pub synthesis: Option<host::Synthesis>,
+    pub ideas: Vec<Idea>,
 }
 
 impl State {
@@ -480,14 +508,21 @@ impl State {
                 // A leader whose quote failed would keep a member that holds from its verifier.
                 let checked = |id: &String| self.found(id).is_some_and(|f| f.unverified.is_none());
                 standing.sort_by_key(|id| !checked(id));
-                if let Some((head, rest)) = standing.split_first() {
-                    let folds = |f: &Found| {
-                        rest.contains(&f.id) || f.folded.as_ref().is_some_and(|h| rest.contains(h))
-                    };
-                    for f in self.findings.iter_mut().filter(|f| folds(f)) {
-                        f.folded = Some(head.clone());
+                fold(
+                    self.findings.iter_mut().map(|f| (&f.id, &mut f.folded)),
+                    &standing,
+                );
+                let mut standing: Vec<String> = vec![];
+                for id in ids {
+                    let stands = self.idea(id).is_some_and(|i| i.folded.is_none());
+                    if stands && !standing.contains(id) {
+                        standing.push(id.clone());
                     }
                 }
+                fold(
+                    self.ideas.iter_mut().map(|i| (&i.id, &mut i.folded)),
+                    &standing,
+                );
             }
             Event::Outcome {
                 participant,
@@ -500,6 +535,41 @@ impl State {
                     format!("{:?}", outcome.recommend),
                 );
                 self.outcome = Some(outcome.clone());
+            }
+            Event::Synthesis {
+                participant,
+                synthesis,
+            } => {
+                let text = synthesis.recommendation.clone();
+                self.line(at, "outcome", participant, text);
+                self.synthesis = Some(synthesis.clone());
+            }
+            Event::Idea {
+                participant,
+                id,
+                idea,
+            } => {
+                self.line(at, "findings", participant, idea.title.clone());
+                if let Some(p) = self.participant(participant) {
+                    p.raised += 1;
+                }
+                self.ideas.push(Idea {
+                    id: id.clone(),
+                    participant: participant.clone(),
+                    idea: idea.clone(),
+                    folded: None,
+                    rank: None,
+                });
+            }
+            Event::Rank { participant, rank } => {
+                let text = format!("{}: value {}, cost {}", rank.idea, rank.value, rank.cost);
+                self.line(at, "rank", participant, text);
+                let lead = self
+                    .idea(&rank.idea)
+                    .map(|i| i.folded.clone().unwrap_or(i.id.clone()));
+                if let Some(i) = self.ideas.iter_mut().find(|i| Some(&i.id) == lead.as_ref()) {
+                    i.rank = Some(rank.clone());
+                }
             }
             Event::Verdict {
                 model,
@@ -537,14 +607,16 @@ impl State {
             }
             Event::Degraded { participant, cause } => {
                 self.line(at, "agent_degraded", participant, cause.clone());
-                let mut merge = false;
+                let mut stage = None;
                 if let Some(p) = self.participant(participant) {
                     (p.status, p.cause) = (Status::Degraded, cause.clone());
-                    merge = p.stage == Stage::Merge;
+                    stage = Some(p.stage);
                 }
-                // A merge that did not finish leaves every finding standing.
-                if merge {
-                    self.findings.iter_mut().for_each(|f| f.folded = None);
+                // A merge or a cluster that did not finish leaves everything standing.
+                match stage {
+                    Some(Stage::Merge) => self.findings.iter_mut().for_each(|f| f.folded = None),
+                    Some(Stage::Cluster) => self.ideas.iter_mut().for_each(|i| i.folded = None),
+                    _ => {}
                 }
             }
             Event::Paused { reason } => self.paused = Some(reason.clone()),
@@ -631,6 +703,29 @@ impl State {
         self.findings.iter().find(|f| f.id == id)
     }
 
+    pub fn idea(&self, id: &str) -> Option<&Idea> {
+        self.ideas.iter().find(|i| i.id == id)
+    }
+
+    /// Each cluster's lead with its other ideas, best first: by value less cost, then by value;
+    /// unranked ones last.
+    pub fn clusters(&self) -> Vec<(&Idea, Vec<&Idea>)> {
+        let mut all: Vec<(&Idea, Vec<&Idea>)> = (self.ideas.iter())
+            .filter(|i| i.folded.is_none())
+            .map(|lead| {
+                let of = |i: &&Idea| i.folded.as_ref() == Some(&lead.id);
+                (lead, self.ideas.iter().filter(of).collect())
+            })
+            .collect();
+        let score = |i: &Idea| {
+            i.rank
+                .as_ref()
+                .map(|r| (r.value as i8 - r.cost as i8, r.value))
+        };
+        all.sort_by_key(|(lead, _)| std::cmp::Reverse(score(lead)));
+        all
+    }
+
     /// The role whose participant raised `id`, `bugs` when the record does not say.
     pub fn role_of(&self, id: &str) -> String {
         let by = self.found(id).map(|f| f.participant.as_str());
@@ -657,6 +752,16 @@ impl State {
         let finders = self.participants.iter().filter(|p| p.stage == Stage::Find);
         let case = |p: &Participant| Some((p.name.clone(), p.note.clone()?));
         finders.filter_map(case).collect()
+    }
+
+    /// Each side's rebuttal, by the side.
+    pub fn rebuttals(&self) -> Vec<(String, String)> {
+        let sides = self.participants.iter().filter(|p| p.stage == Stage::Rebut);
+        let side = |p: &Participant| {
+            let name = p.name.strip_prefix(REBUT).unwrap_or(&p.name);
+            Some((name.to_string(), p.note.clone()?))
+        };
+        sides.filter_map(side).collect()
     }
 
     /// "3 of 4 reported" for the stage's participants.
@@ -801,6 +906,21 @@ impl State {
             },
             timeline: self.timeline.clone(),
             warnings,
+        }
+    }
+}
+
+/// A rebut participant's name is its side's after this.
+pub const REBUT: &str = "rebut-";
+
+/// Folds the `standing` ids after the first, with what folded into them, into the first.
+fn fold<'a>(all: impl Iterator<Item = (&'a String, &'a mut Option<String>)>, standing: &[String]) {
+    let Some((head, rest)) = standing.split_first() else {
+        return;
+    };
+    for (id, folded) in all {
+        if rest.contains(id) || folded.as_ref().is_some_and(|h| rest.contains(h)) {
+            *folded = Some(head.clone());
         }
     }
 }
@@ -975,6 +1095,60 @@ mod tests {
             },
         );
         assert_eq!(s2.gate(&["major".into()]), Gate::Incomplete);
+    }
+
+    #[test]
+    fn ideas_cluster_rank_on_their_lead_and_a_degraded_cluster_unfolds_them() {
+        let mut s = State::default();
+        let idea = |p: &str, id: &str| Event::Idea {
+            participant: p.into(),
+            id: id.into(),
+            idea: host::Idea {
+                title: id.into(),
+                body: "b".into(),
+            },
+        };
+        let rank = |id: &str, value, cost| Event::Rank {
+            participant: "rank".into(),
+            rank: host::Rank {
+                idea: id.into(),
+                value,
+                cost,
+                reason: "r".into(),
+            },
+        };
+        for e in [
+            started("a", "opus", Stage::Find),
+            idea("a", "a-1"),
+            idea("a", "a-2"),
+            idea("a", "a-3"),
+            started("cluster", "sonnet", Stage::Cluster),
+            Event::Group {
+                participant: "cluster".into(),
+                ids: vec!["a-2".into(), "a-3".into()],
+            },
+            rank("a-3", 4, 1),
+            rank("a-1", 5, 4),
+        ] {
+            s.apply(0, &e);
+        }
+        let order: Vec<(&str, usize)> = (s.clusters().iter())
+            .map(|(lead, rest)| (lead.idea.title.as_str(), rest.len()))
+            .collect();
+        assert_eq!(
+            order,
+            [("a-2", 1), ("a-1", 0)],
+            "a member's rank is its lead's"
+        );
+        s.apply(
+            0,
+            &Event::Degraded {
+                participant: "cluster".into(),
+                cause: "x".into(),
+            },
+        );
+        assert_eq!(s.clusters().len(), 3);
+        assert_eq!(s.participants[0].raised, 3);
     }
 
     #[test]
