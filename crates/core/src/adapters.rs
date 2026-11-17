@@ -30,7 +30,7 @@ pub const CATALOG_URL: &str =
     "https://github.com/YohoCX/detached/releases/download/adapters/adapters.json";
 /// The catalog key's public half, which `make adapters-sign` prints when it makes the key; not the
 /// update key.
-pub const CATALOG_KEY: &str = "";
+pub const CATALOG_KEY: &str = "RWT9xIvsiSrasBAM7IXWjh5ZEzilkKJ6Hq8BtB6hhAL3Zze7BJF9rs95";
 /// Days after its `published` date before a version installs on its own.
 pub const COOL_DOWN: u64 = 3;
 
