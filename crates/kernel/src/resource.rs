@@ -327,7 +327,11 @@ mod tests {
         let _held = interest(cx, &r);
         r.update(cx, |r, cx| (0..10).for_each(|_| r.refresh(cx)));
         settle(cx, &r);
-        assert_eq!(n.load(SeqCst), 3, "the first, one of the ten, then one for the other nine");
+        assert_eq!(
+            n.load(SeqCst),
+            3,
+            "the first, one of the ten, then one for the other nine"
+        );
         assert_eq!(value(cx, &r), Some(3));
     }
 
