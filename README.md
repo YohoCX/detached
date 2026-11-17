@@ -144,12 +144,13 @@ base64 -i Detached.p12 | gh secret set MACOS_CERTIFICATE
 
 Each package, and the `latest.json` the app checks for updates, is also signed with a minisign
 key, whose public half is `PUBLIC_KEY` in `crates/core/src/update.rs`; the release job refuses to
-publish without both. Once
+publish without both. The key is a secret of the `release` environment: once, create it under
+Settings, Environments, with yourself as required reviewer and only tags `v*` allowed. Then
 (`brew install minisign`):
 
 ```sh
 minisign -G -W -p minisign.pub -s minisign.key  # -W: no password, so CI can sign
-gh secret set UPDATE_SIGNING_KEY < minisign.key
+gh secret set UPDATE_SIGNING_KEY --env release < minisign.key
 sed -n 2p minisign.pub                          # the PUBLIC_KEY value; commit it
 ```
 

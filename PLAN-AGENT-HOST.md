@@ -358,7 +358,7 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - Running sessions finish on the old one.
   - The previous version is kept for rollback; older ones are removed.
 - **CI vetting**, with no model calls and no model credentials in CI; the release and catalog
-  signing keys are environment-gated secrets (the owner's rule):
+  signing keys are secrets of the `release` and `adapters` environments (the owner's rule):
   - `claude`: installed with the official installer and run through Claude's backend against the
     scripted fake Messages API (§17) on every OS of §17: H4c's real tests.
   - an ACP entry, on each catalog bump: download and verify; Codex's `session/new` runs on a
@@ -1044,7 +1044,8 @@ PLAN-FOUNDATION §12's gate, with these changes:
 - Branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`.
 - **revmux stays.** From P3 on, a step also runs through the panels' gate for comparison.
 - **Real-agent tests need no credentials.** The owner's rule is no model calls and no model
-  credentials in CI; the release and catalog signing keys are environment-gated secrets.
+  credentials in CI; the release and catalog signing keys are secrets of the `release` and
+  `adapters` environments.
   - They drive the user's real `claude` through Claude's backend against a scripted fake Messages
     API: the spike's `src/fake.rs`, pointed at by `ANTHROPIC_BASE_URL`. The CLI runs the scripted
     tool calls with its real permissions and sandbox. Through H4 they ran through the real
