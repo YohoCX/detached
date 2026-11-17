@@ -16,8 +16,8 @@ use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
 use detached_core::adapters::{self, BLOCK, CODEX, Cli};
 use detached_core::backend::{
-    self, Answer, Ask, Backend, Caps, Config, Events, Exit, Failure, Kind, Model, Opened, Past,
-    Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
+    Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
@@ -54,15 +54,6 @@ struct Acp {
 type Adapters = Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>;
 
 impl Backend for Acp {
-    fn caps(&self) -> Caps {
-        Caps {
-            context: true,
-            past: true,
-            delete: true,
-            ..Caps::default()
-        }
-    }
-
     /// The agent lists every session of the folder, the CLI's and other clients' too: those the
     /// host's index does not know are hidden.
     fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {

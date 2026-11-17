@@ -79,14 +79,8 @@ struct Direct;
 impl Backend for Direct {
     fn caps(&self) -> Caps {
         Caps {
-            context: true,
             limits: true,
             stop_task: true,
-            questions: true,
-            past: true,
-            delete: true,
-            wsl: true,
-            probe: true,
             blocks: &[
                 ".claude/settings.json",
                 ".claude/settings.local.json",

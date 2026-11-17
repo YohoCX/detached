@@ -27,7 +27,9 @@ pub fn direct() -> &'static dyn Backend {
 
 /// A backend: it opens sessions, each with its one stream of events.
 pub trait Backend: Send + Sync {
-    fn caps(&self) -> Caps;
+    fn caps(&self) -> Caps {
+        Caps::default()
+    }
     /// Opens a new session; its events go to `events`, `Opened` first.
     fn open(&self, core: &AppState, spec: &Spec, events: Events) -> Result<Box<dyn Session>>;
     /// Opens the past session `id`; its history comes as the updates after `Opened`.
@@ -85,18 +87,11 @@ pub type Tools = Arc<dyn Fn(Value) -> Value + Send + Sync>;
 /// A session's stream: called in the order the agent sent each event, from a backend's thread.
 pub type Events = Box<dyn FnMut(Event) + Send>;
 
-/// The optional pieces a backend has, and the trust paths it blocks mid-turn; the UI hides or states
-/// what is missing.
+/// The optional pieces a backend has, and the trust paths it blocks mid-turn.
 #[derive(Clone, Debug, Default)]
 pub struct Caps {
-    pub context: bool,
     pub limits: bool,
     pub stop_task: bool,
-    pub questions: bool,
-    pub past: bool,
-    pub delete: bool,
-    pub wsl: bool,
-    pub probe: bool,
     pub blocks: &'static [&'static str],
 }
 
