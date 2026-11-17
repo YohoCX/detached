@@ -141,8 +141,8 @@ pub fn private(branch: &str) -> String {
     run::task(branch)
 }
 
-/// The main checkout of `repo` and the workspace folder it was found under: where H6 puts its
-/// managed worktrees.
+/// The main checkout of `repo` and the workspace folder it was found under: where managed
+/// worktrees go.
 fn home(core: &AppState, repo: &str) -> (PathBuf, PathBuf) {
     let repos = core.list_repos();
     let info = repos.iter().find(|r| r.path == repo);

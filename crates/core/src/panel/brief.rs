@@ -1,5 +1,5 @@
 //! Each participant's brief, assembled from the client's state: fixed instructions first, the
-//! subject's own text below them as JSON-quoted data. And the quote check of §6.
+//! subject's own text below them as JSON-quoted data. And the check of a finding's quote.
 
 use std::path::Path;
 

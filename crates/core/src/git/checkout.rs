@@ -1,4 +1,5 @@
-//! Smart checkout, PLAN.md "Smart checkout" steps 1-6.
+//! Smart checkout: when local changes block a switch, they are stashed, carried over and the stash
+//! dropped, or kept when it does not apply; git runs by `runner`'s rules.
 
 use std::path::Path;
 
