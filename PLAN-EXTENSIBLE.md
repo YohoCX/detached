@@ -129,12 +129,7 @@ limits and commands are kept in `ui_state` for the next open.
 Second slice: subagents and tasks, MCP status, fork, open in terminal via `--resume` (without injected env),
 Detached data as tools through the sidecar.
 
-Before any public build: the key goes through `env`, and the sidecar runs only when `apiKeySource` is
-`ANTHROPIC_API_KEY`. Anything else is refused, `none` included: `claude` falls back to the claude.ai login
-by itself and reports it as `none`. Also decide how the key travels: in `auto` without the scrub, every
-Bash call, hook and stdio MCP server sees it; with the scrub, sessions run in `default` with an allow
-list, and same-user processes can still read it from the CLI. `apiKeyHelper` through the `settings`
-option is untested and would change the gate's allowed value.
+Public builds run the user's own `claude` on any login ([decision](docs/decisions/2026-11-12-claude-own-cli.md), PLAN-AGENT-HOST H12).
 
 Done when: the owner runs real sessions in it for a week instead of the terminal, a headless test covers
 a fake sidecar's stream, stop, crash and resume, tests on a real repo cover restore over a Bash edit, a
@@ -271,4 +266,4 @@ Done when: the owner starts a session in a new worktree with its own DB from the
 In docs/BACKLOG.md until something real asks for them: theme editor, icon packs, `px()` migration and
 density, plugin catalog, install with account tokens, process plugins with host widgets, local env store.
 
-Open, and not blocking step 0: whether chat goes into public releases (decides per-OS sidecar builds).
+Chat is in public releases from 0.6.0, on the user's own `claude` with no sidecar (PLAN-AGENT-HOST H12).

@@ -12,7 +12,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 # `open` hands its own environment to the app; Finder gives launchd's PATH and the account's shell.
 shell=$(dscl . -read "/Users/$USER" UserShell | sed 's/^UserShell: //')
-env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL="$shell" \
+# A temp config directory, so a crash report never lands in the real one.
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" SHELL="$shell" DETACHED_CONFIG_DIR="$tmp/config" \
   TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   open -n -W "$@" "target/package/$arch/Detached.app" --args --self-test "$tmp/report.json"
 if [ ! -f "$tmp/report.json" ]; then
