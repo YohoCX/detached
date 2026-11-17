@@ -2143,6 +2143,19 @@ The owner checks: a Codex chat and a review with a Codex verifier on a trusted s
 
 ### Step H12. Release
 
+**Status (2026-11-17): ready for the owner's acts on `agent-host/h12-release`.**
+- **Built:** version 0.6.0; the README says what a user installs and gets, and in plain text that
+  Detached runs the user's installed Claude Code, with no logo and no claim of a partnership; the
+  notes in `docs/releases/0.6.0.md`, which `release.yml` publishes in place of generated ones;
+  PLAN-EXTENSIBLE's public-build rule goes (§16); `make e2e-app` runs the app on a temp config
+  directory. `make build` on macOS gave both zips, signed by "Detached Dev", and `make e2e-app`
+  passed.
+- **The owner's:** the letter's answer and the Commercial Terms; the label (`CLAUDE.name` is still
+  "Claude Agent"); daily use on this build; the sidecar's removal (H11's follow-up) after the
+  check of the new chat; `CATALOG_KEY` and the signed catalog (H3), without which Codex cannot
+  install, so the README says Codex stays off; CLAUDE.md's first line, which lacks the panels'
+  writes of §16; `make release`.
+
 Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with everything.
 
 - **Personal builds** use the subscription login now
