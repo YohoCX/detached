@@ -63,13 +63,16 @@ pub struct Check {
 impl Rounds {
     /// The next round of a live task: a gate on its subject, the roster re-reviews default to, with
     /// the owner's trust choice, budget and "Codex verifies" of the round before.
-    /// None for an issue or a document, which have no diff to gate.
+    /// None for an issue, a document or a question, which have no diff to gate.
     pub fn next(&self, task: &str) -> Option<Start> {
         let runs = self.records.iter().filter(|((t, _), _)| t == task);
         let last = runs.max_by_key(|((_, run), s)| (s.at, run.clone()))?.1;
         let started = last.started.as_ref()?;
         let s = &started.subject;
-        if matches!(s.of, Of::Issue { .. } | Of::Document { .. }) {
+        if matches!(
+            s.of,
+            Of::Issue { .. } | Of::Document { .. } | Of::Question { .. }
+        ) {
             return None;
         }
         Some(Start {

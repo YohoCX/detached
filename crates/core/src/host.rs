@@ -25,6 +25,9 @@ pub enum Act {
     ReportVerdict(Verdict),
     ReportGroup(Group),
     ReportOutcome(Outcome),
+    ReportSynthesis(Synthesis),
+    ReportIdea(Idea),
+    ReportRank(Rank),
     Done(Done),
     Proc(ProcAct),
     Send(SendAct),
@@ -38,6 +41,9 @@ impl Act {
             Act::ReportVerdict(_) => "report_verdict",
             Act::ReportGroup(_) => "report_group",
             Act::ReportOutcome(_) => "report_outcome",
+            Act::ReportSynthesis(_) => "report_synthesis",
+            Act::ReportIdea(_) => "report_idea",
+            Act::ReportRank(_) => "report_rank",
             Act::Done(_) => "done",
             Act::Proc(_) => "proc",
             Act::Send(_) => "send",
@@ -158,6 +164,50 @@ impl Outcome {
         match self.answers().iter().find(|(_, a)| a.trim().is_empty()) {
             Some((a, _)) => Err(format!("{} has no argument: argue each answer.", a.text())),
             None => Ok(()),
+        }
+    }
+}
+
+/// A dialectic's outcome: what to do, and why, having weighed both cases and their rebuttals.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Synthesis {
+    pub recommendation: String,
+    pub why: String,
+}
+
+impl Synthesis {
+    pub fn check(&self) -> Result<(), String> {
+        match self.recommendation.trim().is_empty() || self.why.trim().is_empty() {
+            true => Err("Give the recommendation and why.".into()),
+            false => Ok(()),
+        }
+    }
+}
+
+/// A brainstorm's idea.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Idea {
+    pub title: String,
+    pub body: String,
+}
+
+/// An idea's value and cost, each 1 to 5, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Rank {
+    pub idea: String,
+    pub value: u8,
+    pub cost: u8,
+    pub reason: String,
+}
+
+impl Rank {
+    pub fn check(&self) -> Result<(), String> {
+        if self.reason.trim().is_empty() {
+            return Err("A rank needs its reason: say why the idea is worth its cost.".into());
+        }
+        match (1..=5).contains(&self.value) && (1..=5).contains(&self.cost) {
+            true => Ok(()),
+            false => Err("Value and cost are each 1 to 5.".into()),
         }
     }
 }
@@ -285,8 +335,23 @@ fn tools() -> Value {
             "duplicate",
         ],
     );
+    let synthesis = object(
+        json!({"recommendation": s("What to do, in a sentence or two"),
+            "why": s("How both cases and their rebuttals weigh")}),
+        &["recommendation", "why"],
+    );
+    let idea = object(
+        json!({"title": s("One line"), "body": s("What it is and how it would work")}),
+        &["title", "body"],
+    );
+    let score = |d: &str| json!({"type": "integer", "minimum": 1, "maximum": 5, "description": d});
+    let rank = object(
+        json!({"idea": s("The idea's id"), "value": score("1 to 5, 5 the most worth"),
+            "cost": score("1 to 5, 5 the most costly"), "reason": s("Why this value and cost")}),
+        &["idea", "value", "cost", "reason"],
+    );
     let done = object(
-        json!({"nothing_found": {"type": "boolean"}, "note": s("Your case, or anything to add")}),
+        json!({"nothing_found": {"type": "boolean"}, "note": s("Your case or rebuttal, or anything to add")}),
         &["nothing_found"],
     );
     let proc = object(
@@ -310,8 +375,10 @@ fn tools() -> Value {
     );
     let act = object(
         json!({"action": one_of(&["report_finding", "report_verdict", "report_group",
-                "report_outcome", "done", "proc", "send", "watch"]),
-            "args": {"anyOf": [finding, verdict, group, outcome, done, proc, send, watch],
+                "report_outcome", "report_synthesis", "report_idea", "report_rank", "done", "proc",
+                "send", "watch"]),
+            "args": {"anyOf": [finding, verdict, group, outcome, synthesis, idea, rank, done, proc,
+                send, watch],
                 "description": "The action's arguments"}}),
         &["action", "args"],
     );
@@ -323,8 +390,9 @@ fn tools() -> Value {
             the schema. Queries only, without fragments, variables, directives or introspection; at \
             most 8 deep and 256 KB of result."},
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
-            verdict on a finding, a group of duplicate findings, a triage's outcome, or `done` at the end of the work, which every turn of a review \
-            ends with; `proc` starts, stops or restarts a defined process where its definition \
+            verdict on a finding, a group of duplicate findings or ideas, a triage's outcome, a \
+            dialectic's synthesis, an idea, an idea's rank, or `done` at the end of the work, which \
+            every turn of a panel ends with; `proc` starts, stops or restarts a defined process where its definition \
             lets agents; `send` messages a session of this one's group; `watch` puts one message \
             into this session's inbox when a process is ready or a pipeline ends."},
     ]})
@@ -420,5 +488,31 @@ mod tests {
         assert!(blank.check().unwrap_err().starts_with("Ask the author"));
         args.as_object_mut().unwrap().remove("duplicate");
         assert!(act(&args).unwrap_err().to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn a_rank_without_a_reason_is_refused() {
+        let act = |args: Value| {
+            serde_json::from_value::<Act>(json!({"action": "report_rank", "args": args}))
+        };
+        let Ok(Act::ReportRank(r)) =
+            act(json!({"idea": "a-1", "value": 4, "cost": 2, "reason": "cheap"}))
+        else {
+            panic!()
+        };
+        assert_eq!(r.check(), Ok(()));
+        let missing = act(json!({"idea": "a-1", "value": 4, "cost": 2}));
+        assert!(missing.unwrap_err().to_string().contains("reason"));
+        let blank = Rank {
+            reason: " ".into(),
+            ..r.clone()
+        };
+        assert!(blank.check().unwrap_err().contains("reason"));
+        assert!(Rank { value: 6, ..r }.check().is_err());
+        let s = Synthesis {
+            recommendation: "Do it".into(),
+            why: "\n".into(),
+        };
+        assert!(s.check().is_err());
     }
 }

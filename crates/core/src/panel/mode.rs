@@ -16,6 +16,8 @@ const BUILTIN: &[(&str, &str)] = &[
     ("recheck", include_str!("builtin/recheck.md")),
     ("triage", include_str!("builtin/triage.md")),
     ("plan-review", include_str!("builtin/plan-review.md")),
+    ("dialectic", include_str!("builtin/dialectic.md")),
+    ("brainstorm", include_str!("builtin/brainstorm.md")),
     ("bugs", include_str!("builtin/bugs.md")),
     ("architecture", include_str!("builtin/architecture.md")),
     ("docs", include_str!("builtin/docs.md")),
@@ -31,6 +33,14 @@ const BUILTIN: &[(&str, &str)] = &[
     ("gaps", include_str!("builtin/gaps.md")),
     ("risks", include_str!("builtin/risks.md")),
     ("feasibility", include_str!("builtin/feasibility.md")),
+    ("rebuttal", include_str!("builtin/rebuttal.md")),
+    ("judge", include_str!("builtin/judge.md")),
+    ("cluster", include_str!("builtin/cluster.md")),
+    ("ranker", include_str!("builtin/ranker.md")),
+    ("smallest", include_str!("builtin/smallest.md")),
+    ("user", include_str!("builtin/user.md")),
+    ("bold", include_str!("builtin/bold.md")),
+    ("prior-art", include_str!("builtin/prior-art.md")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +49,10 @@ pub enum Stage {
     Find,
     Merge,
     Verify,
+    Rebut,
     Synthesize,
+    Cluster,
+    Rank,
     Gate,
 }
 
@@ -92,6 +105,8 @@ struct Head {
     seat: Vec<Seat>,
     merge: Option<String>,
     synthesizer: Option<String>,
+    cluster: Option<String>,
+    rank: Option<String>,
     #[serde(default)]
     verifiers: Vec<String>,
     #[serde(default)]
@@ -107,11 +122,26 @@ pub struct Mode {
     pub merge: Option<String>,
     /// The synthesize participant's model.
     pub synthesizer: Option<String>,
+    /// The cluster and rank participants' models.
+    pub cluster: Option<String>,
+    pub rank: Option<String>,
     /// Verifier models, in order of preference.
     pub verifiers: Vec<String>,
     /// The severities a verified finding blocks the gate with.
     pub block: Vec<String>,
     pub text: String,
+}
+
+impl Mode {
+    /// Its sides rebut each other, so its synthesis recommends rather than answers a request.
+    pub fn debate(&self) -> bool {
+        self.graph.contains(&Stage::Rebut)
+    }
+
+    /// Its finders report ideas, not findings.
+    pub fn ideas(&self) -> bool {
+        (self.graph.iter()).any(|s| matches!(s, Stage::Cluster | Stage::Rank))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +180,8 @@ pub fn parse_mode(name: &str, text: &str) -> Result<Mode> {
         roster: h.seat,
         merge: h.merge,
         synthesizer: h.synthesizer,
+        cluster: h.cluster,
+        rank: h.rank,
         verifiers: h.verifiers,
         block: h.block,
         text: text.into(),
@@ -199,9 +231,8 @@ mod tests {
     fn the_built_in_modes_and_roles_parse() {
         for (name, text) in BUILTIN {
             match *name {
-                "review" | "gate" | "recheck" | "triage" | "plan-review" => {
-                    _ = parse_mode(name, text).unwrap()
-                }
+                "review" | "gate" | "recheck" | "triage" | "plan-review" | "dialectic"
+                | "brainstorm" => _ = parse_mode(name, text).unwrap(),
                 _ => _ = parse_role(name, text).unwrap(),
             }
         }
@@ -215,6 +246,17 @@ mod tests {
         assert_eq!(gate.roster.len(), 2);
         assert_eq!(gate.block, ["critical", "major"]);
         assert!(parse_mode("x", "no front matter").is_err());
+        let dialectic = parse_mode("dialectic", BUILTIN[5].1).unwrap();
+        assert!(dialectic.debate() && !dialectic.ideas());
+        let sides: Vec<&str> = dialectic.roster.iter().map(|s| s.model.as_str()).collect();
+        let judge = dialectic.synthesizer.as_deref().unwrap();
+        assert!(
+            !sides.contains(&judge),
+            "the synthesizer runs on another model"
+        );
+        let brainstorm = parse_mode("brainstorm", BUILTIN[6].1).unwrap();
+        assert!(brainstorm.ideas() && !brainstorm.debate());
+        assert_eq!(brainstorm.graph.last(), Some(&Stage::Rank));
     }
 
     #[test]
