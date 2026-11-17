@@ -778,7 +778,7 @@ fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String
         match rx.recv_timeout(START).expect("the turn ended") {
             Event::Update(_, Update::Tool(t)) => merge(*t),
             // The adapter may send its commands again, as many times as its timing makes.
-            Event::Update(_, u) if said.contains(&format!("{u:?}")) => {}
+            Event::Update(_, u @ Update::Commands(_)) if said.contains(&format!("{u:?}")) => {}
             Event::Update(_, u) => said.push(format!("{u:?}")),
             Event::Ask(_, ask, reply) => {
                 reply.send(Answer::Allow);
