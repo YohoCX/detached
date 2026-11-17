@@ -45,6 +45,8 @@ pub struct Resource<T> {
     on: Option<On>,
     load: Load<T>,
     loading: Option<Task<()>>,
+    /// A refresh came while a load ran: another follows it.
+    again: bool,
     held: Rc<()>,
     polling: bool,
 }
@@ -117,6 +119,7 @@ impl<T: Send + 'static> Resource<T> {
                 Box::new(move || f().map_err(|e| e.to_string()))
             }),
             loading: None,
+            again: false,
             held: Rc::default(),
             polling: false,
         }
@@ -137,8 +140,13 @@ impl<T: Send + 'static> Resource<T> {
         Rc::strong_count(&self.held) > 1
     }
 
-    /// Loads now, whatever its age; a load still running is dropped.
+    /// Loads now, whatever its age; while a load runs, once it is done. Dropping the running one
+    /// instead would let refreshes that come faster than a load keep any from finishing.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.loading.is_some() {
+            self.again = true;
+            return;
+        }
         let done = blocking::run(cx, (self.load)(cx));
         self.loading = Some(cx.spawn(async move |this, cx| {
             let r = done.await;
@@ -149,6 +157,9 @@ impl<T: Send + 'static> Resource<T> {
                 match r {
                     Ok(v) => (this.value, this.error) = (Some(v), None),
                     Err(e) => this.error = Some(e),
+                }
+                if std::mem::take(&mut this.again) {
+                    this.refresh(cx);
                 }
                 this.poll(cx);
                 cx.notify();
@@ -303,6 +314,21 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(secs));
         settle(cx, r);
         value(cx, r) != before
+    }
+
+    #[gpui::test]
+    fn refreshes_while_a_load_runs_end_in_one_more_load_after_it(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let policy = Policy {
+            fresh_for: None,
+            poll: None,
+        };
+        let (r, n, _) = counter(cx, policy);
+        let _held = interest(cx, &r);
+        r.update(cx, |r, cx| (0..10).for_each(|_| r.refresh(cx)));
+        settle(cx, &r);
+        assert_eq!(n.load(SeqCst), 3, "the first, one of the ten, then one for the other nine");
+        assert_eq!(value(cx, &r), Some(3));
     }
 
     #[gpui::test]
