@@ -247,10 +247,7 @@ impl Render for TaskView {
             {
                 content = content.child(self.looping(track, rounds, cx));
             }
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
+            let now = crate::util::now();
             for (i, name) in task.rounds.iter().enumerate().rev() {
                 let Some(run) = rounds
                     .runs

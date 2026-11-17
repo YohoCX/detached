@@ -150,10 +150,7 @@ impl Render for List {
                     } else {
                         theme(cx).success
                     };
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
+                    let now = crate::util::now();
                     let time = if run.started_at == 0 {
                         "time unavailable".into()
                     } else {

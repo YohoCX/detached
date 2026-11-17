@@ -7,9 +7,10 @@ use gpui_kit::{
     div, prelude::FluentBuilder, px,
 };
 
-use super::mr_page::{MrPage, button};
+use super::mr_page::MrPage;
 use super::now;
 use crate::files::{Links, Markdown};
+use crate::ui::page::button;
 use crate::ui::{radius, text, theme};
 use crate::util::ago;
 
@@ -202,16 +203,21 @@ impl Thread {
                     .justify_end()
                     .gap(px(6.))
                     .when(closes, |d| {
-                        let cancel = cx.listener(|this, _, window, cx| this.cancel(window, cx));
-                        d.child(button("thread.cancel", "Cancel", true, cancel, cx))
+                        d.child(button(
+                            "thread.cancel",
+                            "Cancel",
+                            true,
+                            cx,
+                            |this, window, cx| this.cancel(window, cx),
+                        ))
                     })
                     .child(
                         button(
                             "thread.send",
                             if reply { "Reply" } else { "Comment" },
                             !self.busy && !blank,
-                            cx.listener(|this, _, window, cx| this.send(window, cx)),
                             cx,
+                            |this, window, cx| this.send(window, cx),
                         )
                         .bg(t.primary)
                         .text_color(t.primary_fg),
@@ -243,18 +249,21 @@ impl Thread {
                 )
             })
             .when(th.replyable, |d| {
-                let open = cx.listener(|this, _, window, cx| this.open(true, window, cx));
-                d.child(button("thread.reply", "Reply", true, open, cx))
+                d.child(button(
+                    "thread.reply",
+                    "Reply",
+                    true,
+                    cx,
+                    |this, window, cx| this.open(true, window, cx),
+                ))
             })
             .when(th.resolvable, |d| {
                 d.child(button(
                     "thread.resolve",
                     if th.resolved { "Unresolve" } else { "Resolve" },
                     !self.busy,
-                    cx.listener(move |this, _, window, cx| {
-                        this.act(resolve.clone(), false, window, cx)
-                    }),
                     cx,
+                    move |this, window, cx| this.act(resolve.clone(), false, window, cx),
                 ))
             })
     }

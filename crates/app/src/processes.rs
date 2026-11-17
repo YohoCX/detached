@@ -26,7 +26,7 @@ use kernel::workspace::Workspace;
 
 use crate::actions::Registration;
 use crate::dock::{self, AppSpec};
-use crate::ui::page::{Opt, Pick, button, labeled, row, select};
+use crate::ui::page::{Opt, Pick, button, labeled, muted, row, select};
 use crate::ui::{self, text, theme};
 
 /// The lines of the log drawn.
@@ -606,7 +606,7 @@ impl Render for Processes {
             .size_full()
             .child(bar)
             .child(match note {
-                Some(n) => div().p(px(10.)).child(muted_text(n, cx)).into_any_element(),
+                Some(n) => div().p(px(10.)).child(muted(n, cx)).into_any_element(),
                 None => div()
                     .flex()
                     .flex_1()
@@ -616,8 +616,4 @@ impl Render for Processes {
                     .into_any_element(),
             })
     }
-}
-
-fn muted_text(text: String, cx: &App) -> impl IntoElement {
-    div().text_color(theme(cx).muted).child(text)
 }

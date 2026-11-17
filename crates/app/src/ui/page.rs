@@ -80,8 +80,8 @@ pub fn labeled(
         .child(text)
 }
 
-pub fn muted(text: &'static str, cx: &App) -> Div {
-    div().text_color(theme(cx).muted).child(text)
+pub fn muted(text: impl Into<SharedString>, cx: &App) -> Div {
+    div().text_color(theme(cx).muted).child(text.into())
 }
 
 pub fn heading(title: &str, cx: &App) -> Div {
