@@ -73,6 +73,8 @@ jobs:
           merge-multiple: true
       - name: Entry
         run: |
+          # upload-artifact keeps each archive under its adapter's folder.
+          find out -mindepth 2 -name '*.tar.gz' -exec mv {} out/ \;
           tag=${GITHUB_REF_NAME#adapters-}; name=${tag%-*}; version=${tag##*-}
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           app=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
