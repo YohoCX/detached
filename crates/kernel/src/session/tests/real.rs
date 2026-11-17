@@ -538,9 +538,11 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
         "detached_act",
         "fixture-not-for-agents",
     ];
-    let mut argv = commands(&id);
+    let argv = commands(&id);
     #[cfg(unix)]
-    if wsl().is_none() {
+    let argv = if wsl().is_some() {
+        argv
+    } else {
         // The session's processes and every one they spawned.
         let mut pids = pgrep(&["-f", &id]);
         for i in 0.. {
@@ -551,14 +553,14 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
         let ps = Command::new("ps")
             .args(["-ww", "-o", "command=", "-p", &pids])
             .output();
-        argv = String::from_utf8_lossy(&ps.unwrap().stdout)
-            .lines()
-            .map(String::from)
-            .collect();
         let lsof = ["-nP", "-a", "-p", &pids, "-iTCP", "-sTCP:LISTEN"];
         let listening = Command::new("lsof").args(lsof).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&listening.stdout), "", "{pids}");
-    }
+        String::from_utf8_lossy(&ps.unwrap().stdout)
+            .lines()
+            .map(String::from)
+            .collect()
+    };
     let leaked = |l: &String| named.iter().any(|n| l.contains(n));
     assert!(!argv.is_empty() && !argv.iter().any(leaked), "{argv:?}");
     s.update(cx, |s, cx| s.end(cx));

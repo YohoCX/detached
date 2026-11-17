@@ -117,9 +117,9 @@ fn main() {
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
         Some("--version") => return println!(concat!("{} (Claude", " Code)"), VERSION),
-        Some(mode @ ("--sleep" | "--child" | "--deaf")) => {
+        Some("--sleep" | "--child" | "--deaf") => {
             #[cfg(unix)]
-            if mode == "--deaf" {
+            if args[0] == "--deaf" {
                 // SAFETY: ignoring a signal touches no memory.
                 unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
             }

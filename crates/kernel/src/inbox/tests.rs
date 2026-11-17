@@ -4,7 +4,6 @@ use std::time::Duration;
 use detached_core::adapters::CLAUDE;
 use detached_core::backend::{Kind, Setting, Spec, StopReason};
 use detached_core::host::Act;
-use detached_core::processes::{self, Agents, Definition};
 use detached_core::testutil::claude;
 use detached_forge_fake::{Kind as Forge, Pipeline as Seeded, Project, Seed, Status};
 use gpui::TestAppContext;
@@ -377,6 +376,7 @@ fn two_grouped_sessions_finish_one_change_by_messages_and_one_stop_ends_both(
 #[cfg(unix)]
 #[gpui::test]
 fn a_process_becoming_ready_puts_one_message_into_the_watcher_s_inbox(cx: &mut TestAppContext) {
+    use detached_core::processes::{self, Agents, Definition};
     let f = boot(cx);
     f.list(cx);
     let def = Definition {

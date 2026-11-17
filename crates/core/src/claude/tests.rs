@@ -1,4 +1,5 @@
 use std::sync::mpsc::Receiver;
+#[cfg(unix)]
 use std::time::Instant;
 
 use super::*;

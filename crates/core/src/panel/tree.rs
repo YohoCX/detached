@@ -431,6 +431,7 @@ pub fn export(_: &Env, _: &Path, _: &str, _: &Path, _: &dyn Fn() -> bool) -> Res
     ))
 }
 
+#[cfg(unix)]
 /// `rel`'s parent under `dest`, made as plain folders: a path that leaves `dest`, names `.git` or
 /// goes through a link is refused.
 fn dir(dest: &Path, rel: &str) -> Result<PathBuf> {
