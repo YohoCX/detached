@@ -61,8 +61,9 @@ impl Sandbox {
         Sandbox { dir, state }
     }
 
+    /// Joined per part, so on Windows it matches the `\` paths discovery lists.
     pub fn path(&self, p: &str) -> PathBuf {
-        self.dir.path().join(p)
+        self.dir.path().join(p.split('/').collect::<PathBuf>())
     }
 
     pub fn git(&self, repo: &Path, args: &[&str]) -> String {
