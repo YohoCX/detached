@@ -122,7 +122,7 @@ fn an_untrusted_participant_reads_toolchains_but_no_secret_writes_nothing_and_re
         bash(&format!("cat {}", tool.display())),
         bash("curl -fsS -m 5 http://example.com >/dev/null; echo CURL=$?"),
         bash(&format!(
-            "echo peer > {}/../p2/x; echo PEER=$?",
+            "echo peer > {}/../p2/x",
             f.dir.path().join("tmp/p1").display()
         )),
     ];
@@ -158,7 +158,8 @@ fn an_untrusted_participant_reads_toolchains_but_no_secret_writes_nothing_and_re
     assert!(all.contains("TOOLCHAIN-OK"), "{all}");
     // The sandbox's proxy answers an unlisted host with an error: no request leaves.
     assert!(!all.contains("CURL=0"), "{all}");
-    assert!(!all.contains("PEER=0"), "{all}");
+    // On Linux the write lands in the tmpfs that hides the peer's folder, and goes with it.
+    assert!(!f.dir.path().join("tmp/p2/x").exists(), "{all}");
     assert!(!asked(&s, cx));
 }
 

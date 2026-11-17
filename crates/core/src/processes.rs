@@ -178,6 +178,8 @@ pub enum Output {
 /// A process running on its PTY; dropped, it hangs up on it.
 pub struct Run {
     pty: Pty,
+    /// ConPTY ends its console's processes once its input closes.
+    _input: Box<dyn std::io::Write + Send>,
     stopper: Stopper,
     /// The batch file cmd reads the command from while it runs.
     #[cfg(windows)]
@@ -254,8 +256,8 @@ pub fn start(
     let pty::Spawned {
         pty,
         mut reader,
+        writer,
         mut child,
-        ..
     } = pty::spawn(cmd, size)?;
     let pid = child.process_id().unwrap_or(0);
     #[cfg(windows)]
@@ -317,6 +319,7 @@ pub fn start(
     };
     Ok(Run {
         pty,
+        _input: writer,
         stopper,
         #[cfg(windows)]
         _script: script,

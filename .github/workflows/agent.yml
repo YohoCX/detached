@@ -129,6 +129,8 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
+          # Not root: the CLI refuses bypassPermissions to root.
+          wsl-shell-user: ci
           additional-packages: >-
             build-essential pkg-config git perl curl ca-certificates unzip jq make python3
             bubblewrap socat libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
