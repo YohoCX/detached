@@ -78,7 +78,7 @@ fn finding() -> host::Finding {
 
 fn made(sb: &Sandbox, repo: &Path, id: &str) -> Result<Made> {
     let at = subject(sb, repo, "feat");
-    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha)?;
+    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha, &Cancel::default())?;
     make(&sb.state, &pv, ["run1", id], &Cancel::default(), &|_| {})
 }
 
@@ -87,7 +87,7 @@ fn a_fix_branches_from_the_head_into_a_managed_worktree_that_untrusted_runs_cann
     let (sb, repo) = sandbox();
     trust(&sb, &repo);
     let at = subject(&sb, &repo, "feat");
-    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha).unwrap();
+    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha, &Cancel::default()).unwrap();
     let cancel = Cancel::default();
     cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     let e = make(&sb.state, &pv, ["run1", "f1-1"], &cancel, &|_| {});
@@ -137,7 +137,8 @@ fn an_untrusted_subject_a_moved_head_or_unaccepted_trust_files_get_no_fix() {
     assert!(e.contains("untrusted"), "{e}");
     trust(&sb, &repo);
     let at = subject(&sb, &repo, "feat");
-    let (pv, brief) = preview(&sb.state, &at, &finding(), &at.head_sha).unwrap();
+    let (pv, brief) =
+        preview(&sb.state, &at, &finding(), &at.head_sha, &Cancel::default()).unwrap();
     assert!(brief.contains(&at.head_sha));
     sb.git(&repo, &["switch", "-q", "feat"]);
     fs::create_dir_all(repo.join(".claude")).unwrap();
@@ -153,7 +154,7 @@ fn an_untrusted_subject_a_moved_head_or_unaccepted_trust_files_get_no_fix() {
     );
     assert!(e.err().unwrap().to_string().contains("moved"));
     let at = subject(&sb, &repo, "feat");
-    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha).unwrap();
+    let (pv, _) = preview(&sb.state, &at, &finding(), &at.head_sha, &Cancel::default()).unwrap();
     assert!(!pv.accepted && !pv.items.is_empty(), "the Fix asks first");
     let e = make(
         &sb.state,
@@ -286,8 +287,8 @@ fn a_gone_subject_is_an_error_not_untrusted() {
     let (sb, repo) = sandbox();
     trust(&sb, &repo);
     let at = subject(&sb, &repo, "feat");
-    assert_eq!(now(&sb.state, &at).unwrap(), (true, false));
+    assert_eq!(now(&sb.state, &at, true).unwrap(), (true, false));
     sb.git(&repo, &["branch", "-qD", "feat"]);
-    let e = now(&sb.state, &at).unwrap_err().to_string();
+    let e = now(&sb.state, &at, true).unwrap_err().to_string();
     assert!(e.contains("No branch feat"), "{e}");
 }

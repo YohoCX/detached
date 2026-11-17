@@ -221,15 +221,8 @@ fn mr(core: &AppState, repo: &Path, n: u64, fetch: Option<&Cancel>) -> Result<Su
         out(&env, repo, &args, Kind::Read).is_ok()
     };
     if let Some(cancel) = fetch.filter(|_| !has(head) || !has(target)) {
-        remotes::fetch_mr(
-            core,
-            repo,
-            &remote,
-            &head_ref,
-            &m.target_branch,
-            cancel,
-            &|_| {},
-        )?;
+        let target = format!("refs/heads/{}", m.target_branch);
+        remotes::fetch_refs(core, repo, &remote, &[&head_ref, &target], cancel, &|_| {})?;
     }
     // Without the fetch the objects may be missing: the target then stands for the base.
     let base = out(&env, repo, &["merge-base", target, head], Kind::Read);
@@ -273,15 +266,16 @@ fn pin(core: &AppState, s: &Subject, run: &str, cancel: &Cancel) -> Result<()> {
     else {
         return Ok(());
     };
-    let repo = Path::new(&s.repo);
-    let at = remotes::fetch_mr(core, repo, remote, head_ref, &s.base, cancel, &|_| {})?;
-    if at != s.head_sha {
-        return Err(Error::Other(format!(
+    let (repo, to) = (Path::new(&s.repo), pin_ref(run));
+    let spec = format!("+{head_ref}:{to}");
+    remotes::fetch_refs(core, repo, remote, &[&spec], cancel, &|_| {})?;
+    let at = out(&core.env(), repo, &["rev-parse", &to], Kind::Read)?;
+    match at.trim() == s.head_sha {
+        true => Ok(()),
+        false => Err(Error::Other(format!(
             "!{number} moved since you looked: check it again"
-        )));
+        ))),
     }
-    let args = ["update-ref", &pin_ref(run), &at];
-    git::locked(core, repo, || out(&core.env(), repo, &args, Kind::Write)).map(drop)
 }
 
 /// Removes the run's MR head, if it has one.
@@ -424,7 +418,7 @@ pub fn task(branch: &str) -> String {
 }
 
 /// Everything a run needs before its first participant: `probe` answers whether the sandbox works,
-/// and `cancelled` stops a wait for the untrusted root.
+/// and `cancel` stops it, an MR's fetch and a wait for the untrusted root included.
 pub fn prepare(
     core: &AppState,
     s: &Start,

@@ -468,7 +468,14 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
         "severity": "major", "class": "correctness", "title": "t", "body": "b", "file": "a.txt",
         "line": 1, "quote": "a", "lenses": []}))
     .unwrap();
-    let (pv, _) = fix::preview(&f.core, &subject, &finding, &subject.head_sha).unwrap();
+    let (pv, _) = fix::preview(
+        &f.core,
+        &subject,
+        &finding,
+        &subject.head_sha,
+        &Default::default(),
+    )
+    .unwrap();
     let made = fix::make(&f.core, &pv, ["run1", "f1-1"], &Default::default(), &|_| {}).unwrap();
     assert_eq!(made.tree, tree);
     assert!(tree.join(".env").exists());

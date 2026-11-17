@@ -8,7 +8,7 @@ use detached_core::backend::{Kind, Spec};
 use detached_core::error::Result;
 use detached_core::host;
 use detached_core::panel::fix;
-use detached_core::panel::record::{Event, Subject};
+use detached_core::panel::record::{Event, Of, Subject};
 use detached_core::panel::run::{Preview, Start};
 use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
@@ -63,12 +63,20 @@ pub fn find(cx: &App, [repo, task, run, finding]: [&str; 4]) -> Option<Entity<Fi
 }
 
 /// The subject as it is now with its trust, and the brief of a Fix of `f` the owner sees first.
-pub fn preview(s: Subject, f: host::Finding, cx: &App) -> Task<Result<(Preview, String)>> {
-    let core = crate::core(cx).clone();
-    blocking::run(cx, move || {
-        let at = s.head_sha.clone();
-        fix::preview(&core, &s, &f, &at)
-    })
+pub fn preview(s: Subject, f: host::Finding, cx: &mut App) -> Task<Result<(Preview, String)>> {
+    let Of::Mr { number, .. } = s.of else {
+        let core = crate::core(cx).clone();
+        return blocking::run(cx, move || {
+            fix::preview(&core, &s, &f, &s.head_sha, &Default::default())
+        });
+    };
+    // An MR's preview may fetch it: an op, which shows and cancels.
+    let (repo, label) = (s.repo.clone(), format!("Fix on !{number}"));
+    let op = move |core: &AppState, id, _: &(dyn Fn(&str) + Sync)| {
+        core.op(id, |c| fix::preview(core, &s, &f, &s.head_sha, c))
+    };
+    let a = crate::activity::Activity::global(cx);
+    a.update(cx, |a, cx| a.run_op(&repo, &label, op, cx))
 }
 
 /// Starts a Fix of a run's finding on the head the owner saw, with the brief as the owner left it;

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::record::{End, Gate, State, Subject};
+use super::record::{End, Gate, Of, State, Subject};
 use super::run::{self, Preview};
 use super::{brief, track, tree};
 use crate::env::Env;
@@ -26,22 +26,34 @@ const HOOKS: &[&str] = &[
     ".pre-commit-config.yaml",
 ];
 
-/// The subject as it is now with its trust, and the brief of a Fix of `f`, reported at `at`.
+/// The subject as it is now with its trust, and the brief of a Fix of `f`, reported at `at`; an
+/// MR the repo lacks is fetched under `cancel`.
 pub fn preview(
     core: &AppState,
     s: &Subject,
     f: &host::Finding,
     at: &str,
+    cancel: &Cancel,
 ) -> Result<(Preview, String)> {
-    let pv = run::preview(core, &run::again(s), &Cancel::default())?;
+    let pv = run::preview(core, &run::again(s), cancel)?;
     let brief = brief::fix(f, &pv.subject.head_sha, at);
     Ok((pv, brief))
 }
 
 /// Whether `s`'s subject is trusted as it is now, and whether its head moved since `s` was pinned,
-/// with no fetch; an error when the branch is gone or cannot be read.
-pub fn now(core: &AppState, s: &Subject) -> Result<(bool, bool)> {
-    let now = run::subject(core, &run::again(s), None)?;
+/// with no fetch; an error when the branch is gone or cannot be read. Only `moved` asks the forge
+/// for an MR's head: its trust is the recorded MR's under today's marks.
+pub fn now(core: &AppState, s: &Subject, moved: bool) -> Result<(bool, bool)> {
+    let mut start = run::again(s);
+    let now = match &s.of {
+        Of::Mr { .. } if !moved => s.clone(),
+        Of::Mr { .. } => run::subject(core, &start, None)?,
+        // Their trust is their branch's, which needs no forge.
+        _ => {
+            start.over = run::Over::Branch;
+            run::subject(core, &start, None)?
+        }
+    };
     let trust = super::marks::classify(core, &super::marks::load(core), &now)?;
     Ok((trust.trusted, now.head_sha != s.head_sha))
 }

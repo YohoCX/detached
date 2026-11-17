@@ -234,7 +234,7 @@ fn a_colleague_s_mr_gets_six_answers_its_text_quoted_and_its_fetched_head_goes_w
     quoted(&synth, HOSTILE);
     assert!(synth.contains(r#""case": "thesis says so""#), "{synth}");
     assert_eq!(p.read_with(cx, |p, _| p.task.clone()), "mr_7");
-    let now = detached_core::panel::fix::now(&f.core, &started.subject).unwrap();
+    let now = detached_core::panel::fix::now(&f.core, &started.subject, true).unwrap();
     assert_eq!(now, (true, false), "trusted, and its head has not moved");
 }
 

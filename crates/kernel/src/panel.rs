@@ -143,13 +143,15 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                         let fixes = (runs.windows(2))
                             .map(|w| format!("git diff {}..{}", head(w[0].1), head(w[1].1)))
                             .map(|range| panel::fix(&core, &repo, &range));
+                        let waits = track.threads.iter().any(|t| t.fate == Fate::FixReady);
                         let last = runs.last().and_then(|(_, s)| s.started.as_ref());
-                        let now = last.map(|s| fix::now(&core, &s.subject));
+                        // Whether it moved matters only to a fix-ready finding, and costs an MR a
+                        // forge request.
+                        let now = last.map(|s| fix::now(&core, &s.subject, waits));
                         let (trusted, moved) = match &now {
                             Some(Ok(t)) => *t,
                             _ => (false, false),
                         };
-                        let waits = track.threads.iter().any(|t| t.fate == Fate::FixReady);
                         let mut fixing = BTreeMap::new();
                         for (run, s) in &runs {
                             for (id, f) in &s.fixes {
