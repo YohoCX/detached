@@ -57,8 +57,10 @@ type Key = (PathBuf, Vec<(String, OsString)>);
 struct Acp {
     /// By executable and env: a start holds its slot alone, so a hung adapter blocks only its own
     /// version, and a participant with a home of its own gets an adapter of its own.
-    adapters: Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>,
+    adapters: Arc<Adapters>,
 }
+
+type Adapters = Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>;
 
 impl Backend for Acp {
     fn caps(&self) -> Caps {
@@ -285,7 +287,7 @@ impl Acp {
     /// The adapter running `spec`'s program, or a new one.
     fn live(&self, spec: proc::Spec, air: bool) -> Result<Arc<Live>> {
         let key = (spec.program.clone(), spec.env.clone());
-        let slot = (self.adapters.lock().unwrap().entry(key))
+        let slot = (self.adapters.lock().unwrap().entry(key.clone()))
             .or_default()
             .clone();
         let mut slot = slot.lock().unwrap();
@@ -295,7 +297,12 @@ impl Acp {
         let demux: Arc<Mutex<Demux>> = Default::default();
         let to = demux.clone();
         let adapter = Adapter::start(&spec, air, move |e| to.lock().unwrap().got(e))?;
-        let live = Arc::new(Live { adapter, demux });
+        let entry = (Arc::downgrade(&self.adapters), key);
+        let live = Arc::new(Live {
+            adapter,
+            demux,
+            entry,
+        });
         *slot = Arc::downgrade(&live);
         Ok(live)
     }
@@ -438,6 +445,23 @@ fn meta(spec: &Spec, server: Option<&str>) -> Value {
 struct Live {
     adapter: Adapter,
     demux: Arc<Mutex<Demux>>,
+    /// Its slot, which goes with it: an untrusted participant's env is its alone.
+    entry: (Weak<Adapters>, Key),
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        let Some(map) = self.entry.0.upgrade() else {
+            return;
+        };
+        let mut map = map.lock().unwrap();
+        // A start that holds the slot puts its own adapter there.
+        let dead = (map.get(&self.entry.1))
+            .is_some_and(|s| s.try_lock().is_ok_and(|w| w.upgrade().is_none()));
+        if dead {
+            map.remove(&self.entry.1);
+        }
+    }
 }
 
 impl Live {

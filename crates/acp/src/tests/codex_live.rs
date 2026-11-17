@@ -160,7 +160,10 @@ fn an_untrusted_participant_writes_reaches_and_cross_reads_nothing() {
             home.join(".ssh"),
             tree.join(".git/detached"),
             tree.join(".env"),
+            sb.path("run/tmp"),
         ],
+        // Its own Codex home, the owner's login linked in: the turn runs only if Codex logs in so.
+        tmp: Some(sb.path("run/tmp/p1")),
         ..Isolation::default()
     });
     let (tools, _) = tools();

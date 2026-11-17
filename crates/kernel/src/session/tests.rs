@@ -893,3 +893,26 @@ fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut Tes
     );
     assert_eq!(past[0].provider, "codex");
 }
+
+/// A link in Codex's layer stops Codex there, and Claude, which never reads it, runs.
+#[cfg(unix)]
+#[gpui::test]
+fn a_link_in_codex_s_layer_refuses_a_codex_session_and_no_claude_one(cx: &mut TestAppContext) {
+    use detached_core::adapters::CODEX;
+    let f = boot_fake(cx, Fake::Claude);
+    let codex = Path::new(&f.repo).join(".codex");
+    std::fs::create_dir_all(&codex).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", codex.join("hooks.json")).unwrap();
+    let s = open(&f, Kind::Chat, cx);
+    assert_eq!(turn(&s, "hello", cx), "said hello");
+    let spec = Spec::new(&CODEX, &f.repo, Kind::Chat);
+    let c = cx.update(|cx| Session::open(spec, None, cx));
+    wait_until(cx, |cx| c.read(cx).state != State::Starting);
+    let State::Ended(End::Failed(why)) = state(&c, cx) else {
+        panic!("{:?}", state(&c, cx));
+    };
+    assert!(
+        why.starts_with("Codex cannot run here") && why.contains("link"),
+        "{why}"
+    );
+}

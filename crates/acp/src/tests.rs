@@ -1075,3 +1075,26 @@ fn an_untrusted_codex_participant_runs_on_a_home_of_its_own_with_the_login_alone
         );
     }
 }
+
+#[test]
+fn an_adapter_s_slot_goes_with_its_last_session() {
+    let sb = codex();
+    let tree = sb.path("tree");
+    std::fs::create_dir_all(&tree).unwrap();
+    let acp = Acp::default();
+    for p in ["p1", "p2"] {
+        let mut spec = Spec::new(&CODEX, &tree.display().to_string(), Kind::Untrusted);
+        spec.sandbox = Some(backend::Sandbox {
+            tmp: Some(sb.path("run/tmp").join(p)),
+            ..Default::default()
+        });
+        let open = acp.start(&sb.state, &spec, None, Box::new(|_| {})).unwrap();
+        assert_eq!(
+            acp.adapters.lock().unwrap().len(),
+            1,
+            "a home of its own each"
+        );
+        drop(open);
+        assert!(acp.adapters.lock().unwrap().is_empty());
+    }
+}

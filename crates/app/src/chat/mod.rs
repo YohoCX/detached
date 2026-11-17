@@ -170,7 +170,8 @@ fn fresh(repo: &str, from: Option<&Entity<Chat>>, cx: &mut App) -> u32 {
             f.effort.clone(),
         );
         s.update(cx, |s, _| {
-            (s.provider, s.mode, s.model, s.effort) = (p, mode, model, effort)
+            s.switch(p);
+            (s.mode, s.model, s.effort) = (mode, model, effort)
         });
     }
     n

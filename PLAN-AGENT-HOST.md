@@ -2084,8 +2084,10 @@ Codex account is out of usage until 2026-11-19, so no live turn ran.**
     does to it, is the owner's live check; the fallback is an override that turns user rules off.
   - Trust: every file of Codex's project layer `.codex/` (`config.toml`, `rules/**`,
     `hooks.json`, …) is one item, "unparsed", when it says anything, and is fingerprinted; the
-    manifest's trust globs say `.codex/**`. On disk a link in or as `.codex/`, or more than 1 MiB
-    of it, refuses the scan, as at a SHA. `.agents/skills` front matter is read as
+    manifest's trust globs say `.codex/**`. A link in or as `.codex/` (or `.agents/` at a SHA),
+    or more than 1 MiB of `.codex/`, leaves Codex's files unscanned and refuses Codex alone: a
+    Codex session there does not start and Claude stands in for a run's Codex seats, while Claude
+    chats, finders and the Skills list go on. `.agents/skills` front matter is read as
     `.claude/skills`'. All of it on disk and at a SHA. A Codex chat
     refuses a repo whose trust files are not trusted, and its card says Codex runs once they are.
   - The chat: a new chat picks Claude or, once Codex is on, Codex beside the provider's name;
