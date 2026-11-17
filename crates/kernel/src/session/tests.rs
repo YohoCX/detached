@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use detached_acp::testutil::install;
-use detached_core::adapters::testutil::CLAUDE_ACP;
-use detached_core::adapters::{self, BLOCK, CLAUDE, Config};
+use detached_core::adapters::{self, BLOCK, CLAUDE, CODEX, Config};
 use detached_core::backend::Kind;
 use detached_core::git::testutil::Sandbox;
 use detached_core::proc;
@@ -50,7 +49,6 @@ both!(
     a_load_of_a_closing_session_waits_for_its_close,
     a_reload_waits_for_a_load_ended_or_dropped_while_it_started,
     always_allow_stays_a_host_rule,
-    out_of_extra_usage_names_the_pool_and_the_fallback,
     a_trust_change_before_the_prompt_went_out_ends_the_session_unsent,
 );
 
@@ -85,11 +83,11 @@ impl Fixture {
     }
 }
 
-/// The kernel on a sandbox with a repo, `fake_acp` installed as Claude's adapter at 1.0.0 and as
-/// its CLI, on the ACP manifest.
+/// The kernel on a sandbox with a repo, `fake_acp` installed as Codex's adapter at 1.0.0 and as its
+/// CLI.
 fn boot(cx: &mut TestAppContext, vars: &[(&str, &str)]) -> Fixture {
     let fake = detached_acp::testutil::fake();
-    boot_on(cx, &fake, vars, &CLAUDE_ACP, |core| install(core, "1.0.0"))
+    boot_on(cx, &fake, vars, &CODEX, |core| install(core, "1.0.0"))
 }
 
 /// The kernel on `fake`: the fake ACP agent, or `fake_claude` as Claude's own CLI.
@@ -141,7 +139,7 @@ const OS: &[&str] = &[
     "PATHEXT",
 ];
 
-/// The kernel on a sandbox with a repo, `cli` as Claude's CLI on `provider`'s manifest and
+/// The kernel on a sandbox with a repo, `cli` as `provider`'s CLI, Codex on, and
 /// `install` run on core. `vars` join core's env first; every other name an agent may get, except
 /// the `OS` ones, is a sandbox folder or empty, so nothing of the caller's own env reaches it.
 pub(crate) fn boot_on(
@@ -184,8 +182,8 @@ pub(crate) fn boot_on(
     sb.commit(&repo, "README.md", "hi\n", "init");
     let Sandbox { dir, state } = sb;
     let config = Config {
-        cli: [(CLAUDE.id.into(), cli.display().to_string())].into(),
-        codex: false,
+        cli: [(provider.id.into(), cli.display().to_string())].into(),
+        codex: true,
     };
     state.set_block(BLOCK, config).unwrap();
     let core = Arc::new(state);
@@ -398,7 +396,7 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
 ) {
     let f = boot(cx, &[]);
     let mut spec = f.spec(Kind::Chat);
-    // The fake exits with code 3 at `session/new` for this model.
+    // The fake exits with code 3 when it is set to this model.
     spec.model = Some("die".into());
     let s = cx.update(|cx| Session::open(spec, None, cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
@@ -437,19 +435,23 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut 
 fn a_load_runs_on_the_session_s_model(fake: Fake, cx: &mut TestAppContext) {
     let f = boot_fake(cx, fake);
     let mut spec = f.spec(Kind::Chat);
-    spec.model = Some("haiku".into());
+    let (model, said) = match fake {
+        Fake::Acp => ("gpt-5.5", "gpt-5.5 read-only"),
+        Fake::Claude => ("haiku", "haiku default"),
+    };
+    spec.model = Some(model.into());
     let s = open_spec(spec.clone(), None, cx);
-    assert_eq!(turn(&s, "model", cx), "haiku default");
+    assert_eq!(turn(&s, "model", cx), said);
     let id = s.read_with(cx, |s, _| s.id.clone());
     s.update(cx, |s, cx| s.end(cx));
     assert_eq!(state(&s, cx), State::Ended(End::Closed));
-    // Without the model asked again either fake would load on fallback-opus.
+    // Without the model asked again either fake would load on its fallback.
     let loaded = open_spec(spec, id, cx);
     assert_eq!(
         loaded.read_with(cx, |s, _| s.option("model").map(String::from)),
-        Some("haiku".into())
+        Some(model.into())
     );
-    assert_eq!(turn(&loaded, "model", cx), "haiku default");
+    assert_eq!(turn(&loaded, "model", cx), said);
 }
 
 fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(
@@ -511,7 +513,7 @@ fn a_load_of_a_closing_session_waits_for_its_close(fake: Fake, cx: &mut TestAppC
 #[gpui::test]
 fn an_adapter_crash_ends_every_session_on_it_with_its_cause(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
-    let (a, b) = (open(&f, Kind::Chat, cx), open(&f, Kind::Untrusted, cx));
+    let (a, b) = (open(&f, Kind::Chat, cx), open(&f, Kind::Verifier, cx));
     let id = a.read_with(cx, |s, _| s.id.clone());
     a.update(cx, |s, cx| s.prompt("die".into(), cx));
     wait_until(cx, |cx| {
@@ -566,32 +568,6 @@ fn always_allow_stays_a_host_rule(fake: Fake, cx: &mut TestAppContext) {
     }
 }
 
-#[gpui::test]
-fn an_untrusted_repo_s_chat_loads_the_user_s_settings_and_a_participant_none(
-    cx: &mut TestAppContext,
-) {
-    let f = boot(cx, &[]);
-    let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
-    std::fs::create_dir_all(Path::new(&f.repo).join(".claude")).unwrap();
-    std::fs::write(Path::new(&f.repo).join(".claude/settings.json"), hook).unwrap();
-    let options = |s: &Entity<Session>, cx: &mut TestAppContext| {
-        let meta: Value = serde_json::from_str(&turn(s, "meta", cx)).unwrap();
-        meta["claudeCode"]["options"].clone()
-    };
-    let chat = options(&open(&f, Kind::Chat, cx), cx);
-    assert_eq!(chat["settingSources"], json!(["user"]));
-    assert_eq!(chat["strictMcpConfig"], Value::Null);
-    assert!(
-        chat["disallowedTools"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("Read(//**/.env*)"))
-    );
-    let participant = options(&open(&f, Kind::Untrusted, cx), cx);
-    assert_eq!(participant["settingSources"], json!([]));
-    assert_eq!(participant["strictMcpConfig"], json!(true));
-}
-
 /// A skill with one SKILL.md in `dir`.
 fn skill(dir: &Path) {
     std::fs::create_dir_all(dir).unwrap();
@@ -628,33 +604,6 @@ fn api() -> (String, std::sync::mpsc::Receiver<String>) {
 }
 
 #[gpui::test]
-fn the_adapter_gets_only_allowed_names_and_reaches_the_api_through_them(cx: &mut TestAppContext) {
-    let (url, request) = api();
-    let vars = [
-        ("ANTHROPIC_BASE_URL", url.as_str()),
-        ("ANTHROPIC_API_KEY", "sk-ant-dummy"),
-        ("GITHUB_TOKEN", "ghp-not-for-agents"),
-        ("DETACHED_SECRET", "nope"),
-    ];
-    let f = boot(cx, &vars);
-    let s = open(&f, Kind::Chat, cx);
-    let names = turn(&s, "env", cx);
-    let allowed: Vec<&str> = (proc::ALLOWED.iter().chain(CLAUDE.env))
-        .copied()
-        .chain([CLAUDE.cli_var])
-        .collect();
-    let names: Vec<&str> = names.split(',').collect();
-    assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
-    assert!(names.contains(&"ANTHROPIC_BASE_URL") && names.contains(&"CLAUDE_CONFIG_DIR"));
-    assert_eq!(turn(&s, "api", cx), "HTTP/1.1 200 OK");
-    let head = request.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert!(
-        head.starts_with("POST /v1/messages") && head.contains("x-api-key: sk-ant-dummy"),
-        "{head}"
-    );
-}
-
-#[gpui::test]
 fn an_old_adapter_keeps_its_sessions_while_a_new_version_starts(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let old = open(&f, Kind::Chat, cx);
@@ -669,8 +618,9 @@ fn an_old_adapter_keeps_its_sessions_while_a_new_version_starts(cx: &mut TestApp
     drop(f.dir);
 }
 
-fn out_of_extra_usage_names_the_pool_and_the_fallback(fake: Fake, cx: &mut TestAppContext) {
-    let f = boot_fake(cx, fake);
+#[gpui::test]
+fn out_of_extra_usage_names_the_pool_and_the_fallback(cx: &mut TestAppContext) {
+    let f = boot_fake(cx, Fake::Claude);
     let s = open(&f, Kind::Chat, cx);
     turn(&s, "out-of-usage", cx);
     s.read_with(cx, |s, _| {
@@ -685,13 +635,12 @@ fn out_of_extra_usage_names_the_pool_and_the_fallback(fake: Fake, cx: &mut TestA
 
 /// ACP blocks no trust path; Claude's mid-turn block is its own test.
 #[gpui::test]
-fn a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not(cx: &mut TestAppContext) {
+fn a_trust_item_changed_mid_turn_ends_the_session_and_agents_md_does_not(cx: &mut TestAppContext) {
     let f = boot(cx, &[]);
     let s = open(&f, Kind::Chat, cx);
-    assert_eq!(turn(&s, "write CLAUDE.md Be terse.;say noted", cx), "noted");
+    assert_eq!(turn(&s, "write AGENTS.md Be terse.;say noted", cx), "noted");
     assert_eq!(state(&s, cx), State::Idle);
-    let hook = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"./x.sh"}]}]}}"#;
-    let write = format!("write .claude/settings.json {hook};stall");
+    let write = "write .codex/config.toml [mcp_servers.repo];stall".to_string();
     s.update(cx, |s, cx| s.prompt(write, cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     s.read_with(cx, |s, _| {
@@ -822,24 +771,17 @@ pub(crate) fn said_from(s: &Entity<Session>, from: usize, cx: &App) -> String {
     text.collect()
 }
 
-/// The kernel with `fake_acp` as Codex's adapter and CLI, Codex on, its sessions in a Codex home.
+/// `boot` with Codex's sessions in a Codex home.
 #[cfg(unix)]
 fn boot_codex(cx: &mut TestAppContext) -> Fixture {
-    use detached_core::adapters::CODEX;
     let fake = detached_acp::testutil::fake();
-    let f = boot_on(cx, &fake, &[], &CODEX, |core| {
-        detached_acp::testutil::install_as(core, CODEX.adapter, &fake, "2.6.0");
+    boot_on(cx, &fake, &[], &CODEX, |core| {
+        install(core, "1.0.0");
         let home = core.data_dir.join("codex-home");
         std::fs::create_dir_all(&home).unwrap();
         let home = ("CODEX_HOME".into(), home.display().to_string());
         core.env.write().unwrap().vars.push(home);
-    });
-    let config = Config {
-        cli: [(CODEX.id.into(), fake.display().to_string())].into(),
-        codex: true,
-    };
-    f.core.set_block(BLOCK, config).unwrap();
-    f
+    })
 }
 
 #[cfg(unix)]
@@ -857,7 +799,6 @@ fn alive(pid: u64) -> bool {
 #[cfg(unix)]
 #[gpui::test]
 fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut TestAppContext) {
-    use detached_core::adapters::CODEX;
     let f = boot_codex(cx);
     let mut spec = f.spec(Kind::Chat);
     spec.mode = CODEX.chat.into();
@@ -898,7 +839,6 @@ fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut Tes
 #[cfg(unix)]
 #[gpui::test]
 fn a_link_in_codex_s_layer_refuses_a_codex_session_and_no_claude_one(cx: &mut TestAppContext) {
-    use detached_core::adapters::CODEX;
     let f = boot_fake(cx, Fake::Claude);
     let codex = Path::new(&f.repo).join(".codex");
     std::fs::create_dir_all(&codex).unwrap();

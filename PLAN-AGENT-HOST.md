@@ -1432,6 +1432,9 @@ shape's first green run, a `Break` in ACP's replay, then gate steps 3 and 4.
 path is gone with every item step 4 lists; H3's tests run on Codex's adapter; `kernel::agents` and
 the Agents page offer an install to ACP providers alone; `agent-ci.sh` runs `claude` 2.1.322 unless
 told otherwise.
+The Claude-on-ACP code went too: the `claudeCode` `_meta` with its `.env` deny, the extra-usage
+match and the config options on new and load; `CLAUDE_ACP` is gone, and the fake-ACP tests and
+`fake_acp` take Codex's shape.
 
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
@@ -1599,7 +1602,7 @@ Tests:
     - `a_reload_waits_for_a_load_ended_or_dropped_while_it_started`;
     - `always_allow_stays_a_host_rule`;
     - `out_of_extra_usage_names_the_pool_and_the_fallback`;
-    - `a_trust_item_changed_mid_turn_ends_the_session_and_claude_md_does_not`, on a trust path
+    - `a_trust_item_changed_mid_turn_ends_the_session_and_agents_md_does_not`, on a trust path
       the backend does not block;
     - `a_trust_change_before_the_prompt_went_out_ends_the_session_unsent`;
   - **ACP's own six**, on the fake ACP agent alone, the first two in the kernel and in

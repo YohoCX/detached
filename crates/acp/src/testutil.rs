@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use detached_core::adapters::{self, CLAUDE, Installed, Version};
+use detached_core::adapters::{self, CODEX, Installed, Version};
 use detached_core::state::AppState;
 
 /// Builds `fake_acp` once and returns its executable.
@@ -12,9 +12,9 @@ pub fn fake() -> PathBuf {
     (FAKE.get_or_init(|| detached_core::testutil::bin("detached-acp", "fake_acp"))).clone()
 }
 
-/// `fake_acp` as Claude's adapter at `version`, the current one; the one before is kept.
+/// `fake_acp` as Codex's adapter at `version`, the current one; the one before is kept.
 pub fn install(core: &AppState, version: &str) {
-    install_as(core, CLAUDE.adapter, &fake(), version);
+    install_as(core, CODEX.adapter, &fake(), version);
 }
 
 /// `program` as the adapter `name` at `version`, the current one; the one before is kept.

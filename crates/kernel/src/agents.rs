@@ -387,8 +387,7 @@ mod tests {
         set(true, cx);
         let agents = cx.read(Agents::global);
         agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
-        let first = [CLAUDE.adapter, CODEX.adapter].map(|n| f.entry(n, "0.1.0"));
-        f.publish(1, &first);
+        f.publish(1, &[f.entry(CODEX.adapter, "0.1.0")]);
         check(cx);
         assert_eq!(version(CODEX.id, cx), None);
         cx.read(|cx| assert!(Agents::global(cx).read(cx).error.is_none()));
@@ -402,8 +401,7 @@ mod tests {
         });
         let mut fresh = f.entry(CODEX.adapter, "0.3.0");
         fresh.published = adapters::today();
-        let claude = f.entry(CLAUDE.adapter, "0.2.0");
-        f.publish(2, &[f.entry(CODEX.adapter, "0.2.0"), fresh, claude]);
+        f.publish(2, &[f.entry(CODEX.adapter, "0.2.0"), fresh]);
         check(cx);
         assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
         assert_eq!(version(CLAUDE.id, cx), None);

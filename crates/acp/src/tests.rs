@@ -3,7 +3,6 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use detached_core::adapters::testutil::CLAUDE_ACP;
 use detached_core::backend::Session as _;
 use detached_core::git::testutil::Sandbox;
 use detached_core::host::Call;
@@ -242,13 +241,13 @@ fn a_killed_host_leaves_no_process() {
     }
 }
 
-/// Core on a sandbox, `fake_acp` installed as Claude's adapter at 1.0.0 and as its CLI.
+/// Core on a sandbox, `fake_acp` installed as Codex's adapter at 1.0.0 and as its CLI, Codex on.
 fn sandbox() -> Sandbox {
     let sb = Sandbox::new();
     let fake = testutil::fake().display().to_string();
     let config = adapters::Config {
-        cli: [(CLAUDE.id.into(), fake)].into(),
-        codex: false,
+        cli: [(CODEX.id.into(), fake)].into(),
+        codex: true,
     };
     sb.state.set_block(BLOCK, config).unwrap();
     testutil::install(&sb.state, "1.0.0");
@@ -259,7 +258,8 @@ fn sandbox() -> Sandbox {
 fn open(acp: &Acp, sb: &Sandbox, past: Option<&str>) -> (Open, Receiver<backend::Event>) {
     let (tx, rx) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     let open = acp.start(&sb.state, &spec, past, Box::new(move |e| _ = tx.send(e)));
     (open.unwrap(), rx)
 }
@@ -369,7 +369,8 @@ fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Strin
     let (tx, rx) = mpsc::channel();
     let (called, calls) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     let called = Mutex::new(called);
     spec.tools = Some(detached_core::host::server(move |c| {
         _ = called.lock().unwrap().send(c);
@@ -383,8 +384,6 @@ fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Strin
     assert_eq!(server["type"], "http");
     let name = server["name"].as_str().unwrap();
     assert!(name.starts_with("detached-host-"), "{name}");
-    let allowed = &params["_meta"]["claudeCode"]["options"]["allowedTools"];
-    assert_eq!(allowed, &json!([format!("mcp__{name}__*")]));
     let url = server["url"].as_str().unwrap().to_string();
     (open, rx, url, calls)
 }
@@ -508,7 +507,8 @@ fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
     assert_eq!(post(&url, "POST", &[], &rpc("initialize")).status, 404);
     let (tx, rx) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     spec.tools = Some(detached_core::host::server(|_| Ok(json!(""))));
     let open = acp.start(
         &sb.state,
@@ -557,7 +557,7 @@ fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowe
 
 #[test]
 fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_reads() {
-    let sb = codex_fake();
+    let sb = sandbox();
     let repo = sb.path("tree");
     std::fs::create_dir_all(repo.join(".codex")).unwrap();
     std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.repo]\n").unwrap();
@@ -585,18 +585,6 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
     assert_eq!(layer, want);
 }
 
-/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI.
-fn codex_fake() -> Sandbox {
-    let sb = Sandbox::new();
-    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
-    let config = adapters::Config {
-        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
-        codex: true,
-    };
-    sb.state.set_block(BLOCK, config).unwrap();
-    sb
-}
-
 /// A Codex session on `acp` in the sandbox with `effort` and `model`, and its stream.
 fn codex_open(
     acp: &Acp,
@@ -615,7 +603,7 @@ fn codex_open(
 
 #[test]
 fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
-    let (acp, sb) = (Acp::default(), codex_fake());
+    let (acp, sb) = (Acp::default(), sandbox());
     let (open, rx) = codex_open(&acp, &sb, "high", None);
     let open = open.unwrap();
     let config = until(&rx, |e| match e {
@@ -630,7 +618,7 @@ fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
 
 #[test]
 fn a_refused_setting_fails_the_open_and_closes_its_session() {
-    let (acp, sb) = (Acp::default(), codex_fake());
+    let (acp, sb) = (Acp::default(), sandbox());
     let (kept, rx) = codex_open(&acp, &sb, "low", None);
     let kept = kept.unwrap();
     let (refused, _) = codex_open(&acp, &sb, "low", Some("no-such-model"));
@@ -664,16 +652,9 @@ fn no_argv_holds_the_host_tools_secret() {
     assert!(!all.contains(secret));
 }
 
-/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI, Codex on, and its sessions kept
-/// in a Codex home of the sandbox's.
+/// `sandbox()` with Codex's sessions kept in a Codex home of the sandbox's.
 fn codex() -> Sandbox {
-    let sb = Sandbox::new();
-    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
-    let config = adapters::Config {
-        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
-        codex: true,
-    };
-    sb.state.set_block(BLOCK, config).unwrap();
+    let sb = sandbox();
     let home = sb.path("codex-home");
     std::fs::create_dir_all(&home).unwrap();
     let home = ("CODEX_HOME".into(), home.display().to_string());

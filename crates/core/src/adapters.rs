@@ -57,6 +57,7 @@ pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
     pub backend: backend::Name,
+    /// The ACP adapter; empty on a direct provider.
     pub adapter: &'static str,
     pub cli: &'static str,
     /// A floor; the catalog entry in use may raise it.
@@ -65,7 +66,7 @@ pub struct Provider {
     pub login: &'static [&'static str],
     /// The vendor's installer as typed in a shell: Unix, then Windows.
     pub installer: Option<[&'static str; 2]>,
-    /// Names the CLI to the adapter.
+    /// Names the CLI to the ACP adapter.
     pub cli_var: &'static str,
     /// Passed from the app's env when set: the login, cloud and proxy variables the provider
     /// documents.
@@ -82,71 +83,66 @@ pub struct Provider {
     pub full: &'static str,
 }
 
-pub static CLAUDE: Provider = claude(backend::Name::Direct);
-
-/// Claude's manifest on `backend`; the adapter's fields serve the ACP one of the tests.
-pub(crate) const fn claude(backend: backend::Name) -> Provider {
-    Provider {
-        id: "claude",
-        name: "Claude Agent",
-        backend,
-        adapter: "claude-agent-acp",
-        cli: "claude",
-        min_cli: Version::new(2, 1, 322),
-        login: &["claude", "/login"],
-        installer: Some([
-            "curl -fsSL https://claude.ai/install.sh | bash",
-            "irm https://claude.ai/install.ps1 | iex",
-        ]),
-        cli_var: "CLAUDE_CODE_EXECUTABLE",
-        env: &[
-            "CLAUDE_CONFIG_DIR",
-            "CLAUDE_CODE_TMPDIR",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-            "AWS_PROFILE",
-            "AWS_REGION",
-            "CLOUD_ML_REGION",
-            "ANTHROPIC_VERTEX_PROJECT_ID",
-            "CLAUDE_CODE_USE_FOUNDRY",
-            "ANTHROPIC_FOUNDRY_RESOURCE",
-            "ANTHROPIC_FOUNDRY_BASE_URL",
-            "ANTHROPIC_FOUNDRY_API_KEY",
-            "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
-            "HTTPS_PROXY",
-            "NO_PROXY",
-            "NODE_EXTRA_CA_CERTS",
-        ],
-        trust: &[
-            ".claude/settings.json",
-            ".claude/settings.local.json",
-            ".claude/skills/*/SKILL.md",
-            ".claude/commands/**",
-            ".claude/agents/**",
-            ".mcp.json",
-        ],
-        modes: &[
-            (
-                "auto",
-                "Auto",
-                "A classifier approves or blocks each action, and asks you when it can't tell",
-            ),
-            (
-                "acceptEdits",
-                "Edits",
-                "File edits run; other actions that need approval ask you",
-            ),
-            ("plan", "Plan", "Explores and plans without changing files"),
-            ("default", "Manual", "Anything that needs approval asks you"),
-        ],
-        ask: "default",
-        chat: "auto",
-        full: "bypassPermissions",
-    }
-}
+pub static CLAUDE: Provider = Provider {
+    id: "claude",
+    name: "Claude Agent",
+    backend: backend::Name::Direct,
+    adapter: "",
+    cli: "claude",
+    min_cli: Version::new(2, 1, 322),
+    login: &["claude", "/login"],
+    installer: Some([
+        "curl -fsSL https://claude.ai/install.sh | bash",
+        "irm https://claude.ai/install.ps1 | iex",
+    ]),
+    cli_var: "",
+    env: &[
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_TMPDIR",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "CLOUD_ML_REGION",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+    ],
+    trust: &[
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/skills/*/SKILL.md",
+        ".claude/commands/**",
+        ".claude/agents/**",
+        ".mcp.json",
+    ],
+    modes: &[
+        (
+            "auto",
+            "Auto",
+            "A classifier approves or blocks each action, and asks you when it can't tell",
+        ),
+        (
+            "acceptEdits",
+            "Edits",
+            "File edits run; other actions that need approval ask you",
+        ),
+        ("plan", "Plan", "Explores and plans without changing files"),
+        ("default", "Manual", "Anything that needs approval asks you"),
+    ],
+    ask: "default",
+    chat: "auto",
+    full: "bypassPermissions",
+};
 
 pub static CODEX: Provider = Provider {
     id: "codex",
@@ -356,7 +352,10 @@ pub fn install(
     progress: &dyn Fn(Progress),
 ) -> Result<Installed> {
     let name = &entry.name;
-    if !PROVIDERS.iter().any(|p| p.adapter == name) {
+    if !PROVIDERS
+        .iter()
+        .any(|p| p.backend == backend::Name::Acp && p.adapter == name)
+    {
         return Err(Error::Other(format!("{name} is not an agent adapter")));
     }
     let artifact = entry.artifacts.get(&target()).ok_or_else(|| {

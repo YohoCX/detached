@@ -1,6 +1,6 @@
 //! A scripted ACP agent for the tests. A prompt is steps split by `;`, each a verb and its
 //! arguments; a prompt with a line `acp: <steps>` runs those alone:
-//! - `say <text>` streams the text in three chunks with a usage update; `prose` answers without a tool;
+//! - `say <text>` streams the text in three chunks with a usage update;
 //! - `stall` runs a foreground command until `session/cancel`, which kills it;
 //! - `die` exits with code 3 mid-turn;
 //! - `ask [<path>|-]` asks permission to write the path (notes.txt), its title always the same and
@@ -10,13 +10,9 @@
 //!   first MCP server's tool;
 //! - `malformed` sends updates whose arguments do not parse, then goes on;
 //! - `spawn` starts a child in its own process group on this stdin, which exits on its EOF;
-//! - `env` says the names in its env; `meta` the `_meta` its session got, `params` all of its
-//!   `session/new` or `session/load`; `model` its model and mode, `effort` its effort; `home` the
-//!   names in its `CODEX_HOME`; `sessions`
-//!   the count of its open sessions;
-//! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
+//! - `params` says all of its `session/new` or `session/load`; `model` its model and mode, `effort`
+//!   its effort; `home` the names in its `CODEX_HOME`; `sessions` the count of its open sessions;
 //! - `write <path> <text>` writes a file under the cwd;
-//! - `out-of-usage` fails the prompt as Claude does when extra usage has run out;
 //! - `hold-close` answers the session's close only once the next prompt, of any session, comes;
 //! - `run <text>` runs a command whose output, `<text>` and a newline twice, comes in pieces beside
 //!   the call's updates, as Codex sends it;
@@ -28,15 +24,12 @@
 //! A prompt's `acp-wake: <steps>` line is what the host's wake line, `You have new messages`, runs
 //! in that session from then on.
 //!
-//! Its version is its folder's name. A load replays one prior turn (`earlier`, `replayed`) and
-//! reports `fallback-opus` as the model unless `configOptions` name one; a close ends the turn
-//! first. A new session asked for the model `die` exits with code 3 before it answers. On stdin's
-//! EOF it exits 1 with `EPIPE`, as Claude's adapter does.
-//!
-//! Installed as `codex-acp` it is Codex's: it reads no `configOptions` on new or load, has Codex's
-//! modes, models and `reasoning_effort`, starts in `agent` on `gpt-5.5` and loads on
-//! `gpt-5.5-mini`. With `CODEX_HOME` set it keeps its sessions in `fake-sessions.json` there, which
-//! `session/list` reads, titled by their first prompt, and `session/delete` archives.
+//! It acts as Codex's adapter: Codex's modes, models and `reasoning_effort`; a new session starts in
+//! `agent` on `gpt-5.5`, a load replays one prior turn (`earlier`, `replayed`) on `gpt-5.5-mini`; a
+//! close ends the turn first. Set to the model `die`, it exits with code 3 before it answers. On
+//! stdin's EOF it exits 1 with `EPIPE`. Its version is its folder's name. With `CODEX_HOME` set it
+//! keeps its sessions in `fake-sessions.json` there, which `session/list` reads, titled by their
+//! first prompt, and `session/delete` archives.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -130,34 +123,12 @@ fn main() {
                         format!("fake-{}-{next}", std::process::id())
                     }
                 };
-                let asked = |k: &str| {
-                    if exe_name().starts_with("codex-acp") {
-                        return None;
-                    }
-                    let all = params["configOptions"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default();
-                    let o = all.into_iter().find(|o| o["configId"] == k)?;
-                    o["value"].as_str().map(String::from)
-                };
-                if method == "session/new" && asked("model").as_deref() == Some("die") {
-                    eprintln!("fake_acp: died at session/new");
-                    std::process::exit(3);
-                }
                 let load = method == "session/load";
-                let fallback = match (codex(), load) {
-                    (true, true) => "gpt-5.5-mini",
-                    (true, false) => "gpt-5.5",
-                    (false, true) => "fallback-opus",
-                    (false, false) => "default",
-                };
-                let mode = if codex() { "agent" } else { "auto" };
                 let s = Session {
                     cwd: params["cwd"].as_str().unwrap_or_default().into(),
                     params: params.clone(),
-                    model: asked("model").unwrap_or(fallback.into()),
-                    mode: asked("mode").unwrap_or(mode.into()),
+                    model: if load { "gpt-5.5-mini" } else { "gpt-5.5" }.into(),
+                    mode: "agent".into(),
                     effort: "medium".into(),
                     ..Session::default()
                 };
@@ -217,17 +188,16 @@ fn main() {
                 let Some(s) = all.get_mut(sid) else { continue };
                 let v = params["value"].as_str().unwrap_or_default().to_string();
                 match params["configId"].as_str() {
-                    // Codex's fake lists `workspace-write` and refuses it, as an agent may.
-                    Some("mode")
-                        if modes().contains(&v.as_str())
-                            && !(codex() && v == "workspace-write") =>
-                    {
+                    Some("model") if v == "die" => {
+                        eprintln!("fake_acp: died at its model");
+                        std::process::exit(3);
+                    }
+                    // It lists `workspace-write` and refuses it, as an agent may.
+                    Some("mode") if MODES.contains(&v.as_str()) && v != "workspace-write" => {
                         s.mode = v
                     }
-                    Some("model") if models().iter().any(|m| m.0 == v) => s.model = v,
-                    Some("reasoning_effort") if codex() && EFFORTS.contains(&v.as_str()) => {
-                        s.effort = v
-                    }
+                    Some("model") if MODELS.iter().any(|m| m.0 == v) => s.model = v,
+                    Some("reasoning_effort") if EFFORTS.contains(&v.as_str()) => s.effort = v,
                     _ => {
                         send(
                             &out,
@@ -320,43 +290,17 @@ fn next_request(next: &mut u64) -> u64 {
     1000 + *next
 }
 
-fn modes() -> &'static [&'static str] {
-    match codex() {
-        true => &["read-only", "workspace-write", "agent", "agent-full-access"],
-        false => &[
-            "auto",
-            "default",
-            "acceptEdits",
-            "plan",
-            "bypassPermissions",
-            "read-only",
-        ],
-    }
-}
-
+const MODES: &[&str] = &["read-only", "workspace-write", "agent", "agent-full-access"];
 /// Each model's value and name.
-fn models() -> &'static [(&'static str, &'static str)] {
-    match codex() {
-        true => &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-5.5 mini")],
-        false => &[
-            ("default", "default"),
-            ("haiku", "haiku"),
-            ("fallback-opus", "fallback-opus"),
-        ],
-    }
-}
+const MODELS: &[(&str, &str)] = &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-5.5 mini")];
 
 const EFFORTS: &[&str] = &["low", "medium", "high"];
 /// The host's line for a woken turn.
 const WAKE: &str = "You have new messages";
 
-fn codex() -> bool {
-    exe_name().starts_with("codex-acp")
-}
-
 /// Runs `f` on the sessions `CODEX_HOME` keeps, and keeps what it leaves.
 fn listed(f: impl FnOnce(&mut Vec<Value>)) {
-    let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty() && codex()) else {
+    let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty()) else {
         return;
     };
     let file = std::path::Path::new(&home).join("fake-sessions.json");
@@ -364,14 +308,6 @@ fn listed(f: impl FnOnce(&mut Vec<Value>)) {
     let mut all: Vec<Value> = serde_json::from_slice(&bytes).unwrap_or_default();
     f(&mut all);
     let _ = std::fs::write(file, Value::from(all).to_string());
-}
-
-fn exe_name() -> String {
-    let exe = std::env::current_exe().unwrap_or_default();
-    exe.file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned()
 }
 
 fn config(s: &Session) -> Value {
@@ -382,16 +318,12 @@ fn config(s: &Session) -> Value {
             .collect();
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
-    let modes: Vec<_> = modes().iter().map(|m| (*m, *m)).collect();
-    let mut all = vec![
-        select("mode", &s.mode, &modes),
-        select("model", &s.model, models()),
-    ];
-    if codex() {
-        let efforts: Vec<_> = EFFORTS.iter().map(|e| (*e, *e)).collect();
-        all.push(select("reasoning_effort", &s.effort, &efforts));
-    }
-    Value::from(all)
+    let pairs = |all: &[&'static str]| all.iter().map(|m| (*m, *m)).collect::<Vec<_>>();
+    json!([
+        select("mode", &s.mode, &pairs(MODES)),
+        select("model", &s.model, MODELS),
+        select("reasoning_effort", &s.effort, &pairs(EFFORTS)),
+    ])
 }
 
 enum Stop {
@@ -461,7 +393,6 @@ impl Turn<'_> {
                     "cost": {"amount": 0.01, "currency": "USD"}}),
                 );
             }
-            "prose" => self.say("No tool is needed for that."),
             "stall" => {
                 let mut child = me()
                     .arg("--sleep")
@@ -556,14 +487,6 @@ impl Turn<'_> {
                 let child = cmd.spawn().map_err(err)?;
                 self.say(&format!("child {}", child.id()));
             }
-            "env" => {
-                let mut names: Vec<String> = std::env::vars_os()
-                    .map(|(k, _)| k.to_string_lossy().into_owned())
-                    .collect();
-                names.sort();
-                self.say(&names.join(","));
-            }
-            "meta" => self.say(&self.session(|s| s.params["_meta"].to_string())),
             "params" => self.say(&self.session(|s| s.params.to_string())),
             "hold-close" => {
                 let mut all = self.sessions.lock().unwrap();
@@ -581,7 +504,6 @@ impl Turn<'_> {
                 self.say(&names.join(","));
             }
             "sessions" => self.say(&self.sessions.lock().unwrap().len().to_string()),
-            "api" => self.say(&api().map_err(err)?),
             "write" => {
                 let (path, text) = rest.split_once(' ').unwrap_or((rest, ""));
                 let path = self.session(|s| std::path::Path::new(&s.cwd).join(path));
@@ -592,11 +514,6 @@ impl Turn<'_> {
                 let url = self.session(|s| s.params["mcpServers"][0]["url"].clone());
                 let said = act(url.as_str().unwrap_or_default(), rest).map_err(err)?;
                 self.say(&said);
-            }
-            "out-of-usage" => {
-                return Err(Stop::Error(
-                    "You're out of extra usage · resets 5pm (Europe/Berlin)".into(),
-                ));
             }
             _ => return Err(Stop::Error(format!("unknown step {step}"))),
         }
@@ -663,19 +580,4 @@ fn post(
             .then(|| v.to_string())
     });
     Ok((session, body.to_string()))
-}
-
-/// One request to the Messages API the env names, by hand: the fake has no HTTP client.
-fn api() -> std::io::Result<String> {
-    let base = std::env::var("ANTHROPIC_BASE_URL").map_err(std::io::Error::other)?;
-    let key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    let host = base.trim_start_matches("http://").trim_end_matches('/');
-    let mut s = std::net::TcpStream::connect(host)?;
-    write!(
-        s,
-        "POST /v1/messages HTTP/1.1\r\nHost: {host}\r\nx-api-key: {key}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-    )?;
-    let mut reply = String::new();
-    s.read_to_string(&mut reply)?;
-    Ok(reply.lines().next().unwrap_or_default().to_string())
 }

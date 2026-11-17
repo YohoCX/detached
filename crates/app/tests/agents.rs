@@ -39,8 +39,7 @@ fn the_agents_page_installs_updates_and_rolls_back_codexs_adapter(cx: &mut TestA
     let f = Fixture::new();
     let (url, key) = (f.url(), f.key.clone());
     cx.update(|_, cx| Agents::global(cx).update(cx, |a, _| (a.url, a.key) = (url, key)));
-    let first = [CODEX.adapter, CLAUDE.adapter].map(|n| f.entry(n, "0.1.0"));
-    f.publish(1, &first);
+    f.publish(1, &[f.entry(CODEX.adapter, "0.1.0")]);
     cx.update(|_, cx| settings::open(cx, "agents"));
     wait_for(cx, "agents.codex.cli", "codex was not found.");
     wait_for(cx, "agents.claude.cli", "claude was not found.");
