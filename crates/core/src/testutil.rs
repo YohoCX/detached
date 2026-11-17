@@ -22,7 +22,23 @@ pub fn bin(package: &str, name: &str) -> PathBuf {
     // process spawning it meanwhile finds nothing: builds take turns, and tests run a copy.
     let lock = File::create(target.join("build.lock")).unwrap();
     lock.lock().unwrap();
-    let out = Command::new(env!("CARGO"))
+    let mut cargo = Command::new(env!("CARGO"));
+    // What cargo test sets for the crate under test reaches build scripts, and ring's reruns on
+    // it: each test crate would relink the fake.
+    let per_crate = [
+        "CARGO_PKG_",
+        "CARGO_MANIFEST_",
+        "CARGO_CRATE_",
+        "CARGO_BIN_",
+        "CARGO_PRIMARY_",
+        "OUT_DIR",
+    ];
+    for (k, _) in std::env::vars() {
+        if per_crate.iter().any(|p| k.starts_with(p)) {
+            cargo.env_remove(k);
+        }
+    }
+    let out = cargo
         .args(["build", "-p", package, "--bin", name])
         .arg("--target-dir")
         .arg(&target)
@@ -48,7 +64,16 @@ pub fn bin(package: &str, name: &str) -> PathBuf {
     let at = built.duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let copy = exe.with_file_name(format!("{name}-{at}{}", std::env::consts::EXE_SUFFIX));
     if !copy.exists() {
-        fs::copy(&exe, &copy).unwrap();
+        // Older builds' copies and a cut-short copy go; Windows keeps one that still runs.
+        let older = format!("{name}-");
+        for e in fs::read_dir(copy.parent().unwrap()).unwrap().flatten() {
+            if e.file_name().to_string_lossy().starts_with(&older) {
+                _ = fs::remove_file(e.path());
+            }
+        }
+        let part = copy.with_extension("part");
+        fs::copy(&exe, &part).unwrap();
+        fs::rename(&part, &copy).unwrap();
     }
     copy
 }

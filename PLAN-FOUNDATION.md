@@ -849,8 +849,10 @@ merged; `make check` and `make smoke` green:
   loads the resource, as a view's mount did; activation reloads a held one older than `fresh_for`;
   a resource reloads on nothing while no interest holds it. Refreshes that come while a load runs
   collapse into one more load after it, and a load that started before an interest never counts as
-  that interest's (`loaded`); a poll skips a tick while one runs. A poll's condition sees a value
-  not loaded yet, so the MR list polls after a failed first load, as its view did.
+  that interest's (`loaded`); a poll skips a tick while one runs. `Resource::edit` changes the value
+  ahead of the write it stands for and drops the value of a load already running, which read before
+  it; the caller refreshes once the write is done. A poll's condition sees a value not loaded yet,
+  so the MR list polls after a failed first load, as its view did.
 - `kernel::invalidate` is the one place: `status(repo)` loads a repo's status once at a time and once
   more after a load that calls came in during (§7's rule, now for every caller), its task ending
   with the load that saw the call; an op's end calls it. `rescan` and `listed(list)` replace
