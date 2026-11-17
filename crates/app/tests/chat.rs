@@ -906,8 +906,12 @@ fn a_settings_or_command_change_mid_turn_keeps_the_turn_and_ends_the_session_aft
         wait_until(cx, |cx| {
             items(cx).iter().filter(|i| i.contains(ended)).count() == n + 1
         });
-        let got = items(cx)[from..].to_vec();
-        let at = |s: &str| (got.iter().skip(1).position(|i| i.contains(s))).unwrap();
+        let all = items(cx);
+        let got = all[from..].to_vec();
+        let at = |s: &str| {
+            (got.iter().skip(1).position(|i| i.contains(s)))
+                .unwrap_or_else(|| panic!("no {s} after {from}: {all:?}"))
+        };
         // The watcher may beat the CLI's callback, so the note can precede "config block".
         let order = ["still going", "Done in ", "so the session ended"];
         assert!(

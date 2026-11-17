@@ -119,16 +119,21 @@ impl Processes {
         rows
     }
 
-    /// Shows what `task` failed with, or closes the form, and the definitions as they are after it.
+    /// Shows what `task` failed with, or closes the form it started from, and the definitions as
+    /// they are after it.
     fn after(&mut self, task: Task<Result<()>>, cx: &mut Context<Self>) {
         self.busy = true;
         self.error = None;
+        let form = self.form.as_ref().map(|f| f.name.entity_id());
         cx.spawn(async move |this, cx| {
             let done = task.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
                 match done {
-                    Ok(()) => this.form = None,
+                    Ok(()) if this.form.as_ref().map(|f| f.name.entity_id()) == form => {
+                        this.form = None
+                    }
+                    Ok(()) => {}
                     Err(e) => this.error = Some(e.to_string()),
                 }
                 if let Some(d) = &this.defs {

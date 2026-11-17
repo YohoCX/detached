@@ -60,10 +60,9 @@ fn a_defined_process_runs_to_ready_stops_and_another_shows_its_exit_and_error(
     wait_label(cx, "processes.state", "Running · ready");
     assert_eq!(label(cx, "processes.log").trim(), "listening on 3000");
     cx.click("processes.stop");
-    wait_until(cx, |cx| !label(cx, "processes.row.web").contains("Running"));
-    assert!(cx.find("processes.start").is_some());
-
     cx.click("processes.new");
+    wait_until(cx, |cx| !label(cx, "processes.row.web").contains("Running"));
+    settle(cx);
     type_in(cx, "processes.name", "fail");
     type_in(
         cx,

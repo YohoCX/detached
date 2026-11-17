@@ -584,6 +584,31 @@ fn the_cap_holds_with_a_chat_turn_first(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_panel_waiting_for_room_starts_when_another_panel_ends(cx: &mut TestAppContext) {
+    let f = boot(cx);
+    trust(&f);
+    let mut p = marks::load(&f.core);
+    p.cap = 1;
+    f.core.set_block(marks::BLOCK, p).unwrap();
+    cx.update(crate::settings::refresh);
+    wait_for(cx, LONG, |cx| live::limits(cx).cap == 1);
+    mode(&f, "first", &["find"], &["f1"]);
+    mode(&f, "second", &["find"], &["f2"]);
+    role(&f, "f1", &format!("fake: wait go;{}", done()));
+    role(&f, "f2", &format!("fake: {}", done()));
+    let a = start(&f, "first", cx);
+    wait_for(cx, LONG, |cx| {
+        (a.read(cx).live.first()).is_some_and(|l| l.session.is_some())
+    });
+    let b = start(&f, "second", cx);
+    wait_for(cx, LONG, |cx| b.read(cx).phase == Phase::Running);
+    b.read_with(cx, |b, _| assert!(b.live[0].session.is_none()));
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    ended(&a, cx);
+    assert_eq!(ended(&b, cx).participants[0].status, Status::Done);
+}
+
+#[gpui::test]
 fn a_verifier_that_writes_the_pinned_tree_drops_the_stage_once_then_fails_verify(
     cx: &mut TestAppContext,
 ) {
