@@ -164,6 +164,8 @@ fn main() {
     s.lacks = lacks.filter_map(|l| l.as_str().map(String::from)).collect();
     let live = config_dir().join(format!("{}.live", s.id));
     // Locked while this process runs: a file that a killed one left, as on Windows, holds no lock.
+    // The CLI makes its config dir.
+    std::fs::create_dir_all(config_dir()).expect("the config dir");
     let held = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
