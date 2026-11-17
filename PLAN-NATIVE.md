@@ -70,7 +70,7 @@ xdg-desktop-portal. v0.3.0, the last Tauri release, stays downloadable for older
 ```
 Cargo.toml                 workspace (resolver 3, edition 2024), [workspace.package], shared pins
 crates/core/               package detached-core: the backend from src-tauri/src minus the commands
-  src/paths.rs             config_dir(), DETACHED_CONFIG_DIR, the workbench rename
+  src/paths.rs             config_dir(), DETACHED_CONFIG_DIR, the old config dir's move
   src/api.rs               one function per command, taking op/query ids where today's commands do
   src/selftest.rs          --self-test <report>, unchanged (unix)
   src/update.rs            latest.json, the download to a temp file, the signature, the install per OS
@@ -188,7 +188,7 @@ with their current chords and are rebuilt when the keymap changes.
 **Window.** macOS: transparent title bar, traffic lights at (16, 23), the title bar as the drag
 region. Windows and Linux: the kit's title bar with window controls at its right. Minimum 900×600,
 default 1400×900. Which zone holds which app and the open documents are the dock's (`dock/`), saved
-in `dock.layout` (PLAN-EXTENSIBLE step 3).
+in `dock.layout`.
 
 **Self-test and smoke.** `--self-test <report>` keeps today's meaning: the backend check from
 `core::selftest` (login-shell PATH, node and git-lfs, a checkout with a node hook), run in `main`
@@ -414,8 +414,6 @@ Each step ends green (`make check`), checked by hand on macOS, and committed.
      the keymap loads `keymap.json`; docs/KEYMAP.md has the owner column; `--smoke` and `--self-test` work as described;
    - `src/files/api.rs`, `src/repos/api.rs` and `src/history/api.rs` with stubs, `util.rs`, the
      forge fake's F routes, the fixtures and `core::api::file_patch` exist and are tested;
-   - a spike shows a real file in the editor and a real diff of a 5,000-line file in the diff view
-     with one annotation under a line;
    - CI (`.github/workflows/check.yml`) runs `make check` and `make smoke` on macOS, Windows and
      Linux on every push;
    - the measurements above are reported to the owner, who decides go or no-go.

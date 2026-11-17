@@ -20,6 +20,9 @@ is answered (§12), §7 rewritten for Windows and Linux, and §4's two dock test
 checks of each on macOS, the baseline on the owner's workspace and the week's work on a build
 are left.**
 
+**Status (2026-11-17): the legacy `folders` and `excludedRepos` migration (§5, step 4) and the
+sidecar protocol (§8) are gone ([decision](docs/decisions/2026-11-17-cleanup-before-0.6.0.md)).**
+
 Owner's decisions, 2026-11-10:
 - "No hurry; we do everything right, on the right architecture." The foundation comes before the
   features; shipping a feature early is not a goal.
@@ -49,8 +52,7 @@ app     shell, dock, ui, feature views, registries of views; the binary     kern
   `crates/kernel/clippy.toml`); step 0 proves the lint or replaces it.
 - `gpui-pre` is pinned `=0.3.11`, the version the kit pins.
 - `crates/core` keeps its name and every rule written about it.
-- Amends PLAN-EXTENSIBLE's "No `crates/sdk`": the kernel is internal; the only public API stays
-  the plugin manifest and protocol.
+- The kernel is internal, not a public API.
 
 ## 2. What the kernel is
 
@@ -84,9 +86,9 @@ and events. In code it is a set of GPUI entities on the foreground executor:
 | `Settings` | a read-only snapshot of core's settings (§5) | `Store.workspaces`, `Store.file_nesting` |
 | `Update` | the updater's state (§6) | the `Update` global in `app/update.rs` |
 
-- **Open documents stay the dock's.** PLAN-EXTENSIBLE: "The dock is the only record of what is
-  open." The kernel holds only the one shown, which the dock sets when a tab comes on screen, as
-  it sets `Store.shown` today.
+- **Open documents stay the dock's.** The dock is the only record of what is open. The kernel
+  holds only the one shown, which the dock sets when a tab comes on screen, as it sets
+  `Store.shown` today.
 - **A job is today's `Op`**, nothing more: what `run_op` starts, visible and cancellable. One
   record per job, in `Activity`: id, title, repo, progress. The id is core's op id and cancel is
   `Ops::cancel(id)`, as now (store.rs:256, 495, 533). Several jobs can run on one repo, as now;
@@ -344,11 +346,6 @@ PLAN-NATIVE:
 - Fixtures: `open_app(cx)` "with the store booted";
 - "Carried over unchanged: `settings.json`" holds; a line about module keys is added.
 
-PLAN-EXTENSIBLE:
-- "No `crates/sdk`: built-ins stay on `Store` and the `api.rs` contracts" (§1, §3);
-- "there is no file watcher" (step 1);
-- "Built in the order that gets a usable feature first": this plan is the owner's stated exception.
-
 docs/TECHDEBT.md: the update cancel row and the `refresh_all` row close with steps 5 and 7.
 
 ## 11. Order
@@ -546,18 +543,16 @@ that agreement. No rule file changes yet: each line of §10 changes in the step 
 
 | §10's lines | Step |
 | --- | --- |
-| CLAUDE.md's crate list, the `blocking` path, the `ui_state` path, "the kernel draws nothing", kernel tests; PLAN-NATIVE's Layout, Threads, the UI contract, the Actions contract, the Files API's re-export; PLAN-EXTENSIBLE's "No `crates/sdk`" | 2 |
+| CLAUDE.md's crate list, the `blocking` path, the `ui_state` path, "the kernel draws nothing", kernel tests; PLAN-NATIVE's Layout, Threads, the UI contract, the Actions contract, the Files API's re-export | 2 |
 | CLAUDE.md's Parallel work registrations; PLAN-NATIVE's Dock contract and Shell slots | 3 |
 | CLAUDE.md's "core owns `settings.json`"; PLAN-NATIVE's Repos API and "Carried over unchanged" | 4 |
 | PLAN-NATIVE's Auto-update row; docs/TECHDEBT.md's update row | 5 |
-| CLAUDE.md's "Views read the `Store`" and "or the store"; PLAN-NATIVE's Store section and contract, Contracts preamble, Verticals table, Navigation, Fixtures; PLAN-EXTENSIBLE's "built-ins stay on `Store`" | 6 |
+| CLAUDE.md's "Views read the `Store`" and "or the store"; PLAN-NATIVE's Store section and contract, Contracts preamble, Verticals table, Navigation, Fixtures | 6 |
 | docs/TECHDEBT.md's `refresh_all` row | 7 |
-| PLAN-EXTENSIBLE's "there is no file watcher" | 8 |
 
 Done when:
 - the status line says the owner accepted the plan, with the date and step 0's go;
-- PLAN-NATIVE's Contracts and PLAN-EXTENSIBLE's decisions each gain one line naming this plan as
-  the agreed change, and PLAN-EXTENSIBLE's "usable feature first" line names it as the exception.
+- PLAN-NATIVE's Contracts gain one line naming this plan as the agreed change.
 
 ### Step 2. The kernel crate
 
@@ -967,7 +962,7 @@ deleted while the app runs. The Log does not follow by itself: it is a view's ow
 - the kernel has no kit crate under it, and `dock/` and `shell.rs` import no feature;
 - `settings.json` has one writer, and no state lives in two places but the settings snapshot;
 - docs/TECHDEBT.md has lost its update and `refresh_all` rows;
-- CLAUDE.md, PLAN-NATIVE and PLAN-EXTENSIBLE say what the code does (§10);
+- CLAUDE.md and PLAN-NATIVE say what the code does (§10);
 - the numbers of step 0 are no worse by more than a tenth, or the owner accepted the ones that are;
 - the owner worked a week on a build with all of it and did not go back to 0.5.0.
 
