@@ -37,6 +37,13 @@ pub fn kill(pid: u32, term: bool) {
     }
 }
 
+/// Unix seconds.
+pub fn now() -> i64 {
+    std::time::UNIX_EPOCH
+        .elapsed()
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// Unix time `t` in the local time zone.
 pub fn local(t: i64) -> libc::tm {
     // SAFETY: only writes into the zeroed `tm` we own.

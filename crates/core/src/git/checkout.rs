@@ -171,10 +171,7 @@ fn drop_stash(env: &Env, repo: &Path, id: &str) -> Result<()> {
 }
 
 fn now() -> String {
-    let t = std::time::UNIX_EPOCH
-        .elapsed()
-        .map_or(0, |d| d.as_secs() as i64);
-    let tm = crate::os::local(t);
+    let tm = crate::os::local(crate::os::now());
     format!(
         "{}-{:02}-{:02} {:02}:{:02}:{:02}",
         tm.tm_year + 1900,

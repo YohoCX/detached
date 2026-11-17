@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::http::{Api, now};
+use super::http::Api;
 use super::*;
+use crate::os::now;
 
 pub struct GitHub(pub Api);
 

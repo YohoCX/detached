@@ -1150,7 +1150,7 @@ fn rate_limits_back_off_until_the_reset() {
     }
     assert_eq!(t.fake.reqs().len(), 1, "the second call stays local");
 
-    let reset = (http::now() + 120).to_string();
+    let reset = (crate::os::now() + 120).to_string();
     let limit = json!({"message": "API rate limit exceeded"});
     let t = github(vec![
         route(&format!("GET {GH}"), 403, limit)
