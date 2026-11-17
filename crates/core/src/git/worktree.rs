@@ -45,7 +45,7 @@ pub fn root(data: &Path, main: &Path, folder: &Path) -> PathBuf {
     match main.strip_prefix(folder) {
         Ok(rel) if !rel.as_os_str().is_empty() => folder.join("worktrees").join(rel),
         _ => {
-            let hash = format!("{:x}", Sha256::digest(main.as_os_str().as_encoded_bytes()));
+            let hash = hex::encode(Sha256::digest(main.as_os_str().as_encoded_bytes()));
             let name = main.file_name().unwrap_or_default().to_string_lossy();
             data.join("worktrees")
                 .join(format!("{name}-{}", &hash[..8]))

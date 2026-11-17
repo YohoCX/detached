@@ -117,7 +117,7 @@ fn fetch(dir: &Path, name: &str, sha256: &str) {
         )));
     let hash = sha2::Sha256::digest(std::fs::read(&path).unwrap());
     assert_eq!(
-        format!("{hash:x}"),
+        hash.iter().map(|b| format!("{b:02x}")).collect::<String>(),
         sha256,
         "{name} does not match its pinned hash"
     );

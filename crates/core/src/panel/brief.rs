@@ -276,7 +276,7 @@ pub fn quote(
 /// A prompt's hash, as the record keeps it.
 pub fn hash(text: &str) -> String {
     use sha2::Digest;
-    format!("{:x}", sha2::Sha256::digest(text.as_bytes()))[..16].to_string()
+    hex::encode(&sha2::Sha256::digest(text.as_bytes())[..8])
 }
 
 /// Fails on a SHA that is not a full object id, so no ref name reaches git as one.
