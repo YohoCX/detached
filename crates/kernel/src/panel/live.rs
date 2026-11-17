@@ -1400,10 +1400,10 @@ impl Panel {
                 p.phase = Phase::Ended;
                 // Dropped last, after the record's writes: it holds the untrusted root's lock.
                 p.release(cx);
-                let me = cx.entity_id();
-                poke(cx, me);
             })
             .ok();
+            // Outside the update: the others' scheduling reads this panel.
+            cx.update(|cx| poke(cx, this.entity_id()));
         });
     }
 
