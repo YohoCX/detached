@@ -1615,7 +1615,6 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "toml 1.1.8+spec-1.1.0",
- "tree-sitter",
  "tree-sitter-containerfile",
  "ureq",
  "url",
