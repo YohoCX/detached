@@ -112,9 +112,16 @@ impl Page {
             Some((path, None)) => format!("{} printed no version.", path.display()),
             Some((path, Some(v))) => match &verdict {
                 Some(Cli::Old(need)) => format!("{c} {v} is older than {need}: update {c}."),
-                Some(Cli::Blocked) => format!(
-                    "{c} {v} is blocked for this adapter: update {c}. The chat warns; isolated panels refuse it."
-                ),
+                Some(Cli::Blocked) => {
+                    let of = if p.backend == Name::Acp {
+                        " for this adapter"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "{c} {v} is blocked{of}: update {c}. The chat warns; isolated panels refuse it."
+                    )
+                }
                 _ => format!("{c} {v} at {}", path.display()),
             },
         };

@@ -133,16 +133,15 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     reader (§6), which ends each message with a `Break`. So the kernel fills its feed one way.
   - **A resume waits for the same id's `Closed`**, in the kernel: two processes never hold one
     session.
-  - **`Caps`** says which optional pieces a backend has (the context breakdown, plan limits, a
-    per-task stop, questions, past sessions, delete, a WSL place, the probe) and which trust
-    paths it blocks (§4). The UI hides or states the rest (§2). A session whose CLI lacks a
+  - **`Caps`** says whether a backend has plan limits and a per-task stop, and which trust paths
+    it blocks mid-turn (§4); ACP takes the default, none of them. A session whose CLI lacks a
     request loses that piece in an update.
   - **Each backend renders `Spec`.** These names exist only inside it:
 
     | `Spec` | Claude | ACP |
     | --- | --- | --- |
-    | kind, trust | `--setting-sources`, `--strict-mcp-config`, `--tools`, the sandbox in `--settings`, `--disallowedTools`, `--allowedTools` | `_meta`: `settingSources`, `strictMcpConfig`, `disallowedTools`; Codex's profile (§5) |
-    | model, effort, mode | `--model`, `--effort`, `--permission-mode`; then `set_model`, `apply_flag_settings`, `set_permission_mode` | `configOptions`; then `set_config_option` |
+    | kind, trust | `--setting-sources`, `--strict-mcp-config`, `--tools`, the sandbox in `--settings`, `--disallowedTools`, `--allowedTools` | Codex's profile (§5) |
+    | model, effort, mode | `--model`, `--effort`, `--permission-mode`; then `set_model`, `apply_flag_settings`, `set_permission_mode` | `set_config_option` after new or load |
     | folders, plugins | the cwd, `--add-dir`, `--plugin-dir` | `cwd` |
     | host tools | `sdkMcpServers` in `initialize` | `mcpServers`, the session's URL (§7) |
     | a new id, a resume | `--session-id`, `--resume` | `session/new`, `session/load` |
@@ -248,7 +247,7 @@ What every provider must do; the host holds each row:
 | "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]`. Claude: `--setting-sources` on every spawn, `""` for none; with no flag the CLI loads everything |
 | MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
-| Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `configOptions` on `session/new` and every `session/load`, `set_config_option` after. Codex's adapter reads no `configOptions` there (H13a, live), so the backend sets each listed option that differs right after; Codex's effort is `reasoning_effort` |
+| Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `set_config_option` after `session/new` and every `session/load`, for each listed option that differs; Codex's effort is `reasoning_effort` |
 | Questions reach the host | Claude: an ask for `AskUserQuestion`, answered in `updatedInput.answers`. ACP: the client declares `elicitation.form` |
 | Usage is reported | Claude: `result`'s usage and cost, `get_context_usage`, `get_usage`. ACP: `usage_update`, `config_option_update`, `current_mode_update`. Missing means unknown, never zero |
 
@@ -646,8 +645,8 @@ For every provider: until the owner accepts what a repo would run, a session loa
   stream's first updates (§1). Without the flags the isolation (`tools`,
   `sandbox`, `settingSources`, `strictMcpConfig`, `disallowedTools`, `allowedTools`, `env`) and
   the model would fall back to the defaults.
-  - On ACP it is `session/load` with the session's `configOptions` and its whole `_meta`, for the
-    same reason; there the adapter replays the history.
+  - On ACP it is `session/load` with the session's cwd and `mcpServers`, then its mode, model and
+    effort through `set_config_option`, for the same reason; there the adapter replays the history.
 - **History, the list and delete on Claude. Open** (the decision's choice 1). Recommended: the
   CLI's transcripts, through a reader of ours.
   - **The path** is `<config dir>/projects/<cwd, each non-alphanumeric as ->/<id>.jsonl`, the
