@@ -41,7 +41,10 @@ made or endorsed by Anthropic.
   Code's own from a terminal included, can be resumed, archived or deleted. Images in an agent's
   reply show as links and never load by themselves.
 - **Trust.** A repo's own agent settings (hooks, MCP servers, permissions, skills, commands) load
-  only once you accept them, and a change to them asks again. Agents are denied `.env` files.
+  only once you accept them, and a change to them asks again.
+  Claude Code's Read tool and a plain `cat`, `head`, `tail` or `less` of a `.env` file are refused;
+  other commands and scripts are not, so a `.env` is not safe from an agent that runs commands
+  without asking.
 - **Panels** put several agents on one subject: a review or a pre-merge gate of a branch, triage of
   a merge request or an issue, a review of a plan or any document. Each finding is checked by
   another agent before you see it; you Fix, Dismiss or Defer it. A Fix runs in a worktree on its
@@ -67,8 +70,7 @@ made or endorsed by Anthropic.
   terminal tab ask the client what it knows, and run a command with an env profile after you
   confirm.
 
-A subscription's sessions show their cost as $0. Codex support is built but stays off in this
-release.
+Codex support is built but stays off in this release.
 
 ## Install
 
@@ -125,7 +127,7 @@ make sign-setup  # once: the "Detached Dev" signing identity that make build use
 make build       # the packages for this OS under target/package
 make e2e-app     # packages Detached.app, starts it like Finder does on a temp config directory,
                  # checks PATH, node and hooks
-make agent-test  # your `claude` on a fake Messages API, no model calls
+make agent-test  # your `claude` on a fake Messages API, no model calls; needs bun and `claude`
 make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
 
