@@ -772,6 +772,12 @@ mod tests {
     use crate::git::testutil::Sandbox;
 
     #[test]
+    fn ids_made_in_one_millisecond_differ() {
+        let ids: std::collections::HashSet<_> = (0..100).map(|_| id("recheck")).collect();
+        assert_eq!(ids.len(), 100);
+    }
+
+    #[test]
     fn an_mr_s_issue_s_document_s_or_question_s_task_is_never_a_branch_s() {
         let of = |over| {
             task_of(&Start {
