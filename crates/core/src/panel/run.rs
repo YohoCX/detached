@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 
@@ -393,9 +393,13 @@ pub fn copy_local(repo: &Path, tree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A run's id: its mode and the time, safe in a branch name.
-pub fn id(mode: &str, ms: i64) -> String {
-    let t = chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default();
+/// A run's id: its mode and the time, safe in a branch name; a run started in the same
+/// millisecond as the last one takes the next.
+pub fn id(mode: &str) -> String {
+    static LAST: Mutex<i64> = Mutex::new(0);
+    let mut last = LAST.lock().unwrap();
+    *last = super::record::now().max(*last + 1);
+    let t = chrono::DateTime::from_timestamp_millis(*last).unwrap_or_default();
     format!("{mode}-{}", t.format("%Y%m%d-%H%M%S-%3f"))
 }
 
@@ -766,6 +770,12 @@ pub fn unique(taken: &[String], want: &str) -> String {
 mod tests {
     use super::*;
     use crate::git::testutil::Sandbox;
+
+    #[test]
+    fn ids_made_in_one_millisecond_differ() {
+        let ids: std::collections::HashSet<_> = (0..100).map(|_| id("recheck")).collect();
+        assert_eq!(ids.len(), 100);
+    }
 
     #[test]
     fn an_mr_s_issue_s_document_s_or_question_s_task_is_never_a_branch_s() {
