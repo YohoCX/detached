@@ -4,10 +4,13 @@
 //! bubblewrap and socat; Windows runs it in WSL, which this step does not build yet.
 
 use std::path::Path;
+#[cfg(unix)]
 use std::sync::Arc;
 
 use detached_core::adapters::CLAUDE;
-use detached_core::backend::{self, Kind, Probe, Sandbox, Spec};
+#[cfg(unix)]
+use detached_core::backend::{self, Probe, Sandbox};
+use detached_core::backend::{Kind, Spec};
 use detached_core::panel::tree;
 use detached_core::testutil::api::Api;
 use gpui::{Entity, TestAppContext};
@@ -25,6 +28,7 @@ fn bash(command: &str) -> Value {
     json!([{"tool": "Bash", "input": {"command": command, "description": "check"}}])
 }
 
+#[cfg(unix)]
 fn read(path: &Path) -> Value {
     json!([{"tool": "Read", "input": {"file_path": path}}])
 }
@@ -488,6 +492,7 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
 }
 
 /// One step every participant of a run takes: each call but its own is refused, then `done`.
+#[cfg(unix)]
 fn acts(calls: &[Value]) -> Vec<Value> {
     let tool = |input: &Value| json!({"tool": "mcp__detached-host__detached_act", "input": input});
     vec![Value::Array(calls.iter().map(tool).collect())]
@@ -566,6 +571,7 @@ fn a_plan_gets_a_verified_edit_from_the_real_claude(cx: &mut TestAppContext) {
     );
 }
 
+#[cfg(unix)]
 fn ask(f: &Fixture, mode: &str, cx: &mut TestAppContext) -> detached_core::panel::record::State {
     super::trust(f);
     cx.update(|cx| super::super::live::set_reach(cx, || true));

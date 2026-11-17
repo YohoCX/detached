@@ -22,18 +22,16 @@ impl Env {
         let login = unix::login_env(
             &std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()),
             &[],
-        );
-        // A Windows app gets the user's environment as is.
-        #[cfg(windows)]
-        let login: Option<Vec<(String, String)>> = None;
+        )
+        .unwrap_or_default();
         #[cfg(unix)]
         let probed = login
-            .as_ref()
-            .and_then(|l| l.iter().find(|(k, _)| k == "PATH"));
-        #[cfg(unix)]
-        let probed = probed.map(|(_, v)| v.clone());
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone());
+        // A Windows app gets the user's environment as is.
         #[cfg(windows)]
-        let probed = std::env::var("PATH").ok();
+        let (login, probed) = (Vec::new(), std::env::var("PATH").ok());
         let from_shell = probed.is_some();
         let path = probed.unwrap_or_else(fallback_path);
         let git = git_override
@@ -45,7 +43,7 @@ impl Env {
                 path,
                 git,
                 vars: vec![],
-                login: Arc::new(login.unwrap_or_default()),
+                login: Arc::new(login),
             },
             from_shell,
         )

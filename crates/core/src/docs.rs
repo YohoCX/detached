@@ -594,7 +594,7 @@ mod tests {
         fs::write(sb.path("secret.md"), "## Flow\nwatcher secret\n").unwrap();
         fs::write(r.join(".env"), "watcher secret\n").unwrap();
         let secret = sb.path("secret.md").display().to_string();
-        let mut index = format!(
+        let index = format!(
             "- ../secret.md — src — read when the watcher.\n\
              - {secret} — src — read when the watcher.\n\
              - docs/.env.md — src — read when the watcher.\n\
@@ -604,14 +604,15 @@ mod tests {
         );
         fs::write(r.join("docs/store.md"), "# Store\n\n## Flow\nwatcher\n").unwrap();
         #[cfg(unix)]
-        {
+        let index = {
             std::os::unix::fs::symlink(sb.path("secret.md"), r.join("docs/link.md")).unwrap();
             std::os::unix::fs::symlink("../.env", r.join("docs/setup.md")).unwrap();
             std::os::unix::fs::symlink("../docs", r.join("src/docs")).unwrap();
-            index += "- docs/link.md — src — read when the watcher.\n\
-                      - docs/setup.md — src — read when the watcher.\n\
-                      - src/docs/store.md — src — read when the watcher.\n";
-        }
+            index
+                + "- docs/link.md — src — read when the watcher.\n\
+                   - docs/setup.md — src — read when the watcher.\n\
+                   - src/docs/store.md — src — read when the watcher.\n"
+        };
         fs::write(r.join(INDEX), index).unwrap();
         let docs = Docs::read(&r);
         let modules: Vec<_> = docs.all.iter().filter(|d| d.kind == Kind::Module).collect();

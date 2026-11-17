@@ -375,6 +375,7 @@ mod tests {
     use super::*;
 
     /// The kernel on a repo with `slow`, which runs `command` and lets agents start it.
+    #[cfg(unix)]
     fn slow(cx: &mut gpui::TestAppContext, command: &str) -> (tempfile::TempDir, String) {
         let dir = crate::boot(cx);
         let core = cx.update(|cx| crate::core(cx).clone());
@@ -397,6 +398,7 @@ mod tests {
 
     /// A string only this run's processes of one test hold: pgrep sees every process on the
     /// machine, other runs of the test and what they left included.
+    #[cfg(unix)]
     fn marker(test: &str) -> String {
         format!("{test}-{}", std::process::id())
     }
@@ -412,6 +414,7 @@ mod tests {
     }
 
     /// The run's process group.
+    #[cfg(unix)]
     fn group(cx: &mut gpui::TestAppContext, repo: &str) -> Option<u32> {
         let p = cx.update(|cx| get(cx, repo, "slow").unwrap());
         p.read_with(cx, |p, _| p.run.as_ref().map(|r| r.pid()))
@@ -420,17 +423,20 @@ mod tests {
     #[cfg(unix)]
     fn in_group(group: u32) -> bool {
         let mut kill = std::process::Command::new("kill");
-        let kill = kill.args(["-0", &format!("-{group}")]);
+        // Without `--`, procps' kill reports success for `-0 -<pgid>` of a group that is gone.
+        let kill = kill.args(["-0", "--", &format!("-{group}")]);
         kill.stderr(std::process::Stdio::null())
             .status()
             .unwrap()
             .success()
     }
 
+    #[cfg(unix)]
     fn done<R: 'static>(cx: &mut gpui::TestAppContext, t: Task<R>) -> R {
         cx.foreground_executor().block_test(t)
     }
 
+    #[cfg(unix)]
     fn running(cx: &mut gpui::TestAppContext, repo: &str) -> bool {
         let p = cx.update(|cx| get(cx, repo, "slow").unwrap());
         p.read_with(cx, |p, _| p.running())
