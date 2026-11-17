@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::http::{Reply, Req, decode, paged};
-use crate::{Job, Kind, Mr, MrState, Pipeline, State, Status, ghe};
+use crate::{Issue, Job, Kind, Mr, MrState, Pipeline, State, Status, ghe};
 
 pub(crate) const T: &str = "2026-10-01T10:00:00Z";
 
@@ -48,7 +48,7 @@ fn live(s: &State, p: usize, n: u64) -> &Live {
     s.live.get(&(p, n)).unwrap_or(&SEEDED)
 }
 
-/// Routes outside the APIs (`/__append`, `/__blob`): no auth, not recorded.
+/// Routes outside the APIs (`/__append`, `/__blob`, a seeded repo's git files): no auth, not recorded.
 pub(crate) fn control(s: &mut State, req: &Req) -> Option<Reply> {
     #[derive(Deserialize)]
     struct Append {
@@ -69,6 +69,25 @@ pub(crate) fn control(s: &mut State, req: &Req) -> Option<Reply> {
             }
             Ok(_) => fail(404, "no such job".into()),
         },
+        ("GET", [mount @ ("gitlab" | "ghe"), ..]) if req.path.contains(".git/") => {
+            let (repo, file) = req.path.split_once(".git/")?;
+            let path = decode(repo.strip_prefix(&format!("/{mount}/"))?);
+            let forge = if *mount == "gitlab" {
+                Kind::Gitlab
+            } else {
+                Kind::Ghe
+            };
+            let p = s
+                .projects
+                .iter()
+                .find(|p| p.forge == forge && p.path == path)?;
+            let dir = std::path::Path::new(p.git.as_ref()?);
+            let file = decode(file);
+            match (!file.contains("..")).then(|| std::fs::read(dir.join(file))) {
+                Some(Ok(b)) => Some(text(b)),
+                _ => fail(404, "Not Found".into()),
+            }
+        }
         (_, ["__blob", p, id]) => {
             if req.header("authorization").is_some() {
                 return fail(400, "the signed URL must not get the token".into());
@@ -262,6 +281,13 @@ pub(crate) fn gitlab(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Re
             Some(Reply::json(201, gl_mr(s, p, s.projects[p].mrs.last()?)))
         }
         ("GET", ["merge_requests", n]) => Some(Reply::json(200, gl_mr(s, p, mr(s, p, n)?))),
+        ("GET", ["issues", n]) => Some(Reply::json(200, gl_issue(s, p, &issue(s, p, n)?))),
+        ("GET", ["issues", n, "notes"]) => Some(paged(
+            &s.origin,
+            req,
+            comments(&issue(s, p, n)?, true),
+            None,
+        )),
         ("GET", ["merge_requests", n, "approvals"]) => {
             let by = &live(s, p, mr(s, p, n)?.number).approved_by;
             let users: Vec<_> = by
@@ -481,6 +507,13 @@ pub(crate) fn ghe(s: &mut State, req: &Req, p: usize, sub: &str) -> Option<Reply
             }
             Some(Reply::json(200, gh_pr(s, p, mr(s, p, n)?)))
         }
+        ("GET", ["issues", n]) => Some(Reply::json(200, gh_issue(s, p, &issue(s, p, n)?))),
+        ("GET", ["issues", n, "comments"]) if mr(s, p, n).is_none() => Some(paged(
+            &s.origin,
+            req,
+            comments(&issue(s, p, n)?, false),
+            None,
+        )),
         ("GET", ["issues", n, "comments"]) => {
             let l = live(s, p, mr(s, p, n)?.number);
             let general = l.notes.iter().filter(|x| x.thread == x.id.to_string());
@@ -638,9 +671,9 @@ fn unmergeable(m: &Mr, req: &Req, not_open: &str, moved: &str) -> Option<Reply> 
     }
 }
 
-fn text(log: String) -> Reply {
+fn text(log: impl Into<Vec<u8>>) -> Reply {
     Reply {
-        text: Some(log),
+        text: Some(log.into()),
         ..Reply::json(200, Value::Null)
     }
 }
@@ -805,6 +838,7 @@ fn add_mr(
         base_sha: sha(&target),
         head_sha: sha(source),
         target_branch: target,
+        source: None,
     };
     s.projects[p].mrs.push(m);
 }
@@ -895,7 +929,7 @@ fn gl_mr(s: &State, p: usize, m: &Mr) -> Value {
         "description": m.description, "state": gl_state(m), "draft": m.draft,
         "work_in_progress": m.draft, "author": { "username": m.author },
         "source_branch": m.source_branch, "target_branch": m.target_branch,
-        "source_project_id": p + 1, "target_project_id": p + 1, "sha": m.head_sha, "diff_refs": diff,
+        "source_project_id": fork(s, p, m) + 1, "target_project_id": p + 1, "sha": m.head_sha, "diff_refs": diff,
         "labels": [], "reviewers": [], "detailed_merge_status": status,
         "merge_when_pipeline_succeeds": live(s, p, m.number).auto_merge, "head_pipeline": pl,
         "web_url": format!("{}/-/merge_requests/{}", web(s, p, "gitlab"), m.number),
@@ -919,13 +953,52 @@ fn gh_pr(s: &State, p: usize, m: &Mr) -> Value {
         "number": m.number, "title": m.title, "body": m.description, "state": gh_state(m),
         "merged": merged, "merged_at": merged.then_some(T), "draft": m.draft,
         "user": { "login": m.author }, "labels": [], "requested_reviewers": [], "assignees": [],
-        "head": { "ref": m.source_branch, "sha": m.head_sha, "repo": repo },
+        "head": { "ref": m.source_branch, "sha": m.head_sha, "repo": ghe::repo(s, fork(s, p, m)) },
         "base": { "ref": m.target_branch, "sha": m.base_sha, "repo": repo },
         "mergeable": open.then_some(true), "mergeable_state": mergeable,
         "auto_merge": live(s, p, m.number).auto_merge.then(|| json!({ "merge_method": "merge" })),
         "html_url": format!("{}/pull/{}", web(s, p, "ghe"), m.number),
         "created_at": T, "updated_at": T,
     })
+}
+
+/// The index of the project `m` comes from: its fork's, else its own.
+fn fork(s: &State, p: usize, m: &Mr) -> usize {
+    let found = |path: &String| {
+        s.projects
+            .iter()
+            .position(|x| x.forge == s.projects[p].forge && x.path == *path)
+    };
+    m.source.as_ref().and_then(found).unwrap_or(p)
+}
+
+fn issue(s: &State, p: usize, n: &str) -> Option<Issue> {
+    let n: u64 = n.parse().ok()?;
+    s.projects[p].issues.iter().find(|i| i.number == n).cloned()
+}
+
+fn gh_issue(s: &State, p: usize, i: &Issue) -> Value {
+    json!({
+        "number": i.number, "title": i.title, "body": i.description, "state": "open",
+        "user": { "login": i.author }, "created_at": T, "updated_at": T,
+        "html_url": format!("{}/issues/{}", web(s, p, "ghe"), i.number),
+    })
+}
+
+fn gl_issue(s: &State, p: usize, i: &Issue) -> Value {
+    json!({
+        "iid": i.number, "title": i.title, "description": i.description, "state": "opened",
+        "author": { "username": i.author }, "created_at": T, "updated_at": T,
+        "web_url": format!("{}/-/issues/{}", web(s, p, "gitlab"), i.number),
+    })
+}
+
+fn comments(i: &Issue, gitlab: bool) -> Vec<Value> {
+    let all = i.comments.iter().enumerate().map(|(k, c)| match gitlab {
+        true => json!({ "id": k + 1, "body": c.body, "author": { "username": c.author }, "created_at": T, "system": false }),
+        false => json!({ "id": k + 1, "body": c.body, "user": { "login": c.author }, "created_at": T }),
+    });
+    all.collect()
 }
 
 fn gh_review(r: &Review) -> Value {

@@ -166,7 +166,13 @@ impl FixCard {
             .flex_col()
             .gap(GAP);
         let (pv, text) = match self.form.as_ref()? {
-            Err(e) => return Some(out.text_color(t.error).child(e.clone()).into_any_element()),
+            Err(e) => {
+                let out = out
+                    .aria_label(e.clone())
+                    .text_color(t.error)
+                    .child(e.clone());
+                return Some(out.into_any_element());
+            }
             Ok(f) => f,
         };
         let mut out = out.child(

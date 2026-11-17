@@ -1270,6 +1270,7 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
         budget: None,
         codex: false,
         roles: vec![],
+        over: Default::default(),
     };
     let (repo_id, task, round) = app.update(|_, cx| {
         let p = kernel::panel::live::start(start, cx);
@@ -1349,4 +1350,168 @@ fn a_recheck_that_cannot_start_shows_why_and_offers_re_check(cx: &mut TestAppCon
     wait_watched(&mut app, |cx| {
         label(cx, "panel.fix.state").is_some_and(|l| l.ends_with("re-check passed: fix ready"))
     });
+}
+
+/// `repos/reviewed` on the forge fake as `group/app`, its origin a bare clone the fake serves with
+/// MR 7, a colleague's change to `a.txt` that the repo has not fetched.
+fn on_forge(sb: &Sandbox) -> detached_forge_fake::Forge {
+    use detached_forge_fake::{Kind, Mr, MrState, Project, Seed};
+    let r = repo(sb, "reviewed");
+    let (bare, seed) = (sb.path("origin.git"), sb.path("seed"));
+    let path = |p: &Path| p.display().to_string();
+    sb.git(
+        sb.dir.path(),
+        &["clone", "-q", "--bare", &path(&r), &path(&bare)],
+    );
+    sb.git(sb.dir.path(), &["clone", "-q", &path(&bare), &path(&seed)]);
+    let head = sb.commit(&seed, "a.txt", "let x = 1\n", "mr");
+    sb.git(
+        &seed,
+        &["push", "-q", "origin", "HEAD:refs/merge-requests/7/head"],
+    );
+    sb.git(&bare, &["update-server-info"]);
+    let mr = Mr {
+        number: 7,
+        title: "Set x".into(),
+        description: "Sets x.".into(),
+        author: "colleague".into(),
+        state: MrState::Open,
+        draft: false,
+        source_branch: "set-x".into(),
+        target_branch: "main".into(),
+        base_sha: sb.git(&r, &["rev-parse", "HEAD"]),
+        head_sha: head,
+        source: None,
+    };
+    let project = Project {
+        forge: Kind::Gitlab,
+        path: "group/app".into(),
+        default_branch: "main".into(),
+        mrs: vec![mr],
+        pipelines: vec![],
+        issues: vec![],
+        git: Some(path(&bare)),
+    };
+    let seed = Seed {
+        user: "tester".into(),
+        projects: vec![project],
+    };
+    let forge = forge(sb, seed);
+    let origin = format!("{}/group/app.git", forge.gitlab());
+    sb.git(&r, &["remote", "add", "origin", &origin]);
+    mark_trusted(sb, &r);
+    forge
+}
+
+#[gpui_kit::test]
+fn an_mr_s_triage_from_the_panels_app_shows_six_answers_and_its_fix_keeps_its_branch(
+    cx: &mut TestAppContext,
+) {
+    use serde_json::json;
+    let mut forged = None;
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        forged = Some(on_forge(sb));
+        fix_mode(sb);
+        let role = |name: &str, script: String| {
+            let text = format!("+++\nlenses = [\"{name}\"]\n+++\nfake: {script}\n");
+            write(
+                &sb.state.config_dir.join("roles"),
+                [(format!("{name}.md"), text)],
+            );
+        };
+        for r in ["facts", "thesis", "antithesis", "cost"] {
+            let done = json!({"action": "done", "args": {"nothing_found": true, "note": format!("{r} case")}});
+            role(r, format!("act {done}"));
+        }
+        let says = |a: &str| format!("the case to {a}");
+        let outcome = json!({"action": "report_outcome", "args": {"recommend": "ask_author",
+            "accept": says("accept"), "decline": says("decline"), "defer": says("defer"),
+            "ask_author": says("ask"), "split": says("split"), "duplicate": "none"}});
+        role("synthesizer", format!("act {outcome};act {DONE}"));
+    });
+    let repo = app.sb.path("repos/reviewed");
+    let start = detached_core::panel::run::Start {
+        repo: repo.display().to_string(),
+        mode: "review".into(),
+        over: detached_core::panel::run::Over::Mr(7),
+        ..Default::default()
+    };
+    let (repo_id, task, round) = app.update(|_, cx| {
+        let p = kernel::panel::live::start(start, cx);
+        let p = p.read(cx);
+        (p.repo.clone(), p.task.clone(), p.run.clone())
+    });
+    let doc = Doc::Panel {
+        repo: repo_id,
+        task,
+        round,
+    };
+    app.workspace(|w, cx| w.show(doc, cx));
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    wait_until(&mut app, |cx| cx.find("panel.finding.f1-1").is_some());
+    app.click("panel.finding.f1-1");
+    wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
+    quiet(&app.sb);
+    // The card redraws while the MR's task reloads, which can swallow a click.
+    wait_until(&mut app, |cx| {
+        if cx.find("panel.fix.form").is_none() && cx.find("panel.fix").is_some() {
+            cx.click("panel.fix");
+        }
+        cx.find("panel.fix.form").is_some()
+    });
+    start_fix(&mut app, "write a.txt let x = 2;commit fix x");
+    assert!(app.find("panel.fix.kept").is_some());
+    assert!(app.find("panel.fix.merge").is_none());
+
+    open_tab(&mut app, "tab.panels");
+    app.click("panels.new");
+    wait_until(&mut app, |cx| cx.find("panels.form").is_some());
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        w.within("panels.form.subject").click(1usize, cx)
+    });
+    settle(&app);
+    app.click("panels.form.item");
+    app.input("7");
+    app.click("panels.form.check");
+    wait_until(&mut app, |cx| cx.find("panels.form.trust").is_some());
+    let trust = label(&mut app, "panels.form.trust").unwrap();
+    assert!(trust.starts_with("Trusted (trusted by repo"), "{trust}");
+    assert!(
+        app.find("panels.form.mark").is_none(),
+        "an MR is no branch to mark"
+    );
+    app.click("panels.form.start");
+    wait_watched(&mut app, |cx| cx.find("panel.ended").is_some());
+    wait_until(&mut app, |cx| cx.find("panel.outcome").is_some());
+    assert_eq!(
+        label(&mut app, "panel.outcome").as_deref(),
+        Some("Recommended: Ask the author")
+    );
+    for (answer, text) in [
+        ("Accept", "Accept · the case to accept"),
+        ("Decline", "Decline · the case to decline"),
+        ("Defer", "Defer · the case to defer"),
+        (
+            "Ask the author",
+            "Ask the author · recommended · the case to ask",
+        ),
+        ("Split", "Split · the case to split"),
+        ("Duplicate", "Duplicate · none"),
+    ] {
+        let id = format!("panel.answer.{answer}");
+        assert_eq!(label(&mut app, id).as_deref(), Some(text));
+    }
+    assert_eq!(
+        label(&mut app, "panel.case.thesis").as_deref(),
+        Some("thesis's case · thesis case")
+    );
+    assert!(
+        app.sb
+            .git(&repo, &["for-each-ref", "refs/detached/"])
+            .is_empty()
+    );
+
+    drop(forged);
 }

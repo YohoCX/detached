@@ -47,6 +47,7 @@ pub(crate) fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) 
         target_branch: "main".into(),
         base_sha: sha.clone(),
         head_sha: sha.clone(),
+        source: None,
     };
     forge.reset(Seed {
         user: "tester".into(),
@@ -56,6 +57,8 @@ pub(crate) fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) 
             default_branch: "main".into(),
             mrs: vec![mr(1, "One"), mr(2, "Two")],
             pipelines: vec![],
+            issues: vec![],
+            git: None,
         }],
     });
     let account = AccountInput {

@@ -14,8 +14,8 @@ use detached_core::host::Act;
 use detached_core::panel::brief;
 use detached_core::panel::marks;
 use detached_core::panel::mode::{self, Stage};
-use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, State};
-use detached_core::panel::run::{self, Prepared, Start};
+use detached_core::panel::record::{self, Disposition, End, Event, Found, Gate, Of, State};
+use detached_core::panel::run::{self, Over, Prepared, Start};
 use detached_core::panel::{track, tree};
 use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, WeakEntity};
@@ -180,7 +180,7 @@ pub struct Panel {
 /// Starts a run: its trees and record are made off the main thread, then its finders queue.
 pub fn start(s: Start, cx: &mut App) -> Entity<Panel> {
     let run = run::id(&s.mode, record::now());
-    let task = run::task(&s.branch);
+    let task = run::task_of(&s);
     let now = cx.background_executor().now();
     let p = cx.new(|cx| {
         let mut p = Panel {
@@ -249,13 +249,19 @@ impl Panel {
         self.tasks.push(cx.spawn(f));
     }
 
-    /// "Review `feature/x`".
+    /// "Review `feature/x`", "Triage !7".
     pub fn title(&self) -> String {
-        let mut mode = self.start.mode.clone();
+        let mut mode = self.start.mode.replace('-', " ");
         if let Some(c) = mode.get_mut(..1) {
             c.make_ascii_uppercase();
         }
-        format!("{mode} `{}`", self.start.branch)
+        let what = match &self.start.over {
+            Over::Branch => format!("`{}`", self.start.branch),
+            Over::Mr(n) => format!("!{n}"),
+            Over::Issue(n) => format!("#{n}"),
+            Over::Document(path) => format!("`{path}`"),
+        };
+        format!("{mode} {what}")
     }
 
     fn now(cx: &App) -> Instant {
@@ -481,6 +487,7 @@ impl Panel {
         let can: &'static [&'static str] = match l.stage {
             Stage::Find => &["report_finding", "done"],
             Stage::Merge => &["report_group", "done"],
+            Stage::Synthesize => &["report_outcome", "done"],
             _ => &["report_verdict", "done"],
         };
         let scope = Scope {
@@ -687,6 +694,12 @@ impl Panel {
         if self.live[i].reported && !judged {
             return self.fail(name, "It called `done` without a verdict.".into(), cx);
         }
+        if self.live[i].reported
+            && self.live[i].stage == Stage::Synthesize
+            && self.state.outcome.is_none()
+        {
+            return self.fail(name, "It called `done` without an outcome.".into(), cx);
+        }
         if self.live[i].reported {
             self.live[i].status = Status::Done;
             self.close(i, cx);
@@ -771,6 +784,13 @@ impl Panel {
                 Event::Group {
                     participant: name.into(),
                     ids: g.ids,
+                },
+                cx,
+            ),
+            Act::ReportOutcome(outcome) => self.emit(
+                Event::Outcome {
+                    participant: name.into(),
+                    outcome,
                 },
                 cx,
             ),
@@ -1043,6 +1063,23 @@ impl Panel {
                 );
             }
             Stage::Verify => self.verify(&p, cx),
+            Stage::Synthesize => {
+                let found: Vec<&Found> = self.state.heads().collect();
+                let brief = brief::synthesize(&p.synthesizer, &p.data, &found, &self.state.cases());
+                let model = p.mode.synthesizer.clone().unwrap_or_else(|| "opus".into());
+                let role = p.synthesizer.name.clone();
+                self.add(
+                    &p,
+                    "synthesize",
+                    &role,
+                    next,
+                    &model,
+                    brief,
+                    (None, vec![]),
+                    cx,
+                );
+                self.schedule(cx);
+            }
             Stage::Gate => {
                 let gate = self.state.gate(&p.mode.block);
                 self.end(End::Done { gate: Some(gate) }, cx);
@@ -1389,14 +1426,22 @@ fn clock(d: Duration) -> String {
 
 /// Threat-model lines that do not hold for this run.
 fn threat_lines(p: &Prepared) -> Vec<String> {
-    match (p.trust.trusted, cfg!(windows)) {
+    let mut lines = match (p.trust.trusted, cfg!(windows)) {
         (true, _) => vec![format!(
             "Trusted ({}): participants run unsandboxed in orchestrator mode",
             p.trust.why
         )],
         (false, true) => vec!["Windows without WSL: lines 2–4 and 12 do not hold".into()],
         (false, false) => vec![],
+    };
+    if matches!(p.subject.of, Of::Mr { .. } | Of::Issue { .. }) {
+        lines.push(
+            "Line 5 is a mitigation: the thread is quoted as data below the instructions, and no \
+             model is proven to ignore orders in it"
+                .into(),
+        );
     }
+    lines
 }
 
 /// Merges a kept finder branch into the local subject branch, fast-forward only, and records it.
@@ -1526,6 +1571,7 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
             }
             _ = tree::remove(&core, path, &root.join("pinned"));
             tree::prune(&core, &run);
+            run::unpin(&core, path, &run);
             _ = std::fs::remove_dir_all(core.data_dir.join("private").join(&run));
             r.append(record::now(), &Event::RunEnded(End::Interrupted))
         }

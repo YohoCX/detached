@@ -109,6 +109,7 @@ impl Identity {
             (Act::ReportVerdict(v), Some(f)) if v.finding != f => {
                 Err(format!("This session judges finding {f} alone."))
             }
+            (Act::ReportOutcome(o), _) => o.check(),
             _ => Ok(()),
         }
     }

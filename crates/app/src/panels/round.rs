@@ -547,6 +547,7 @@ impl Render for RunView {
             .overflow_hidden()
             .gap(GAP);
         if let Some(run) = run {
+            let outcome = (record.as_ref()).and_then(|s| super::outcome::render(s, &run, cx));
             if self.selected.is_none()
                 && self.mode == 2
                 && let Some(f) = run.findings.first()
@@ -720,7 +721,16 @@ impl Render for RunView {
                         super::timeline::render(&run, cx)
                     })
                     .into_any_element(),
-                _ => self.findings(&run, cx),
+                _ => div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .gap(GAP)
+                    .children(outcome)
+                    .child(self.findings(&run, cx))
+                    .into_any_element(),
             });
         } else {
             content = content.child(error.unwrap_or_else(|| "Loading round…".into()));

@@ -5,25 +5,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::marks::{self, Trust};
 use super::mode::{self, Mode, Role, Seat};
-use super::record::{Event, Record, Subject};
+use super::record::{Event, Of, Record, Subject};
 use super::track::{self, Prior};
 use super::{brief, root, tree};
 use crate::adapters::{CLAUDE, CODEX};
 use crate::backend::Probe;
 use crate::error::{Error, Result};
 use crate::git::runner::{Kind, out};
+use crate::git::{self, remotes::network};
 use crate::state::AppState;
-use crate::trust;
+use crate::{forge, trust};
 
 /// What the owner asked for.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Start {
     pub repo: String,
-    /// A local branch, or `<remote>/<branch>`.
+    /// A local branch, or `<remote>/<branch>`; where an issue or a document is read.
     pub branch: String,
     /// Read it as a remote branch even where a local one has its name.
     pub remote: bool,
@@ -37,6 +38,17 @@ pub struct Start {
     pub codex: bool,
     /// Roles seated beside the mode's, each once, on its first seat's model.
     pub roles: Vec<String>,
+    pub over: Over,
+}
+
+/// What a run is over: the branch's diff, an MR, an issue or a document.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Over {
+    #[default]
+    Branch,
+    Mr(u64),
+    Issue(u64),
+    Document(String),
 }
 
 /// A finder: its name, role, seat and tree, and its branch on a trusted run.
@@ -56,6 +68,7 @@ pub struct Prepared {
     pub mode: Mode,
     pub verifier: Role,
     pub merge: Role,
+    pub synthesizer: Role,
     pub trust: Trust,
     /// The tree verifiers and the merge read: a worktree on a trusted run, the export else.
     pub pinned: PathBuf,
@@ -120,11 +133,21 @@ pub fn again(s: &Subject) -> Start {
         budget: None,
         codex: false,
         roles: vec![],
+        over: match &s.of {
+            Of::Branch => Over::Branch,
+            Of::Mr { number, .. } => Over::Mr(*number),
+            Of::Issue { number, .. } => Over::Issue(*number),
+            Of::Document { path } => Over::Document(path.clone()),
+        },
     }
 }
 
-/// The subject at its two SHAs: the branch's head, and where it left its base.
+/// The subject at its two SHAs: the branch's head, and where it left its base. An issue and a
+/// document have no diff: both SHAs are the branch's head.
 pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
+    if let Over::Mr(n) = s.over {
+        return mr(core, Path::new(&s.repo), n);
+    }
     let (env, repo) = (core.env(), Path::new(&s.repo));
     let at = |full: String| {
         let rev = format!("{full}^{{commit}}");
@@ -145,19 +168,154 @@ pub fn subject(core: &AppState, s: &Start) -> Result<Subject> {
         None => at(format!("refs/remotes/{}", s.branch))
             .map_err(|_| Error::Other(format!("No branch {}", s.branch)))?,
     };
-    let base = out(
-        &env,
-        repo,
-        &["merge-base", crate::git::arg(&s.base)?, head.trim()],
-        Kind::Read,
-    )?;
+    let head = head.trim();
+    let of = match &s.over {
+        Over::Branch | Over::Mr(_) => Of::Branch,
+        Over::Issue(n) => {
+            let i = forge::get_issue(core, repo, *n)?;
+            Of::Issue {
+                number: *n,
+                title: i.title,
+                author: i.author,
+                url: i.web_url,
+            }
+        }
+        Over::Document(path) => {
+            let at = format!("{head}:{}", path.trim_start_matches("./"));
+            out(&env, repo, &["cat-file", "-e", &at], Kind::Read)
+                .map_err(|_| Error::Other(format!("No {path} on {}", s.branch)))?;
+            Of::Document { path: path.clone() }
+        }
+    };
+    let base = match of {
+        Of::Branch => {
+            let args = ["merge-base", crate::git::arg(&s.base)?, head];
+            out(&env, repo, &args, Kind::Read)?.trim().to_string()
+        }
+        _ => head.to_string(),
+    };
     Ok(Subject {
         repo: s.repo.clone(),
         branch: s.branch.clone(),
         remote,
         base: s.base.clone(),
+        base_sha: base,
+        head_sha: head.into(),
+        of,
+    })
+}
+
+/// MR `n` at its head on the forge, fetched with its target branch when the repo lacks either.
+fn mr(core: &AppState, repo: &Path, n: u64) -> Result<Subject> {
+    let m = forge::get_mr(core, repo, n)?;
+    let (head, target) = (brief::sha(&m.head_sha)?, brief::sha(&m.base_sha)?);
+    let remote = forge::mr_remote(core, repo)?;
+    let head_ref = forge::head_ref(&m);
+    let env = core.env();
+    let has = |sha: &str| {
+        let args = ["cat-file", "-e", &format!("{sha}^{{commit}}")];
+        out(&env, repo, &args, Kind::Read).is_ok()
+    };
+    if !has(head) || !has(target) {
+        let branch = format!("refs/heads/{}", m.target_branch);
+        fetch(core, repo, &remote, &[&head_ref, &branch])?;
+    }
+    let base = out(&env, repo, &["merge-base", target, head], Kind::Read)?;
+    Ok(Subject {
+        repo: repo.display().to_string(),
+        branch: m.source_branch.clone(),
+        remote: true,
+        base: m.target_branch.clone(),
         base_sha: base.trim().into(),
-        head_sha: head.trim().into(),
+        head_sha: head.into(),
+        of: Of::Mr {
+            number: n,
+            fork: m.source_project != m.target_project,
+            title: m.title,
+            author: m.author,
+            url: m.web_url,
+            remote,
+            head_ref,
+        },
+    })
+}
+
+/// Fetches `refspecs` from `remote`, writing no `FETCH_HEAD`.
+fn fetch(core: &AppState, repo: &Path, remote: &str, refspecs: &[&str]) -> Result<()> {
+    let mut args = vec![
+        "fetch",
+        "--no-write-fetch-head",
+        "--no-tags",
+        git::arg(remote)?,
+    ];
+    args.extend(refspecs);
+    let cancel = Default::default();
+    git::locked(core, repo, || {
+        network(core, repo, &args, Some(remote), &cancel, &|_| {}).map(drop)
+    })
+}
+
+/// Where an MR's head stays for its run.
+pub fn pin_ref(run: &str) -> String {
+    format!("refs/detached/subjects/{run}")
+}
+
+/// Fetches an MR subject's head into the run's ref; refused when it moved since `s` was resolved.
+fn pin(core: &AppState, s: &Subject, run: &str) -> Result<()> {
+    let Of::Mr {
+        number,
+        remote,
+        head_ref,
+        ..
+    } = &s.of
+    else {
+        return Ok(());
+    };
+    let (repo, to) = (Path::new(&s.repo), pin_ref(run));
+    fetch(core, repo, remote, &[&format!("+{head_ref}:{to}")])?;
+    let at = out(&core.env(), repo, &["rev-parse", &to], Kind::Read)?;
+    match at.trim() == s.head_sha {
+        true => Ok(()),
+        false => Err(Error::Other(format!(
+            "!{number} moved since you looked: check it again"
+        ))),
+    }
+}
+
+/// Removes the run's MR head, if it has one.
+pub fn unpin(core: &AppState, repo: &Path, run: &str) {
+    let args = ["update-ref", "-d", &pin_ref(run)];
+    _ = git::locked(core, repo, || out(&core.env(), repo, &args, Kind::Write));
+}
+
+/// An MR's or an issue's text on its forge, as the briefs hold it: its title, description and
+/// thread.
+fn text(core: &AppState, s: &Subject) -> Result<Option<(&'static str, Value)>> {
+    let repo = Path::new(&s.repo);
+    let note = |n: &crate::types::Note| json!({"author": n.author, "body": n.body});
+    Ok(match &s.of {
+        Of::Mr { number, .. } => {
+            let m = forge::get_mr(core, repo, *number)?;
+            let threads = forge::mr_threads(core, repo, *number)?;
+            let thread: Vec<Value> = (threads.iter())
+                .map(|t| {
+                    let at = t.position.as_ref();
+                    json!({"file": at.map(|p| &p.path), "line": at.map(|p| p.line),
+                        "notes": t.notes.iter().map(note).collect::<Vec<_>>()})
+                })
+                .collect();
+            let v = json!({"number": number, "title": m.title, "author": m.author,
+                "source_branch": m.source_branch, "target_branch": m.target_branch,
+                "description": m.description, "thread": thread});
+            Some(("mr", v))
+        }
+        Of::Issue { number, .. } => {
+            let i = forge::get_issue(core, repo, *number)?;
+            let v = json!({"number": number, "title": i.title, "author": i.author,
+                "description": i.description, "comments": i.notes.iter().map(note).collect::<Vec<_>>()});
+            Some(("issue", v))
+        }
+        _ => None,
     })
 }
 
@@ -237,6 +395,16 @@ pub fn id(mode: &str, ms: i64) -> String {
     format!("{mode}-{}", t.format("%Y%m%d-%H%M%S-%3f"))
 }
 
+/// The task of what `s` asks for: its MR, issue, document or branch.
+pub fn task_of(s: &Start) -> String {
+    match &s.over {
+        Over::Branch => task(&s.branch),
+        Over::Mr(n) => format!("mr-{n}"),
+        Over::Issue(n) => format!("issue-{n}"),
+        Over::Document(path) => task(path),
+    }
+}
+
 /// A task's name: the subject's branch, as a folder name.
 pub fn task(branch: &str) -> String {
     branch
@@ -301,12 +469,17 @@ pub fn prepare(
         names.push(name.clone());
         seats.push((name, role(&seat.role)?, seat.clone()));
     }
+    let mut data = brief::subject(&env, &subject)?;
+    if let Some((key, text)) = text(core, &subject)? {
+        data[key] = text;
+    }
     let mut p = Prepared {
         record,
-        data: brief::subject(&env, &subject)?,
+        data,
         subject,
         verifier: role("verifier")?,
         merge: role("merge")?,
+        synthesizer: role("synthesizer")?,
         trust: pv.trust,
         pinned: PathBuf::new(),
         finders: vec![],
@@ -335,6 +508,7 @@ pub fn prepare(
         }
         let trees = || {
             halt(cancelled)?;
+            pin(core, &p.subject, run)?;
             p.pinned = tree::pinned(core, repo, run, &sha)?;
             for (name, role, seat) in seats {
                 halt(cancelled)?;
@@ -372,7 +546,9 @@ pub fn prepare(
         let dir = root.join(run);
         p.pinned = dir.join("pinned");
         (p.dir, p.lock) = (Some(dir), Some(lock));
-        if let Err(e) = tree::export(&env, repo, &sha, &p.pinned, cancelled) {
+        let export = pin(core, &p.subject, run)
+            .and_then(|_| tree::export(&env, repo, &sha, &p.pinned, cancelled));
+        if let Err(e) = export {
             teardown(core, &p, run);
             return Err(e);
         }
@@ -517,6 +693,9 @@ pub fn teardown(core: &AppState, p: &Prepared, run: &str) -> Vec<Event> {
     if let Some(dir) = &p.dir {
         _ = fs::remove_dir_all(dir);
     }
+    if matches!(p.subject.of, Of::Mr { .. }) {
+        unpin(core, repo, run);
+    }
     kept
 }
 
@@ -572,6 +751,7 @@ mod tests {
             graph: vec![],
             roster: vec![seat("claude", "sonnet"), seat("codex", "gpt-5.5")],
             merge: Some("codex".into()),
+            synthesizer: None,
             verifiers: vec!["codex:gpt-5.5".into(), "opus".into()],
             block: vec![],
             text: String::new(),
@@ -609,6 +789,7 @@ mod tests {
             budget: None,
             codex: false,
             roles: vec![],
+            over: Default::default(),
         };
         let pv = preview(&sb.state, &s).unwrap();
         assert!(!pv.accepted && pv.items.iter().any(|i| i.contains("FROM_LOCAL")));
@@ -648,6 +829,7 @@ mod tests {
             budget: None,
             codex: false,
             roles: vec![],
+            over: Default::default(),
         };
         let shown = preview(&sb.state, &s).unwrap();
         fs::write(repo.join(".claude/settings.json"), settings("never shown")).unwrap();
@@ -687,6 +869,7 @@ mod tests {
             budget: None,
             codex: false,
             roles: vec![],
+            over: Default::default(),
         };
         let stop = Arc::new(AtomicBool::new(false));
         let later = stop.clone();

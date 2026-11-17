@@ -831,6 +831,40 @@ The owner checks: the same on a real branch in a trusted workspace.
 
 ### Step P5. Triage and plan review
 
+**Status (2026-11-17): built; waiting for the owner's check.**
+- Built: a subject is a branch, an MR, an issue or a document (`record::Of`, `run::Over`). An MR
+  is read from the forge with its thread; its head and target are fetched without a ref when the
+  repo lacks them, and for the run `git fetch <MR remote> +<head ref>:refs/detached/subjects/<run>`
+  pins it, refused if the MR moved since the preview, and the ref goes at teardown and with an
+  interrupted run. An issue and a document are read at a branch's head, with no diff. The MR's or
+  issue's title, description and thread join the subject's JSON-quoted data; the header says line 5
+  is a mitigation. MR trust: untrusted in an unmarked repo, trusted from the mark's own remote, a
+  fork's only with "include forks". The `synthesize` stage and `report_outcome` (the six answers,
+  each argued, and the one recommended; `Identity::may` refuses a blank one), a `done` without it
+  fails the attempt; the built-in `triage` (facts, thesis, antithesis, cost, then the synthesizer)
+  and `plan-review` (consistency, gaps, risks, feasibility; find → merge → verify) modes and their
+  roles. The start form picks Branch, MR, Issue or Document and the modes each takes; the Findings
+  tab shows a triage's six answers and the finders' cases, a plan review's verified edits with Copy
+  edits. The forge reads issues (`forge::get_issue`); the forge fake seeds issues and fork MRs and
+  serves a seeded bare repo over git's dumb HTTP, so the MR fetch is real in tests.
+- Tests: `kernel::panel::tests::triage` on `fake_claude` and the forge fake (a colleague's MR gets six
+  answers, its brief and the synthesizer's hold the hostile description and commit as quoted data
+  under the label, its fetched head stays and its ref goes; an issue's comments; a synthesis without
+  an outcome fails; MR trust by mark, fork and forks; a fork's MR runs sandboxed; a plan review ends
+  with a verified edit), `marks` (MR trust), `host` (the outcome's six answers), `forge::tests`
+  (issues on both forges), the fake's own, `tests/panels.rs` (an MR triage from the Panels app shows
+  the six answers, and the MR's Fix offers no Merge and keeps its branch), and on the real `claude`
+  against the fake Messages API (`make agent-test`): an MR on the forge fake gets six answers and a
+  plan gets a verified edit.
+- Choices: a triage finder's case is its `done` note, and the facts it reports are findings; the
+  six answers are one object with a field each, so a missing one is a schema error; agent text in
+  the outcome shows as plain text; an MR subject is a remote one, so a Fix keeps its branch for the
+  owner to push; tasks are `mr-<n>`, `issue-<n>` and the document's path; the synthesizer runs on
+  the mode's `synthesizer` model, opus by default.
+- Left: starting a triage from the MR page or a plan review from Files (the Panels app's form does
+  both).
+- The owner checks: triages a real MR; reviews these plans.
+
 Work: MR and issue subjects with their thread (MR heads fetched per
 [the decision](docs/decisions/2026-11-12-write-mr-fetch.md)); a document subject at a SHA; both
 modes and their outcome views.

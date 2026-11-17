@@ -4,7 +4,7 @@
 use detached_core::adapters::CODEX;
 use detached_core::panel::mode::Stage;
 use detached_core::panel::record::State;
-use detached_core::panel::run::{Preview, Start};
+use detached_core::panel::run::{Over, Preview, Start};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
@@ -21,13 +21,28 @@ use kernel::workspace::Workspace;
 use crate::ui::theme::{GAP, text};
 use crate::ui::{self, theme};
 
+/// What a run can be over, and the modes each takes, the first the default.
+const SUBJECTS: [(&str, &[(&str, &str)]); 4] = [
+    ("Branch", &[("review", "Review"), ("gate", "Gate")]),
+    (
+        "MR",
+        &[("triage", "Triage"), ("review", "Review"), ("gate", "Gate")],
+    ),
+    ("Issue", &[("triage", "Triage")]),
+    ("Document", &[("plan-review", "Plan review")]),
+];
+
 /// The start form: the subject, the mode, what its trust makes of it, and the estimate.
 pub(super) struct Form {
     repo: String,
+    /// Its index in `SUBJECTS`.
+    kind: usize,
+    mode: &'static str,
     branch: Entity<InputState>,
     base: Entity<InputState>,
+    /// An MR's or an issue's number, or a document's path.
+    item: Entity<InputState>,
     budget: Entity<InputState>,
-    gate: bool,
     untrusted: bool,
     /// Codex verifies first.
     codex: bool,
@@ -51,10 +66,12 @@ impl Form {
         let mut f = Form {
             branch: input(&branch, "Branch", window, cx),
             base: input("main", "Base", window, cx),
+            item: input("", "MR or issue number, or the document's path", window, cx),
             budget: input("", "Budget in tokens (optional)", window, cx),
             rounds: Interest::view(kernel::panel::rounds(cx, &repo), cx),
             repo,
-            gate: false,
+            kind: 0,
+            mode: "review",
             untrusted: false,
             codex: false,
             preview: None,
@@ -66,23 +83,42 @@ impl Form {
         f
     }
 
-    fn start(&self, cx: &App) -> Start {
+    fn start(&self, cx: &App) -> Result<Start, String> {
         let text = |i: &Entity<InputState>| i.read(cx).value().trim().to_string();
-        Start {
+        let (item, branch) = (text(&self.item), text(&self.branch));
+        let number = || item.trim_start_matches(['!', '#']).parse::<u64>();
+        let over = match self.kind {
+            0 => Over::Branch,
+            1 => Over::Mr(number().map_err(|_| "Enter the MR's number")?),
+            2 => Over::Issue(number().map_err(|_| "Enter the issue's number")?),
+            _ if item.is_empty() => return Err("Enter the document's path".into()),
+            _ => Over::Document(item),
+        };
+        Ok(Start {
             repo: self.repo.clone(),
-            branch: text(&self.branch),
+            base: match self.kind {
+                0 => text(&self.base),
+                _ => branch.clone(),
+            },
+            branch,
             remote: false,
-            base: text(&self.base),
-            mode: if self.gate { "gate" } else { "review" }.into(),
+            mode: self.mode.into(),
             untrusted: self.untrusted,
             budget: text(&self.budget).parse().ok(),
             codex: self.codex,
             roles: vec![],
-        }
+            over,
+        })
     }
 
     fn check(&mut self, cx: &mut Context<Self>) {
-        let t = live::preview(self.start(cx), cx);
+        let t = match self.start(cx) {
+            Ok(s) => live::preview(s, cx),
+            Err(e) => {
+                self.preview = Some(Err(e));
+                return cx.notify();
+            }
+        };
         self.preview = None;
         self._tasks.push(cx.spawn(async move |this, cx| {
             let p = t.await.map_err(|e| e.to_string());
@@ -112,8 +148,7 @@ impl Form {
     }
 
     fn estimate(&self, cx: &App) -> Option<u64> {
-        let mode = if self.gate { "gate" } else { "review" };
-        self.rounds.read(cx).value.as_ref()?.estimate(mode)
+        self.rounds.read(cx).value.as_ref()?.estimate(self.mode)
     }
 }
 
@@ -127,22 +162,43 @@ impl Render for Form {
             .flex_col()
             .gap(GAP)
             .p(GAP);
+        let kinds: Vec<(usize, &str)> = SUBJECTS.iter().map(|s| s.0).enumerate().collect();
+        let (me, again) = (cx.entity().downgrade(), cx.entity().downgrade());
         body = body
-            .child(ui::input(&self.branch, cx))
-            .child(ui::input(&self.base, cx))
+            .child(ui::segmented(
+                "panels.form.subject",
+                &kinds,
+                self.kind,
+                move |kind, _, cx| {
+                    me.update(cx, |f, cx| {
+                        (f.kind, f.mode) = (kind, SUBJECTS[kind].1[0].0);
+                        f.check(cx);
+                    })
+                    .ok();
+                },
+                cx,
+            ))
+            .when(self.kind != 1, |b| b.child(ui::input(&self.branch, cx)))
+            .when(self.kind == 0, |b| b.child(ui::input(&self.base, cx)))
+            .when(self.kind != 0, |b| {
+                b.child(
+                    div()
+                        .id("panels.form.item")
+                        .test_support()
+                        .child(ui::input(&self.item, cx)),
+                )
+            })
             .child(ui::segmented(
                 "panels.form.mode",
-                &[(false, "Review"), (true, "Gate")],
-                self.gate,
-                {
-                    let me = cx.entity().downgrade();
-                    move |gate, _, cx| {
-                        me.update(cx, |f, cx| {
-                            f.gate = gate;
+                SUBJECTS[self.kind].1,
+                self.mode,
+                move |mode, _, cx| {
+                    again
+                        .update(cx, |f, cx| {
+                            f.mode = mode;
                             cx.notify();
                         })
                         .ok();
-                    }
                 },
                 cx,
             ))
@@ -294,7 +350,7 @@ impl Render for Form {
                         .when(!ready, |b| b.opacity(0.5))
                         .when(ready, |b| {
                             b.on_click(cx.listener(|f, _, _, cx| {
-                                let s = f.start(cx);
+                                let Ok(s) = f.start(cx) else { return };
                                 let p = live::start(s, cx);
                                 let (repo, task, round) = {
                                     let p = p.read(cx);

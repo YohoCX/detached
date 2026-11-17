@@ -294,6 +294,27 @@ impl Forge for GitHub {
         self.full(p, n, &self.0.get(&repo(p))?)
     }
 
+    fn issue(&self, p: &Project, n: u64) -> Result<Issue> {
+        let v = self.0.get(&format!("{}/issues/{n}", repo(p)))?;
+        let comments = format!("{}/issues/{n}/comments?per_page=100", repo(p));
+        let notes = (self.0.list(&comments, None, usize::MAX)?.iter())
+            .map(|c| Note {
+                id: c["id"].to_string(),
+                author: s(&c["user"]["login"]),
+                body: s(&c["body"]),
+                time: time(&c["created_at"]),
+            })
+            .collect();
+        Ok(Issue {
+            number: n,
+            title: s(&v["title"]),
+            description: s(&v["body"]),
+            author: s(&v["user"]["login"]),
+            web_url: s(&v["html_url"]),
+            notes,
+        })
+    }
+
     fn threads(&self, p: &Project, n: u64) -> Result<Vec<Thread>> {
         let (owner, name) = p.path.split_once('/').unwrap_or_default();
         let mut out = vec![];

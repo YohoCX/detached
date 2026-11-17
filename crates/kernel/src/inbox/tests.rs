@@ -437,6 +437,8 @@ fn a_pipeline_ending_after_the_watch_puts_one_message_into_the_watcher_s_inbox(
             default_branch: "main".into(),
             mrs: vec![],
             pipelines,
+            issues: vec![],
+            git: None,
         }],
     };
     // A view loaded the branch's pipelines before: the newest of them has ended.
