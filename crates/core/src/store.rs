@@ -493,9 +493,11 @@ pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
 
 pub(crate) fn hash(files: &Files, links: &Links) -> String {
     fn put(hash: &mut Sha256, path: &Path, bytes: &[u8]) {
-        let path = path.as_os_str().as_encoded_bytes();
+        // Parts joined by `/`, so a walk's `\` on Windows hashes as the `/` an item was written with.
+        let parts: Vec<_> = path.iter().map(|c| c.as_encoded_bytes()).collect();
+        let path = parts.join(&b'/');
         hash.update((path.len() as u64).to_le_bytes());
-        hash.update(path);
+        hash.update(&path);
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
     }
@@ -969,19 +971,25 @@ mod tests {
             } else {
                 from.clone()
             };
-            let mut handle = fs::OpenOptions::new().append(true).open(source).unwrap();
-            copy_move(
-                &from,
-                &to,
-                &files,
-                &Links::new(),
-                &root.join(".git/detached/trash"),
-            )
-            .unwrap();
+            let mut handle = fs::OpenOptions::new().append(true).open(&source).unwrap();
+            let trash = root.join(".git/detached/trash");
+            let moved = copy_move(&from, &to, &files, &Links::new(), &trash);
             handle.write_all(b" edited").unwrap();
+            // Windows renames no folder that holds an open file, so it stays and says so.
+            if cfg!(windows) && from.is_dir() {
+                assert!(
+                    moved
+                        .unwrap_err()
+                        .to_string()
+                        .contains("the original stays")
+                );
+                assert_eq!(fs::read(source).unwrap(), b"first edited");
+                continue;
+            }
+            moved.unwrap();
             assert!(!from.exists());
             assert_eq!(read(&to, false).unwrap().0, files);
-            let trash = fs::read_dir(root.join(".git/detached/trash"))
+            let trash = fs::read_dir(trash)
                 .unwrap()
                 .map(|entry| entry.unwrap().path().join(&name))
                 .find(|path| path.exists())

@@ -501,10 +501,8 @@ fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<Stri
             s["network"] = json!({"strictAllowlist": true});
         }
         settings.insert("sandbox".into(), s);
-        // An absolute path's rule starts with two slashes.
-        for p in &sb.deny_read {
-            let p = p.to_string_lossy().replace('\\', "/");
-            denied.extend([format!("Read(/{p})"), format!("Read(/{p}/**)")]);
+        for p in sb.deny_read.iter().map(|p| rule_path(p)) {
+            denied.extend([format!("Read({p})"), format!("Read({p}/**)")]);
         }
     }
     a.push(format!("--disallowedTools={}", denied.join(",")));
@@ -523,6 +521,26 @@ fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<Stri
     let flag = if resume { "--resume" } else { "--session-id" };
     a.extend([flag.into(), id.into()]);
     a
+}
+
+/// `p` as a rule's absolute path: `//` and the real path, missing parts kept, since the CLI
+/// matches what it resolves; Windows' `C:\x` as `//c/x`, as the CLI spells it.
+fn rule_path(p: &Path) -> String {
+    let real = p.ancestors().find_map(|a| {
+        let rest = p.strip_prefix(a).ok()?;
+        Some(
+            rest.iter()
+                .fold(crate::os::canonical(a).ok()?, |r, c| r.join(c)),
+        )
+    });
+    let s = real
+        .unwrap_or_else(|| p.into())
+        .to_string_lossy()
+        .replace('\\', "/");
+    match s.as_bytes() {
+        [d, b':', b'/', ..] => format!("//{}{}", d.to_ascii_lowercase() as char, &s[2..]),
+        _ => format!("/{s}"),
+    }
 }
 
 /// A session's CLI; dropped, it closes as `close` says, on a thread of its own.

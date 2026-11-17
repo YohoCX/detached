@@ -456,10 +456,14 @@ fn a_sandbox_and_a_run_s_mcp_file_go_into_one_settings_flag_and_the_read_rules()
         .iter()
         .find(|f| f.starts_with("--disallowedTools="))
         .unwrap();
-    assert!(
-        denied.contains(&format!("Read(/{}/**)", secret.display())),
-        "{denied}"
-    );
+    let real = crate::os::canonical(&run.sb.path("home"))
+        .unwrap()
+        .join(".ssh");
+    let real = real.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let real = format!("/{}{}", real[..1].to_lowercase(), &real[2..]);
+    assert!(denied.contains(&format!("Read(/{real}/**)")), "{denied}");
+    assert!(!denied.contains('~'), "{denied}");
     let tmp = env(&run.sb.state, &spec);
     let tmp = tmp.iter().find(|(k, _)| k == "CLAUDE_CODE_TMPDIR").unwrap();
     assert_eq!(PathBuf::from(&tmp.1), run.sb.path("tmp/p1"));

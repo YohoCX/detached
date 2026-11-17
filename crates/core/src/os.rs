@@ -1,6 +1,6 @@
 //! What differs between Unix and Windows: process groups, local and UTC time, opening a path.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::Result;
@@ -68,6 +68,18 @@ pub fn utc(t: i64) -> libc::tm {
         libc::gmtime_s(&mut tm, &t);
         tm
     }
+}
+
+/// `p` real, and on Windows without the `\\?\` that `canonicalize` adds to a drive path.
+pub fn canonical(p: &Path) -> std::io::Result<PathBuf> {
+    let p = p.canonicalize()?;
+    #[cfg(windows)]
+    if let Some(s) = p.to_str().and_then(|s| s.strip_prefix(r"\\?\"))
+        && s.as_bytes().get(1) == Some(&b':')
+    {
+        return Ok(PathBuf::from(s));
+    }
+    Ok(p)
 }
 
 /// Opens a file or folder with the system's default app (Finder, Explorer, the file manager).
