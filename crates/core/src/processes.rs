@@ -1,7 +1,7 @@
 //! Defined processes: a repo's definitions, a store kind, and their runs on a PTY with the login
 //! environment and their env profile, the log plain text with the profile's values redacted.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
@@ -178,8 +178,6 @@ pub enum Output {
 /// A process running on its PTY; dropped, it hangs up on it.
 pub struct Run {
     pty: Pty,
-    /// ConPTY ends its console's processes once its input closes.
-    _input: Box<dyn std::io::Write + Send>,
     stopper: Stopper,
     /// The batch file cmd reads the command from while it runs.
     #[cfg(windows)]
@@ -224,7 +222,7 @@ pub fn start(
             "@chcp 65001 >nul\r\n@cd /d \"{folder}\"\r\n@echo off\r\n{}\r\n",
             def.command
         );
-        std::io::Write::write_all(&mut f, text.as_bytes())?;
+        f.write_all(text.as_bytes())?;
         f.into_temp_path()
     };
     #[cfg(windows)]
@@ -256,7 +254,7 @@ pub fn start(
     let pty::Spawned {
         pty,
         mut reader,
-        writer,
+        mut writer,
         mut child,
     } = pty::spawn(cmd, size)?;
     let pid = child.process_id().unwrap_or(0);
@@ -281,7 +279,13 @@ pub fn start(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => lines.feed(&buf[..n], &*sink),
+                Ok(n) => {
+                    // ConPTY prints nothing until told its cursor, and ends once this input closes.
+                    if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                        _ = writer.write_all(b"\x1b[1;1R");
+                    }
+                    lines.feed(&buf[..n], &*sink)
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => break,
             }
@@ -319,7 +323,6 @@ pub fn start(
     };
     Ok(Run {
         pty,
-        _input: writer,
         stopper,
         #[cfg(windows)]
         _script: script,
@@ -615,12 +618,20 @@ mod tests {
         );
     }
 
-    /// What `def` prints in `repo`, empty lines left out, to its exit.
+    /// What `def` prints in `repo`, empty lines left out, to its exit; ConPTY's reader ends only
+    /// once the run is dropped.
     fn printed(sb: &Sandbox, repo: &Path, def: &Definition) -> Vec<Output> {
         let (tx, rx) = mpsc::channel();
         let _run = start(&sb.state, repo, def, move |o| _ = tx.send(o)).unwrap();
-        let got = rx.iter().filter(|o| *o != Output::Line(String::new()));
-        got.collect()
+        let mut got = vec![];
+        for o in rx.iter().filter(|o| *o != Output::Line(String::new())) {
+            let exit = matches!(o, Output::Exit(_));
+            got.push(o);
+            if exit {
+                break;
+            }
+        }
+        got
     }
 
     #[cfg(windows)]
@@ -771,14 +782,8 @@ mod tests {
             ready: Some("^up$".into()),
             ..Default::default()
         };
-        let (tx, rx) = mpsc::channel();
-        let _run = start(&sb.state, &repo, &def, move |o| _ = tx.send(o)).unwrap();
-        let got: Vec<Output> = rx
-            .iter()
-            .filter(|o| *o != Output::Line(String::new()))
-            .collect();
         assert_eq!(
-            got,
+            printed(&sb, &repo, &def),
             [
                 Output::Line("token=[redacted]".into()),
                 Output::Line("up".into()),
