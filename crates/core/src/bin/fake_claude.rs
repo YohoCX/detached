@@ -163,11 +163,12 @@ fn main() {
     let lacks = s.fake["lacks"].as_array().into_iter().flatten();
     s.lacks = lacks.filter_map(|l| l.as_str().map(String::from)).collect();
     let live = config_dir().join(format!("{}.live", s.id));
-    if flag("--resume").is_some() && live.exists() {
+    // Locked while this process runs: a file that a killed one left, as on Windows, holds no lock.
+    let held = std::fs::File::create(&live).ok();
+    if held.as_ref().is_some_and(|f| f.try_lock().is_err()) && flag("--resume").is_some() {
         eprintln!("fake_claude: session {} is open in another process", s.id);
         std::process::exit(1);
     }
-    let _ = std::fs::write(&live, "");
     on_term(&live);
 
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
