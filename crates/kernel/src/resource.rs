@@ -39,8 +39,11 @@ pub struct Resource<T> {
     pub error: Option<String>,
     /// When the last load ended.
     pub at: Option<Instant>,
-    /// Loads ended so far.
+    /// Loads ended so far; one runs at a time.
     loads: u64,
+    /// The loads that must have ended for the last refresh to be served: a load already running
+    /// when it came read before it.
+    due: u64,
     policy: Policy<T>,
     on: Option<On>,
     load: Load<T>,
@@ -54,8 +57,8 @@ pub struct Resource<T> {
 /// Keeps a resource loaded while it lives.
 pub struct Interest<T> {
     resource: Entity<Resource<T>>,
-    /// The resource's loads when this was taken.
-    since: u64,
+    /// The loads that must have ended for this interest's own load.
+    due: u64,
     _held: Rc<()>,
     _redraw: Option<Subscription>,
 }
@@ -112,6 +115,7 @@ impl<T: Send + 'static> Resource<T> {
             error: None,
             at: None,
             loads: 0,
+            due: 0,
             policy,
             on: None,
             load: Box::new(move |cx| {
@@ -140,13 +144,15 @@ impl<T: Send + 'static> Resource<T> {
         Rc::strong_count(&self.held) > 1
     }
 
-    /// Loads now, whatever its age; while a load runs, once it is done. Dropping the running one
-    /// instead would let refreshes that come faster than a load keep any from finishing.
+    /// Loads now, whatever its age; while a load runs, once it is done, every refresh meanwhile
+    /// served by that one load. Dropping the running one instead would let refreshes that come
+    /// faster than a load keep any from finishing.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.loading.is_some() {
-            self.again = true;
+            (self.again, self.due) = (true, self.loads + 2);
             return;
         }
+        self.due = self.loads + 1;
         let done = blocking::run(cx, (self.load)(cx));
         self.loading = Some(cx.spawn(async move |this, cx| {
             let r = done.await;
@@ -213,17 +219,16 @@ impl<T: Send + 'static> Resource<T> {
 }
 
 impl<T: Send + 'static> Interest<T> {
-    /// Loads `resource` now; activation and its poll reload it while this lives.
+    /// Refreshes `resource`; activation and its poll reload it while this lives.
     pub fn new(resource: Entity<Resource<T>>, cx: &mut App) -> Self {
-        let (held, since) = resource.update(cx, |r, cx| {
-            let held = (r.held.clone(), r.loads);
+        let (held, due) = resource.update(cx, |r, cx| {
             r.refresh(cx);
             r.poll(cx);
-            held
+            (r.held.clone(), r.due)
         });
         Interest {
             resource,
-            since,
+            due,
             _held: held,
             _redraw: None,
         }
@@ -246,14 +251,14 @@ impl<T: Send + 'static> Interest<T> {
         self.resource.read(cx)
     }
 
-    /// The resource once it loaded for this interest: nothing reloads one that no interest holds,
-    /// so an older value may be stale.
+    /// The resource once a load that started after this interest was taken ended: a load already
+    /// running then never serves it.
     pub fn loaded<'a>(&self, cx: &'a App) -> Option<&'a Resource<T>> {
         let r = self.read(cx);
-        (r.loads > self.since).then_some(r)
+        (r.loads >= self.due).then_some(r)
     }
 
-    /// For a Refresh button: loads now, whatever its age.
+    /// For a Refresh button: loads now, whatever its age, or once the running load is done.
     pub fn refresh(&self, cx: &mut App) {
         self.resource.update(cx, |r, cx| r.refresh(cx));
     }
@@ -314,6 +319,40 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(secs));
         settle(cx, r);
         value(cx, r) != before
+    }
+
+    #[gpui::test]
+    fn an_interest_taken_while_a_load_runs_is_served_by_the_load_after_it(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let policy = Policy {
+            fresh_for: None,
+            poll: None,
+        };
+        let (r, ..) = counter(cx, policy);
+        let _held = interest(cx, &r);
+        r.update(cx, |r, cx| r.refresh(cx));
+        let late = cx.update(|cx| Interest::new(r.clone(), cx));
+        // At each change, the value and whether the late interest took it as its load.
+        let seen = Rc::new(std::cell::RefCell::new(vec![]));
+        let (log, due) = (seen.clone(), late.due);
+        let _watch = cx.update(|cx| {
+            cx.observe(late.resource(), move |r, cx| {
+                let r = r.read(cx);
+                log.borrow_mut().push((r.value, r.loads >= due));
+            })
+        });
+        assert!(cx.read(|cx| late.loaded(cx).is_none()));
+        settle(cx, &r);
+        let seen = seen.borrow();
+        assert!(
+            seen.contains(&(Some(2), false)),
+            "the running load landed unserving: {seen:?}"
+        );
+        assert!(!seen.contains(&(Some(2), true)), "{seen:?}");
+        assert_eq!(
+            cx.read(|cx| late.loaded(cx).map(|r| r.value)),
+            Some(Some(3))
+        );
     }
 
     #[gpui::test]

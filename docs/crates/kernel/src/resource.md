@@ -23,21 +23,23 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
 - `Resource::on(on)` (`crates/kernel/src/resource.rs:125`): also reload on that `On` input.
 - `Resource::value`, `error`, `at` (pub fields), `loading()`, and `refresh(cx)`
   (`crates/kernel/src/resource.rs:141`), which loads now whatever the age.
-- `Interest::new(resource, cx)` (`crates/kernel/src/resource.rs:206`): holds the resource, loads it
-  now and starts its poll.
+- `Interest::new(resource, cx)` (`crates/kernel/src/resource.rs:206`): holds the resource,
+  refreshes it (now, or after the load that runs) and starts its poll.
 - `Interest::view(resource, cx)` (`crates/kernel/src/resource.rs:222`): the same, and the view
   redraws when the resource changes.
 - `Interest::resource`, `read`, `loaded` (`crates/kernel/src/resource.rs:240`): `loaded` is `Some`
-  only after a load that ended since this interest was taken.
-- `Interest::refresh(cx)` (`crates/kernel/src/resource.rs:246`): for a Refresh button.
+  only after a load that started after this interest was taken has ended.
+- `Interest::refresh(cx)` (`crates/kernel/src/resource.rs:246`): for a Refresh button; while a load
+  runs, one more follows it.
 - `input(cx, Input)` (`crates/kernel/src/resource.rs:94`, crate-only): hands `Input::Activated` or
   `Input::On(on)` to every registered resource.
 
 ## Flow
 1. A view or kernel module calls a keyed constructor (e.g. `forge::latest_pipeline`, `skills::get`)
    that wraps `get`, then takes an `Interest` on it. The interest loads it at once.
-2. `refresh` starts the job; when it ends, `value` and `error` are set, `at` and the load count
-   move, the poll starts if its condition holds, and observers are notified.
+2. `refresh` starts the job, or while one runs asks for one more after it; when it ends, `value`
+   and `error` are set, `at` and the load count move, the follow-up starts if one was asked for,
+   the poll starts if its condition holds, and observers are notified.
 3. A repo's status loads in `Workspace::refresh`, which calls `invalidate::status_loaded`
    (`crates/kernel/src/workspace.rs:138`). That sends `Input::On(On::Status(repo))`, and also
    `Input::On(On::Head(repo))` when head or branch moved (`crates/kernel/src/invalidate.rs:109`).
@@ -58,9 +60,10 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
   (`crates/kernel/src/resource.rs:81`). Keys carry the repo and parameters, e.g.
   `format!("sharing:{repo}")`.
 - Resources are never removed from `Resources`; dropping every interest only stops reloads. A value
-  read without an interest may be stale, which is why `loaded` checks the load count.
-- `refresh` replaces a running load's task, dropping it; activation skips a resource whose load
-  runs, a poll tick skips one too.
+  read without an interest may be stale, which is why `loaded` waits for a load that started after
+  the interest: one running when it was taken lands first and does not count.
+- `refresh` while a load runs lets it land and runs one more load after it, however many refreshes
+  came meanwhile; activation skips a resource whose load runs, a poll tick skips one too.
 - A failed load keeps the last value and sets `error`; a later success clears it.
 - `held()` counts `Rc` clones: the resource keeps one, each interest one more.
 - `on` takes a single `On`; a resource reacts to one repo's status or head, not both.
@@ -75,6 +78,9 @@ Unit tests in `crates/kernel/src/resource.rs:251`, in GPUI's test context on a c
 - `a_poll_ticks_while_an_interest_is_held_and_the_window_shows`: hidden window, dropped interest
   and a new interest restarting the poll.
 - `a_failed_refresh_keeps_the_last_value_and_the_error_beside_it`.
+- `refreshes_while_a_load_runs_end_in_one_more_load_after_it`.
+- `an_interest_taken_while_a_load_runs_is_served_by_the_load_after_it`: `loaded` waits for the
+  follow-up load.
 
 Real policies' polls are tested in `crates/kernel/src/forge.rs:214` (e.g.
 `a_pipeline_polls_every_5_s_only_while_it_runs_held_and_shown`). The `On::Status` path from a saved

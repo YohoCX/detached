@@ -847,8 +847,9 @@ merged; `make check` and `make smoke` green:
   and `Interest`, which holds it while it lives (`Interest::view` also redraws its view). Resources
   live for the session under a key (`resource::get`), as `Cache` kept its values. Taking an interest
   loads the resource, as a view's mount did; activation reloads a held one older than `fresh_for`;
-  a resource reloads on nothing while no interest holds it. A refresh drops a load still running,
-  so a stale result never lands; a poll skips a tick while one runs. A poll's condition sees a value
+  a resource reloads on nothing while no interest holds it. Refreshes that come while a load runs
+  collapse into one more load after it, and a load that started before an interest never counts as
+  that interest's (`loaded`); a poll skips a tick while one runs. A poll's condition sees a value
   not loaded yet, so the MR list polls after a failed first load, as its view did.
 - `kernel::invalidate` is the one place: `status(repo)` loads a repo's status once at a time and once
   more after a load that calls came in during (§7's rule, now for every caller), its task ending
