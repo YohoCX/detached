@@ -94,20 +94,46 @@ pub fn fetch_mr(
     cancel: &Cancel,
     progress: &(dyn Fn(&str) + Sync),
 ) -> Result<String> {
+    let refs = [arg(head_ref)?, arg(target_branch)?];
     locked(state, repo, || {
-        let args = [
-            "fetch",
-            "--refmap=",
-            "--no-tags",
-            arg(remote)?,
-            arg(head_ref)?,
-            arg(target_branch)?,
-        ];
-        network(state, repo, &args, Some(remote), cancel, progress)?;
+        quiet(state, repo, remote, &refs, true, cancel, progress)?;
         // FETCH_HEAD lists the fetched refs in command-line order.
         let head = out(&state.env(), repo, &["rev-parse", "FETCH_HEAD"], Kind::Read)?;
         Ok(head.trim().into())
     })
+}
+
+/// `git fetch <remote> <refspecs>` that changes only the refspecs' own destinations: no
+/// remote-tracking ref, no tag, and no `FETCH_HEAD`.
+pub fn fetch_refs(
+    state: &AppState,
+    repo: &Path,
+    remote: &str,
+    refspecs: &[&str],
+    cancel: &Cancel,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<()> {
+    locked(state, repo, || {
+        quiet(state, repo, remote, refspecs, false, cancel, progress)
+    })
+}
+
+fn quiet(
+    state: &AppState,
+    repo: &Path,
+    remote: &str,
+    refspecs: &[&str],
+    fetch_head: bool,
+    cancel: &Cancel,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<()> {
+    let mut args = vec!["fetch", "--refmap=", "--no-tags"];
+    if !fetch_head {
+        args.push("--no-write-fetch-head");
+    }
+    args.push(arg(remote)?);
+    args.extend(refspecs);
+    network(state, repo, &args, Some(remote), cancel, progress).map(drop)
 }
 
 #[cfg(test)]
@@ -176,6 +202,25 @@ mod tests {
             sb.git(&work, &["for-each-ref"]),
             refs,
             "no remote-tracking ref moves"
+        );
+        let fetch_head = std::fs::read(work.join(".git/FETCH_HEAD")).unwrap();
+        let spec = "+refs/pull/1/head:refs/kept";
+        fetch_refs(
+            &sb.state,
+            &work,
+            "upstream",
+            &[spec],
+            &Cancel::default(),
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(sb.git(&work, &["rev-parse", "refs/kept"]), pr);
+        sb.git(&work, &["update-ref", "-d", "refs/kept"]);
+        assert_eq!(sb.git(&work, &["for-each-ref"]), refs);
+        assert_eq!(
+            std::fs::read(work.join(".git/FETCH_HEAD")).unwrap(),
+            fetch_head,
+            "FETCH_HEAD is the owner's"
         );
         let r = fetch_mr(
             &sb.state,

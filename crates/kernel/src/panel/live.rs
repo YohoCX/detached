@@ -1582,10 +1582,18 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
     })
 }
 
-/// What the start dialog shows for `s`.
-pub fn preview(s: Start, cx: &App) -> Task<Result<run::Preview>> {
-    let core = crate::core(cx).clone();
-    blocking::run(cx, move || run::preview(&core, &s, &Default::default()))
+/// What the start dialog shows for `s`; an MR's, whose fetch can take a while, as an op.
+pub fn preview(s: Start, cx: &mut App) -> Task<Result<run::Preview>> {
+    let Over::Mr(n) = s.over else {
+        let core = crate::core(cx).clone();
+        return blocking::run(cx, move || run::preview(&core, &s, &Default::default()));
+    };
+    let (repo, label) = (s.repo.clone(), format!("Check !{n}"));
+    let op = move |core: &AppState, id, _: &(dyn Fn(&str) + Sync)| {
+        core.op(id, |c| run::preview(core, &s, c))
+    };
+    let a = crate::activity::Activity::global(cx);
+    a.update(cx, |a, cx| a.run_op(&repo, &label, op, cx))
 }
 
 /// Accepts the trust files the preview showed.

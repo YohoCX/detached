@@ -49,6 +49,7 @@ pub(super) struct Form {
     preview: Option<Result<Preview, String>>,
     rounds: Interest<Rounds>,
     busy: bool,
+    checking: Option<Task<()>>,
     pub done: bool,
     _tasks: Vec<Task<()>>,
 }
@@ -76,6 +77,7 @@ impl Form {
             codex: false,
             preview: None,
             busy: false,
+            checking: None,
             done: false,
             _tasks: vec![],
         };
@@ -116,12 +118,13 @@ impl Form {
         let t = match self.start(cx) {
             Ok(s) => live::preview(s, cx),
             Err(e) => {
-                self.preview = Some(Err(e));
+                (self.preview, self.checking) = (Some(Err(e)), None);
                 return cx.notify();
             }
         };
         self.preview = None;
-        self._tasks.push(cx.spawn(async move |this, cx| {
+        // Replaces the check before, so a slower earlier preview never lands after this one.
+        self.checking = Some(cx.spawn(async move |this, cx| {
             let p = t.await.map_err(|e| e.to_string());
             this.update(cx, |f, cx| {
                 f.preview = Some(p);

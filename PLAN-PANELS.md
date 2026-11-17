@@ -833,9 +833,11 @@ The owner checks: the same on a real branch in a trusted workspace.
 
 **Status (2026-11-17): built, with the review round's fixes; waiting for the owner's check.**
 - Built: a subject is a branch, an MR, an issue or a document (`record::Of`, `run::Over`). An MR
-  is read from the forge with its thread. `remotes::fetch_mr` fetches its head and target with an
-  empty refmap and no tags, so no ref of the owner's moves, under the run's cancel; a preview
-  fetches only when the repo lacks them, and the Panels list's reload never fetches. At the run's
+  is read from the forge with its thread. `remotes::fetch_refs` fetches its head and target with an
+  empty refmap, no tags and no `FETCH_HEAD`, so nothing of the owner's changes, under the run's
+  cancel; a preview fetches only when the repo lacks them, and an MR's Check and its Fix brief run
+  as Activity ops with an op id and cancel. The Panels list's reload never fetches, and asks the
+  forge for an MR's head only when a finding of its task is fix ready. At the run's
   start the head is fetched again and kept in `refs/detached/subjects/<run>` until teardown or the
   close of an interrupted run. The run refuses a head other than the one the start form's preview
   showed (`Start::head`). An issue and a document are read at a branch's head, with no diff. The
