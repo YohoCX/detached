@@ -161,7 +161,7 @@ impl Acp {
             None => None,
         };
         let server = route.as_ref().map(|r| {
-            let name = format!("detached-host-{}", &mcp::random()[..8]);
+            let name = format!("detached-host-{}", &backend::random()[..8]);
             (name, r.url.clone())
         });
         let options = Options {
@@ -376,7 +376,7 @@ fn isolate(cwd: &Path, deny: &[PathBuf]) -> Result<()> {
     if ours {
         return Ok(());
     }
-    let tmp = dir.join(format!("config.toml.{}", mcp::random()));
+    let tmp = dir.join(format!("config.toml.{}", backend::random()));
     std::fs::File::create_new(&tmp)?.write_all(toml.as_bytes())?;
     Ok(std::fs::rename(tmp, file)?)
 }

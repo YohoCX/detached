@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use detached_core::backend::Session as _;
 use detached_core::git::testutil::Sandbox;
 use detached_core::host::Call;
+use detached_core::testutil::alive;
 
 use super::*;
 
@@ -70,23 +71,6 @@ fn exit(rx: &Receiver<Event>) -> (Exit, bool) {
         Event::Exited(x, asked) => Some((x, asked)),
         _ => None,
     })
-}
-
-/// Whether `pid` runs, a zombie counting as gone.
-pub fn alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        let out = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .unwrap();
-        return String::from_utf8_lossy(&out.stdout).contains(&pid.to_string());
-    }
-    let out = Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    let stat = String::from_utf8_lossy(&out.stdout);
-    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }
 
 fn gone(pid: u32) {

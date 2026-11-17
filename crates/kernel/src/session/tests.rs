@@ -784,16 +784,6 @@ fn boot_codex(cx: &mut TestAppContext) -> Fixture {
     })
 }
 
-#[cfg(unix)]
-fn alive(pid: u64) -> bool {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    let stat = String::from_utf8_lossy(&out.stdout);
-    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
-}
-
 /// Codex's cancel spares a background command: ending the session ends it, and the chat goes on in
 /// a resume that lists among the past sessions.
 #[cfg(unix)]
@@ -820,7 +810,7 @@ fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut Tes
     s.update(cx, |s, cx| s.cancel_and_end(cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     let start = std::time::Instant::now();
-    while alive(pid) {
+    while detached_core::testutil::alive(pid as u32) {
         assert!(start.elapsed() < START, "the background command runs on");
         cx.run_until_parked();
     }

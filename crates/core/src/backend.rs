@@ -2,6 +2,7 @@
 //! types, in a session's terms. No flag, field or frame of a protocol is named here.
 
 use std::collections::BTreeMap;
+use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -53,6 +54,13 @@ pub trait Backend: Send + Sync {
     fn probe(&self, _core: &AppState, _wsl: Option<&str>) -> Result<Probe> {
         Err(Error::Other("This agent has no sandbox probe.".into()))
     }
+}
+
+/// 256 bits from std's randomly keyed hasher, as hex.
+pub fn random() -> String {
+    (0..4u8)
+        .map(|i| format!("{:016x}", RandomState::new().hash_one(i)))
+        .collect()
 }
 
 /// The probe's answer: passed, or what the agent said instead.
