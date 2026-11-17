@@ -315,9 +315,10 @@ Node-free, from the Settings "Agents" page; built in step H3.
   - **Claude's `min_cli` and `blocked_cli`. Open** (the decision's choice 2). Recommended: a `cli`
     list of its own in the same signed file, read by every app version, under the same key, serial
     and fetch. The floor is the oldest `claude` the vetting passes on.
-  - **Signing stays off CI.** The catalog's minisign key lives on the owner's machine, and
-    `make adapters-sign` signs the file there. `adapters.yml` only uploads a catalog that is
-    already signed and committed, so no secret and no model credential is ever in CI.
+  - **Signing in CI** ([decision](docs/decisions/2026-11-17-catalog-signed-in-ci.md)).
+    `adapters.yml` signs the catalog with the `ADAPTERS_SIGNING_KEY` secret in the `adapters`
+    environment, adds a tag's entry first, commits the catalog to main and uploads it.
+    `make adapters-sign` is the manual fallback. No model credential is ever in CI.
   - **Vetting of `claude`** (H4c) runs daily, since the CLI releases most days: the floor and the
     latest `claude`, through Claude's backend at main and at the latest release tag, on every OS
     of §17.
@@ -325,7 +326,7 @@ Node-free, from the Settings "Agents" page; built in step H3.
       the tag is older than 0.6.0, the first with Claude's backend: until then vetting runs at
       main alone.
     - A failure opens an issue for the owner; nothing is published by itself. The owner decides
-      whether to add that version to `blocked_cli`, signs and pushes.
+      whether to add that version to `blocked_cli` and pushes; CI signs.
   - **The vetted version is the floor**: the `cli` list's `min_cli`, else the manifest's. It is
     the one `claude` every day's vetting passes on, so it is the version a message names. No
     "last vetted" value is kept anywhere; a floor that fails is the owner's to raise.

@@ -1,10 +1,10 @@
 # Agent adapters.
 # - An adapters-<name>-<version> tag builds that adapter with bun per platform into a release of its
-#   own, with the entry.json that `make adapters-sign entry=entry.json` adds to the catalog.
-# - A push of adapters/adapters.json to main, or a manual run, checks the signed catalog and
-#   publishes it to the rolling `adapters` release, the URL core's CATALOG_URL names.
-# Signing stays on the owner's machine, so no secret is used here. Neither release is marked latest:
-# the app's updater reads the latest release.
+#   own with an entry.json, then the catalog job adds that entry to the catalog.
+# - The catalog job signs adapters/adapters.json with ADAPTERS_SIGNING_KEY unless its committed
+#   signature already holds, commits it to main and publishes it to the rolling `adapters` release,
+#   the URL core's CATALOG_URL names. It runs on main and on those tags, in the `adapters`
+#   environment. Neither release is marked latest: the app's updater reads the latest release.
 name: Adapters
 
 on:
@@ -81,28 +81,51 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --latest=false \
             --title "Adapter ${GITHUB_REF_NAME#adapters-}" \
-            --notes "Add it to the catalog with \`make adapters-sign entry=entry.json\`." \
+            --notes "The catalog job adds entry.json to the signed catalog." \
             out/*.tar.gz out/entry.json
 
-  publish:
-    if: "!startsWith(github.ref, 'refs/tags/')"
+  catalog:
+    needs: release
+    if: ${{ !cancelled() && !github.event.repository.fork && (github.ref == 'refs/heads/main' || needs.release.result == 'success') }}
     runs-on: ubuntu-latest
+    environment: adapters
+    concurrency: adapters-catalog
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - name: Sign
+        env:
+          SECRET: ${{ secrets.ADAPTERS_SIGNING_KEY }}
+        run: |
+          catalog=adapters/adapters.json
+          key=$(sed -n 's/^pub const CATALOG_KEY: &str = "\(.*\)";$/\1/p' crates/core/src/adapters.rs)
+          [ -n "$key" ] || { echo "::error::Set CATALOG_KEY in crates/core/src/adapters.rs."; exit 1; }
+          echo "key=$key" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          entry=()
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release download "$GITHUB_REF_NAME" -p entry.json -D "$RUNNER_TEMP"
+            entry=("$RUNNER_TEMP/entry.json")
+          elif [ -f "$catalog.minisig" ] && minisign -V -q -P "$key" -m "$catalog"; then
+            exit 0
+          fi
+          [ -n "$SECRET" ] || { echo "::error::Set the ADAPTERS_SIGNING_KEY secret."; exit 1; }
+          dir=$RUNNER_TEMP/key
+          mkdir -m 700 "$dir"
+          printf '%s\n' "$SECRET" > "$dir/adapters.key"
+          printf 'untrusted comment: CATALOG_KEY\n%s\n' "$key" > "$dir/adapters.pub"
+          # The key has an empty password, which minisign reads from a stdin that is not a terminal.
+          echo | DETACHED_ADAPTERS_KEY_DIR=$dir scripts/adapters-sign.sh "${entry[@]}"
+          rm -r "$dir"
       - name: Check
         run: |
           catalog=adapters/adapters.json
-          if [ ! -f "$catalog.minisig" ]; then
-            echo "::notice::$catalog is not signed yet; nothing to publish."
-            echo "unsigned=1" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          key=$(sed -n 's/^pub const CATALOG_KEY: &str = "\(.*\)";$/\1/p' crates/core/src/adapters.rs)
-          [ -n "$key" ] || { echo "::error::Set CATALOG_KEY in crates/core/src/adapters.rs."; exit 1; }
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq minisign
           minisign -V -q -P "$key" -m "$catalog"
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/adapters/adapters.json"
           if published=$(curl -fsSL "$url"); then
@@ -116,10 +139,13 @@ jobs:
                 || { echo "::error::$u does not match its size or sha256."; exit 1; }
             done
       - name: Publish
-        if: env.unsigned != '1'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
+          git add adapters/adapters.json adapters/adapters.json.minisig
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Adapters catalog signed at serial $(jq .serial adapters/adapters.json)"
+            git push origin HEAD:main
+          fi
           gh release view adapters > /dev/null 2>&1 || gh release create adapters --prerelease --latest=false \
             --title "Adapters catalog" --notes "The signed adapters.json that Detached reads."
           gh release upload adapters adapters/adapters.json adapters/adapters.json.minisig --clobber

@@ -53,7 +53,7 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           title="The scheduled agent vetting failed"
-          body="$RUN failed. If a claude version breaks Claude's backend, add it to blocked_cli, then \`make adapters-sign\` and push."
+          body="$RUN failed. If a claude version breaks Claude's backend, add it to blocked_cli in adapters/adapters.json and push; CI signs it."
           open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
           if [ -n "$open" ]; then
             gh issue comment "$open" -R "$GITHUB_REPOSITORY" --body "$body"

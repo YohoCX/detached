@@ -68,8 +68,8 @@ sign-setup:
 e2e-app:
 	./scripts/e2e-app.sh
 
-# Signs adapters/adapters.json with the catalog's key, made outside the repo on first use;
-# entry=<entry.json> from an adapters-* release adds that entry first.
+# The fallback to adapters.yml's signing: signs adapters/adapters.json with the catalog's key, made
+# outside the repo on first use; entry=<entry.json> from an adapters-* release adds that entry first.
 adapters-sign:
 	./scripts/adapters-sign.sh $(entry)
 
