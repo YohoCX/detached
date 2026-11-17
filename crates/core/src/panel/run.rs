@@ -155,6 +155,8 @@ pub struct Preview {
     pub accepted: bool,
     /// What accepting this preview accepts, and no other.
     pub fingerprint: String,
+    /// Why Codex's files at the head were not scanned, so Codex cannot run on it.
+    pub refused: Option<String>,
 }
 
 pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
@@ -172,6 +174,7 @@ pub fn preview(core: &AppState, s: &Start) -> Result<Preview> {
         authors: marks::authors(&core.env(), &p, &subject)?,
         accepted: trust::trusted(&core.config_dir, &s.repo, &project),
         fingerprint: project.fingerprint,
+        refused: project.refused,
         items: project.items,
         trust,
         subject,
@@ -184,6 +187,7 @@ pub fn accept(core: &AppState, pv: &Preview) -> Result<()> {
     let project = trust::Project {
         items: pv.items.clone(),
         fingerprint: pv.fingerprint.clone(),
+        refused: None,
     };
     trust::trust(&core.config_dir, &pv.subject.repo, &project)
 }
@@ -251,8 +255,14 @@ pub fn prepare(
     }
     let mut limits = vec![];
     // Codex loads a tree's own settings whatever it is told: on one not accepted, Claude stands in.
-    if !pv.accepted && claude_only(&mut mode) {
-        limits.push("cross-provider verification unavailable: the subject's agent settings are not accepted, so Codex does not run".into());
+    let why = match &pv.refused {
+        Some(r) => r.clone(),
+        None => "the subject's agent settings are not accepted".into(),
+    };
+    if (!pv.accepted || pv.refused.is_some()) && claude_only(&mut mode) {
+        limits.push(format!(
+            "cross-provider verification unavailable: {why}, so Codex does not run"
+        ));
     }
     let role = |n: &str| mode::role(core, repo, n);
     let priors = track::priors(core, repo, task, &subject.head_sha)?;

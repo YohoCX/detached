@@ -45,6 +45,26 @@ pub struct Project {
     pub items: Vec<String>,
     /// The files read, with their git object ids; any change asks again.
     pub fingerprint: String,
+    /// Why Codex's files (`.codex/`, `.agents/`) were not scanned: a link or their size. Only a
+    /// provider that reads them is refused for it.
+    pub refused: Option<String>,
+}
+
+impl Project {
+    /// Why a provider whose trust globs are `globs` may not load this tree.
+    pub fn refuses(&self, globs: &[&str]) -> Option<&str> {
+        let reads = globs
+            .iter()
+            .any(|g| CODEX_ONLY.iter().any(|d| g.starts_with(d)));
+        self.refused.as_deref().filter(|_| reads)
+    }
+}
+
+/// Codex's alone of the trust files: a problem in them refuses Codex, not every provider.
+const CODEX_ONLY: &[&str] = &[CODEX, ".agents"];
+
+fn refuse_link(p: impl std::fmt::Display) -> String {
+    format!("{p} is a link: the scan refuses it")
 }
 
 /// Reads what loading `repo`'s own settings would bring in.
@@ -58,19 +78,16 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     for dir in MARKDOWN {
         markdown(repo, &repo.join(dir), &mut files);
     }
-    layer(repo, &repo.join(CODEX), &mut files)?;
+    let mut codex = vec![];
     let size = |f: &String| fs::metadata(repo.join(f)).map_or(0, |m| m.len());
-    if files
-        .iter()
-        .filter(|f| f.starts_with(CODEX))
-        .map(size)
-        .sum::<u64>()
-        > 1 << 20
-    {
-        return Err(Error::Other(format!(
-            "{CODEX} is over 1 MiB: the scan refuses it"
-        )));
-    }
+    let refused = match layer(repo, &repo.join(CODEX), &mut codex) {
+        Err(e) => Some(e),
+        Ok(()) if codex.iter().map(size).sum::<u64>() > 1 << 20 => Some(over()),
+        Ok(()) => {
+            files.extend(codex);
+            None
+        }
+    };
     files.sort();
     let mut items = vec![];
     for f in &files {
@@ -92,7 +109,15 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
                 .collect()
         }
     };
-    Ok(Project { items, fingerprint })
+    Ok(Project {
+        items,
+        fingerprint,
+        refused,
+    })
+}
+
+fn over() -> String {
+    format!("{CODEX} is over 1 MiB: the scan refuses it")
 }
 
 /// What `repo`'s trust files at `sha` would bring in, read as raw blobs: a link among them or more
@@ -114,13 +139,27 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
                 .any(|d| d.starts_with(p) || p.starts_with(d))
             || wanted(p)
     };
-    if let Some(e) = all.iter().find(|e| e.mode == "120000" && link(&e.path)) {
-        return Err(Error::Other(format!(
-            "{} is a link: the scan refuses it",
-            e.path
-        )));
+    let codex_only = |p: &str| {
+        CODEX_ONLY
+            .iter()
+            .any(|d| p == *d || p.starts_with(&format!("{d}/")))
+    };
+    let links = all.iter().filter(|e| e.mode == "120000" && link(&e.path));
+    let (theirs, links): (Vec<_>, Vec<_>) = links.partition(|e| codex_only(&e.path));
+    if let Some(e) = links.first() {
+        return Err(Error::Other(refuse_link(&e.path)));
     }
     let mut files: Vec<&tree::Entry> = all.iter().filter(|e| wanted(&e.path)).collect();
+    let codex = files
+        .iter()
+        .filter(|e| e.path.starts_with(&format!("{CODEX}/")));
+    let refused = match theirs.first() {
+        Some(e) => Some(refuse_link(&e.path)),
+        None => (codex.map(|e| e.size).sum::<u64>() > 1 << 20).then(over),
+    };
+    if refused.is_some() {
+        files.retain(|e| !codex_only(&e.path));
+    }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     if files.iter().map(|e| e.size).sum::<u64>() > 1 << 20 {
         return Err(Error::Other(
@@ -135,7 +174,11 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
         scan(&e.path, &String::from_utf8_lossy(&body), &mut items);
         fingerprint.push_str(&format!("{} {}\n", e.oid, e.path));
     }
-    Ok(Project { items, fingerprint })
+    Ok(Project {
+        items,
+        fingerprint,
+        refused,
+    })
 }
 
 /// `p` with `repo`'s file `rel` as it is on disk, when it exists, in the order `project` reads.
@@ -185,18 +228,17 @@ fn load(config_dir: &Path) -> BTreeMap<String, String> {
 }
 
 /// Every file under Codex's layer `dir`, read whole: a link in it, or it a link, refuses the scan.
-fn layer(repo: &Path, dir: &Path, files: &mut Vec<String>) -> Result<()> {
+fn layer(repo: &Path, dir: &Path, files: &mut Vec<String>) -> std::result::Result<(), String> {
     let Ok(m) = dir.symlink_metadata() else {
         return Ok(());
     };
-    let refuse = |p: &Path| Error::Other(format!("{} is a link: the scan refuses it", p.display()));
     if m.file_type().is_symlink() {
-        return Err(refuse(dir));
+        return Err(refuse_link(dir.display()));
     }
-    for e in fs::read_dir(dir)?.flatten() {
-        let (path, kind) = (e.path(), e.file_type()?);
+    for e in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+        let (path, kind) = (e.path(), e.file_type().map_err(|e| e.to_string())?);
         if kind.is_symlink() {
-            return Err(refuse(&path));
+            return Err(refuse_link(path.display()));
         } else if kind.is_dir() {
             layer(repo, &path, files)?;
         } else if let Some(rel) = path.strip_prefix(repo).ok().and_then(|p| p.to_str()) {
@@ -581,20 +623,37 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_scan_on_disk_refuses_a_link_in_or_as_codex_s_layer_and_its_size() {
+    fn a_link_in_or_as_codex_s_layer_or_its_size_refuses_codex_alone() {
+        use crate::adapters::{CLAUDE, CODEX};
         let sb = Sandbox::new();
         let r = sb.path("r");
         fs::create_dir_all(r.join(".codex")).unwrap();
         sb.git(&r, &["init", "-q"]);
+        write(&r, ".claude/settings.json", r#"{"env": {"A": "1"}}"#);
         let env = sb.state.env();
+        let refused = |why: &str| {
+            let p = project(&env, &r).unwrap();
+            assert_eq!(p.items, ["Environment: A"], "the rest is scanned");
+            assert!(p.refuses(CLAUDE.trust).is_none());
+            let codex = p.refuses(CODEX.trust).unwrap_or_default().to_string();
+            assert!(codex.contains(why), "{codex}");
+        };
         std::os::unix::fs::symlink("/dev/zero", r.join(".codex/hooks.json")).unwrap();
-        assert!(project(&env, &r).unwrap_err().to_string().contains("link"));
+        refused("link");
         fs::remove_dir_all(r.join(".codex")).unwrap();
         std::os::unix::fs::symlink("/", r.join(".codex")).unwrap();
-        assert!(project(&env, &r).unwrap_err().to_string().contains("link"));
+        refused("link");
         fs::remove_file(r.join(".codex")).unwrap();
         write(&r, ".codex/config.toml", &"#\n".repeat(1 << 20));
-        assert!(project(&env, &r).unwrap_err().to_string().contains("1 MiB"));
+        refused("1 MiB");
+        fs::remove_dir_all(r.join(".codex")).unwrap();
+        std::os::unix::fs::symlink("../.claude", r.join(".agents")).unwrap();
+        sb.git(&r, &["add", "-A"]);
+        sb.git(&r, &["commit", "-qm", "a"]);
+        let head = sb.git(&r, &["rev-parse", "HEAD"]);
+        let p = at(&env, &r, &head).unwrap();
+        assert!(p.refuses(CLAUDE.trust).is_none());
+        assert!(p.refuses(CODEX.trust).unwrap().contains("link"));
     }
 
     #[cfg(unix)]

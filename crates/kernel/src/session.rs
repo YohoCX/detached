@@ -1254,6 +1254,12 @@ fn start(
         Some(_) => trust::project(&core.env(), Path::new(&spec.repo))?,
         None => Default::default(),
     };
+    if let Some(why) = project.refuses(spec.provider.trust) {
+        return Err(Error::Other(format!(
+            "{} cannot run here: {why}",
+            spec.provider.name
+        )));
+    }
     spec.trusted = accept.is_some_and(|a| trust::trusted(&core.config_dir, &a, &project));
     let trusted = spec.trusted;
     // Skills never stop a session: a bad item is listed with its error, and the CLI reads its own.

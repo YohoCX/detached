@@ -198,10 +198,17 @@ impl Chat {
             return;
         }
         self.end(cx);
-        (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
-        self.cached.clear();
+        self.switch(p);
         self.open(None, cx);
         self.check_trust(cx);
+    }
+
+    /// Takes `p` in `p`'s chat mode, without the other provider's `/` commands.
+    pub fn switch(&mut self, p: &'static Provider) {
+        if self.provider.id != p.id {
+            (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
+            self.cached.clear();
+        }
     }
 
     /// Switches the mode, model or effort, for this session and the next.
@@ -356,9 +363,7 @@ impl Chat {
     /// Shows `p`'s past conversation `id` in place of this one; the next message goes on with it.
     pub fn open_past(&mut self, p: &'static Provider, id: String, cx: &mut Context<Self>) {
         self.end(cx);
-        if self.provider.id != p.id {
-            (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
-        }
+        self.switch(p);
         self.resumed = true;
         self.open(Some(id), cx);
     }

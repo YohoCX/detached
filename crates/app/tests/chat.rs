@@ -750,6 +750,17 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
         label(cx, ("chat.suggest", 0usize)).as_deref(),
         Some("/review <pr> Reviews a change")
     );
+    // Another provider's chat, as a resume or a new chat from one takes it, lists none of them.
+    let solo = cx.sb.solo().display().to_string();
+    let codex = &detached_core::adapters::CODEX;
+    cx.update(|_, cx| {
+        let chat = chat::find(&solo, 1, cx).unwrap();
+        chat.update(cx, |c, cx| {
+            c.end(cx);
+            c.switch(codex);
+        });
+        assert!(chat.read(cx).commands(cx).is_empty());
+    });
 }
 
 #[gpui_kit::test]
