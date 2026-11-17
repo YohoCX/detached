@@ -7,7 +7,8 @@ use gpui_kit::{
 };
 
 use super::mr::is_gitlab;
-use super::mr_page::{MrPage, button};
+use super::mr_page::MrPage;
+use crate::ui::page::button;
 use crate::ui::{self, radius, theme};
 use kernel::forge::active;
 
@@ -122,8 +123,8 @@ impl MergeWidget {
                     "merge.submit",
                     if auto { "Set auto-merge" } else { "Merge" },
                     !busy && (mr.blocking.is_none() || auto),
-                    cx.listener(move |p, _, _, cx| p.act(action.clone(), cx).detach()),
                     cx,
+                    move |p, _, cx| p.act(action.clone(), cx).detach(),
                 )
                 .bg(t.primary)
                 .text_color(t.primary_fg),

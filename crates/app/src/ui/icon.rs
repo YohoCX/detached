@@ -20,7 +20,6 @@ pub enum Icon {
     File,
     Repo,
     Tree,
-    Changes,
     Mr,
     Chevron,
     Down,
@@ -31,10 +30,7 @@ pub enum Icon {
     Search,
     EyeOff,
     Edit,
-    Log,
-    Pipeline,
     Gear,
-    Terminal,
     Chat,
     PanelLeft,
     PanelBottom,
@@ -70,7 +66,6 @@ impl Icon {
             Icon::Folder => svg16!("M2 4.5h4l1.5 1.5H14v6.5H2z"),
             Icon::Repo => svg16!("M3.5 2.5h9v11h-9zM6 2.5v11"),
             Icon::Tree => svg16!("M3 3h4M5 3v9h3M5 7.5h3M10 7.5h3M10 12h3"),
-            Icon::Changes => svg16!("M3 3h10v10H3zM6 8h4M8 6v4"),
             Icon::Mr => svg16!(
                 "M4.5 4.5v7M4.5 3a1.5 1.5 0 1 0 0 .01M4.5 13a1.5 1.5 0 1 0 0 .01M11.5 13a1.5 1.5 0 1 0 0 .01M11.5 11.5V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6"
             ),
@@ -86,16 +81,9 @@ impl Icon {
                 "M2 2l12 12M6 3.8A7 7 0 0 1 8 3.5c4 0 6.5 4.5 6.5 4.5a12 12 0 0 1-2 2.5M10 12.2a7 7 0 0 1-2 .3C4 12.5 1.5 8 1.5 8a12 12 0 0 1 2-2.5M6.5 6.5a2.1 2.1 0 0 0 3 3"
             ),
             Icon::Edit => svg16!("M10.5 3l2.5 2.5L6 12.5H3.5V10zM9 4.5 11.5 7"),
-            Icon::Log => svg16!(
-                "M4 2.5v1M4 6.5v3M4 12.5v1M2.5 5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M2.5 11a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M8 5h5.5M8 11h5.5"
-            ),
-            Icon::Pipeline => svg16!(
-                "M1.5 8a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M6.5 8a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M11.5 8a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0M4.5 8h2M9.5 8h2"
-            ),
             Icon::Gear => svg16!(
                 "M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"
             ),
-            Icon::Terminal => svg16!("M2.5 3h11v10h-11zM5 6.5l2 1.5-2 1.5M8.5 10H11"),
             Icon::Chat => svg16!("M2.5 3h11v8H7l-3 2.5V11H2.5zM5 6h6M5 8.5h4"),
             Icon::PanelLeft => svg16!("M2.5 3h11v10h-11zM6.5 3v10"),
             Icon::PanelBottom => svg16!("M2.5 3h11v10h-11zM2.5 9.5h11"),

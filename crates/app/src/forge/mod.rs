@@ -33,6 +33,7 @@ use crate::actions::Registration;
 use crate::dock::{self, AppSpec, DocKind};
 use crate::settings;
 use crate::shell::{self, TopBar};
+use crate::ui::page::labeled;
 use crate::ui::{self, theme};
 use crate::util::{first_line, now};
 use kernel::doc::Doc;
@@ -191,15 +192,9 @@ fn labelled(id: &'static str, label: impl Into<SharedString>) -> ObservedElement
     div().id(id).test_support().aria_label(label)
 }
 
-/// `text` labelled with itself.
-fn text_of(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
-    let text = text.into();
-    labelled(id, text.clone()).child(text)
-}
-
 /// A line of text in place of content.
 fn note(id: &'static str, text: impl Into<SharedString>, color: Hsla) -> AnyElement {
-    text_of(id, text)
+    labeled(id, text)
         .px(px(16.))
         .py(px(12.))
         .text_color(color)

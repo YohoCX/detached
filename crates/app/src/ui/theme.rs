@@ -546,7 +546,6 @@ pub mod graph {
     pub const RAIL: Pixels = px(2.);
     pub const DOT: Pixels = px(8.);
     pub const ROW: Pixels = px(64.);
-    pub const COLUMN: Pixels = px(210.);
     pub const FLOW_COLUMN: f32 = 240.;
     pub const FLOW_GUTTER: f32 = 64.;
     pub const FLOW_HEADER: f32 = 40.;

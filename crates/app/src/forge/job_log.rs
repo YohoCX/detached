@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use super::ansi::{Color, LogParser, Span, visible};
 use super::pipelines::{Seen, job_key, status};
-use super::{core, glyph, note, text_of};
+use super::{core, glyph, labeled, note};
 use crate::ui::theme::{Theme, mono};
 use crate::ui::{self, Icon, text, theme};
 use kernel::blocking;
@@ -217,14 +217,14 @@ impl JobLog {
             .whitespace_nowrap()
             .children(self.job.as_ref().map(|j| status(&j.status, cx)))
             .child(div().font_weight(FontWeight::BOLD).child(self.name.clone()))
-            .child(text_of("job.at", at).text_color(t.muted))
+            .child(labeled("job.at", at).text_color(t.muted))
             .child(div().flex_1())
             .when(self.following, |d| {
-                d.child(text_of("job.following", "Following…").text_color(t.muted))
+                d.child(labeled("job.following", "Following…").text_color(t.muted))
             })
             .when(self.cut, |d| {
                 let cut = "Over 20 MB: showing the end only";
-                d.child(text_of("job.cut", cut).text_color(t.warning))
+                d.child(labeled("job.cut", cut).text_color(t.warning))
             })
             .when_some(url, |d, url| {
                 d.child(

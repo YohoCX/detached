@@ -10,12 +10,12 @@ use detached_core::types::{
     self, CommitSummary, FileChange, Hunk, MergeRequest, MrAction, MrState, Side,
 };
 use futures::channel::oneshot;
-use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, AsyncApp, ClickEvent, Context, Div, ElementId, Entity, FontWeight,
-    Hsla, InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString, Stateful,
+    AnyElement, App, AppContext, AsyncApp, Context, Div, Entity, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
     px,
 };
@@ -23,9 +23,10 @@ use gpui_kit::{
 use super::merge::MergeWidget;
 use super::mr::{bare_title, is_gitlab, links, tone};
 use super::thread::Thread;
-use super::{Pipelines, core, labelled, name, note, now, text_of};
+use super::{Pipelines, core, labeled, labelled, name, note, now};
 use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Markdown};
 use crate::history::CommitDetails;
+use crate::ui::page::{self, button};
 use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, ago_text, base_name, dir_name, status_of, when};
 use kernel::activity::Activity;
@@ -440,7 +441,7 @@ impl MrPage {
             .text_size(text::TITLE)
             .whitespace_nowrap()
             .child(
-                text_of("mr.number", format!("{sign}{}", self.number))
+                labeled("mr.number", format!("{sign}{}", self.number))
                     .font_weight(FontWeight::EXTRA_BOLD),
             )
             .when_some(m, |d, m| {
@@ -451,7 +452,7 @@ impl MrPage {
                     MrState::Closed => ("closed", "Closed", t.muted),
                 };
                 d.child(
-                    text_of("mr.title", title)
+                    labeled("mr.title", title)
                         .min_w_0()
                         .truncate()
                         .font_weight(FontWeight::BOLD)
@@ -570,7 +571,11 @@ impl MrPage {
     fn overview(&self, m: &MergeRequest, cx: &Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let (busy, gitlab) = (self.busy, is_gitlab(m));
-        let act = |a: MrAction| cx.listener(move |this, _, _, cx| this.act(a.clone(), cx).detach());
+        let act = |a: MrAction| {
+            move |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
+                this.act(a.clone(), cx).detach()
+            }
+        };
         let row = || div().flex().flex_wrap().justify_end().gap(px(8.));
         let description = match &self.description {
             Some(md) => md.clone().into_any_element(),
@@ -585,7 +590,7 @@ impl MrPage {
                     true => ("Unapprove", MrAction::Unapprove),
                     false => ("Approve", MrAction::Approve),
                 };
-                d.child(button("mr.approve", label, !busy, act(a), cx))
+                d.child(button("mr.approve", label, !busy, cx, act(a)))
             })
             .child(button(
                 "mr.set_draft",
@@ -595,11 +600,11 @@ impl MrPage {
                     "Mark as draft"
                 },
                 !busy,
-                act(MrAction::SetDraft { draft: !m.draft }),
                 cx,
+                act(MrAction::SetDraft { draft: !m.draft }),
             ))
             .child(
-                button("mr.close", "Close", !busy, act(MrAction::Close), cx).text_color(t.error),
+                button("mr.close", "Close", !busy, cx, act(MrAction::Close)).text_color(t.error),
             );
         let blank = self.review.read(cx).value().trim().is_empty();
         let review = div()
@@ -619,16 +624,16 @@ impl MrPage {
                             "mr.approve",
                             "Approve",
                             !busy,
-                            act(MrAction::Approve),
                             cx,
+                            act(MrAction::Approve),
                         ))
                     })
                     .child(button(
                         "mr.request_changes",
                         "Request changes",
                         !busy && !blank,
-                        cx.listener(|this, _, window, cx| this.request_changes(window, cx)),
                         cx,
+                        |this, window, cx| this.request_changes(window, cx),
                     )),
             );
         let threads = self.threads.iter().enumerate();
@@ -673,8 +678,8 @@ impl MrPage {
                             "mr.reopen",
                             "Reopen",
                             !busy,
-                            act(MrAction::Reopen),
                             cx,
+                            act(MrAction::Reopen),
                         )))
                     })
                     .child(
@@ -881,7 +886,7 @@ impl Render for MrPage {
                 .bg(t.error.opacity(0.1))
                 .text_color(t.error)
                 .child(
-                    text_of("mr.failure", f)
+                    labeled("mr.failure", f)
                         .min_w_0()
                         .truncate()
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)),
@@ -907,28 +912,8 @@ impl Render for MrPage {
     }
 }
 
-/// A pill whose clicks run `on_click` unless disabled, when it dims.
-pub(super) fn button(
-    id: impl Into<ElementId>,
-    label: &'static str,
-    enabled: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> ObservedElement<Stateful<Div>> {
-    ui::button(id, label, cx)
-        .when(!enabled, |b| b.opacity(0.5))
-        .when(enabled, |b| b.on_click(on_click))
-        .test_support()
-        .role(Role::Button)
-        .aria_label(label)
-}
-
 fn muted(text: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .flex_none()
-        .text_size(text::SMALL)
-        .text_color(theme(cx).muted)
-        .child(text.into())
+    page::muted(text, cx).flex_none().text_size(text::SMALL)
 }
 
 /// Views of `threads`, each kept from `old` when it shows the same thread, so an open reply
