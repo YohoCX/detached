@@ -78,16 +78,7 @@ fn claude() -> PathBuf {
 }
 
 /// The kernel on the user's `claude`, and the fake API on `script`.
-fn boot(cx: &mut TestAppContext, script: Value) -> (Fixture, Api) {
-    boot_with(cx, script, &CLAUDE, |_| {})
-}
-
-pub(crate) fn boot_with(
-    cx: &mut TestAppContext,
-    script: Value,
-    provider: &'static Provider,
-    install: impl FnOnce(&AppState),
-) -> (Fixture, Api) {
+pub(crate) fn boot(cx: &mut TestAppContext, script: Value) -> (Fixture, Api) {
     let host = wsl().map(|_| std::env::var("DETACHED_AGENT_WSL_HOST").expect("the gateway"));
     let api = Api::serve_on(host.as_deref().unwrap_or("127.0.0.1"), script).unwrap();
     // The CLI sends even plain HTTP through the proxy.
@@ -104,7 +95,7 @@ pub(crate) fn boot_with(
     ];
     // The distro's own `claude` runs there.
     let cli = wsl().map_or_else(claude, |_| PathBuf::from("claude"));
-    let mut f = super::boot_on(cx, &cli, &vars, provider, install);
+    let mut f = super::boot_on(cx, &cli, &vars, &CLAUDE, |_| {});
     f.wsl = wsl();
     (f, api)
 }
@@ -332,7 +323,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
         };
         assert_eq!(*stop, Some(StopReason::Cancelled));
     });
-    // On Windows the command runs on until the adapter or the CLI goes (docs/TECHDEBT.md).
+    // On Windows the command runs on until the CLI goes (docs/TECHDEBT.md).
     if cfg!(windows) && wsl().is_none() {
         assert!(running(&marker));
         cx.update(|_| drop(s));
@@ -344,7 +335,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
 #[ignore = "make agent-test"]
 fn a_session_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
     let (_f, _api, marker, s) = mid_command("gone", cx);
-    // The adapter's last session or the CLI's own goes, which ends it; on Windows its job then closes.
+    // The session's CLI goes, which ends it; on Windows its job then closes.
     // Released in an update: a dropped handle alone waits for the next one.
     cx.update(|_| drop(s));
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
