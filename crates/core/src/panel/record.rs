@@ -945,6 +945,7 @@ pub fn verdict(f: &Found) -> String {
 }
 
 /// How many models stand behind a group: two sources on one model count once.
+#[cfg(any(test, feature = "testutil"))]
 pub fn corroboration(sources: &[&Found]) -> usize {
     let mut models: Vec<String> = sources.iter().map(|f| family(&f.model)).collect();
     models.sort();

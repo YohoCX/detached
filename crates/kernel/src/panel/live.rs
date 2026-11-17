@@ -68,13 +68,13 @@ fn reachable() -> bool {
     addr.is_some_and(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_secs(5)).is_ok())
 }
 
-/// Replaces the reachability probe, for tests.
-pub fn set_reach(cx: &mut App, reach: impl Fn() -> bool + Send + Sync + 'static) {
+#[cfg(test)]
+pub(crate) fn set_reach(cx: &mut App, reach: impl Fn() -> bool + Send + Sync + 'static) {
     cx.global_mut::<Panels>().reach = Arc::new(reach);
 }
 
-/// Replaces the wall clock, for tests.
-pub fn set_wall(cx: &mut App, wall: impl Fn() -> i64 + Send + Sync + 'static) {
+#[cfg(test)]
+pub(crate) fn set_wall(cx: &mut App, wall: impl Fn() -> i64 + Send + Sync + 'static) {
     cx.global_mut::<Panels>().wall = Arc::new(wall);
 }
 

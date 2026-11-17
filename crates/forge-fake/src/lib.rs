@@ -51,11 +51,7 @@ pub struct Forge {
 impl Forge {
     /// Serves on a free port.
     pub fn start() -> io::Result<Self> {
-        Self::start_on(0)
-    }
-
-    pub fn start_on(port: u16) -> io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let origin = format!("http://{addr}");
         let state = Arc::new(Mutex::new(State {
