@@ -1,22 +1,20 @@
-use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use detached_core::adapters::testutil::CLAUDE_ACP;
 use detached_core::backend::Session as _;
-use detached_core::env::Env;
 use detached_core::git::testutil::Sandbox;
 use detached_core::host::Call;
-use detached_core::testutil::api::Api;
+use detached_core::testutil::alive;
 
 use super::*;
 
 mod codex_live;
 
 const WAIT: Duration = Duration::from_secs(10);
+/// A real adapter may take this long to start or answer.
+const START: Duration = Duration::from_secs(60);
 
 /// `fake_acp`; a host child takes its parent's rather than running cargo again.
 fn fake() -> PathBuf {
@@ -34,7 +32,7 @@ fn spec(cwd: &Path) -> proc::Spec {
 
 fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec(cwd), true, move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&spec(cwd), move |e| _ = tx.send(e)).unwrap();
     let options = Options {
         cwd: cwd.into(),
         ..Default::default()
@@ -73,23 +71,6 @@ fn exit(rx: &Receiver<Event>) -> (Exit, bool) {
         Event::Exited(x, asked) => Some((x, asked)),
         _ => None,
     })
-}
-
-/// Whether `pid` runs, a zombie counting as gone.
-pub fn alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        let out = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .unwrap();
-        return String::from_utf8_lossy(&out.stdout).contains(&pid.to_string());
-    }
-    let out = Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    let stat = String::from_utf8_lossy(&out.stdout);
-    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }
 
 fn gone(pid: u32) {
@@ -244,16 +225,19 @@ fn a_killed_host_leaves_no_process() {
     }
 }
 
-/// Core on a sandbox, `fake_acp` installed as Claude's adapter at 1.0.0 and as its CLI.
+/// Core on a sandbox, `fake_acp` installed as Codex's adapter at 1.0.0 and as its CLI, Codex on,
+/// `CODEX_HOME` empty so the caller's own is never touched.
 fn sandbox() -> Sandbox {
     let sb = Sandbox::new();
     let fake = testutil::fake().display().to_string();
     let config = adapters::Config {
-        cli: [(CLAUDE.id.into(), fake)].into(),
-        codex: false,
+        cli: [(CODEX.id.into(), fake)].into(),
+        codex: true,
     };
     sb.state.set_block(BLOCK, config).unwrap();
     testutil::install(&sb.state, "1.0.0");
+    let blank = ("CODEX_HOME".into(), String::new());
+    sb.state.env.write().unwrap().vars.push(blank);
     sb
 }
 
@@ -261,7 +245,8 @@ fn sandbox() -> Sandbox {
 fn open(acp: &Acp, sb: &Sandbox, past: Option<&str>) -> (Open, Receiver<backend::Event>) {
     let (tx, rx) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     let open = acp.start(&sb.state, &spec, past, Box::new(move |e| _ = tx.send(e)));
     (open.unwrap(), rx)
 }
@@ -371,7 +356,8 @@ fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Strin
     let (tx, rx) = mpsc::channel();
     let (called, calls) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     let called = Mutex::new(called);
     spec.tools = Some(detached_core::host::server(move |c| {
         _ = called.lock().unwrap().send(c);
@@ -385,8 +371,6 @@ fn with_tools(acp: &Acp, sb: &Sandbox) -> (Open, Receiver<backend::Event>, Strin
     assert_eq!(server["type"], "http");
     let name = server["name"].as_str().unwrap();
     assert!(name.starts_with("detached-host-"), "{name}");
-    let allowed = &params["_meta"]["claudeCode"]["options"]["allowedTools"];
-    assert_eq!(allowed, &json!([format!("mcp__{name}__*")]));
     let url = server["url"].as_str().unwrap().to_string();
     (open, rx, url, calls)
 }
@@ -510,7 +494,8 @@ fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
     assert_eq!(post(&url, "POST", &[], &rpc("initialize")).status, 404);
     let (tx, rx) = mpsc::channel();
     let repo = sb.dir.path().display().to_string();
-    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
+    let mut spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    spec.trusted = true;
     spec.tools = Some(detached_core::host::server(|_| Ok(json!(""))));
     let open = acp.start(
         &sb.state,
@@ -559,7 +544,7 @@ fn a_bare_ask_takes_its_call_s_title_and_input_and_the_host_s_own_tool_is_allowe
 
 #[test]
 fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_reads() {
-    let sb = codex_fake();
+    let sb = sandbox();
     let repo = sb.path("tree");
     std::fs::create_dir_all(repo.join(".codex")).unwrap();
     std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.repo]\n").unwrap();
@@ -587,18 +572,6 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
     assert_eq!(layer, want);
 }
 
-/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI.
-fn codex_fake() -> Sandbox {
-    let sb = Sandbox::new();
-    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
-    let config = adapters::Config {
-        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
-        codex: true,
-    };
-    sb.state.set_block(BLOCK, config).unwrap();
-    sb
-}
-
 /// A Codex session on `acp` in the sandbox with `effort` and `model`, and its stream.
 fn codex_open(
     acp: &Acp,
@@ -617,7 +590,7 @@ fn codex_open(
 
 #[test]
 fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
-    let (acp, sb) = (Acp::default(), codex_fake());
+    let (acp, sb) = (Acp::default(), sandbox());
     let (open, rx) = codex_open(&acp, &sb, "high", None);
     let open = open.unwrap();
     let config = until(&rx, |e| match e {
@@ -632,7 +605,7 @@ fn codex_s_effort_is_set_as_its_reasoning_effort_after_the_open() {
 
 #[test]
 fn a_refused_setting_fails_the_open_and_closes_its_session() {
-    let (acp, sb) = (Acp::default(), codex_fake());
+    let (acp, sb) = (Acp::default(), sandbox());
     let (kept, rx) = codex_open(&acp, &sb, "low", None);
     let kept = kept.unwrap();
     let (refused, _) = codex_open(&acp, &sb, "low", Some("no-such-model"));
@@ -666,189 +639,19 @@ fn no_argv_holds_the_host_tools_secret() {
     assert!(!all.contains(secret));
 }
 
-/// A real adapter and `claude` may take this long to start or answer.
-const START: Duration = Duration::from_secs(60);
-
-/// Names an agent gets from the machine rather than from whoever runs the tests.
-const OS: &[&str] = &[
-    "PATH",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "PROGRAMDATA",
-    "PROGRAMFILES",
-    "SYSTEMROOT",
-    "SYSTEMDRIVE",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-];
-
-/// The user's `claude`, found as the app finds it.
-fn claude() -> PathBuf {
-    let env = Env {
-        path: std::env::var("PATH").unwrap_or_default(),
-        ..Default::default()
-    };
-    adapters::find_cli(&CLAUDE, None, &env)
-        .expect("no `claude` on PATH or in ~/.local/bin: install it with Anthropic's installer")
-}
-
-/// The env of the kernel's real tests: the folders in `dir`, the fake API at `api`, every other
-/// allowed name but the machine's own empty.
-fn claude_env(dir: &Path, api: &str) -> Vec<(String, OsString)> {
-    let at = |p: &str| dir.join(p).into_os_string();
-    let set = [
-        ("HOME", at("home")),
-        ("CLAUDE_CONFIG_DIR", at("claude-config")),
-        ("USERPROFILE", at("home")),
-        ("APPDATA", at("home/AppData/Roaming")),
-        ("LOCALAPPDATA", at("home/AppData/Local")),
-        ("XDG_CONFIG_HOME", at("home/.config")),
-        ("XDG_DATA_HOME", at("home/.local/share")),
-        ("XDG_CACHE_HOME", at("home/.cache")),
-        ("ANTHROPIC_BASE_URL", api.into()),
-        ("ANTHROPIC_API_KEY", "sk-ant-placeholder".into()),
-        // Anything the CLI sends past the fake goes nowhere.
-        ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
-        ("NO_PROXY", "127.0.0.1,localhost".into()),
-    ];
-    let get = |k: &str| match set.iter().find(|(n, _)| *n == k) {
-        Some((_, v)) => Some(v.clone()),
-        None if OS.contains(&k) => std::env::var_os(k),
-        None => Some(OsString::new()),
-    };
-    let mut env = proc::env(CLAUDE.env, get);
-    env.push((CLAUDE.cli_var.into(), claude().into()));
-    env
-}
-
-/// Claude's real adapter: under CI's vetting (`DETACHED_AGENT_CATALOG`) the catalog's entry
-/// `DETACHED_AGENT_ENTRY` installed in `data`, else the bun build `make agent-test` makes.
-fn real_adapter(data: &Path) -> PathBuf {
-    if let Ok(url) = std::env::var("DETACHED_AGENT_CATALOG") {
-        let version = std::env::var("DETACHED_AGENT_ENTRY").ok();
-        testutil::from_catalog(data, &url, adapters::CATALOG_KEY, version.as_deref());
-        let current = adapters::installed(data, CLAUDE.adapter).current.unwrap();
-        return adapters::exe(data, CLAUDE.adapter, &current);
-    }
-    let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters");
-    let exe = format!("{}{}", CLAUDE.adapter, std::env::consts::EXE_SUFFIX);
-    let program = build.join(CLAUDE.adapter).join("out").join(exe);
-    assert!(
-        program.is_file(),
-        "no bun build of the adapter: run `make agent-test`"
-    );
-    program
-}
-
-/// A turn on Claude's real adapter, started with or without AIR's declaration, every ask allowed
-/// once: what it sent besides tool calls, and each tool call as its updates left it.
-fn air_turn(sb: &Sandbox, api: &str, air: bool) -> (Vec<String>, BTreeMap<String, Tool>) {
-    let spec_proc = proc::Spec {
-        program: real_adapter(&sb.state.data_dir),
-        args: vec![],
-        cwd: std::env::temp_dir(),
-        env: claude_env(sb.dir.path(), api),
-    };
-    let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec_proc, air, move |e| _ = tx.send(e)).unwrap();
-    let repo = sb.path("repo").display().to_string();
-    let mut spec = Spec::new(&CLAUDE_ACP, &repo, Kind::Chat);
-    spec.trusted = true;
-    let options = Options {
-        cwd: repo.into(),
-        config: config_of(&spec),
-        meta: meta(&spec, None),
-        ..Options::default()
-    };
-    let opened = adapter.new_session(&options).unwrap();
-    let (mut said, mut tools) = (vec![format!("{:?}", opened.config)], BTreeMap::new());
-    adapter.prompt(&opened.id, "go").unwrap();
-    let mut merge = |t: Tool| {
-        let was: &mut Tool = tools.entry(t.id.clone()).or_default();
-        was.id = t.id;
-        was.title = t.title.or(was.title.take());
-        was.kind = t.kind.or(was.kind.take());
-        was.status = t.status.or(was.status.take());
-        was.input = t.input.or(was.input.take());
-        was.output = t.output.or(was.output.take());
-    };
-    loop {
-        match rx.recv_timeout(START).expect("the turn ended") {
-            Event::Update(_, Update::Tool(t)) => merge(*t),
-            // The adapter may send its commands again, as many times as its timing makes.
-            Event::Update(_, u @ Update::Commands(_)) if said.contains(&format!("{u:?}")) => {}
-            Event::Update(_, u) => said.push(format!("{u:?}")),
-            Event::Ask(_, ask, reply) => {
-                reply.send(Answer::Allow);
-                let bare = [ask.tool.kind.is_none(), ask.tool.status.is_none()];
-                assert_eq!(bare, [air, air], "{:?}", ask.tool);
-                let tool = Tool {
-                    kind: None,
-                    status: None,
-                    ..ask.tool
-                };
-                said.push(format!("ask {tool:?} {:?}", ask.options));
-            }
-            Event::Ended(_, end) => {
-                said.push(format!("{end:?}"));
-                break;
-            }
-            Event::Closed(_) | Event::Exited(..) | Event::Output(..) => {}
-        }
-    }
-    (said, tools)
-}
-
-/// The check fired: with AIR the adapter keeps tool output out of `rawOutput` (a command's goes
-/// to `_meta.terminal_output`, a read's text nowhere) and gives an ask's tool no kind or status, so
-/// this pins those differences and no other.
-#[test]
-#[ignore = "make agent-test"]
-fn the_air_declaration_changes_tool_output_and_nothing_else_seen() {
-    let script = json!([
-        [{"tool": "Bash", "input": {"command": "echo in front", "description": "a scripted command",
-            "timeout": 600000}}],
-        [{"tool": "Bash", "input": {"command": "perl -e 'sleep 1'", "description": "behind",
-            "run_in_background": true}}],
-        [{"tool": "Read", "input": {"file_path": "README.md"}}],
-        [{ "text": "read it" }],
-    ]);
-    let api = Api::serve(script);
-    let sb = Sandbox::new();
-    let repo = sb.path("repo");
-    for d in [&repo, &sb.path("claude-config")] {
-        std::fs::create_dir_all(d).unwrap();
-    }
-    sb.git(&repo, &["init", "-q"]);
-    sb.commit(&repo, "README.md", "hi\n", "init");
-    let (said, tools) = air_turn(&sb, &api.url, true);
-    let (said_without, tools_without) = air_turn(&sb, &api.url, false);
-    assert_eq!(said, said_without);
-    assert_eq!(tools.len(), 3, "{tools:?}");
-    assert_eq!(tools_without.len(), 3, "{tools_without:?}");
-    for (id, mut t) in tools_without {
-        assert!(t.output.is_some(), "{t:?}");
-        t.output = None;
-        assert_eq!(tools[&id], t);
-    }
-}
-
-/// Core on a sandbox with `fake_acp` as Codex's adapter and CLI, Codex on, and its sessions kept
-/// in a Codex home of the sandbox's.
+/// `sandbox()` with Codex's sessions kept in a Codex home of the sandbox's.
 fn codex() -> Sandbox {
-    let sb = Sandbox::new();
-    testutil::install_as(&sb.state, CODEX.adapter, &testutil::fake(), "2.6.0");
-    let config = adapters::Config {
-        cli: [(CODEX.id.into(), testutil::fake().display().to_string())].into(),
-        codex: true,
-    };
-    sb.state.set_block(BLOCK, config).unwrap();
+    let sb = sandbox();
     let home = sb.path("codex-home");
     std::fs::create_dir_all(&home).unwrap();
-    let home = ("CODEX_HOME".into(), home.display().to_string());
-    sb.state.env.write().unwrap().vars.push(home);
+    let mut env = sb.state.env.write().unwrap();
+    let (_, v) = env
+        .vars
+        .iter_mut()
+        .find(|(k, _)| k == "CODEX_HOME")
+        .unwrap();
+    *v = home.display().to_string();
+    drop(env);
     sb
 }
 

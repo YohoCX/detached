@@ -6,7 +6,7 @@ and Discard, a Fix's branch and worktree, an MR subject's ref under `refs/detach
 the chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
   and PTYs in `proc`, defined processes in `processes`, the env store in `secrets`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
-  with `fake_claude`, the scripted CLI the tests run, the sidecar's protocol and trust), blocking
+  with `fake_claude`, the scripted CLI the tests run, and trust), blocking
   Rust, no UI types.
 - `crates/acp`: the ACP client on `agent-client-protocol`, a blocking API whose async deps stay
   inside, and `fake_acp`, the scripted agent the tests run.
@@ -14,7 +14,6 @@ the chat's turn snapshots (private refs) and restores:
   `Activity`, `Doc`, `Session`, the `Settings` snapshot), on gpui-pre alone; it draws nothing. See [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md).
 - `crates/app`: the client on GPUI (gpui-kit), binary `detached`; see [PLAN-NATIVE.md](PLAN-NATIVE.md).
 - `crates/forge-fake`: a local GitLab and GitHub Enterprise for the tests.
-- `sidecars/claude`: the chat's process on the Agent SDK, in TypeScript, kept out of the release packages.
 
 ## Commands
 
@@ -23,8 +22,7 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
               # (core, unit tests, UI tests)
 make app      # the client at release speed, on the real config directory (the owner's only)
 make ui-test  # the UI tests only; t=repos runs tests/repos.rs alone
-make agent-test  # your `claude` on a fake Messages API, through the real Claude adapter (built
-                 # with bun) and through the direct backend
+make agent-test  # your `claude` on a fake Messages API, through the direct backend
 make codex-live  # the owner's, never CI's: Codex's live rows on his own `codex` and login, a few
                  # model turns
 make agent-login # the owner's, never an agent's: `detached --session` on his own `claude` and login,
@@ -32,7 +30,7 @@ make agent-login # the owner's, never an agent's: `detached --session` on his ow
 make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
 make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory
-make sidecar  # build the Claude sidecar (needs bun) and install it in the config directory
+make fmt      # cargo fmt over the workspace
 make build    # the packages for this OS under target/package (scripts/package.sh)
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
 make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses

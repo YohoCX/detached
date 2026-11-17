@@ -182,12 +182,6 @@ fn the_host_tools_answer_on_the_session_s_own_pipes_with_nothing_in_argv() {
 }
 
 #[cfg(unix)]
-fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks that the pid exists.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
-#[cfg(unix)]
 fn eventually(what: &str, done: impl Fn() -> bool) {
     let began = Instant::now();
     while !done() {
@@ -199,17 +193,17 @@ fn eventually(what: &str, done: impl Fn() -> bool) {
 /// Whether a process of the session `id` runs: its CLI, the leash or the child, which carries no
 /// id and is checked by pid.
 #[cfg(unix)]
-fn left(id: &str, child: i32) -> bool {
+fn left(id: &str, child: u32) -> bool {
     let pgrep = std::process::Command::new("pgrep")
         .args(["-f", id])
         .output();
-    alive(child) || pgrep.is_ok_and(|o| !o.stdout.is_empty())
+    crate::testutil::alive(child) || pgrep.is_ok_and(|o| !o.stdout.is_empty())
 }
 
 /// A session whose turn runs a child by `step` and then ignores `interrupt` and EOF: the session,
 /// its id and the child's pid.
 #[cfg(unix)]
-fn busy(run: &Run, step: &str) -> (Open, String, i32) {
+fn busy(run: &Run, step: &str) -> (Open, String, u32) {
     let s = open(run, &chat(run)).unwrap();
     let Ok(Event::Opened(o)) = s.1.recv() else {
         panic!("not opened");
@@ -249,7 +243,7 @@ fn a_close_kills_a_command_deaf_to_term_once_the_grace_is_over() {
     let (_, events) = until(&rx, |_, e| matches!(e, Event::Closed | Event::Exited(_)));
     assert!(matches!(events.last(), Some(Event::Closed)));
     // The CLI ended on SIGTERM, not on a SIGKILL, which would have taken its command too.
-    assert!(alive(child) && began.elapsed() < Duration::from_secs(2) + GRACE);
+    assert!(crate::testutil::alive(child) && began.elapsed() < Duration::from_secs(2) + GRACE);
     eventually("the command is killed", || !left(&id, child));
     let took = began.elapsed();
     assert!(took >= Duration::from_secs(2) + GRACE, "{took:?}");

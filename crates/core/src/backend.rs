@@ -2,13 +2,14 @@
 //! types, in a session's terms. No flag, field or frame of a protocol is named here.
 
 use std::collections::BTreeMap;
+use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapters::Provider;
-pub use crate::agent::{Choice, Limit, Model, Part, Past, Question, SlashCommand, Task};
 use crate::error::{Error, Result};
 use crate::skills::Skill;
 use crate::state::AppState;
@@ -27,7 +28,9 @@ pub fn direct() -> &'static dyn Backend {
 
 /// A backend: it opens sessions, each with its one stream of events.
 pub trait Backend: Send + Sync {
-    fn caps(&self) -> Caps;
+    fn caps(&self) -> Caps {
+        Caps::default()
+    }
     /// Opens a new session; its events go to `events`, `Opened` first.
     fn open(&self, core: &AppState, spec: &Spec, events: Events) -> Result<Box<dyn Session>>;
     /// Opens the past session `id`; its history comes as the updates after `Opened`.
@@ -51,6 +54,13 @@ pub trait Backend: Send + Sync {
     fn probe(&self, _core: &AppState, _wsl: Option<&str>) -> Result<Probe> {
         Err(Error::Other("This agent has no sandbox probe.".into()))
     }
+}
+
+/// 256 bits from std's randomly keyed hasher, as hex.
+pub fn random() -> String {
+    (0..4u8)
+        .map(|i| format!("{:016x}", RandomState::new().hash_one(i)))
+        .collect()
 }
 
 /// The probe's answer: passed, or what the agent said instead.
@@ -85,18 +95,11 @@ pub type Tools = Arc<dyn Fn(Value) -> Value + Send + Sync>;
 /// A session's stream: called in the order the agent sent each event, from a backend's thread.
 pub type Events = Box<dyn FnMut(Event) + Send>;
 
-/// The optional pieces a backend has, and the trust paths it blocks mid-turn; the UI hides or states
-/// what is missing.
+/// The optional pieces a backend has, and the trust paths it blocks mid-turn.
 #[derive(Clone, Debug, Default)]
 pub struct Caps {
-    pub context: bool,
     pub limits: bool,
     pub stop_task: bool,
-    pub questions: bool,
-    pub past: bool,
-    pub delete: bool,
-    pub wsl: bool,
-    pub probe: bool,
     pub blocks: &'static [&'static str],
 }
 
@@ -303,6 +306,78 @@ impl Drop for Reply {
         if let Some(f) = self.0.take() {
             f(Answer::Cancel);
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    pub value: String,
+    pub label: String,
+    pub auto: bool,
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Question {
+    pub question: String,
+    pub header: String,
+    pub multi: bool,
+    pub options: Vec<Choice>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlashCommand {
+    pub name: String,
+    pub description: String,
+    pub hint: String,
+}
+
+/// A plan limit's window, as `/usage` shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Limit {
+    /// "5h", "Week", or a model's weekly window by its name.
+    pub name: String,
+    /// Percent of the window used.
+    pub used: f64,
+    /// Milliseconds since the epoch.
+    pub resets: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Task {
+    pub id: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    pub name: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Past {
+    pub id: String,
+    pub title: String,
+    /// Milliseconds since the epoch.
+    pub modified: u64,
+    pub cwd: Option<String>,
+    /// "archived" once archived.
+    pub tag: Option<String>,
+    pub model: Option<String>,
+    /// The provider's id, which a resume takes.
+    pub provider: String,
+}
+
+impl Past {
+    pub fn archived(&self) -> bool {
+        self.tag.as_deref() == Some("archived")
     }
 }
 

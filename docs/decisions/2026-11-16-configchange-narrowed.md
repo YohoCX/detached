@@ -1,7 +1,7 @@
 # A mid-turn change to commands, agents or `.mcp.json` no longer ends Claude's turn
 
 **Decided on 2026-11-16**, on the owner's "сделай всё" (do all of it) to H4c's open question,
-check 5 ([ANSWERS-H4c §5](../../spikes/claude-direct/ANSWERS-H4c.md)).
+check 5 (ANSWERS-H4c §5, `spikes/claude-direct/ANSWERS-H4c.md`, removed by commit fd6a544).
 
 ## What was decided
 

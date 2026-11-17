@@ -3,13 +3,12 @@
 //! a second one ends the session.
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, RandomState};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
-use detached_core::backend::Tools;
+use detached_core::backend::{Tools, random};
 use detached_core::error::{Error, Result};
 use serde_json::Value;
 
@@ -80,13 +79,6 @@ impl Drop for Route {
             s.routes.lock().unwrap().remove(&self.secret);
         }
     }
-}
-
-/// 256 bits from std's randomly keyed hasher, as hex.
-pub(crate) fn random() -> String {
-    (0..4u8)
-        .map(|i| format!("{:016x}", RandomState::new().hash_one(i)))
-        .collect()
 }
 
 struct Request {

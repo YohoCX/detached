@@ -1,6 +1,6 @@
-//! The agents' adapters: a catalog check at launch and daily, which updates an installed adapter
-//! once a new version is out of its cool-down and never installs a first one, and the Agents page's
-//! install, rollback and CLI check.
+//! The ACP providers' adapters: a catalog check at launch and daily, which updates an installed
+//! adapter once a new version is out of its cool-down and never installs a first one, and the Agents
+//! page's install, rollback and CLI check.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -142,7 +142,7 @@ impl Agents {
 
     /// The newest entry the provider's adapter can install by hand, cool-down or not.
     pub fn offer(&self, id: &str) -> Option<&Entry> {
-        let row = self.row(id)?;
+        let row = self.row(id).filter(|r| r.provider.backend == Name::Acp)?;
         let newest = self
             .catalog
             .as_ref()?
@@ -208,7 +208,8 @@ impl Agents {
                 }
                 let today = adapters::today();
                 let due: Vec<_> = (a.rows.iter())
-                    .filter(|r| !r.busy() && a.config.shows(r.provider))
+                    .filter(|r| r.provider.backend == Name::Acp && !r.busy())
+                    .filter(|r| a.config.shows(r.provider))
                     .filter_map(|r| {
                         let catalog = a.catalog.as_ref()?;
                         let e = catalog.auto(r.provider.adapter, &a.app, &r.installed, today)?;
@@ -297,7 +298,10 @@ impl Agents {
 
     /// Makes the kept version current again.
     pub fn rollback(&mut self, id: &'static str, cx: &mut Context<Self>) {
-        let Some(row) = self.row(id).filter(|r| !r.busy()) else {
+        let row = self
+            .row(id)
+            .filter(|r| r.provider.backend == Name::Acp && !r.busy());
+        let Some(row) = row else {
             return;
         };
         let (data, name) = (crate::core(cx).data_dir.clone(), row.provider.adapter);
@@ -370,20 +374,22 @@ mod tests {
     ) {
         let dir = crate::boot(cx);
         let f = Fixture::new();
-        let cli = dir.path().join("claude");
+        let cli = dir.path().join("codex");
         std::fs::write(&cli, "").unwrap();
-        let config = Config {
-            cli: [(CLAUDE.id.into(), cli.to_string_lossy().into())].into(),
-            codex: false,
+        let set = |codex, cx: &mut TestAppContext| {
+            let config = Config {
+                cli: [(CODEX.id.into(), cli.to_string_lossy().into())].into(),
+                codex,
+            };
+            cx.read(|cx| crate::core(cx).set_block(BLOCK, config))
+                .unwrap();
         };
-        cx.read(|cx| crate::core(cx).set_block(BLOCK, config))
-            .unwrap();
+        set(true, cx);
         let agents = cx.read(Agents::global);
         agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
-        let first = [CLAUDE.adapter, CODEX.adapter].map(|n| f.entry(n, "0.1.0"));
-        f.publish(1, &first);
+        f.publish(1, &[f.entry(CODEX.adapter, "0.1.0")]);
         check(cx);
-        assert_eq!(version(CLAUDE.id, cx), None);
+        assert_eq!(version(CODEX.id, cx), None);
         cx.read(|cx| assert!(Agents::global(cx).read(cx).error.is_none()));
         agents.update(cx, |a, cx| {
             a.install(CLAUDE.id, cx);
@@ -391,19 +397,23 @@ mod tests {
         });
         wait_until(cx, |cx| {
             let a = Agents::global(cx).read(cx);
-            a.rows.iter().all(|r| r.installed.current.is_some())
+            a.row(CODEX.id).unwrap().installed.current.is_some()
         });
-        let mut fresh = f.entry(CLAUDE.adapter, "0.3.0");
+        let mut fresh = f.entry(CODEX.adapter, "0.3.0");
         fresh.published = adapters::today();
-        let codex = f.entry(CODEX.adapter, "0.2.0");
-        f.publish(2, &[f.entry(CLAUDE.adapter, "0.2.0"), fresh, codex]);
+        f.publish(2, &[f.entry(CODEX.adapter, "0.2.0"), fresh]);
         check(cx);
-        assert_eq!(version(CLAUDE.id, cx).as_deref(), Some("0.2.0"));
-        assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.1.0"));
+        assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
+        assert_eq!(version(CLAUDE.id, cx), None);
         cx.read(|cx| {
             let a = Agents::global(cx).read(cx);
-            assert_eq!(a.offer(CLAUDE.id).unwrap().version.to_string(), "0.3.0");
-            assert_eq!(a.row(CLAUDE.id).unwrap().cli, None);
+            assert_eq!(a.offer(CODEX.id).unwrap().version.to_string(), "0.3.0");
+            assert!(a.offer(CLAUDE.id).is_none());
+            assert_eq!(a.row(CODEX.id).unwrap().cli, None);
         });
+        set(false, cx);
+        f.publish(3, &[f.entry(CODEX.adapter, "0.2.5")]);
+        check(cx);
+        assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
     }
 }

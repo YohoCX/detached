@@ -1,7 +1,8 @@
-//! The Agents page: each provider's adapter, installed from the catalog, updated and rolled back,
-//! and the user's own CLI it runs, found, checked and logged in from a terminal tab.
+//! The Agents page: each provider's own CLI, found, checked and logged in from a terminal tab, and an
+//! ACP provider's adapter, installed from the catalog, updated and rolled back.
 
 use detached_core::adapters::{self, Cli, PROVIDERS};
+use detached_core::backend::Name;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
@@ -111,9 +112,16 @@ impl Page {
             Some((path, None)) => format!("{} printed no version.", path.display()),
             Some((path, Some(v))) => match &verdict {
                 Some(Cli::Old(need)) => format!("{c} {v} is older than {need}: update {c}."),
-                Some(Cli::Blocked) => format!(
-                    "{c} {v} is blocked for this adapter: update {c}. The chat warns; isolated panels refuse it."
-                ),
+                Some(Cli::Blocked) => {
+                    let of = if p.backend == Name::Acp {
+                        " for this adapter"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "{c} {v} is blocked{of}: update {c}. The chat warns; isolated panels refuse it."
+                    )
+                }
                 _ => format!("{c} {v} at {}", path.display()),
             },
         };
@@ -123,12 +131,17 @@ impl Page {
         let login = found.map(|cli| adapters::login(p, &cli));
         div()
             .child(row().child(labeled(el("name"), p.name).font_weight(FontWeight::BOLD)))
-            .child(row().child(
-                labeled(el("adapter"), adapter(r)).when(matches!(r.state, State::Failed(_)), |d| {
-                    d.text_color(theme(cx).error)
-                }),
-            ))
-            .child(buttons)
+            .when(p.backend == Name::Acp, |d| {
+                d.child(
+                    row().child(
+                        labeled(el("adapter"), adapter(r))
+                            .when(matches!(r.state, State::Failed(_)), |d| {
+                                d.text_color(theme(cx).error)
+                            }),
+                    ),
+                )
+                .child(buttons)
+            })
             .child(
                 row()
                     .child(labeled(el("cli"), cli).when(warn, |d| d.text_color(theme(cx).warning))),

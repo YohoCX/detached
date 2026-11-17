@@ -14,8 +14,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
 use super::{result, tool, wsl};
-use crate::agent::Past;
-use crate::backend::Update;
+use crate::backend::{Past, Update};
 use crate::error::{Error, Result};
 
 /// Where the CLI cuts a project folder's name and adds a hash.

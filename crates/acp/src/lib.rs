@@ -14,10 +14,10 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
-use detached_core::adapters::{self, BLOCK, CLAUDE, CODEX, Cli};
+use detached_core::adapters::{self, BLOCK, CODEX, Cli};
 use detached_core::backend::{
-    self, Answer, Ask, Backend, Caps, Cause, Config, Events, Exit, Failure, Kind, Model, Opened,
-    Past, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
+    Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
@@ -34,15 +34,6 @@ mod mcp;
 const PAGES: usize = 20;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
-
-/// Claude's `.env` deny, the sidecar's: it stops literal paths only, so it is a mitigation.
-const DENIED: &[&str] = &[
-    "Read(//**/.env*)",
-    "Bash(cat *.env*)",
-    "Bash(less *.env*)",
-    "Bash(head *.env*)",
-    "Bash(tail *.env*)",
-];
 
 /// The backend of every ACP provider; its adapters serve the sessions of the whole process.
 pub fn backend() -> &'static dyn Backend {
@@ -63,15 +54,6 @@ struct Acp {
 type Adapters = Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>;
 
 impl Backend for Acp {
-    fn caps(&self) -> Caps {
-        Caps {
-            context: true,
-            past: true,
-            delete: true,
-            ..Caps::default()
-        }
-    }
-
     /// The agent lists every session of the folder, the CLI's and other clients' too: those the
     /// host's index does not know are hidden.
     fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
@@ -179,13 +161,12 @@ impl Acp {
             None => None,
         };
         let server = route.as_ref().map(|r| {
-            let name = format!("detached-host-{}", &mcp::random()[..8]);
+            let name = format!("detached-host-{}", &backend::random()[..8]);
             (name, r.url.clone())
         });
         let options = Options {
             cwd: spec.repo.clone().into(),
             config: config_of(spec),
-            meta: meta(spec, server.as_ref().map(|s| s.0.as_str())),
             server,
             mcp: match &spec.mcp {
                 Some(file) => from_file(file)?,
@@ -279,13 +260,11 @@ impl Acp {
             cwd: std::env::temp_dir(),
             env: vars,
         };
-        // Claude's adapter stops a background task only for AIR; Codex's would move a command's
-        // output out of the standard fields.
-        Ok((self.live(spec_proc, p.id == CLAUDE.id)?, note))
+        Ok((self.live(spec_proc)?, note))
     }
 
     /// The adapter running `spec`'s program, or a new one.
-    fn live(&self, spec: proc::Spec, air: bool) -> Result<Arc<Live>> {
+    fn live(&self, spec: proc::Spec) -> Result<Arc<Live>> {
         let key = (spec.program.clone(), spec.env.clone());
         let slot = (self.adapters.lock().unwrap().entry(key.clone()))
             .or_default()
@@ -296,7 +275,7 @@ impl Acp {
         }
         let demux: Arc<Mutex<Demux>> = Default::default();
         let to = demux.clone();
-        let adapter = Adapter::start(&spec, air, move |e| to.lock().unwrap().got(e))?;
+        let adapter = Adapter::start(&spec, move |e| to.lock().unwrap().got(e))?;
         let entry = (Arc::downgrade(&self.adapters), key);
         let live = Arc::new(Live {
             adapter,
@@ -308,7 +287,7 @@ impl Acp {
     }
 }
 
-/// `configOptions`, set before the session starts: mode, model, effort. A Codex verifier or
+/// Mode, model and effort, set once the session starts. A Codex verifier or
 /// untrusted participant reads in Codex's own sandbox; a trusted finder takes its mode as asked.
 fn config_of(spec: &Spec) -> Vec<(String, String)> {
     let mode = match spec.provider.id == CODEX.id && spec.kind != Kind::Chat {
@@ -397,7 +376,7 @@ fn isolate(cwd: &Path, deny: &[PathBuf]) -> Result<()> {
     if ours {
         return Ok(());
     }
-    let tmp = dir.join(format!("config.toml.{}", mcp::random()));
+    let tmp = dir.join(format!("config.toml.{}", backend::random()));
     std::fs::File::create_new(&tmp)?.write_all(toml.as_bytes())?;
     Ok(std::fs::rename(tmp, file)?)
 }
@@ -417,28 +396,6 @@ fn codex_home(tmp: &Path, owner: Option<&Path>) -> Result<PathBuf> {
         std::fs::copy(login, &auth)?;
     }
     Ok(home)
-}
-
-/// `_meta`, sent whole on every new and load: a closed session loads with the defaults otherwise.
-/// `server`, the host's tools, is pre-allowed.
-fn meta(spec: &Spec, server: Option<&str>) -> Value {
-    if spec.provider.id != CLAUDE.id {
-        return Value::Null;
-    }
-    let (sources, strict) = match spec.kind {
-        Kind::Chat if spec.trusted => (&["user", "project", "local"][..], false),
-        Kind::Chat => (&["user"][..], false),
-        Kind::Verifier => (&["user"][..], true),
-        Kind::Untrusted => (&[][..], true),
-    };
-    let mut options = json!({"settingSources": sources, "disallowedTools": DENIED});
-    if strict {
-        options["strictMcpConfig"] = json!(true);
-    }
-    if let Some(name) = server {
-        options["allowedTools"] = json!([format!("mcp__{name}__*")]);
-    }
-    json!({"claudeCode": {"options": options}})
 }
 
 /// An adapter and its sessions' streams; the last session to go closes it.
@@ -469,8 +426,9 @@ impl Live {
     fn end(&self, id: &str) {
         self.adapter.cancel(id);
         if let Some(mut sink) = self.demux.lock().unwrap().sinks.remove(id) {
-            let text = "A second client connected to this session's host tools, so it was ended";
-            sink(backend::Event::Ended(Err(failure(text.into()))));
+            let text =
+                "A second client connected to this session's host tools, so it was ended".into();
+            sink(backend::Event::Ended(Err(Failure { text, cause: None })));
             sink(backend::Event::Closed);
         }
         self.adapter.close_session(id);
@@ -668,10 +626,8 @@ const OUTPUT: usize = 64 * 1024;
 #[derive(Clone, Debug, Default)]
 struct Options {
     cwd: PathBuf,
-    /// `configOptions`, set before the session starts: mode, model, effort.
+    /// Mode, model and effort, set once the session starts.
     config: Vec<(String, String)>,
-    /// `_meta`, sent whole on every new and load.
-    meta: Value,
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
     /// A run's MCP servers.
@@ -710,11 +666,9 @@ struct Adapter {
 }
 
 impl Adapter {
-    /// Spawns the adapter and initializes it, as JetBrains AIR when `air`; `on_event` runs on the
-    /// connection's thread.
+    /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
     fn start(
         spec: &proc::Spec,
-        air: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Adapter> {
         let mut proc = Proc::spawn(spec)?;
@@ -827,11 +781,7 @@ impl Adapter {
             asked,
             quit: Some(quit),
         };
-        // JetBrains AIR's declaration: the adapter's stop of a background task needs it.
-        let meta = json!({"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}});
-        let caps = ClientCapabilities::new().meta(meta.as_object().cloned().filter(|_| air));
-        let init =
-            adapter.call(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps));
+        let init = adapter.call(InitializeRequest::new(ProtocolVersion::V1));
         let init = init.map_err(|e| fail(e.to_string()))?;
         adapter.version = init.agent_info.map(|a| a.version).unwrap_or_default();
         Ok(adapter)
@@ -846,28 +796,19 @@ impl Adapter {
     }
 
     fn new_session(&self, o: &Options) -> Result<Opened> {
-        let r = self.call(
-            NewSessionRequest::new(&o.cwd)
-                .mcp_servers(servers(o))
-                .config_options(initial(o))
-                .meta(o.meta.as_object().cloned()),
-        )?;
+        let r = self.call(NewSessionRequest::new(&o.cwd).mcp_servers(servers(o)))?;
         Ok(self.opened(r.session_id.to_string(), r.config_options))
     }
 
     /// Loads a past session; a closed one is made anew from `o`, so it is sent whole.
     fn load_session(&self, id: &str, o: &Options) -> Result<Opened> {
-        let r = self.call(
-            LoadSessionRequest::new(id.to_string(), &o.cwd)
-                .mcp_servers(servers(o))
-                .config_options(initial(o))
-                .meta(o.meta.as_object().cloned()),
-        )?;
+        let r =
+            self.call(LoadSessionRequest::new(id.to_string(), &o.cwd).mcp_servers(servers(o)))?;
         Ok(self.opened(id.into(), r.config_options))
     }
 
-    /// Sets what `new` and `load` did not: Codex's adapter reads no `configOptions` there. An option
-    /// the agent does not list is left out; one it refuses closes the session.
+    /// Sets the session's mode, model and effort. An option the agent does not list is left out;
+    /// one it refuses closes the session.
     fn configure(&self, mut o: Opened, want: &Options) -> Result<Opened> {
         for (k, v) in &want.config {
             if !o.config.iter().any(|c| c.id == *k && c.value != *v) {
@@ -928,7 +869,11 @@ impl Adapter {
                     stop: stop(r.stop_reason),
                     tokens: r.usage.map(|u| (u.input_tokens, u.output_tokens)),
                 });
-                ended(Event::Ended(id, turn.map_err(|e| failure(e.to_string()))));
+                let turn = turn.map_err(|e| Failure {
+                    text: e.to_string(),
+                    cause: None,
+                });
+                ended(Event::Ended(id, turn));
                 Ok(())
             })
             .map_err(|e| Error::Other(e.to_string()))
@@ -966,14 +911,6 @@ impl Drop for Adapter {
 fn servers(o: &Options) -> Vec<McpServer> {
     let http = |(name, url): &(String, String)| McpServer::Http(McpServerHttp::new(name, url));
     o.server.iter().map(http).chain(o.mcp.clone()).collect()
-}
-
-fn initial(o: &Options) -> Vec<InitialSessionConfigOption> {
-    let option = |(k, v): &(String, String)| {
-        let value = SessionConfigOptionValue::value_id(v.clone());
-        InitialSessionConfigOption::new(wire(k, o.codex), value)
-    };
-    o.config.iter().map(option).collect()
 }
 
 /// The `model` option's choices, with their names; efforts come with the `effort` option.
@@ -1028,14 +965,6 @@ fn stop(s: agent_client_protocol::v1::schema::StopReason) -> StopReason {
         S::Refusal => StopReason::Refusal,
         S::Cancelled => StopReason::Cancelled,
         _ => StopReason::EndTurn,
-    }
-}
-
-fn failure(text: String) -> Failure {
-    let cause = text.contains("out of extra usage");
-    Failure {
-        cause: cause.then_some(Cause::OutOfExtraUsage),
-        text,
     }
 }
 

@@ -152,7 +152,7 @@ fn floor(sb: &Sandbox, min: &str) {
 }
 
 #[gpui_kit::test]
-fn without_a_sidecar_it_says_how_to_get_one(cx: &mut TestAppContext) {
+fn without_a_cli_it_says_how_to_get_one(cx: &mut TestAppContext) {
     let cx = &mut open_bare(cx);
     say(cx, "hello");
     wait_for_item(cx, "has no CLI: see the Agents page");
@@ -416,7 +416,7 @@ fn the_end_of_a_turn_refreshes_the_repo(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_sidecar(cx: &mut TestAppContext) {
+fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_session(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");
     wait_for_item(cx, "said hello");
@@ -1381,7 +1381,7 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
     let pid1 = pid(cx).unwrap();
     cx.click("chat.stop");
     idle(cx);
-    wait_until(cx, |_| !alive(pid1));
+    wait_until(cx, |_| !detached_core::testutil::alive(pid1 as u32));
     send("say again", cx);
     wait_for_item(cx, "again");
     assert_eq!(
@@ -1413,14 +1413,4 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
     send("model", cx);
     // The model is the one the load kept, the mode the one the agent refused to leave.
     wait_for_item(cx, "gpt-5.5-mini agent");
-}
-
-#[cfg(unix)]
-fn alive(pid: u64) -> bool {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    let stat = String::from_utf8_lossy(&out.stdout);
-    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }

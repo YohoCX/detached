@@ -6,12 +6,8 @@ use std::path::{Path, PathBuf};
 use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 
-use super::{Artifact, CLAUDE, CliRule, Entry, Provider, claude, target};
-use crate::backend::Name;
+use super::{Artifact, CLAUDE, CliRule, Entry, target};
 use crate::update::testutil::{Server, keys};
-
-/// Claude's manifest on the ACP backend and its adapter, for the fake ACP agent's tests.
-pub static CLAUDE_ACP: Provider = claude(Name::Acp);
 
 pub type Signer = Box<dyn Fn(&[u8]) -> String>;
 

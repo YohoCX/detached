@@ -78,6 +78,23 @@ pub fn bin(package: &str, name: &str) -> PathBuf {
     copy
 }
 
+/// Whether `pid` runs, a zombie counting as gone.
+pub fn alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .unwrap();
+        return String::from_utf8_lossy(&out.stdout).contains(&pid.to_string());
+    }
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+}
+
 /// `limit` stretched by how many times over the machine's cores are busy, for tests' waits.
 pub fn scaled(limit: Duration) -> Duration {
     #[cfg(unix)]

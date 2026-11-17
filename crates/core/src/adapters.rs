@@ -57,6 +57,7 @@ pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
     pub backend: backend::Name,
+    /// The ACP adapter; empty on a direct provider.
     pub adapter: &'static str,
     pub cli: &'static str,
     /// A floor; the catalog entry in use may raise it.
@@ -65,7 +66,7 @@ pub struct Provider {
     pub login: &'static [&'static str],
     /// The vendor's installer as typed in a shell: Unix, then Windows.
     pub installer: Option<[&'static str; 2]>,
-    /// Names the CLI to the adapter.
+    /// Names the CLI to the ACP adapter.
     pub cli_var: &'static str,
     /// Passed from the app's env when set: the login, cloud and proxy variables the provider
     /// documents.
@@ -82,71 +83,66 @@ pub struct Provider {
     pub full: &'static str,
 }
 
-pub static CLAUDE: Provider = claude(backend::Name::Direct);
-
-/// Claude's manifest on `backend`; the adapter's fields serve the ACP one until it goes.
-pub(crate) const fn claude(backend: backend::Name) -> Provider {
-    Provider {
-        id: "claude",
-        name: "Claude Agent",
-        backend,
-        adapter: "claude-agent-acp",
-        cli: "claude",
-        min_cli: Version::new(2, 1, 322),
-        login: &["claude", "/login"],
-        installer: Some([
-            "curl -fsSL https://claude.ai/install.sh | bash",
-            "irm https://claude.ai/install.ps1 | iex",
-        ]),
-        cli_var: "CLAUDE_CODE_EXECUTABLE",
-        env: &[
-            "CLAUDE_CONFIG_DIR",
-            "CLAUDE_CODE_TMPDIR",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-            "AWS_PROFILE",
-            "AWS_REGION",
-            "CLOUD_ML_REGION",
-            "ANTHROPIC_VERTEX_PROJECT_ID",
-            "CLAUDE_CODE_USE_FOUNDRY",
-            "ANTHROPIC_FOUNDRY_RESOURCE",
-            "ANTHROPIC_FOUNDRY_BASE_URL",
-            "ANTHROPIC_FOUNDRY_API_KEY",
-            "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
-            "HTTPS_PROXY",
-            "NO_PROXY",
-            "NODE_EXTRA_CA_CERTS",
-        ],
-        trust: &[
-            ".claude/settings.json",
-            ".claude/settings.local.json",
-            ".claude/skills/*/SKILL.md",
-            ".claude/commands/**",
-            ".claude/agents/**",
-            ".mcp.json",
-        ],
-        modes: &[
-            (
-                "auto",
-                "Auto",
-                "A classifier approves or blocks each action, and asks you when it can't tell",
-            ),
-            (
-                "acceptEdits",
-                "Edits",
-                "File edits run; other actions that need approval ask you",
-            ),
-            ("plan", "Plan", "Explores and plans without changing files"),
-            ("default", "Manual", "Anything that needs approval asks you"),
-        ],
-        ask: "default",
-        chat: "auto",
-        full: "bypassPermissions",
-    }
-}
+pub static CLAUDE: Provider = Provider {
+    id: "claude",
+    name: "Claude Agent",
+    backend: backend::Name::Direct,
+    adapter: "",
+    cli: "claude",
+    min_cli: Version::new(2, 1, 322),
+    login: &["claude", "/login"],
+    installer: Some([
+        "curl -fsSL https://claude.ai/install.sh | bash",
+        "irm https://claude.ai/install.ps1 | iex",
+    ]),
+    cli_var: "",
+    env: &[
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_TMPDIR",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "CLOUD_ML_REGION",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+    ],
+    trust: &[
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/skills/*/SKILL.md",
+        ".claude/commands/**",
+        ".claude/agents/**",
+        ".mcp.json",
+    ],
+    modes: &[
+        (
+            "auto",
+            "Auto",
+            "A classifier approves or blocks each action, and asks you when it can't tell",
+        ),
+        (
+            "acceptEdits",
+            "Edits",
+            "File edits run; other actions that need approval ask you",
+        ),
+        ("plan", "Plan", "Explores and plans without changing files"),
+        ("default", "Manual", "Anything that needs approval asks you"),
+    ],
+    ask: "default",
+    chat: "auto",
+    full: "bypassPermissions",
+};
 
 pub static CODEX: Provider = Provider {
     id: "codex",
@@ -356,7 +352,10 @@ pub fn install(
     progress: &dyn Fn(Progress),
 ) -> Result<Installed> {
     let name = &entry.name;
-    if !PROVIDERS.iter().any(|p| p.adapter == name) {
+    if !PROVIDERS
+        .iter()
+        .any(|p| p.backend == backend::Name::Acp && p.adapter == name)
+    {
         return Err(Error::Other(format!("{name} is not an agent adapter")));
     }
     let artifact = entry.artifacts.get(&target()).ok_or_else(|| {
@@ -633,13 +632,13 @@ mod tests {
         f.publish(
             1,
             &[
-                f.entry("claude-agent-acp", "0.1.0"),
-                f.entry("claude-agent-acp", "0.2.0"),
+                f.entry(CODEX.adapter, "0.1.0"),
+                f.entry(CODEX.adapter, "0.2.0"),
             ],
         );
         let d = data();
         let catalog = fetched(&f, d.path()).unwrap();
-        let entries = catalog.entries(CLAUDE.adapter, &app_version());
+        let entries = catalog.entries(CODEX.adapter, &app_version());
         let versions: Vec<_> = entries.iter().map(|e| e.version.to_string()).collect();
         assert_eq!(versions, ["0.2.0", "0.1.0"]);
         assert_eq!(stored(d.path()).unwrap().serial, 1);
@@ -658,7 +657,7 @@ mod tests {
         f.publish(5, &[]);
         fetched(&f, d.path()).unwrap();
         let stored_json = fs::read(d.path().join("adapters/catalog.json")).unwrap();
-        f.publish(4, &[f.entry("claude-agent-acp", "0.1.0")]);
+        f.publish(4, &[f.entry(CODEX.adapter, "0.1.0")]);
         let err = fetched(&f, d.path()).unwrap_err().to_string();
         assert!(err.contains("older than 5"), "{err}");
         f.publish_signed_by(&testutil::other_signer(), 6, &[]);
@@ -675,7 +674,7 @@ mod tests {
     fn a_wrong_size_or_sha256_is_refused_and_leaves_nothing() {
         let f = Fixture::new();
         let d = data();
-        let good = f.entry("claude-agent-acp", "0.1.0");
+        let good = f.entry(CODEX.adapter, "0.1.0");
         let mut entry = good.clone();
         let a = entry.artifacts.get_mut(&target()).unwrap();
         a.size -= 1;
@@ -692,8 +691,8 @@ mod tests {
         entry.artifacts.get_mut(&target()).unwrap().sha256 = "0".repeat(64);
         let err = put(d.path(), &entry).unwrap_err().to_string();
         assert!(err.ends_with("wrong sha256"), "{err}");
-        assert!(left(d.path(), CLAUDE.adapter).is_empty());
-        assert_eq!(installed(d.path(), CLAUDE.adapter), Installed::default());
+        assert!(left(d.path(), CODEX.adapter).is_empty());
+        assert_eq!(installed(d.path(), CODEX.adapter), Installed::default());
         put(d.path(), &good).unwrap();
     }
 
@@ -707,10 +706,10 @@ mod tests {
             testutil::Member::link("licenses", "/etc"),
         ];
         for member in evil {
-            let entry = f.entry_with("claude-agent-acp", "0.1.0", &[member]);
+            let entry = f.entry_with(CODEX.adapter, "0.1.0", &[member]);
             let err = put(d.path(), &entry).unwrap_err().to_string();
             assert!(err.ends_with("leaves its folder"), "{err}");
-            assert!(left(d.path(), CLAUDE.adapter).is_empty());
+            assert!(left(d.path(), CODEX.adapter).is_empty());
         }
     }
 
@@ -720,7 +719,7 @@ mod tests {
         let d = data();
         let cli = cli_file(&CLAUDE);
         let entry = f.entry_with(
-            "claude-agent-acp",
+            CODEX.adapter,
             "0.1.0",
             &[testutil::Member::file(&format!("bin/{cli}"), b"cli")],
         );
@@ -734,30 +733,30 @@ mod tests {
                 .contains("not an agent adapter")
         );
         assert!(!d.path().join("adapters/claude").exists());
-        assert!(left(d.path(), CLAUDE.adapter).is_empty());
+        assert!(left(d.path(), CODEX.adapter).is_empty());
     }
 
     #[test]
     fn a_version_inside_its_cool_down_does_not_auto_install() {
         let f = Fixture::new();
-        let mut new = f.entry("claude-agent-acp", "0.2.0");
+        let mut new = f.entry(CODEX.adapter, "0.2.0");
         new.published = day("2026-11-14");
         let catalog = Catalog {
             cli: vec![],
             serial: 1,
-            adapters: vec![f.entry("claude-agent-acp", "0.1.0"), new],
+            adapters: vec![f.entry(CODEX.adapter, "0.1.0"), new],
         };
         let kept = Installed {
             current: Some(v("0.0.9")),
             previous: None,
         };
-        let pick = |today| catalog.auto(CLAUDE.adapter, &app_version(), &kept, day(today));
+        let pick = |today| catalog.auto(CODEX.adapter, &app_version(), &kept, day(today));
         assert_eq!(pick("2026-11-16").unwrap().version, v("0.1.0"));
         assert_eq!(pick("2026-11-17").unwrap().version, v("0.2.0"));
         let none = Installed::default();
         assert!(
             catalog
-                .auto(CLAUDE.adapter, &app_version(), &none, day("2026-12-01"))
+                .auto(CODEX.adapter, &app_version(), &none, day("2026-12-01"))
                 .is_none()
         );
     }
@@ -767,7 +766,7 @@ mod tests {
         let f = Fixture::new();
         let app = v("0.5.0");
         let with = |version: &str, min: &str, max: Option<&str>| {
-            let mut e = f.entry("claude-agent-acp", version);
+            let mut e = f.entry(CODEX.adapter, version);
             (e.min_app, e.max_app) = (v(min), max.map(v));
             e
         };
@@ -778,14 +777,14 @@ mod tests {
                 with("0.4.0", "0.6.0", None),
                 with("0.3.0", "0.1.0", Some("0.4.9")),
                 with("0.2.0", "0.5.0", Some("0.5.0")),
-                f.entry("codex-acp", "9.0.0"),
+                f.entry("other-acp", "9.0.0"),
             ],
         };
-        let found: Vec<_> = (catalog.entries(CLAUDE.adapter, &app).iter())
+        let found: Vec<_> = (catalog.entries(CODEX.adapter, &app).iter())
             .map(|e| e.version.to_string())
             .collect();
         assert_eq!(found, ["0.2.0"]);
-        let mut other = f.entry("claude-agent-acp", "0.9.0");
+        let mut other = f.entry(CODEX.adapter, "0.9.0");
         other.artifacts =
             HashMap::from([("plan9-mips".into(), other.artifacts[&target()].clone())]);
         let catalog = Catalog {
@@ -793,14 +792,14 @@ mod tests {
             serial: 1,
             adapters: vec![other],
         };
-        assert!(catalog.entries(CLAUDE.adapter, &app).is_empty());
+        assert!(catalog.entries(CODEX.adapter, &app).is_empty());
     }
 
     #[test]
     fn two_versions_sit_side_by_side_and_rollback_points_at_the_kept_one() {
         let f = Fixture::new();
         let d = data();
-        let name = CLAUDE.adapter;
+        let name = CODEX.adapter;
         let [one, two, three] = ["0.1.0", "0.2.0", "0.3.0"].map(|x| f.entry(name, x));
         let seen = RefCell::new(vec![]);
         install(d.path(), &one, &Cancel::default(), &|p| {
@@ -826,7 +825,7 @@ mod tests {
         put(d.path(), &three).unwrap();
         assert_eq!(left(d.path(), name), ["0.1.0", "0.3.0", "installed.json"]);
         assert!(rollback(d.path(), name).is_ok());
-        assert!(rollback(d.path(), CODEX.adapter).is_err());
+        assert!(rollback(d.path(), "other-acp").is_err());
     }
 
     #[test]
@@ -834,26 +833,26 @@ mod tests {
         let f = Fixture::new();
         let d = data();
         let cancel = Cancel::new(true.into());
-        let entry = f.entry(CLAUDE.adapter, "0.1.0");
+        let entry = f.entry(CODEX.adapter, "0.1.0");
         let done = install(d.path(), &entry, &cancel, &|_| {});
         assert!(matches!(done, Err(Error::Cancelled)));
-        assert!(left(d.path(), CLAUDE.adapter).is_empty());
+        assert!(left(d.path(), CODEX.adapter).is_empty());
     }
 
     #[test]
     fn the_min_cli_check_refuses_a_cli_below_the_entry_or_the_floor_and_a_blocked_one() {
         let f = Fixture::new();
-        let mut entry = f.entry(CLAUDE.adapter, "0.1.0");
-        let check = |e: Option<&Entry>, cli| check_cli(&CLAUDE, e, &v(cli));
-        assert_eq!(check(None, "2.1.321"), Cli::Old(v("2.1.322")));
-        assert_eq!(check(None, "2.1.322"), Cli::Ok);
-        entry.min_cli = Some(v("2.1.300"));
-        assert_eq!(check(Some(&entry), "2.1.321"), Cli::Old(v("2.1.322")));
-        entry.min_cli = Some(v("2.1.330"));
-        assert_eq!(check(Some(&entry), "2.1.329"), Cli::Old(v("2.1.330")));
-        entry.blocked_cli = vec![v("2.1.331")];
-        assert_eq!(check(Some(&entry), "2.1.331"), Cli::Blocked);
-        assert_eq!(check(Some(&entry), "2.1.332"), Cli::Ok);
+        let mut entry = f.entry(CODEX.adapter, "0.1.0");
+        let check = |e: Option<&Entry>, cli| check_cli(&CODEX, e, &v(cli));
+        assert_eq!(check(None, "0.165.9"), Cli::Old(v("0.166.0")));
+        assert_eq!(check(None, "0.166.0"), Cli::Ok);
+        entry.min_cli = Some(v("0.150.0"));
+        assert_eq!(check(Some(&entry), "0.165.9"), Cli::Old(v("0.166.0")));
+        entry.min_cli = Some(v("0.170.0"));
+        assert_eq!(check(Some(&entry), "0.169.9"), Cli::Old(v("0.170.0")));
+        entry.blocked_cli = vec![v("0.170.1")];
+        assert_eq!(check(Some(&entry), "0.170.1"), Cli::Blocked);
+        assert_eq!(check(Some(&entry), "0.170.2"), Cli::Ok);
     }
 
     #[test]
@@ -918,15 +917,14 @@ mod tests {
     fn login_flow() {
         let f = Fixture::new();
         let d = data();
-        f.publish(1, &[f.entry(CLAUDE.adapter, "0.1.0")]);
+        f.publish(1, &[f.entry(CODEX.adapter, "0.1.0")]);
         let catalog = fetched(&f, d.path()).unwrap();
-        let entry = catalog.entries(CLAUDE.adapter, &app_version())[0];
-        put(d.path(), entry).unwrap();
+        put(d.path(), catalog.entries(CODEX.adapter, &app_version())[0]).unwrap();
         let cli = testutil::fake_cli(d.path(), "2.1.400");
         let env = Env::default();
         let found = find_cli(&CLAUDE, cli.to_str(), &env).unwrap();
         let version = cli_version(&found, &env).unwrap();
-        assert_eq!(check_cli(&CLAUDE, Some(entry), &version), Cli::Ok);
+        assert_eq!(check_own_cli(&CLAUDE, Some(&catalog), &version), Cli::Ok);
         assert!(login(&CLAUDE, &found).ends_with("/login"));
     }
 

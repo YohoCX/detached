@@ -128,7 +128,7 @@ make sign-setup  # once: the "Detached Dev" signing identity that make build use
 make build       # the packages for this OS under target/package
 make e2e-app     # packages Detached.app, starts it like Finder does on a temp config directory,
                  # checks PATH, node and hooks
-make agent-test  # your `claude` on a fake Messages API, no model calls; needs bun and `claude`
+make agent-test  # your `claude` on a fake Messages API, no model calls; needs `claude`
 make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
 
@@ -173,8 +173,7 @@ app's live state, `crates/app` the GPUI client and `crates/forge-fake` a local G
 Enterprise for the UI tests in `crates/app/tests`, which drive real views headless against temp
 repos. The agent tests run scripted fakes of Claude Code and of an ACP agent.
 
-Design and history: [PLAN.md](PLAN.md) (milestone 1), [PLAN-M2.md](PLAN-M2.md) (milestone 2),
-[PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md)
+Design and history: [PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md)
 (the kernel), [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md) and [PLAN-PANELS.md](PLAN-PANELS.md) (the
 agents), [docs/decisions/](docs/decisions/), [docs/BACKLOG.md](docs/BACKLOG.md),
 [docs/TECHDEBT.md](docs/TECHDEBT.md). Release notes: [docs/releases/](docs/releases/).

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::host::{Identity, Scope};
 use crate::session::tests::Fixture;
-use crate::session::tests::real::boot_with;
+use crate::session::tests::real;
 use crate::session::{Item, Seat, Session, State};
 use crate::wait_for;
 
@@ -34,7 +34,7 @@ fn read(path: &Path) -> Value {
 }
 
 fn boot(cx: &mut TestAppContext, script: Vec<Value>) -> (Fixture, Api) {
-    boot_with(cx, Value::Array(script), &CLAUDE, |_| {})
+    real::boot(cx, Value::Array(script))
 }
 
 /// A participant's session in its seat, one turn run to its end; the tool results it got.

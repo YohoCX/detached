@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use detached_core::adapters::{self, CLAUDE, Installed, Version};
+use detached_core::adapters::{self, CODEX, Installed, Version};
 use detached_core::state::AppState;
 
 /// Builds `fake_acp` once and returns its executable.
@@ -12,9 +12,9 @@ pub fn fake() -> PathBuf {
     (FAKE.get_or_init(|| detached_core::testutil::bin("detached-acp", "fake_acp"))).clone()
 }
 
-/// `fake_acp` as Claude's adapter at `version`, the current one; the one before is kept.
+/// `fake_acp` as Codex's adapter at `version`, the current one; the one before is kept.
 pub fn install(core: &AppState, version: &str) {
-    install_as(core, CLAUDE.adapter, &fake(), version);
+    install_as(core, CODEX.adapter, &fake(), version);
 }
 
 /// `program` as the adapter `name` at `version`, the current one; the one before is kept.
@@ -31,16 +31,4 @@ pub fn install_as(core: &AppState, name: &str, program: &Path, version: &str) {
     };
     let kept = serde_json::to_vec(&kept).unwrap();
     std::fs::write(folder.join("installed.json"), kept).unwrap();
-}
-
-/// Fetches the catalog and installs its entry `version`, or the newest for this app.
-pub fn from_catalog(data: &Path, url: &str, key: &str, version: Option<&str>) {
-    let catalog = adapters::fetch(url, key, data).unwrap();
-    let entries = catalog.entries(CLAUDE.adapter, &adapters::app_version());
-    let entry = match version {
-        Some(v) => entries.into_iter().find(|e| e.version.to_string() == v),
-        None => entries.into_iter().max_by(|a, b| a.version.cmp(&b.version)),
-    };
-    let entry = entry.expect("the catalog has no such entry of Claude's adapter for this app");
-    adapters::install(data, entry, &Default::default(), &|_| {}).unwrap();
 }

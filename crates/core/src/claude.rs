@@ -79,14 +79,8 @@ struct Direct;
 impl Backend for Direct {
     fn caps(&self) -> Caps {
         Caps {
-            context: true,
             limits: true,
             stop_task: true,
-            questions: true,
-            past: true,
-            delete: true,
-            wsl: true,
-            probe: true,
             blocks: &[
                 ".claude/settings.json",
                 ".claude/settings.local.json",
@@ -531,7 +525,7 @@ fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<Stri
     a
 }
 
-/// A session's CLI; dropped, it closes in §1's order on a thread of its own.
+/// A session's CLI; dropped, it closes as `close` says, on a thread of its own.
 struct Live(Arc<Client>);
 
 type Then = Box<dyn FnOnce(&Arc<Client>, std::result::Result<Value, String>) + Send>;
@@ -768,7 +762,7 @@ impl Client {
         self.update(Update::Config(config));
     }
 
-    /// §1's close: `interrupt`, `stop_task` for each task, stdin closed, SIGTERM to what is left of
+    /// `interrupt`, `stop_task` for each task, stdin closed, SIGTERM to what is left of
     /// the group after 2 s and SIGKILL 5 s later, never first.
     fn close(&self) {
         let st = self.state.lock().unwrap();
@@ -1249,20 +1243,15 @@ fn last(stderr: &str) -> String {
     stderr.trim().lines().last().unwrap_or_default().into()
 }
 
-/// A random v4 UUID from std's randomly keyed hasher.
+/// A random v4 UUID.
 fn uuid() -> String {
-    use std::hash::{BuildHasher, RandomState};
-    let x = format!(
-        "{:016x}{:016x}",
-        RandomState::new().hash_one(1),
-        RandomState::new().hash_one(2)
-    );
+    let x = backend::random();
     format!(
         "{}-{}-4{}-a{}-{}",
         &x[..8],
         &x[8..12],
         &x[13..16],
         &x[17..20],
-        &x[20..]
+        &x[20..32]
     )
 }
