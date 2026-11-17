@@ -1,4 +1,4 @@
-# Agent adapters (PLAN-AGENT-HOST §3).
+# Agent adapters.
 # - An adapters-<name>-<version> tag builds that adapter with bun per platform into a release of its
 #   own, with the entry.json that `make adapters-sign entry=entry.json` adds to the catalog.
 # - A push of adapters/adapters.json to main, or a manual run, checks the signed catalog and

@@ -173,8 +173,7 @@ app's live state, `crates/app` the GPUI client and `crates/forge-fake` a local G
 Enterprise for the UI tests in `crates/app/tests`, which drive real views headless against temp
 repos. The agent tests run scripted fakes of Claude Code and of an ACP agent.
 
-Design and history: [PLAN.md](PLAN.md) (milestone 1), [PLAN-M2.md](PLAN-M2.md) (milestone 2),
-[PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md)
+Design and history: [PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md)
 (the kernel), [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md) and [PLAN-PANELS.md](PLAN-PANELS.md) (the
 agents), [docs/decisions/](docs/decisions/), [docs/BACKLOG.md](docs/BACKLOG.md),
 [docs/TECHDEBT.md](docs/TECHDEBT.md). Release notes: [docs/releases/](docs/releases/).

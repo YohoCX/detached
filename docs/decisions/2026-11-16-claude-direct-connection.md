@@ -7,8 +7,8 @@ any other AI agent in the client.)
 
 This is option A of the proposal of 2026-11-15. The proposal was this file's first text, as
 `2026-11-15-claude-direct-cli.md` at commit 80149a6: one file per decision, so it was renamed and
-rewritten, not kept beside this one. The evidence is
-[spikes/claude-direct/ANSWERS-0c.md](../../spikes/claude-direct/ANSWERS-0c.md).
+rewritten, not kept beside this one. The evidence is `spikes/claude-direct/ANSWERS-0c.md`, removed
+by commit fd6a544.
 
 ## What was decided
 

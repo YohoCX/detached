@@ -1,14 +1,16 @@
 # Backlog
 
-Features after milestone 1, newest first. Milestone 2 scope is in [PLAN-M2.md](../PLAN-M2.md) "Scope".
+Features after milestone 1, newest first.
 
 | Feature | Notes |
 | --- | --- |
+| Plugins from a folder | A manifest with themes and TUI tabs through the terminal; a manifest over a JSON CLI whose `source` fills a table and whose `actions` run commands, with a confirm before destructive ones. One consent, "this plugin runs code as you", shown again when its files change; no per-permission screen, since without a sandbox it would imply a limit that is not there. A per-tab opt-in to the terminal env, never for a plugin's TUI tab. `ACTIONS` stays for built-ins and a runtime table takes namespaced ids from manifests, unknown ids refused softly, with one rebind path; CLAUDE.md's key rule and docs/KEYMAP.md change with it. Done when a `local-postgres` manifest lists databases from `pg-dev` and drops one after a confirm, in a test on a fake CLI. |
+| DHP plugin | Private, installed from a folder: `wt`, `pg-dev` and `redis-dev` as an environment provider, which brings the worktree-or-current-folder choice to a new chat; the session card lists what deleting a worktree removes. Infra, Services and Board are the folder plugins' CLI tables; Board stays out of the public client. Done when the owner starts a session in a new worktree with its own DB from the app and removes it again. Needs plugins from a folder. |
 | A free, committing agent on untrusted code | A sandboxed full clone per agent, its result taken back as a bundle made inside the sandbox; today an untrusted subject gets a read-only review and no Fix ([decision](decisions/2026-11-12-untrusted-read-only.md)). Needs its own spike. Open questions from plan review round 08: Claude's sandbox denies `.git/hooks` and `.git/config` writes outright; toolchains under a denied `$HOME`; the CLI's login in its config dir; no git identity in the clone; deny-wins `Read` rules; no sandbox for the host's `git bundle`; `fsckObjects` on a bundle fetch only from git 2.48; a clone lacks MR commits and carries every local branch; clones filling the disk. |
 | Native Windows sandbox for panels | Isolate an untrusted subject's participants on Windows without WSL2: an AppContainer or a restricted token, with a proxy allowlist for egress. Or Claude Code's own native sandbox: 2.1.322 has one behind a feature gate, which needs `claude sandbox install` (admin) to provision a sandbox user and network filters. Today they run in WSL2 or unisolated after a consent ([PLAN-PANELS.md](../PLAN-PANELS.md) §3). |
-| Theme editor | In Settings with a live preview, saving to a theme file; one mutable preview slot, so a `Theme` does not leak per edit. Themes come from JSON files first ([PLAN-EXTENSIBLE.md](../PLAN-EXTENSIBLE.md) step 2). |
+| Theme editor | In Settings with a live preview, saving to a theme file; one mutable preview slot, so a `Theme` does not leak per edit. |
 | Icon packs | UI and file type icons replaceable from the config directory; needs a licensed or own set of file type icons first. |
-| Density and a spacing scale | The ~530 `px()` in views onto tokens; many are geometry rather than spacing, such as the 90 px traffic light inset. |
+| Density and a spacing scale | The ~840 `px()` in views onto tokens; many are geometry rather than spacing, such as the 90 px traffic light inset. |
 | Plugin catalog | Plugins in GitHub Releases, a signed JSON index with a sequence number in a `detached-plugins` repo, moderated by PR, its own minisign key, a revocation list. The index URL can move to a VPS later. |
 | Plugin install with account tokens | From a private repo with a connected account's token. |
 | Process plugins and host widgets | JSON over stdio with a version handshake, host widgets `chat`, `diff`, `markdown`, `list`, `tree`, `table`. |

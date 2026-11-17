@@ -30,6 +30,7 @@ make agent-login # the owner's, never an agent's: `detached --session` on his ow
 make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
 make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory
+make fmt      # cargo fmt over the workspace
 make build    # the packages for this OS under target/package (scripts/package.sh)
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
 make sign-setup  # once, macOS: the "Detached Dev" signing identity that make build uses

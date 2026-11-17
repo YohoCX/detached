@@ -366,8 +366,7 @@ Node-free, from the Settings "Agents" page; built in step H3.
 
 ## 4. Trust
 
-PLAN-EXTENSIBLE's rule holds for every provider: until the owner accepts what a repo would run,
-a session loads none of it.
+For every provider: until the owner accepts what a repo would run, a session loads none of it.
 
 - **Trust items** are what `core::trust` parses: hooks, env blocks, helper commands, allow rules,
   MCP servers, and skill and command front matter (`hooks`, `allowed-tools`).
@@ -407,7 +406,7 @@ a session loads none of it.
     whichever path it is, as today's chat does.
   - **H4c part 0 row 5** ran it on every OS: no new hook ran before its block, from settings or a
     skill, by the Write tool or a Bash redirect
-    ([ANSWERS-H4c §5](spikes/claude-direct/ANSWERS-H4c.md)). Windows' Write-tool rows wait for the
+    (ANSWERS-H4c §5, removed by commit fd6a544). Windows' Write-tool rows wait for the
     long path. Instruction files and docs never end a session.
 
 ## 5. Permissions and read-only
@@ -1029,12 +1028,6 @@ settings, ops and invalidation findings.
   - **Docs:** `docs/INDEX.md`, module docs, `covers:` (H7). **Storage:** scopes (H2).
   - **Commands:** `make adapters-sign` (H3); `make agent-test` (H4), whose line loses the adapter
     at H4c's gate; `make agent-login` (H4c); `make sidecar` goes with H11's follow-up.
-- **PLAN-EXTENSIBLE:**
-  - step 1's sidecar, private protocol and "current folder" (H4, H11);
-  - the second slice's tools (H5);
-  - step 4's terminal env (H9);
-  - the public-build rule: it goes, per the 2026-11-12 decision (H12).
-  - "UI text says Claude" becomes the label the owner chooses (§2).
 - **PLAN-NATIVE:** the chat's contract and the Layout's agent lines.
 - **docs/BACKLOG.md:** the env store and `detached-cli env run` (H9).
 - **README:** what a user installs (H12).
@@ -1913,9 +1906,8 @@ doc covering a changed file the turn did not change itself, `Tests` when only te
 `Flow` otherwise; the chat shows it as "Docs may need: …" with a button that sends the update prompt.
 The Docs app (`panel.docs`, left zone, no chord) lists the index, plans, decisions by date and
 contracts; a doc opens to its sections and cites as `path:line` links and the commits that made it
-stale; a repo with no index offers a chat that writes one. This repo's index has six module docs;
-the plans in progress carry `covers:`, the closed PLAN.md and PLAN-M2.md none, so they never read as
-stale. The Done runs as `a_real_claude_reads_the_watcher_s_doc_through_docs` under
+stale; a repo with no index offers a chat that writes one. This repo's index has seven module docs;
+the plans in progress carry `covers:`. The Done runs as `a_real_claude_reads_the_watcher_s_doc_through_docs` under
 `make agent-test`, passed with claude 2.1.325, and `this_repo_s_docs_keep_the_layout_and_route_the_watcher`
 checks this repo's docs in `make check`.
 
@@ -2031,7 +2023,7 @@ The owner checks: the same.
 
 ### Step H13. Codex live
 
-**Status (2026-11-17): H13a built on `agent-host/h13a-codex`, its rows passing on macOS with
+**Status (2026-11-17): H13a built and merged, its rows passing on macOS with
 `codex-cli` 0.167.2, our bun build of `codex-acp` 2.6.0 and the owner's login; the owner's Linux or
 WSL run is open.**
 - **Built:** §7's HTTP transport in `crates/acp` with its tests on `fake_acp` (a second
@@ -2066,7 +2058,7 @@ WSL run is open.**
   output (Codex sends it in `_meta.terminal_output_delta`), the per-task stop, and P2's `Spec.mcp`
   as `mcpServers`.
 
-**Status (2026-11-17): H13b built on `agent-host/h13b-codex`, on `fake_acp` only: the owner's
+**Status (2026-11-17): H13b built and merged, on `fake_acp` only: the owner's
 Codex account is out of usage until 2026-11-19, so no live turn ran.**
 - **Built:**
   - Each manifest names its modes, its asking mode (`Spec::new`'s), its chat mode and its
@@ -2152,11 +2144,11 @@ The owner checks: a Codex chat and a review with a Codex verifier on a trusted s
 
 ### Step H12. Release
 
-**Status (2026-11-17): ready for the owner's acts on `agent-host/h12-release`.**
+**Status (2026-11-17): merged; ready for the owner's acts.**
 - **Built:** version 0.6.0; the README says what a user installs and gets, and in plain text that
   Detached runs the user's installed Claude Code, with no logo and no claim of a partnership; the
   notes in `docs/releases/0.6.0.md`, which `release.yml` publishes in place of generated ones;
-  PLAN-EXTENSIBLE's public-build rule goes (§16); `make e2e-app` runs the app on a temp config
+  the public-build rule goes (§16); `make e2e-app` runs the app on a temp config
   directory. `make build` on macOS gave both zips, signed by "Detached Dev", and `make e2e-app`
   passed.
 - **The owner's:** the letter's answer and the Commercial Terms; the label (`CLAUDE.name` is still
@@ -2194,4 +2186,4 @@ Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with eve
   process without its grant;
 - `sidecars/claude`, `core::agent` and Claude's adapter path are gone;
 - nothing above `core::backend` names a provider's protocol;
-- CLAUDE.md, PLAN-EXTENSIBLE and PLAN-NATIVE say what the code does (§16).
+- CLAUDE.md and PLAN-NATIVE say what the code does (§16).
