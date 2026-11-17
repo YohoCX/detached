@@ -38,13 +38,12 @@ pub fn preview(
     Ok((pv, brief))
 }
 
-/// Whether `s`'s branch is trusted as it is now, and whether its head moved since `s` was pinned.
-pub fn now(core: &AppState, s: &Subject) -> (bool, bool) {
-    let Ok(now) = run::subject(core, &run::again(s)) else {
-        return (false, false);
-    };
-    let trust = super::marks::classify(core, &super::marks::load(core), &now);
-    (trust.is_ok_and(|t| t.trusted), now.head_sha != s.head_sha)
+/// Whether `s`'s branch is trusted as it is now, and whether its head moved since `s` was pinned;
+/// an error when the branch is gone or cannot be read.
+pub fn now(core: &AppState, s: &Subject) -> Result<(bool, bool)> {
+    let now = run::subject(core, &run::again(s))?;
+    let trust = super::marks::classify(core, &super::marks::load(core), &now)?;
+    Ok((trust.trusted, now.head_sha != s.head_sha))
 }
 
 /// A Fix's branch and its managed worktree, with the MCP file its session reads.
@@ -103,19 +102,26 @@ pub fn make(
         worktree::hookless(&env, repo, &["branch", &branch, brief::sha(&s.head_sha)?])
     })?;
     let (main, folder) = home(core, &s.repo);
-    let tree = match worktree::create(core, repo, &main, &folder, &branch, cancel, progress) {
-        Ok(t) => t,
-        Err(e) => {
-            // Fails while a worktree has it, which the error then names.
-            _ = locked(core, repo, || {
-                worktree::hookless(&env, repo, &["branch", "-D", &branch])
-            });
-            return Err(e);
-        }
-    };
-    run::copy_local(repo, &tree)?;
-    let mcp = run::mcp(core, repo, &tree, &private(&branch))?;
-    Ok(Made { branch, tree, mcp })
+    let made =
+        worktree::create(core, repo, &main, &folder, &branch, cancel, progress).and_then(|tree| {
+            run::copy_local(repo, &tree)?;
+            let mcp = run::mcp(core, repo, &tree, &private(&branch))?;
+            Ok(Made {
+                branch: branch.clone(),
+                tree,
+                mcp,
+            })
+        });
+    if made.is_err() {
+        // `create` keeps a worktree whose install failed: it goes, then the branch, so no Fix
+        // the card cannot see is left behind.
+        let tree = worktree::root(&core.data_dir, &main, &folder).join(&branch);
+        _ = discard(core, [repo, &tree], &branch, &Cancel::default(), &|_| {});
+        _ = locked(core, repo, || {
+            worktree::hookless(&env, repo, &["branch", "-D", &branch])
+        });
+    }
+    made
 }
 
 /// The folder under `data/private/` that holds a Fix's MCP file.

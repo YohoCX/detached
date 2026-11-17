@@ -248,3 +248,45 @@ fn merge_fast_forwards_with_hooks_off_shows_hook_files_refuses_dirty_or_diverged
     .unwrap();
     assert_eq!(remote(), pushed, "nothing pushes");
 }
+
+#[test]
+fn a_fix_whose_install_fails_leaves_no_worktree_or_branch() {
+    let (sb, repo) = sandbox();
+    trust(&sb, &repo);
+    let recipe = |text: &str| {
+        let files: Files = [(PathBuf::new(), text.as_bytes().to_vec())].into();
+        let store = RepoStore::open(&sb.state, &repo).unwrap();
+        fs::remove_dir_all(&store.local).unwrap();
+        store
+            .write(&sb.state, store::Kind::Recipes, worktree::RECIPE, &files)
+            .unwrap();
+    };
+    recipe("copies = [\".env\"]\ninstall = \"exit 3\"\n");
+    let e = made(&sb, &repo, "f1-1").err().unwrap().to_string();
+    assert!(e.contains("is created, but"), "{e}");
+    assert!(
+        !sb.path("ws/worktrees/r/detached-fix")
+            .join("run1/f1-1")
+            .exists()
+    );
+    assert!(
+        sb.git(&repo, &["branch", "--list", "detached-fix/*"])
+            .is_empty()
+    );
+    recipe("copies = [\".env\"]\n");
+    assert_eq!(
+        made(&sb, &repo, "f1-1").unwrap().branch,
+        "detached-fix/run1/f1-1"
+    );
+}
+
+#[test]
+fn a_gone_subject_is_an_error_not_untrusted() {
+    let (sb, repo) = sandbox();
+    trust(&sb, &repo);
+    let at = subject(&sb, &repo, "feat");
+    assert_eq!(now(&sb.state, &at).unwrap(), (true, false));
+    sb.git(&repo, &["branch", "-qD", "feat"]);
+    let e = now(&sb.state, &at).unwrap_err().to_string();
+    assert!(e.contains("No branch feat"), "{e}");
+}
