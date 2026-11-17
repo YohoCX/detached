@@ -278,7 +278,7 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     /// `n` commits on main, each tenth also merging the commit five back, through fast-import.
     fn many(sb: &Sandbox, n: usize) -> PathBuf {
@@ -558,8 +558,8 @@ mod tests {
         assert_eq!(seen.last(), Some(&done(2)));
     }
 
-    #[test]
-    fn a_hundred_thousand_commits_stream_with_lanes_and_the_cap_stops_git() {
+    /// Streams 100,000 commits of a longer history and checks their lanes; returns how long it took.
+    fn a_hundred_thousand() -> Duration {
         let sb = Sandbox::new();
         let repo = many(&sb, CAP + 500);
         let start = Instant::now();
@@ -575,7 +575,18 @@ mod tests {
             below.dedup();
             assert_eq!(below, above, "{}", w[1].sha);
         }
-        eprintln!("100,000 commits in {took:?}");
+        took
+    }
+
+    #[test]
+    fn a_hundred_thousand_commits_stream_with_lanes_and_the_cap_stops_git() {
+        a_hundred_thousand();
+    }
+
+    #[test]
+    #[ignore = "a benchmark: run it alone, on an idle machine"]
+    fn a_hundred_thousand_commits_stream_in_under_3_s() {
+        let took = a_hundred_thousand();
         assert!(took.as_secs_f64() < 3.0, "{took:?}");
     }
 }

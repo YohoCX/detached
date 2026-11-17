@@ -23,6 +23,9 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
 - `Resource::on(on)` (`crates/kernel/src/resource.rs:125`): also reload on that `On` input.
 - `Resource::value`, `error`, `at` (pub fields), `loading()`, and `refresh(cx)`
   (`crates/kernel/src/resource.rs:141`), which loads now whatever the age.
+- `Resource::edit(f, cx)`: changes the value at once, ahead of the write it stands for; a load
+  running then read before the write, so its value is dropped. The caller refreshes once the write
+  is done (the Chats list's archive and delete).
 - `Interest::new(resource, cx)` (`crates/kernel/src/resource.rs:206`): holds the resource,
   refreshes it (now, or after the load that runs) and starts its poll.
 - `Interest::view(resource, cx)` (`crates/kernel/src/resource.rs:222`): the same, and the view
@@ -81,6 +84,7 @@ Unit tests in `crates/kernel/src/resource.rs:251`, in GPUI's test context on a c
 - `refreshes_while_a_load_runs_end_in_one_more_load_after_it`.
 - `an_interest_taken_while_a_load_runs_is_served_by_the_load_after_it`: `loaded` waits for the
   follow-up load.
+- `an_edit_while_a_load_runs_drops_that_load_s_value`.
 
 Real policies' polls are tested in `crates/kernel/src/forge.rs:214` (e.g.
 `a_pipeline_polls_every_5_s_only_while_it_runs_held_and_shown`). The `On::Status` path from a saved
