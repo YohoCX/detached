@@ -58,18 +58,11 @@ jobs:
         with:
           path: out
           merge-multiple: true
-      - run: npm install -g bun@1.4.4
-      # min_cli follows the SDK's claudeCodeVersion; the client never goes below its own floor.
       - name: Entry
         run: |
           tag=${GITHUB_REF_NAME#adapters-}; name=${tag%-*}; version=${tag##*-}
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           app=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
-          min_cli=null
-          if [ "$name" = claude-agent-acp ]; then
-            (cd "adapters/$name" && bun install --frozen-lockfile --omit optional --ignore-scripts > /dev/null)
-            min_cli=$(jq '.claudeCodeVersion' "adapters/$name/node_modules/@anthropic-ai/claude-agent-sdk/package.json")
-          fi
           artifacts='{}'
           for f in out/*.tar.gz; do
             file=${f#out/}; target=${file#"$name-$version-"}; target=${target%.tar.gz}
@@ -78,9 +71,9 @@ jobs:
               '. + {($t): {url: $url, size: $size, sha256: $sha}}' <<< "$artifacts")
           done
           jq -n --arg name "$name" --arg version "$version" --arg published "$(date -u +%F)" \
-            --arg app "$app" --argjson min_cli "$min_cli" --argjson artifacts "$artifacts" \
+            --arg app "$app" --argjson artifacts "$artifacts" \
             '{name: $name, version: $version, published: $published, min_app: $app,
-              min_cli: $min_cli, blocked_cli: [], artifacts: $artifacts}' > out/entry.json
+              min_cli: null, blocked_cli: [], artifacts: $artifacts}' > out/entry.json
           cat out/entry.json
       - name: Publish
         env:

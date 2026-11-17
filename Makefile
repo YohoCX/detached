@@ -19,13 +19,11 @@ app:
 ui-test:
 	$(call TESTS,-p detached-app $(if $(t),--test $(t)))
 
-# The bun-built Claude adapter and the user's `claude` on a scripted fake Messages API, in temp homes;
-# not in check, since it needs both and runs a 3-minute command. A missing one fails.
+# The user's `claude` on a scripted fake Messages API, in temp homes; not in check, since it needs
+# `claude` and runs a 3-minute command. A missing one fails.
 agent-test:
-	./scripts/adapter-build.sh claude-agent-acp
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
 	cargo test -p detached-kernel --lib panel::tests::real -- --ignored
-	cargo test -p detached-acp -- --ignored --skip codex_live
 
 # The owner's, never CI's: Codex's live rows through the bun build of its adapter, on his own `codex`
 # and login. Three short model turns; each checks his config.toml unchanged.

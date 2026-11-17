@@ -128,7 +128,7 @@ make sign-setup  # once: the "Detached Dev" signing identity that make build use
 make build       # the packages for this OS under target/package
 make e2e-app     # packages Detached.app, starts it like Finder does on a temp config directory,
                  # checks PATH, node and hooks
-make agent-test  # your `claude` on a fake Messages API, no model calls; needs bun and `claude`
+make agent-test  # your `claude` on a fake Messages API, no model calls; needs `claude`
 make release     # tags v<version in Cargo.toml>; CI builds every platform and publishes it
 ```
 

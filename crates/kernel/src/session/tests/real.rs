@@ -1,5 +1,5 @@
-//! The user's `claude` on the scripted fake Messages API, through the real adapter and through the
-//! direct backend, run by `make agent-test`, where a missing adapter or CLI fails. Each test runs on
+//! The user's `claude` on the scripted fake Messages API through the direct backend, run by
+//! `make agent-test`, where a missing CLI fails. Each test runs on
 //! `boot_on`'s sandbox, with its own HOME and CLAUDE_CONFIG_DIR and Detached's three tiers apart.
 //! With `DETACHED_AGENT_WSL=<distro>` on Windows, the direct backend's CLI runs in that distro, which
 //! reaches the fake on `DETACHED_AGENT_WSL_HOST`.
@@ -8,8 +8,6 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
 
-use detached_acp::testutil::from_catalog;
-use detached_core::adapters::{CATALOG_KEY, Installed, Version};
 use detached_core::backend;
 use detached_core::env::Env;
 use detached_core::store::{Kind as StoreKind, RepoStore};
@@ -19,49 +17,13 @@ use super::*;
 
 const SECRET: &str = "SECRET=fixture-not-for-agents";
 
-/// The two ways to the real `claude`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Real {
-    Adapter,
-    Direct,
-}
-
-/// Each named body as `<name>::adapter` and `<name>::direct`.
-macro_rules! both {
-    ($($name:ident),* $(,)?) => {$(
-        mod $name {
-            #[gpui::test]
-            #[ignore = "make agent-test"]
-            fn adapter(cx: &mut gpui::TestAppContext) {
-                super::$name(super::Real::Adapter, cx)
-            }
-
-            #[gpui::test]
-            #[ignore = "make agent-test"]
-            fn direct(cx: &mut gpui::TestAppContext) {
-                super::$name(super::Real::Direct, cx)
-            }
-        }
-    )*};
-}
-
-both!(
-    the_first_tool_call_asks_under_default,
-    a_load_comes_back_on_the_model_it_had,
-    an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_deny,
-    the_env_deny_refuses_read_and_cat,
-    a_cancel_mid_command_ends_the_turn_and_the_command,
-    a_session_gone_mid_command_leaves_no_process,
-    a_three_minute_command_reports_in_progress_before_it_ends,
-);
-
-/// The Done of PLAN-AGENT-HOST's H8: Claude reads no `~/.agents`, so the skill came through the
+/// Claude reads no `~/.agents`, so the skill came through the
 /// session's plugin, under the chat's setting sources and under none; a local skill turns off the
 /// `~/.claude` one of its name.
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppContext) {
-    let (f, _api) = boot(cx, Real::Direct, json!([]));
+    let (f, _api) = boot(cx, json!([]));
     let skill = |dir: PathBuf, name: &str| {
         std::fs::create_dir_all(&dir).unwrap();
         let text = format!("---\nname: {name}\ndescription: Says {name}\n---\nSay it.\n");
@@ -115,56 +77,9 @@ fn claude() -> PathBuf {
         .expect("no `claude` on PATH or in ~/.local/bin: install it with Anthropic's installer")
 }
 
-fn build_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../adapters")
-        .join(CLAUDE.adapter)
-}
-
-/// The version adapters/ pins.
-fn pinned() -> String {
-    let package = std::fs::read(build_dir().join("package.json")).unwrap();
-    let package: Value = serde_json::from_slice(&package).unwrap();
-    let pin = &package["dependencies"][format!("@agentclientprotocol/{}", CLAUDE.adapter)];
-    pin.as_str().unwrap().into()
-}
-
-/// The real adapter, installed from the signed catalog at `DETACHED_AGENT_CATALOG` when set (CI's
-/// vetting), else from the bun build in adapters/ that `make agent-test` makes.
-fn install(core: &AppState) {
-    let data = &core.data_dir;
-    if let Ok(url) = std::env::var("DETACHED_AGENT_CATALOG") {
-        let version = std::env::var("DETACHED_AGENT_ENTRY").ok();
-        return from_catalog(data, &url, CATALOG_KEY, version.as_deref());
-    }
-    let exe = format!("{}{}", CLAUDE.adapter, std::env::consts::EXE_SUFFIX);
-    let build = build_dir().join("out").join(exe);
-    assert!(
-        build.is_file(),
-        "no bun build of the adapter at {}: run `make agent-test`",
-        build.display()
-    );
-    let version = Version::parse(&pinned()).unwrap();
-    let exe = adapters::exe(data, CLAUDE.adapter, &version);
-    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-    std::fs::copy(&build, &exe).unwrap();
-    let installed = Installed {
-        current: Some(version),
-        previous: None,
-    };
-    let file = data
-        .join("adapters")
-        .join(CLAUDE.adapter)
-        .join("installed.json");
-    std::fs::write(file, serde_json::to_vec(&installed).unwrap()).unwrap();
-}
-
-/// The kernel on `real`'s way to `claude`, and the fake API on `script`.
-fn boot(cx: &mut TestAppContext, real: Real, script: Value) -> (Fixture, Api) {
-    match real {
-        Real::Adapter => boot_with(cx, script, &CLAUDE_ACP, install),
-        Real::Direct => boot_with(cx, script, &CLAUDE, |_| {}),
-    }
+/// The kernel on the user's `claude`, and the fake API on `script`.
+fn boot(cx: &mut TestAppContext, script: Value) -> (Fixture, Api) {
+    boot_with(cx, script, &CLAUDE, |_| {})
 }
 
 pub(crate) fn boot_with(
@@ -272,14 +187,10 @@ fn pgrep(args: &[&str]) -> Vec<String> {
 }
 
 /// A chat whose turn runs `perl -e 'sleep 600' <marker>`, once that command runs.
-fn mid_command(
-    real: Real,
-    name: &str,
-    cx: &mut TestAppContext,
-) -> (Fixture, Api, String, Entity<Session>) {
-    let marker = format!("detached-mark-{}-{name}-{real:?}", std::process::id());
+fn mid_command(name: &str, cx: &mut TestAppContext) -> (Fixture, Api, String, Entity<Session>) {
+    let marker = format!("detached-mark-{}-{name}", std::process::id());
     let command = format!("perl -e 'sleep 600' {marker}");
-    let (f, api) = boot(cx, real, json!([[bash(&command)], text("stopped")]));
+    let (f, api) = boot(cx, json!([[bash(&command)], text("stopped")]));
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| waiting(&s, cx).is_some());
@@ -289,12 +200,10 @@ fn mid_command(
     (f, api, marker, s)
 }
 
-fn the_first_tool_call_asks_under_default(real: Real, cx: &mut TestAppContext) {
-    let (f, _api) = boot(
-        cx,
-        real,
-        json!([[bash("echo made > made.txt")], text("made")]),
-    );
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn the_first_tool_call_asks_under_default(cx: &mut TestAppContext) {
+    let (f, _api) = boot(cx, json!([[bash("echo made > made.txt")], text("made")]));
     let s = open(&f, Kind::Chat, cx);
     assert_eq!(
         s.read_with(cx, |s, _| s.option("mode").map(String::from)),
@@ -309,8 +218,10 @@ fn the_first_tool_call_asks_under_default(real: Real, cx: &mut TestAppContext) {
     assert!(Path::new(&f.repo).join("made.txt").exists());
 }
 
-fn a_load_comes_back_on_the_model_it_had(real: Real, cx: &mut TestAppContext) {
-    let (f, api) = boot(cx, real, json!([text("one"), text("two")]));
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_load_comes_back_on_the_model_it_had(cx: &mut TestAppContext) {
+    let (f, api) = boot(cx, json!([text("one"), text("two")]));
     // A load without its model falls back to these settings.
     std::fs::write(f.claude_dir().join("settings.json"), r#"{"model": "opus"}"#).unwrap();
     let mut spec = f.spec(Kind::Chat);
@@ -341,8 +252,9 @@ fn hook(file: &str) -> String {
     json!({"hooks": {"UserPromptSubmit": [{"hooks": [command]}]}}).to_string()
 }
 
+#[gpui::test]
+#[ignore = "make agent-test"]
 fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_deny(
-    real: Real,
     cx: &mut TestAppContext,
 ) {
     let script = json!([
@@ -352,7 +264,7 @@ fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_den
         text("second"),
         text("trusted"),
     ]);
-    let (f, api) = boot(cx, real, script);
+    let (f, api) = boot(cx, script);
     f.write(".claude/settings.json", &hook("project-hooked"));
     f.write(".env", SECRET);
     std::fs::write(f.claude_dir().join("settings.json"), hook("user-hooked")).unwrap();
@@ -385,7 +297,9 @@ fn an_untrusted_chat_closed_and_loaded_keeps_the_user_s_settings_and_the_env_den
     assert_eq!(hooked(), [true, true]);
 }
 
-fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn the_env_deny_refuses_read_and_cat(cx: &mut TestAppContext) {
     let script = json!([
         [{"tool": "Read", "input": {"file_path": ".env"}}],
         [{"tool": "Read", "input": {"file_path": "sub/.env.local"}}],
@@ -393,7 +307,7 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
         [{"tool": "Read", "input": {"file_path": ".ENV"}}],
         text("tried"),
     ]);
-    let (f, api) = boot(cx, real, script);
+    let (f, api) = boot(cx, script);
     f.write(".env", SECRET);
     f.write("sub/.env.local", SECRET);
     let s = open(&f, Kind::Chat, cx);
@@ -406,8 +320,10 @@ fn the_env_deny_refuses_read_and_cat(real: Real, cx: &mut TestAppContext) {
     );
 }
 
-fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command(real, "cancel", cx);
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_cancel_mid_command_ends_the_turn_and_the_command(cx: &mut TestAppContext) {
+    let (_f, _api, marker, s) = mid_command("cancel", cx);
     s.update(cx, |s, _| s.cancel());
     wait_for(cx, START, |cx| s.read(cx).state == State::Idle);
     s.read_with(cx, |s, _| {
@@ -424,21 +340,21 @@ fn a_cancel_mid_command_ends_the_turn_and_the_command(real: Real, cx: &mut TestA
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
-fn a_session_gone_mid_command_leaves_no_process(real: Real, cx: &mut TestAppContext) {
-    let (_f, _api, marker, s) = mid_command(real, "gone", cx);
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_session_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
+    let (_f, _api, marker, s) = mid_command("gone", cx);
     // The adapter's last session or the CLI's own goes, which ends it; on Windows its job then closes.
     // Released in an update: a dropped handle alone waits for the next one.
     cx.update(|_| drop(s));
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
-/// PLAN-PANELS §7's stall rule counts a tool call in progress as activity.
-fn a_three_minute_command_reports_in_progress_before_it_ends(real: Real, cx: &mut TestAppContext) {
-    let (f, _api) = boot(
-        cx,
-        real,
-        json!([[bash("perl -e 'sleep 180'")], text("slept")]),
-    );
+/// Panels' stall rule counts a tool call in progress as activity.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_three_minute_command_reports_in_progress_before_it_ends(cx: &mut TestAppContext) {
+    let (f, _api) = boot(cx, json!([[bash("perl -e 'sleep 180'")], text("slept")]));
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| s.prompt("go".into(), cx));
     wait_for(cx, START, |cx| waiting(&s, cx).is_some());
@@ -459,26 +375,7 @@ fn a_three_minute_command_reports_in_progress_before_it_ends(real: Real, cx: &mu
     assert_eq!(done.status.as_deref(), Some("completed"));
 }
 
-/// The vetting path: the adapter's own archive in a catalog signed with the test key.
-#[gpui::test]
-#[ignore = "make agent-test"]
-fn an_entry_of_a_signed_catalog_installs_and_runs_a_turn(cx: &mut TestAppContext) {
-    let archive = std::fs::read(build_dir().join("out.tar.gz"))
-        .expect("no adapter archive in adapters/: run `make agent-test`");
-    let catalog = adapters::testutil::Fixture::new();
-    let mut entry = catalog.entry_of(CLAUDE.adapter, &pinned(), archive);
-    entry.min_cli = Some(CLAUDE.min_cli.clone());
-    catalog.publish(1, &[entry]);
-    let (f, _api) = boot_with(cx, json!([text("vetted")]), &CLAUDE_ACP, |core| {
-        from_catalog(&core.data_dir, &catalog.url(), &catalog.key, None)
-    });
-    let s = open(&f, Kind::Chat, cx);
-    run(&s, "go", cx);
-    assert_eq!(said(&s, 0, cx), "vetted");
-    assert_eq!(s.read_with(cx, |s, _| s.version.clone()), Some(pinned()));
-}
-
-/// PLAN-AGENT-HOST §4: the CLI keeps the settings it loaded, and the session ends with the turn.
+/// The CLI keeps the settings it loaded, and the session ends with the turn.
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_settings_hook_written_mid_turn_never_runs_and_the_session_ends_with_its_turn(
@@ -492,7 +389,7 @@ fn a_settings_hook_written_mid_turn_never_runs_and_the_session_ends_with_its_tur
         [bash("echo after > after.txt")],
         text("done")
     ]);
-    let (f, _api) = boot(cx, Real::Direct, script);
+    let (f, _api) = boot(cx, script);
     let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     wait_for(cx, START, |cx| matches!(s.read(cx).state, State::Ended(_)));
@@ -509,7 +406,7 @@ fn a_settings_hook_written_mid_turn_never_runs_and_the_session_ends_with_its_tur
 fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppContext) {
     let query = "{ workspace { repos { name status { changed } } } }";
     let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
-    let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
+    let (f, api) = boot(cx, json!([[call], text("read")]));
     f.write("new.txt", "x");
     f.list(cx);
     // The tool's answer, as a JSON string in a request after `from`.
@@ -577,7 +474,7 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
     answered(from);
 }
 
-/// The Done of PLAN-AGENT-HOST's H7: asked about the watcher, `claude` reads the doc's section
+/// Asked about the watcher, `claude` reads the doc's section
 /// through `docs`, and the model gets it.
 #[gpui::test]
 #[ignore = "make agent-test"]
@@ -585,7 +482,7 @@ fn a_real_claude_reads_the_watcher_s_doc_through_docs(cx: &mut TestAppContext) {
     let query = r#"{ workspace { repos { docs(query: "how does the watcher work") { path heading
         text stale } } } }"#;
     let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
-    let (f, api) = boot(cx, Real::Direct, json!([[call], text("read")]));
+    let (f, api) = boot(cx, json!([[call], text("read")]));
     f.write(
         "docs/INDEX.md",
         "- docs/watch.md — src/watch.rs — read when asking how the watcher works.\n",
@@ -603,7 +500,7 @@ fn a_real_claude_reads_the_watcher_s_doc_through_docs(cx: &mut TestAppContext) {
     assert!(results.iter().any(read), "{results:?}");
 }
 
-/// The Done of PLAN-AGENT-HOST's H9: a dev server that failed runs from its definition, and a real
+/// A dev server that failed runs from its definition, and a real
 /// `claude` with `read` gets its error through the host's tools; with `off` it gets no log.
 #[gpui::test]
 #[ignore = "make agent-test"]
@@ -612,7 +509,7 @@ fn a_real_claude_reads_a_failed_dev_server_s_error_by_its_level(cx: &mut TestApp
     let query = "{ workspace { repos { processes { name state exitCode log } } } }";
     let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
     let script = json!([[call.clone()], text("read"), [call], text("read")]);
-    let (f, api) = boot(cx, Real::Direct, script);
+    let (f, api) = boot(cx, script);
     f.list(cx);
     let repo = cx.read(|cx| crate::workspace::Workspace::get(cx).repos()[0].path.clone());
     let define = |agents| {
@@ -655,11 +552,7 @@ fn a_real_claude_reads_a_failed_dev_server_s_error_by_its_level(cx: &mut TestApp
 fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a_delete(
     cx: &mut TestAppContext,
 ) {
-    let (f, _api) = boot(
-        cx,
-        Real::Direct,
-        json!([[bash("echo made")], text("made it")]),
-    );
+    let (f, _api) = boot(cx, json!([[bash("echo made")], text("made it")]));
     let spec = f.spec(Kind::Chat);
     let s = open_spec(spec.clone(), None, cx);
     run(&s, "go", cx);
@@ -694,7 +587,7 @@ fn stop_task_ends_a_background_command_and_the_session_goes_on(cx: &mut TestAppC
     let command = json!({"tool": "Bash", "input": {"command": format!("perl -e 'sleep 600' {marker}"),
         "description": "a background command", "run_in_background": true}});
     let script = json!([[command], text("started"), text("after")]);
-    let (f, _api) = boot(cx, Real::Direct, script);
+    let (f, _api) = boot(cx, script);
     let s = open(&f, Kind::Chat, cx);
     run(&s, "go", cx);
     wait_for(cx, START, |cx| {
@@ -717,7 +610,7 @@ fn stop_task_ends_a_background_command_and_the_session_goes_on(cx: &mut TestAppC
 fn a_killed_host_leaves_no_process(cx: &mut TestAppContext) {
     const HOST: &str = "DETACHED_TEST_HOST";
     if std::env::var_os(HOST).is_some() {
-        let (_f, _api, marker, s) = mid_command(Real::Direct, "killed", cx);
+        let (_f, _api, marker, s) = mid_command("killed", cx);
         let id = s.read_with(cx, |s, _| s.id.clone()).unwrap();
         println!("host {marker} {id}");
         loop {

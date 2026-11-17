@@ -22,8 +22,7 @@ make check    # the merge gate: fmt, clippy -D warnings and cargo test over the 
               # (core, unit tests, UI tests)
 make app      # the client at release speed, on the real config directory (the owner's only)
 make ui-test  # the UI tests only; t=repos runs tests/repos.rs alone
-make agent-test  # your `claude` on a fake Messages API, through the real Claude adapter (built
-                 # with bun) and through the direct backend
+make agent-test  # your `claude` on a fake Messages API, through the direct backend
 make codex-live  # the owner's, never CI's: Codex's live rows on his own `codex` and login, a few
                  # model turns
 make agent-login # the owner's, never an agent's: `detached --session` on his own `claude` and login,

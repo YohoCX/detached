@@ -32,15 +32,3 @@ pub fn install_as(core: &AppState, name: &str, program: &Path, version: &str) {
     let kept = serde_json::to_vec(&kept).unwrap();
     std::fs::write(folder.join("installed.json"), kept).unwrap();
 }
-
-/// Fetches the catalog and installs its entry `version`, or the newest for this app.
-pub fn from_catalog(data: &Path, url: &str, key: &str, version: Option<&str>) {
-    let catalog = adapters::fetch(url, key, data).unwrap();
-    let entries = catalog.entries(CLAUDE.adapter, &adapters::app_version());
-    let entry = match version {
-        Some(v) => entries.into_iter().find(|e| e.version.to_string() == v),
-        None => entries.into_iter().max_by(|a, b| a.version.cmp(&b.version)),
-    };
-    let entry = entry.expect("the catalog has no such entry of Claude's adapter for this app");
-    adapters::install(data, entry, &Default::default(), &|_| {}).unwrap();
-}

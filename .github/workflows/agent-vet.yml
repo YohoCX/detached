@@ -1,32 +1,17 @@
-# The vetting (PLAN-AGENT-HOST §3), each run through agent.yml on every OS:
-# - daily, `claude` at its floor and the latest, through Claude's backend at main and, from 0.6.0 on,
-#   at the latest release tag on that tag's own tests;
-# - Claude's adapter on each signed catalog entry, on each catalog bump against its min_cli and weekly
-#   against the newest `claude`.
+# The vetting, run daily through agent.yml on every OS: `claude` at its floor and the latest, through
+# Claude's backend at main and, from 0.6.0 on, at the latest release tag on that tag's own tests.
 # A scheduled failure opens an issue for the owner, who decides on blocked_cli; nothing is published
 # from here.
 name: Agent vetting
 
 on:
-  push:
-    branches: [main]
-    paths: [adapters/adapters.json, adapters/adapters.json.minisig]
   schedule:
-    - cron: '23 5 * * 1'
     - cron: '41 4 * * *'
   workflow_dispatch:
 
 jobs:
-  vet:
-    if: github.event.schedule != '41 4 * * *'
-    uses: ./.github/workflows/agent.yml
-    with:
-      vet: true
-      latest: ${{ github.event_name == 'schedule' }}
-
   # main, and the latest release tag once it has Claude's backend.
   refs:
-    if: github.event_name != 'push' && github.event.schedule != '23 5 * * 1'
     runs-on: ubuntu-latest
     outputs:
       legs: ${{ steps.r.outputs.legs }}
@@ -57,7 +42,7 @@ jobs:
       cli: ${{ matrix.cli }}
 
   issue:
-    needs: [vet, claude]
+    needs: [claude]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -68,7 +53,7 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           title="The scheduled agent vetting failed"
-          body="$RUN failed. If a claude version breaks Claude's backend or the adapter, add it to blocked_cli, then \`make adapters-sign\` and push."
+          body="$RUN failed. If a claude version breaks Claude's backend, add it to blocked_cli, then \`make adapters-sign\` and push."
           open=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
           if [ -n "$open" ]; then
             gh issue comment "$open" -R "$GITHUB_REPOSITORY" --body "$body"

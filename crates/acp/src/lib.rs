@@ -279,13 +279,11 @@ impl Acp {
             cwd: std::env::temp_dir(),
             env: vars,
         };
-        // Claude's adapter stops a background task only for AIR; Codex's would move a command's
-        // output out of the standard fields.
-        Ok((self.live(spec_proc, p.id == CLAUDE.id)?, note))
+        Ok((self.live(spec_proc)?, note))
     }
 
     /// The adapter running `spec`'s program, or a new one.
-    fn live(&self, spec: proc::Spec, air: bool) -> Result<Arc<Live>> {
+    fn live(&self, spec: proc::Spec) -> Result<Arc<Live>> {
         let key = (spec.program.clone(), spec.env.clone());
         let slot = (self.adapters.lock().unwrap().entry(key.clone()))
             .or_default()
@@ -296,7 +294,7 @@ impl Acp {
         }
         let demux: Arc<Mutex<Demux>> = Default::default();
         let to = demux.clone();
-        let adapter = Adapter::start(&spec, air, move |e| to.lock().unwrap().got(e))?;
+        let adapter = Adapter::start(&spec, move |e| to.lock().unwrap().got(e))?;
         let entry = (Arc::downgrade(&self.adapters), key);
         let live = Arc::new(Live {
             adapter,
@@ -710,11 +708,9 @@ struct Adapter {
 }
 
 impl Adapter {
-    /// Spawns the adapter and initializes it, as JetBrains AIR when `air`; `on_event` runs on the
-    /// connection's thread.
+    /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
     fn start(
         spec: &proc::Spec,
-        air: bool,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Adapter> {
         let mut proc = Proc::spawn(spec)?;
@@ -827,11 +823,7 @@ impl Adapter {
             asked,
             quit: Some(quit),
         };
-        // JetBrains AIR's declaration: the adapter's stop of a background task needs it.
-        let meta = json!({"jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}}});
-        let caps = ClientCapabilities::new().meta(meta.as_object().cloned().filter(|_| air));
-        let init =
-            adapter.call(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps));
+        let init = adapter.call(InitializeRequest::new(ProtocolVersion::V1));
         let init = init.map_err(|e| fail(e.to_string()))?;
         adapter.version = init.agent_info.map(|a| a.version).unwrap_or_default();
         Ok(adapter)

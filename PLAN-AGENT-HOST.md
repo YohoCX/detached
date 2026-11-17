@@ -1428,6 +1428,11 @@ The owner's check: a changed command mid-turn in the chat on `claude`.
 Open for the gate: part 0's answers (CI's reruns, row 4 in the WSL shape among them), the WSL
 shape's first green run, a `Break` in ACP's replay, then gate steps 3 and 4.
 
+**Status (2026-11-17): gate step 4 is done, on the owner's call before step 3.** Claude's adapter
+path is gone with every item step 4 lists; H3's tests run on Codex's adapter; `kernel::agents` and
+the Agents page offer an install to ACP providers alone; `agent-ci.sh` runs `claude` 2.1.322 unless
+told otherwise.
+
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
 - **What runs:** `spikes/claude-direct`, made portable: job objects on Windows, and no `ps`,

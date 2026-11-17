@@ -1,16 +1,14 @@
-# The agent harness on every OS of PLAN-AGENT-HOST §17 (scripts/agent-ci.sh): H4's tests on the fake
-# ACP agent and the fake CLI, then the official `claude` on a scripted fake Messages API, through the
-# real Claude adapter and through the direct backend; on Windows the direct backend's again with the
-# CLI in a WSL distro, the product's WSL shape.
+# The agent harness on every OS (scripts/agent-ci.sh): the tests on the fake ACP agent and the fake
+# CLI, then the official `claude` on a scripted fake Messages API through the direct backend; on
+# Windows again with the CLI in a WSL distro, the product's WSL shape.
 # No model call and no secret: the fake answers the CLI, and its other HTTPS goes to a dead proxy.
-# agent-vet.yml calls it with `vet` to run each signed catalog entry instead of a build from adapters/,
-# and with `cli` and `ref` to vet a `claude` at main or at a release tag, on that tree's own tests.
+# agent-vet.yml calls it with `cli` and `ref` to vet a `claude` at main or at a release tag, on that
+# tree's own tests.
 name: Agent
 
 on:
   push:
     paths:
-      - adapters/claude-agent-acp/**
       - crates/acp/**
       - crates/core/src/adapters.rs
       - crates/core/src/adapters/**
@@ -31,33 +29,25 @@ on:
       - crates/kernel/src/session.rs
       - crates/kernel/src/session/**
       - Cargo.lock
-      - scripts/adapter-build.sh
       - scripts/agent-ci.sh
       - .github/workflows/agent.yml
   workflow_dispatch:
     inputs:
-      vet:
-        description: Each signed catalog entry in place of a build
-        type: boolean
-        default: false
       latest:
-        description: The newest claude in place of the entry's min_cli
+        description: The newest claude
         type: boolean
         default: false
       cli:
-        description: The claude to run, a version, floor or latest; else the adapter SDK's
+        description: The claude to run, a version, floor or latest; else the pinned one
         type: string
         default: ''
   workflow_call:
     inputs:
-      vet:
-        type: boolean
-        default: false
       latest:
         type: boolean
         default: false
       cli:
-        description: The claude to run, a version, floor or latest; else the adapter SDK's
+        description: The claude to run, a version, floor or latest; else the pinned one
         type: string
         default: ''
       ref:
@@ -66,7 +56,6 @@ on:
         default: ''
 
 env:
-  VET: ${{ inputs.vet && '1' || '' }}
   LATEST: ${{ inputs.latest && '1' || '' }}
   CLI: ${{ inputs.cli }}
 
@@ -87,7 +76,6 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: npm install -g bun@1.4.4
       # The product's WSL shape: the stock distro, which mounts the runner's drives.
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         if: runner.os == 'Windows'
@@ -141,7 +129,6 @@ jobs:
           mkdir -p ~/detached
           tar -C "$(wslpath '${{ github.workspace }}')" --exclude=./target -cf - . | tar -C ~/detached -xf -
           curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-          curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4
-          export PATH=$HOME/.cargo/bin:$HOME/.bun/bin:$PATH RUST_TEST_THREADS=$(nproc)
+          export PATH=$HOME/.cargo/bin:$PATH RUST_TEST_THREADS=$(nproc)
           cd ~/detached
-          VET='${{ env.VET }}' LATEST='${{ env.LATEST }}' CLI='${{ env.CLI }}' ./scripts/agent-ci.sh
+          LATEST='${{ env.LATEST }}' CLI='${{ env.CLI }}' ./scripts/agent-ci.sh
