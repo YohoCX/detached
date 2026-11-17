@@ -37,8 +37,8 @@ and the turn's "docs may need" line. It only reads: agents write docs, the host 
    `git log <that>..HEAD -- <covers>`. A doc never committed is not stale; a git error counts as
    not stale.
 5. The read tool's `Repo.docs(query)` answers `find`'s hits as `DocSection`s
-   (`crates/kernel/src/host/exec.rs:319`); a repo with no index is `null` with an error.
-6. A turn's end lists what changed and runs `may_need` on it (`crates/kernel/src/session.rs:889`);
+   (`crates/kernel/src/host/exec.rs:308`); a repo with no index is `null` with an error.
+6. A turn's end lists what changed and runs `may_need` on it (`crates/kernel/src/session.rs:1072`);
    a rename counts by both its names, and the needs become an `Item::Docs` after the `Changes` item.
 
 ## Gotchas
