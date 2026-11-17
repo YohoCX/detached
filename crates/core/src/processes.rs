@@ -643,7 +643,8 @@ mod tests {
         std::fs::create_dir_all(repo.join(folder)).unwrap();
         let def = Definition {
             name: "cd".into(),
-            command: "echo cd=%CD%".into(),
+            // `%CD%` would reach cmd's parser expanded, so `cd` prints it instead.
+            command: "cd".into(),
             folder: folder.into(),
             ..Default::default()
         };
