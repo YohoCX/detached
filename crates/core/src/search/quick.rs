@@ -59,7 +59,7 @@ pub fn rank(lists: &[(&str, Arc<Vec<String>>)], query: &str, limit: usize) -> Ve
     hits.truncate(limit);
     hits.sort_unstable_by(order);
     hits.into_iter()
-        .map(|(score, repo, path)| {
+        .map(|(_, repo, path)| {
             let mut indices = vec![];
             pattern.indices(Utf32Str::new(path, &mut buf), &mut matcher, &mut indices);
             indices.sort_unstable();
@@ -67,7 +67,6 @@ pub fn rank(lists: &[(&str, Arc<Vec<String>>)], query: &str, limit: usize) -> Ve
             FileMatch {
                 repo: repo.into(),
                 path: path.into(),
-                score,
                 indices,
             }
         })

@@ -868,7 +868,6 @@ impl State {
             .map(|p| Row {
                 name: p.name.clone(),
                 lenses: p.lenses.clone(),
-                executor: "claude".into(),
                 requested_model: p.model.clone(),
                 actual_model: p.actual.clone().unwrap_or_else(|| p.model.clone()),
                 effort: String::new(),

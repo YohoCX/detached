@@ -194,11 +194,6 @@ pub fn pull(s: &AppState, repo: &str, op_id: u64, progress: Progress) -> Result<
     s.op(op_id, |c| pulls::pull(s, Path::new(repo), c, progress))
 }
 
-/// Cancels an op, log or find; `cancel_op`, `cancel_log` and `cancel_find` share the id space.
-pub fn cancel(s: &AppState, id: u64) {
-    s.ops.cancel(id)
-}
-
 pub fn list_changes(s: &AppState, repo: &str, from: &Side, to: &Side) -> Result<Vec<FileChange>> {
     diff::list_changes(&s.env(), Path::new(repo), from, to)
 }
@@ -216,10 +211,6 @@ pub fn file_patch(
     right: &Side,
 ) -> Result<FilePatch> {
     patch::file_patch(s, Path::new(repo), path, orig_path, left, right)
-}
-
-pub fn list_files(s: &AppState, repo: &str, rev: Option<&str>) -> Result<Vec<FileEntry>> {
-    files::list_files(&s.env(), Path::new(repo), rev)
 }
 
 pub fn read_file(s: &AppState, repo: &str, rev: Option<&str>, path: &str) -> Result<Content> {

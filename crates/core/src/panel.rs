@@ -26,7 +26,6 @@ use crate::state::AppState;
 pub struct Participant {
     pub name: String,
     pub lenses: Vec<String>,
-    pub executor: String,
     pub requested_model: String,
     pub actual_model: String,
     pub effort: String,
