@@ -136,6 +136,8 @@ jobs:
 
   sign:
     needs: plan
+    # Without it, a skipped release upstream skips this job too.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     environment: adapters
     concurrency: adapters-catalog
