@@ -7,10 +7,11 @@ use detached_core::panel::record::State;
 use detached_core::panel::run::{Over, Preview, Start};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity,
+    Window, div, prelude::FluentBuilder, px,
 };
 use kernel::doc::Doc;
 use kernel::panel::Rounds;
@@ -571,13 +572,40 @@ pub(super) fn participants(panel: &Entity<Panel>, cx: &App) -> AnyElement {
             .p(GAP)
             .bg(t.panel)
             .rounded(theme::radius::ITEM)
+            .tooltip({
+                let tip = SharedString::from(label);
+                move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
+            })
             .child(
                 div()
                     .flex()
-                    .gap(GAP)
+                    .gap(px(6.))
                     .items_center()
                     .child(ui::dot(color))
-                    .child(div().min_w_0().truncate().child(label)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(l.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(text::SMALL)
+                            .text_color(color)
+                            .child(state),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(match raised {
+                        0 => format!("{} tokens", self::tokens(tokens)),
+                        n => format!("{n} found · {} tokens", self::tokens(tokens)),
+                    }),
             )
             .children(activity.map(|a| {
                 div()

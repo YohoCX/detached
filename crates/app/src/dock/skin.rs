@@ -12,10 +12,10 @@ use gpui_kit::base::{ResizeHandleContext, ResizeHandleState, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity,
-    FontWeight, ease_out_quint,
-    InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
+    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, WeakEntity, Window, canvas, div, ease_out_quint, point, prelude::FluentBuilder, px,
+    size,
 };
 
 use super::{DocTab, DragDoc, Tab, missing};
@@ -296,7 +296,7 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
             Ok(d) => Label {
                 id: d.read(cx).id(),
                 title: d.read(cx).title(cx),
-                tip: None,
+                tip: d.read(cx).tip(cx),
                 doc: Some(d),
             },
             Err(_) => Label {

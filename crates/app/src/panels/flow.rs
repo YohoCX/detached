@@ -417,9 +417,13 @@ pub(super) fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
         .flex_col()
         .gap(GAP)
         .child(format!(
-            "{} found → {} merged → {confirmed} confirmed · {rejected} rejected",
+            "{} found → {} merged → {confirmed} confirmed{}",
             run.stages.raw.len(),
-            run.stages.merged.len()
+            run.stages.merged.len(),
+            match rejected {
+                0 => String::new(),
+                n => format!(" · {n} rejected"),
+            }
         ))
         .when(run.stages.raw.is_empty(), |d| {
             d.child(

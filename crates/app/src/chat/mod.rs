@@ -270,16 +270,20 @@ impl DocKind for ChatDocs {
         let Doc::Chat { repo, n } = doc else {
             unreachable!()
         };
-        let place = label(repo, cx);
         let chat = find(repo, *n, cx);
-        let chat = chat.as_ref().map(|s| s.read(cx));
-        match chat.and_then(|s| s.topic(cx)) {
-            Some(t) => format!("{place} · {}", first_line(t)).into(),
-            None => {
-                let name = chat.map_or(CLAUDE.name, |c| c.provider.name);
-                format!("{name} · {place}").into()
-            }
-        }
+        let topic = chat.as_ref().and_then(|s| s.read(cx).topic(cx));
+        topic.map_or("New chat".into(), |t| first_line(t).into())
+    }
+
+    fn tip(&self, doc: &Doc, cx: &App) -> Option<SharedString> {
+        let Doc::Chat { repo, n } = doc else {
+            return None;
+        };
+        let chat = find(repo, *n, cx);
+        let name = chat
+            .as_ref()
+            .map_or(CLAUDE.name, |s| s.read(cx).provider.name);
+        Some(format!("{name} · {}", label(repo, cx)).into())
     }
 
     /// While it works or waits for you.

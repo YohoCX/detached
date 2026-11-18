@@ -155,7 +155,7 @@ impl Render for List {
                         (t.success, "No critical or major findings")
                     };
                     let time = if run.started_at == 0 {
-                        "time unavailable".into()
+                        String::new()
                     } else {
                         crate::util::ago_text(run.started_at / 1000, now)
                     };

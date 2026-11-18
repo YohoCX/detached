@@ -445,12 +445,24 @@ impl RunView {
             .overflow_y_scroll()
             .gap(GAP)
             .when_some(selected, |d, f| {
-                d.child(div().flex_none().min_w_0().truncate().child(format!(
-                    "{} · {} · {}",
-                    f.severity,
-                    f.verdict.as_deref().unwrap_or("unverified"),
-                    f.title
-                )))
+                d.child(
+                    div()
+                        .flex_none()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(f.title.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(text::SMALL)
+                        .text_color(theme(cx).muted)
+                        .child(format!(
+                            "{} · {}",
+                            f.severity,
+                            f.verdict.as_deref().unwrap_or("unverified")
+                        )),
+                )
                 .child(
                     div()
                         .flex_none()
@@ -549,15 +561,13 @@ impl Render for RunView {
             {
                 self.select(f, cx);
             }
-            let duration = if run.duration_ms == 0 {
-                "duration unavailable".into()
-            } else {
+            let duration = (run.duration_ms > 0).then(|| {
                 format!(
                     "{}m {}s",
                     run.duration_ms / 60_000,
                     run.duration_ms / 1000 % 60
                 )
-            };
+            });
             let tokens = match run.tokens {
                 1_000_000.. => format!("{:.1}M", run.tokens as f64 / 1_000_000.),
                 1000.. => format!("{:.1}K", run.tokens as f64 / 1000.),
@@ -583,18 +593,34 @@ impl Render for RunView {
                         .min_w_0()
                         .overflow_hidden()
                         .gap(GAP)
-                        .child(div().flex_1().min_w_0().truncate().child(format!(
-                            "{} / {} · {} · {duration} · {tokens} tokens · {}/{} reported",
-                            run.task,
-                            run.round,
-                            if run.profile.is_empty() {
-                                "revmux"
-                            } else {
-                                &run.profile
-                            },
-                            run.participants.iter().filter(|p| !p.degraded).count(),
-                            run.participants.len()
-                        )))
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{} / {}", run.task, run.round)),
+                        )
+                        .child({
+                            let all = run.participants.len();
+                            let reported = run.participants.iter().filter(|p| !p.degraded).count();
+                            let profile = (!run.profile.is_empty()).then(|| run.profile.clone());
+                            let facts: Vec<String> =
+                                [profile, duration, Some(format!("{tokens} tokens"))]
+                                    .into_iter()
+                                    .flatten()
+                                    .chain(
+                                        (reported < all)
+                                            .then(|| format!("{reported}/{all} reported")),
+                                    )
+                                    .collect();
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(text::SMALL)
+                                .text_color(theme(cx).muted)
+                                .child(facts.join(" · "))
+                        })
                         .child(div().flex_none().child(count_badges(run.counts(), cx))),
                 )
                 .when_some(compare, |d, c| {
