@@ -1,7 +1,7 @@
 # Workspaces are the top-level context
 
-**Decided by the owner on 2026-11-18**, first as six decisions, then in his answers to the draft
-plan's nine questions.
+**Decided by the owner on 2026-11-18**: six decisions, then his answers to the draft plan's nine
+questions and to the four its first review raised.
 
 ## What was decided
 
@@ -9,25 +9,34 @@ plan's nine questions.
   belong to a workspace, not to a project. A chat is for the workspace: its agent works across the
   workspace's projects.
 - **A chat can also start inside one project**, chosen when it is made: that project is its cwd,
-  so its own `.claude/settings.json` (hooks, MCP servers, allow rules) loads under the repo's
-  trust acceptance as today, and the workspace's other projects stay attached with their roles.
+  so its own `.claude/settings.json` (hooks, allow rules) loads under the repo's trust acceptance
+  as today, and the workspace's other projects stay attached with their roles.
 - **A project can be attached to several workspaces.**
 - **A project can be attached read-only**, as a knowledge base: agents and the owner read and
   search it, Docs indexes it, and Detached keeps it fresh with fetch and pull every 15 minutes, at
   a switch to the workspace and in Fetch/Pull All. Nothing else writes to it: no switch, stash,
   worktree, Fix or commit. This is enforced for agents (permission rules, the sandbox's
   `denyWrite`), not only hidden in the UI.
+  - It ships only together with its enforcement for chats and Council, never before it.
   - Its MRs can be Council subjects: the head is fetched into `refs/detached/subjects/`; review
     yes, Fix no.
   - On native Windows, where Claude has no sandbox, Bash in such a chat is not enforced; the limit
-    is accepted and goes to docs/TECHDEBT.md.
-  - It ships only together with its enforcement for chats and Council, never before it.
+    is accepted and goes to docs/TECHDEBT.md. A trusted Council run beside a read-only project is
+    refused there.
+  - Codex chats with a read-only project run only in `read-only` and `workspace-write`, and are
+    never pinned to a read-only project.
+  - Hooks from the owner's settings and accepted repos can still write it: the owner's own code,
+    a stated limit.
+- **Third-party MCP servers are off in every Detached chat and Council run**, the user's and the
+  projects'; Detached's own server stays (the read tool, Council's report tools). Agents are
+  extended through skills with scripts. Hooks load only from the user's own settings and repos the
+  owner accepted, never from untrusted ones, as today. This changes today's chat and ships early,
+  with a release-notes line.
 - **Start clean.** Existing per-project chats and Council runs are not migrated; they stay in an
   archive, read-only. Workspaces and their folders carry over.
 - **Deleting a workspace moves its chats and runs to the archive.** The archive clears per item
   and all at once, each after a confirm. Clearing never touches a transcript Detached did not
-  start, such as the owner's own `claude` sessions in a terminal, unless the owner decides
-  otherwise (the plan's §15).
+  start, such as the owner's own `claude` sessions in a terminal.
 - **Document tabs by category**, Docs | Chats/Council | Code, as category chips with counts at the
   start of one strip, each category with its own tabs. Every Markdown file is a Doc.
 - **Open in Zed is removed everywhere**: the headers, the action and its keymap entry, the
@@ -36,7 +45,10 @@ plan's nine questions.
 ## Why
 
 The center's single strip mixed a chat tab next to a file tab, and a chat or run tied to one repo
-did not match work that spans several repos and a shared knowledge base.
+did not match work that spans several repos and a shared knowledge base. MCP servers run outside
+the sandbox and the deny rules, so read-only could not hold with them, and they cost context
+tokens on every turn; skills with scripts cover the same use under Bash's sandbox, denies and
+asks.
 
 ## Rejected
 
@@ -45,8 +57,11 @@ did not match work that spans several repos and a shared knowledge base.
 - Read-only as a UI-only state that agents could still write through.
 - One tab strip for every kind of document; and a strip per category in a fixed center split.
 - Deleting a workspace's chats and runs with it.
+- Third-party MCP servers only off beside a read-only project: they stay outside the sandbox
+  everywhere.
+- Codex's `agent` mode beside a read-only project: its auto-reviewer approves escalations unseen.
 
 ## Plan
 
 [PLAN-WORKSPACES.md](../../PLAN-WORKSPACES.md) builds this; its choices marked *Proposal* wait for
-the plan review, and its §15 lists the questions its review raised for the owner.
+the plan review.
