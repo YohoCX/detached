@@ -8,8 +8,8 @@ name: Agent
 
 on:
   push:
-    # Branches alone, so a tag push does not run it.
-    branches: ['**']
+    # Branches alone, so a tag push does not run it; win.yml runs win/**.
+    branches: ['**', '!win/**']
     paths:
       - crates/acp/**
       - crates/core/src/adapters.rs

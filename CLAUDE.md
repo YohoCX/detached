@@ -102,6 +102,8 @@ Keep this list in sync with the Makefile.
 - No sleeps for timing; wait on state with the fixtures' `settle`/`wait_until`.
 - Tests run on macOS, Windows and Linux CI. A test that can only work on Unix is `#[cfg(unix)]` and
   listed in docs/TECHDEBT.md.
+- Windows fix loop: push a `win/<name>` branch and win.yml runs Check's and Agent's Windows jobs;
+  a `WIN_TESTS` file narrows them to its lines (format in win.yml), deleted before merge.
 
 ## Parallel work (PLAN-NATIVE verticals)
 
