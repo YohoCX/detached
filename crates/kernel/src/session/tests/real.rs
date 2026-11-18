@@ -37,6 +37,17 @@ fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppCont
         .write(&f.core, StoreKind::Skills, "mine", &mine)
         .unwrap();
     for kind in [Kind::Chat, Kind::Untrusted] {
+        // Claude's sandbox does not run on native Windows: its CLI refuses rather than run open.
+        if kind == Kind::Untrusted && cfg!(windows) && wsl().is_none() {
+            let s = cx.update(|cx| Session::open(f.spec(kind), None, cx));
+            wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
+            let state = state(&s, cx);
+            assert!(
+                matches!(&state, State::Ended(End::Failed(e)) if e.contains("failIfUnavailable")),
+                "{state:?}"
+            );
+            continue;
+        }
         let s = open(&f, kind, cx);
         let names: Vec<String> = s.read_with(cx, |s, _| {
             s.commands.iter().map(|c| c.name.clone()).collect()
@@ -586,13 +597,22 @@ fn stop_task_ends_a_background_command_and_the_session_goes_on(cx: &mut TestAppC
     });
     let task = s.read_with(cx, |s, _| s.tasks[0].id.clone());
     s.read_with(cx, |s, _| s.stop_task(&task));
-    wait_for(cx, START, |cx| {
-        !running(&marker) && s.read(cx).tasks.is_empty()
-    });
+    wait_for(cx, START, |cx| s.read(cx).tasks.is_empty());
+    // On Windows the CLI ends the command's shell alone, so the command runs on until the CLI
+    // goes (docs/TECHDEBT.md).
+    let windows = cfg!(windows) && wsl().is_none();
+    if !windows {
+        wait_for(cx, START, |_| !running(&marker));
+    }
     assert_eq!(state(&s, cx), State::Idle);
     let from = s.read_with(cx, |s, _| s.items.len());
     run(&s, "again", cx);
     assert_eq!(said(&s, from, cx), "after");
+    if windows {
+        assert!(running(&marker));
+        cx.update(|_| drop(s));
+        wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
+    }
 }
 
 /// The host is this test re-run with `HOST` set, SIGKILLed mid-command; on Windows its job closes.

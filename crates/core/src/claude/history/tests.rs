@@ -194,6 +194,23 @@ fn a_worktree_s_session_is_in_its_own_folder_and_found_from_any() {
 }
 
 #[test]
+fn a_folder_s_list_takes_its_path_as_given_and_its_real_one_once() {
+    let short = r"C:\Users\RUNNER~1\AppData\Local\Temp\x\repo";
+    let real = r"C:\Users\runneradmin\AppData\Local\Temp\x\repo";
+    let dir = laid("titled", short);
+    assert!(past(dir.path(), real).is_empty());
+    let ids = |real: &str| -> Vec<String> {
+        here(dir.path(), short, real)
+            .into_iter()
+            .map(|p| p.id)
+            .collect()
+    };
+    assert_eq!(ids(real), [TITLED]);
+    // A case-blind file system opens one folder under both spellings.
+    assert_eq!(ids(&short.to_lowercase()), [TITLED]);
+}
+
+#[test]
 fn a_file_of_unknown_lines_has_no_history_and_no_list_entry() {
     let cwd = "/tmp/h4c/unknown";
     let dir = laid("titled", cwd);
