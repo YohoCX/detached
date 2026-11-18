@@ -86,12 +86,31 @@ fn wait_for(
     limit: std::time::Duration,
     done: impl Fn(&App) -> bool,
 ) {
+    wait_on(cx, limit, done, |d| *d);
+}
+
+/// `wait_for` until `done` holds of `state`, which it returns and a timeout prints.
+#[cfg(test)]
+#[track_caller]
+fn wait_on<T: std::fmt::Debug>(
+    cx: &mut gpui::TestAppContext,
+    limit: std::time::Duration,
+    state: impl Fn(&App) -> T,
+    done: impl Fn(&T) -> bool,
+) -> T {
     use std::time::{Duration, Instant};
     cx.executor().allow_parking();
     let start = Instant::now();
-    while !cx.read(&done) {
+    loop {
+        let s = cx.read(&state);
+        if done(&s) {
+            return s;
+        }
         let limit = detached_core::testutil::scaled(limit);
-        assert!(start.elapsed() < limit, "timed out after {limit:?}");
+        assert!(
+            start.elapsed() < limit,
+            "timed out after {limit:?} at {s:?}"
+        );
         let tick = cx.executor().timer(Duration::from_millis(10));
         cx.foreground_executor().block_test(tick);
     }

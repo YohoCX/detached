@@ -247,8 +247,9 @@ painting its lanes with `PathBuilder` on a canvas. Batches of 500 rows stream in
   The log has no spec today; V4 writes tests for history.md §1 and §6.5.
 - Waiting: core runs on real threads, which GPUI's deterministic test executor does not see. The
   fixtures provide `settle(cx)` and `wait_until(cx, predicate)`: they allow parking, run the
-  executor until parked and poll the predicate on real time up to 10 s. Tests wait on state through
-  these, never on sleeps.
+  executor until parked and poll the predicate on real time up to 30 s (`wait_watched`, for file
+  events, 60 s), stretched by the machine's load. Tests wait on state through these, never on
+  sleeps.
 - Pixel checks are not used; the smoke run has a screenshot artifact on macOS and Linux.
 
 **Measurements (step 0 go/no-go).** On the owner's Mac with a workspace of about 20 repos: release

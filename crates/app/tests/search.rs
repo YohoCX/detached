@@ -1,7 +1,6 @@
 mod common;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use common::*;
 use detached_app::actions::{self, Group};
@@ -556,15 +555,8 @@ fn find_open(cx: &mut VisualTestContext) -> bool {
 fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     cx: &mut TestAppContext,
 ) {
-    // Long lines dense with "alpha" keep a find for it streaming past the next query's start.
     let (mut app, _) = open_solo(cx, |sb| {
-        let alpha = "alpha ".repeat(160);
-        let data = (0..1000).map(|i| {
-            (
-                format!("data/item-{i}.txt"),
-                format!("{i} {alpha}\n").repeat(6),
-            )
-        });
+        let data = (0..20).map(|i| (format!("data/item-{i}.txt"), format!("{i} alpha\n")));
         sb.commit_files(&sb.solo(), "alpha", data);
     });
     let cx = &mut app;
@@ -582,19 +574,13 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     let glob = cx.find("find.glob").unwrap();
     assert_eq!(glob.bounds().size.height, px(28.));
 
+    // The find for "alpha" stops after its first matches until the next query cancels it.
+    let hold = &detached_core::search::find::HOLD;
+    hold.lock().unwrap().push("alpha".into());
     cx.input("alpha");
-    // Past the debounce, then the clock stays put: the stream's next batch waits for a frame.
-    cx.executor().advance_clock(Duration::from_millis(150));
-    let start = Instant::now();
-    while headers(cx).is_empty() {
-        let limit = detached_core::testutil::scaled(Duration::from_secs(30));
-        assert!(start.elapsed() < limit, "no results");
-        cx.run_until_parked();
-    }
-    // A loaded machine can let the search end before its first batch is drawn.
+    wait_until(cx, |cx| !headers(cx).is_empty());
     let line = status(cx).unwrap();
-    let done = line == "6000 matches in 1000 files";
-    assert!(line.starts_with("Searching… ") || done, "{line}");
+    assert!(line.starts_with("Searching… "), "{line}");
     let first = headers(cx).remove(0);
     let item = first
         .strip_prefix("item-")
@@ -611,6 +597,7 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     assert_eq!(hits(cx), ["beta-", "beta-"]);
     let alpha = |f: &Found| matches!(f, Found::Match { text, .. } if text.contains("alpha"));
     assert!(!found(cx).iter().any(|(_, f)| alpha(f)));
+    hold.lock().unwrap().retain(|t| t != "alpha");
 }
 
 #[gpui_kit::test]
