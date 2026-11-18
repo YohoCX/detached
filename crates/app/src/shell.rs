@@ -272,7 +272,7 @@ impl Render for Shell {
             .text_color(t.fg)
             .text_size(text::BODY)
             .line_height(relative(1.4))
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::NORMAL)
             .child(self.title_bar(cx))
             .child(div().flex().flex_1().min_h_0().child(self.dock.clone()))
             .child(

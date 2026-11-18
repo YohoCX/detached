@@ -97,7 +97,7 @@ impl MrList {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("Merge Requests"),
             )
             .child(
@@ -152,7 +152,7 @@ impl MrList {
                 .bg(t.hover)
                 .text_color(t.muted)
                 .text_size(text::LABEL)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(text)
         };
         let line = || div().flex().items_center().gap(px(6.)).min_w_0();
@@ -182,7 +182,7 @@ impl MrList {
                         div()
                             .flex_none()
                             .text_color(t.muted)
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child(num),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(title))
@@ -201,7 +201,7 @@ impl MrList {
                             .id("approvals")
                             .flex_none()
                             .text_color(t.success)
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .tooltip(move |window, cx| {
                                 Tooltip::new(approved.clone()).build(window, cx)
                             })

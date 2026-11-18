@@ -194,7 +194,7 @@ impl MrChip {
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(move |_, _, cx| show_mr(cx, repo.clone(), n))
             .child(Icon::Mr.size(px(14.)))
-            .child(div().font_weight(FontWeight::EXTRA_BOLD).child(number(m)))
+            .child(div().font_weight(FontWeight::BOLD).child(number(m)))
             .child(div().min_w_0().truncate().child(bare_title(m).to_string()))
             .into_any_element()
     }
@@ -236,7 +236,7 @@ impl MrChip {
             }))
             .child(
                 div()
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("New merge request"),
             )
             .child(

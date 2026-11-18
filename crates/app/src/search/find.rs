@@ -328,7 +328,7 @@ impl Find {
                     .h(px(24.))
                     .px(px(8.))
                     .whitespace_nowrap()
-                    .child(div().font_weight(FontWeight::BOLD).child(name))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
                     .child(
                         div()
                             .flex_1()
@@ -363,7 +363,7 @@ impl Find {
                     .role(Role::Mark)
                     .aria_label(run.to_string())
                     .text_color(t.hit)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .into_any_element(),
                 false => el.into_any_element(),
             }
@@ -473,7 +473,7 @@ impl Render for Find {
             .child(
                 div()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("Find in Files"),
             )
             .child(
@@ -529,7 +529,7 @@ impl Render for Find {
                 .h(px(30.))
                 .rounded(radius::ICON_BUTTON)
                 .font_family(mono.clone())
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .map(|b| match on {
                     true => b.bg(t.selected).text_color(t.fg).shadow(vec![ring.clone()]),
                     false => b.text_color(t.muted).hover(|s| s.bg(t.hover)),

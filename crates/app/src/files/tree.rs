@@ -307,7 +307,7 @@ impl Tree {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("Project"),
             )
             .child(

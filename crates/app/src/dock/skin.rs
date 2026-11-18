@@ -11,7 +11,8 @@ use gpui_kit::base::dock::{
 use gpui_kit::base::{ResizeHandleContext, ResizeHandleState, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity, FontWeight,
+    Animation, AnimationExt, AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity,
+    FontWeight, ease_out_quint,
     InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement,
     Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
     WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
@@ -242,6 +243,24 @@ impl DockAreaRenderer for Skin {
 }
 
 /// The grip ids the panes had before the dock.
+/// The active tab's accent bar on the tab bar's bottom line, growing out from the middle.
+fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .bottom(px(-7.))
+        .h(px(2.))
+        .rounded(px(1.))
+        .bg(color)
+        .with_animation(
+            "underline",
+            Animation::new(ui::motion::BASE).with_easing(ease_out_quint()),
+            |d, t| {
+                let inset = px(10. + 30. * (1. - t));
+                d.left(inset).right(inset).opacity(t)
+            },
+        )
+}
+
 fn grip(p: DockPlacement) -> &'static str {
     match p {
         DockPlacement::Left => "grip.repos",
@@ -355,12 +374,16 @@ impl TabGroupRenderer for Group {
                 .when_some(l.tip.clone(), |d, tip| {
                     d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 })
+                .relative()
+                .font_weight(FontWeight::MEDIUM)
                 .map(|d| match on {
-                    true => d.bg(t.selected).text_color(t.fg),
+                    true => d.bg(t.selected_inactive).text_color(t.fg),
                     false => d
                         .text_color(t.muted)
-                        .hover(|s| s.bg(t.hover).text_color(t.fg)),
+                        .hover(|s| s.bg(t.hover).text_color(t.fg))
+                        .active(|s| s.bg(t.selected_inactive)),
                 })
+                .when(on && !collapsed, |d| d.child(underline(t.accent)))
                 .on_click(move |e, window, cx| {
                     clicked.select_tab(ix, window, cx);
                     if let Some(a) = super::zones(cx) {
@@ -437,6 +460,11 @@ impl TabGroupRenderer for Group {
             .min_h_0()
             .size_full()
             .child(panel)
+            .with_animation(
+                ("panel.in", group.active_ix()),
+                Animation::new(ui::motion::FAST),
+                |d, t| d.opacity(0.3 + 0.7 * t),
+            )
             .into_any_element()
     }
 

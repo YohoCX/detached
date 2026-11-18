@@ -7,7 +7,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{glass, pressable};
+use super::{appear, glass, motion, pressable};
 
 /// `trigger`, and while there is `content`, `content` in glass 8px under it; a click outside it
 /// lands on the backdrop and calls `close`.
@@ -34,6 +34,7 @@ pub fn popup(
         .flex()
         .min_w_0()
         .when_some(content, |p, content| {
-            p.content(glass(div(), cx).py(px(8.)).child(content))
+            let content = glass(div(), cx).py(px(8.)).child(content);
+            p.content(appear("popup.in", content, -4., motion::FAST))
         })
 }

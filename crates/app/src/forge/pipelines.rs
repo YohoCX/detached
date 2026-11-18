@@ -419,7 +419,7 @@ impl Pipelines {
             .rounded(radius::PILL)
             .bg(t.input)
             .text_size(text::LABEL)
-            .font_weight(FontWeight::BOLD)
+            .font_weight(FontWeight::SEMIBOLD)
             .when(self.busy, |b| b.opacity(0.5))
             .when(!self.busy, |b| {
                 b.on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
@@ -639,7 +639,7 @@ impl Pipelines {
                     .child(status(&p.status, cx))
                     .child(
                         div()
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child(format!("#{}", p.id)),
                     )
                     .child(div().min_w_0().truncate().child(p.ref_.clone()))
@@ -775,7 +775,7 @@ impl Pipelines {
                         .test_support()
                         .aria_label(format!("{}{}", glyph(&g.status), g.name))
                         .text_color(t.muted)
-                        .font_weight(FontWeight::BOLD)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child(
                             div()
                                 .text_color(color(&g.status, cx))

@@ -298,7 +298,7 @@ impl Render for Switcher {
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(label),
             )
             .child(Icon::Down.size(px(12.)));

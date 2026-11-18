@@ -272,7 +272,7 @@ impl Changes {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("Changes"),
             )
             .children(mode)
@@ -350,7 +350,7 @@ impl Changes {
             .h(px(28.))
             .px(px(6.))
             .text_size(text::LABEL)
-            .font_weight(FontWeight::BOLD)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme(cx).muted)
             .cursor_pointer()
             .on_click(toggle)

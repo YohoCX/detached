@@ -396,7 +396,7 @@ fn style(file: bool, cx: &App) -> TextViewStyle {
             let size = [h1, h2, h3].get(level as usize - 1).copied();
             let s = StyleRefinement::default()
                 .text_size(size.unwrap_or(text::TITLE))
-                .font_weight(FontWeight::EXTRA_BOLD);
+                .font_weight(FontWeight::BOLD);
             match file && level <= 2 {
                 true => s.pb(px(6.)).border_b_1().border_color(rule),
                 false => s,

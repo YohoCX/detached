@@ -189,7 +189,7 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
                 .flex_none()
                 .whitespace_nowrap()
                 .text_size(text::TITLE)
-                .font_weight(FontWeight::EXTRA_BOLD)
+                .font_weight(FontWeight::BOLD)
                 .child(name),
         )
         .child(muted("viewer.dir", dir_name(path).to_string().into()))

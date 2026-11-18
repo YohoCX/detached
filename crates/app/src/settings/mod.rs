@@ -197,7 +197,7 @@ impl Dialog {
                     .role(Role::Tab)
                     .aria_label(title)
                     .aria_selected(on)
-                    .when(on, |r| r.font_weight(FontWeight::BOLD))
+                    .when(on, |r| r.font_weight(FontWeight::SEMIBOLD))
                     .on_click(cx.listener(move |this, _, _, cx| this.show(id, cx)))
                     .child(title),
             );
@@ -231,7 +231,7 @@ impl Render for Dialog {
             .child(
                 div()
                     .text_size(text::HEADING)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child("Settings"),
             )
             .child(

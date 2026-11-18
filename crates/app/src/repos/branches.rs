@@ -760,7 +760,7 @@ impl Popup {
                     .px(px(18.))
                     .pb(px(5.))
                     .text_size(text::LABEL)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.muted)
                     .child(*label)
                     .into_any_element();
@@ -787,7 +787,7 @@ impl Popup {
                             .min_w_0()
                             .truncate()
                             .when(current, |d| {
-                                d.text_color(t.accent).font_weight(FontWeight::EXTRA_BOLD)
+                                d.text_color(t.accent).font_weight(FontWeight::BOLD)
                             })
                             .child(ui::highlighted(b.full().to_string(), hits, cx)),
                     )
@@ -1150,7 +1150,7 @@ fn title(back: Option<AnyElement>, text: String) -> Div {
         .px(px(16.))
         .pt(px(2.))
         .pb(px(8.))
-        .font_weight(FontWeight::EXTRA_BOLD)
+        .font_weight(FontWeight::BOLD)
         .children(back)
         .child(
             div()

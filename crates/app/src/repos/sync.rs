@@ -269,7 +269,7 @@ impl Render for SyncButtons {
                 .px(px(14.))
                 .rounded(radius::PILL)
                 .border_1()
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .font_features(tnum.clone())
                 .map(|b| match kind {
                     Kind::Pull => b

@@ -439,7 +439,7 @@ impl Render for Palette {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .child(mode.title()),
             )
             .when(matches!(mode, Mode::File | Mode::Everywhere), |d| {

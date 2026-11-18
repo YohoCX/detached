@@ -147,7 +147,7 @@ impl MergeWidget {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(div().size(px(8.)).rounded_full().bg(dot))
                     .child(status),
             )
