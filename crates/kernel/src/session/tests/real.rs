@@ -37,8 +37,9 @@ fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppCont
         .write(&f.core, StoreKind::Skills, "mine", &mine)
         .unwrap();
     for kind in [Kind::Chat, Kind::Untrusted] {
-        // Claude's sandbox does not run on native Windows: its CLI refuses rather than run open.
-        if kind == Kind::Untrusted && cfg!(windows) && wsl().is_none() {
+        // This build runs no untrusted Claude on Windows: the native CLI has no sandbox, and the
+        // distro's (bubblewrap and socat) is P2's "WSL ready". The CLI refuses either way.
+        if kind == Kind::Untrusted && cfg!(windows) {
             let s = cx.update(|cx| Session::open(f.spec(kind), None, cx));
             wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
             let state = state(&s, cx);

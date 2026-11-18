@@ -285,6 +285,23 @@ fn a_killed_host_leaves_nothing() {
     });
 }
 
+/// WSL hangs up on the leash when its `wsl.exe` is killed.
+#[cfg(unix)]
+#[test]
+fn a_hang_up_on_the_leash_ends_the_session() {
+    let run = boot();
+    let (_s, id, child) = busy(&run, "spawn");
+    let me = std::process::id().to_string();
+    let out = std::process::Command::new("pgrep")
+        .args(["-P", &me, "-f", &id])
+        .output()
+        .unwrap();
+    let leash = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+    // SAFETY: a signal to the leash this test started.
+    unsafe { libc::kill(leash, libc::SIGHUP) };
+    eventually("the session ends on the hang-up", || !left(&id, child));
+}
+
 #[test]
 fn a_rule_key_does_not_hang_on_the_order_of_the_input_s_fields() {
     let input: Value =
