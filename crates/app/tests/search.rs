@@ -464,9 +464,12 @@ fn the_empty_centers_hints_open_their_palettes_and_show_their_chords(cx: &mut Te
     assert_eq!(title(cx), None, "a document over the hints takes the click");
 }
 
-/// The sandbox layout with `solo` current; returns its path.
-fn open_solo(cx: &mut TestAppContext) -> (TestApp, String) {
-    let mut app = open_app_with(cx, layout);
+/// The sandbox layout, then `seed`, with `solo` current; returns its path.
+fn open_solo(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> (TestApp, String) {
+    let mut app = open_app_with(cx, |sb| {
+        layout(sb);
+        seed(sb);
+    });
     let repo = app.sb.solo().display().to_string();
     let r = repo.clone();
     app.workspace(|w, cx| w.set_current(Some(r), cx));
@@ -553,7 +556,17 @@ fn find_open(cx: &mut VisualTestContext) -> bool {
 fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     cx: &mut TestAppContext,
 ) {
-    let (mut app, _) = open_solo(cx);
+    // Long lines dense with "alpha" keep a find for it streaming past the next query's start.
+    let (mut app, _) = open_solo(cx, |sb| {
+        let alpha = "alpha ".repeat(160);
+        let data = (0..1000).map(|i| {
+            (
+                format!("data/item-{i}.txt"),
+                format!("{i} {alpha}\n").repeat(6),
+            )
+        });
+        sb.commit_files(&sb.solo(), "alpha", data);
+    });
     let cx = &mut app;
     cx.press("secondary-shift-f");
     assert_eq!(
@@ -599,7 +612,7 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
 
 #[gpui_kit::test]
 fn find_in_files_opens_the_selected_match_at_its_line_and_keeps_the_text(cx: &mut TestAppContext) {
-    let (mut app, solo) = open_solo(cx);
+    let (mut app, solo) = open_solo(cx, |_| {});
     let cx = &mut app;
     let at = |path: &str, line| {
         Some(Doc::File(Location {
@@ -697,7 +710,7 @@ fn retype(cx: &mut VisualTestContext, text: &str) {
 
 #[gpui_kit::test]
 fn find_at_a_ref_matches_a_regex_on_the_same_lines_as_the_working_tree(cx: &mut TestAppContext) {
-    let (mut app, solo) = open_solo(cx);
+    let (mut app, solo) = open_solo(cx, |_| {});
     let cx = &mut app;
     cx.press("secondary-shift-f");
     cx.click("find.regex");
@@ -727,16 +740,13 @@ fn find_at_a_ref_matches_a_regex_on_the_same_lines_as_the_working_tree(cx: &mut 
 
 #[gpui_kit::test]
 fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext) {
-    let mut app = open_app_with(cx, |sb| {
-        layout(sb);
+    let (mut app, solo) = open_solo(cx, |sb| {
         let opts = "gamma\nGamma\ngammas\n".to_string();
         write(
             &sb.solo(),
             [("opts.txt", opts), ("big.txt", "omega\n".repeat(10_001))],
         );
     });
-    let solo = app.sb.solo().display().to_string();
-    app.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
     let cx = &mut app;
     cx.press("secondary-shift-f");
     cx.input("gamma");
@@ -823,7 +833,7 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn notices_stay_usable_over_find_in_files(cx: &mut TestAppContext) {
-    let (mut app, _) = open_solo(cx);
+    let (mut app, _) = open_solo(cx, |_| {});
     let cx = &mut app;
     cx.press("secondary-shift-f");
     let id = cx.activity(|s, cx| {

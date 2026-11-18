@@ -131,7 +131,7 @@ fn the_e2e_layout_lists_its_repos_with_their_branch_state(cx: &mut TestAppContex
     let solo = path(sb.solo());
     let branches = sb.git(&sb.repo("app"), &["branch", "--format=%(refname:short)"]);
     assert_eq!(branches, "main\nother\nspike\nwt");
-    assert_eq!(sb.git(&sb.solo(), &["ls-files"]).lines().count(), 1046);
+    assert_eq!(sb.git(&sb.solo(), &["ls-files"]).lines().count(), 46);
 
     let repos = cx.workspace(|w, _| w.repos().to_vec());
     let paths: Vec<_> = repos.iter().map(|r| &r.path).collect();

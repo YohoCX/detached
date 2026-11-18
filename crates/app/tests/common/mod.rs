@@ -217,25 +217,13 @@ pub fn layout(sb: &Sandbox) {
     let index = "export const touched = true\n";
     sb.commit_files(&lib, "touch index", [("src/index.ts", index)]);
 
-    // Long lines dense with "alpha" keep a find for it streaming past the next query's start.
     let solo = sb.solo();
     clone(&solo);
-    let alpha = "alpha ".repeat(160);
-    let data = (0..1000).map(|i| {
-        (
-            format!("data/item-{i}.txt"),
-            format!("{i} {alpha}\n").repeat(6),
-        )
-    });
     let beta = [
         ("data/beta-a.txt", "beta-42 first\n"),
         ("data/beta-b.txt", "x\nbeta-7 second\n"),
     ];
-    sb.commit_files(
-        &solo,
-        "data",
-        data.chain(beta.map(|(p, t)| (p.into(), t.into()))),
-    );
+    sb.commit_files(&solo, "data", beta);
     folders(sb, &[sb.ws(), solo]);
 }
 
