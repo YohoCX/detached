@@ -489,15 +489,16 @@ impl RunView {
                         .child(m),
                 )
             });
-        let diff = match self.diff.clone() {
-            Some(diff) => div()
-                .id("panel.diff")
-                .test_support()
+        let line = theme(cx).line;
+        let diff = self.diff.clone().map(|diff| {
+            ui::pane("panel.findings.diff", Edge::Top, 360., 120., 1400.)
                 .flex()
                 .flex_col()
-                .size_full()
                 .gap(px(6.))
-                .pl(GAP)
+                .pt(GAP)
+                .px(GAP)
+                .border_t_1()
+                .border_color(line)
                 .child(
                     div()
                         .id("panel.diff.range")
@@ -512,6 +513,8 @@ impl RunView {
                 )
                 .child(
                     div()
+                        .id("panel.diff")
+                        .test_support()
                         .relative()
                         .flex_1()
                         .min_h_0()
@@ -519,10 +522,7 @@ impl RunView {
                         .overflow_hidden()
                         .child(diff),
                 )
-                .into_any_element(),
-            None => ui::placeholder("No code location for this finding", cx).into_any_element(),
-        };
-        let line = theme(cx).line;
+        });
         div()
             .id("panel.findings")
             .test_support()
@@ -539,13 +539,15 @@ impl RunView {
                     .child(list),
             )
             .child(
-                ui::pane("panel.findings.detail", Edge::Right, 480., 260., 1200.)
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
                     .h_full()
-                    .border_r_1()
-                    .border_color(line)
-                    .child(detail),
+                    .child(div().flex_1().min_h_0().child(detail))
+                    .children(diff),
             )
-            .child(div().flex_1().min_w_0().h_full().child(diff))
             .into_any_element()
     }
 }
