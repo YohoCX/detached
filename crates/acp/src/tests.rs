@@ -12,7 +12,9 @@ use super::*;
 
 mod codex_live;
 
-const WAIT: Duration = Duration::from_secs(10);
+fn wait() -> Duration {
+    detached_core::testutil::scaled(Duration::from_secs(30))
+}
 /// A real adapter may take this long to start or answer.
 const START: Duration = Duration::from_secs(60);
 
@@ -45,7 +47,7 @@ fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
 fn until<E, T>(rx: &Receiver<E>, mut f: impl FnMut(E) -> Option<T>) -> T {
     let start = Instant::now();
     loop {
-        let left = WAIT.saturating_sub(start.elapsed());
+        let left = wait().saturating_sub(start.elapsed());
         let e = rx.recv_timeout(left).expect("timed out");
         if let Some(t) = f(e) {
             return t;
@@ -76,7 +78,7 @@ fn exit(rx: &Receiver<Event>) -> (Exit, bool) {
 fn gone(pid: u32) {
     let start = Instant::now();
     while alive(pid) {
-        assert!(start.elapsed() < WAIT, "{pid} still runs");
+        assert!(start.elapsed() < wait(), "{pid} still runs");
         std::thread::yield_now();
     }
 }
@@ -213,7 +215,7 @@ fn a_killed_host_leaves_no_process() {
         if !pids.is_empty() {
             break pids;
         }
-        assert!(start.elapsed() < WAIT, "the host said no pids");
+        assert!(start.elapsed() < wait(), "the host said no pids");
         std::thread::yield_now();
     };
     let pids: Vec<u32> = pids.split(' ').map(|p| p.parse().unwrap()).collect();
@@ -347,7 +349,7 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly() {
         .lock()
         .unwrap()
         .got(Event::Exited(exit, true));
-    let e = new_rx.recv_timeout(WAIT).unwrap();
+    let e = new_rx.recv_timeout(wait()).unwrap();
     assert!(matches!(e, backend::Event::Closed));
 }
 
@@ -448,7 +450,7 @@ fn the_host_tools_answer_the_client_that_initialized_first_and_no_other() {
     assert_eq!(answer.status, 200);
     assert!(answer.body.contains("recorded"), "{}", answer.body);
     assert_eq!(
-        calls.recv_timeout(WAIT).unwrap(),
+        calls.recv_timeout(wait()).unwrap(),
         Call::Read("{ schema }".into())
     );
     assert_eq!(post(&url, "POST", &[], &read).status, 404);

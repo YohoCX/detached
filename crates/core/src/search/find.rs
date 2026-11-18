@@ -21,7 +21,23 @@ const CAP: usize = 10_000;
 /// Longer lines (minified code) are cut, so one match can't flood the UI.
 const MAX_LINE: usize = 1000;
 
+/// Finds for these texts wait after each match until the text leaves the list or the find is
+/// cancelled, so a test sees one mid-way.
+#[cfg(any(test, feature = "testutil"))]
+pub static HOLD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(vec![]);
+
+#[cfg(any(test, feature = "testutil"))]
+fn held(text: &str, cancel: &Cancel) {
+    while HOLD.lock().unwrap().iter().any(|t| t == text) && !cancel.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(any(test, feature = "testutil")))]
+fn held(_: &str, _: &Cancel) {}
+
 struct Find<'a> {
+    text: &'a str,
     query_id: u64,
     matcher: RegexMatcher,
     cancel: &'a Cancel,
@@ -62,6 +78,7 @@ impl Find<'_> {
             text,
             ranges,
         });
+        held(self.text, self.cancel);
         true
     }
 }
@@ -107,6 +124,7 @@ pub fn find(
             .build(&q.text)
             .map_err(|e| Error::Other(e.to_string()))?;
         let find = Find {
+            text: &q.text,
             query_id,
             matcher,
             cancel,

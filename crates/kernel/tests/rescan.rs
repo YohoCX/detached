@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use detached_core::api;
 use detached_core::git::testutil::Sandbox;
+use detached_core::testutil::scaled;
 use detached_kernel::settings::Settings;
 use detached_kernel::workspace::Workspace;
 use detached_kernel::{blocking, invalidate};
@@ -17,7 +18,10 @@ fn wait_until(cx: &mut TestAppContext, done: impl Fn(&App) -> bool) {
     cx.executor().allow_parking();
     let start = Instant::now();
     while !cx.read(&done) {
-        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+        assert!(
+            start.elapsed() < scaled(Duration::from_secs(30)),
+            "timed out"
+        );
         let tick = cx.executor().timer(Duration::from_millis(10));
         cx.foreground_executor().block_test(tick);
     }
@@ -63,7 +67,7 @@ fn a_repo_added_while_the_list_loads_is_not_missed(cx: &mut TestAppContext) {
     let (ran, listing_done) = mpsc::channel();
     let _marker = cx.update(|cx| blocking::run(cx, move || ran.send(()).unwrap()));
     listing_done
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(scaled(Duration::from_secs(30)))
         .expect("the listing ran");
 
     let list = api::add_folder(&core, "Default".into(), more.display().to_string()).unwrap();

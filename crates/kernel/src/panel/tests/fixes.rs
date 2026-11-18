@@ -9,6 +9,7 @@ use super::*;
 use crate::panel::fixes::{self, Fix, Phase as FixPhase};
 use crate::resource::Interest;
 use crate::session::{Item, Session};
+use crate::wait_on;
 
 fn ids(p: &Entity<Panel>, cx: &mut TestAppContext) -> [String; 3] {
     p.read_with(cx, |p, _| [p.repo.clone(), p.task.clone(), p.run.clone()])
@@ -267,8 +268,8 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
     let subject = s.started.clone().unwrap().subject;
     let mut started = vec![];
     for (id, script) in [
-        ("f1-1", "write a.txt let x = 2;commit fix a"),
-        ("f1-2", "write b.txt c;commit fix b"),
+        ("f1-1", "wait go;write a.txt let x = 2;commit fix a"),
+        ("f1-2", "wait go;write b.txt c;commit fix b"),
     ] {
         let finding = s.found(id).unwrap().finding.clone();
         let (pv, brief) = wait(
@@ -280,14 +281,21 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
         let brief = format!("{brief}\nfake: {script}");
         started.push(cx.update(|cx| fixes::start(ids, pv, brief, "f1".into(), cx)));
     }
-    wait_for(cx, LONG, |cx| {
-        started.iter().all(|fx| fx.read(cx).session.is_some())
-    });
-    wait_for(cx, LONG, |cx| {
+    let phases = |cx: &App| {
         started
             .iter()
-            .all(|fx| matches!(fx.read(cx).phase, FixPhase::Ended(_)))
+            .map(|fx| fx.read(cx).phase.clone())
+            .collect::<Vec<_>>()
+    };
+    // Both turns wait for `go`, so the two Fixes work at once.
+    wait_on(cx, LONG, phases, |p| {
+        p.iter().all(|p| *p == FixPhase::Working)
     });
+    std::fs::write(f.dir.path().join("claude-config/go"), "").unwrap();
+    let end = |p: &FixPhase| matches!(p, FixPhase::Ended(_) | FixPhase::Failed(_));
+    let phases = wait_on(cx, LONG, phases, |p| p.iter().all(end));
+    let ended = FixPhase::Ended("Its re-check ended".into());
+    assert_eq!(phases, [ended.clone(), ended]);
     let ready = ready(&f);
     assert!(ready.contains(&format!("{run}/f1-1")) && ready.contains(&format!("{run}/f1-2")));
     let fixes = p.read_with(cx, |p, _| p.state.fixes.clone());

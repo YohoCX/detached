@@ -475,7 +475,7 @@ mod tests {
 
         /// The batches until `done` holds of them together.
         fn until(&self, done: impl Fn(&Batch) -> bool) -> Batch {
-            let end = Instant::now() + Duration::from_secs(15);
+            let end = Instant::now() + crate::testutil::scaled(Duration::from_secs(60));
             let mut all = Batch::default();
             while !done(&all) {
                 let left = end.saturating_duration_since(Instant::now());

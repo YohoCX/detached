@@ -112,11 +112,11 @@ fn the_apps_accounts_reach_the_fake_forge(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-#[should_panic(expected = "wait_until timed out after 10s")]
-fn wait_until_gives_up_after_10_s(cx: &mut TestAppContext) {
+#[should_panic(expected = "wait_until timed out after 30s")]
+fn wait_until_gives_up_after_30_s(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     wait_until(cx, |cx| {
-        cx.executor().advance_clock(Duration::from_secs(10));
+        cx.executor().advance_clock(Duration::from_secs(30));
         false
     });
 }

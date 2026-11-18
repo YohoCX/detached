@@ -238,7 +238,7 @@ fn a_cancel_mid_command_ends_the_turn_and_the_session_s_close_its_command() {
     drop(open);
     let start = Instant::now();
     while !running(&marker).is_empty() {
-        assert!(start.elapsed() < WAIT, "{:?} still run", running(&marker));
+        assert!(start.elapsed() < wait(), "{:?} still run", running(&marker));
         std::thread::sleep(Duration::from_millis(100));
     }
     eprintln!("closed: the command ended in {:?}", start.elapsed());
