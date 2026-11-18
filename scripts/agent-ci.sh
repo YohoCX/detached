@@ -6,9 +6,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo test -p detached-acp
+# Inside WSL only what its kernel can change; acp's and core's tests run on native Linux.
+if ! grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  cargo test -p detached-acp
+  cargo test -p detached-core --lib -- proc:: trust:: backend:: claude::
+fi
 cargo test -p detached-kernel --lib session::
-cargo test -p detached-core --lib -- proc:: trust:: backend:: claude::
 
 # Installs `claude` $1 and puts it first on PATH.
 cli() {

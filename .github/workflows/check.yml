@@ -4,6 +4,13 @@ name: Check
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     strategy:
@@ -11,49 +18,50 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-
+      - run: rustup toolchain install --no-self-update
       # libghostty-vt: built with Zig on Linux and Windows (crates/app/build.rs), kept across runs.
+      - run: echo "GHOSTTY_VT_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
+      # main's cache alone: a branch's would only crowd main's out of the quota.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ${{ runner.temp }}/ghostty-vt
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: runner.os != 'macOS'
         with:
           version: 0.17.1
           use-cache: false
-      - run: echo "GHOSTTY_VT_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ghostty-vt
-          key: ghostty-vt-${{ runner.os }}-${{ hashFiles('crates/app/build.rs') }}
 
-      # GPUI's windowing and Vulkan; zsh for core's login-shell tests.
+      # GPUI's windowing and Vulkan, zsh for core's login-shell tests, a virtual display and mesa's
+      # software Vulkan for the smoke run.
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
-            libzstd-dev libvulkan1 zsh
+            libzstd-dev libvulkan1 zsh xvfb mesa-vulkan-drivers
 
       - name: GNU make
         if: runner.os == 'Windows'
         run: command -v make || choco install make --no-progress -y
 
+      # The tests' sandboxes on a RAM disk; without one they run on disk.
+      - name: RAM disk
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: make ramdisk
+
       # The repo's five tests at a time are for a 10-core Mac; a runner's shells need its own core count.
       - run: echo "RUST_TEST_THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
 
       - run: make check
-
-      # Linux draws through mesa's software Vulkan on a virtual display.
-      - name: Linux display
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y xvfb mesa-vulkan-drivers
 
       - name: Smoke
         timeout-minutes: 10

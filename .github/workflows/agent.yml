@@ -8,12 +8,13 @@ name: Agent
 
 on:
   push:
+    # Branches alone, so a tag push does not run it.
+    branches: ['**']
     paths:
       - crates/acp/**
       - crates/core/src/adapters.rs
       - crates/core/src/adapters/**
       - crates/core/src/backend.rs
-      - crates/core/src/backend/**
       - crates/core/src/bin/fake_claude.rs
       - crates/core/src/claude*
       - crates/core/src/claude/**
@@ -26,8 +27,11 @@ on:
       - crates/core/src/update.rs
       - crates/core/src/update/**
       - crates/kernel/src/lib.rs
+      - crates/kernel/src/panel.rs
+      - crates/kernel/src/panel/**
       - crates/kernel/src/session.rs
       - crates/kernel/src/session/**
+      - adapters/adapters.json
       - Cargo.lock
       - scripts/agent-ci.sh
       - .github/workflows/agent.yml
@@ -55,6 +59,14 @@ on:
         type: string
         default: ''
 
+permissions:
+  contents: read
+
+# The inputs too, so agent-vet.yml's legs do not cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}-${{ inputs.cli }}-${{ inputs.latest }}
+  cancel-in-progress: true
+
 env:
   LATEST: ${{ inputs.latest && '1' || '' }}
   CLI: ${{ inputs.cli }}
@@ -74,8 +86,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: rustup toolchain install --no-self-update
+      # Per image: 22.04 and 24.04 are both Linux to rust-cache, and their C objects differ.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.os }}
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
       # The product's WSL shape: the stock distro, which mounts the runner's drives.
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         if: runner.os == 'Windows'
@@ -124,11 +141,16 @@ jobs:
             bubblewrap socat libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
             libzstd-dev libvulkan1
       - shell: wsl-bash {0}
+        env:
+          WSLENV: LATEST:CLI
         run: |
           set -eu
           mkdir -p ~/detached
           tar -C "$(wslpath '${{ github.workspace }}')" --exclude=./target -cf - . | tar -C ~/detached -xf -
-          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           export PATH=$HOME/.cargo/bin:$PATH RUST_TEST_THREADS=$(nproc)
           cd ~/detached
-          LATEST='${{ env.LATEST }}' CLI='${{ env.CLI }}' ./scripts/agent-ci.sh
+          # A release tag from before rust-toolchain.toml builds on stable.
+          [ -f rust-toolchain.toml ] || rustup default stable
+          rustup toolchain install --no-self-update
+          ./scripts/agent-ci.sh
