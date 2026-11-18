@@ -1,7 +1,7 @@
 # Workspaces are the top-level context
 
 **Decided by the owner on 2026-11-18**: six decisions, then his answers to the draft plan's nine
-questions and to the four its first review raised.
+questions and to the four each of its first two reviews raised.
 
 ## What was decided
 
@@ -27,11 +27,19 @@ questions and to the four its first review raised.
     never pinned to a read-only project.
   - Hooks from the owner's settings and accepted repos can still write it: the owner's own code,
     a stated limit.
+  - On macOS and Linux, where Claude's sandbox does not run (bubblewrap or socat missing, a
+    user-namespace limit), a chat or trusted run beside a read-only project refuses and shows the
+    fix. Settings that name `sandbox.excludedCommands` make such a chat refuse and name the file.
 - **Third-party MCP servers are off in every Detached chat and Council run**, the user's and the
   projects'; Detached's own server stays (the read tool, Council's report tools). Agents are
   extended through skills with scripts. Hooks load only from the user's own settings and repos the
   owner accepted, never from untrusted ones, as today. This changes today's chat and ships early,
-  with a release-notes line.
+  with a release-notes line. Codex runs in Detached only if it can drop the user's and the
+  project's MCP servers per session; otherwise it is off.
+- **A chat `--add-dir`s the workspace's trusted read-write projects**, so edits there work under
+  `acceptEdits` and their skills, agents and commands load as the owner accepted them; the trust
+  check covers them as it covers the cwd. Read-only and untrusted projects are files only: read
+  rules, nothing loaded.
 - **Start clean.** Existing per-project chats and Council runs are not migrated; they stay in an
   archive, read-only. Workspaces and their folders carry over.
 - **Deleting a workspace moves its chats and runs to the archive.** The archive clears per item
