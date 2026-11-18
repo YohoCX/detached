@@ -27,9 +27,11 @@ jobs:
       - run: rustup toolchain install --no-self-update
       # libghostty-vt: built with Zig on Linux and Windows (crates/app/build.rs), kept across runs.
       - run: echo "GHOSTTY_VT_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
-      # main's cache alone: a branch's would only crowd main's out of the quota.
+      # main's cache alone: a branch's would only crowd main's out of the quota. build.rs in the key,
+      # since an exact hit saves nothing and ghostty-vt's version lives there.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          key: ${{ hashFiles('crates/app/build.rs') }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-directories: ${{ runner.temp }}/ghostty-vt

@@ -21,11 +21,16 @@ on:
       - crates/core/src/env.rs
       - crates/core/src/git/testutil.rs
       - crates/core/src/os.rs
+      - crates/core/src/panel.rs
+      - crates/core/src/panel/**
       - crates/core/src/proc.rs
+      - crates/core/src/proc/**
       - crates/core/src/testutil/**
       - crates/core/src/trust.rs
       - crates/core/src/update.rs
       - crates/core/src/update/**
+      - crates/kernel/src/host.rs
+      - crates/kernel/src/host/**
       - crates/kernel/src/lib.rs
       - crates/kernel/src/panel.rs
       - crates/kernel/src/panel/**
