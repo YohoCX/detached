@@ -35,8 +35,9 @@ questions and to the four its first review raised.
 - **Start clean.** Existing per-project chats and Council runs are not migrated; they stay in an
   archive, read-only. Workspaces and their folders carry over.
 - **Deleting a workspace moves its chats and runs to the archive.** The archive clears per item
-  and all at once, each after a confirm. Clearing never touches a transcript Detached did not
-  start, such as the owner's own `claude` sessions in a terminal.
+  and all at once, each after a confirm. Clearing removes only what Detached made and can prove;
+  it never touches a transcript Detached did not start, such as the owner's own `claude` sessions
+  in a terminal, and chats and runs from before workspaces stay, read-only, without Clear.
 - **Document tabs by category**, Docs | Chats/Council | Code, as category chips with counts at the
   start of one strip, each category with its own tabs. Every Markdown file is a Doc.
 - **Open in Zed is removed everywhere**: the headers, the action and its keymap entry, the
