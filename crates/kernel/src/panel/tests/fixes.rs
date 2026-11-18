@@ -280,14 +280,17 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
         let brief = format!("{brief}\nfake: {script}");
         started.push(cx.update(|cx| fixes::start(ids, pv, brief, "f1".into(), cx)));
     }
-    wait_for(cx, LONG, |cx| {
-        started.iter().all(|fx| fx.read(cx).session.is_some())
-    });
-    wait_for(cx, LONG, |cx| {
+    let phases = |cx: &App| {
         started
             .iter()
-            .all(|fx| matches!(fx.read(cx).phase, FixPhase::Ended(_)))
+            .map(|fx| fx.read(cx).phase.clone())
+            .collect::<Vec<_>>()
+    };
+    wait_for(cx, LONG, |cx| {
+        (phases(cx).iter()).all(|p| matches!(p, FixPhase::Ended(_) | FixPhase::Failed(_)))
     });
+    let ended = FixPhase::Ended("Its re-check ended".into());
+    assert_eq!(cx.read(phases), [ended.clone(), ended]);
     let ready = ready(&f);
     assert!(ready.contains(&format!("{run}/f1-1")) && ready.contains(&format!("{run}/f1-2")));
     let fixes = p.read_with(cx, |p, _| p.state.fixes.clone());
