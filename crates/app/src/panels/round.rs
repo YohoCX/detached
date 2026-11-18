@@ -1,5 +1,6 @@
 use super::*;
 use crate::files::{Links, Markdown};
+use crate::ui::Edge;
 use detached_core::panel::record::{Disposition, State};
 use detached_core::panel::track::{self, Fate, Track};
 use detached_core::panel::{Finding, Run};
@@ -396,11 +397,8 @@ impl RunView {
         let list = div()
             .id("panel.findings.list")
             .test_support()
-            .w(theme::graph::CHART * 2.)
-            .flex_none()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
+            .size_full()
+            .pr(GAP)
             .overflow_y_scroll()
             .children(["critical", "major", "minor"].into_iter().map(|s| {
                 div()
@@ -409,7 +407,16 @@ impl RunView {
                     .min_w_0()
                     .overflow_hidden()
                     .when(run.findings.iter().any(|f| f.severity == s), |d| {
-                        d.child(div().text_color(theme(cx).muted).child(s))
+                        d.child(
+                            div()
+                                .px(GAP)
+                                .pt(GAP)
+                                .pb(px(4.))
+                                .text_size(text::LABEL)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme(cx).muted)
+                                .child(s.to_uppercase()),
+                        )
                     })
                     .children(run.findings.iter().filter(|f| f.severity == s).map(row))
             }))
@@ -438,10 +445,8 @@ impl RunView {
             .test_support()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
+            .size_full()
+            .px(GAP)
             .overflow_y_scroll()
             .gap(GAP)
             .when_some(selected, |d, f| {
@@ -483,43 +488,41 @@ impl RunView {
                         .overflow_hidden()
                         .child(m),
                 )
-            })
-            .when_some(self.diff.clone(), |d, diff| {
-                d.child(
+            });
+        let diff = match self.diff.clone() {
+            Some(diff) => div()
+                .id("panel.diff")
+                .test_support()
+                .flex()
+                .flex_col()
+                .size_full()
+                .gap(px(6.))
+                .pl(GAP)
+                .child(
                     div()
-                        .id("panel.diff")
+                        .id("panel.diff.range")
                         .test_support()
-                        .flex()
-                        .flex_col()
+                        .aria_label(range_note.clone())
                         .flex_none()
-                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(text::SMALL)
+                        .text_color(theme(cx).muted)
+                        .child(range_note),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
                         .min_w_0()
                         .overflow_hidden()
-                        .h(theme::graph::CHART * 3.)
-                        .child(
-                            div()
-                                .id("panel.diff.range")
-                                .test_support()
-                                .aria_label(range_note.clone())
-                                .flex_none()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(text::SMALL)
-                                .text_color(theme(cx).muted)
-                                .child(range_note.clone()),
-                        )
-                        .child(
-                            div()
-                                .relative()
-                                .flex_1()
-                                .min_h_0()
-                                .min_w_0()
-                                .w_full()
-                                .overflow_hidden()
-                                .child(diff),
-                        ),
+                        .child(diff),
                 )
-            });
+                .into_any_element(),
+            None => ui::placeholder("No code location for this finding", cx).into_any_element(),
+        };
+        let line = theme(cx).line;
         div()
             .id("panel.findings")
             .test_support()
@@ -528,9 +531,21 @@ impl RunView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .gap(GAP)
-            .child(list)
-            .child(detail)
+            .child(
+                ui::pane("panel.findings.list", Edge::Right, 320., 200., 700.)
+                    .h_full()
+                    .border_r_1()
+                    .border_color(line)
+                    .child(list),
+            )
+            .child(
+                ui::pane("panel.findings.detail", Edge::Right, 480., 260., 1200.)
+                    .h_full()
+                    .border_r_1()
+                    .border_color(line)
+                    .child(detail),
+            )
+            .child(div().flex_1().min_w_0().h_full().child(diff))
             .into_any_element()
     }
 }
