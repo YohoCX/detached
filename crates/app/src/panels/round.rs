@@ -710,6 +710,8 @@ impl Render for RunView {
                     .min_h_0()
                     .min_w_0()
                     .overflow_y_scroll()
+                    // The flow and timeline scroll sideways inside: each takes only its own axis.
+                    .restrict_scroll_to_axis()
                     .child(if self.mode == 0 {
                         super::flow::render(&run, cx)
                     } else {

@@ -415,6 +415,7 @@ pub(super) fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
                 .w_full()
                 .min_w_0()
                 .overflow_x_scroll()
+                .restrict_scroll_to_axis()
                 .child(
                     canvas(
                         move |bounds, window, cx| {

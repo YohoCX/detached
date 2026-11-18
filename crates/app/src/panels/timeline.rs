@@ -433,6 +433,7 @@ pub(super) fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
                 .id("panel.timeline.scroll")
                 .w_full()
                 .overflow_x_scroll()
+                .restrict_scroll_to_axis()
                 .child(
                     canvas(
                         move |bounds, window, cx| {
