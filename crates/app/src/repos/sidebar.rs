@@ -74,6 +74,8 @@ struct RepoRow {
     worktree: bool,
     worktrees: usize,
     depth: usize,
+    /// Under a folder row, so drawn a level deeper than `depth`.
+    nested: bool,
 }
 
 /// The rows per active workspace. `collapsed` holds `workspace:<name>`, folder paths and repo paths
@@ -204,6 +206,7 @@ impl<'a> Tree<'a> {
                     worktree,
                     worktrees,
                     depth,
+                    nested: !solo,
                 })
             };
             self.out.push(row(repo, false, wts.len(), depth));
@@ -309,7 +312,8 @@ impl Sidebar {
         let item = match row {
             Row::Workspace(name) => item.child(self.workspace(ix, name, cx)),
             Row::Folder { workspace, folder } => item.child(self.folder(ix, workspace, folder, cx)),
-            Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, *depth, cx)),
+            // Folders only exist under a folder row.
+            Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, depth + 1, cx)),
             Row::Repo(r) => item.child(self.repo(ix, r, cx)),
         };
         let key = key(row);
@@ -364,15 +368,25 @@ impl Sidebar {
                     .show(e.position(), window, cx);
             }
         };
-        header(ix, open, cx)
-            .test_support()
+        let t = theme(cx);
+        line(ix, 0, cx)
+            .group(ui::HOVER)
+            .hover(|s| s.bg(t.hover))
+            .role(Role::Button)
+            .aria_expanded(open)
             .aria_label(folder_name(folder).to_string())
             .aria_description(tip.clone())
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
             .on_aux_click(menu)
-            .child(Icon::Folder.size(px(12.)))
-            .child(label(folder_name(folder)))
+            .child(slot().text_color(t.muted).child(chevron(open)))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(t.muted)
+                    .child(Icon::Folder.size(px(14.))),
+            )
+            .child(name_of(folder_name(folder).to_string()).font_weight(FontWeight::MEDIUM))
             .child(
                 ui::hover_button("remove", Icon::Minus, "Remove folder", cx)
                     .test_support()
@@ -512,7 +526,7 @@ impl Sidebar {
         } else {
             FontWeight::MEDIUM
         };
-        line(ix, r.depth, cx)
+        line(ix, r.depth + r.nested as usize, cx)
             .group(ui::HOVER)
             .map(|d| match selected {
                 true => d.bg(t.selected),
