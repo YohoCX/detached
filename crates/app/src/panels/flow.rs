@@ -259,12 +259,25 @@ fn cards(run: &Run, layout: Layout, cx: &Context<round::RunView>) -> AnyElement 
                 .flex()
                 .flex_col()
                 .justify_center()
-                .px(GAP)
+                .pl(px(18.))
+                .pr(GAP)
                 .rounded(theme::radius::ITEM)
-                .bg(theme(cx).panel)
-                .border_l_2()
+                .bg(theme(cx).popup)
+                .border_1()
+                .border_color(theme(cx).line)
                 .text_size(text::SMALL)
                 .overflow_hidden();
+            // The lane or severity as a short bar inside the card, clear of its rounded corners.
+            let stripe = |color| {
+                div()
+                    .absolute()
+                    .left(px(6.))
+                    .top(px(10.))
+                    .bottom(px(10.))
+                    .w(px(3.))
+                    .rounded_full()
+                    .bg(color)
+            };
             if let Some(f) = n.finding {
                 let status = n.status.as_deref();
                 let muted =
@@ -291,11 +304,12 @@ fn cards(run: &Run, layout: Layout, cx: &Context<round::RunView>) -> AnyElement 
                 )))
                 .test_support()
                 .aria_label(format!("{} · {}", f.title, status.unwrap_or(&f.severity)))
-                .border_color(if muted {
+                .hover(|s| s.border_color(theme(cx).selected_ring))
+                .child(stripe(if muted {
                     theme(cx).muted
                 } else {
                     severity(&f.severity, cx)
-                })
+                }))
                 .text_color(if muted { theme(cx).muted } else { theme(cx).fg })
                 .child(div().w_full().truncate().child(f.title))
                 .children(n.status.map(|s| {
@@ -322,8 +336,14 @@ fn cards(run: &Run, layout: Layout, cx: &Context<round::RunView>) -> AnyElement 
                 card.id(("panel.flow.agent", i))
                     .test_support()
                     .aria_label(tip.clone())
-                    .border_color(theme(cx).lane(i as u32))
-                    .child(div().w_full().truncate().child(p.name.clone()))
+                    .child(stripe(theme(cx).lane(i as u32)))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(p.name.clone()),
+                    )
                     .child(
                         div()
                             .w_full()

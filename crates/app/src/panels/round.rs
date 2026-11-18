@@ -633,7 +633,7 @@ impl Render for RunView {
                             .min_w_0()
                             .overflow_hidden()
                             .flex_wrap()
-                            .gap(GAP)
+                            .gap(px(6.))
                             .children(run.participants.iter().enumerate().map(|(i, p)| {
                                 let label = format!(
                                     "{} · {} · {}{}{}",
@@ -657,25 +657,39 @@ impl Render for RunView {
                                         format!(" · {}", p.cause)
                                     }
                                 );
+                                let t = theme(cx);
+                                let tip = SharedString::from(label.clone());
                                 div()
                                     .id(("panel.participant", i))
                                     .test_support()
-                                    .aria_label(label.clone())
+                                    .aria_label(label)
+                                    .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
                                     .min_w_0()
                                     .max_w_full()
-                                    .overflow_hidden()
-                                    .bg(theme(cx).panel)
-                                    .rounded(theme::radius::ITEM)
-                                    .p(GAP)
+                                    .h(px(26.))
+                                    .px(px(10.))
                                     .flex()
                                     .items_center()
-                                    .gap(GAP)
-                                    .child(div().flex_none().child(ui::dot(if p.degraded {
-                                        theme(cx).warning
-                                    } else {
-                                        theme(cx).success
-                                    })))
-                                    .child(div().min_w_0().truncate().child(label))
+                                    .gap(px(6.))
+                                    .rounded(theme::radius::PILL)
+                                    .bg(t.hover)
+                                    .text_size(text::SMALL)
+                                    .child(ui::dot(if p.degraded { t.warning } else { t.success }))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(p.name.clone()),
+                                    )
+                                    .when(!p.cause.is_empty(), |d| {
+                                        d.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(t.warning)
+                                                .child(p.cause.clone()),
+                                        )
+                                    })
                             })),
                     )
                 })
