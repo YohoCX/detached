@@ -25,8 +25,8 @@ questions and to the four each of its first two reviews raised.
     refused there.
   - Codex chats with a read-only project run only in `read-only` and `workspace-write`, and are
     never pinned to a read-only project.
-  - Hooks from the owner's settings and accepted repos can still write it: the owner's own code,
-    a stated limit.
+  - Hooks from the owner's settings, accepted repos and the plugins they enable can still write
+    it: the owner's own code, a stated limit.
   - On macOS and Linux, where Claude's sandbox does not run (bubblewrap or socat missing, a
     user-namespace limit), a chat or trusted run beside a read-only project refuses and shows the
     fix. Settings that name `sandbox.excludedCommands` make such a chat refuse and name the file.
@@ -39,7 +39,8 @@ questions and to the four each of its first two reviews raised.
 - **A chat `--add-dir`s the workspace's trusted read-write projects**, so edits there work under
   `acceptEdits` and their skills, agents and commands load as the owner accepted them; the trust
   check covers them as it covers the cwd. Read-only and untrusted projects are files only: read
-  rules, nothing loaded.
+  rules, nothing loaded. A chat pinned to a project not accepted adds none, since added dirs load
+  only under the project setting source it does not get.
 - **Start clean.** Existing per-project chats and Council runs are not migrated; they stay in an
   archive, read-only. Workspaces and their folders carry over.
 - **Deleting a workspace moves its chats and runs to the archive.** The archive clears per item
