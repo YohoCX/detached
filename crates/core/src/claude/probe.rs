@@ -26,6 +26,13 @@ pub(super) fn run(core: &AppState, wsl: Option<&str>) -> Result<Probe> {
     if wsl.is_some() {
         return Err(Error::Other("The probe in WSL is not built yet".into()));
     }
+    if cfg!(windows) {
+        return Ok(Probe::Failed(
+            "Claude's sandbox does not run on native Windows: an untrusted run needs WSL, which \
+             this build does not run yet"
+                .into(),
+        ));
+    }
     let dir = tempfile::tempdir()?;
     let tree = dir.path().join("tree");
     std::fs::create_dir_all(&tree)?;

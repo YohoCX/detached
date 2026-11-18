@@ -505,6 +505,11 @@ fn a_sandbox_and_a_run_s_mcp_file_go_into_one_settings_flag_and_the_read_rules()
 #[test]
 fn the_probe_passes_only_when_its_write_is_denied_and_reaches_its_responder_whatever_the_env() {
     let mut run = boot();
+    if cfg!(windows) {
+        let probe = backend().probe(&run.sb.state, None).unwrap();
+        assert!(matches!(probe, Probe::Failed(e) if e.contains("WSL")));
+        return;
+    }
     let env = run.sb.state.env.get_mut().unwrap();
     for (k, v) in [
         ("CLAUDE_CODE_USE_BEDROCK", "1"),

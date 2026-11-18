@@ -78,6 +78,7 @@ fn wait_watched(cx: &mut gpui::TestAppContext, done: impl Fn(&App) -> bool) {
 }
 
 #[cfg(test)]
+#[track_caller]
 fn wait_for(
     cx: &mut gpui::TestAppContext,
     limit: std::time::Duration,

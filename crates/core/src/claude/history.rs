@@ -59,8 +59,9 @@ impl Place {
     pub(crate) fn past(&self, repo: &str) -> Result<Vec<Past>> {
         match self {
             Place::Here(dir) => {
-                let cwd = fs::canonicalize(repo).map_or(repo.into(), |p| p.display().to_string());
-                Ok(past(dir, cwd.trim_start_matches(r"\\?\")))
+                let real = crate::os::canonical(Path::new(repo))
+                    .map_or(repo.into(), |p| p.display().to_string());
+                Ok(here(dir, repo, &real))
             }
             Place::Wsl(d, env) => {
                 let cwd =
@@ -182,6 +183,22 @@ pub(crate) fn past(dir: &Path, cwd: &str) -> Vec<Past> {
         })
         .collect();
     all.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    all
+}
+
+/// The past sessions of the folder `repo`, real path `real`, newest first. Unix's CLI keeps them
+/// under its real path, the cwd the OS hands it; Windows' under the path as spawned, short (8.3)
+/// names and all, as `C:\Users\RUNNER~1\…` on CI.
+fn here(dir: &Path, repo: &str, real: &str) -> Vec<Past> {
+    let mut all = past(dir, real);
+    if repo != real {
+        // A case-blind file system finds one folder under both spellings.
+        let more: Vec<Past> = (past(dir, repo).into_iter())
+            .filter(|p| !all.iter().any(|a| a.id == p.id))
+            .collect();
+        all.extend(more);
+        all.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    }
     all
 }
 
