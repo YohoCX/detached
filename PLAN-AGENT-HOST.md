@@ -320,16 +320,17 @@ Node-free, from the Settings "Agents" page; built in step H3.
     environment, after adding every `adapters-*` release's entry it lacks, commits the catalog to
     main and uploads it.
     `make adapters-sign` is the manual fallback. No model credential is ever in CI.
-  - **Vetting of `claude`** (H4c) runs daily, since the CLI releases most days: the floor and the
-    latest `claude`, through Claude's backend at main and at the latest release tag, on every OS
-    of §17.
+  - **Vetting of `claude`** (H4c): the latest `claude` daily, since the CLI releases most days,
+    and the floor on Mondays and by hand
+    ([decision](docs/decisions/2026-11-18-ci-speed.md)), through Claude's backend at main and at
+    the latest release tag, on every OS of §17.
     - The release leg checks that tag out and runs its own tests and script. It is skipped while
       the tag is older than 0.6.0, the first with Claude's backend: until then vetting runs at
       main alone.
     - A failure opens an issue for the owner; nothing is published by itself. The owner decides
       whether to add that version to `blocked_cli` and pushes; CI signs.
   - **The vetted version is the floor**: the `cli` list's `min_cli`, else the manifest's. It is
-    the one `claude` every day's vetting passes on, so it is the version a message names. No
+    the one `claude` every week's vetting passes on, so it is the version a message names. No
     "last vetted" value is kept anywhere; a floor that fails is the owner's to raise.
   - **A `claude` in `blocked_cli`:** the chat warns and still runs; isolated participants refuse
     to start; the Agents page names the version, the floor and the installer's command for it.
@@ -1052,6 +1053,8 @@ PLAN-FOUNDATION §12's gate, with these changes:
     adapter; H4c ports them.
   - They run in CI on macOS, Ubuntu 22.04 and 24.04, Windows, and WSL2 inside the Windows job
     (GitHub's runner has it), from H4 on, beside the fake ACP agent and, from H4c, the fake CLI.
+    WSL2 runs the kernel's session and real tests alone; acp's and core's fake tests run on native
+    Linux ([decision](docs/decisions/2026-11-18-ci-speed.md)).
     From H4c the Windows job also runs the product's WSL shape: a Windows host, `wsl.exe`, the CLI
     in the distro, through part b's WSL place.
   - Codex runs on a placeholder API-key login; its live rows are H13a's.
@@ -1400,8 +1403,8 @@ every trust path that moved is one its backend blocks.
 - **The WSL place** (item 7): `Spec.wsl`; the spawn as `wsl.exe -d <distro> --cd <dir> -e sh -c
   <leash> leash claude …`, the manifest's names alone through `WSLENV`; the distro's own `claude`,
   checked against the floor; the reader, the list and delete through `wsl.exe` on bytes.
-- **Vetting** (item 11): `agent-vet.yml` daily at the floor and the latest `claude`, at main and,
-  from 0.6.0, at the latest release tag on its own tests; the adapter's entries as before.
+- **Vetting** (item 11): `agent-vet.yml` daily at the latest `claude`, weekly at the floor, at main
+  and, from 0.6.0, at the latest release tag on its own tests; the adapter's entries as before.
 - **Tests.** In `make check`: the seam's ten on both fakes with Claude's real replay, ACP's own six,
   and Claude's own, history on part 0's fixtures, a distro's listing, the WSL argv and `--session`
   on the fake CLI among them. `make agent-test` on macOS with `claude` 2.1.325: H4's seven on the
@@ -1572,8 +1575,8 @@ Work:
 10. **The manifest reads `backend = "direct"`.** A test-only manifest, Claude's with
     `backend = "acp"` and the adapter, then carries the fake-ACP tests and the adapter's nine. The
     nine go at the gate; the manifest stays for the fake-ACP tests.
-11. `agent-vet.yml`: daily, the floor and the latest `claude`, at main and, from 0.6.0 on, at the
-    latest release tag on that tag's own tests (§3).
+11. `agent-vet.yml`: the latest `claude` daily, the floor on Mondays and by hand, at main and, from
+    0.6.0 on, at the latest release tag on that tag's own tests (§3).
 12. docs/TECHDEBT.md: the Windows Stop row as part 0 found it; the experimental limits call moves
     from the sidecar to `core::claude`.
 13. CLAUDE.md's crate lines, its Rust rule and `make agent-login` (§16). `make agent-test` keeps

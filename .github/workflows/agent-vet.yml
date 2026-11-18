@@ -1,5 +1,6 @@
-# The vetting, run daily through agent.yml on every OS: `claude` at its floor and the latest, through
-# Claude's backend at main and, from 0.6.0 on, at the latest release tag on that tag's own tests.
+# The vetting through agent.yml on every OS: the latest `claude` daily, and its floor on Mondays and
+# by hand, through Claude's backend at main and, from 0.6.0 on, at the latest release tag on that
+# tag's own tests.
 # A scheduled failure opens an issue for the owner, who decides on blocked_cli; nothing is published
 # from here.
 name: Agent vetting
@@ -9,17 +10,25 @@ on:
     - cron: '41 4 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  # main, and the latest release tag once it has Claude's backend.
+  # main, and the latest release tag once it has Claude's backend; the CLIs to vet.
   refs:
     runs-on: ubuntu-latest
     outputs:
       legs: ${{ steps.r.outputs.legs }}
+      cli: ${{ steps.r.outputs.cli }}
     steps:
       - id: r
         env:
           REPO: ${{ github.server_url }}/${{ github.repository }}
+          EVENT: ${{ github.event_name }}
         run: |
+          cli='"latest"'
+          if [ "$EVENT" != schedule ] || [ "$(date -u +%u)" = 1 ]; then cli='"floor", "latest"'; fi
+          echo "cli=[$cli]" >> "$GITHUB_OUTPUT"
           tag=$(git ls-remote --tags --refs "$REPO" 'v*' | sed 's|.*refs/tags/||' | sort -V | tail -1)
           refs='"main"'
           if [ -n "$tag" ] && [ "$(printf '0.6.0\n%s\n' "${tag#v}" | sort -V | head -1)" = 0.6.0 ]; then
@@ -35,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         ref: ${{ fromJSON(needs.refs.outputs.legs) }}
-        cli: [floor, latest]
+        cli: ${{ fromJSON(needs.refs.outputs.cli) }}
     uses: ./.github/workflows/agent.yml
     with:
       ref: ${{ matrix.ref }}

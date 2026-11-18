@@ -7,8 +7,8 @@ TESTS = cargo test --no-run $(1) && $(if $(wildcard /Volumes/DetachedTests),TMPD
 check:
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
-# Core alone with e2e and testutil on, so no other crate is built with them.
-	cargo clippy -p detached-core --all-targets --all-features -- -D warnings
+# The product as shipped: no tests, no test-only features.
+	cargo clippy --workspace -- -D warnings
 	$(call TESTS,--workspace --no-fail-fast)
 
 # Release speed, on the real config directory.
