@@ -82,6 +82,8 @@ fn ghostty() {
                 .current_dir(src.join(format!("libghostty-vt-{VERSION}")))
                 .env("ZIG_GLOBAL_CACHE_DIR", tmp.join("zig-global"))
                 .env("ZIG_LOCAL_CACHE_DIR", tmp.join("zig-local"))
+                // Ghostty reads its version from the enclosing git repo and panics on our release tag.
+                .env("GIT_CEILING_DIRECTORIES", &src)
                 .args(["build", "--system"])
                 .arg(format!("../libghostty-vt-{VERSION}-deps"))
                 .args(["-Doptimize=ReleaseFast", "-Dcpu=baseline", "-Dstrip=true"])
