@@ -21,10 +21,13 @@ plan's nine questions.
     yes, Fix no.
   - On native Windows, where Claude has no sandbox, Bash in such a chat is not enforced; the limit
     is accepted and goes to docs/TECHDEBT.md.
+  - It ships only together with its enforcement for chats and Council, never before it.
 - **Start clean.** Existing per-project chats and Council runs are not migrated; they stay in an
   archive, read-only. Workspaces and their folders carry over.
 - **Deleting a workspace moves its chats and runs to the archive.** The archive clears per item
-  and all at once, each after a confirm.
+  and all at once, each after a confirm. Clearing never touches a transcript Detached did not
+  start, such as the owner's own `claude` sessions in a terminal, unless the owner decides
+  otherwise (the plan's §15).
 - **Document tabs by category**, Docs | Chats/Council | Code, as category chips with counts at the
   start of one strip, each category with its own tabs. Every Markdown file is a Doc.
 - **Open in Zed is removed everywhere**: the headers, the action and its keymap entry, the
@@ -46,4 +49,4 @@ did not match work that spans several repos and a shared knowledge base.
 ## Plan
 
 [PLAN-WORKSPACES.md](../../PLAN-WORKSPACES.md) builds this; its choices marked *Proposal* wait for
-the plan review.
+the plan review, and its §15 lists the questions its review raised for the owner.
