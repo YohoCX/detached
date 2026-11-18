@@ -1,5 +1,7 @@
-# The Windows fix loop: a push to win/** runs Check's and Agent's Windows jobs, or with a WIN_TESTS
-# file only its lines, `check <cargo test args>` or `agent <args of scripts/agent-ci.sh>`.
+# The Windows fix loop: a push to win/** runs Check's Windows job and Agent's native Windows job
+# (its WSL pass included), or with a WIN_TESTS file only its lines, `check <cargo test args>` or
+# `agent <args of scripts/agent-ci.sh>`. Job ids and rust-cache inputs are Check's and Agent's, so
+# a run restores main's caches; it saves none.
 name: Win
 
 on:
@@ -12,9 +14,6 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  RUST_BACKTRACE: 1
 
 jobs:
   check:
@@ -29,10 +28,8 @@ jobs:
       - run: echo "GHOSTTY_VT_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: win-check
           key: ${{ hashFiles('crates/app/build.rs') }}
-          cache-on-failure: true
-          save-if: true
+          save-if: false
           cache-directories: ${{ runner.temp }}/ghostty-vt
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
@@ -44,7 +41,7 @@ jobs:
           if [ ! -f WIN_TESTS ]; then make check; make smoke; exit; fi
           sed -n 's/^check //p' WIN_TESTS | while read -r args; do eval "cargo test $args" </dev/null; done
 
-  agent:
+  native:
     runs-on: windows-latest
     timeout-minutes: 90
     defaults:
@@ -55,9 +52,8 @@ jobs:
       - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: win-agent
-          cache-on-failure: true
-          save-if: true
+          key: windows-latest
+          save-if: false
       - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
         with:
           distribution: Ubuntu-24.04
