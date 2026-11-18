@@ -6,13 +6,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Inside WSL only what its kernel can change; acp's and core's tests run on native Linux.
-if ! grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
-  cargo test -p detached-acp
-  cargo test -p detached-core --lib -- proc:: trust:: backend:: claude::
-fi
-cargo test -p detached-kernel --lib session::
-
 # Installs `claude` $1 and puts it first on PATH.
 cli() {
   case "$(uname -s)" in
@@ -41,23 +34,38 @@ floor() {
     jq -r '.cli[]? | select(.name == "claude") | .min_cli // empty' adapters/adapters.json
   } | sort -V | tail -1
 }
-# The direct backend's real tests with `claude` $1 in the distro $WSL, reaching the fake API on the
-# distro's gateway address.
-wsl_real() {
+# `cargo test` with the rest of the arguments and `claude` $1 in the distro $WSL, reaching the fake
+# API on the distro's gateway address.
+wsl_test() {
   export MSYS_NO_PATHCONV=1
   wsl.exe -d "$WSL" -e sh -c "curl -fsSL https://claude.ai/install.sh | bash -s $1 && ~/.local/bin/claude --version"
+  shift
   host=$(wsl.exe -d "$WSL" -e sh -c "ip route show default | cut -d' ' -f3")
   echo "the gateway: $host"
   powershell -NoProfile -Command "New-NetFirewallRule -DisplayName detached-agent-wsl -Direction Inbound -LocalAddress $host -Action Allow | Out-Null"
   # A temp folder by its long name: the distro sees no 8.3 names.
   tmp=${RUNNER_TEMP:-$TMP}
   TMP=$tmp TEMP=$tmp DETACHED_AGENT_WSL=$WSL DETACHED_AGENT_WSL_HOST=$host \
-    cargo test -p detached-kernel --lib session::tests::real -- --ignored
+    cargo test "$@"
 }
 
 version=${CLI:-2.1.322}
 [ "${LATEST:-}" = 1 ] && version=latest
 [ "$version" = floor ] && version=$(floor)
+# With arguments, `claude` and only `cargo test <arguments>`, then again in $WSL.
+if [ $# -gt 0 ]; then
+  cli "$version"
+  cargo test "$@"
+  [ -z "${WSL:-}" ] || wsl_test "$version" "$@"
+  exit
+fi
+
+# Inside WSL only what its kernel can change; acp's and core's tests run on native Linux.
+if ! grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+  cargo test -p detached-acp
+  cargo test -p detached-core --lib -- proc:: trust:: backend:: claude::
+fi
+cargo test -p detached-kernel --lib session::
 cli "$version"
 real
-if [ -n "${WSL:-}" ]; then wsl_real "$version"; fi
+[ -z "${WSL:-}" ] || wsl_test "$version" -p detached-kernel --lib session::tests::real -- --ignored

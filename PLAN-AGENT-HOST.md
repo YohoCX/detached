@@ -1436,6 +1436,13 @@ match and the config options on new and load; `CLAUDE_ACP` is gone, and the fake
 `fake_acp` take Codex's shape.
 Part 0's rerun is dropped: `spikes/claude-direct` and `h4c-evidence.yml` are gone.
 
+**Status (2026-11-18): row 4 in the WSL shape is answered, and the WSL shape runs green in CI.**
+`wsl.exe -e` gives its command a pty. A killed `wsl.exe` ends the relay and hangs up on the
+session, and that SIGHUP killed the leash before it could act. The leash now takes a hang-up for
+the host gone. In CI the command was gone within 1.5 s and the CLI within 2 s of the host's kill;
+the `sh` lines suffice and no helper ships. The WSL shape runs no untrusted Claude: the
+runner's distro has no bubblewrap, so its CLI refuses, and "WSL ready" stays P2's.
+
 **Part 0. Evidence before the client**, as the spike-0b rule has it
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)). No code in `crates/`.
 - **What runs:** `spikes/claude-direct`, made portable: job objects on Windows, and no `ps`,

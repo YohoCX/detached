@@ -57,11 +57,12 @@ const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk"];
 const SERVER: &str = "detached-host";
 /// The per-session plugin's name; its skills are `detached:<name>`.
 const PLUGIN: &str = "detached";
-/// The CLI on the leash's own stdin, SIGTERM once the host is gone; a background job's stdin is
-/// /dev/null unless redirected, hence fd 3.
-const LEASH: &str = "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; while kill -0 $! 2>/dev/null; do \
-    kill -0 $PPID 2>/dev/null || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; \
-    done; wait $!";
+/// The CLI on the leash's own stdin, SIGTERM once the host is gone: its parent gone, or a hang-up,
+/// which is how WSL tells of a killed `wsl.exe`. A background job's stdin is /dev/null unless
+/// redirected, hence fd 3.
+const LEASH: &str = "trap gone=1 HUP; exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; \
+    while kill -0 $! 2>/dev/null; do [ -z \"$gone\" ] && kill -0 $PPID 2>/dev/null \
+    || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; done; wait $!";
 const WAIT: Duration = Duration::from_secs(60);
 /// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
 const PATHS: &[&str] = &[

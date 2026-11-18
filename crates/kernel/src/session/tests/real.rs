@@ -36,9 +36,18 @@ fn a_personal_skill_reaches_a_claude_session_in_a_temp_repo(cx: &mut TestAppCont
     store
         .write(&f.core, StoreKind::Skills, "mine", &mine)
         .unwrap();
+    // Under WSL the CLI's sandbox needs bubblewrap and socat in the distro; native Windows has no
+    // sandbox. Without one the CLI refuses an untrusted start. Only this test, never the product,
+    // routes an untrusted Claude through WSL yet.
+    let tools = "command -v bwrap && command -v socat";
+    let sandbox = match wsl() {
+        Some(d) => (Command::new("wsl.exe").args(["-d", &d, "-e", "sh", "-c", tools]))
+            .output()
+            .is_ok_and(|o| o.status.success()),
+        None => !cfg!(windows),
+    };
     for kind in [Kind::Chat, Kind::Untrusted] {
-        // Claude's sandbox does not run on native Windows: its CLI refuses rather than run open.
-        if kind == Kind::Untrusted && cfg!(windows) && wsl().is_none() {
+        if kind == Kind::Untrusted && !sandbox {
             let s = cx.update(|cx| Session::open(f.spec(kind), None, cx));
             wait_for(cx, START, |cx| s.read(cx).state != State::Starting);
             let state = state(&s, cx);
