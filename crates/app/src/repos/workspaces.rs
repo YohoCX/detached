@@ -12,7 +12,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{settings_call, widget};
+use super::{caret, settings_call, widget};
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::settings::Settings;
 
@@ -174,7 +174,7 @@ impl Workspaces {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .child(w.name.clone()),
             )
             .child(
@@ -259,9 +259,10 @@ impl Render for Workspaces {
             l => l,
         };
         let trigger = widget("workspaces", "Workspaces", label.clone(), cx)
+            .when(self.open.is_some(), |b| b.bg(theme(cx).selected_inactive))
             .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
             .child(div().min_w_0().truncate().child(label))
-            .child(Icon::Down.size(px(12.)));
+            .child(caret(cx));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
         let this = cx.weak_entity();
         let close = move |window: &mut Window, cx: &mut App| {

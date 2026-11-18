@@ -101,6 +101,8 @@ pub struct Tree {
     scroll: UniformListScrollHandle,
     field: Entity<Suggest>,
     sel: Option<String>,
+    /// The folder expanded last, whose rows fade in.
+    opened: Option<String>,
     /// The current repo and the ref its tree browses.
     key: Option<(String, Option<String>)>,
     files: Option<Interest<Dir>>,
@@ -140,6 +142,7 @@ impl Tree {
             scroll: UniformListScrollHandle::new(),
             field,
             sel: None,
+            opened: None,
             key: None,
             files: None,
             children: HashMap::new(),
@@ -215,7 +218,7 @@ impl Tree {
         flatten(root, &expanded, &rules, &loaded, &hidden)
     }
 
-    fn expand(&self, path: &str, on: bool, cx: &mut Context<Self>) {
+    fn expand(&mut self, path: &str, on: bool, cx: &mut Context<Self>) {
         let Some((repo, _)) = &self.key else {
             return;
         };
@@ -223,6 +226,7 @@ impl Tree {
         let mut set: HashSet<String> = ui_state::get(&key, cx).unwrap_or_default();
         if on {
             set.insert(path.into());
+            self.opened = Some(path.into());
         } else {
             set.remove(path);
         }
@@ -307,17 +311,26 @@ impl Tree {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Project"),
             )
             .child(
                 div()
                     .id("tree.ref")
                     .test_support()
+                    .flex()
                     .flex_none()
-                    .w(px(140.))
+                    .items_center()
+                    .gap(px(4.))
+                    .w(px(156.))
                     .tooltip(tip("Browse a branch, tag or commit"))
-                    .child(self.field.clone()),
+                    .child(
+                        div()
+                            .flex()
+                            .text_color(if at { t.accent } else { t.muted })
+                            .child(Icon::Branch.size(px(12.))),
+                    )
+                    .child(div().flex_1().min_w_0().child(self.field.clone())),
             )
             .when(at, |d| d.child(back))
             .child(
@@ -377,7 +390,11 @@ impl Tree {
             r.path.clone().into()
         };
         let row = r.clone();
-        ui::list_row(("tree.row", i), on, focused, cx)
+        let fresh = self.opened.as_deref().is_some_and(|o| {
+            r.parent.as_deref() == Some(o)
+                || r.path.strip_prefix(o).is_some_and(|p| p.starts_with('/'))
+        });
+        let el = ui::list_row(("tree.row", i), on, focused, cx)
             .test_support()
             .role(Role::TreeItem)
             .aria_label(name.clone())
@@ -406,6 +423,7 @@ impl Tree {
             })
             .aria_selected(on)
             .when(r.dir || r.kids, |d| d.aria_expanded(r.open))
+            .relative()
             .w_full()
             .h(px(24.))
             .gap(px(4.))
@@ -414,8 +432,18 @@ impl Tree {
             .whitespace_nowrap()
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.activate(&row, cx)))
+            .children((0..r.depth).map(|d| {
+                let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
+                guide.left(px(14. + 16. * d as f32))
+            }))
             .child(chevron)
-            .child(if r.dir { Icon::Folder } else { Icon::File }.size(px(14.)))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .text_color(t.muted)
+                    .child(if r.dir { Icon::Folder } else { Icon::File }.size(px(14.))),
+            )
             .child(
                 div()
                     .id("name")
@@ -436,8 +464,11 @@ impl Tree {
                         .tooltip(|window, cx| Tooltip::new(NOT_INDEXED).build(window, cx))
                         .child(Icon::EyeOff.size(px(12.))),
                 )
-            })
-            .into_any_element()
+            });
+        match fresh {
+            true => ui::appear(r.path.clone(), el, 2., ui::motion::FAST).into_any_element(),
+            false => el.into_any_element(),
+        }
     }
 }
 

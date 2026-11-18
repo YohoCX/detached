@@ -18,8 +18,8 @@ use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, Div, Entity, Global, InteractiveElement, PathPromptOptions, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Task, px,
+    App, AppContext, Div, Entity, Global, InteractiveElement, ParentElement, PathPromptOptions,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, div, px,
 };
 
 pub use api::*;
@@ -33,7 +33,7 @@ use crate::actions::{self, Registration};
 use crate::dock::{self, AppSpec};
 use crate::settings;
 use crate::shell::{self, TopBar};
-use crate::ui::{self, radius, theme};
+use crate::ui::{self, Icon, radius, theme};
 use branches::Intent;
 use kernel::activity::Activity;
 use kernel::blocking;
@@ -219,16 +219,26 @@ fn widget(
     label: impl Into<SharedString>,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
+    let t = theme(cx);
     ui::pressable(id)
         .test_support()
         .min_w_0()
-        .gap(px(7.))
-        .h(px(32.))
-        .px(px(10.))
+        .gap(px(6.))
+        .h(px(28.))
+        .px(px(8.))
         .rounded(radius::WIDGET)
-        .hover(|s| s.bg(theme(cx).hover))
+        .hover(|s| s.bg(t.hover))
+        .active(|s| s.bg(t.selected_inactive))
         .role(Role::Button)
         .aria_label(label)
         .aria_description(title)
         .tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+}
+
+/// A widget's muted chevron.
+fn caret(cx: &App) -> Div {
+    div()
+        .flex()
+        .text_color(theme(cx).muted)
+        .child(Icon::Down.size(px(12.)))
 }

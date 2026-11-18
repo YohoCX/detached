@@ -6,10 +6,11 @@ use std::collections::HashSet;
 use detached_core::docs::{Doc, Docs, Kind};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
-    prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, prelude::FluentBuilder, px,
 };
 use kernel::doc::Location;
 use kernel::resource::Interest;
@@ -17,7 +18,7 @@ use kernel::workspace::Workspace;
 
 use crate::actions::Registration;
 use crate::dock::{self, AppSpec};
-use crate::ui::{self, GAP, Icon, text, theme};
+use crate::ui::{self, GAP, Icon, radius, text, theme};
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     let docs = AppSpec {
@@ -67,19 +68,24 @@ impl DocsApp {
     fn doc(&self, repo: &str, d: &Doc, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let open = self.open.contains(&d.path);
-        let title = match d.kind {
-            Kind::Decision => {
-                let date = d.path.trim_start_matches("docs/decisions/").get(..10);
-                format!("{} · {}", date.unwrap_or_default(), d.title)
-            }
+        let date = d.path.trim_start_matches("docs/decisions/").get(..10);
+        let date = date.unwrap_or_default();
+        let short = d.path.strip_prefix("docs/").unwrap_or(&d.path);
+        let (lead, name) = match (d.kind, short.rsplit_once('/')) {
+            (Kind::Decision, _) => (format!("{date} · "), d.title.as_str()),
+            (_, Some((dir, file))) => (format!("{dir}/"), file),
+            (_, None) => (String::new(), short),
+        };
+        let mut label = match d.kind {
+            Kind::Decision => format!("{date} · {}", d.title),
             _ => d.path.clone(),
         };
-        let mut label = title.clone();
         if let Some(when) = &d.when {
             label += &format!(" · read when {when}");
         }
+        let stale = format!("possibly stale: {} newer commits", d.newer.len());
         if !d.newer.is_empty() {
-            label += &format!(" · possibly stale: {} newer commits", d.newer.len());
+            label += &format!(" · {stale}");
         }
         if let Some(e) = &d.error {
             label += &format!(" · {e}");
@@ -94,37 +100,79 @@ impl DocsApp {
         )
         .test_support()
         .aria_label(SharedString::from(label))
-        .py(px(4.))
+        .flex_col()
+        .items_stretch()
+        .gap(px(2.))
+        .py(px(5.))
         .cursor_pointer()
-        .when(!leaf, |r| {
-            r.child(match open {
-                true => Icon::Down.size(px(12.)).into_any_element(),
-                false => Icon::Chevron.size(px(12.)).into_any_element(),
-            })
-        })
         .child(
             div()
                 .flex()
-                .flex_col()
-                .flex_1()
+                .items_center()
                 .min_w_0()
-                .child(div().truncate().child(title))
-                .children(d.when.clone().map(|w| {
+                .child(
                     div()
-                        .text_size(text::SMALL)
+                        .flex()
+                        .flex_none()
+                        .w(px(18.))
                         .text_color(t.muted)
-                        .whitespace_normal()
-                        .child(format!("Read when {w}."))
-                }))
-                .children(
-                    d.error
-                        .clone()
-                        .map(|e| div().text_size(text::SMALL).text_color(t.error).child(e)),
-                ),
+                        .when(!leaf, |s| {
+                            s.child(if open { Icon::Down } else { Icon::Chevron }.size(px(12.)))
+                        }),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
+                        .text_color(t.muted)
+                        .child(lead),
+                )
+                .child(
+                    div()
+                        .flex_auto()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(name.to_string()),
+                )
+                .when(!d.newer.is_empty(), |r| {
+                    r.child(
+                        div()
+                            .id("stale")
+                            .flex_none()
+                            .ml(px(6.))
+                            .px(px(5.))
+                            .rounded(radius::BADGE)
+                            .border_1()
+                            .border_color(t.warning.opacity(0.5))
+                            .text_size(text::LABEL)
+                            .text_color(t.warning)
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(stale.clone()).build(window, cx)
+                            })
+                            .child("stale"),
+                    )
+                }),
         )
-        .when(!d.newer.is_empty(), |r| {
-            r.child(ui::badge("possibly stale", t.warning, cx))
-        })
+        .children(d.when.clone().map(|w| {
+            div()
+                .pl(px(18.))
+                .text_size(text::SMALL)
+                .text_color(t.muted)
+                .whitespace_normal()
+                .line_clamp(2)
+                .text_ellipsis()
+                .child(format!("Read when {w}."))
+        }))
+        .children(d.error.clone().map(|e| {
+            div()
+                .pl(px(18.))
+                .text_size(text::SMALL)
+                .text_color(t.error)
+                .child(e)
+        }))
         .on_click(cx.listener({
             let repo = repo.to_string();
             move |v, _, _, cx| match leaf {
@@ -178,11 +226,11 @@ impl DocsApp {
                     .text_color(t.muted)
                     .child(format!("{sha} {}", c.subject))
             });
-            div()
+            let body = div()
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .pl(px(30.))
+                .pl(px(28.))
                 .pb(px(6.))
                 .when(!d.newer.is_empty(), |b| {
                     b.child(
@@ -193,7 +241,8 @@ impl DocsApp {
                     )
                     .children(stale)
                 })
-                .children(sections)
+                .children(sections);
+            ui::appear(format!("docs.open.{}", d.path), body, 2., ui::motion::FAST)
         });
         div()
             .flex()
@@ -271,12 +320,20 @@ impl Render for DocsApp {
                         }
                         rows.push(
                             div()
+                                .flex()
+                                .gap(px(6.))
                                 .px(px(10.))
-                                .pt(GAP)
-                                .pb(px(2.))
-                                .text_size(text::SMALL)
+                                .pt(px(if rows.is_empty() { 6. } else { 16. }))
+                                .pb(px(4.))
+                                .text_size(text::LABEL)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(t.muted)
-                                .child(title)
+                                .child(title.to_uppercase())
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::NORMAL)
+                                        .child(of.len().to_string()),
+                                )
                                 .into_any_element(),
                         );
                         let repo = self.repo.clone().unwrap_or_default();
@@ -298,16 +355,25 @@ impl Render for DocsApp {
                     .items_center()
                     .justify_between()
                     .p(GAP)
-                    .child("Docs")
                     .child(
-                        ui::icon_button("docs.refresh", Icon::Refresh, cx)
-                            .test_support()
-                            .aria_label("Refresh docs")
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                if let Some(i) = &v.docs {
-                                    i.refresh(cx);
-                                }
-                            })),
+                        div()
+                            .text_size(text::TITLE)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Docs"),
+                    )
+                    .child(
+                        ui::titled(
+                            ui::icon_button("docs.refresh", Icon::Refresh, cx),
+                            "Refresh docs",
+                        )
+                        .h(px(24.))
+                        .min_w(px(24.))
+                        .test_support()
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            if let Some(i) = &v.docs {
+                                i.refresh(cx);
+                            }
+                        })),
                     ),
             )
             .children(message.map(|m| {

@@ -272,7 +272,7 @@ impl Changes {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Changes"),
             )
             .children(mode)
@@ -328,6 +328,7 @@ impl Changes {
         open: bool,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        let t = theme(cx);
         let count = format!("{count} {}", if count == 1 { "file" } else { "files" });
         let key = title.to_string();
         let toggle = cx.listener(move |this, _, _, cx| {
@@ -351,12 +352,13 @@ impl Changes {
             .px(px(6.))
             .text_size(text::LABEL)
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme(cx).muted)
+            .text_color(t.muted)
             .cursor_pointer()
+            .hover(|s| s.text_color(t.fg))
             .on_click(toggle)
             .child(if open { Icon::Down } else { Icon::Chevron }.size(px(12.)))
             .child(title.to_uppercase())
-            .child(count)
+            .child(div().font_weight(FontWeight::NORMAL).child(count))
             .into_any_element()
     }
 
@@ -396,7 +398,7 @@ impl Changes {
             .child(
                 div()
                     .flex_none()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .when(st == Status::Deleted, |d| {
                         d.line_through().text_color(t.muted)
                     })
@@ -407,6 +409,7 @@ impl Changes {
                 div()
                     .min_w_0()
                     .truncate()
+                    .text_size(text::SMALL)
                     .text_color(t.muted)
                     .child(dir_name(&c.path).to_string()),
             )

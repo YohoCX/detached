@@ -21,7 +21,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, transparent_black, uniform_list,
 };
 
-use super::{CheckoutTarget, State, checkout, say, sync, widget};
+use super::{CheckoutTarget, State, caret, checkout, say, sync, widget};
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
 use kernel::activity::{Activity, Level, Notice};
@@ -97,6 +97,7 @@ impl Render for Widget {
                 .collect()
         });
         let trigger = widget("branches", "Branches", label.clone(), cx)
+            .when(self.open.is_some(), |b| b.bg(t.selected_inactive))
             .map(|b| match current {
                 false => b.opacity(0.5),
                 true => b.on_click(cx.listener(|this, _, window, cx| {
@@ -117,7 +118,7 @@ impl Render for Widget {
                     .into_iter()
                     .map(|c| div().text_color(t.muted).child(c)),
             )
-            .child(Icon::Down.size(px(12.)));
+            .child(caret(cx));
         let content = self.open.as_ref().map(|o| o.1.clone().into_any_element());
         ui::popup(
             "branches",

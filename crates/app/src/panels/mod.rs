@@ -8,10 +8,11 @@ mod task;
 pub mod timeline;
 
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
-    prelude::FluentBuilder,
+    AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, prelude::FluentBuilder, px,
 };
 use kernel::doc::{DiffDoc, Doc};
 use kernel::panel::Rounds;
@@ -101,6 +102,7 @@ impl List {
 
 impl Render for List {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
         let mut rows = vec![];
         let mut error = None;
         let mut message = "Select a repository".to_string();
@@ -132,6 +134,8 @@ impl Render for List {
                             .max(),
                     )
                 });
+                let now = crate::util::now();
+                let mut shown_day = "";
                 for task in tasks {
                     let mut runs: Vec<_> = rounds.runs.iter().filter(|r| r.task == task).collect();
                     runs.sort_by(|a, b| (b.started_at, &b.round).cmp(&(a.started_at, &a.round)));
@@ -141,46 +145,75 @@ impl Render for List {
                         task: task.clone(),
                     };
                     let counts = run.counts();
-                    let color = if run.participants.iter().any(|p| p.degraded)
+                    let (color, state) = if run.participants.iter().any(|p| p.degraded)
                         || !run.warnings.is_empty()
                     {
-                        theme(cx).warning
+                        (t.warning, "Degraded: an agent failed or warned")
                     } else if counts.critical + counts.major > 0 {
-                        theme(cx).error
+                        (t.error, "Critical or major findings")
                     } else {
-                        theme(cx).success
+                        (t.success, "No critical or major findings")
                     };
-                    let now = crate::util::now();
                     let time = if run.started_at == 0 {
                         "time unavailable".into()
                     } else {
                         crate::util::ago_text(run.started_at / 1000, now)
                     };
-                    let label = format!("{task} · {} rounds · {time}", runs.len());
-                    rows.push(
-                        ui::row(SharedString::from(format!("panels.task.{task}")), false, cx)
-                            .test_support()
-                            .aria_label(label)
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(ui::dot(color))
-                            .child(div().flex_1().min_w_0().truncate().child(task))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(text::SMALL)
-                                    .text_color(theme(cx).muted)
-                                    .child(format!("{} · {time}", runs.len())),
-                            )
-                            .on_click(move |_, _, cx| {
-                                Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));
-                            })
-                            .into_any_element(),
-                    );
+                    let n = runs.len();
+                    let label = format!("{task} · {n} rounds · {time}");
+                    let count = format!("{n} round{}", if n == 1 { "" } else { "s" });
+                    let group = day(run.started_at, now);
+                    if group != shown_day {
+                        shown_day = group;
+                        rows.push(
+                            div()
+                                .px(px(10.))
+                                .pt(px(10.))
+                                .pb(px(4.))
+                                .text_size(text::LABEL)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(t.muted)
+                                .child(group.to_uppercase())
+                                .into_any_element(),
+                        );
+                    }
+                    let row = ui::row(SharedString::from(format!("panels.task.{task}")), false, cx)
+                        .test_support()
+                        .aria_label(label)
+                        .h(px(28.))
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            ui::dot(color)
+                                .id("state")
+                                .tooltip(move |window, cx| Tooltip::new(state).build(window, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(task.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(text::SMALL)
+                                .text_color(t.muted)
+                                .child(format!("{count} · {time}")),
+                        )
+                        .on_click(move |_, _, cx| {
+                            Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));
+                        });
+                    let id = format!("panels.in.{task}");
+                    rows.push(ui::appear(id, row, 2., ui::motion::FAST).into_any_element());
                 }
                 rows.extend(rounds.errors.iter().map(|e| {
                     div()
-                        .text_color(theme(cx).error)
+                        .px(px(10.))
+                        .text_size(text::SMALL)
+                        .text_color(t.error)
                         .child(e.clone())
                         .into_any_element()
                 }));
@@ -196,16 +229,26 @@ impl Render for List {
                 div()
                     .flex()
                     .items_center()
-                    .justify_between()
+                    .gap(px(6.))
                     .p(GAP)
-                    .child("Panels")
                     .child(
-                        ui::button("panels.new", "New run", cx)
+                        div()
+                            .flex_1()
+                            .text_size(text::TITLE)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Panels"),
+                    )
+                    .child(
+                        ui::primary_button("panels.new", "New run", cx)
+                            .h(px(24.))
+                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, window, cx| v.toggle_form(window, cx))),
                     )
                     .child(
                         ui::button("panels.stats", "Stats", cx)
+                            .h(px(24.))
+                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, _, cx| {
                                 if let Some(repo) = &v.repo {
@@ -214,14 +257,18 @@ impl Render for List {
                             })),
                     )
                     .child(
-                        ui::icon_button("panels.refresh", ui::Icon::Refresh, cx)
-                            .test_support()
-                            .aria_label("Refresh rounds")
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                if let Some(r) = &v.rounds {
-                                    r.refresh(cx);
-                                }
-                            })),
+                        ui::titled(
+                            ui::icon_button("panels.refresh", ui::Icon::Refresh, cx),
+                            "Refresh rounds",
+                        )
+                        .h(px(24.))
+                        .min_w(px(24.))
+                        .test_support()
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            if let Some(r) = &v.rounds {
+                                r.refresh(cx);
+                            }
+                        })),
                     ),
             )
             .when_some(error, |d, e| {
@@ -230,7 +277,9 @@ impl Render for List {
                         .id("panels.stale")
                         .test_support()
                         .aria_label(e.clone())
-                        .text_color(theme(cx).error)
+                        .px(GAP)
+                        .text_size(text::SMALL)
+                        .text_color(t.error)
                         .child(e),
                 )
             })
@@ -241,9 +290,27 @@ impl Render for List {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .when(rows.is_empty(), |d| d.child(message))
+                    .px(px(4.))
+                    .pb(px(6.))
+                    .when(rows.is_empty(), |d| {
+                        d.child(div().px(px(6.)).text_color(t.muted).child(message))
+                    })
                     .children(rows),
             )
+    }
+}
+
+/// "Today", "Yesterday" or "Earlier" for a run started at `ms`, in local time.
+fn day(ms: i64, now: i64) -> &'static str {
+    let date = |t: i64| {
+        let tm = detached_core::os::local(t);
+        (tm.tm_year, tm.tm_yday)
+    };
+    match ms / 1000 {
+        0 => "Earlier",
+        t if date(t) == date(now) => "Today",
+        t if date(t) == date(now - 86_400) => "Yesterday",
+        _ => "Earlier",
     }
 }
 

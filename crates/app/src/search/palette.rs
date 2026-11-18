@@ -351,8 +351,15 @@ impl Palette {
         let name = |s: &str, hits: &[usize]| {
             div()
                 .whitespace_nowrap()
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(FontWeight::MEDIUM)
                 .child(ui::highlighted(s.to_string(), hits, cx))
+        };
+        let icon = |i: Icon| {
+            div()
+                .flex()
+                .flex_none()
+                .text_color(t.muted)
+                .child(i.size(px(14.)))
         };
         let small = div().flex_none().text_size(text::SMALL).text_color(t.muted);
         let base = div()
@@ -379,7 +386,7 @@ impl Palette {
         let row = match &row.item {
             Item::File(_) => {
                 let [(file, file_hits), (dir, dir_hits)] = split(&label, &row.indices);
-                base.child(Icon::Tree.size(px(14.)))
+                base.child(icon(Icon::Tree))
                     .child(name(file, &file_hits).flex_none())
                     .child(
                         div()
@@ -393,7 +400,7 @@ impl Palette {
                     .child(small.child(detail))
             }
             Item::Branch { .. } => base
-                .child(Icon::Branch.size(px(14.)))
+                .child(icon(Icon::Branch))
                 .child(name(&label, &row.indices).flex_1().min_w_0().truncate())
                 .child(small.child(detail)),
             Item::Action(..) => base
@@ -405,7 +412,9 @@ impl Palette {
                         .truncate()
                         .when(off, |d| d.text_color(t.muted)),
                 )
-                .child(small.font_family(ui::theme::mono(cx)).child(detail)),
+                .when(!detail.is_empty(), |r| {
+                    r.child(ui::kbd(detail, cx).text_color(t.muted))
+                }),
         };
         ui::disabled(row, off).test_support()
     }
@@ -439,7 +448,7 @@ impl Render for Palette {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(mode.title()),
             )
             .when(matches!(mode, Mode::File | Mode::Everywhere), |d| {
@@ -482,10 +491,14 @@ impl Render for Palette {
             .id("palette.empty")
             .test_support()
             .aria_label(empty)
+            .flex()
+            .items_center()
+            .gap(px(8.))
             .px(px(18.))
             .pt(px(14.))
             .pb(px(22.))
             .text_color(t.muted)
+            .child(Icon::Search.size(px(14.)))
             .child(empty);
         let dialog = div()
             .id("palette")

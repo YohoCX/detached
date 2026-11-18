@@ -255,7 +255,7 @@ impl Render for Markdown {
             .markdown_block_renderer("mermaid", move |node, _, cx| diagram(&this, node, cx));
         let root = div().id("markdown").test_support();
         if !file {
-            return root.child(view.text_size(text::BODY)).into_any_element();
+            return root.child(view.text_size(doc::BODY)).into_any_element();
         }
         // The column is centered by padding, so the scrollbar stays at the edge.
         let list = self.state.read(cx).list_state().clone();

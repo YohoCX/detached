@@ -5,8 +5,8 @@ mod palette;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Global, IntoElement, ParentElement, Render, Role,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    AnyView, App, AppContext, Context, Global, InteractiveElement, IntoElement, ParentElement,
+    Render, Role, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::actions::{self, Registration};
@@ -94,12 +94,14 @@ impl Render for Pill {
             .aria_description(chord.clone())
             .gap(px(8.))
             .w(px(240.))
-            .h(px(30.))
+            .h(px(28.))
             .pl(px(12.))
             .pr(px(10.))
             .rounded(radius::PILL)
             .bg(t.hover)
             .text_color(t.muted)
+            .hover(|s| s.bg(t.selected_inactive).text_color(t.fg))
+            .active(|s| s.opacity(0.75))
             .on_click(|_, window, cx| actions::dispatch(window, cx, "search.everywhere"))
             .child(Icon::Search.size(px(14.)))
             .child(div().flex_1().child("Search everywhere"))

@@ -191,6 +191,7 @@ impl Shell {
                     .children(self.center.iter().cloned())
                     .child(div().flex_1())
                     .children(self.right.iter().cloned())
+                    .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(t.line))
                     .child(run(
                         "top.chat",
                         Icon::Chat,
@@ -247,11 +248,12 @@ fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
         .aria_label(tip.clone())
         .aria_toggled(on.into())
         .map(|b| match on {
-            true => b.bg(t.selected).text_color(t.fg),
+            true => b.bg(t.selected_inactive).text_color(t.fg),
             false => b
                 .text_color(t.muted)
                 .hover(|s| s.bg(t.hover).text_color(t.fg)),
         })
+        .active(|s| s.opacity(0.75))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .on_click(move |_, window, cx| click(window, cx))
         .child(icon)

@@ -46,13 +46,13 @@ impl Render for StatusBar {
         let left = match &a.message {
             Some(m) => {
                 let full = m.text.clone();
-                div()
+                let message = div()
                     .id("status.message")
                     .test_support()
                     .min_w_0()
                     .max_w(relative(0.5))
                     .truncate()
-                    .when(m.error, |d| d.text_color(t.error))
+                    .text_color(if m.error { t.error } else { t.fg })
                     .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
                     .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation()
@@ -60,8 +60,8 @@ impl Render for StatusBar {
                     .on_click(|_, _, cx| {
                         Activity::global(cx).update(cx, |a, cx| a.clear_message(cx))
                     })
-                    .child(m.text.clone())
-                    .into_any_element()
+                    .child(m.text.clone());
+                ui::appear(m.text.clone(), message, 3., ui::motion::BASE).into_any_element()
             }
             None => w.current().map_or(div().into_any_element(), |repo| {
                 let st = Repo::get(cx, repo).and_then(Repo::status);
@@ -95,7 +95,7 @@ impl Render for StatusBar {
                     .child(
                         div()
                             .flex_none()
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(FontWeight::MEDIUM)
                             .child(name),
                     )
                     .children(branch.map(|b| {
@@ -116,13 +116,14 @@ impl Render for StatusBar {
         };
         let ops = a.ops.iter().map(|op| {
             let (id, line) = (op.id, op.line.clone());
-            div()
+            let row = div()
                 .id(("op", id as usize))
                 .flex()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(6.))
                 .min_w_0()
                 .max_w(px(320.))
+                .text_color(t.fg)
                 .when(!line.is_empty(), |d| {
                     d.tooltip(move |window, cx| Tooltip::new(line.clone()).build(window, cx))
                 })
@@ -130,12 +131,18 @@ impl Render for StatusBar {
                 .child(
                     div()
                         .flex_none()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(FontWeight::MEDIUM)
                         .child(op.label.clone()),
                 )
                 .child(div().flex_none().child(w.name_of(&op.repo).to_string()))
                 .when(!op.line.is_empty(), |d| {
-                    d.child(div().min_w_0().truncate().child(op.line.clone()))
+                    d.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(t.muted)
+                            .child(op.line.clone()),
+                    )
                 })
                 .child(
                     ui::icon_button(("op.cancel", id as usize), Icon::Close.size(px(10.)), cx)
@@ -145,7 +152,8 @@ impl Render for StatusBar {
                         .px(px(3.))
                         .tooltip(|window, cx| Tooltip::new("Cancel").build(window, cx))
                         .on_click(move |_, _, cx| Activity::cancel_op(id, cx)),
-                )
+                );
+            ui::appear(("op.in", id as usize), row, 3., ui::motion::BASE)
         });
         let events = (!a.log.is_empty()).then(|| {
             let unread = a.unread;
