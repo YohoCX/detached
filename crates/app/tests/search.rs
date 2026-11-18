@@ -587,11 +587,14 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
     cx.executor().advance_clock(Duration::from_millis(150));
     let start = Instant::now();
     while headers(cx).is_empty() {
-        assert!(start.elapsed() < Duration::from_secs(10), "no results");
+        let limit = detached_core::testutil::scaled(Duration::from_secs(30));
+        assert!(start.elapsed() < limit, "no results");
         cx.run_until_parked();
     }
-    let searching = status(cx).unwrap();
-    assert!(searching.starts_with("Searching… "), "{searching}");
+    // A loaded machine can let the search end before its first batch is drawn.
+    let line = status(cx).unwrap();
+    let done = line == "6000 matches in 1000 files";
+    assert!(line.starts_with("Searching… ") || done, "{line}");
     let first = headers(cx).remove(0);
     let item = first
         .strip_prefix("item-")

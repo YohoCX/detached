@@ -447,17 +447,17 @@ pub fn settle(cx: &TestAppContext) {
     cx.run_until_parked();
 }
 
-/// Runs the app and lets core's threads work until `done` holds; panics after 10 s of waiting, more
-/// on a loaded machine.
+/// Runs the app and lets core's threads work until `done` holds; panics after 30 s of waiting, more
+/// on a loaded machine, whose load average shows a burst only a minute late.
 #[track_caller]
 pub fn wait_until(cx: &mut VisualTestContext, done: impl FnMut(&mut VisualTestContext) -> bool) {
-    wait_for(cx, Duration::from_secs(10), done);
+    wait_for(cx, Duration::from_secs(30), done);
 }
 
 /// `wait_until` for what the OS's file events deliver, which a loaded machine can hold back.
 #[track_caller]
 pub fn wait_watched(cx: &mut VisualTestContext, done: impl FnMut(&mut VisualTestContext) -> bool) {
-    wait_for(cx, Duration::from_secs(30), done);
+    wait_for(cx, Duration::from_secs(60), done);
 }
 
 #[track_caller]

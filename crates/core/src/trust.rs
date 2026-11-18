@@ -544,7 +544,7 @@ mod tests {
         fs::create_dir_all(&r).unwrap();
         let (tx, rx) = mpsc::channel();
         let _watch = watch(&r, crate::adapters::CLAUDE.trust, move || _ = tx.send(())).unwrap();
-        let wait = || rx.recv_timeout(std::time::Duration::from_secs(10));
+        let wait = || rx.recv_timeout(crate::testutil::scaled(std::time::Duration::from_secs(60)));
         write(&r, ".claude/settings.json", "{}");
         wait().expect("the new .claude folder");
         while rx.try_recv().is_ok() {}

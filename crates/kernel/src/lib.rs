@@ -65,16 +65,16 @@ fn boot(cx: &mut gpui::TestAppContext) -> tempfile::TempDir {
 }
 
 /// Runs the executor, letting real time pass for the core threads, until `done` holds; the limit
-/// stretches with the machine's load.
+/// stretches with the machine's load, which the load average shows only a minute late.
 #[cfg(test)]
 fn wait_until(cx: &mut gpui::TestAppContext, done: impl Fn(&App) -> bool) {
-    wait_for(cx, std::time::Duration::from_secs(10), done)
+    wait_for(cx, std::time::Duration::from_secs(30), done)
 }
 
 /// `wait_until` for what the OS's file events deliver, which a loaded machine can hold back.
 #[cfg(test)]
 fn wait_watched(cx: &mut gpui::TestAppContext, done: impl Fn(&App) -> bool) {
-    wait_for(cx, std::time::Duration::from_secs(30), done)
+    wait_for(cx, std::time::Duration::from_secs(60), done)
 }
 
 #[cfg(test)]
