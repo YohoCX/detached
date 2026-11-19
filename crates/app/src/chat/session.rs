@@ -259,14 +259,15 @@ impl Chat {
     }
 
     /// The feed: each session's items by session and index, a resume's history left out but its
-    /// notes.
+    /// notes, blank text left out.
     pub fn feed<'a>(&'a self, cx: &'a App) -> Vec<((usize, usize), &'a Item)> {
         let mut out = vec![];
         for (k, s) in self.sessions.iter().enumerate() {
             let s = s.read(cx);
-            let shown = s.items.iter().enumerate();
-            let shown =
-                shown.filter(|(i, it)| k == 0 || *i >= s.history || matches!(it, Item::Note(_)));
+            let shown = s.items.iter().enumerate().filter(|(i, it)| {
+                (k == 0 || *i >= s.history || matches!(it, Item::Note(_)))
+                    && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
+            });
             out.extend(shown.map(|(i, it)| ((k, i), it)));
         }
         out
