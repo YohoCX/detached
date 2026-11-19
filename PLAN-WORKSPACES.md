@@ -70,8 +70,11 @@ flattened map of unknown fields, so a later build's fields survive this one's sa
   and read-write in another.
 - **Identity is `id`**, 8 random hex, made once. Chats, runs, tabs, trust marks and ui_state keys
   name the id; the name is a unique label. `data/workspaces/<id>/name` keeps it for the archive.
-- **Rename** changes the name alone. **Delete** removes the settings entry and nothing else: its
-  folder stays, so its chats and runs show in the archive (§7). Its projects are not touched.
+- **Rename** changes the name alone. **Delete** is refused while something of it runs: a chat's
+  turn, a Council run, or a docked terminal tab; the message names them. Otherwise, after a
+  confirm, it closes the workspace's tabs (their `removed` hooks end idle chats' sessions), drops
+  `tabs.<id>` and the settings entry. Its folder stays, so its chats and runs show in the archive
+  (§7). Its projects and their processes are not touched.
 - **A project in no workspace** is not listed, as today; the archive keeps its old items (§7).
 - Core: `list_repos(ws)`; `RepoInfo.read_only`; `set_read_only(ws, path, on)`; the folder calls
   take the id.
@@ -119,9 +122,11 @@ becomes a switcher.
 
 ### 4.1 Where it runs
 
-- **A workspace chat** runs in `data/workspaces/<id>/chat/`, a folder Detached makes and keeps
-  empty (*Proposal*). Why: the CLI keeps transcripts by cwd, so one folder per workspace lists its
-  chats; no project is primary; a rename moves nothing.
+- **A workspace chat** runs in a folder of its own, `data/workspaces/<id>/chats/<chat>/`, `<chat>`
+  an id Detached makes at creation (*Proposal*). Detached makes it empty then and never empties
+  it: it is that chat's scratch, kept with it and removed with its delete; the instructions say
+  so. Why: the CLI keeps transcripts by cwd, so the workspace's chats are its folders' transcripts;
+  no project is primary; a rename moves nothing; no chat touches another's files.
 - **A chat in one project** runs in that project. Chosen at creation from New chat's menu ("In
   the workspace", the default, or a project) or a project row's New chat here; `agent.chat` starts
   one in the current repo, as its KEYMAP line says, and `agent.chatWorkspace` a workspace one. The
@@ -135,11 +140,10 @@ becomes a switcher.
   | in an accepted project | `user,project,local` | the trusted read-write projects |
   | in a project not accepted | `user` | none: every other project is files only, and the banner says why |
 
-  The workspace folder is Detached's, not a place to keep files: Detached empties it at every
-  open and resume, so nothing an agent left there (a `CLAUDE.md`, a `.claude/settings.json`) loads
-  into a later session. A trust file appearing there mid-session ends the session at the turn's
-  end; the next message resumes in the emptied folder. The plugin copy's "the CLI reads it itself"
-  follows the same sources.
+  A chat's own folder is a tree like a project's, accepted while it holds no trust file. One
+  appearing there is a trust change: the session ends at the turn's end and resumes as a chat in
+  a project not accepted (the table's last row) until the owner accepts it with Trust… or removes
+  the file. The plugin copy's "the CLI reads it itself" follows the same sources.
 - Either way the tab's title names the place, and the Chats app lists both kinds together.
 
 ### 4.2 The projects given to the agent
@@ -181,7 +185,7 @@ becomes a switcher.
 - The host's index (`sessions.json`) gains `workspace`, `cwd` and `started`, which only the open of
   a new session Detached made sets (W5 on); a resume or the archive flag never sets it. Its entry
   gains a flattened map of unknown fields, as `Workspace` does.
-- A workspace's chats are the transcripts of its own folder and the index's entries with this
+- A workspace's chats are the transcripts of its chats' folders and the index's entries with this
   workspace. Other transcripts of a project's CLI folder are the archive's (§7).
 - Resume passes the same `Spec`; delete and the archive flag are as now. Codex: `session/list`
   narrowed to the host's index.
@@ -198,8 +202,9 @@ included:
   read-only project and its git common dir. A deny wins in every mode (W0 row 2).
 - **Claude's Bash: the fence**, on macOS and Linux. `Spec` gains `fence: Option<Fence { write,
   deny }>` beside `sandbox`, which keeps its meaning for the probe and participants; a spec has one
-  or neither. The backend turns a fence into Claude's sandbox, `allowUnsandboxedCommands: false`
-  and `autoAllowBashIfSandboxed` left off, so Bash asks as its mode says (W0 row 3).
+  or neither. The backend turns a fence into Claude's sandbox, with `failIfUnavailable: true` (host
+  §5's backstop when a cached probe pass is wrong), `allowUnsandboxedCommands: false` and
+  `autoAllowBashIfSandboxed` left off, so Bash asks as its mode says (W0 row 3).
   `allowWrite`: the home, the temp dirs, and each read-write project with its git common dir;
   `denyWrite`: each read-only project and its git common dir.
 - **The fence needs the probe's pass**, since without it an ordinary `git switch` an allow rule
@@ -267,8 +272,11 @@ Every Detached session, chat and Council alike:
   commits from their linked worktrees work (W0 row 3). Codex participants give way to Claude, as
   above. The run is refused where the fence cannot run (native Windows, a failed probe), and when
   settings its participants load name `sandbox.excludedCommands`, naming the file.
-- `Doc::Panel`, `PanelTask` and `PanelStats` take `workspace` in place of `repo`; stats read the
-  workspace's runs.
+- `Doc::Panel` and `PanelTask` take a `place` in place of `repo`: `Place::Workspace(id)` for a
+  run recorded under the workspace, `Place::Repo(path)` for what lives in a repo, a revmux import
+  or a run from before workspaces, opened from the archive. The place joins the tab's id and
+  `same()`, so two projects' `review/01` stay two tabs. `PanelStats` takes `workspace` and reads
+  its runs.
 
 ## 6. Processes and worktrees
 
@@ -334,7 +342,8 @@ the same in every workspace. Nothing is moved or copied.
   unchanged, and a tab dragged to one leaves its category.
 - Each category has its own tabs, active tab and preview tab: a file from the tree replaces the
   code preview, a plan from Docs the docs preview. `show_doc` opens a doc in its category and
-  brings the category forward.
+  brings the category forward. It looks only at the current workspace's tabs, for a match and for
+  a preview to reuse, so a file of a project two workspaces share gets a tab in each.
 - The center shows the current workspace's tabs; a switch hides the others' and shows its own.
 - ui_state: `dock.layout` keeps every tab, as today; `tabs.<workspace id>` keeps the category shown
   and each category's selected tab.
@@ -487,7 +496,9 @@ tabs and shows the other's; an old `dock.layout`'s center loads into the current
 registered kind has a category; a switch of category keeps a file's scroll position; a docked
 terminal survives a category switch and a workspace switch and back: the same shell runs, its
 exit still closes its tab, and the interceptor still passes the tab chords; no switch calls a
-tab's `removed` hook.
+tab's `removed` hook; a file of a project in two workspaces, opened in each, gets a tab in each and
+neither takes the other's preview; a workspace's delete is refused while its docked terminal is
+open, and otherwise closes its tabs, which a restart does not bring back.
 
 Done when the owner's `align-2-0` chat and `biome.json` no longer share a strip.
 
@@ -498,15 +509,17 @@ with `data/archive.json`.
 
 Tests, on `fake_claude`: each row of §4.1's sources table, its sources and `--add-dir`s (a
 workspace chat `user,project` with one per trusted read-write project in attachment order, read
-rules per other project, and the instructions; a chat in a project not accepted adds none); a
-trust file appearing in the workspace folder ends the session at the turn's end, and the resume
-finds the folder emptied, a `CLAUDE.md` left there included; a resume keeps
+rules per other project, and the instructions; a chat in a project not accepted adds none); two
+workspace chats get two folders, a file one writes survives the other's creation and its own
+resume, and a chat's delete removes its folder alone; a trust file appearing in a chat's folder
+ends the session at the turn's end and resumes it as a project not accepted; a resume keeps
 the place and the flags; a trust file of an added project changed between turns ends the session unsent, changed
 mid-turn is blocked and ends it at the turn's end, and the next message resumes with that project
 as read rules only until accepted; Pull All landing a new skill in an added project does the same;
 an untrusted project's skills, agents and commands never reach the CLI;
 snapshots of the session's read-write projects alone; the read scope is the chat's workspace; an
-archived chat opens without a composer; a deleted workspace's chats show in the archive; Clear and
+archived chat opens without a composer; a workspace's delete is refused while a chat's turn runs;
+a deleted workspace's chats show in the archive; Clear and
 Clear all remove only `started` chats after their confirms; an archived or resumed terminal
 session and a v0.5.0 chat are listed and never cleared; an index entry's unknown field survives
 a write. The Skills page lists a clashing added skill as `/<folder>:<skill>`.
@@ -521,7 +534,9 @@ Needs W3; after the Council rename. Work: §5 but its read-only rules; §7 for r
 Tests: records under the workspace; a run of a project in two workspaces lists in its own alone;
 marks rewritten to ids by `panel::marks` and a repo trusted by its workspace's mark still trusted;
 an old run opens read-only and a kept finder branch still merges; a deleted workspace's runs in
-the archive, cleared after a confirm; an old run has no Clear.
+the archive, cleared after a confirm; an old run has no Clear; an import and an old run open by
+`Place::Repo`, and two projects' `review/01` open two tabs; a workspace's delete is refused while
+a run runs.
 
 Done when the owner runs a review from a workspace and finds his old runs in the archive.
 
@@ -536,13 +551,13 @@ Tests: core: each write refused in a read-only attachment, the store's write, Sh
 default among them, and allowed where the same repo is read-write; the ff-only pull skips a dirty
 and a diverged tree. Kernel: keep-fresh runs at a
 switch and every 15 minutes on GPUI's clock against a local remote. On `fake_claude`: the denies
-per read-only project, the pinned cwd included; the fence's write and deny lists; a spec never
+per read-only project, the pinned cwd included; the fence's write and deny lists and
+`failIfUnavailable`; a spec never
 carries a fence and a sandbox; the chat refused on a failed probe and on `excludedCommands`; only
 `default` and `plan` on Windows. The probe and untrusted participants' flags unchanged. Codex:
 `agent` and full access refused, a pinned read-only project refused. Council: a read-only subject
 runs untrusted with no Fix, its MR's head fetched and removed after; a trusted run beside a
-read-only project carries the fence with the subject's common dir less its config and hooks,
-Claude in Codex's roles, and is refused without the fence and on `excludedCommands`. `tests/repos.rs`: menus and the VCS popup lack writes, a chord's
+read-only project carries the fence with the subject's common dir, Claude in Codex's roles, and is refused without the fence and on `excludedCommands`. `tests/repos.rs`: menus and the VCS popup lack writes, a chord's
 refusal says why, the Processes app lists no read-only project. `make agent-test` gains one row:
 an edit and a `git switch` into a read-only project are refused by the real `claude`, and a
 `git commit` and an `npm install` in a read-write one go through.
