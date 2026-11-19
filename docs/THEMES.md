@@ -19,7 +19,8 @@ running app within a second. A file that does not load keeps the theme in use an
   comes from it, so a file holds only what it changes.
 - `font`, `mono_font`: family names. Inter and JetBrains Mono come with the app; leaving them out
   uses the system's.
-- `light`, `dark`: the tokens for each system appearance. Colors are `#rrggbb` or `#rrggbbaa`.
+- `light`, `dark`: the tokens for each appearance: the system's, or the one Settings › Appearance ›
+  Mode forces. Colors are `#rrggbb` or `#rrggbbaa`.
 
 The full token list, with values, is in the bundled files:
 [fleet.json](../crates/app/themes/fleet.json), [classic.json](../crates/app/themes/classic.json).
