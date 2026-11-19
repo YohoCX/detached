@@ -1,9 +1,11 @@
 mod common;
 
 use common::*;
+use detached_app::settings;
 use detached_app::ui::theme;
 use gpui_kit::component::Theme as Kit;
-use gpui_kit::{Hsla, TestAppContext, VisualTestContext, rgb};
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{Hsla, TestAppContext, VisualTestContext, WindowAppearance, rgb};
 
 const MINE: &str = "themes/mine.json";
 
@@ -64,6 +66,42 @@ fn another_theme_is_chosen_and_kept_across_a_restart(cx: &mut TestAppContext) {
     assert_ne!(fonts(cx).0, "Inter", "Classic keeps the system's");
     let ui = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(ui.contains(r#""theme.name": "Classic""#), "{ui}");
+}
+
+#[gpui_kit::test]
+fn the_mode_forces_light_or_dark_and_system_follows_the_window(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let dark = |cx: &mut VisualTestContext| cx.update(|_, cx| theme::is_dark(cx));
+    let window = cx.update(|w, _| w.appearance());
+    let system = matches!(
+        window,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    );
+    assert_eq!(dark(cx), system);
+    cx.update(|_, cx| settings::open(cx, "appearance"));
+    settle(cx);
+    for (option, mode) in [(2usize, Some(true)), (1, Some(false)), (0, None)] {
+        cx.update(|w, cx| w.within("settings.mode").click(option, cx));
+        settle(cx);
+        // What the shell runs when the window's appearance changes.
+        cx.update(theme::sync);
+        let expected = mode.unwrap_or(system);
+        assert_eq!(dark(cx), expected, "option {option}");
+        let ground = cx.update(|_, cx| (theme::theme(cx).ground, Kit::global(cx).background));
+        assert_eq!(ground.0, ground.1, "the kit's widgets follow");
+    }
+    let ui = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
+    assert!(ui.contains(r#""theme.mode": "system""#), "{ui}");
+}
+
+#[gpui_kit::test]
+fn a_chosen_mode_holds_from_the_first_frame(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let ui = sb.state.config_dir.join("ui.json");
+        std::fs::write(ui, r#"{"theme.mode": "dark"}"#).unwrap();
+    });
+    assert!(cx.update(|_, cx| theme::is_dark(cx)));
+    assert_eq!(cx.update(|_, cx| theme::mode(cx)), theme::Mode::Dark);
 }
 
 #[gpui_kit::test]

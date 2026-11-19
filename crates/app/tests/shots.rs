@@ -1,6 +1,7 @@
 //! Pictures of the Settings pages over a seeded sandbox, for a look by eye:
 //! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `<dir>/<page id>.png`, and
-//! `<id>-end.png` scrolled down when the page is taller; `PAGES=skills,sharing` draws only those ids.
+//! `<id>-end.png` scrolled down when the page is taller; `PAGES=skills,sharing` draws only those ids,
+//! `MODE=light|dark` in that mode.
 //! macOS only, on the main thread its platform needs; without SHOTS it does nothing.
 
 use std::collections::BTreeMap;
@@ -151,6 +152,9 @@ fn main() {
         cx.set_reduce_motion(true);
         actions::init(cx);
         ui_state::init(&dir, cx);
+        if let Ok(mode) = std::env::var("MODE") {
+            ui_state::set("theme.mode", mode, cx);
+        }
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
         detached_app::register(cx);

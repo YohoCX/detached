@@ -130,7 +130,7 @@ root.
   "Detached Dev" identity, so Keychain entries stay readable without prompts. `install.sh` keeps its
   URL and behavior.
 - The look: the tokens in `src/app.css` (shell.md §5) become the GPUI theme, light and dark following
-  the system. The Monaco theme colors (files.md §2) become editor and diff colors.
+  the system unless Settings › Appearance › Mode forces one (`theme.mode` in `ui.json`). The Monaco theme colors (files.md §2) become editor and diff colors.
 - UI state that lived in localStorage moves to `ui.json` in the config directory, same key names
   and ranges (`sidebar.collapsed`, `size.*`, `tree.nesting`, `viewer.sideBySide`, `viewer.mdPreview`).
   Values are not migrated from the web view's storage: first launch starts from defaults.
