@@ -64,10 +64,11 @@ impl Workspaces {
                     return;
                 }
                 new.update(cx, |s, cx| s.set_value("", window, cx));
+                let this = cx.weak_entity();
                 let made = core_then(
                     cx,
                     move |core| api::save_workspace(core, name, None),
-                    switch,
+                    move |id, cx| _ = this.update(cx, |this, cx| this.switch(id, cx)),
                 );
                 made.detach();
             });
@@ -124,7 +125,10 @@ impl Workspaces {
     fn rename(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {
         self.commit(window, cx);
         let Some(open) = &mut self.open else { return };
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(from.clone()));
+        let all = &Settings::get(cx).workspaces;
+        let name = all.iter().find(|w| w.id == from).map(|w| w.name.clone());
+        let input =
+            cx.new(|cx| InputState::new(window, cx).default_value(name.unwrap_or_default()));
         input.update(cx, |s, cx| {
             s.focus(window, cx);
             s.select_all(window, cx);
