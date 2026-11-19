@@ -1583,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "detached-acp"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "agent-client-protocol",
  "chrono",
@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "detached-app"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "detached-core",
@@ -1623,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "detached-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "detached-forge-fake"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "form_urlencoded",
  "percent-encoding",
@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "detached-kernel"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "detached-acp",
  "detached-core",
