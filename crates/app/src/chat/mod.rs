@@ -58,7 +58,7 @@ pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Chat>> {
 pub fn label(path: &str, cx: &App) -> String {
     match Workspace::get(cx).repos().iter().find(|r| r.path == path) {
         Some(r) => r.name.clone(),
-        None => format!("{}/", crate::util::base_name(path)),
+        None => format!("{}/", crate::util::folder_name(path)),
     }
 }
 

@@ -100,8 +100,9 @@ impl Request {
 
 /// One connection's requests, kept alive until the client closes it.
 fn serve(c: TcpStream, port: u16, routes: &Routes) {
-    let Ok(mut out) = c.try_clone() else { return };
-    let mut r = BufReader::new(c);
+    // No `try_clone`: on Windows the clone is inheritable, so a child spawned meanwhile keeps the
+    // connection open and resets it when it exits.
+    let mut r = BufReader::new(&c);
     while let Some(q) = read(&mut r) {
         let (status, session, body) = answer(&q, port, routes);
         let body = body.map(|b| b.to_string()).unwrap_or_default();
@@ -112,7 +113,7 @@ fn serve(c: TcpStream, port: u16, routes: &Routes) {
         if let Some(id) = session {
             head.push_str(&format!("Mcp-Session-Id: {id}\r\n"));
         }
-        if out
+        if (&c)
             .write_all(format!("{head}\r\n{body}").as_bytes())
             .is_err()
         {

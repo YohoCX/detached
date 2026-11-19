@@ -20,7 +20,7 @@
 //! - `bg` starts a command that a cancel leaves running, as Codex's background terminals, and the
 //!   session's close ends; it runs until `session/cancel`;
 //! - `act <json>` calls the host's `detached_act` with those arguments through the session's first
-//!   MCP server, over HTTP, and says its answer.
+//!   MCP server, over HTTP, initialized once per session as Codex does, and says its answer.
 //!
 //! A prompt's `acp-wake: <steps>` line is what the host's wake line, `You have new messages`, runs
 //! in that session from then on.
@@ -61,6 +61,8 @@ struct Session {
     background: Vec<Child>,
     /// The steps the host's wake line runs, from a prompt's `acp-wake:` line.
     wake: Option<String>,
+    /// Its host tools' MCP session, once initialized.
+    mcp: Option<String>,
 }
 
 fn main() {
@@ -520,8 +522,14 @@ impl Turn<'_> {
                 std::fs::write(path, text).map_err(err)?;
             }
             "act" => {
-                let url = self.session(|s| s.params["mcpServers"][0]["url"].clone());
-                let said = act(url.as_str().unwrap_or_default(), rest).map_err(err)?;
+                let (url, mcp) = self.session(|s| {
+                    let url = s.params["mcpServers"][0]["url"]
+                        .as_str()
+                        .unwrap_or_default();
+                    (url.to_string(), s.mcp.clone())
+                });
+                let (mcp, said) = act(&url, mcp, rest).map_err(err)?;
+                self.sessions.lock().unwrap().get_mut(self.sid).unwrap().mcp = mcp;
                 self.say(&said);
             }
             _ => return Err(Stop::Error(format!("unknown step {step}"))),
@@ -543,21 +551,22 @@ fn err(e: impl std::fmt::Display) -> Stop {
     Stop::Error(e.to_string())
 }
 
-/// Calls `detached_act` with `args` on the MCP server at `url`: an `initialize`, then the call on
-/// the session it answered with.
-fn act(url: &str, args: &str) -> std::io::Result<String> {
+/// Calls `detached_act` with `args` on the MCP server at `url`, on the session `mcp` or one an
+/// `initialize` answers with: that session and the call's answer.
+fn act(url: &str, mcp: Option<String>, args: &str) -> std::io::Result<(Option<String>, String)> {
     let args: Value = serde_json::from_str(args).map_err(std::io::Error::other)?;
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2025-06-18"}});
-    let (session, _) = post(url, None, &init)?;
+    let mcp = match mcp {
+        Some(id) => Some(id),
+        None => post(url, None, &init)?.0,
+    };
     let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "detached_act", "arguments": args}});
-    let (_, body) = post(url, session.as_deref(), &call)?;
+    let (_, body) = post(url, mcp.as_deref(), &call)?;
     let r: Value = serde_json::from_str(&body).unwrap_or_default();
-    Ok(r["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or(&body)
-        .to_string())
+    let said = r["result"]["content"][0]["text"].as_str().unwrap_or(&body);
+    Ok((mcp, said.to_string()))
 }
 
 /// One HTTP POST of `body`: the answer's `Mcp-Session-Id` and body.

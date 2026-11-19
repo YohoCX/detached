@@ -236,6 +236,10 @@ impl DiffView {
         if !matches!(self.body, Body::Diff) {
             return;
         }
+        // A step wins over the first-change reveal of a reload still pending for this doc.
+        if self.last.is_some() {
+            self.reveal = false;
+        }
         let changes = &self.changes;
         let at = self.cursor(cx).map(|(s, l)| order(changes, s, l));
         let key = |&&(s, l): &&(DiffSide, u32)| order(changes, s, l);

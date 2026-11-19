@@ -426,6 +426,15 @@ fn a_shell_dragged_out_of_the_terminal_is_a_tab_of_its_own_and_ends_with_it(
     let tab = gpui_kit::SharedString::from(id);
     assert_eq!(cx.find(tab.clone()).unwrap().checked(), Some(true));
     assert!(answered(cx), "the same screen, now in the center");
+    // A title as long as PowerShell's leaves the close button in the zone.
+    #[cfg(unix)]
+    {
+        cx.input(&format!("printf '\\033]0;{}\\007'", "x".repeat(120)));
+        cx.press("enter");
+        let long =
+            |cx: &mut VisualTestContext| cx.find(tab.clone()).and_then(|e| e.label().map(str::len));
+        wait_until(cx, |cx| long(cx) == Some(120));
+    }
 
     cx.update(|w, cx| w.within(tab).click("tab.close", cx));
     settle(cx);

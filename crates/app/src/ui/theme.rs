@@ -71,6 +71,9 @@ tokens!(
 /// The gap between panes and around the window.
 pub const GAP: Pixels = px(10.);
 
+/// A tab's title is cut past this, so a long one leaves its close button in the zone.
+pub const TAB_TITLE: Pixels = px(240.);
+
 pub mod radius {
     use gpui_kit::{Pixels, px};
 
