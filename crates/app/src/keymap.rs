@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use crate::actions::{self, Run};
-use crate::ui::page::{heading, labeled, row};
+use crate::ui::page::{card, item, layout, path};
 use crate::ui::{self, text, theme, theme::mono};
 use kernel::blocking;
 
@@ -303,16 +303,25 @@ impl Render for Page {
             "To change a chord, map the action's id to one in {}, such as \"file.goto\": \"Cmd+P\"; an empty one unbinds it. Read at launch.",
             file.display()
         );
+        let custom = item(
+            "Custom chords",
+            Some("\"file.goto\": \"Cmd+P\" rebinds an action; an empty chord unbinds it".into()),
+            cx,
+        )
+        .id("settings.keymapNote")
+        .test_support()
+        .aria_label(note)
+        .child(path("settings.keymapFile", file.display().to_string(), cx));
         let groups = [Search, Navigate, Vcs, Diff, View].map(|g| {
             let rows = actions::ACTIONS.iter().filter(|a| a.group == g).map(|a| {
                 let chord = chord_for(a.id, cx);
-                row()
+                item(a.title, None, cx)
+                    .min_h(px(34.))
+                    .py(px(4.))
                     .id(SharedString::from(format!("keymap.{}", a.id)))
                     .test_support()
                     .aria_label(a.title)
                     .aria_description(SharedString::from(chord.clone()))
-                    .mb(px(2.))
-                    .child(div().flex_1().min_w_0().truncate().child(a.title))
                     .child(
                         div()
                             .text_color(t.muted)
@@ -328,19 +337,15 @@ impl Render for Page {
                             .when(!chord.is_empty(), |d| d.child(ui::kbd(chord, cx))),
                     )
             });
-            div()
-                .flex()
-                .flex_col()
-                .child(heading(&format!("{g:?}"), cx).mb(px(8.)))
-                .children(rows)
+            let title = match g {
+                Vcs => "Version control".to_string(),
+                g => format!("{g:?}"),
+            };
+            card(Some(&title), None, rows, cx)
         });
-        div()
-            .id("settings.keymap")
-            .test_support()
-            .flex()
-            .flex_col()
-            .gap(px(22.))
-            .child(labeled("settings.keymapNote", note).text_color(t.muted))
+        let about = "Every action and its chord. Changes to keymap.json are read at launch.";
+        layout("settings.keymap", "Keymap", about, None, cx)
+            .child(card(None, None, [custom], cx))
             .children(groups)
     }
 }

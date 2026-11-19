@@ -322,15 +322,6 @@ pub fn heading(title: &str, cx: &App) -> Div {
         .child(title.to_uppercase())
 }
 
-pub fn section(id: &'static str, title: String, cx: &App) -> ObservedElement<Stateful<Div>> {
-    div()
-        .id(id)
-        .test_support()
-        .flex()
-        .flex_col()
-        .child(heading(&title, cx).mb(px(10.)))
-}
-
 pub fn row() -> Div {
     div().flex().items_center().gap(px(10.)).mb(px(6.))
 }

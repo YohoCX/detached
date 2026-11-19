@@ -4,12 +4,11 @@ use detached_core::error::{Error, Result};
 use detached_core::owner;
 use gpui_kit::{
     AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Styled, Window,
-    prelude::FluentBuilder,
 };
 use kernel::blocking;
 
-use crate::ui::page::{button, labeled, muted, row, section};
-use crate::ui::theme;
+use crate::ui::page::{button, card, item, labeled, layout};
+use crate::ui::{text, theme};
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|_| Page { said: None }).into()
@@ -46,23 +45,31 @@ impl Render for Page {
             Ok(text) => (text.clone(), false),
             Err(e) => (e.to_string(), true),
         });
-        section("settings.cli", "Command line".into(), cx)
-            .child(row().child(muted(
-                "detached-cli q reads what Detached shows, from a Detached terminal tab only.",
+        let detail =
+            "`detached-cli q` reads what Detached shows, from a Detached terminal tab only.";
+        let install = item("detached-cli", Some(detail.into()), cx).child(button(
+            "settings.cli.install",
+            "Install to PATH",
+            true,
+            cx,
+            |this, _, cx| this.install(cx),
+        ));
+        let said = said.map(|(text, error)| {
+            let t = theme(cx);
+            item(
+                labeled("settings.cli.said", text)
+                    .text_size(text::SMALL)
+                    .text_color(if error { t.error } else { t.muted }),
+                None,
                 cx,
-            )))
-            .child(row().child(button(
-                "settings.cli.install",
-                "Install to PATH",
-                true,
-                cx,
-                |this, _, cx| this.install(cx),
-            )))
-            .children(said.map(|(text, error)| {
-                row().child(
-                    labeled("settings.cli.said", text)
-                        .when(error, |d| d.text_color(theme(cx).error)),
-                )
-            }))
+            )
+        });
+        let about = "A command for scripts and agents in Detached's terminal tabs.";
+        layout("settings.cli", "Command line", about, None, cx).child(card(
+            None,
+            None,
+            std::iter::once(install).chain(said),
+            cx,
+        ))
     }
 }

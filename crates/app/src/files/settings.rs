@@ -1,12 +1,13 @@
 use crate::ui::{
     self,
-    page::{button, labeled, row, section},
+    page::{button, card, item, labeled, layout},
+    text, theme,
 };
 use detached_core::git::files::{self, TreeSettings};
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Subscription, Window,
+    Styled, Subscription, Window, div, px,
 };
 use kernel::{blocking, settings::Settings};
 
@@ -81,34 +82,38 @@ impl Page {
 
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut page = section("settings.files", "Files".into(), cx)
-            .child(labeled("files.hidden.title", "Hidden in every repository"))
-            .child(
-                row()
-                    .child(ui::input(&self.input, cx).id("files.hidden.input"))
-                    .child(button(
-                        "files.hidden.add",
-                        "Add",
-                        !self.busy,
-                        cx,
-                        |this, _, cx| {
-                            let name = this.input.read(cx).value().trim().to_string();
-                            this.error = files::rule(&name).err().map(|e| e.to_string());
-                            if this.error.is_none()
-                                && !name.is_empty()
-                                && !this.settings.hidden.contains(&name)
-                            {
-                                let mut settings = this.settings.clone();
-                                settings.hidden.push(name);
-                                this.save(settings, cx);
-                            }
-                            cx.notify();
-                        },
-                    )),
-            );
-        for (i, name) in self.settings.hidden.iter().enumerate() {
+        let t = theme(cx);
+        let add = item(
+            div()
+                .w(px(320.))
+                .child(ui::input(&self.input, cx).id("files.hidden.input")),
+            None,
+            cx,
+        )
+        .child(button(
+            "files.hidden.add",
+            "Add",
+            !self.busy,
+            cx,
+            |this, _, cx| {
+                let name = this.input.read(cx).value().trim().to_string();
+                this.error = files::rule(&name).err().map(|e| e.to_string());
+                if this.error.is_none() && !name.is_empty() && !this.settings.hidden.contains(&name)
+                {
+                    let mut settings = this.settings.clone();
+                    settings.hidden.push(name);
+                    this.save(settings, cx);
+                }
+                cx.notify();
+            },
+        ));
+        let hidden = self.settings.hidden.iter().enumerate().map(|(i, name)| {
             let name = name.clone();
-            page = page.child(row().child(name.clone()).child(button(
+            let shown = div()
+                .font_family(theme::mono(cx))
+                .text_size(text::SMALL)
+                .child(name.clone());
+            item(shown, None, cx).child(button(
                 SharedString::from(format!("files.hidden.remove.{i}")),
                 "Remove",
                 !self.busy,
@@ -118,12 +123,27 @@ impl Render for Page {
                     settings.hidden.retain(|n| n != &name);
                     this.save(settings, cx);
                 },
-            )));
-        }
-        page.children(
+            ))
+        });
+        let rows = hidden.chain(std::iter::once(add));
+        let about = "A name or a glob, such as .claude or *.log.";
+        layout(
+            "settings.files",
+            "Files",
+            "What the file tree leaves out.",
+            None,
+            cx,
+        )
+        .child(card(
+            Some("Hidden in every repository"),
+            Some(about.into()),
+            rows,
+            cx,
+        ))
+        .children(
             self.error
                 .as_ref()
-                .map(|e| labeled("files.hidden.error", e.clone())),
+                .map(|e| labeled("files.hidden.error", e.clone()).text_color(t.error)),
         )
     }
 }

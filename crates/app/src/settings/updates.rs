@@ -2,13 +2,13 @@
 
 use detached_core::update::{Install, RELEASES};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Styled, Subscription,
-    Window, div, prelude::FluentBuilder,
+    AnyView, App, AppContext, Context, FontWeight, IntoElement, ParentElement, Render, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::update::{State, Update};
 
-use crate::ui::page::{button, labeled, row, section};
-use crate::ui::theme;
+use crate::ui::page::{button, card, item, labeled, layout};
+use crate::ui::{text, theme};
 use crate::{chat, terminal};
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
@@ -31,9 +31,9 @@ fn status(u: &Update) -> String {
     let v = v.unwrap_or_default();
     match (&u.install, &u.state) {
         (None, _) => "Updates are off: this build was not installed from a release package.".into(),
-        (_, State::Idle) => "Not checked yet.".into(),
-        (_, State::Checking) => "Checking for updates…".into(),
-        (_, State::UpToDate) => "Detached is up to date.".into(),
+        (_, State::Idle) => "Not checked yet".into(),
+        (_, State::Checking) => "Checking…".into(),
+        (_, State::UpToDate) => "Up to date".into(),
         (Some(Install::Deb), State::Offered) => {
             format!("Detached {v} is out. The package manager updates it.")
         }
@@ -51,6 +51,7 @@ fn status(u: &Update) -> String {
 
 impl Render for Updates {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
         let update = Update::global(cx);
         let u = update.read(cx);
         let version = format!("Detached {}", u.feed.version);
@@ -63,107 +64,98 @@ impl Render for Updates {
                 Update::global(cx).update(cx, f)
             }
         };
-        section("settings.updates", "Updates".into(), cx)
-            .child(row().child(labeled("settings.update.version", version)))
+        let label = div()
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .child(labeled("settings.update.version", version).font_weight(FontWeight::MEDIUM))
             .child(
-                row().child(
-                    labeled("settings.update.state", status(u))
-                        .when(failed, |d| d.text_color(theme(cx).error)),
-                ),
-            )
-            .child(
-                row()
-                    .when(u.install.is_some(), |r| {
-                        r.child(button(
-                            "settings.update.check",
-                            "Check now",
-                            check,
-                            cx,
-                            act(Update::check),
-                        ))
-                    })
-                    .when(offered && !deb, |r| {
-                        r.child(button(
-                            "settings.update.download",
-                            "Download",
-                            true,
-                            cx,
-                            act(Update::download),
-                        ))
-                    })
-                    .when(matches!(state, State::Downloading { .. }), |r| {
-                        r.child(button(
-                            "settings.update.cancel",
-                            "Cancel",
-                            true,
-                            cx,
-                            act(|u, _| u.cancel()),
-                        ))
-                    })
-                    .when(*state == State::Ready, |r| {
-                        r.child(button(
-                            "settings.update.restart",
-                            "Restart now",
-                            self.warning.is_none(),
-                            cx,
-                            |this, _, cx| {
-                                let live = [chat::live(cx), terminal::live(cx)].concat();
-                                match live.is_empty() {
-                                    true => Update::global(cx).update(cx, Update::restart),
-                                    false => this.warning = Some(live),
-                                }
-                                cx.notify();
-                            },
-                        ))
-                    })
-                    .when(deb, |r| {
-                        r.child(button(
-                            "settings.update.releases",
-                            "Open releases page",
-                            true,
-                            cx,
-                            |_, _, cx| cx.open_url(RELEASES),
-                        ))
-                    }),
-            )
-            .children(
-                self.warning
-                    .as_ref()
-                    .filter(|_| *state == State::Ready)
-                    .map(|live| {
-                        let text = format!("Restarting ends {}.", live.join(", "));
-                        let keep = |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-                            this.warning = None;
-                            cx.notify();
-                        };
-                        div()
-                            .child(
-                                row().child(
-                                    labeled("settings.update.warning", text)
-                                        .text_color(theme(cx).warning),
-                                ),
-                            )
-                            .child(
-                                row()
-                                    .child(button(
-                                        "settings.update.anyway",
-                                        "Restart anyway",
-                                        true,
-                                        cx,
-                                        move |this, w, cx| {
-                                            keep(this, w, cx);
-                                            Update::global(cx).update(cx, Update::restart);
-                                        },
-                                    ))
-                                    .child(button(
-                                        "settings.update.keep",
-                                        "Not now",
-                                        true,
-                                        cx,
-                                        keep,
-                                    )),
-                            )
-                    }),
-            )
+                labeled("settings.update.state", status(u))
+                    .text_size(text::SMALL)
+                    .text_color(if failed { t.error } else { t.muted }),
+            );
+        let main = item(label, None, cx)
+            .when(offered && !deb, |r| {
+                r.child(button(
+                    "settings.update.download",
+                    "Download",
+                    true,
+                    cx,
+                    act(Update::download),
+                ))
+            })
+            .when(matches!(state, State::Downloading { .. }), |r| {
+                r.child(button(
+                    "settings.update.cancel",
+                    "Cancel",
+                    true,
+                    cx,
+                    act(|u, _| u.cancel()),
+                ))
+            })
+            .when(*state == State::Ready, |r| {
+                r.child(button(
+                    "settings.update.restart",
+                    "Restart now",
+                    self.warning.is_none(),
+                    cx,
+                    |this, _, cx| {
+                        let live = [chat::live(cx), terminal::live(cx)].concat();
+                        match live.is_empty() {
+                            true => Update::global(cx).update(cx, Update::restart),
+                            false => this.warning = Some(live),
+                        }
+                        cx.notify();
+                    },
+                ))
+            })
+            .when(deb, |r| {
+                r.child(button(
+                    "settings.update.releases",
+                    "Open releases page",
+                    true,
+                    cx,
+                    |_, _, cx| cx.open_url(RELEASES),
+                ))
+            })
+            .when(u.install.is_some(), |r| {
+                r.child(button(
+                    "settings.update.check",
+                    "Check now",
+                    check,
+                    cx,
+                    act(Update::check),
+                ))
+            });
+        let warning = self
+            .warning
+            .as_ref()
+            .filter(|_| *state == State::Ready)
+            .map(|live| {
+                let text = format!("Restarting ends {}.", live.join(", "));
+                let keep = |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
+                    this.warning = None;
+                    cx.notify();
+                };
+                item(
+                    labeled("settings.update.warning", text).text_color(t.warning),
+                    None,
+                    cx,
+                )
+                .child(button("settings.update.keep", "Not now", true, cx, keep))
+                .child(button(
+                    "settings.update.anyway",
+                    "Restart anyway",
+                    true,
+                    cx,
+                    move |this, w, cx| {
+                        keep(this, w, cx);
+                        Update::global(cx).update(cx, Update::restart);
+                    },
+                ))
+            });
+        let rows = std::iter::once(main).chain(warning);
+        let about = "New versions come from Detached's signed release feed.";
+        layout("settings.updates", "Updates", about, None, cx).child(card(None, None, rows, cx))
     }
 }

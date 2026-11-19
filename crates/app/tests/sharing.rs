@@ -50,7 +50,7 @@ fn sharing_defaults_and_item_moves_follow_the_repo_and_its_linked_worktree(
     let store = RepoStore::open(&cx.sb.state, main.as_ref()).unwrap();
     wait_until(cx, |cx| {
         cx.find("sharing.default.roles")
-            .is_some_and(|e| e.label() == Some("Keep new items local"))
+            .is_some_and(|e| e.checked() == Some(true))
     });
     assert_eq!(
         store.defaults().unwrap().get(&Kind::Roles),

@@ -104,9 +104,9 @@ fn the_page_shows_each_state_with_its_buttons(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     offer(cx, Install::Windows);
     let states = [
-        (State::Idle, "Not checked yet.", &["check"][..]),
-        (State::Checking, "Checking for updates…", &["check"]),
-        (State::UpToDate, "Detached is up to date.", &["check"]),
+        (State::Idle, "Not checked yet", &["check"][..]),
+        (State::Checking, "Checking…", &["check"]),
+        (State::UpToDate, "Up to date", &["check"]),
         (
             State::Offered,
             "Detached 9.9.9 is available.",

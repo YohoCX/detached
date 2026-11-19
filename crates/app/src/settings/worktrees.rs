@@ -3,10 +3,12 @@ use detached_core::error::Result;
 use detached_core::git::worktree::RECIPE;
 use detached_core::state::AppState;
 use detached_core::store::Kind;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div,
+    AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, prelude::FluentBuilder, px,
 };
 use kernel::activity::Activity;
 use kernel::invalidate;
@@ -17,7 +19,7 @@ use kernel::workspace::Workspace;
 
 use crate::ui::{
     self,
-    page::{button, labeled, row, section},
+    page::{Tone, button, card, chip, item, labeled, layout, muted, path},
 };
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
@@ -152,12 +154,15 @@ impl Page {
 
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut page = section("settings.worktrees", "Worktrees".into(), cx);
+        let t = ui::theme(cx);
+        let about = "Extra checkouts of this repository, each on its own branch.";
+        let mut page = layout("settings.worktrees", "Worktrees", about, None, cx);
         if self.repo.is_none() {
-            return page.child(labeled(
-                "worktrees.empty",
-                "Select a repository to manage its worktrees.",
-            ));
+            return page.child(
+                muted("Select a repository to manage its worktrees.", cx)
+                    .id("worktrees.empty")
+                    .test_support(),
+            );
         }
         let recipe = self
             .sharing
@@ -167,96 +172,123 @@ impl Render for Page {
             let mut items = s.items.iter();
             items.find(|i| i.kind == Kind::Recipes && i.name == RECIPE)
         });
-        page = page.child(labeled(
-            "worktrees.recipe",
-            match recipe {
-                None => format!("No {RECIPE}: worktrees get no copies, install or teardown."),
-                Some(i) if !i.trusted => format!(
-                    "{} needs acceptance on the Sharing page before it runs.",
-                    i.path.display()
-                ),
-                Some(i) => format!("Recipe: {}", i.path.display()),
-            },
+        let said = match recipe {
+            None => format!("No {RECIPE}: worktrees get no copies, install or teardown."),
+            Some(i) if !i.trusted => format!(
+                "{} needs acceptance on the Sharing page before it runs.",
+                i.path.display()
+            ),
+            Some(i) => format!("Recipe: {}", i.path.display()),
+        };
+        let detail = recipe.is_none().then(|| {
+            SharedString::from("None: a new worktree gets no copies, install or teardown")
+        });
+        let recipe_row = item("Recipe", detail, cx)
+            .id("worktrees.recipe")
+            .test_support()
+            .aria_label(said)
+            .children(
+                recipe.map(|i| path("worktrees.recipe.path", i.path.display().to_string(), cx)),
+            )
+            .when(recipe.is_some_and(|i| !i.trusted), |r| {
+                r.child(chip("needs acceptance", Tone::Warn, cx))
+                    .child(button(
+                        "worktrees.sharing",
+                        "Open Sharing",
+                        true,
+                        cx,
+                        |_, _, cx| super::open(cx, "sharing"),
+                    ))
+            });
+        let create = item(
+            div()
+                .w(px(320.))
+                .child(ui::input(&self.branch, cx).id("worktrees.branch")),
+            None,
+            cx,
+        )
+        .child(button(
+            "worktrees.create",
+            "Create",
+            !self.busy,
+            cx,
+            |this, _, cx| this.create(cx),
         ));
-        if recipe.is_some_and(|i| !i.trusted) {
-            page = page.child(row().child(button(
-                "worktrees.sharing",
-                "Open Sharing",
-                true,
-                cx,
-                |_, _, cx| super::open(cx, "sharing"),
-            )));
-        }
-        page = page.child(
-            row()
-                .child(ui::input(&self.branch, cx).id("worktrees.branch"))
-                .child(button(
-                    "worktrees.create",
-                    "Create",
-                    !self.busy,
-                    cx,
-                    |this, _, cx| this.create(cx),
-                )),
-        );
+        page = page.child(card(
+            Some("New worktree"),
+            None,
+            [recipe_row.into_any_element(), create.into_any_element()],
+            cx,
+        ));
         if let Some(error) = &self.error {
-            page = page.child(labeled("worktrees.error", error.clone()));
+            page = page.child(labeled("worktrees.error", error.clone()).text_color(t.error));
         }
         let main = self.main(cx).map(|m| m.0);
         let trees = Workspace::get(cx).repos().iter();
         let trees = trees.filter(|r| main.is_some() && r.worktree_of == main);
         let trees: Vec<_> = trees.map(|r| (r.path.clone(), r.name.clone())).collect();
-        for (i, (path, name)) in trees.into_iter().enumerate() {
-            let status = Repo::get(cx, &path).and_then(|r| r.status());
-            let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
-            let id = |what| SharedString::from(format!("worktrees.{what}.{i}"));
-            let mut line = row();
-            if self.confirm.as_ref() == Some(&path) {
-                let p = path.clone();
-                line = line
-                    .child(
-                        button(
-                            id("confirm"),
-                            "Discard changes and remove",
-                            true,
+        let rows: Vec<_> = trees
+            .into_iter()
+            .enumerate()
+            .map(|(i, (path_, name))| {
+                let status = Repo::get(cx, &path_).and_then(|r| r.status());
+                let branch = status.and_then(|s| s.branch.clone()).unwrap_or_default();
+                let id = |what| SharedString::from(format!("worktrees.{what}.{i}"));
+                let label = div()
+                    .id(id("tree"))
+                    .test_support()
+                    .aria_label(format!("{name} · {branch}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(name))
+                    .child(chip(branch, Tone::Muted, cx));
+                let mut line = item(label, None, cx).child(path(id("path"), path_.clone(), cx));
+                if self.confirm.as_ref() == Some(&path_) {
+                    let p = path_.clone();
+                    line = line
+                        .child(button(id("cancel"), "Cancel", true, cx, |this, _, cx| {
+                            this.confirm = None;
+                            cx.notify();
+                        }))
+                        .child(
+                            button(
+                                id("confirm"),
+                                "Discard changes and remove",
+                                true,
+                                cx,
+                                move |this, _, cx| this.remove(p.clone(), true, cx),
+                            )
+                            .text_color(t.error),
+                        );
+                } else {
+                    if self.refused.as_ref() == Some(&path_) {
+                        let p = path_.clone();
+                        line = line.child(button(
+                            id("force"),
+                            "Remove anyway",
+                            !self.busy,
                             cx,
-                            move |this, _, cx| this.remove(p.clone(), true, cx),
-                        )
-                        .text_color(ui::theme(cx).error),
-                    )
-                    .child(button(id("cancel"), "Cancel", true, cx, |this, _, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    }));
-            } else {
-                let p = path.clone();
-                line = line.child(button(
-                    id("remove"),
-                    "Remove",
-                    !self.busy,
-                    cx,
-                    move |this, _, cx| this.remove(p.clone(), false, cx),
-                ));
-                if self.refused.as_ref() == Some(&path) {
-                    let p = path.clone();
+                            move |this, _, cx| {
+                                this.confirm = Some(p.clone());
+                                cx.notify();
+                            },
+                        ));
+                    }
+                    let p = path_.clone();
                     line = line.child(button(
-                        id("force"),
-                        "Remove anyway",
+                        id("remove"),
+                        "Remove",
                         !self.busy,
                         cx,
-                        move |this, _, cx| {
-                            this.confirm = Some(p.clone());
-                            cx.notify();
-                        },
+                        move |this, _, cx| this.remove(p.clone(), false, cx),
                     ));
                 }
-            }
-            let text = format!("{name} · {branch}");
-            page = page.child(
-                div()
-                    .child(labeled(id("tree"), text))
-                    .child(path)
-                    .child(line),
-            );
+                line
+            })
+            .collect();
+        if !rows.is_empty() {
+            page = page.child(card(Some("Worktrees"), None, rows, cx));
         }
         page
     }
