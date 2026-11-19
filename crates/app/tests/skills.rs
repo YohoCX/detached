@@ -61,7 +61,7 @@ fn the_skills_page_lists_each_skill_with_its_source_and_stops_reading_agents(
     wait_until(cx, |cx| cx.find("skills.Agents.lint").is_none());
     assert_eq!(
         label(cx, "skills.folder.Agents"),
-        format!("~/.agents: {agents} · off")
+        format!("~/.agents: {agents} · not read")
     );
     assert_eq!(cx.find("skills.agents").unwrap().checked(), Some(false));
     let config = cx.update(|_, cx| kernel::core(cx).get_settings().block::<Config>(BLOCK));

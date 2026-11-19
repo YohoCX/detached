@@ -653,6 +653,8 @@ impl Model {
             true => card(Some(&title), None, [item(muted(none, cx), None, cx)], cx),
             false => card(Some(&title), None, rows, cx),
         }
+        .id("settings.repo")
+        .test_support()
     }
 
     fn mrs_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -660,7 +662,9 @@ impl Model {
         let title = format!("Merge requests for {name}");
         let (Some(f), Some((remote, picks))) = (&self.data.forge, &self.picks.forge) else {
             let none = item(muted("No remote is on GitLab or GitHub.", cx), None, cx);
-            return card(Some(&title), None, [none], cx);
+            return card(Some(&title), None, [none], cx)
+                .id("settings.mrs")
+                .test_support();
         };
         let remote = item("Remote", Some("Where merge requests are read".into()), cx).child(
             div()
@@ -670,6 +674,8 @@ impl Model {
         let rows = f.hosts.iter().zip(picks).enumerate();
         let rows = rows.map(|(i, (h, p))| host(h, select(p, ("settings.forgeAccount", i), cx), cx));
         card(Some(&title), None, std::iter::once(remote).chain(rows), cx)
+            .id("settings.mrs")
+            .test_support()
     }
 
     fn removed_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

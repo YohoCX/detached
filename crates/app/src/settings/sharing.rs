@@ -2,12 +2,12 @@ use detached_core::error::Result;
 use detached_core::panel::marks::{self, Mark, Panels};
 use detached_core::state::AppState;
 use detached_core::store::{Kind, RepoStore, Scope};
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    div, prelude::FluentBuilder, px,
+    ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::resource::Interest;
 use kernel::sharing::Sharing;
@@ -95,7 +95,7 @@ impl Page {
 
 impl Page {
     /// The panels' trust marks for this repo: the repo, its workspaces and marked branches.
-    fn marks(&self, cx: &Context<Self>) -> Option<Div> {
+    fn marks(&self, cx: &Context<Self>) -> Option<ObservedElement<Stateful<Div>>> {
         let repo = self.repo.clone()?;
         let settings = kernel::settings::Settings::get(cx);
         let p: Panels = settings.block(marks::BLOCK).unwrap_or_default();
@@ -219,7 +219,8 @@ impl Page {
         }
         let about = "A trusted subject runs panels unsandboxed, anything else a sandboxed \
                      read-only review. Kept on this machine.";
-        Some(card(Some("Panels trust"), Some(about.into()), rows, cx))
+        let trust = card(Some("Panels trust"), Some(about.into()), rows, cx);
+        Some(trust.id("sharing.marks").test_support())
     }
 }
 

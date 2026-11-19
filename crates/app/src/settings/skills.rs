@@ -117,10 +117,10 @@ impl Render for Page {
                 )),
                 _ => None,
             };
-            let mut aria = format!("{} · {}", s.name, source(s.source));
-            if let Some((_, why, _)) = &state {
-                aria = format!("{aria} · {why}");
-            }
+            let why = state
+                .as_ref()
+                .map_or(String::new(), |(_, why, _)| format!(" · {why}"));
+            let aria = format!("{} · {}{why}", s.name, s.source.title());
             let description = s.description.clone().unwrap_or_default();
             let tip: SharedString = match &state {
                 Some((_, why, _)) => format!("{description}\n\n{why}").trim().to_string().into(),
@@ -179,10 +179,15 @@ impl Render for Page {
             let mut row = item(f.source.title(), None, cx)
                 .id(SharedString::from(id.clone()))
                 .test_support()
-                .aria_label(match word {
-                    Some(w) => format!("{}: {path} · {w}", f.source.title()),
-                    None => format!("{}: {path}", f.source.title()),
-                })
+                .aria_label(format!(
+                    "{}: {path}{}",
+                    f.source.title(),
+                    match word {
+                        Some("off") => " · not read",
+                        Some(_) => " · not present",
+                        None => "",
+                    }
+                ))
                 .child(ui::page::path(
                     SharedString::from(format!("{id}.path")),
                     path,

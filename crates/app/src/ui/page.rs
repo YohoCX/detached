@@ -229,7 +229,7 @@ pub fn path(
     path: impl Into<SharedString>,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
-    const MAX: usize = 48;
+    const MAX: usize = 40;
     let full = path.into();
     let chars: Vec<char> = full.chars().collect();
     let shown: String = match chars.len() > MAX {
@@ -251,7 +251,7 @@ pub fn path(
         .test_support()
         .aria_label(full)
         .flex_none()
-        .max_w(px(360.))
+        .max_w(px(300.))
         .truncate()
         .font_family(theme::mono(cx))
         .text_size(text::SMALL)

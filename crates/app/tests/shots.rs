@@ -1,6 +1,7 @@
 //! Pictures of the Settings pages over a seeded sandbox, for a look by eye:
-//! `SHOTS=<dir> cargo test -p detached-app --test shots`. macOS only, on the main thread its
-//! platform needs; without SHOTS it does nothing.
+//! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `<dir>/<page id>.png`, and
+//! `<id>-end.png` scrolled down when the page is taller; `PAGES=skills,sharing` draws only those ids.
+//! macOS only, on the main thread its platform needs; without SHOTS it does nothing.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,33 +9,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use detached_app::{actions, keymap, settings, shell};
+use detached_core::adapters::testutil::fake_cli;
+use detached_core::adapters::{self, CLAUDE};
 use detached_core::api;
 use detached_core::git::files::TreeSettings;
 use detached_core::git::testutil::Sandbox;
+use detached_core::git::worktree::RECIPE;
 use detached_core::settings::Settings;
 use detached_core::state::AppState;
 use detached_core::store::{Files, Kind, RepoStore};
 use detached_core::types::{AccountInput, Provider};
 use gpui_kit::platform::{current_headless_renderer, current_platform};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, HeadlessAppContext, ScrollDelta, point, px};
+use gpui_kit::{AnyWindowHandle, ElementId, HeadlessAppContext, ScrollDelta, point, px};
+use kernel::repo::Repo;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-const PAGES: [&str; 13] = [
-    "accounts",
-    "git",
-    "appearance",
-    "keymap",
-    "updates",
-    "agents",
-    "cli",
-    "env",
-    "files",
-    "repository",
-    "sharing",
-    "skills",
-    "worktrees",
+/// Each page's id, and what shows once it has loaded: an element, and a text its label holds.
+const PAGES: [(&str, &str, &str); 13] = [
+    ("accounts", "accounts.row", ""),
+    ("git", "settings.env", ""),
+    ("appearance", "settings.theme", ""),
+    ("keymap", "keymap.app.settings", ""),
+    ("updates", "settings.update.state", ""),
+    ("agents", "agents.claude.cli", "2.1.400"),
+    ("cli", "settings.cli.install", ""),
+    ("env", "env.profile.dev", ""),
+    ("files", "files.hidden.remove.0", ""),
+    ("repository", "settings.repo", ""),
+    ("sharing", "sharing.local", ""),
+    ("skills", "skills.folder.Agents", ""),
+    ("worktrees", "worktrees.recipe", "Recipe:"),
 ];
 
 fn skill(dir: &Path, description: &str) {
@@ -69,6 +75,16 @@ fn seed(sb: &Sandbox) -> String {
     store
         .write(&sb.state, Kind::Roles, "reviewer.md", &files("review"))
         .unwrap();
+    let recipe = files("copies = [\".env\"]\n");
+    store
+        .write(&sb.state, Kind::Recipes, RECIPE, &recipe)
+        .unwrap();
+    let bin = sb.path("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let cli = fake_cli(&bin, "2.1.400").display().to_string();
+    let cli = [(CLAUDE.id.into(), cli)].into();
+    let config = adapters::Config { cli, codex: false };
+    sb.state.set_block(adapters::BLOCK, config).unwrap();
     let input = AccountInput {
         id: None,
         provider: Provider::GitlabSelfHosted,
@@ -90,12 +106,26 @@ fn seed(sb: &Sandbox) -> String {
     r.display().to_string()
 }
 
-fn idle(cx: &mut HeadlessAppContext) {
+/// Runs the app until `done` holds; panics after 30 s.
+fn wait_until(cx: &mut HeadlessAppContext, mut done: impl FnMut(&mut HeadlessAppContext) -> bool) {
     cx.allow_parking();
-    for _ in 0..40 {
-        cx.run_until_parked();
-        std::thread::sleep(Duration::from_millis(25));
+    let start = cx.background_executor().now();
+    while !done(cx) {
+        let waited = cx.background_executor().now() - start;
+        assert!(waited < Duration::from_secs(30), "wait_until timed out");
+        let tick = cx.background_executor().timer(Duration::from_millis(10));
+        cx.foreground_executor().block_test(tick);
     }
+}
+
+/// Whether the element `id` is drawn with `text` in its label.
+fn shows(cx: &mut HeadlessAppContext, window: AnyWindowHandle, id: ElementId, text: &str) -> bool {
+    let label = cx.update_window(window, |_, w, cx| {
+        w.render_frame(cx);
+        let e = w.try_find(id)?;
+        Some(e.label().unwrap_or_default().to_string())
+    });
+    label.ok().flatten().is_some_and(|l| l.contains(text))
 }
 
 fn main() {
@@ -129,11 +159,17 @@ fn main() {
     cx.allow_parking();
     cx.foreground_executor().block_test(keys);
     let window: AnyWindowHandle = cx.update(shell::open).unwrap();
-    idle(&mut cx);
+    wait_until(&mut cx, |cx| {
+        cx.update(|cx| {
+            let w = Workspace::get(cx);
+            let loaded = (w.repos().iter())
+                .all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status.is_some()));
+            loaded && w.repos().iter().any(|r| r.path == repo)
+        })
+    });
     cx.update(|cx| Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo), cx)));
-    idle(&mut cx);
     let only = std::env::var("PAGES").ok();
-    for page in PAGES {
+    for (page, ready, text) in PAGES {
         if only
             .as_ref()
             .is_some_and(|o| !o.split(',').any(|p| p == page))
@@ -141,15 +177,19 @@ fn main() {
             continue;
         }
         cx.update(|cx| settings::open(cx, page));
-        idle(&mut cx);
-        cx.update_window(window, |_, w, cx| w.render_frame(cx))
-            .unwrap();
+        let id = match page {
+            "accounts" => ElementId::from((ready, 0usize)),
+            _ => ElementId::from(ready),
+        };
+        wait_until(&mut cx, |cx| shows(cx, window, id.clone(), text));
         let img = cx.capture_screenshot(window).unwrap();
         img.save(out.join(format!("{page}.png"))).unwrap();
         let down = ScrollDelta::Pixels(point(px(0.), px(-2000.)));
-        cx.update_window(window, |_, w, cx| w.scroll("settings.body", down, cx))
-            .unwrap();
-        idle(&mut cx);
+        cx.update_window(window, |_, w, cx| {
+            w.scroll("settings.body", down, cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
         let end = cx.capture_screenshot(window).unwrap();
         if end != img {
             end.save(out.join(format!("{page}-end.png"))).unwrap();

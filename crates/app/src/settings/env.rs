@@ -231,8 +231,9 @@ impl Render for Page {
         if rows.is_empty() {
             rows.push(item(muted("No profiles yet.", cx), None, cx).into_any_element());
         }
-        let about = "Encrypted in the system's credential store; a log shows values of 4 or more \
-                     characters as [redacted].";
+        let about = "Values are encrypted under a key in the system's credential store. A log shows \
+                     each value of 4 characters or more as [redacted]; a shorter one shows as it \
+                     is, to agents that read the log too.";
         page = page.child(card(Some("Profiles"), Some(about.into()), rows, cx));
         page.children(self.form.as_ref().map(|f| self.editor(f, cx)))
     }
