@@ -398,7 +398,7 @@ fn the_session_outlives_its_page(cx: &mut TestAppContext) {
     });
     settle(cx);
     assert!(cx.find("chat").is_none());
-    cx.click("top.chat");
+    back_to_chat(cx);
     wait_for_item(cx, "said hello");
     say(cx, "again");
     wait_for_item(cx, "said again");
@@ -857,7 +857,7 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
     assert!(
         matches!(shown, Some(Doc::Diff(d)) if d.path == "README.md" && matches!(d.right, detached_core::types::Side::Rev { .. }))
     );
-    cx.click("top.chat");
+    back_to_chat(cx);
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
     cx.click(("chat.back.confirm", i));
@@ -1237,7 +1237,7 @@ fn an_open_chat_shows_whether_it_waits_for_you_or_is_done(cx: &mut TestAppContex
     wait_for_item(cx, "waiting");
     open_tab(cx, "tab.chats");
     assert_eq!(state(cx).as_deref(), Some("Waiting"));
-    cx.click("top.chat");
+    back_to_chat(cx);
     let i = index_of(cx, "waiting");
     cx.click(("chat.allow", i));
     idle(cx);
@@ -1466,4 +1466,11 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
     send("model", cx);
     // The model is the one the load kept, the mode the one the agent refused to leave.
     wait_for_item(cx, "gpt-5.5-mini agent");
+}
+
+/// Shows the first chat on solo again: the top bar's chat button opens a new one.
+fn back_to_chat(cx: &mut TestApp) {
+    let repo = cx.sb.solo().display().to_string();
+    cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
+    settle(cx);
 }

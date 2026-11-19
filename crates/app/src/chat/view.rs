@@ -1803,7 +1803,11 @@ impl Render for ChatView {
                             .capture_action(
                                 cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)),
                             )
-                            .child(Textarea::new(&self.input).rounded(radius::FIELD))
+                            .child(
+                                Textarea::new(&self.input)
+                                    .rounded(radius::FIELD)
+                                    .text_size(theme::doc::BODY),
+                            )
                             .child(bar),
                     ),
             )

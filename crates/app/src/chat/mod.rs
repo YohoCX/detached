@@ -91,7 +91,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         "Claude",
         actions::Group::View,
         |_, cx| match Workspace::get(cx).current().map(String::from) {
-            Some(repo) => show(repo, cx),
+            Some(repo) => new_chat(repo, None, cx),
             None => Activity::global(cx).update(cx, |a, cx| {
                 a.say("Select a repository to chat about", false, cx)
             }),

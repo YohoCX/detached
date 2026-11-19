@@ -42,7 +42,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `pipeline.run` | Run a pipeline for a branch | | M2 | V5 |
 | `markdown.preview` | Toggle the preview of an open markdown file | | M2 | V2 |
 | `panel.terminal` | Terminal app | Alt+F12 | M2 | V7 |
-| `agent.chat` | Chat with Claude about the current repo, in a tab | | M2 | H11 |
+| `agent.chat` | A new chat about the current repo, or its empty one, in a tab | | M2 | H11 |
 | `zone.left` | Open or close the left zone | Cmd+B | M2 | F |
 | `zone.bottom` | Open or close the bottom zone | Cmd+J | M2 | F |
 | `zone.right` | Open or close the right zone | Cmd+Alt+B | M2 | F |
