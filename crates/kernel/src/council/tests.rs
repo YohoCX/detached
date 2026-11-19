@@ -244,11 +244,18 @@ fn codex_verifies_claude_s_findings_on_a_trusted_subject(cx: &mut TestAppContext
     let limits = &s.started.as_ref().unwrap().limits;
     assert!(!limits.iter().any(|l| l.contains("Codex")), "{limits:?}");
     let head = s.heads().next().unwrap();
-    assert!(record::verified(head));
+    assert!(record::verified(head), "{:?} {:?}", s.timeline, s.notes);
     assert_eq!(head.verdict.as_ref().unwrap().1, "codex");
     assert_eq!(record::corroboration(&s.sources(&head.id)), 1);
-    let verifier = s.participants.iter().find(|p| p.name == "verify-f1-1");
-    assert_eq!(verifier.unwrap().model, "codex");
+    let v = s
+        .participants
+        .iter()
+        .find(|p| p.name == "verify-f1-1")
+        .unwrap();
+    assert_eq!(
+        (v.model.as_str(), v.status, v.attempt),
+        ("codex", Status::Done, 1)
+    );
     assert!(!f.core.data_dir.join("private").exists(), "no MCP file");
 }
 
