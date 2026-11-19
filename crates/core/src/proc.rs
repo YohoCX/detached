@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -87,6 +87,7 @@ pub struct Proc {
     pub stdout: Option<ChildStdout>,
     exit: Arc<(Mutex<Option<ExitStatus>>, Condvar)>,
     stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_done: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl Proc {
@@ -111,6 +112,7 @@ impl Proc {
             }
         };
         let stderr = Arc::new(Mutex::new(vec![]));
+        let (done, drained) = mpsc::channel();
         if let Some(mut pipe) = child.stderr.take() {
             let tail = stderr.clone();
             thread::spawn(move || {
@@ -121,6 +123,7 @@ impl Proc {
                     let over = t.len().saturating_sub(TAIL);
                     t.drain(..over);
                 }
+                drop(done);
             });
         }
         let (pid, stdin, stdout) = (child.id(), child.stdin.take(), child.stdout.take());
@@ -140,6 +143,7 @@ impl Proc {
             stdout,
             exit,
             stderr,
+            stderr_done: Mutex::new(Some(drained)),
         })
     }
 
@@ -186,6 +190,15 @@ impl Proc {
     /// The end of what it wrote to stderr.
     pub fn stderr(&self) -> String {
         String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned()
+    }
+
+    /// The stderr tail after exit, with a bounded wait for the reader.
+    pub fn stderr_after_exit(&self) -> String {
+        if let Some(drained) = self.stderr_done.lock().unwrap().take() {
+            // A descendant can keep the pipe open.
+            let _ = drained.recv_timeout(Duration::from_secs(1));
+        }
+        self.stderr()
     }
 }
 

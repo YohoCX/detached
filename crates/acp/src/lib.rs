@@ -749,7 +749,7 @@ impl Adapter {
                 });
                 let exit = Exit {
                     code: status.and_then(|s| s.code()),
-                    stderr: proc.stderr(),
+                    stderr: proc.stderr_after_exit(),
                 };
                 on_exit(Event::Exited(exit, closing.load(Ordering::SeqCst)));
             })?;

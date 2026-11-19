@@ -837,7 +837,7 @@ impl Client {
                 true => Event::Closed,
                 false => Event::Exited(Exit {
                     code: status.code(),
-                    stderr: self.proc.stderr(),
+                    stderr: self.proc.stderr_after_exit(),
                 }),
             });
         }
