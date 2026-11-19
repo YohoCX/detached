@@ -33,9 +33,18 @@ fn rows(cx: &mut VisualTestContext) -> Vec<String> {
     })
 }
 
-/// Waits for a row that is exactly `line`, as output is and an echoed command is not.
+/// Waits for a row that is exactly `line`, as output is and an echoed command is not; a failure's
+/// output shows each screen it saw.
 fn wait_for_line(cx: &mut VisualTestContext, line: &str) {
-    wait_until(cx, |cx| rows(cx).iter().any(|r| r.trim() == line));
+    let mut seen = vec![];
+    wait_until(cx, |cx| {
+        let rows = rows(cx);
+        if rows != seen {
+            println!("{rows:#?}");
+            seen = rows;
+        }
+        seen.iter().any(|r| r.trim() == line)
+    });
 }
 
 fn run(cx: &mut VisualTestContext, cmd: &str) {

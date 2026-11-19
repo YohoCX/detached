@@ -961,9 +961,11 @@ fn a_settings_or_command_change_mid_turn_keeps_the_turn_and_ends_the_session_aft
             items(cx).iter().filter(|i| i.contains(ended)).count() == n + 1
         });
         let all = items(cx);
-        let got = all[from..].to_vec();
+        let (said, got): (Vec<_>, Vec<_>) =
+            all[from..].iter().partition(|i| i.starts_with("You: "));
+        assert_eq!(said.len(), 1, "said once: {all:?}");
         let at = |s: &str| {
-            (got.iter().skip(1).position(|i| i.contains(s)))
+            (got.iter().position(|i| i.contains(s)))
                 .unwrap_or_else(|| panic!("no {s} after {from}: {all:?}"))
         };
         // The watcher may beat the CLI's callback, so the note can precede "config block".
