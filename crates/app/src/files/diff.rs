@@ -390,7 +390,7 @@ impl DiffView {
             this.goto = None;
             match (*e, &this.code) {
                 (Goto::To(line, col), Some(code)) if matches!(this.body, Body::Conflict) => {
-                    code.update(cx, |c, cx| c.reveal(line, col, window, cx));
+                    code.update(cx, |c, cx| c.reveal(line, col, true, window, cx));
                 }
                 (Goto::To(line, _), _) => {
                     this.move_to((DiffSide::Modified, line), cx);
@@ -501,7 +501,7 @@ impl Render for DiffView {
             && let Some(code) = &self.code
             && let Some(line) = self.target.take()
         {
-            code.update(cx, |c, cx| c.reveal(line, 1, window, cx));
+            code.update(cx, |c, cx| c.reveal(line, 1, true, window, cx));
         }
         if self._numbers.is_none() {
             self._numbers = Some(cx.subscribe_in(&self.state, window, Self::number_pressed));

@@ -59,17 +59,23 @@ impl Code {
         });
     }
 
-    /// Puts the cursor on `line` at `col` (from 1), centers the line and focuses the editor.
     pub(super) fn reveal(
         &mut self,
         line: u32,
         col: u32,
+        focus: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let at = Position::new(line.saturating_sub(1), col.saturating_sub(1));
-        self.editor
-            .update(cx, |e, cx| e.set_cursor_position(at, window, cx));
+        self.editor.update(cx, |e, cx| {
+            if focus {
+                e.set_cursor_position(at, window, cx);
+            } else {
+                let offset = e.text().position_to_offset(&at);
+                e.set_selected_range(offset..offset, cx);
+            }
+        });
         self.center = Some(line.max(1));
         cx.notify();
     }
