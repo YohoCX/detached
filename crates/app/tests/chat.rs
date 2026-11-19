@@ -1227,8 +1227,8 @@ fn a_folder_s_repos_nest_under_it_and_the_newest_nodes_start_open(cx: &mut TestA
         past(sb, &sb.repo("group/api"), "g", "In api", 240);
     });
     open_tab(cx, "tab.chats");
-    wait_until(cx, |cx| node(cx, 4).0.is_some());
-    // The workspace's folders in order, each over its own chats, then its repos newest first.
+    wait_until(cx, |cx| node(cx, 5).0.is_some());
+    // The workspace's folders in order, each over its repos newest first, then its own chats.
     assert_eq!(node(cx, 0), (Some("ws/".into()), Some(true)));
     assert_eq!(node(cx, 1), (Some("app".into()), Some(true)));
     assert_eq!(
@@ -1237,13 +1237,26 @@ fn a_folder_s_repos_nest_under_it_and_the_newest_nodes_start_open(cx: &mut TestA
         "not in the 3 newest"
     );
     assert_eq!(node(cx, 3).1, Some(false));
-    assert_eq!(node(cx, 4), (Some("solo".into()), Some(true)));
+    assert_eq!(node(cx, 4), (Some("ws/ · here".into()), Some(true)));
+    assert_eq!(node(cx, 5), (Some("solo".into()), Some(true)));
     let titles: Vec<_> = (0usize..3).map(|i| label(cx, ("chats.past", i))).collect();
-    let want = ["In ws", "In app", "In solo"].map(|t| Some(t.to_string()));
+    let want = ["In app", "In ws", "In solo"].map(|t| Some(t.to_string()));
     assert_eq!(titles, want);
     assert_eq!(
         description(cx, ("chats.node", 2usize)).as_deref(),
         Some("1")
+    );
+
+    cx.click(("chats.node", 4usize));
+    assert_eq!(
+        node(cx, 4).1,
+        Some(false),
+        "the folder's own chats close alone"
+    );
+    assert_eq!(node(cx, 0).1, Some(true));
+    assert_eq!(
+        label(cx, ("chats.past", 1usize)).as_deref(),
+        Some("In solo")
     );
 
     cx.click(("chats.node", 0usize));
@@ -1255,7 +1268,7 @@ fn a_folder_s_repos_nest_under_it_and_the_newest_nodes_start_open(cx: &mut TestA
     assert_eq!(
         node(cx, 1).0.as_deref(),
         Some("solo"),
-        "the folder's repos go with it"
+        "the folder's nodes go with it"
     );
     assert_eq!(
         label(cx, ("chats.past", 0usize)).as_deref(),

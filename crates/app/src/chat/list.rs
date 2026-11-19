@@ -34,6 +34,8 @@ const PER_PLACE: usize = 5;
 const RECENT: usize = 3;
 const ROW: f32 = 32.;
 const NODE: f32 = 28.;
+/// Ends the path of a folder's node of its own chats, beside its repos'.
+const HERE: &str = "#here";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Filter {
@@ -385,8 +387,9 @@ impl ChatList {
         self.then(cwd, done, cx);
     }
 
-    /// The workspace's folders over their own conversations and their repos', then the repos in no
-    /// folder: the nodes with a conversation that is `archived` or not and matches the search.
+    /// The workspace's folders over their repos', then the repos in no folder: the nodes with a
+    /// conversation that is `archived` or not and matches the search. A folder's own conversations
+    /// sit under it, or in a node of their own after its repos when it has any.
     fn tree(&self, archived: bool, cx: &App) -> Vec<Node> {
         let q = self.query(cx);
         let mut chats: HashMap<&str, Vec<Past>> = HashMap::new();
@@ -417,6 +420,14 @@ impl ChatList {
             }
             n.kids.retain(|k| !k.past.is_empty());
             n.kids.sort_by_key(|k| Reverse(k.newest()));
+            if !n.kids.is_empty() && !n.past.is_empty() {
+                let (path, past) = (format!("{f}{HERE}"), std::mem::take(&mut n.past));
+                n.kids.push(Node {
+                    path,
+                    past,
+                    kids: vec![],
+                });
+            }
             out.push(n);
         }
         for r in w.repos() {
@@ -626,12 +637,17 @@ impl ChatList {
                 path, open, count, ..
             } => {
                 let i = tick(&mut n.2);
-                let name = label(path, cx);
+                let here = path.strip_suffix(HERE);
+                let name = label(here.unwrap_or(path), cx);
                 let icon = match name.ends_with('/') {
                     true => Icon::Folder,
                     false => Icon::Repo,
                 };
-                row(("chats.node", i).into(), name.clone(), cx)
+                let said = match here {
+                    Some(_) => format!("{name} · here"),
+                    None => name.clone(),
+                };
+                row(("chats.node", i).into(), said, cx)
                     .h(px(NODE))
                     .gap(px(4.))
                     .aria_expanded(*open)
@@ -645,12 +661,15 @@ impl ChatList {
                     )
                     .child(
                         div()
-                            .flex_1()
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .child(name),
                     )
+                    .when(here.is_some(), |r| {
+                        r.child(div().flex_none().text_color(t.muted).child("· here"))
+                    })
+                    .child(div().flex_1())
                     .when(!open, |r| {
                         r.child(
                             div()
