@@ -1,5 +1,9 @@
-//! The Chats app: the chats open now, then past conversations by repo and folder, each a row the
-//! keys walk, open, archive and delete.
+//! The Chats app: the chats open now, then past conversations in a tree of the workspace's folders
+//! and repos, each a row the keys walk, open, archive and delete.
+
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+use std::iter::once;
 
 use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
@@ -13,18 +17,23 @@ use gpui_kit::{
 };
 
 use super::{Chat, label, open, state_icon};
+use crate::ui::tree::{chevron, nest, slot};
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::util::{age, now};
+use crate::util::{age, in_folder, now};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 use kernel::resource::Interest;
 use kernel::session::Item;
 use kernel::settings::Settings;
+use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-/// Past conversations shown per repo or folder.
+/// Past conversations shown per repo or folder before its Show more.
 const PER_PLACE: usize = 5;
+/// The nodes with the newest conversations, open until toggled.
+const RECENT: usize = 3;
 const ROW: f32 = 32.;
+const NODE: f32 = 28.;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Filter {
@@ -34,30 +43,147 @@ enum Filter {
 }
 
 /// What a row stands for, which stays when the list is rebuilt.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Key {
     Open(String, u32),
     Past(String),
+    /// A folder's or a repo's node, in the archived tree or not.
+    Node(String, bool),
+    /// The node's conversations past `PER_PLACE`.
+    More(String, bool),
     Archived,
 }
 
 enum Line {
-    /// A section, with a repo's or a folder's icon.
-    Heading(String, Option<Icon>),
+    Heading(&'static str),
     Open(String, u32, Entity<Chat>),
-    Past(Past),
+    Node {
+        path: String,
+        archived: bool,
+        depth: usize,
+        open: bool,
+        count: usize,
+    },
+    Past(Past, usize),
+    More {
+        path: String,
+        archived: bool,
+        depth: usize,
+        left: usize,
+    },
     Archived(usize),
 }
 
 impl Line {
     fn key(&self) -> Option<Key> {
         match self {
-            Line::Heading(..) => None,
+            Line::Heading(_) => None,
             Line::Open(repo, n, _) => Some(Key::Open(repo.clone(), *n)),
-            Line::Past(p) => Some(Key::Past(p.id.clone())),
+            Line::Node { path, archived, .. } => Some(Key::Node(path.clone(), *archived)),
+            Line::Past(p, _) => Some(Key::Past(p.id.clone())),
+            Line::More { path, archived, .. } => Some(Key::More(path.clone(), *archived)),
             Line::Archived(_) => Some(Key::Archived),
         }
     }
+
+    fn depth(&self) -> usize {
+        match self {
+            Line::Node { depth, .. } | Line::Past(_, depth) | Line::More { depth, .. } => *depth,
+            _ => 0,
+        }
+    }
+
+    /// Whether a row that opens is open.
+    fn open(&self, show_archived: bool) -> Option<bool> {
+        match self {
+            Line::Node { open, .. } => Some(*open),
+            Line::Archived(_) => Some(show_archived),
+            _ => None,
+        }
+    }
+}
+
+/// A folder or a repo with its conversations, newest first, and a folder's repos.
+struct Node {
+    path: String,
+    past: Vec<Past>,
+    kids: Vec<Node>,
+}
+
+impl Node {
+    fn count(&self) -> usize {
+        self.past.len() + self.kids.iter().map(Node::count).sum::<usize>()
+    }
+
+    fn newest(&self) -> u64 {
+        let own = self.past.first().map_or(0, |p| p.modified);
+        self.kids.iter().map(Node::newest).fold(own, u64::max)
+    }
+}
+
+/// The ui_state key of a node's open state.
+fn state_key(path: &str, archived: bool) -> String {
+    match archived {
+        true => format!("chats.archived.{path}"),
+        false => format!("chats.tree.{path}"),
+    }
+}
+
+/// The current workspace's folders.
+fn folders(cx: &App) -> Vec<String> {
+    let id = Workspace::get(cx).id();
+    let all = Settings::get(cx).workspaces.iter();
+    let current = all.filter(|w| Some(w.id.as_str()) == id);
+    current.flat_map(|w| w.folders.clone()).collect()
+}
+
+/// `nodes` as rows at `depth`: each node, then while it is open its conversations, up to
+/// `PER_PLACE` unless `more` holds it, and its repos.
+fn walk(
+    out: &mut Vec<Line>,
+    nodes: Vec<Node>,
+    archived: bool,
+    depth: usize,
+    open: &dyn Fn(&Node) -> bool,
+    more: &HashSet<Key>,
+) {
+    for n in nodes {
+        let (on, count) = (open(&n), n.count());
+        out.push(Line::Node {
+            path: n.path.clone(),
+            archived,
+            depth,
+            open: on,
+            count,
+        });
+        if !on {
+            continue;
+        }
+        let all = more.contains(&Key::More(n.path.clone(), archived));
+        let left = n.past.len().saturating_sub(PER_PLACE);
+        let shown = if all { n.past.len() } else { PER_PLACE };
+        out.extend(
+            n.past
+                .into_iter()
+                .take(shown)
+                .map(|p| Line::Past(p, depth + 1)),
+        );
+        if left > 0 && !all {
+            let (path, depth) = (n.path, depth + 1);
+            out.push(Line::More {
+                path,
+                archived,
+                depth,
+                left,
+            });
+        }
+        walk(out, n.kids, archived, depth + 1, open, more);
+    }
+}
+
+fn tick(n: &mut usize) -> usize {
+    *n += 1;
+    *n - 1
 }
 
 /// A folder and a provider's id.
@@ -69,6 +195,8 @@ pub struct ChatList {
     filter: Filter,
     query: Entity<InputState>,
     show_archived: bool,
+    /// The nodes shown past `PER_PLACE`.
+    more: HashSet<Key>,
     selected: Option<Key>,
     /// The row whose delete waits for a confirm.
     deleting: Option<Key>,
@@ -89,6 +217,7 @@ impl ChatList {
             past: vec![],
             filter: Filter::All,
             show_archived: false,
+            more: HashSet::new(),
             selected: None,
             deleting: None,
             focus: cx.focus_handle(),
@@ -109,11 +238,9 @@ impl ChatList {
     fn watch(&mut self, cx: &mut Context<Self>) {
         let w = Workspace::get(cx);
         let mut places: Vec<String> = w.repos().iter().map(|r| r.path.clone()).collect();
-        let all = Settings::get(cx).workspaces.iter();
-        let current = all.filter(|x| Some(x.id.as_str()) == w.id());
-        for f in current.flat_map(|w| &w.folders) {
-            if !places.contains(f) {
-                places.push(f.clone());
+        for f in folders(cx) {
+            if !places.contains(&f) {
+                places.push(f);
             }
         }
         let providers = super::providers(cx);
@@ -172,9 +299,13 @@ impl ChatList {
         }));
     }
 
+    fn keys(&self, cx: &App) -> Vec<Key> {
+        self.lines(cx).iter().filter_map(Line::key).collect()
+    }
+
     /// The row after `key`'s, or the one before at the end, to take the selection when it goes.
     fn next(&self, key: &Key, cx: &App) -> Option<Key> {
-        let keys: Vec<_> = self.lines(cx).iter().filter_map(Line::key).collect();
+        let keys = self.keys(cx);
         let i = keys.iter().position(|k| k == key)?;
         keys.get(i + 1)
             .or(i.checked_sub(1).and_then(|i| keys.get(i)))
@@ -195,7 +326,7 @@ impl ChatList {
                 let cwd = p.cwd.clone().unwrap_or_default();
                 Some((cwd, id.clone(), super::provider(&p.provider)))
             }
-            Key::Archived => None,
+            _ => None,
         }
     }
 
@@ -254,28 +385,63 @@ impl ChatList {
         self.then(cwd, done, cx);
     }
 
-    /// Past conversations in the workspace's folders, archived or not, newest place first.
-    fn places(&self, archived: bool, cx: &App) -> Vec<(String, Vec<Past>)> {
+    /// The workspace's folders over their own conversations and their repos', then the repos in no
+    /// folder: the nodes with a conversation that is `archived` or not and matches the search.
+    fn tree(&self, archived: bool, cx: &App) -> Vec<Node> {
         let q = self.query(cx);
-        let mut places: Vec<(String, Vec<Past>)> = vec![];
-        let mut past = self.all(cx);
-        past.sort_by_key(|p| std::cmp::Reverse(p.modified));
-        for p in past {
-            let Some(cwd) = p
-                .cwd
-                .clone()
-                .filter(|_| p.archived() == archived)
-                .filter(|c| has(&q, &p.title) || has(&q, &label(c, cx)))
-            else {
-                continue;
-            };
-            match places.iter_mut().find(|(c, _)| *c == cwd) {
-                Some((_, list)) if list.len() < PER_PLACE => list.push(p),
-                Some(_) => {}
-                None => places.push((cwd, vec![p])),
+        let mut chats: HashMap<&str, Vec<Past>> = HashMap::new();
+        for ((place, _), past) in &self.past {
+            let name = label(place, cx);
+            let hit = |p: &&Past| p.archived() == archived && (has(&q, &p.title) || has(&q, &name));
+            let past = past.read(cx).value.iter().flatten().filter(hit).cloned();
+            chats.entry(place).or_default().extend(past);
+        }
+        let mut node = |path: &str| {
+            let mut past = chats.remove(path).unwrap_or_default();
+            past.sort_by_key(|p| Reverse(p.modified));
+            let (path, kids) = (path.to_string(), vec![]);
+            Node { path, past, kids }
+        };
+        let w = Workspace::get(cx);
+        let folders = folders(cx);
+        let mut taken: HashSet<&str> = folders.iter().map(String::as_str).collect();
+        let mut seen = HashSet::new();
+        let mut out = vec![];
+        for f in folders.iter().filter(|f| seen.insert(*f)) {
+            let mut n = node(f);
+            let dir = f.trim_end_matches(['/', '\\']);
+            for r in w.repos() {
+                if in_folder(&r.path, dir) && taken.insert(&r.path) {
+                    n.kids.push(node(&r.path));
+                }
+            }
+            n.kids.retain(|k| !k.past.is_empty());
+            n.kids.sort_by_key(|k| Reverse(k.newest()));
+            out.push(n);
+        }
+        for r in w.repos() {
+            if taken.insert(&r.path) {
+                out.push(node(&r.path));
             }
         }
-        places
+        out.retain(|n| n.count() > 0);
+        out
+    }
+
+    /// The tree's rows from `depth`. A node opens and closes at a click, and stays so; untouched,
+    /// it is open when it or one of its repos has one of the `RECENT` newest conversations.
+    fn grow(&self, out: &mut Vec<Line>, nodes: Vec<Node>, archived: bool, depth: usize, cx: &App) {
+        let searching = !self.query(cx).is_empty();
+        let mut ranked: Vec<&Node> = nodes.iter().flat_map(|n| once(n).chain(&n.kids)).collect();
+        ranked.retain(|n| !n.past.is_empty());
+        ranked.sort_by_key(|n| Reverse(n.past[0].modified));
+        let recent: Vec<String> = ranked.iter().take(RECENT).map(|n| n.path.clone()).collect();
+        let open = |n: &Node| {
+            let stored = ui_state::get(&state_key(&n.path, archived), cx);
+            let recent = || once(n).chain(&n.kids).any(|n| recent.contains(&n.path));
+            searching || stored.unwrap_or_else(recent)
+        };
+        walk(out, nodes, archived, depth, &open, &self.more);
     }
 
     fn query(&self, cx: &App) -> String {
@@ -294,33 +460,20 @@ impl ChatList {
                 has(&q, &label(r, cx)) || feed.iter().any(|(_, i)| said(i))
             });
             if !open.is_empty() {
-                out.push(Line::Heading("Active".into(), None));
+                out.push(Line::Heading("Active"));
                 out.extend(open.into_iter().map(|(r, n, s)| Line::Open(r, n, s)));
             }
         }
         if self.filter == Filter::Active {
             return out;
         }
-        let place = |out: &mut Vec<Line>, (cwd, past): (String, Vec<Past>)| {
-            let name = label(&cwd, cx);
-            let icon = match name.ends_with('/') {
-                true => Icon::Folder,
-                false => Icon::Repo,
-            };
-            out.push(Line::Heading(name, Some(icon)));
-            out.extend(past.into_iter().map(Line::Past));
-        };
-        for p in self.places(false, cx) {
-            place(&mut out, p);
-        }
-        let archived = self.places(true, cx);
-        let n: usize = archived.iter().map(|(_, p)| p.len()).sum();
+        self.grow(&mut out, self.tree(false, cx), false, 0, cx);
+        let archived = self.tree(true, cx);
+        let n: usize = archived.iter().map(Node::count).sum();
         if n > 0 {
             out.push(Line::Archived(n));
             if self.show_archived {
-                for p in archived {
-                    place(&mut out, p);
-                }
+                self.grow(&mut out, archived, true, 1, cx);
             }
         }
         out
@@ -342,6 +495,21 @@ impl ChatList {
                 };
                 super::resume(cwd, p, id.clone(), cx);
             }
+            // A search holds open every node it matches in.
+            Key::Node(..) if !self.query(cx).is_empty() => {}
+            Key::Node(path, archived) => {
+                let lines = self.lines(cx);
+                let line = lines.iter().find(|l| l.key().as_ref() == Some(key));
+                if let Some(open) = line.and_then(|l| l.open(false)) {
+                    ui_state::set(&state_key(path, *archived), !open, cx);
+                }
+            }
+            // The first row it brings takes its place and the selection.
+            Key::More(..) => {
+                let at = self.keys(cx).iter().position(|k| k == key);
+                self.more.insert(key.clone());
+                self.selected = at.and_then(|i| self.keys(cx).get(i).cloned());
+            }
             Key::Archived => self.show_archived = !self.show_archived,
         }
         // Queued after the show, whose chat takes the cursor when its tab comes forward.
@@ -351,10 +519,8 @@ impl ChatList {
     }
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keys: Vec<(usize, Key)> = self
-            .lines(cx)
-            .iter()
-            .enumerate()
+        let lines = self.lines(cx);
+        let keys: Vec<(usize, Key)> = (lines.iter().enumerate())
             .filter_map(|(i, l)| Some((i, l.key()?)))
             .collect();
         let at = keys
@@ -365,6 +531,11 @@ impl ChatList {
             .clone()
             .filter(|k| self.conversation(k, cx).is_some());
         let k = &e.keystroke;
+        let go = |l: &mut Self, i: usize| {
+            let (row, key) = keys[i].clone();
+            l.selected = Some(key);
+            l.scroll.scroll_to_item(row);
+        };
         match (k.key.as_str(), self.deleting.clone()) {
             ("enter", Some(key)) => self.delete(&key, window, cx),
             ("escape", Some(_)) => self.deleting = None,
@@ -372,10 +543,26 @@ impl ChatList {
             ("down" | "up", None) if !keys.is_empty() => {
                 let step = if k.key == "down" { 1 } else { -1 };
                 let last = keys.len() as isize - 1;
-                let next = at.map_or(0, |i| (i as isize + step).clamp(0, last));
-                let (row, key) = keys[next as usize].clone();
-                self.selected = Some(key);
-                self.scroll.scroll_to_item(row);
+                go(
+                    self,
+                    at.map_or(0, |i| (i as isize + step).clamp(0, last)) as usize,
+                );
+            }
+            // As in a tree: right opens, left closes or goes up to the node the row is in.
+            ("right" | "left", None) => {
+                let Some(at) = at else { return };
+                let (row, key) = keys[at].clone();
+                let line = &lines[row];
+                let up = keys[..at].iter().rposition(|(r, k)| {
+                    matches!(k, Key::Node(..) | Key::Archived) && lines[*r].depth() < line.depth()
+                });
+                match (k.key == "right", line.open(self.show_archived), up) {
+                    (true, Some(false), _) | (false, Some(true), _) => {
+                        self.activate(&key, window, cx)
+                    }
+                    (false, _, Some(up)) => go(self, up),
+                    _ => return,
+                }
             }
             ("enter", None) => match self.selected.clone() {
                 Some(key) => self.activate(&key, window, cx),
@@ -392,11 +579,11 @@ impl ChatList {
         cx.notify();
     }
 
-    /// One row of the list; `n` counts the open and the past rows for their ids.
+    /// One row of the list; `n` counts the open, past, node and more rows for their ids.
     fn line(
         &self,
         line: &Line,
-        n: &mut (usize, usize),
+        n: &mut (usize, usize, usize, usize),
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -404,9 +591,10 @@ impl ChatList {
         let focused = self.focus.contains_focused(window, cx);
         let key = line.key();
         let on = key.is_some() && key == self.selected;
+        let depth = line.depth();
         let row = |id: ElementId, label: String, cx: &mut Context<Self>| {
             let key = key.clone();
-            ui::list_row(id, on, focused, cx)
+            let row = ui::list_row(id, on, focused, cx)
                 .test_support()
                 .aria_label(SharedString::from(label))
                 .group(ui::HOVER)
@@ -418,33 +606,74 @@ impl ChatList {
                         l.deleting = None;
                         l.activate(k, window, cx);
                     }
-                }))
+                }));
+            nest(row, depth, cx)
         };
         match line {
-            Line::Heading(text, icon) => div()
+            Line::Heading(name) => div()
                 .flex()
                 .flex_none()
                 .items_end()
-                .gap(px(6.))
                 .h(px(28.))
-                .px(px(10.))
+                .px(px(16.))
                 .pb(px(4.))
                 .text_size(text::LABEL)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.muted)
-                .children(icon.map(|i| i.size(px(12.))))
-                // A section is a label; a repo or folder keeps its name as written.
-                .child(div().truncate().child(match icon {
-                    Some(_) => text.clone(),
-                    None => text.to_uppercase(),
-                }))
+                .child(name.to_uppercase())
                 .into_any_element(),
+            Line::Node {
+                path, open, count, ..
+            } => {
+                let i = tick(&mut n.2);
+                let name = label(path, cx);
+                let icon = match name.ends_with('/') {
+                    true => Icon::Folder,
+                    false => Icon::Repo,
+                };
+                row(("chats.node", i).into(), name.clone(), cx)
+                    .h(px(NODE))
+                    .gap(px(4.))
+                    .aria_expanded(*open)
+                    .aria_description(SharedString::from(count.to_string()))
+                    .child(slot().text_color(t.muted).child(chevron(*open)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(t.muted)
+                            .child(icon.size(px(14.))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
+                    )
+                    .when(!open, |r| {
+                        r.child(
+                            div()
+                                .text_size(text::SMALL)
+                                .text_color(t.muted)
+                                .child(count.to_string()),
+                        )
+                    })
+                    .into_any_element()
+            }
+            Line::More { left, .. } => {
+                let said = format!("Show {left} more");
+                row(("chats.more", tick(&mut n.3)).into(), said.clone(), cx)
+                    .text_color(t.muted)
+                    .child(slot())
+                    .child(said)
+                    .into_any_element()
+            }
             Line::Open(repo, chat, session) => {
-                let i = n.0;
-                n.0 += 1;
+                let i = tick(&mut n.0);
                 let key = Key::Open(repo.clone(), *chat);
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(i, key, cx);
+                    return self.confirm(i, key, depth, cx);
                 }
                 let s = session.read(cx);
                 let state = s.state(cx);
@@ -472,7 +701,7 @@ impl ChatList {
                         cx,
                     ));
                 }
-                let slot = div()
+                let side = div()
                     .flex()
                     .flex_none()
                     .justify_end()
@@ -496,15 +725,14 @@ impl ChatList {
                             .truncate()
                             .child(last.unwrap_or("New chat".into())),
                     )
-                    .child(slot)
+                    .child(side)
                     .into_any_element()
             }
-            Line::Past(p) => {
-                let k = n.1;
-                n.1 += 1;
+            Line::Past(p, _) => {
+                let k = tick(&mut n.1);
                 let key = Key::Past(p.id.clone());
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(k, key, cx);
+                    return self.confirm(k, key, depth, cx);
                 }
                 let archive = match p.archived() {
                     true => "Unarchive  E",
@@ -518,7 +746,7 @@ impl ChatList {
                     .text_color(t.muted)
                     .group_hover(ui::HOVER, |s| s.invisible())
                     .child(age(now() - p.modified as i64 / 1000));
-                let slot = div()
+                let side = div()
                     .relative()
                     .flex()
                     .flex_none()
@@ -535,19 +763,16 @@ impl ChatList {
                             .child(delete),
                     );
                 row(("chats.past", k).into(), p.title.clone(), cx)
-                    .child(div().text_color(t.muted).child(Icon::Chat.size(px(12.))))
+                    .child(slot().text_color(t.muted).child(Icon::Chat.size(px(12.))))
                     .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
-                    .child(slot)
+                    .child(side)
                     .into_any_element()
             }
             Line::Archived(count) => {
-                let chevron = match self.show_archived {
-                    true => Icon::Down.size(px(12.)),
-                    false => Icon::Chevron.size(px(12.)),
-                };
                 row("chats.archived".into(), format!("Archived ({count})"), cx)
                     .text_color(t.muted)
-                    .child(chevron)
+                    .aria_expanded(self.show_archived)
+                    .child(slot().child(chevron(self.show_archived)))
                     .child(format!("Archived ({count})"))
                     .into_any_element()
             }
@@ -579,7 +804,7 @@ impl ChatList {
     }
 
     /// A delete waiting for its confirm, in the row's own place and height.
-    fn confirm(&self, ix: usize, key: Key, cx: &mut Context<Self>) -> AnyElement {
+    fn confirm(&self, ix: usize, key: Key, depth: usize, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         // Codex's delete archives the conversation in Codex's own history.
         let keeps = (self.conversation(&key, cx)).is_some_and(|(.., p)| p.id == CODEX.id);
@@ -610,7 +835,7 @@ impl ChatList {
                 .hover(|s| s.bg(t.hover))
                 .child(label)
         };
-        div()
+        let row = div()
             .id((row, ix))
             .test_support()
             .flex()
@@ -621,7 +846,7 @@ impl ChatList {
             .px(px(10.))
             .rounded(radius::ITEM)
             .bg(t.error.opacity(0.14))
-            .child(div().text_color(t.error).child(Icon::Trash.size(px(12.))))
+            .child(slot().text_color(t.error).child(Icon::Trash.size(px(12.))))
             .child(div().flex_1().min_w_0().truncate().child(ask))
             .child(
                 small(no, "Cancel")
@@ -635,8 +860,8 @@ impl ChatList {
                 small(yes, "Delete")
                     .text_color(t.error)
                     .on_click(cx.listener(move |l, _, window, cx| l.delete(&key, window, cx))),
-            )
-            .into_any_element()
+            );
+        nest(row, depth, cx).into_any_element()
     }
 }
 
@@ -648,7 +873,7 @@ impl Render for ChatList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let lines = self.lines(cx);
-        let mut n = (0, 0);
+        let mut n = (0, 0, 0, 0);
         let rows: Vec<_> = lines
             .iter()
             .map(|l| self.line(l, &mut n, window, cx))

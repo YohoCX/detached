@@ -24,6 +24,7 @@ use super::branches::{self, Intent};
 use super::sync::{Kind, sync_one, sync_repos};
 use super::{State, add_folders, run_core, settings_call};
 use crate::dock;
+use crate::ui::tree::{chevron, nest, slot};
 use crate::ui::{self, Icon, Menu, radius, text, theme, theme::Theme};
 use crate::util::{folder_name, in_folder};
 use kernel::activity::Activity;
@@ -37,9 +38,6 @@ const COLLAPSED: &str = "sidebar.collapsed";
 
 /// Every row's height: the list lays them out as uniform.
 const ROW: Pixels = px(28.);
-/// Where a tree row's chevron slot starts at depth 0, and how far each level moves it.
-const BASE: f32 = 16.;
-const INDENT: f32 = 16.;
 
 const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
     "Finder"
@@ -619,39 +617,17 @@ impl Render for Sidebar {
 
 /// A tree row at `depth`, with a guide down each level it is nested in.
 fn line(ix: usize, depth: usize, cx: &App) -> ObservedElement<Stateful<Div>> {
-    let t = theme(cx);
-    let x = |level: usize| px(BASE + level as f32 * INDENT);
-    div()
+    let row = div()
         .id(("sidebar.row", ix))
         .test_support()
-        .relative()
         .flex()
         .items_center()
         .gap(px(4.))
         .h(ROW)
         .mx(px(6.))
-        .pl(x(depth))
         .pr(px(8.))
-        .rounded(radius::WIDGET)
-        .children((0..depth).map(|level| {
-            let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
-            guide.left(x(level) + px(8.))
-        }))
-}
-
-/// The 16 px box a row's chevron sits in.
-fn slot() -> Div {
-    div()
-        .flex()
-        .flex_none()
-        .size(px(16.))
-        .items_center()
-        .justify_center()
-}
-
-fn chevron(open: bool) -> impl IntoElement {
-    let icon = if open { Icon::Down } else { Icon::Chevron };
-    icon.size(px(12.))
+        .rounded(radius::WIDGET);
+    nest(row, depth, cx)
 }
 
 fn name_of(name: String) -> ObservedElement<Stateful<Div>> {
