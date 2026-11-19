@@ -206,8 +206,14 @@ pub fn live(cx: &App) -> Vec<String> {
     let live = open(cx)
         .into_iter()
         .filter(|(.., s)| !s.read(cx).is_new(cx));
-    live.map(|(repo, n, _)| ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into())
-        .collect()
+    live.map(|(repo, n, _)| {
+        let doc = Doc::Chat {
+            repo: repo.clone(),
+            n,
+        };
+        format!("{} · {}", label(&repo, cx), ChatDocs.title(&doc, None, cx))
+    })
+    .collect()
 }
 
 /// Resets the idle open chat that shows past conversation `id`, which is going away.

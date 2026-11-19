@@ -177,7 +177,11 @@ impl Thread {
                     .flex()
                     .gap(px(8.))
                     .text_size(text::SMALL)
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(n.author.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(n.author.clone()),
+                    )
                     .child(div().text_color(t.muted).child(ago(n.time, now()))),
             )
             .child(self.notes[k].clone())

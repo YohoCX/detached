@@ -242,14 +242,13 @@ impl DockAreaRenderer for Skin {
     }
 }
 
-/// The grip ids the panes had before the dock.
 /// The active tab's accent bar on the tab bar's bottom line, growing out from the middle.
 fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
     div()
         .absolute()
         .bottom(px(-7.))
         .h(px(2.))
-        .rounded(px(1.))
+        .rounded_full()
         .bg(color)
         .with_animation(
             "underline",
@@ -261,6 +260,7 @@ fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
         )
 }
 
+/// The grip ids the panes had before the dock.
 fn grip(p: DockPlacement) -> &'static str {
     match p {
         DockPlacement::Left => "grip.repos",
@@ -372,7 +372,8 @@ impl TabGroupRenderer for Group {
                 .rounded(radius::ICON_BUTTON)
                 .when(preview, |d| d.italic())
                 .when_some(l.tip.clone(), |d, tip| {
-                    d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    d.aria_description(tip.clone())
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 })
                 .relative()
                 .font_weight(FontWeight::MEDIUM)

@@ -499,11 +499,7 @@ impl MrPage {
             .flex_wrap()
             .items_center()
             .gap(px(6.))
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .child(m.author.clone()),
-            )
+            .child(div().font_weight(FontWeight::BOLD).child(m.author.clone()))
             .child("wants to merge")
             .child(branch(source))
             .child(div().text_color(t.muted).child("into"))

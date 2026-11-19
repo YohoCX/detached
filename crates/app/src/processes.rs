@@ -384,7 +384,11 @@ impl Processes {
             .gap(px(6.))
             .child(
                 row()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(e.name.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(e.name.clone()),
+                    )
                     .child(
                         div()
                             .flex_1()

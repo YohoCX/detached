@@ -97,11 +97,9 @@ pub fn modal(
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| close(window, cx));
-    let scrim = scrim.with_animation(
-        "scrim.in",
-        Animation::new(motion::BASE),
-        |s, t| s.opacity(t),
-    );
+    let scrim = scrim.with_animation("scrim.in", Animation::new(motion::BASE), |s, t| {
+        s.opacity(t)
+    });
     let content = glass(div(), cx)
         .w(width)
         .rounded(radius)
@@ -164,18 +162,10 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -
 /// A pill with a label, 28px high.
 pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
-    pressable(id)
-        .h(px(28.))
-        .px(px(14.))
-        .border_1()
+    pill(id, label)
         .border_color(t.line)
-        .rounded(radius::PILL)
         .bg(t.input)
-        .text_size(text::SMALL)
-        .font_weight(FontWeight::SEMIBOLD)
         .hover(|s| s.bg(t.hover).border_color(t.selected_ring))
-        .active(|s| s.opacity(0.75))
-        .child(label.into())
 }
 
 /// A `button` the eye goes to first.
@@ -185,11 +175,24 @@ pub fn primary_button(
     cx: &App,
 ) -> Stateful<Div> {
     let t = theme(cx);
-    button(id, label, cx)
+    pill(id, label)
         .bg(t.primary)
         .border_color(t.primary)
         .text_color(t.primary_fg)
-        .hover(|s| s.bg(t.primary.opacity(0.88)).border_color(t.primary))
+        .hover(|s| s.bg(t.primary.opacity(0.88)))
+}
+
+// GPUI takes one hover style per element, so each button sets its own.
+fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    pressable(id)
+        .h(px(28.))
+        .px(px(14.))
+        .border_1()
+        .rounded(radius::PILL)
+        .text_size(text::SMALL)
+        .font_weight(FontWeight::SEMIBOLD)
+        .active(|s| s.opacity(0.75))
+        .child(label.into())
 }
 
 /// The group a row names with `.group(HOVER)` to show its `hover_button`s.

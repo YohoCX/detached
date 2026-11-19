@@ -314,6 +314,8 @@ mod tests {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::init(cx);
+            // The test clock stands still, so an animation would stay on its first frame.
+            cx.set_reduce_motion(true);
             actions::init(cx);
             ui_state::init(dir.path(), cx);
             keymap::bind(&BTreeMap::new(), cx);
