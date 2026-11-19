@@ -316,7 +316,7 @@ fn the_wsl_leash_kills_a_detached_descendant_on_hup() {
 
 #[cfg(unix)]
 #[test]
-fn the_wsl_leash_cleans_up_the_cli_s_group_on_normal_exit() {
+fn the_wsl_leash_cleans_up_the_cli_s_group_and_detached_child_on_normal_exit() {
     check_wsl_leash("exit");
 }
 
@@ -329,24 +329,23 @@ sleep() {{
     if [ -n "$snapshot" ] && [ -z "$sampled" ]; then
         sampled=1
         echo sampled
-        while kill -0 "$pid" 2>/dev/null; do command sleep 0.02; done
+        if [ "{end}" = exit ]; then
+            while kill -0 "$pid" 2>/dev/null; do command sleep 0.02; done
+        fi
     else
         command sleep "$@"
     fi
 }}
 {WSL_LEASH}"#
     );
-    let cli = r#"sh -c '"$@" & wait' worker perl -MPOSIX=setsid -e '
+    let cli = r#"if [ "$1" = exit ]; then sleep "$2" & fi
+perl -MPOSIX=setsid -e '
     my ($end, $timeout) = @ARGV;
     $| = 1;
     $SIG{ALRM} = sub { print "survived\n"; exit 1; };
     alarm $timeout;
-    if ($end eq "exit") {
-        print "ready\n";
-    } else {
-        $SIG{TERM} = "IGNORE";
-        setsid() >= 0 or die $!;
-    }
+    $SIG{TERM} = "IGNORE" if $end eq "exit";
+    setsid() >= 0 or die $!;
     sleep $timeout + 1;
 ' "$@" &
 cat >/dev/null
@@ -398,19 +397,21 @@ exit 37"#;
         // SAFETY: a signal to the leash this test started.
         assert_eq!(unsafe { libc::kill(host.id() as i32, libc::SIGHUP) }, 0);
     }
-    drop(stdin);
     assert_eq!(
         ready.unwrap_or_else(|e| panic!("waiting for the leash fixture ({end}): {e}")),
-        if end == "exit" { "ready" } else { "sampled" }
+        "sampled"
     );
-    assert_eq!(next().unwrap(), "eof");
+    if end == "exit" {
+        drop(stdin);
+        assert_eq!(next().unwrap(), "eof");
+    }
     assert_eq!(
         next(),
         Err(mpsc::RecvTimeoutError::Disconnected),
         "a child still holds stdout after {end}"
     );
     let status = host.wait().unwrap();
-    if end != "parent" {
+    if end == "exit" {
         assert_eq!(status.code(), Some(37));
     }
 }

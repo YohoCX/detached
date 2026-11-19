@@ -70,7 +70,7 @@ exec 3<&0; setsid "$@" <&3 3<&- & exec 3<&-
 pid=$!
 walk() {
     rows=$(ps -A -o pid=,ppid=,pgid= 2>/dev/null) || return
-    printf '%s\n' "$rows" | awk -v root="$pid" '
+    printf '%s\n' "$rows" | SNAPSHOT="$1" awk -v root="$pid" '
         NF == 3 {
             children[$2] = children[$2] " " $1
             if ($3 == root) group[$1] = 1
@@ -81,7 +81,12 @@ walk() {
             n = split(children[pid], list)
             for (i = 1; i <= n; i++) tree(list[i])
         }
-        END { tree(root); for (pid in group) tree(pid) }'
+        END {
+            tree(root)
+            for (pid in group) tree(pid)
+            n = split(ENVIRON["SNAPSHOT"], seeds)
+            for (i = 1; i <= n; i++) tree(seeds[i])
+        }'
 }
 snapshot=
 while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
@@ -92,7 +97,7 @@ while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
     fi
     sleep 1
 done
-pids=$(printf '%s\n' $snapshot $(walk) | awk 'NF && !seen[$0]++')
+pids=$(printf '%s\n' $snapshot $(walk "$snapshot") | awk 'NF && !seen[$0]++')
 kill -TERM "-$pid" 2>/dev/null || pids="$pid $pids"
 [ -z "$pids" ] || kill -TERM $pids 2>/dev/null
 pids="-$pid $pids"
@@ -789,9 +794,10 @@ impl Client {
     fn open(&self, opened: Opened, history: Vec<Update>, mut events: Events) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.gone {
+            drop(st);
             return Err(Error::Other(format!(
                 "claude exited: {}",
-                last(&self.proc.stderr())
+                last(&self.proc.stderr_after_exit())
             )));
         }
         events(Event::Opened(opened));
@@ -875,17 +881,13 @@ impl Client {
         let sink = st.sink.take();
         drop(st);
         if let Some(mut sink) = sink {
-            let stderr = if self.closing.load(Ordering::SeqCst) {
-                String::new()
+            sink(if self.closing.load(Ordering::SeqCst) {
+                Event::Closed
             } else {
-                self.proc.stderr_after_exit()
-            };
-            sink(match self.closing.load(Ordering::SeqCst) {
-                true => Event::Closed,
-                false => Event::Exited(Exit {
+                Event::Exited(Exit {
                     code: status.code(),
-                    stderr,
-                }),
+                    stderr: self.proc.stderr_after_exit(),
+                })
             });
         }
     }
