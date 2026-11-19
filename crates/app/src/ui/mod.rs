@@ -11,6 +11,7 @@ pub mod page;
 pub mod popup;
 pub mod suggest;
 pub mod theme;
+pub mod tree;
 
 use std::rc::Rc;
 use std::time::Duration;
