@@ -149,7 +149,7 @@ impl Fix {
         }));
         let tree = m.tree.display().to_string();
         let mut spec = Spec::new(&CLAUDE, &tree, Kind::Chat);
-        (spec.mode, spec.mcp) = (CLAUDE.full.into(), m.mcp);
+        spec.mode = CLAUDE.full.into();
         let seat = Seat {
             who: Identity::of(Kind::Chat, &tree),
             accept: Some(self.repo.clone()),
@@ -187,8 +187,6 @@ impl Fix {
         let core = crate::core(cx).clone();
         let (repo, base, branch) = (self.repo.clone(), self.base.clone(), self.branch.clone());
         let commits = blocking::run(cx, move || {
-            let private = core.data_dir.join("private").join(fix::private(&branch));
-            _ = std::fs::remove_dir_all(private);
             fix::commits(&core.env(), Path::new(&repo), &base, &branch)
         });
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -267,7 +265,7 @@ pub fn merge(ids: [&str; 4], s: Subject, branch: String, cx: &mut App) -> Task<R
 }
 
 /// Ends the Fix's session if it runs, removes its worktree and keeps its branch.
-pub fn discard(ids: [&str; 4], tree: PathBuf, branch: String, cx: &mut App) -> Task<Result<()>> {
+pub fn discard(ids: [&str; 4], tree: PathBuf, cx: &mut App) -> Task<Result<()>> {
     if let Some(f) = find(cx, ids) {
         f.update(cx, |f, cx| {
             f.close(cx);
@@ -278,7 +276,7 @@ pub fn discard(ids: [&str; 4], tree: PathBuf, branch: String, cx: &mut App) -> T
     let repo = ids[0].to_string();
     let op = move |core: &AppState, id, progress: Progress| {
         let paths = [Path::new(&repo), &tree];
-        core.op(id, |c| fix::discard(core, paths, &branch, c, progress))
+        core.op(id, |c| fix::discard(core, paths, c, progress))
     };
     let removed =
         Activity::global(cx).update(cx, |a, cx| a.run_op(ids[0], "Discard the Fix", op, cx));

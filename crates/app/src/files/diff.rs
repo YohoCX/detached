@@ -343,7 +343,6 @@ impl DiffView {
             )
         });
         let repo = Workspace::get(cx).name_of(&d.repo).to_string();
-        let zed = cx.listener(|this, _, _, cx| this.zed(cx));
         viewer::header(&d.path, repo, cx)
             .min_w_0()
             .flex_wrap()
@@ -376,7 +375,6 @@ impl DiffView {
                 )
                 .children(seg)
             })
-            .child(viewer::zed_button(zed, cx))
     }
 
     fn open_goto(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -408,19 +406,6 @@ impl DiffView {
             (Body::Conflict, Some(code)) => code.update(cx, |c, cx| c.focus(window, cx)),
             _ => window.focus(&self.state.focus_handle(cx), cx),
         }
-    }
-
-    /// Opens the file in Zed at the cursor's line on the right side.
-    pub(super) fn zed(&self, cx: &mut App) {
-        let line = match (&self.body, &self.code) {
-            (Body::Conflict, Some(code)) => Some(code.read(cx).line(cx)),
-            (Body::Diff, _) => self.cursor(cx).and_then(|(side, line)| match side {
-                DiffSide::Modified => Some(line),
-                DiffSide::Original => other_line(&self.changes, side, line),
-            }),
-            _ => None,
-        };
-        viewer::open_in_zed(&self.doc.repo, &self.doc.path, line, cx);
     }
 
     fn diff(&self, cx: &mut Context<Self>) -> Diff {
@@ -534,14 +519,13 @@ impl Render for DiffView {
                 .into_any_element(),
             Body::Diff => self.diff(cx).into_any_element(),
         };
-        let zed = cx.listener(|this, _, _, cx| this.zed(cx));
         div()
             .flex()
             .flex_col()
             .size_full()
             .child(self.header(cx))
             .when(matches!(self.body, Body::Conflict), |d| {
-                d.child(viewer::conflict_bar(zed, cx))
+                d.child(viewer::conflict_bar(cx))
             })
             .child(
                 div()

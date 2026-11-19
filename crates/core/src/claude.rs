@@ -55,6 +55,7 @@ const DENIED: &[&str] = &[
 const BLOCKED: &[&str] = &["project_settings", "local_settings", "skills"];
 const MODES: &[&str] = &["default", "acceptEdits", "plan", "auto", "dontAsk"];
 const SERVER: &str = "detached-host";
+const CONNECTORS: &str = "ENABLE_CLAUDEAI_MCP_SERVERS";
 /// The per-session plugin's name; its skills are `detached:<name>`.
 const PLUGIN: &str = "detached";
 /// The CLI on the leash's own stdin, SIGTERM once the host is gone: its parent gone, or a hang-up,
@@ -135,8 +136,12 @@ fn env(core: &AppState, spec: &Spec) -> Vec<(String, OsString)> {
         vars.retain(|(k, _)| k != "CLAUDE_CODE_TMPDIR");
         vars.push(("CLAUDE_CODE_TMPDIR".into(), tmp.into()));
     }
+    // The account's claude.ai connectors are MCP servers too.
+    vars.push((CONNECTORS.into(), "false".into()));
     if spec.wsl.is_some() {
-        let names = vars.iter().filter(|(k, _)| p.env.contains(&k.as_str()));
+        let names = vars
+            .iter()
+            .filter(|(k, _)| p.env.contains(&k.as_str()) || k == CONNECTORS);
         let flag = |k: &str| if PATHS.contains(&k) { "up" } else { "u" };
         let names: Vec<String> = names.map(|(k, _)| format!("{k}/{}", flag(k))).collect();
         vars.push(("WSLENV".into(), names.join(":").into()));
@@ -463,20 +468,17 @@ fn sources(spec: &Spec) -> &'static str {
 /// `spec` as flags, all of them again on a resume: the CLI keeps none of them. `off` are the skills
 /// it would read itself that must not load.
 fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<String> {
-    let (sources, strict) = (sources(spec), spec.kind != Kind::Chat);
     let mut a: Vec<String> = BASE.iter().map(|s| s.to_string()).collect();
     a.extend(
         [
             "--permission-mode",
             &spec.mode,
             "--setting-sources",
-            sources,
+            sources(spec),
+            "--strict-mcp-config",
         ]
         .map(String::from),
     );
-    if strict {
-        a.push("--strict-mcp-config".into());
-    }
     let mut denied: Vec<String> = DENIED.iter().map(|d| d.to_string()).collect();
     let mut settings = serde_json::Map::new();
     if !off.is_empty() {
@@ -509,9 +511,6 @@ fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<Stri
     a.push(format!("--disallowedTools={}", denied.join(",")));
     if !settings.is_empty() {
         a.extend(["--settings".into(), Value::Object(settings).to_string()]);
-    }
-    if let Some(m) = &spec.mcp {
-        a.extend(["--mcp-config".into(), mounted(spec, m)]);
     }
     if spec.tools.is_some() {
         a.extend(["--allowedTools".into(), format!("mcp__{SERVER}__*")]);

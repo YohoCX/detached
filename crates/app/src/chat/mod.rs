@@ -122,12 +122,17 @@ pub fn ask(repo: String, prompt: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-/// The providers a chat may pick: Claude, and Codex once it is on.
-pub fn providers(cx: &App) -> Vec<&'static Provider> {
-    let config: Config = (kernel::settings::Settings::get(cx))
-        .block(detached_core::adapters::BLOCK)
-        .unwrap_or_default();
-    PROVIDERS.into_iter().filter(|p| config.shows(p)).collect()
+/// The providers a chat may pick: Claude alone, since Codex cannot turn off its MCP servers per
+/// session.
+pub fn providers(_: &App) -> Vec<&'static Provider> {
+    vec![&CLAUDE]
+}
+
+/// Whether Codex is on: it then takes an untrusted run's Codex seats.
+pub fn codex_on(cx: &App) -> bool {
+    let config: Option<Config> =
+        kernel::settings::Settings::get(cx).block(detached_core::adapters::BLOCK);
+    config.is_some_and(|c| c.codex)
 }
 
 /// The provider of a past conversation, by its id.

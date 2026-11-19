@@ -32,7 +32,6 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `vcs.popup` | VCS operations popup | Ctrl+V; Alt+` on Windows and Linux | M1 | V3 |
 | `diff.show` | Show diff | Cmd+D | M1 | V2 |
 | `diff.next` / `diff.prev` | Next / previous change | F7 / Shift+F7 | M1 | V2 |
-| `file.openInZed` | Open the shown file in Zed | | M1 | V2 |
 | `vcs.rollback` | Rollback | Cmd+Alt+Z | M3 | — |
 | `app.settings` | Settings (accounts, removed repos, git) | Cmd+, | M1 | V1 |
 | `panel.mergeRequests` | Merge Requests app | | M2 | V5 |

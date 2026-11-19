@@ -100,7 +100,8 @@ fn the_readme_diff_starts_on_its_first_change_and_steps_with_f7(cx: &mut TestApp
         label(cx, "diff.pill").as_deref(),
         Some("HEAD ↔ Working tree")
     );
-    assert_eq!(label(cx, "viewer.zed").as_deref(), Some("Open in Zed"));
+    assert!(cx.find("viewer.zed").is_none(), "no Open in Zed");
+    assert!(actions::find("file.openInZed").is_none());
     assert_eq!(text(cx, "old", 5).as_deref(), Some("line 5"));
     assert_eq!(current_line(cx), "line 5 changed");
     cx.press("f7");
@@ -478,6 +479,7 @@ fn a_conflicted_file_shows_the_bar_and_its_markers(cx: &mut TestAppContext) {
     open(cx, &r, None, "README.md", None);
     shown(cx, "<<<<<<<");
     assert_eq!(label(cx, "viewer.conflict").as_deref(), Some(bar));
+    assert!(cx.find("viewer.zed").is_none() && cx.find("viewer.conflict.zed").is_none());
     let doc = DiffDoc {
         repo: r.display().to_string(),
         path: "README.md".into(),
@@ -489,6 +491,7 @@ fn a_conflicted_file_shows_the_bar_and_its_markers(cx: &mut TestAppContext) {
     wait_until(cx, |cx| cx.find("diff.pill").is_some());
     shown(cx, ">>>>>>> side");
     assert_eq!(label(cx, "viewer.conflict").as_deref(), Some(bar));
+    assert!(cx.find("viewer.conflict.zed").is_none());
     assert!(
         cx.find("diff.next").is_none(),
         "no change stepping in the editor"

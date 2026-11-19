@@ -278,6 +278,16 @@ fn chat_here_on_a_folder_opens_a_chat_on_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_repo_menu_has_no_open_in_zed(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = path(cx.sb.repo("lib"));
+    let id = row(cx, &lib).id;
+    cx.update(|w, cx| w.right_click(id, cx));
+    cx.update(|w, cx| assert!(!menu::pick("Open in Zed", w, cx)));
+    cx.update(|w, cx| assert!(menu::pick("Copy Path", w, cx)));
+}
+
+#[gpui_kit::test]
 fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let (lib, solo, ws) = (

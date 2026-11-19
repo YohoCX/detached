@@ -229,7 +229,7 @@ fn a_trusted_review_ends_with_one_verified_card_from_two_sources_and_leaves_no_t
 }
 
 #[gpui::test]
-fn codex_verifies_claude_s_findings_on_a_trusted_subject(cx: &mut TestAppContext) {
+fn claude_stands_in_for_codex_on_a_trusted_subject(cx: &mut TestAppContext) {
     let f = boot(cx);
     codex(&f);
     trust(&f);
@@ -243,12 +243,15 @@ fn codex_verifies_claude_s_findings_on_a_trusted_subject(cx: &mut TestAppContext
     );
     let p = run(&f, "review", None, true, cx);
     let s = ended(&p, cx);
+    let limits = &s.started.as_ref().unwrap().limits;
+    let mcp = "cross-provider verification unavailable: Codex cannot turn off its MCP servers";
+    assert!(limits.iter().any(|l| l.starts_with(mcp)), "{limits:?}");
     let head = s.heads().next().unwrap();
     assert!(record::verified(head));
-    assert_eq!(head.verdict.as_ref().unwrap().1, "codex");
-    assert_eq!(record::corroboration(&s.sources(&head.id)), 1);
+    assert_ne!(head.verdict.as_ref().unwrap().1, "codex");
     let verifier = s.participants.iter().find(|p| p.name == "verify-f1-1");
-    assert_eq!(verifier.unwrap().model, "codex");
+    assert_ne!(verifier.unwrap().model, "codex");
+    assert!(!f.core.data_dir.join("private").exists(), "no MCP file");
 }
 
 #[cfg(unix)]

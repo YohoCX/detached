@@ -758,27 +758,16 @@ fn codex_refuses_a_chat_in_a_repo_whose_settings_are_not_trusted() {
 }
 
 #[test]
-fn a_run_s_mcp_file_reaches_codex_as_its_servers() {
+fn a_codex_session_without_the_host_s_tools_gets_no_mcp_server() {
     let sb = codex();
-    let file = sb.path("mcp.json");
-    let servers = json!({"mcpServers": {
-        "local": {"command": "srv", "args": ["-v"], "env": {"TOKEN": "t"}},
-        "web": {"type": "http", "url": "https://x.test/mcp", "headers": {"Authorization": "b"}},
-    }});
-    std::fs::write(&file, servers.to_string()).unwrap();
     let mut spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
-    (spec.trusted, spec.mcp) = (true, Some(file));
+    spec.trusted = true;
     let (tx, rx) = mpsc::channel();
     let open = Acp::default().start(&sb.state, &spec, None, Box::new(move |e| _ = tx.send(e)));
     let open = open.unwrap();
     open.prompt("params").unwrap();
     let params: Value = serde_json::from_str(&said(&rx)).unwrap();
-    let want = json!([
-        {"name": "local", "command": "srv", "args": ["-v"], "env": [{"name": "TOKEN", "value": "t"}]},
-        {"type": "http", "name": "web", "url": "https://x.test/mcp",
-            "headers": [{"name": "Authorization", "value": "b"}]},
-    ]);
-    assert_eq!(params["mcpServers"], want);
+    assert_eq!(params["mcpServers"], json!([]));
 }
 
 #[test]

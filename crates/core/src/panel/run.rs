@@ -1,11 +1,11 @@
 //! A live run's setup and teardown: the subject at two SHAs, its trust, its mode and roles, each
-//! participant's tree, the MCP file of a trusted run, and the record's folder.
+//! participant's tree, and the record's folder.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::marks::{self, Trust};
 use super::mode::{self, Mode, Role, Seat};
@@ -80,7 +80,6 @@ pub struct Prepared {
     /// The tree verifiers and the merge read: a worktree on a trusted run, the export else.
     pub pinned: PathBuf,
     pub finders: Vec<Finder>,
-    pub mcp: Option<PathBuf>,
     /// An untrusted run's denied reads, and its folder under the untrusted root.
     pub deny: Vec<PathBuf>,
     pub dir: Option<PathBuf>,
@@ -466,11 +465,13 @@ pub fn prepare(
     }
     let mut limits = vec![];
     // Codex loads a tree's own settings whatever it is told: on one not accepted, Claude stands in.
+    // A trusted run's Codex would load the owner's MCP servers, which no per-session override drops.
     let why = match &pv.refused {
         Some(r) => r.clone(),
-        None => "the subject's agent settings are not accepted".into(),
+        None if !pv.accepted => "the subject's agent settings are not accepted".into(),
+        None => "Codex cannot turn off its MCP servers per session".into(),
     };
-    if (!pv.accepted || pv.refused.is_some()) && claude_only(&mut mode) {
+    if (pv.trust.trusted || !pv.accepted || pv.refused.is_some()) && claude_only(&mut mode) {
         limits.push(format!(
             "cross-provider verification unavailable: {why}, so Codex does not run"
         ));
@@ -508,7 +509,6 @@ pub fn prepare(
         trust: pv.trust,
         pinned: PathBuf::new(),
         finders: vec![],
-        mcp: None,
         deny: vec![],
         dir: None,
         common,
@@ -548,7 +548,6 @@ pub fn prepare(
                 });
                 copy_local(repo, &p.finders.last().unwrap().cwd)?;
             }
-            p.mcp = mcp(core, repo, &p.pinned, run)?;
             halt(cancelled)
         };
         if let Err(e) = trees() {
@@ -644,52 +643,6 @@ fn claude_only(m: &mut Mode) -> bool {
     changed
 }
 
-/// The repo's MCP servers, from `.mcp.json` at the subject's head and the CLI's entry for the repo's
-/// path, never its login, in a 0600 file under `data/private/<run>/`; None when there are none.
-pub fn mcp(core: &AppState, repo: &Path, tree: &Path, run: &str) -> Result<Option<PathBuf>> {
-    let read = |p: &Path| -> Value {
-        fs::read(p)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
-    };
-    let mut servers = Map::new();
-    if let Some(m) = read(&tree.join(".mcp.json"))["mcpServers"].as_object() {
-        servers.extend(m.clone());
-    }
-    let env = core.env();
-    let get = |k: &str| {
-        env.vars
-            .iter()
-            .find(|(n, _)| n == k)
-            .map(|(_, v)| v.into())
-            .or_else(|| std::env::var_os(k))
-    };
-    let home = crate::claude::home(&get);
-    let file = match get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
-        Some(dir) => PathBuf::from(dir).join(".claude.json"),
-        None => home.unwrap_or_default().join(".claude.json"),
-    };
-    let key = repo.display().to_string();
-    if let Some(m) = read(&file)["projects"][&key]["mcpServers"].as_object() {
-        servers.extend(m.clone());
-    }
-    if servers.is_empty() {
-        return Ok(None);
-    }
-    let dir = core.data_dir.join("private").join(run);
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("mcp.json");
-    let mut f = crate::os::create_private(&path)?;
-    std::io::Write::write_all(
-        &mut f,
-        serde_json::json!({"mcpServers": servers})
-            .to_string()
-            .as_bytes(),
-    )?;
-    Ok(Some(path))
-}
-
 /// Rebuilds a trusted run's pinned tree after a verifier changed it.
 pub fn repin(core: &AppState, p: &Prepared, run: &str) -> Result<()> {
     let repo = Path::new(&p.subject.repo);
@@ -697,8 +650,8 @@ pub fn repin(core: &AppState, p: &Prepared, run: &str) -> Result<()> {
     tree::pinned(core, repo, run, &p.subject.head_sha).map(drop)
 }
 
-/// The run's end for its trees: each finder's by what it left, the pinned tree, the private files
-/// and the untrusted folder. The events say which branches stay.
+/// The run's end for its trees: each finder's by what it left, the pinned tree and the untrusted
+/// folder. The events say which branches stay.
 pub fn teardown(core: &AppState, p: &Prepared, run: &str) -> Vec<Event> {
     let repo = Path::new(&p.subject.repo);
     let mut kept = vec![];
@@ -720,7 +673,6 @@ pub fn teardown(core: &AppState, p: &Prepared, run: &str) -> Vec<Event> {
     }
     if p.trust.trusted {
         _ = tree::remove(core, repo, &p.pinned);
-        _ = fs::remove_dir_all(core.data_dir.join("private").join(run));
         tree::prune(core, run);
     }
     if let Some(dir) = &p.dir {

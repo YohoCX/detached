@@ -456,7 +456,6 @@ impl Panel {
             false => provider.ask,
         }
         .into();
-        spec.mcp = (kind == Kind::Chat).then(|| p.mcp.clone()).flatten();
         spec.sandbox = match kind {
             // Codex's profile is the shared tree's project layer, the same for each of its
             // participants: it denies every temp dir, its own Codex home in its own among them.
@@ -1687,7 +1686,6 @@ pub fn close_interrupted(repo: &str, task: &str, run: &str, cx: &mut App) -> Tas
             _ = tree::remove(&core, path, &root.join("pinned"));
             tree::prune(&core, &run);
             run::unpin(&core, path, &run);
-            _ = std::fs::remove_dir_all(core.data_dir.join("private").join(&run));
             r.append(record::now(), &Event::RunEnded(End::Interrupted))
         }
     });

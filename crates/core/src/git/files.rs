@@ -1,20 +1,17 @@
-//! File lists for the tree and quick open, and Open in Zed.
+//! File lists for the tree and quick open.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::env::{self, Env};
+use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::arg;
 use crate::git::runner::{Kind, out};
 use crate::git::status;
 use crate::types::{FileChange, FileEntry};
-
-const ZED_CLI: &str = "/Applications/Zed.app/Contents/MacOS/cli";
 
 /// A working-tree walk with git's ignore rules.
 pub fn walker(repo: &Path) -> WalkBuilder {
@@ -254,27 +251,6 @@ pub fn children(repo: &Path, dir: &str, settings: &TreeSettings) -> Result<Vec<F
     Ok(entries)
 }
 
-/// Starts Zed on `<repo>/<path>[:line]` and returns without waiting for it.
-pub fn open_in_zed(env: &Env, repo: &Path, path: &str, line: Option<u32>) -> Result<()> {
-    // Some Linux packages name the CLI zeditor.
-    let zed = env::which("zed", &env.path)
-        .or_else(|| env::which("zeditor", &env.path))
-        .or_else(|| Some(PathBuf::from(ZED_CLI)).filter(|p| p.is_file()))
-        .ok_or_else(|| Error::Other("Zed not found: no zed on PATH".into()))?;
-    let file = repo.join(path).display().to_string();
-    let mut child = crate::os::group(
-        Command::new(zed)
-            .arg(line.map_or(file.clone(), |l| format!("{file}:{l}")))
-            .env("PATH", &env.path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null()),
-    )
-    .spawn()?;
-    std::thread::spawn(move || child.wait());
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,37 +418,5 @@ mod tests {
                 .all(|e| e.change.is_none())
         );
         assert!(paths(&env, &work, Some("-x")).is_err());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn zed_gets_the_absolute_path_and_line() {
-        use std::os::unix::fs::PermissionsExt;
-        use std::time::{Duration, Instant};
-        let sb = Sandbox::new();
-        let bin = sb.path("bin");
-        std::fs::create_dir(&bin).unwrap();
-        let log = sb.path("zed-args");
-        std::fs::write(
-            bin.join("zed"),
-            format!("#!/bin/sh\necho \"$@\" > '{}'\n", log.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(bin.join("zed"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let env = Env {
-            path: format!("{}:/usr/bin:/bin", bin.display()),
-            ..sb.state.env()
-        };
-        open_in_zed(&env, Path::new("/repo"), "src/a.rs", Some(12)).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while std::fs::read_to_string(&log).unwrap_or_default().is_empty()
-            && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(
-            std::fs::read_to_string(&log).unwrap(),
-            "/repo/src/a.rs:12\n"
-        );
     }
 }

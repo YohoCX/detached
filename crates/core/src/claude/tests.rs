@@ -338,7 +338,8 @@ fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() 
     let vars = env(&run.sb.state, &spec);
     let wslenv = vars.iter().find(|(k, _)| k == "WSLENV").unwrap();
     let wslenv: Vec<&str> = wslenv.1.to_str().unwrap().split(':').collect();
-    assert_eq!(wslenv.len(), CLAUDE.env.len());
+    assert_eq!(wslenv.len(), CLAUDE.env.len() + 1);
+    assert!(wslenv.contains(&"ENABLE_CLAUDEAI_MCP_SERVERS/u"));
     for k in [
         "CLAUDE_CONFIG_DIR/up",
         "CLAUDE_CODE_TMPDIR/up",
@@ -510,13 +511,12 @@ fn a_sandbox_and_a_run_s_mcp_file_go_into_one_settings_flag_and_the_read_rules()
     );
 
     let mut finder = chat(&run);
-    (finder.trusted, finder.mcp) = (true, Some(run.sb.path("private/r/mcp.json")));
+    finder.trusted = true;
     let a = flags(&finder, "s3", false, Default::default());
-    assert_eq!(
-        after(&a, "--mcp-config"),
-        Some(run.sb.path("private/r/mcp.json").to_str().unwrap())
-    );
+    assert!(a.contains(&"--strict-mcp-config".into()) && after(&a, "--mcp-config").is_none());
     assert_eq!(after(&a, "--setting-sources"), Some("user,project,local"));
+    let vars = env(&run.sb.state, &finder);
+    assert!(vars.contains(&("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into())));
 }
 
 #[test]

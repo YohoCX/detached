@@ -250,7 +250,7 @@ Every Detached session, chat and Council alike:
 - **Claude:** `--strict-mcp-config` on every spawn, which keeps the session's own `sdkMcpServers`
   (host §7) and drops every other server. Setting sources stay as today, so the user's and
   accepted repos' hooks and allow rules load. If the account's claude.ai connectors still join (W0
-  row 4), `core::claude` turns them off through the CLI's variable for it. If strict mode keeps a
+  row 4), `core::claude` turns them off through the CLI's variable for it (W0: on every spawn). If strict mode keeps a
   plugin's servers or an agent file's inline `mcpServers`, a session whose loaded settings enable
   such a plugin, or whose agents declare such servers, does not start and names the file.
   Council's 0600 file of a repo's MCP servers in `data/private/<run>/` and `Spec.mcp` go.
@@ -460,7 +460,41 @@ step's status.
 
 Done when every row has an answer per OS, or a fallback the owner accepts.
 
+**Status (2026-11-19): macOS answered on `claude` 2.1.328 and `codex-cli` 0.167.2, with no model:
+the real CLIs on a scripted Messages API (`claude -p`, stream-json, a temp `CLAUDE_CONFIG_DIR`
+and `HOME`), Codex's `app-server`, `mcp list` and `sandbox`, stdio MCP servers of our own, repos
+outside the temp dirs. Linux, Windows and the rows marked *owner* are the owner's.**
+
+| Row | macOS answer |
+| --- | --- |
+| 1 `--add-dir` | Under `project` (`user,project` and `user,project,local`) an added dir loads its skills, agents, commands and `enabledPlugins` (a plugin it enables loads, skills and servers); its hooks and allow rules do not. `CLAUDE.md` loads with the variable, **also under `user` alone**, where its skills, agents and commands do not. `Write` and `Edit` there run unasked in `acceptEdits`, `auto` and `bypassPermissions`, and ask in `default`. Two added dirs with skill `same`: the first keeps `same`, the second is `b2:same`. Mid-turn, a new skill in an added dir fires `ConfigChange` (source `skills`), which a block holds; its agents, commands and settings fire none, and a new agent is not loaded until the next session (commands and settings not reloaded: *to verify*). `Read`, `Grep`, `Glob` allow rules on a dir not added read it unasked in `default`. `extraKnownMarketplaces` of an added dir alone did not install its plugin headless. |
+| 2 denies | `Edit`, `Write`, `NotebookEdit` deny rules on a dir hold in `default`, `acceptEdits`, `auto` and `bypassPermissions`. |
+| 3 the fence | `denyWrite` wins inside `allowWrite`. In a read-only project `touch`, `echo >`, `git switch -c` and `git stash` fail. `cargo build`, `npm install` and `git commit` work in the cwd, in a read-write project not added, and in a linked worktree with its common dir in `allowWrite`. Bash asks in `default` (a write; `echo` alone runs unasked) and runs unasked in `bypassPermissions`. With `allowedDomains: ["*"]`, `allowAllUnixSockets` and `allowLocalBinding`: local TCP and unix sockets (a DB's, `/tmp`'s) work, HTTPS goes through the CLI's proxy, but **ssh to a remote host fails** (`connect to host github.com port 22: Operation not permitted`), so `git push` over ssh fails; the proxy takes credentials, so a plain `nc` `ProxyCommand` does not reach it. `docker ps` *owner* (its unix socket is allowed). |
+| 4 strict MCP | `--strict-mcp-config` under `user,project,local` drops every server: `~/.claude.json`'s (user and the project's local entry), `.mcp.json` with `enableAllProjectMcpServers`, a user plugin's, an added dir's plugin's, the cwd's and an added dir's agent-file `mcpServers` (none started). `mcpServers` in `settings.json` loads in neither mode. User and cwd project hooks run. Detached's `sdkMcpServers` already answer under strict (P2's participants). claude.ai connectors: *owner* (no account login here); the CLI's switch is `ENABLE_CLAUDEAI_MCP_SERVERS=false`. |
+| 5 resume | `--resume` with the same flags keeps rows 1 and 4 (no server, the added skills, agents and `CLAUDE.md`, the hooks). |
+| 6 instructions | Claude: `--append-system-prompt` lands in `system` once, also on a resume that passes it again. Codex (source, *to verify*): ACP `systemPrompt` on `session/new` becomes the thread's `developerInstructions`, and the adapter passes it again on load. |
+| 7 Codex | Writable roots: the adapter's field is ACP `additionalDirectories` (`session/new`, `session/load`), which it adds to `sandbox_workspace_write.writable_roots` and the turn's `workspaceWrite` roots (source; a written root through the adapter *to verify*). `codex sandbox -P :workspace` writes the cwd and not another repo; `:read-only` writes nothing and reads both. MCP: a per-session override (the thread config, which the adapter's `CODEX_CONFIG` feeds) of `mcp_servers = {}` empties nothing, since layers merge; `mcp_servers.<name>.enabled = false` turns off a user server and a project-layer one, by name only. |
+
+What this changes:
+- **W2:** strict mode alone drops plugins' and agent files' servers, so nothing refuses on them.
+  Codex has no override that empties `mcp_servers`, so by decision 8 Codex chats and trusted Codex
+  participants are off; the fallback for the owner to accept or not is a per-name `enabled = false`
+  from the servers Detached lists for the session's cwd and Codex home. claude.ai connectors are
+  turned off on every spawn by the CLI's variable, since no run here could show strict dropping
+  them.
+- **W5:** an added dir's `CLAUDE.md` loads under any source, so the variable goes only with a
+  `--add-dir`; mid-turn only skills need the block, which the CLI gives, so projects are added.
+- **W7:** sandboxed Bash cannot reach ssh remotes, so §4.4's rule applies: no fence, unless the
+  owner accepts `git push` over ssh failing in such a chat (HTTPS remotes work) and keeps it.
+
 ### Step W1. Open in Zed out
+
+**Status (2026-11-19): built, not yet run.** Gone: the file and diff headers' button, the
+conflict bar's, the conflict notice's (its file list stays, as text), the sidebar menu's item,
+`file.openInZed` and its KEYMAP row, `viewer::open_in_zed`, the views' `zed`, `Code::line`,
+`api::open_in_zed`, `git::files::open_in_zed` with `ZED_CLI` and its test, TECHDEBT's fake-zed
+mention. Tests written (`files.rs`, `repos.rs`), compiled with `cargo check`, not run: `make check`
+waits for the combined build. The owner checks: no Zed anywhere in the app.
 
 Work: §9. Tests: `tests/files.rs` asserts no `viewer.zed` in the header and no Zed button in the
 conflict bar; `tests/repos.rs` the sidebar menu without the item; the action is unknown to the
@@ -469,15 +503,30 @@ decisions and KEYMAP matches. Independent of the rest.
 
 ### Step W2. Third-party MCP servers off
 
+**Status (2026-11-19): built, not yet run.** Claude: `--strict-mcp-config` on every spawn and
+resume, every kind, and `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the CLI's env (and `WSLENV`);
+`Spec.mcp`, `--mcp-config`, the run's and the Fix's 0600 file in `data/private/` and the ACP
+backend's file servers are gone. Codex, by W0 row 7: a chat offers Claude alone, and a trusted
+run's Codex seats go to Claude with the limit "Codex cannot turn off its MCP servers per session";
+an untrusted run still seats Codex, and Settings' `agents.codex` still turns that on. The gate is
+the app's provider list and core's run setup, not `kernel::Session`, whose Codex tests on
+`fake_acp` stay. README and `docs/releases/0.6.1.md` say it. Tests written, compiled with `cargo
+check`, not run (`make check` and `make agent-test` wait for the combined build): the fake CLI's
+argv per kind and on a resume, its env, no `data/private/`, the ACP session's empty `mcpServers`,
+Claude in Codex's seats on a trusted subject, a chat with no Codex pick; `make agent-test`'s new
+row (a user server in `~/.claude.json` never starts, the read tool answers, the user's hook runs)
+and its finder row (a trusted repo's `.mcp.json` never starts). The owner checks: his chat lists
+Detached's server alone (`/mcp`), his skills and hooks still run, claude.ai connectors absent.
+
 Needs W0 rows 4 and 7. Work: §4.5 on today's chat and Council; the README and the release notes
 say third-party MCP servers no longer load in Detached's agents, and skills with scripts replace
 them.
 
 Tests: on `fake_claude`, every spawn and resume carries `--strict-mcp-config`, the chat's in a
 trusted repo with `user,project,local`; no `--mcp-config` and no file in `data/private/`; a
-trusted repo's hook still runs; per W0 row 4, a plugin or agent file declaring a server refuses
-the session and names the file, or loads with no server. Codex: off, or its override on the fake
-ACP agent.
+trusted repo's hook still runs; per W0 row 4, a plugin or agent file declaring a server loads with
+no server (strict drops both), and every spawn turns claude.ai connectors off. Codex: off, by W0
+row 7: no Codex chat, and Claude in a trusted run's Codex seats.
 `make agent-test` gains one row: a user server in `~/.claude.json` is not listed by the real
 `claude`, and the host's read tool answers.
 
@@ -563,7 +612,9 @@ Done when the owner runs a review from a workspace and finds his old runs in the
 
 ### Step W7. Read-only projects
 
-Needs W0, W5, W6. Work: §3, §4.4, §5's read-only rules, §6's; attaching read-only from Add
+Needs W0, W5, W6. W0 row 3 found no ssh from sandboxed Bash on macOS: unless the owner accepts
+that, §4.4's no-fence rule applies and the fence's tests below become the Windows rule's on every
+OS. Work: §3, §4.4, §5's read-only rules, §6's; attaching read-only from Add
 folder… and the project row's menu; docs/TECHDEBT.md gains the Windows row: Bash in a chat with a
 read-only project is not confined on native Windows; `default`/`plan` only and the ask card
 mitigate (§4.4).

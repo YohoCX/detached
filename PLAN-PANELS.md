@@ -178,13 +178,8 @@ Every brief says that finding nothing is a valid answer.
       usually not a fast-forward any more; the owner merges it with git.
     - A remote-branch or MR subject has no Merge; the branch is kept for the owner to push.
     - Discard deletes the branch and its worktree after a confirm.
-  - **The chat's configuration in its worktree:**
-    - The repo's MCP servers (from `.mcp.json` and the CLI's per-project entries for the repo's
-      path, never the login) go into a 0600 config file in `data/private/<run>/`, which the CLI
-      reads by path: the session's `Spec` names the file, and Claude's backend passes
-      `--mcp-config <path>` (host §1; P2 adds both). Inline servers would put their `env` and `headers` into argv. If the
-      CLI cannot take the path, the repo's local MCP servers are left out and the header says so.
-    - The host copies `.claude/settings.local.json`, which is gitignored.
+  - **The chat's configuration in its worktree:** the host copies `.claude/settings.local.json`,
+    which is gitignored. No MCP server loads but the host's (PLAN-WORKSPACES §4.5).
 - **An untrusted subject gets a sandboxed, read-only review.** Participants read and report;
   nothing writes and nothing commits. This is the isolation spike 0b verified (host §5):
   - the pinned tree at the subject's SHA, `<untrusted root>/<run>/pinned/` (host §5),
@@ -639,8 +634,8 @@ Messages API, host §17):
   - a permission request from a verifier is denied by the host and noted in the run;
 - orchestrator mode, on the real `claude` against the fake Messages API:
   - a trusted participant works on its own branch in its own worktree, with no permission prompt,
-    with `["user", "project", "local"]`, the copied `settings.local.json`, and the repo's MCP
-    servers among the tools offered;
+    with `["user", "project", "local"]`, the copied `settings.local.json`, and no MCP server but
+    the host's, the repo's `.mcp.json` never started (PLAN-WORKSPACES W2);
   - its commits show;
 - the read-only sandbox: an untrusted participant reads a toolchain under `$HOME`, but cannot
   read a seeded secret of any class, write the tree, or reach the network;
@@ -648,7 +643,6 @@ Messages API, host §17):
   verifier sees only its finding;
 - on the real `claude` against the fake Messages API, a 3-minute command does not trip the stall;
   a retried participant's old session reports nothing;
-- no MCP server's `env` or `headers` value appears in any spawned process's argv (`ps -ww`);
 - a `claude` below `min_cli` refuses a sandboxed participant;
 - every sandboxed participant's `Read` deny holds through a link in its tree, at `min_cli`;
 - the enumerated deny list holds through Bash and `Read` for each entry, including
@@ -656,8 +650,8 @@ Messages API, host §17):
   a store not on the list is readable; a real turn still logs in;
 - the workspace deny: a repo's `.env` under a workspace root, and a worktree and an `.env` created
   under it after the session started, all fail to read;
-- an untrusted run already running cannot read a trusted run's MCP config in `data/private/` or its
-  finder worktree, both made after it started;
+- an untrusted run already running cannot read a trusted run's finder worktree, made after it
+  started;
 - different config/temp overrides share one root/lock: a second instance waits without output,
   including after its session started; reverse their roles and repeat. After exit or crash, the
   next run can read no predecessor export/temp output; cleanup skips a held lock and never boots

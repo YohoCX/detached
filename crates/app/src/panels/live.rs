@@ -1,7 +1,6 @@
 //! Live runs: the start form in the Panels app, a run's header, participants and kept branches in
 //! its tab, and a line per run in the status bar.
 
-use detached_core::adapters::CODEX;
 use detached_core::panel::mode::Stage;
 use detached_core::panel::record::State;
 use detached_core::panel::run::{Over, Preview, Start};
@@ -221,25 +220,22 @@ impl Render for Form {
                 },
                 cx,
             ))
-            .when(
-                crate::chat::providers(cx).iter().any(|p| p.id == CODEX.id),
-                |b| {
-                    let me = cx.entity().downgrade();
-                    b.child(ui::segmented(
-                        "panels.form.verifier",
-                        &[(false, "Claude verifies"), (true, "Codex verifies")],
-                        self.codex,
-                        move |codex, _, cx| {
-                            me.update(cx, |f, cx| {
-                                f.codex = codex;
-                                cx.notify();
-                            })
-                            .ok();
-                        },
-                        cx,
-                    ))
-                },
-            )
+            .when(crate::chat::codex_on(cx), |b| {
+                let me = cx.entity().downgrade();
+                b.child(ui::segmented(
+                    "panels.form.verifier",
+                    &[(false, "Claude verifies"), (true, "Codex verifies")],
+                    self.codex,
+                    move |codex, _, cx| {
+                        me.update(cx, |f, cx| {
+                            f.codex = codex;
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                    cx,
+                ))
+            })
             .child(ui::input(&self.budget, cx))
             .child(
                 div().flex().gap(GAP).child(

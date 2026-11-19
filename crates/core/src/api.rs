@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::git::patch::{self, FilePatch};
 use crate::git::snapshot::{self, Restore};
 use crate::git::{
-    branches, checkout as smart, diff, files, log as logs, pull as pulls, remotes, worktree,
+    branches, checkout as smart, diff, log as logs, pull as pulls, remotes, worktree,
 };
 use crate::search::{find, quick};
 use crate::settings::Settings;
@@ -225,10 +225,6 @@ pub fn read_image(
     path: &str,
 ) -> Result<Option<String>> {
     diff::image(s, Path::new(repo), rev, path)
-}
-
-pub fn open_in_zed(s: &AppState, repo: &str, path: &str, line: Option<u32>) -> Result<()> {
-    files::open_in_zed(&s.env(), Path::new(repo), path, line)
 }
 
 /// Errors arrive as `LogEvent::Error`.

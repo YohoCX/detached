@@ -103,15 +103,15 @@ pub struct Caps {
     pub blocks: &'static [&'static str],
 }
 
-/// What a session may load of the repo's and the user's settings and MCP servers.
+/// What a session may load of the repo's and the user's settings; every kind has the host's MCP
+/// server alone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
-    /// The chat, and a trusted subject's finders: the repo's settings once trusted, the user's
-    /// MCP servers.
+    /// The chat, and a trusted subject's finders: the repo's settings once trusted.
     Chat,
-    /// A trusted subject's verifier: the user's settings, the host's MCP servers alone.
+    /// A trusted subject's verifier: the user's settings.
     Verifier,
-    /// An untrusted subject's participant: no settings, the host's MCP servers alone.
+    /// An untrusted subject's participant: no settings.
     Untrusted,
 }
 
@@ -144,8 +144,6 @@ pub struct Spec {
     pub wsl: Option<String>,
     /// The sandbox: an untrusted participant runs in one always, a verifier where the probe passed.
     pub sandbox: Option<Sandbox>,
-    /// A run's MCP servers, in a file the agent reads by path.
-    pub mcp: Option<PathBuf>,
 }
 
 impl Spec {
@@ -163,7 +161,6 @@ impl Spec {
             skills: vec![],
             wsl: None,
             sandbox: None,
-            mcp: None,
         }
     }
 }

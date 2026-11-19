@@ -51,7 +51,7 @@ fn the_env_holds_only_allowed_and_manifest_names_and_reaches_the_api_through_the
     // Besides what the leash's shell sets for itself.
     let allowed: Vec<&str> = (proc::ALLOWED.iter().chain(CLAUDE.env))
         .copied()
-        .chain(["PWD", "SHLVL", "OLDPWD", "_"])
+        .chain(["PWD", "SHLVL", "OLDPWD", "_", "ENABLE_CLAUDEAI_MCP_SERVERS"])
         .collect();
     let names: Vec<&str> = names.split(',').collect();
     assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
@@ -59,6 +59,7 @@ fn the_env_holds_only_allowed_and_manifest_names_and_reaches_the_api_through_the
         "ANTHROPIC_BASE_URL",
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_USE_FOUNDRY",
+        "ENABLE_CLAUDEAI_MCP_SERVERS",
     ] {
         assert!(names.contains(&n), "{n} in {names:?}");
     }
@@ -82,12 +83,14 @@ fn the_setting_sources_follow_the_kind_and_the_trust_and_no_spawn_goes_without_t
         (flag(&argv, "--setting-sources").map(String::from), strict)
     };
     let some = |s: &str| Some(s.to_string());
-    assert_eq!(sources(Kind::Chat, cx), (some("user"), false));
+    assert_eq!(sources(Kind::Chat, cx), (some("user"), true));
     assert_eq!(sources(Kind::Verifier, cx), (some("user"), true));
     assert_eq!(sources(Kind::Untrusted, cx), (some(""), true));
     let project = trust::project(&f.core.env(), Path::new(&f.repo)).unwrap();
     trust::trust(&f.core.config_dir, &f.repo, &project).unwrap();
-    assert_eq!(sources(Kind::Chat, cx), (some("user,project,local"), false));
+    // The trusted repo's hooks load under project; only its MCP servers do not.
+    assert_eq!(sources(Kind::Chat, cx), (some("user,project,local"), true));
+    assert!(!f.core.data_dir.join("private").exists());
 }
 
 #[gpui::test]
@@ -187,6 +190,9 @@ fn a_resume_passes_every_flag_of_its_spawn_again_and_runs_on_its_model(cx: &mut 
     assert_eq!(new[new.len() - 2..], tail);
     assert_eq!(resumed[..resumed.len() - 2], new[..new.len() - 2]);
     assert_eq!(resumed[resumed.len() - 2..], ["--resume", id.as_str()]);
+    assert!(
+        flag(&again, "--strict-mcp-config").is_some() && flag(&again, "--mcp-config").is_none()
+    );
     assert!(flag(&again, "--disallowedTools").is_some_and(|d| d.contains("Read(//**/.env*)")));
     assert_eq!(turn(&s, "model", cx), "haiku default");
 }
