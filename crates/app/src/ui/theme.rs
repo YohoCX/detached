@@ -1,5 +1,5 @@
-//! Colors from theme files, the bundled ones and the user's `themes/*.json`, light and dark
-//! following the system. A file only needs the tokens it changes; the rest come from `extends`.
+//! Colors from theme files, the bundled ones and the user's `themes/*.json`, light or dark as the
+//! mode says. A file only needs the tokens it changes; the rest come from `extends`.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime};
 
-use gpui_kit::component::Theme as Kit;
+use gpui_kit::component::{Theme as Kit, ThemeMode};
 use gpui_kit::{App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, px, rgba};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::util::Status;
@@ -33,6 +34,7 @@ const FONTS: [&[u8]; 8] = [
     include_bytes!("../../fonts/SymbolsNerdFontMono-Regular.ttf"),
 ];
 const KEY: &str = "theme.name";
+const MODE: &str = "theme.mode";
 /// How often the themes folder is looked at for edits.
 const POLL: Duration = Duration::from_millis(500);
 
@@ -444,12 +446,12 @@ impl Theme {
     }
 }
 
-/// Whether the kit's theme last synced to a dark appearance.
+/// Whether the kit's theme last synced to dark.
 pub fn is_dark(cx: &App) -> bool {
     cx.try_global::<Kit>().is_some_and(|k| k.is_dark())
 }
 
-/// The tokens for the system appearance the kit's theme last synced to.
+/// The tokens for the appearance the kit's theme last synced to.
 pub fn theme(cx: &App) -> &'static Theme {
     let dark = is_dark(cx);
     let (light, night) = match cx.try_global::<Active>() {
@@ -471,9 +473,32 @@ pub fn mono(cx: &App) -> SharedString {
     Kit::global(cx).mono_font_family.clone()
 }
 
-/// Follows the window's appearance and gives the kit's own widgets our colors and text size.
+/// Light, dark, or the window's appearance.
+#[derive(Clone, Copy, Default, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+pub fn mode(cx: &App) -> Mode {
+    ui_state::get(MODE, cx).unwrap_or_default()
+}
+
+pub fn set_mode(mode: Mode, window: &mut Window, cx: &mut App) {
+    ui_state::set(MODE, mode, cx);
+    sync(window, cx);
+}
+
+/// Sets the kit's appearance from the mode and gives its widgets our colors and text size.
 pub fn sync(window: &mut Window, cx: &mut App) {
-    Kit::sync_system_appearance(Some(window), cx);
+    match mode(cx) {
+        Mode::System => Kit::sync_system_appearance(Some(window), cx),
+        Mode::Light => Kit::change(ThemeMode::Light, Some(window), cx),
+        Mode::Dark => Kit::change(ThemeMode::Dark, Some(window), cx),
+    }
     sync_kit(cx);
 }
 

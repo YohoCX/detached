@@ -1,4 +1,4 @@
-//! The Appearance page of Settings: the theme, and the folder of theme files.
+//! The Appearance page of Settings: the theme, light or dark, and the folder of theme files.
 
 use detached_core::api;
 use gpui_kit::component::IndexPath;
@@ -11,7 +11,8 @@ use kernel::activity::Activity;
 use kernel::blocking;
 
 use super::page::{Opt, Pick, button, card, item, labeled, layout, select};
-use super::{text, theme};
+use super::theme::Mode;
+use super::{segmented, text, theme};
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| {
@@ -45,11 +46,23 @@ impl Render for Appearance {
                 .text_color(theme(cx).warning)
                 .text_size(text::SMALL)
         });
-        let pick = item("Theme", Some("Light and dark follow the system".into()), cx).child(
-            div()
-                .w(px(240.))
-                .child(select(&self.theme, "settings.theme", cx)),
-        );
+        let pick = item("Theme", None, cx).child(div().w(px(240.)).child(select(
+            &self.theme,
+            "settings.theme",
+            cx,
+        )));
+        let modes = [
+            (Mode::System, "System"),
+            (Mode::Light, "Light"),
+            (Mode::Dark, "Dark"),
+        ];
+        let mode = item("Mode", Some("System follows the OS".into()), cx).child(segmented(
+            "settings.mode",
+            &modes,
+            theme::mode(cx),
+            theme::set_mode,
+            cx,
+        ));
         let detail = "Each file is a theme over the one it extends; an edit shows at once";
         let folder = item("Theme files", Some(detail.into()), cx).child(button(
             "settings.themes",
@@ -73,7 +86,7 @@ impl Render for Appearance {
                 .detach();
             },
         ));
-        let rows = [pick, folder]
+        let rows = [pick, mode, folder]
             .into_iter()
             .chain(error.map(|e| item(e, None, cx)));
         let about = "How Detached looks.";
