@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use super::{DocTab, DragDoc, Tab, missing, tabs};
-use crate::ui::{self, GAP, Icon, radius, theme};
+use crate::ui::{self, GAP, Icon, TAB_TITLE, radius, theme};
 use crate::{actions, keymap};
 
 /// A side zone dragged narrower than this closes on release.
@@ -504,7 +504,7 @@ impl TabGroupRenderer for Group {
                         dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
                     })
                     .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
-                    .child(l.title)
+                    .child(div().max_w(TAB_TITLE).truncate().child(l.title))
                     .children(close)
             });
         let end = group.clone();

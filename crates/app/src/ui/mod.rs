@@ -32,7 +32,7 @@ pub use icon::{Icon, spinner};
 pub use menu::Menu;
 pub use popup::popup;
 pub use suggest::Suggest;
-pub use theme::{GAP, radius, text, theme};
+pub use theme::{GAP, TAB_TITLE, radius, text, theme};
 
 use crate::util::{self, Status, fuzzy};
 
