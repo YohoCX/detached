@@ -201,19 +201,21 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Chat>)> {
     all
 }
 
-/// The open chats with something in them, by their tabs' titles.
+/// The open chats with something in them, each as "place · title".
 pub fn live(cx: &App) -> Vec<String> {
     let live = open(cx)
         .into_iter()
         .filter(|(.., s)| !s.read(cx).is_new(cx));
-    live.map(|(repo, n, _)| {
-        let doc = Doc::Chat {
-            repo: repo.clone(),
-            n,
-        };
-        format!("{} · {}", label(&repo, cx), ChatDocs.title(&doc, None, cx))
-    })
-    .collect()
+    live.map(|(repo, n, _)| named(repo, n, cx)).collect()
+}
+
+/// A chat by its place and its tab's title.
+fn named(repo: String, n: u32, cx: &App) -> String {
+    let place = label(&repo, cx);
+    format!(
+        "{place} · {}",
+        ChatDocs.title(&Doc::Chat { repo, n }, None, cx)
+    )
 }
 
 /// Resets the idle open chat that shows past conversation `id`, which is going away.
@@ -226,14 +228,12 @@ pub fn forget(id: &str, cx: &mut App) {
     }
 }
 
-/// The open chat on conversation `id` by its place and topic, else the id.
+/// The open chat on conversation `id` as "place · title", else the id.
 pub fn name_of(id: &str, cx: &App) -> String {
     let chat = open(cx)
         .into_iter()
         .find(|(.., s)| s.read(cx).conversation(cx) == Some(id));
-    chat.map_or(id.into(), |(repo, n, _)| {
-        ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into()
-    })
+    chat.map_or(id.into(), |(repo, n, _)| named(repo, n, cx))
 }
 
 /// How a chat stands: working, waiting for you, done, stopped, or not started.

@@ -11,7 +11,7 @@ use gpui_kit::component::input::{
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div,
     prelude::FluentBuilder, px, relative,
 };
@@ -74,6 +74,8 @@ pub struct ChatView {
     unlisted: bool,
     /// Entries before this one were there on open and do not animate in.
     seen: usize,
+    /// The `/clear` whose earlier entries show.
+    earlier: Option<usize>,
     _files: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -125,6 +127,7 @@ impl ChatView {
             me: cx.weak_entity(),
             unlisted: false,
             seen,
+            earlier: None,
             _files: None,
             _subscriptions: subscriptions,
         }
@@ -581,15 +584,21 @@ impl ChatView {
             (Some(Item::Tool(_)), Some(Item::Tool(_))) | (_, Some(Item::End { .. })) => 8.,
             _ => 16.,
         };
+        let cut = chat.cleared(&feed, cx);
+        let open = cut.is_some() && self.earlier == cut;
+        let mut divider = cut.map(|_| self.divider(open, cut, cx));
         let mut out = vec![];
         let mut push = |i: usize, el: AnyElement| {
+            if Some(i) == cut {
+                out.extend(divider.take());
+            }
             let el = div().flex().flex_col().pt(px(gap(i))).child(el);
             out.push(match i >= self.seen {
                 true => ui::appear(("chat.in", i), el, 4., ui::motion::BASE).into_any_element(),
                 false => el.into_any_element(),
             });
         };
-        let mut i = 0;
+        let mut i = cut.filter(|_| !open).unwrap_or(0);
         while i < feed.len() {
             match feed[i..].iter().take_while(|(_, it)| tool(it)).count() {
                 0 | 1 => {
@@ -606,6 +615,37 @@ impl ChatView {
             push(feed.len(), self.user(feed.len(), text, cx));
         }
         out
+    }
+
+    /// "Context cleared" over the last `/clear`, folding what came before it.
+    fn divider(&self, open: bool, cut: Option<usize>, cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let me = self.me.clone();
+        let action = if open { "Hide earlier" } else { "Show earlier" };
+        let rule = || div().flex_1().h(px(1.)).bg(t.line);
+        div()
+            .id("chat.earlier")
+            .test_support()
+            .role(Role::Button)
+            .aria_label(action)
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .when(open, |d| d.pt(px(24.)))
+            .text_size(text::LABEL)
+            .text_color(t.muted)
+            .cursor_pointer()
+            .hover(|s| s.text_color(t.fg))
+            .on_click(move |_, _, cx| {
+                _ = me.update(cx, |v, cx| {
+                    v.earlier = if open { None } else { cut };
+                    cx.notify();
+                })
+            })
+            .child(rule())
+            .child(format!("Context cleared · {action}"))
+            .child(rule())
+            .into_any_element()
     }
 
     /// Tool calls in a row: one line saying what ran, open while one runs or when one failed.

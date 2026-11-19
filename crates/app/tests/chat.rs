@@ -11,7 +11,7 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
-use kernel::session::State as Run;
+use kernel::session::{Item, State as Run};
 use serde_json::json;
 
 /// A turn that runs until it is stopped.
@@ -797,6 +797,49 @@ fn slash_suggests_commands_and_at_suggests_files(cx: &mut TestAppContext) {
 }
 
 const EDIT: &str = "write README.md agent; write made-by-agent.txt x";
+
+#[gpui_kit::test]
+fn a_clear_folds_what_came_before_and_its_restore_stays_reachable(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"commands": ["clear"]})));
+    let made = cx.sb.solo().join("made-by-agent.txt");
+    say(cx, EDIT);
+    let i = index_of(cx, "2 files changed in this turn");
+    idle(cx);
+    // Enter takes the suggested command first, then sends it.
+    say(cx, "/clear");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("chat.earlier").is_some());
+    idle(cx);
+    assert!(cx.find(("chat.back", i)).is_none(), "folded");
+    assert_eq!(label(cx, "chat.earlier").as_deref(), Some("Show earlier"));
+    cx.click("chat.earlier");
+    assert_eq!(label(cx, "chat.earlier").as_deref(), Some("Hide earlier"));
+    cx.click(("chat.back", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
+    cx.click(("chat.back.confirm", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("restored"));
+    assert!(!made.exists());
+}
+
+#[gpui_kit::test]
+fn blank_text_and_thoughts_leave_no_row(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    let before = items(cx);
+    let solo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| {
+        let chat = chat::find(&solo, 0, cx).unwrap();
+        let session = chat.read(cx).current().unwrap().clone();
+        session.update(cx, |s, cx| {
+            s.items.push(Item::Text(" \n".into()));
+            s.items.push(Item::Thought(String::new()));
+            cx.notify();
+        });
+    });
+    assert_eq!(items(cx), before);
+}
 
 #[gpui_kit::test]
 fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut TestAppContext) {

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use detached_core::adapters::{CLAUDE, Provider};
-use detached_core::backend::{Kind, Setting, SlashCommand, Spec};
+use detached_core::backend::{Kind, Setting, SlashCommand, Spec, StopReason};
 use detached_core::trust::{self, Project};
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 use kernel::blocking;
@@ -259,7 +259,7 @@ impl Chat {
     }
 
     /// The feed: each session's items by session and index, a resume's history left out but its
-    /// notes, blank text left out, and what came before the last `/clear`.
+    /// notes, and blank text left out.
     pub fn feed<'a>(&'a self, cx: &'a App) -> Vec<((usize, usize), &'a Item)> {
         let mut out = vec![];
         for (k, s) in self.sessions.iter().enumerate() {
@@ -270,11 +270,29 @@ impl Chat {
             });
             out.extend(shown.map(|(i, it)| ((k, i), it)));
         }
-        let clear = |it: &Item| matches!(it, Item::User(t) if t.trim() == "/clear");
-        if let Some(at) = out.iter().rposition(|(_, it)| clear(it)) {
-            out.drain(..at);
-        }
         out
+    }
+
+    /// Where in `feed` the agent last cleared its context: a `/clear` its session lists, whose
+    /// turn ended well.
+    pub fn cleared(&self, feed: &[((usize, usize), &Item)], cx: &App) -> Option<usize> {
+        let lists = |k: usize| {
+            let own = &self.sessions[k].read(cx).commands;
+            let listed = if own.is_empty() { &self.cached } else { own };
+            listed.iter().any(|c| c.name == "clear")
+        };
+        let ended = |i: usize| {
+            let end = feed[i + 1..].iter().find_map(|(_, it)| match it {
+                Item::End { stop, .. } => Some(*stop == Some(StopReason::EndTurn)),
+                Item::User(_) => Some(false),
+                _ => None,
+            });
+            end.unwrap_or(false)
+        };
+        (0..feed.len()).rev().find(|&i| {
+            let ((k, _), it) = feed[i];
+            matches!(it, Item::User(t) if t.trim() == "/clear") && lists(k) && ended(i)
+        })
     }
 
     /// Reads the repo's own settings and whether the user trusts them.
