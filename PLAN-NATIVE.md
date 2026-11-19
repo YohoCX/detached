@@ -198,7 +198,7 @@ boot, open the window, render one frame, exit 0; CI runs it on all three OSes.
 **File view.** Read-only `EditorState`. Language from the file name, then the extension, mapped to
 the kit's names by our table (the kit matches names, not extensions); Dockerfile gets a registered
 `tree-sitter-containerfile` grammar. Files in languages the kit lacks show as plain text (Monaco
-colored more languages: a known loss). Placeholders, the conflict bar, Open in Zed, go to line (our
+colored more languages: a known loss). Placeholders, the conflict bar, go to line (our
 overlay), reload in place on status change, and reveal-and-focus on open, as in files.md §1.1.
 
 **Diff view.** Core gets `file_patch(repo, path, orig_path, left, right)`: it reads both sides the

@@ -873,13 +873,6 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
         Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(r), cx));
         dock::open("changes", window, cx);
     };
-    let zed = {
-        let r = repo.to_string();
-        move |_: &mut Window, cx: &mut App| {
-            let r = r.clone();
-            run_core(cx, move |core| api::open_in_zed(core, &r, "", None))
-        }
-    };
     let one = |kind| {
         let r = repo.to_string();
         move |_: &mut Window, cx: &mut App| sync_one(kind, r.clone(), cx)
@@ -907,7 +900,6 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
         })
         .separator()
         .item(format!("Open in {FILE_MANAGER}"), open_folder(repo))
-        .item("Open in Zed", zed)
         .item("Copy Path", copy_path(repo))
         .separator()
         .item("Remove from List", remove_repo(workspace, repo, solo))

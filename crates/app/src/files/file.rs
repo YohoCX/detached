@@ -210,12 +210,6 @@ impl FileView {
         self.goto = Some((goto, events));
         cx.notify();
     }
-
-    /// Opens the file in Zed at the cursor's line.
-    pub(super) fn zed(&self, cx: &mut App) {
-        let line = matches!(self.body, Body::Text { .. }).then(|| self.code.read(cx).line(cx));
-        viewer::open_in_zed(&self.loc.repo, &self.loc.path, line, cx);
-    }
 }
 
 impl Render for FileView {
@@ -226,7 +220,6 @@ impl Render for FileView {
             Some(rev) => format!("{name} @ {rev}"),
             None => name,
         };
-        let zed = || cx.listener(|this: &mut Self, _, _, cx| this.zed(cx));
         let body = match (&self.body, &self.preview) {
             (Body::Loading, _) => div().into_any_element(),
             (Body::Text { .. }, Some(preview)) => preview.clone().into_any_element(),
@@ -256,11 +249,10 @@ impl Render for FileView {
                             },
                             cx,
                         ))
-                    })
-                    .child(viewer::zed_button(zed(), cx)),
+                    }),
             )
             .when(matches!(self.body, Body::Text { conflicted: true }), |d| {
-                d.child(viewer::conflict_bar(zed(), cx))
+                d.child(viewer::conflict_bar(cx))
             })
             .child(
                 div()

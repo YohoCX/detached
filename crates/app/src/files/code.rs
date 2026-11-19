@@ -78,11 +78,6 @@ impl Code {
         self.editor.read(cx).text().to_string()
     }
 
-    /// The cursor's line, from 1.
-    pub(super) fn line(&self, cx: &App) -> u32 {
-        self.editor.read(cx).cursor_position().line + 1
-    }
-
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.editor.update(cx, |e, cx| e.focus(window, cx));
     }

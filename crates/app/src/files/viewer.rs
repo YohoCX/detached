@@ -1,11 +1,10 @@
 //! A tab's file or diff.
 
-use detached_core::api;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyView, App, AppContext, ClickEvent, Context, Div, Entity, FontWeight, Global,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    AnyView, App, AppContext, Context, Div, Entity, FontWeight, Global, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px,
 };
 
 use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
@@ -13,11 +12,8 @@ use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
 use crate::dock::DocKind;
-use crate::keymap;
-use crate::ui::{self, Icon, text, theme};
+use crate::ui::{text, theme};
 use crate::util::{base_name, dir_name};
-use kernel::activity::Activity;
-use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::repo::Repo;
 use kernel::workspace::Workspace;
@@ -39,10 +35,6 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let this = cx.weak_entity();
-        let zed = move |_: &mut Window, cx: &mut App| {
-            this.update(cx, |v, cx| v.zed(cx)).ok();
-        };
         let none = |_: &mut Window, _: &mut App| {};
         let actions = vec![
             // The views register their own; these keep the keys quiet when nothing takes them.
@@ -57,7 +49,6 @@ impl Viewer {
                 none,
             ),
             register(cx, "diff.show", "Show Diff", Group::Diff, diff_shown),
-            register(cx, "file.openInZed", "Open in Zed", Group::Navigate, zed),
         ];
         Viewer {
             shown: None,
@@ -103,20 +94,6 @@ impl Viewer {
             _ => return,
         }
         cx.notify();
-    }
-
-    fn zed(&mut self, cx: &mut Context<Self>) {
-        if !matches!(
-            Workspace::get(cx).shown(),
-            Some(Doc::File(_) | Doc::Diff(_))
-        ) {
-            return;
-        }
-        match &self.shown {
-            Some(Shown::File(v)) => v.update(cx, |v, cx| v.zed(cx)),
-            Some(Shown::Diff(v)) => v.update(cx, |v, cx| v.zed(cx)),
-            None => {}
-        }
     }
 }
 
@@ -196,25 +173,7 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
         .child(muted("viewer.repo", repo.into()))
 }
 
-pub(super) fn zed_button(
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> impl IntoElement {
-    let tip = keymap::tip("Open in Zed", "file.openInZed", cx);
-    ui::titled(
-        ui::icon_button("viewer.zed", Icon::External.size(px(14.)), cx),
-        tip,
-    )
-    .test_support()
-    .text_size(text::SMALL)
-    .child("Zed")
-    .on_click(on_click)
-}
-
-pub(super) fn conflict_bar(
-    on_zed: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> impl IntoElement {
+pub(super) fn conflict_bar(cx: &App) -> impl IntoElement {
     let t = theme(cx);
     let text = "This file has merge conflicts.";
     div()
@@ -231,20 +190,6 @@ pub(super) fn conflict_bar(
         .border_b_1()
         .border_color(t.line)
         .child(text)
-        .child(ui::button("viewer.conflict.zed", "Open in Zed", cx).on_click(on_zed))
-}
-
-/// Errors go to the status message.
-pub(super) fn open_in_zed(repo: &str, path: &str, line: Option<u32>, cx: &mut App) {
-    let core = kernel::core(cx).clone();
-    let (repo, path) = (repo.to_string(), path.to_string());
-    let open = blocking::run(cx, move || api::open_in_zed(&core, &repo, &path, line));
-    cx.spawn(async move |cx| {
-        if let Err(e) = open.await {
-            cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)));
-        }
-    })
-    .detach();
 }
 
 /// Files and diffs: they share the center's preview tab, whose viewer shows the next in place.

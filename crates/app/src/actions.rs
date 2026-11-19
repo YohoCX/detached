@@ -50,7 +50,6 @@ pub const ACTIONS: &[Action] = &[
     a("diff.show", "Show Diff", Group::Diff),
     a("diff.next", "Next Change", Group::Diff),
     a("diff.prev", "Previous Change", Group::Diff),
-    a("file.openInZed", "Open in Zed", Group::Navigate),
     a("app.settings", "Settings…", Group::View),
     a("panel.log", "Git Log", Group::View),
     a("panel.mergeRequests", "Merge Requests", Group::View),

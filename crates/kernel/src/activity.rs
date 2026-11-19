@@ -26,8 +26,8 @@ pub enum Level {
     Error,
 }
 
-/// `repo` and `files` list files with an Open in Zed button (checkout conflicts); `open` is a file
-/// an Open button shows in its default app.
+/// `files` lists `repo`'s files a checkout left in conflict; `open` is a file an Open button shows
+/// in its default app.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Notice {
     pub id: u64,

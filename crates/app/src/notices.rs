@@ -11,7 +11,7 @@ use gpui_kit::{
 use std::path::PathBuf;
 
 use detached_core::error::Result;
-use detached_core::{api, os};
+use detached_core::os;
 
 use crate::ui::{self, Icon, text, theme};
 use kernel::activity::{Activity, Level, Notice};
@@ -87,36 +87,19 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
             .text_size(text::SMALL)
             .child(SelectableText::new("text", b))
     });
-    let files = n.repo.filter(|_| !n.files.is_empty()).map(|repo| {
+    let files = (!n.files.is_empty()).then(|| {
         div()
             .id("files")
             .mt(px(6.))
             .max_h(px(200.))
             .overflow_y_scroll()
-            .children(n.files.into_iter().enumerate().map(|(i, file)| {
-                let repo = repo.clone();
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .py(px(2.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(ui::theme::mono(cx))
-                            .text_size(text::SMALL)
-                            .child(file.clone()),
-                    )
-                    .child(
-                        ui::button(("zed", i), "Open in Zed", cx)
-                            .h(px(24.))
-                            .px(px(10.))
-                            .text_size(text::SMALL)
-                            .on_click(move |_, _, cx| open_in_zed(repo.clone(), file.clone(), cx)),
-                    )
-            }))
+            .font_family(ui::theme::mono(cx))
+            .text_size(text::SMALL)
+            .children(
+                n.files
+                    .into_iter()
+                    .map(|file| div().py(px(2.)).truncate().child(file)),
+            )
     });
     let open = n.open.map(|file| {
         ui::button("open", "Open", cx)
@@ -144,14 +127,6 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
             Animation::new(ui::motion::SLOW).with_easing(ease_out_quint()),
             |n, t| n.opacity(t).relative().left(px(32. * (1. - t))),
         )
-}
-
-fn open_in_zed(repo: String, file: String, cx: &mut App) {
-    let core = kernel::core(cx).clone();
-    say_error(
-        blocking::run(cx, move || api::open_in_zed(&core, &repo, &file, None)),
-        cx,
-    );
 }
 
 fn open_file(file: PathBuf, cx: &mut App) {

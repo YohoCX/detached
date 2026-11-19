@@ -489,6 +489,13 @@ What this changes:
 
 ### Step W1. Open in Zed out
 
+**Status (2026-11-19): built, not yet run.** Gone: the file and diff headers' button, the
+conflict bar's, the conflict notice's (its file list stays, as text), the sidebar menu's item,
+`file.openInZed` and its KEYMAP row, `viewer::open_in_zed`, the views' `zed`, `Code::line`,
+`api::open_in_zed`, `git::files::open_in_zed` with `ZED_CLI` and its test, TECHDEBT's fake-zed
+mention. Tests written (`files.rs`, `repos.rs`), compiled with `cargo check`, not run: `make check`
+waits for the combined build. The owner checks: no Zed anywhere in the app.
+
 Work: §9. Tests: `tests/files.rs` asserts no `viewer.zed` in the header and no Zed button in the
 conflict bar; `tests/repos.rs` the sidebar menu without the item; the action is unknown to the
 palette. Done when `rg -i 'open in zed|open_in_zed|openInZed' crates docs` finds nothing outside
