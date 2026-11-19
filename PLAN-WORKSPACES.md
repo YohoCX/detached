@@ -12,10 +12,9 @@ The workspace becomes the top-level context: chats and Council runs belong to it
 across its projects, a project can sit in several workspaces and be attached read-only as a
 knowledge base, and the center's tabs are split by category.
 
-**Status (2026-11-18): plan review rounds 01–03 fixed, and the owner's answers to round 02's
-questions in: trusted read-write projects are `--add-dir`ed under the cwd's trust rules, the
-others are files only, and read-only needs Claude's sandbox or refuses (Windows keeps the owner's
-accepted limit). Waiting for the next review.** What the owner decided is in the
+**Status (2026-11-19): plan review rounds 01–04 fixed. After round 04 the owner set read-only's
+boundary: it stops a cooperative agent's accidental writes, not a deliberate escape; the hardening
+that only served the latter is gone. Waiting for the next review.** What the owner decided is in the
 [decision](docs/decisions/2026-11-18-workspaces.md); choices marked *Proposal* are this plan's.
 
 Owner's decisions, 2026-11-18:
@@ -41,6 +40,11 @@ Owner's decisions, 2026-11-18:
     `sandbox.excludedCommands`, naming the file. Codex runs only if it can drop its MCP servers
     per session. A chat `--add-dir`s the workspace's trusted read-write projects; read-only and
     untrusted ones are files only.
+11. (2026-11-19) Read-only protects against a cooperative agent's accidental writes, not against
+    an agent deliberately escaping: planting git config or hooks (`core.hooksPath`, submodule git
+    dirs, `~/.gitconfig`), settings that widen the sandbox, a process Detached runs. Untrusted
+    code goes through Council's untrusted path (sandboxed, an export, no Fix), the real
+    isolation.
 
 Words: a **project** is a repo the workspace lists (today's `RepoInfo`); an **attachment** is a
 project in a workspace, with a **role**, read-write or read-only. Council is today's Panels; its
@@ -108,8 +112,8 @@ becomes a switcher.
   the branch without its popup; write items leave menus and the VCS popup; a chord for one says
   why through Activity.
 - **The user's own terminal is not limited:** what the owner types is the owner's.
-- **Agents** beside a read-only project: §4.4 and §5. Read-only ships in one step with that
-  enforcement (W7), never before it.
+- **Agents** beside a read-only project: §4.4 and §5, against accidental writes (decision 11).
+  Read-only ships in one step with that enforcement (W7), never before it.
 
 ## 4. The chat
 
@@ -131,9 +135,11 @@ becomes a switcher.
   | in an accepted project | `user,project,local` | the trusted read-write projects |
   | in a project not accepted | `user` | none: every other project is files only, and the banner says why |
 
-  The workspace folder counts as trusted while it holds no trust file; one appearing there ends
-  the session at the turn's end, as any trust change does. The plugin copy's "the CLI reads it
-  itself" follows the same sources.
+  The workspace folder is Detached's, not a place to keep files: Detached empties it at every
+  open and resume, so nothing an agent left there (a `CLAUDE.md`, a `.claude/settings.json`) loads
+  into a later session. A trust file appearing there mid-session ends the session at the turn's
+  end; the next message resumes in the emptied folder. The plugin copy's "the CLI reads it itself"
+  follows the same sources.
 - Either way the tab's title names the place, and the Chats app lists both kinds together.
 
 ### 4.2 The projects given to the agent
@@ -186,27 +192,27 @@ becomes a switcher.
 
 ### 4.4 Read-only, enforced
 
-A chat whose list has a read-only project, the cwd included:
+Against accidental writes (decision 11). A chat whose list has a read-only project, the cwd
+included:
 - **Claude's file tools, every OS:** `Edit`, `Write` and `NotebookEdit` deny rules on each
   read-only project and its git common dir. A deny wins in every mode (W0 row 2).
 - **Claude's Bash: the fence**, on macOS and Linux. `Spec` gains `fence: Option<Fence { write,
   deny }>` beside `sandbox`, which keeps its meaning for the probe and participants; a spec has one
   or neither. The backend turns a fence into Claude's sandbox, `allowUnsandboxedCommands: false`
-  and `autoAllowBashIfSandboxed` left off, so Bash asks as its mode says (W0 row 3):
-  - `allowWrite`: the cwd, the temp dirs, and each read-write project's tree and git common dir.
-    Not the home: nothing that later runs outside the fence, `~/.gitconfig`, `~/.claude`,
-    Detached's config, data and cache tiers, is writable.
-  - `denyWrite`: each read-only project and its git common dir; and in every project, read-write
-    ones included, the git dir's `config`, `config.worktree` files and `hooks`, which Detached's
-    and the owner's unsandboxed git would run.
-  - A toolchain cache under the home (`~/.cargo`, `~/.npm`) is not writable, so a build that
-    fetches fails; one joins `allowWrite` only by a plan edit, never a config or dotfile dir.
-- **The fence needs the probe's pass:** on macOS and Linux, where it fails
+  and `autoAllowBashIfSandboxed` left off, so Bash asks as its mode says (W0 row 3).
+  `allowWrite`: the home, the temp dirs, and each read-write project with its git common dir;
+  `denyWrite`: each read-only project and its git common dir.
+- **The fence needs the probe's pass**, since without it an ordinary `git switch` an allow rule
+  lets through writes the project: on macOS and Linux, where it fails
   (bubblewrap or socat missing, a user-namespace limit), the chat does not start and shows the
   probe's fix.
 - **`excludedCommands`:** when settings the session loads (the user's, the pinned project's)
-  name `sandbox.excludedCommands`, which would run outside the fence, the chat does not start and
-  names the file.
+  name `sandbox.excludedCommands`, an ordinary excluded `git` or `make` would run outside the
+  fence, so the chat does not start and names the file.
+- **Not covered**, by decision 11: what other settings add to the sandbox (`allowWrite`, `Edit`
+  allow rules, `additionalDirectories`, sockets, managed settings), file-tool writes to git config,
+  hooks or Detached's files that unsandboxed code later runs, and a `proc` restart of code the
+  agent edited (§6).
 - **Native Windows**, which has no sandbox: the owner's accepted limit. Only `default` and `plan`
   modes; each Bash ask's card says the shell can write the read-only projects; a command the owner
   or his allow rules allow runs unconfined. A TECHDEBT row (W7).
@@ -257,8 +263,7 @@ Every Detached session, chat and Council alike:
   consent, so it refuses where the sandbox does not run. Its MR's head is fetched into
   `refs/detached/subjects/<run>` and removed with the run.
 - **A trusted run in a workspace with a read-only project** keeps orchestrator mode with §4.4's
-  denies and fence. Its `write` is the participant's own tree and the subject repo's git common
-  dir, less that dir's `config`, `config.worktree` files and `hooks`, so finders' and Fix's
+  denies and fence, whose `write` holds the subject repo's git common dir, so finders' and Fix's
   commits from their linked worktrees work (W0 row 3). Codex participants give way to Claude, as
   above. The run is refused where the fence cannot run (native Windows, a failed probe), and when
   settings its participants load name `sandbox.excludedCommands`, naming the file.
@@ -271,7 +276,10 @@ Every Detached session, chat and Council alike:
   belongs to its project, running on across a switch. The Processes app lists the current
   workspace's read-write projects, grouped. A read-only project's processes are neither listed nor
   started, by the owner or an agent: they run repo code that writes.
-- A chat's `proc` reaches its own read-write projects' processes at their `agents` level.
+- A chat's `proc` reaches its own read-write projects' processes at their `agents` level. A
+  process runs outside the fence; one an agent edited and restarted could write a read-only
+  project, which decision 11 leaves out: the `start` level already means code execution as the
+  owner (host §8).
 - Managed worktrees stay per project (`<folder>/worktrees/<repo>/<branch>`), shown in every
   workspace that lists it; none for a read-only one.
 
@@ -317,15 +325,19 @@ the same in every workspace. Nothing is moved or copied.
   └────────────────────────────────────────────────────────────────────┘
   ```
 
-- Built on the kit's `DockArea::set_center` with each category's layout, its tab entities kept,
-  so a switch rebuilds no view. A category can still split the center by dragging a tab to an
-  edge; side zones are unchanged, and a tab dragged to one leaves its category.
+- **Hidden, never removed.** Every document tab stays in the dock's center as today; `DocTab`
+  gains its workspace (set at open, saved with it), and our `skin` draws in each center tab strip
+  only the tabs of the current workspace and category, selecting the category's remembered tab. A
+  switch removes no panel, so no tab's `removed` hook runs: a docked terminal keeps its shell and
+  its place in `Terminals`. `DockArea::set_center` is not used: it sends `on_removed` to every
+  center tab. A center pane with no tab of the shown category draws its empty state. Side zones are
+  unchanged, and a tab dragged to one leaves its category.
 - Each category has its own tabs, active tab and preview tab: a file from the tree replaces the
   code preview, a plan from Docs the docs preview. `show_doc` opens a doc in its category and
   brings the category forward.
-- The center is the current workspace's: a switch swaps it.
-- ui_state: `dock.layout` keeps the zones; `tabs.<workspace id>` keeps the category shown and a
-  dump of each category's tabs.
+- The center shows the current workspace's tabs; a switch hides the others' and shows its own.
+- ui_state: `dock.layout` keeps every tab, as today; `tabs.<workspace id>` keeps the category shown
+  and each category's selected tab.
 - Keys, ids in `actions.rs`, chords in `keymap.rs` and docs/KEYMAP.md:
 
   | Action id | Action | Keys |
@@ -354,12 +366,13 @@ Removed everywhere:
 - **`active` stays** as it is, read and written but unused after the migration, so an older build
   still lists repos. The first active workspace becomes `workspace.current`.
 - **Chats and runs are not migrated**; the archive shows them (§7).
-- **The saved layout:** the center's tabs of the old `dock.layout` load once into the current
-  workspace's categories; old `Doc::Chat` and `Doc::Panel` tabs, keyed by repo, are dropped.
+- **The saved layout:** the center's tabs of the old `dock.layout` load into the current
+  workspace; old `Doc::Chat` and `Doc::Panel` tabs, keyed by repo, are dropped.
 - **A stated limit:** a build older than this drops `id` and `readOnly` on its next save, and the
   index entries' `workspace`, `cwd` and `started` on its next index write. Back on this build, the
-  workspace gets a new id, its earlier chats and runs show in the archive as a deleted workspace's
-  and are not clearable, and its read-only roles must be set again. The release notes say so.
+  workspace gets a new id, and its earlier chats and runs show in the archive under its name as a
+  deleted workspace's. Its runs and the chats whose `started` survived stay clearable there, so the
+  release notes say not to clear them; its read-only roles must be set again.
 
 ## 11. Written rules this changes
 
@@ -402,12 +415,10 @@ step's status.
    name; a mid-turn change to its skills, agents, commands or settings fires a blocked
    `ConfigChange`. `Read`, `Grep`, `Glob` allow rules on a path not added read it unasked.
 2. `Edit`, `Write`, `NotebookEdit` denies hold in every mode, `bypassPermissions` included.
-3. The fence: `denyWrite` wins inside `allowWrite`, globs included; `touch`, `echo >`,
-   `git switch` and `git stash` in a read-only project fail; `git config`, a new hook and a write
-   to `~/.gitconfig`, `~/.claude` or Detached's config fail in every project; `cargo build` with
-   fetched dependencies and `git commit` work in the cwd, in a read-write project the CLI loads
-   nothing from, and in a linked worktree whose common dir is elsewhere, as a finder's is;
-   `npm install` and a cargo fetch fail; Bash asks in `default` and runs unasked in
+3. The fence: `denyWrite` wins inside `allowWrite`; `touch`, `echo >`, `git switch` and
+   `git stash` in a read-only project fail; `cargo build`, `npm install` and `git commit` work in
+   the cwd, in a read-write project the CLI loads nothing from, and in a linked worktree whose
+   common dir is elsewhere, as a finder's is; Bash asks in `default` and runs unasked in
    `bypassPermissions`; network asks reach the host.
 4. `--strict-mcp-config` with `user,project,local`, against servers in `~/.claude.json`, in user
    settings, in an accepted repo's `.mcp.json` with `enableAllProjectMcpServers`, in an enabled
@@ -471,9 +482,12 @@ Needs W3. Work: §8.
 
 Tests, `tests/dock.rs`: a file and a chat open in different categories, a Markdown file under
 Docs; a category shows its tabs alone, the chips their counts; each category's preview tab; the
-four actions; a restart restores each workspace's categories; a switch swaps the center; an old
-`dock.layout`'s center loads into categories; every registered kind has a category; a switch of
-category keeps a file's scroll position.
+four actions; a restart restores each workspace's categories; a workspace switch hides one's
+tabs and shows the other's; an old `dock.layout`'s center loads into the current workspace; every
+registered kind has a category; a switch of category keeps a file's scroll position; a docked
+terminal survives a category switch and a workspace switch and back: the same shell runs, its
+exit still closes its tab, and the interceptor still passes the tab chords; no switch calls a
+tab's `removed` hook.
 
 Done when the owner's `align-2-0` chat and `biome.json` no longer share a strip.
 
@@ -485,7 +499,8 @@ with `data/archive.json`.
 Tests, on `fake_claude`: each row of §4.1's sources table, its sources and `--add-dir`s (a
 workspace chat `user,project` with one per trusted read-write project in attachment order, read
 rules per other project, and the instructions; a chat in a project not accepted adds none); a
-trust file appearing in the workspace folder ends the session at the turn's end; a resume keeps
+trust file appearing in the workspace folder ends the session at the turn's end, and the resume
+finds the folder emptied, a `CLAUDE.md` left there included; a resume keeps
 the place and the flags; a trust file of an added project changed between turns ends the session unsent, changed
 mid-turn is blocked and ends it at the turn's end, and the next message resumes with that project
 as read rules only until accepted; Pull All landing a new skill in an added project does the same;
@@ -521,8 +536,7 @@ Tests: core: each write refused in a read-only attachment, the store's write, Sh
 default among them, and allowed where the same repo is read-write; the ff-only pull skips a dirty
 and a diverged tree. Kernel: keep-fresh runs at a
 switch and every 15 minutes on GPUI's clock against a local remote. On `fake_claude`: the denies
-per read-only project, the pinned cwd included; the fence's write list without the home and its
-deny list with every project's git `config`, `config.worktree` and `hooks`; a spec never
+per read-only project, the pinned cwd included; the fence's write and deny lists; a spec never
 carries a fence and a sandbox; the chat refused on a failed probe and on `excludedCommands`; only
 `default` and `plan` on Windows. The probe and untrusted participants' flags unchanged. Codex:
 `agent` and full access refused, a pinned read-only project refused. Council: a read-only subject
@@ -530,12 +544,11 @@ runs untrusted with no Fix, its MR's head fetched and removed after; a trusted r
 read-only project carries the fence with the subject's common dir less its config and hooks,
 Claude in Codex's roles, and is refused without the fence and on `excludedCommands`. `tests/repos.rs`: menus and the VCS popup lack writes, a chord's
 refusal says why, the Processes app lists no read-only project. `make agent-test` gains one row:
-an edit and a `git switch` into a read-only project, and a `git config core.fsmonitor` in a
-read-write one, are refused by the real `claude`, and a `git commit` in a read-write one goes
-through.
+an edit and a `git switch` into a read-only project are refused by the real `claude`, and a
+`git commit` and an `npm install` in a read-write one go through.
 
-Done when the owner's knowledge-base repo stays fresh with nothing but fetch and pull, and no chat
-or run can write it but through a hook or, on Windows, an allowed command.
+Done when the owner's knowledge-base repo stays fresh with nothing but fetch and pull, and no
+chat or run writes it by accident, but through a hook or, on Windows, an allowed command.
 
 ## 13. Parallel work
 
@@ -554,9 +567,8 @@ or run can write it but through a hook or, on Windows, an allowed command.
 
 ## 14. Risks
 
-- **The fence** keeps toolchain caches under the home read-only, so a chat beside a read-only
-  project cannot fetch dependencies; W0 row 3 shows which, and the `write` list grows only by a
-  plan edit, never by a config or dotfile dir.
+- **Read-only's boundary** (decision 11): an agent that means to escape can, through git config,
+  hooks, settings or a process; untrusted code belongs on Council's untrusted path.
 - **No third-party MCP servers** in Detached's agents: a workflow that needs one moves to a skill
   with a script, or to the owner's own terminal `claude`.
 - **Hooks** of the owner's settings, of accepted projects and of the plugins they enable can
@@ -564,5 +576,6 @@ or run can write it but through a hook or, on Windows, an allowed command.
 - **Windows:** Bash in a chat with a read-only project is not confined; the owner accepted it;
   TECHDEBT row from W7.
 - **`--add-dir` semantics** move between CLI versions; `min_cli` pins what W0 row 1 saw.
-- **The kit's `set_center`** with kept tab entities is unproven; W4 starts with that test.
+- **Hiding tabs in our skin** while the kit's tab panel keeps them is unproven; W4 starts with
+  the terminal test.
 

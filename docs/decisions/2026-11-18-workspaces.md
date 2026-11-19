@@ -1,7 +1,8 @@
 # Workspaces are the top-level context
 
 **Decided by the owner on 2026-11-18**: six decisions, then his answers to the draft plan's nine
-questions and to the four each of its first two reviews raised.
+questions and to the four each of its first two reviews raised; read-only's boundary on
+2026-11-19.
 
 ## What was decided
 
@@ -18,6 +19,13 @@ questions and to the four each of its first two reviews raised.
   worktree, Fix or commit. This is enforced for agents (permission rules, the sandbox's
   `denyWrite`), not only hidden in the UI.
   - It ships only together with its enforcement for chats and Council, never before it.
+  - **Its boundary (2026-11-19):** it protects against a cooperative agent's accidental writes,
+    not against an agent deliberately escaping: planting git config or hooks (`core.hooksPath`,
+    submodule git dirs, `~/.gitconfig`), settings that widen the sandbox, edits to code a process
+    Detached runs. Untrusted code goes through Council's untrusted path (sandboxed, an export, no
+    Fix), which is the real isolation. So the plan keeps the file-tool denies on read-only paths,
+    Bash's sandbox denying writes there, and core refusing Detached's own writes, and drops
+    hardening that only served against a deliberate escape.
   - Its MRs can be Council subjects: the head is fetched into `refs/detached/subjects/`; review
     yes, Fix no.
   - On native Windows, where Claude has no sandbox, Bash in such a chat is not enforced; the limit
@@ -65,6 +73,8 @@ asks.
 - Several workspaces shown at once, as before.
 - Migrating per-project chats and runs into workspaces.
 - Read-only as a UI-only state that agents could still write through.
+- Read-only hardened against a deliberate escape (no writable home, denies on every repo's git
+  config and hooks): it broke ordinary builds and still left routes open.
 - One tab strip for every kind of document; and a strip per category in a fixed center split.
 - Deleting a workspace's chats and runs with it.
 - Third-party MCP servers only off beside a read-only project: they stay outside the sandbox
