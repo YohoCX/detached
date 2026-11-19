@@ -384,7 +384,11 @@ impl Processes {
             .gap(px(6.))
             .child(
                 row()
-                    .child(div().font_weight(FontWeight::BOLD).child(e.name.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(e.name.clone()),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -583,7 +587,7 @@ impl Render for Processes {
             .child(
                 div()
                     .flex_1()
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Processes"),
             )
             .when_some(self.error.clone(), |b, e| {

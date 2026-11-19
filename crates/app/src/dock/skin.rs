@@ -11,10 +11,11 @@ use gpui_kit::base::dock::{
 use gpui_kit::base::{ResizeHandleContext, ResizeHandleState, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, canvas, div, point, prelude::FluentBuilder, px, size,
+    Animation, AnimationExt, AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity,
+    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, WeakEntity, Window, canvas, div, ease_out_quint, point, prelude::FluentBuilder, px,
+    size,
 };
 
 use super::{DocTab, DragDoc, Tab, missing};
@@ -241,6 +242,24 @@ impl DockAreaRenderer for Skin {
     }
 }
 
+/// The active tab's accent bar on the tab bar's bottom line, growing out from the middle.
+fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .bottom(px(-7.))
+        .h(px(2.))
+        .rounded_full()
+        .bg(color)
+        .with_animation(
+            "underline",
+            Animation::new(ui::motion::BASE).with_easing(ease_out_quint()),
+            |d, t| {
+                let inset = px(10. + 30. * (1. - t));
+                d.left(inset).right(inset).opacity(t)
+            },
+        )
+}
+
 /// The grip ids the panes had before the dock.
 fn grip(p: DockPlacement) -> &'static str {
     match p {
@@ -277,7 +296,7 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
             Ok(d) => Label {
                 id: d.read(cx).id(),
                 title: d.read(cx).title(cx),
-                tip: None,
+                tip: d.read(cx).tip(cx),
                 doc: Some(d),
             },
             Err(_) => Label {
@@ -353,14 +372,19 @@ impl TabGroupRenderer for Group {
                 .rounded(radius::ICON_BUTTON)
                 .when(preview, |d| d.italic())
                 .when_some(l.tip.clone(), |d, tip| {
-                    d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    d.aria_description(tip.clone())
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 })
+                .relative()
+                .font_weight(FontWeight::MEDIUM)
                 .map(|d| match on {
-                    true => d.bg(t.selected).text_color(t.fg),
+                    true => d.bg(t.selected_inactive).text_color(t.fg),
                     false => d
                         .text_color(t.muted)
-                        .hover(|s| s.bg(t.hover).text_color(t.fg)),
+                        .hover(|s| s.bg(t.hover).text_color(t.fg))
+                        .active(|s| s.bg(t.selected_inactive)),
                 })
+                .when(on && !collapsed, |d| d.child(underline(t.accent)))
                 .on_click(move |e, window, cx| {
                     clicked.select_tab(ix, window, cx);
                     if let Some(a) = super::zones(cx) {
@@ -430,6 +454,8 @@ impl TabGroupRenderer for Group {
         if group.is_collapsed() {
             return Empty.into_any_element();
         }
+        // Keyed by the view, so reordering or closing other tabs keeps its state.
+        let id = ("panel.in", panel.entity_id().as_u64() as usize);
         div()
             .flex()
             .flex_col()
@@ -437,6 +463,9 @@ impl TabGroupRenderer for Group {
             .min_h_0()
             .size_full()
             .child(panel)
+            .with_animation(id, Animation::new(ui::motion::FAST), |d, t| {
+                d.opacity(0.3 + 0.7 * t)
+            })
             .into_any_element()
     }
 

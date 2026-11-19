@@ -4,8 +4,7 @@
 use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::component::Sizable;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{
     AnyElement, App, AppContext, Context, ElementId, Entity, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
@@ -25,7 +24,7 @@ use kernel::workspace::Workspace;
 
 /// Past conversations shown per repo or folder.
 const PER_PLACE: usize = 5;
-const ROW: f32 = 28.;
+const ROW: f32 = 32.;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Filter {
@@ -428,14 +427,18 @@ impl ChatList {
                 .flex_none()
                 .items_end()
                 .gap(px(6.))
-                .h(px(ROW))
+                .h(px(28.))
                 .px(px(10.))
                 .pb(px(4.))
-                .text_size(text::SMALL)
+                .text_size(text::LABEL)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.muted)
                 .children(icon.map(|i| i.size(px(12.))))
-                .child(div().truncate().child(text.clone()))
+                // A section is a label; a repo or folder keeps its name as written.
+                .child(div().truncate().child(match icon {
+                    Some(_) => text.clone(),
+                    None => text.to_uppercase(),
+                }))
                 .into_any_element(),
             Line::Open(repo, chat, session) => {
                 let i = n.0;
@@ -453,14 +456,13 @@ impl ChatList {
                 });
                 let name = label(repo, cx);
                 let mut buttons =
-                    vec![self.button(("chats.open.end", i), Icon::Close, "End chat", &key, on, cx)];
+                    vec![self.button(("chats.open.end", i), Icon::Close, "End chat", &key, cx)];
                 if said {
                     buttons.push(self.button(
                         ("chats.open.archive", i),
                         Icon::Archive,
                         "Archive  E",
                         &key,
-                        on,
                         cx,
                     ));
                     buttons.push(self.button(
@@ -468,7 +470,6 @@ impl ChatList {
                         Icon::Trash,
                         "Delete  ⌫",
                         &key,
-                        on,
                         cx,
                     ));
                 }
@@ -482,13 +483,18 @@ impl ChatList {
                 row(("chats.open", i).into(), name.clone(), cx)
                     .aria_description(SharedString::from(format!("{state:?}")))
                     .child(state_icon(state, cx))
-                    .child(div().flex_none().child(name))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(t.muted)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_color(t.muted)
                             .child(last.unwrap_or("New chat".into())),
                     )
                     .child(slot)
@@ -505,15 +511,12 @@ impl ChatList {
                     true => "Unarchive  E",
                     false => "Archive  E",
                 };
-                let archive =
-                    self.button(("chats.archive", k), Icon::Archive, archive, &key, on, cx);
-                let delete =
-                    self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, on, cx);
+                let archive = self.button(("chats.archive", k), Icon::Archive, archive, &key, cx);
+                let delete = self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, cx);
                 // The age gives way to the buttons, so the title keeps its width.
                 let age = div()
                     .text_size(text::SMALL)
                     .text_color(t.muted)
-                    .when(on, |d| d.invisible())
                     .group_hover(ui::HOVER, |s| s.invisible())
                     .child(age(now() - p.modified as i64 / 1000));
                 let slot = div()
@@ -559,12 +562,10 @@ impl ChatList {
         icon: Icon,
         title: &'static str,
         key: &Key,
-        on: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = key.clone();
         ui::hover_button(id, icon.size(px(12.)), title, cx)
-            .when(on, |b| b.visible())
             .test_support()
             .on_click(cx.listener(move |l, _, window, cx| {
                 cx.stop_propagation();
@@ -724,7 +725,7 @@ impl Render for ChatList {
                     .flex_none()
                     .px(px(8.))
                     .pb(px(6.))
-                    .child(Input::new(&self.query).small()),
+                    .child(ui::input(&self.query, cx)),
             )
             .child(
                 div()

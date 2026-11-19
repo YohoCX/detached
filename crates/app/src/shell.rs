@@ -191,6 +191,7 @@ impl Shell {
                     .children(self.center.iter().cloned())
                     .child(div().flex_1())
                     .children(self.right.iter().cloned())
+                    .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(t.line))
                     .child(run(
                         "top.chat",
                         Icon::Chat,
@@ -247,11 +248,12 @@ fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
         .aria_label(tip.clone())
         .aria_toggled(on.into())
         .map(|b| match on {
-            true => b.bg(t.selected).text_color(t.fg),
+            true => b.bg(t.selected_inactive).text_color(t.fg),
             false => b
                 .text_color(t.muted)
                 .hover(|s| s.bg(t.hover).text_color(t.fg)),
         })
+        .active(|s| s.opacity(0.75))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .on_click(move |_, window, cx| click(window, cx))
         .child(icon)
@@ -272,7 +274,7 @@ impl Render for Shell {
             .text_color(t.fg)
             .text_size(text::BODY)
             .line_height(relative(1.4))
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::NORMAL)
             .child(self.title_bar(cx))
             .child(div().flex().flex_1().min_h_0().child(self.dock.clone()))
             .child(
@@ -312,6 +314,8 @@ mod tests {
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::init(cx);
+            // The test clock stands still, so an animation would stay on its first frame.
+            cx.set_reduce_motion(true);
             actions::init(cx);
             ui_state::init(dir.path(), cx);
             keymap::bind(&BTreeMap::new(), cx);

@@ -13,15 +13,16 @@ pub mod suggest;
 pub mod theme;
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, BoxShadow, Div, ElementId, Entity, FontWeight, HighlightStyle, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Role, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, StyledText, Window, div, prelude::FluentBuilder, px,
-    relative,
+    Animation, AnimationElement, AnimationExt, App, BoxShadow, Div, ElementId, Entity, FontWeight,
+    HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div,
+    ease_out_quint, prelude::FluentBuilder, px, relative,
 };
 
 pub use disabled::disabled;
@@ -33,6 +34,29 @@ pub use suggest::Suggest;
 pub use theme::{GAP, radius, text, theme};
 
 use crate::util::{self, Status, fuzzy};
+
+/// How long motion takes: hover and press, popups and tabs, panes and dialogs.
+pub mod motion {
+    use std::time::Duration;
+
+    pub const FAST: Duration = Duration::from_millis(120);
+    pub const BASE: Duration = Duration::from_millis(180);
+    pub const SLOW: Duration = Duration::from_millis(260);
+}
+
+/// `e` fading in and rising `rise` px into place when it first renders under `id`.
+pub fn appear<E: Styled + IntoElement + 'static>(
+    id: impl Into<ElementId>,
+    e: E,
+    rise: f32,
+    duration: Duration,
+) -> AnimationElement<E> {
+    e.with_animation(
+        id,
+        Animation::new(duration).with_easing(ease_out_quint()),
+        move |e, t| e.opacity(t).relative().top(px(rise * (1. - t))),
+    )
+}
 
 /// Top bar, strip, sidebar, tool pane and bottom panel.
 pub fn panel<E: Styled>(e: E, cx: &App) -> E {
@@ -73,6 +97,9 @@ pub fn modal(
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| close(window, cx));
+    let scrim = scrim.with_animation("scrim.in", Animation::new(motion::BASE), |s, t| {
+        s.opacity(t)
+    });
     let content = glass(div(), cx)
         .w(width)
         .rounded(radius)
@@ -81,6 +108,7 @@ pub fn modal(
         .overflow_hidden()
         .occlude()
         .child(content);
+    let content = appear("modal.in", content, 10., motion::BASE);
     div().absolute().inset_0().child(scrim).child(
         div()
             .absolute()
@@ -127,21 +155,17 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -
         .rounded(radius::ICON_BUTTON)
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
+        .active(|s| s.bg(t.selected_inactive).opacity(0.8))
         .child(icon)
 }
 
 /// A pill with a label, 28px high.
 pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
-    pressable(id)
-        .h(px(28.))
-        .px(px(14.))
-        .border_1()
+    pill(id, label)
         .border_color(t.line)
-        .rounded(radius::PILL)
         .bg(t.input)
-        .font_weight(FontWeight::BOLD)
-        .child(label.into())
+        .hover(|s| s.bg(t.hover).border_color(t.selected_ring))
 }
 
 /// A `button` the eye goes to first.
@@ -151,10 +175,24 @@ pub fn primary_button(
     cx: &App,
 ) -> Stateful<Div> {
     let t = theme(cx);
-    button(id, label, cx)
+    pill(id, label)
         .bg(t.primary)
         .border_color(t.primary)
         .text_color(t.primary_fg)
+        .hover(|s| s.bg(t.primary.opacity(0.88)))
+}
+
+// GPUI takes one hover style per element, so each button sets its own.
+fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    pressable(id)
+        .h(px(28.))
+        .px(px(14.))
+        .border_1()
+        .rounded(radius::PILL)
+        .text_size(text::SMALL)
+        .font_weight(FontWeight::SEMIBOLD)
+        .active(|s| s.opacity(0.75))
+        .child(label.into())
 }
 
 /// The group a row names with `.group(HOVER)` to show its `hover_button`s.
@@ -191,7 +229,7 @@ pub fn dot(color: Hsla) -> Div {
         .rounded_full()
         .bg(color)
         .shadow(vec![
-            BoxShadow::new(px(0.), px(0.), color).blur_radius(px(8.)),
+            BoxShadow::new(px(0.), px(0.), color.opacity(0.45)).blur_radius(px(4.)),
         ])
 }
 
@@ -204,7 +242,7 @@ pub fn badge(label: impl Into<SharedString>, color: Hsla, cx: &App) -> Div {
         .bg(color)
         .text_color(theme(cx).accent_fg)
         .text_size(px(10.))
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .child(label.into())
 }
 
@@ -220,7 +258,9 @@ pub fn row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> 
         .rounded(radius::ITEM)
         .map(|r| match selected {
             true => r.bg(t.selected),
-            false => r.hover(|s| s.bg(t.hover)),
+            false => r
+                .hover(|s| s.bg(t.hover))
+                .active(|s| s.bg(t.selected_inactive)),
         })
 }
 
@@ -271,19 +311,19 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
         .children(options.iter().enumerate().map(|(i, &(v, label, tip))| {
             let on = v == value;
             let on_change = on_change.clone();
+            let chip = BoxShadow::new(px(0.), px(1.), t.ground.opacity(0.5)).blur_radius(px(2.));
             pressable(i)
                 .test_support()
                 .h(px(24.))
                 .px(px(10.))
                 .rounded(radius::SEGMENT)
                 .text_size(text::SMALL)
-                .font_weight(if on {
-                    FontWeight::BOLD
-                } else {
-                    FontWeight::SEMIBOLD
-                })
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if on { t.fg } else { t.muted })
-                .when(on, |b| b.bg(t.selected))
+                .map(|b| match on {
+                    true => b.bg(t.popup).shadow(vec![chip]),
+                    false => b.hover(|s| s.text_color(t.fg)),
+                })
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_toggled(on.into())
@@ -292,6 +332,12 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
                 })
                 .on_click(move |_, window, cx| on_change(v, window, cx))
                 .child(label)
+                // A new id each time the choice moves, so the chosen chip fades in.
+                .with_animation(
+                    ("segment", i * 2 + on as usize),
+                    Animation::new(motion::FAST),
+                    move |b, f| if on { b.opacity(0.4 + 0.6 * f) } else { b },
+                )
         }))
 }
 
@@ -309,7 +355,7 @@ pub fn status(s: Status, cx: &App) -> Div {
         .text_color(c)
         .font_family(theme::mono(cx))
         .text_size(text::LETTER)
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .child(util::letter(s))
 }
 
@@ -327,7 +373,7 @@ pub fn highlighted(text: impl Into<SharedString>, indices: &[usize], cx: &App) -
     let text = text.into();
     let hit = HighlightStyle {
         color: Some(theme(cx).hit),
-        font_weight: Some(FontWeight::BOLD),
+        font_weight: Some(FontWeight::SEMIBOLD),
         ..HighlightStyle::default()
     };
     let mut end = 0;

@@ -255,7 +255,7 @@ impl Render for Markdown {
             .markdown_block_renderer("mermaid", move |node, _, cx| diagram(&this, node, cx));
         let root = div().id("markdown").test_support();
         if !file {
-            return root.child(view.text_size(text::BODY)).into_any_element();
+            return root.child(view.text_size(doc::BODY)).into_any_element();
         }
         // The column is centered by padding, so the scrollbar stays at the edge.
         let list = self.state.read(cx).list_state().clone();
@@ -396,7 +396,7 @@ fn style(file: bool, cx: &App) -> TextViewStyle {
             let size = [h1, h2, h3].get(level as usize - 1).copied();
             let s = StyleRefinement::default()
                 .text_size(size.unwrap_or(text::TITLE))
-                .font_weight(FontWeight::EXTRA_BOLD);
+                .font_weight(FontWeight::BOLD);
             match file && level <= 2 {
                 true => s.pb(px(6.)).border_b_1().border_color(rule),
                 false => s,

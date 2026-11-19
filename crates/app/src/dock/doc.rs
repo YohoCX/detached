@@ -24,6 +24,10 @@ pub trait DocKind {
     /// The tab's element id, stable for tests.
     fn id(&self, doc: &Doc) -> SharedString;
     fn title(&self, doc: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString;
+    /// The tab's tooltip.
+    fn tip(&self, _: &Doc, _: &App) -> Option<SharedString> {
+        None
+    }
     /// A mark before the title.
     fn badge(&self, _: &Doc, _: &App) -> Option<AnyElement> {
         None
@@ -121,6 +125,10 @@ impl DocTab {
 
     pub fn badge(&self, cx: &App) -> Option<AnyElement> {
         self.kind.badge(&self.doc, cx)
+    }
+
+    pub fn tip(&self, cx: &App) -> Option<SharedString> {
+        self.kind.tip(&self.doc, cx)
     }
 }
 

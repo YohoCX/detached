@@ -609,7 +609,7 @@ impl Log {
                 .bg(color.opacity(0.15))
                 .text_color(color)
                 .text_size(text::LABEL)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .line_height(px(16.))
                 .truncate()
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))

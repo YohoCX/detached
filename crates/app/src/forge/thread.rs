@@ -177,7 +177,11 @@ impl Thread {
                     .flex()
                     .gap(px(8.))
                     .text_size(text::SMALL)
-                    .child(div().font_weight(FontWeight::BOLD).child(n.author.clone()))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(n.author.clone()),
+                    )
                     .child(div().text_color(t.muted).child(ago(n.time, now()))),
             )
             .child(self.notes[k].clone())
@@ -297,7 +301,7 @@ impl Render for Thread {
                             .border_color(t.warning)
                             .rounded(radius::PILL)
                             .text_size(text::LABEL)
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.warning)
                             .child("outdated"),
                     )

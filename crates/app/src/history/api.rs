@@ -212,7 +212,7 @@ impl CommitDetails {
         div()
             .child(
                 selectable("details.subject", title)
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .text_size(text::TITLE),
             )
             .child(
@@ -285,7 +285,7 @@ impl CommitDetails {
         div()
             .child(
                 selectable("details.subject", subject.to_string())
-                    .font_weight(FontWeight::EXTRA_BOLD)
+                    .font_weight(FontWeight::BOLD)
                     .text_size(text::TITLE),
             )
             .when(!body.is_empty(), |d| {
@@ -402,7 +402,7 @@ impl Render for CommitDetails {
                 .px(px(16.))
                 .py(px(6.))
                 .text_size(text::LABEL)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.muted)
                 .child(head.to_uppercase()),
         )

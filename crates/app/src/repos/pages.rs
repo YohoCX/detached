@@ -586,7 +586,12 @@ impl Model {
                         .gap(px(2.))
                         .flex_1()
                         .min_w_0()
-                        .child(div().truncate().font_weight(FontWeight::BOLD).child(title))
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
                         .child(div().truncate().text_color(t.muted).child(about))
                         .children(state.map(|(s, color)| {
                             div()

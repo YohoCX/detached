@@ -12,7 +12,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{settings_call, widget};
+use super::{caret, settings_call, widget};
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::settings::Settings;
 
@@ -174,7 +174,7 @@ impl Workspaces {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .child(w.name.clone()),
             )
             .child(
@@ -221,7 +221,25 @@ impl Workspaces {
                     .enumerate()
                     .map(|(i, w)| self.row(i, w, cx)),
             )
-            .child(field(ui::input(&open.new, cx).id("workspaces.new")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .mt(px(4.))
+                    .pt(px(4.))
+                    .px(px(8.))
+                    .border_t_1()
+                    .border_color(theme(cx).line)
+                    .text_color(theme(cx).muted)
+                    .child(Icon::Plus.size(px(14.)))
+                    .child(
+                        ui::input(&open.new, cx)
+                            .id("workspaces.new")
+                            .flex_1()
+                            .bg(theme(cx).popup),
+                    ),
+            )
             .into_any_element()
     }
 }
@@ -258,10 +276,16 @@ impl Render for Workspaces {
             l if l.is_empty() => "No workspace".to_string(),
             l => l,
         };
-        let trigger = widget("workspaces", "Workspaces", label.clone(), cx)
-            .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
-            .child(div().min_w_0().truncate().child(label))
-            .child(Icon::Down.size(px(12.)));
+        let trigger = widget(
+            "workspaces",
+            "Workspaces",
+            label.clone(),
+            self.open.is_some(),
+            cx,
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
+        .child(div().min_w_0().truncate().child(label))
+        .child(caret(cx));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
         let this = cx.weak_entity();
         let close = move |window: &mut Window, cx: &mut App| {

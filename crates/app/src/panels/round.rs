@@ -1,5 +1,6 @@
 use super::*;
 use crate::files::{Links, Markdown};
+use crate::ui::Edge;
 use detached_core::panel::record::{Disposition, State};
 use detached_core::panel::track::{self, Fate, Track};
 use detached_core::panel::{Finding, Run};
@@ -396,11 +397,8 @@ impl RunView {
         let list = div()
             .id("panel.findings.list")
             .test_support()
-            .w(theme::graph::CHART * 2.)
-            .flex_none()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
+            .size_full()
+            .pr(GAP)
             .overflow_y_scroll()
             .children(["critical", "major", "minor"].into_iter().map(|s| {
                 div()
@@ -409,7 +407,16 @@ impl RunView {
                     .min_w_0()
                     .overflow_hidden()
                     .when(run.findings.iter().any(|f| f.severity == s), |d| {
-                        d.child(div().text_color(theme(cx).muted).child(s))
+                        d.child(
+                            div()
+                                .px(GAP)
+                                .pt(GAP)
+                                .pb(px(4.))
+                                .text_size(text::LABEL)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme(cx).muted)
+                                .child(s.to_uppercase()),
+                        )
                     })
                     .children(run.findings.iter().filter(|f| f.severity == s).map(row))
             }))
@@ -438,19 +445,29 @@ impl RunView {
             .test_support()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
+            .size_full()
+            .px(GAP)
             .overflow_y_scroll()
             .gap(GAP)
             .when_some(selected, |d, f| {
-                d.child(div().flex_none().min_w_0().truncate().child(format!(
-                    "{} · {} · {}",
-                    f.severity,
-                    f.verdict.as_deref().unwrap_or("unverified"),
-                    f.title
-                )))
+                d.child(
+                    div()
+                        .flex_none()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(f.title.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(text::SMALL)
+                        .text_color(theme(cx).muted)
+                        .child(format!(
+                            "{} · {}",
+                            f.severity,
+                            f.verdict.as_deref().unwrap_or("unverified")
+                        )),
+                )
                 .child(
                     div()
                         .flex_none()
@@ -471,43 +488,41 @@ impl RunView {
                         .overflow_hidden()
                         .child(m),
                 )
-            })
-            .when_some(self.diff.clone(), |d, diff| {
-                d.child(
+            });
+        let line = theme(cx).line;
+        let diff = self.diff.clone().map(|diff| {
+            ui::pane("panel.findings.diff", Edge::Top, 360., 120., 1400.)
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .pt(GAP)
+                .px(GAP)
+                .border_t_1()
+                .border_color(line)
+                .child(
+                    div()
+                        .id("panel.diff.range")
+                        .test_support()
+                        .aria_label(range_note.clone())
+                        .flex_none()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(text::SMALL)
+                        .text_color(theme(cx).muted)
+                        .child(range_note),
+                )
+                .child(
                     div()
                         .id("panel.diff")
                         .test_support()
-                        .flex()
-                        .flex_col()
-                        .flex_none()
-                        .w_full()
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
                         .min_w_0()
                         .overflow_hidden()
-                        .h(theme::graph::CHART * 3.)
-                        .child(
-                            div()
-                                .id("panel.diff.range")
-                                .test_support()
-                                .aria_label(range_note.clone())
-                                .flex_none()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(text::SMALL)
-                                .text_color(theme(cx).muted)
-                                .child(range_note.clone()),
-                        )
-                        .child(
-                            div()
-                                .relative()
-                                .flex_1()
-                                .min_h_0()
-                                .min_w_0()
-                                .w_full()
-                                .overflow_hidden()
-                                .child(diff),
-                        ),
+                        .child(diff),
                 )
-            });
+        });
         div()
             .id("panel.findings")
             .test_support()
@@ -516,9 +531,23 @@ impl RunView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .gap(GAP)
-            .child(list)
-            .child(detail)
+            .child(
+                ui::pane("panel.findings.list", Edge::Right, 320., 200., 700.)
+                    .h_full()
+                    .border_r_1()
+                    .border_color(line)
+                    .child(list),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(div().flex_1().min_h_0().child(detail))
+                    .children(diff),
+            )
             .into_any_element()
     }
 }
@@ -549,15 +578,13 @@ impl Render for RunView {
             {
                 self.select(f, cx);
             }
-            let duration = if run.duration_ms == 0 {
-                "duration unavailable".into()
-            } else {
+            let duration = (run.duration_ms > 0).then(|| {
                 format!(
                     "{}m {}s",
                     run.duration_ms / 60_000,
                     run.duration_ms / 1000 % 60
                 )
-            };
+            });
             let tokens = match run.tokens {
                 1_000_000.. => format!("{:.1}M", run.tokens as f64 / 1_000_000.),
                 1000.. => format!("{:.1}K", run.tokens as f64 / 1000.),
@@ -583,18 +610,34 @@ impl Render for RunView {
                         .min_w_0()
                         .overflow_hidden()
                         .gap(GAP)
-                        .child(div().flex_1().min_w_0().truncate().child(format!(
-                            "{} / {} · {} · {duration} · {tokens} tokens · {}/{} reported",
-                            run.task,
-                            run.round,
-                            if run.profile.is_empty() {
-                                "revmux"
-                            } else {
-                                &run.profile
-                            },
-                            run.participants.iter().filter(|p| !p.degraded).count(),
-                            run.participants.len()
-                        )))
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{} / {}", run.task, run.round)),
+                        )
+                        .child({
+                            let all = run.participants.len();
+                            let reported = run.participants.iter().filter(|p| !p.degraded).count();
+                            let profile = (!run.profile.is_empty()).then(|| run.profile.clone());
+                            let facts: Vec<String> =
+                                [profile, duration, Some(format!("{tokens} tokens"))]
+                                    .into_iter()
+                                    .flatten()
+                                    .chain(
+                                        (reported < all)
+                                            .then(|| format!("{reported}/{all} reported")),
+                                    )
+                                    .collect();
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(text::SMALL)
+                                .text_color(theme(cx).muted)
+                                .child(facts.join(" · "))
+                        })
                         .child(div().flex_none().child(count_badges(run.counts(), cx))),
                 )
                 .when_some(compare, |d, c| {
@@ -633,7 +676,7 @@ impl Render for RunView {
                             .min_w_0()
                             .overflow_hidden()
                             .flex_wrap()
-                            .gap(GAP)
+                            .gap(px(6.))
                             .children(run.participants.iter().enumerate().map(|(i, p)| {
                                 let label = format!(
                                     "{} · {} · {}{}{}",
@@ -657,25 +700,39 @@ impl Render for RunView {
                                         format!(" · {}", p.cause)
                                     }
                                 );
+                                let t = theme(cx);
+                                let tip = SharedString::from(label.clone());
                                 div()
                                     .id(("panel.participant", i))
                                     .test_support()
-                                    .aria_label(label.clone())
+                                    .aria_label(label)
+                                    .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
                                     .min_w_0()
                                     .max_w_full()
-                                    .overflow_hidden()
-                                    .bg(theme(cx).panel)
-                                    .rounded(theme::radius::ITEM)
-                                    .p(GAP)
+                                    .h(px(26.))
+                                    .px(px(10.))
                                     .flex()
                                     .items_center()
-                                    .gap(GAP)
-                                    .child(div().flex_none().child(ui::dot(if p.degraded {
-                                        theme(cx).warning
-                                    } else {
-                                        theme(cx).success
-                                    })))
-                                    .child(div().min_w_0().truncate().child(label))
+                                    .gap(px(6.))
+                                    .rounded(theme::radius::PILL)
+                                    .bg(t.hover)
+                                    .text_size(text::SMALL)
+                                    .child(ui::dot(if p.degraded { t.warning } else { t.success }))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(p.name.clone()),
+                                    )
+                                    .when(!p.cause.is_empty(), |d| {
+                                        d.child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(t.warning)
+                                                .child(p.cause.clone()),
+                                        )
+                                    })
                             })),
                     )
                 })
@@ -710,6 +767,8 @@ impl Render for RunView {
                     .min_h_0()
                     .min_w_0()
                     .overflow_y_scroll()
+                    // The flow and timeline scroll sideways inside: each takes only its own axis.
+                    .restrict_scroll_to_axis()
                     .child(if self.mode == 0 {
                         super::flow::render(&run, cx)
                     } else {

@@ -216,7 +216,11 @@ impl JobLog {
             .border_color(t.line)
             .whitespace_nowrap()
             .children(self.job.as_ref().map(|j| status(&j.status, cx)))
-            .child(div().font_weight(FontWeight::BOLD).child(self.name.clone()))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.name.clone()),
+            )
             .child(labeled("job.at", at).text_color(t.muted))
             .child(div().flex_1())
             .when(self.following, |d| {

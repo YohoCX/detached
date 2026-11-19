@@ -3,8 +3,9 @@
 use gpui_kit::base::{SelectableText, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, BoxShadow, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
+    Animation, AnimationExt, App, BoxShadow, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    ease_out_quint, px,
 };
 
 use std::path::PathBuf;
@@ -55,7 +56,7 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
         .flex()
         .items_center()
         .gap(px(8.))
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .child(
             div()
                 .flex_none()
@@ -138,6 +139,11 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
         .children(body)
         .children(files)
         .children(open)
+        .with_animation(
+            ("notice.in", id as usize),
+            Animation::new(ui::motion::SLOW).with_easing(ease_out_quint()),
+            |n, t| n.opacity(t).relative().left(px(32. * (1. - t))),
+        )
 }
 
 fn open_in_zed(repo: String, file: String, cx: &mut App) {

@@ -21,7 +21,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, transparent_black, uniform_list,
 };
 
-use super::{CheckoutTarget, State, checkout, say, sync, widget};
+use super::{CheckoutTarget, State, caret, checkout, say, sync, widget};
 use crate::ui::{self, Icon, radius, text, theme, theme::mono};
 use crate::util::fuzzy;
 use kernel::activity::{Activity, Level, Notice};
@@ -96,28 +96,34 @@ impl Render for Widget {
                 .map(|(a, n)| format!("{a}{n}"))
                 .collect()
         });
-        let trigger = widget("branches", "Branches", label.clone(), cx)
-            .map(|b| match current {
-                false => b.opacity(0.5),
-                true => b.on_click(cx.listener(|this, _, window, cx| {
-                    let shown = State::global(cx).read(cx).branches.is_some();
-                    open((!shown).then_some(Intent::Checkout), cx);
-                    this.sync(window, cx);
-                })),
-            })
-            .child(
-                div()
-                    .flex()
-                    .text_color(t.accent)
-                    .child(Icon::Branch.size(px(14.))),
-            )
-            .child(div().min_w_0().truncate().child(label))
-            .children(
-                counts
-                    .into_iter()
-                    .map(|c| div().text_color(t.muted).child(c)),
-            )
-            .child(Icon::Down.size(px(12.)));
+        let trigger = widget(
+            "branches",
+            "Branches",
+            label.clone(),
+            self.open.is_some(),
+            cx,
+        )
+        .map(|b| match current {
+            false => b.opacity(0.5),
+            true => b.on_click(cx.listener(|this, _, window, cx| {
+                let shown = State::global(cx).read(cx).branches.is_some();
+                open((!shown).then_some(Intent::Checkout), cx);
+                this.sync(window, cx);
+            })),
+        })
+        .child(
+            div()
+                .flex()
+                .text_color(t.accent)
+                .child(Icon::Branch.size(px(14.))),
+        )
+        .child(div().min_w_0().truncate().child(label))
+        .children(
+            counts
+                .into_iter()
+                .map(|c| div().text_color(t.muted).child(c)),
+        )
+        .child(caret(cx));
         let content = self.open.as_ref().map(|o| o.1.clone().into_any_element());
         ui::popup(
             "branches",
@@ -760,7 +766,7 @@ impl Popup {
                     .px(px(18.))
                     .pb(px(5.))
                     .text_size(text::LABEL)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.muted)
                     .child(*label)
                     .into_any_element();
@@ -787,7 +793,7 @@ impl Popup {
                             .min_w_0()
                             .truncate()
                             .when(current, |d| {
-                                d.text_color(t.accent).font_weight(FontWeight::EXTRA_BOLD)
+                                d.text_color(t.accent).font_weight(FontWeight::BOLD)
                             })
                             .child(ui::highlighted(b.full().to_string(), hits, cx)),
                     )
@@ -1150,7 +1156,7 @@ fn title(back: Option<AnyElement>, text: String) -> Div {
         .px(px(16.))
         .pt(px(2.))
         .pb(px(8.))
-        .font_weight(FontWeight::EXTRA_BOLD)
+        .font_weight(FontWeight::BOLD)
         .children(back)
         .child(
             div()

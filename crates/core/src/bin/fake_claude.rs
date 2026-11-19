@@ -13,7 +13,8 @@
 //! - `spawn` starts a child in a process group of its own, which only this CLI's SIGTERM ends;
 //!   `deaf` one in this CLI's group that ignores SIGTERM;
 //! - `env [<text>]` says the names in its env, of the values with the text, `argv` its arguments, `model` its model and mode;
-//!   `initialize` lists the skills it loads among the commands, as the CLI does;
+//!   `initialize` lists the skills it loads among the commands, as the CLI does, and `fake.json`'s
+//!   `commands` by name;
 //! - `api` calls `$ANTHROPIC_BASE_URL/v1/messages` and says the status line;
 //! - `config <path> <text>` writes the file and reports it as `ConfigChange` where the CLI does;
 //! - `wait <name>` waits for `$CLAUDE_CONFIG_DIR/<name>`;
@@ -319,6 +320,8 @@ fn initialize(s: &Shared) -> Value {
     };
     let mut commands = vec![command("review", "Reviews a change", "<pr>")];
     commands.extend(skills(s));
+    let named = s.fake["commands"].as_array().into_iter().flatten();
+    commands.extend(named.filter_map(Value::as_str).map(|n| command(n, "", "")));
     json!({
         "models": models,
         "commands": commands,

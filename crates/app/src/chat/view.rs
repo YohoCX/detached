@@ -10,8 +10,8 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, ClipboardItem, Context, Entity, EntityId, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
+    AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div,
     prelude::FluentBuilder, px, relative,
 };
@@ -72,6 +72,10 @@ pub struct ChatView {
     me: WeakEntity<ChatView>,
     /// A `/` typed before any session listed its commands.
     unlisted: bool,
+    /// Entries before this one were there on open and do not animate in.
+    seen: usize,
+    /// The `/clear` whose earlier entries show.
+    earlier: Option<usize>,
     _files: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -108,6 +112,7 @@ impl ChatView {
         let repo = session.read(cx).repo.clone();
         let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
         scroll.scroll_to_bottom();
+        let seen = session.read(cx).feed(cx).len();
         ChatView {
             session,
             input,
@@ -121,6 +126,8 @@ impl ChatView {
             named: p.id,
             me: cx.weak_entity(),
             unlisted: false,
+            seen,
+            earlier: None,
             _files: None,
             _subscriptions: subscriptions,
         }
@@ -283,7 +290,13 @@ impl ChatView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(topic),
             )
-            .child(div().flex_none().text_color(t.muted).child(name))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(name),
+            )
             .child(div().flex_1())
             .child(
                 ui::titled(ui::icon_button("chat.new", Icon::Plus, cx), "New chat")
@@ -309,7 +322,10 @@ impl ChatView {
             let chevron =
                 (!entries.is_empty() && id != "chat.usage").then(|| Icon::Down.size(px(10.)));
             ui::titled(
-                ui::icon_button(id, div().child(label.clone()), cx).children(chevron),
+                ui::icon_button(id, div().child(label.clone()), cx)
+                    .h(px(24.))
+                    .px(px(8.))
+                    .children(chevron),
                 title.to_string(),
             )
             .aria_description(SharedString::from(label))
@@ -375,7 +391,8 @@ impl ChatView {
             let parts: Vec<String> = (parts.iter())
                 .map(|p| format!("{} {}", p.name, tokens(p.tokens)))
                 .collect();
-            let label = format!("Context {}%", used * 100 / max);
+            let pct = used * 100 / max;
+            let label = format!("Context {pct}%");
             let entries = parts.iter().map(|p| (p.clone(), None)).collect();
             menu(
                 "chat.usage",
@@ -385,7 +402,7 @@ impl ChatView {
             )
             .aria_label(SharedString::from(label))
             .aria_description(SharedString::from(parts.join(", ")))
-            .text_color(t.muted)
+            .child(meter(pct as f32, cx))
         });
         let account = s.and_then(|s| s.account.as_ref());
         let plan = account.map(|a| SharedString::from(a.plan.clone()));
@@ -493,6 +510,8 @@ impl ChatView {
         let fresh = m.fresh_name();
         ui::titled(
             ui::icon_button("chat.group", div().child(label.clone()), cx)
+                .h(px(24.))
+                .px(px(8.))
                 .child(Icon::Down.size(px(10.))),
             "Messages between agents",
         )
@@ -554,25 +573,79 @@ impl ChatView {
         let chat = self.session.read(cx);
         let feed = chat.feed(cx);
         let tool = |it: &Item| matches!(it, Item::Tool(t) if t.status.as_deref() != Some("denied"));
+        // Widest before a turn (None past the end is the queued message), tight between actions
+        // and above a turn's end.
+        let gap = |i: usize| match (
+            i.checked_sub(1).map(|p| feed[p].1),
+            feed.get(i).map(|f| f.1),
+        ) {
+            (None, _) => 0.,
+            (_, Some(Item::User(_)) | None) => 24.,
+            (Some(Item::Tool(_)), Some(Item::Tool(_))) | (_, Some(Item::End { .. })) => 8.,
+            _ => 16.,
+        };
+        let cut = chat.cleared(&feed, cx);
+        let open = cut.is_some() && self.earlier == cut;
+        let mut divider = cut.map(|_| self.divider(open, cut, cx));
         let mut out = vec![];
-        let mut i = 0;
+        let mut push = |i: usize, el: AnyElement| {
+            if Some(i) == cut {
+                out.extend(divider.take());
+            }
+            let el = div().flex().flex_col().pt(px(gap(i))).child(el);
+            out.push(match i >= self.seen {
+                true => ui::appear(("chat.in", i), el, 4., ui::motion::BASE).into_any_element(),
+                false => el.into_any_element(),
+            });
+        };
+        let mut i = cut.filter(|_| !open).unwrap_or(0);
         while i < feed.len() {
-            let run = feed[i..].iter().take_while(|(_, it)| tool(it)).count();
-            match run {
+            match feed[i..].iter().take_while(|(_, it)| tool(it)).count() {
                 0 | 1 => {
-                    out.push(self.item(i, feed[i], cx));
+                    push(i, self.item(i, feed[i], cx));
                     i += 1;
                 }
                 n => {
-                    out.push(self.group(i, &feed[i..i + n], cx));
+                    push(i, self.group(i, &feed[i..i + n], cx));
                     i += n;
                 }
             }
         }
         if let Some(text) = chat.current().and_then(|s| s.read(cx).queued.clone()) {
-            out.push(self.user(feed.len(), text, cx));
+            push(feed.len(), self.user(feed.len(), text, cx));
         }
         out
+    }
+
+    /// "Context cleared" over the last `/clear`, folding what came before it.
+    fn divider(&self, open: bool, cut: Option<usize>, cx: &App) -> AnyElement {
+        let t = theme(cx);
+        let me = self.me.clone();
+        let action = if open { "Hide earlier" } else { "Show earlier" };
+        let rule = || div().flex_1().h(px(1.)).bg(t.line);
+        div()
+            .id("chat.earlier")
+            .test_support()
+            .role(Role::Button)
+            .aria_label(action)
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .when(open, |d| d.pt(px(24.)))
+            .text_size(text::LABEL)
+            .text_color(t.muted)
+            .cursor_pointer()
+            .hover(|s| s.text_color(t.fg))
+            .on_click(move |_, _, cx| {
+                _ = me.update(cx, |v, cx| {
+                    v.earlier = if open { None } else { cut };
+                    cx.notify();
+                })
+            })
+            .child(rule())
+            .child(format!("Context cleared · {action}"))
+            .child(rule())
+            .into_any_element()
     }
 
     /// Tool calls in a row: one line saying what ran, open while one runs or when one failed.
@@ -654,7 +727,7 @@ impl ChatView {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.))
+                .gap(px(6.))
                 .ml(px(14.))
                 .pl(px(10.))
                 .border_l_1()
@@ -700,7 +773,8 @@ impl ChatView {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(radius::FIELD)
-                    .bg(t.hover)
+                    .bg(t.selected_inactive)
+                    .line_height(relative(theme::doc::LINE_HEIGHT))
                     .child(text),
             )
             .into_any_element()
@@ -719,7 +793,7 @@ impl ChatView {
                 .child(
                     div()
                         .flex_none()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(FontWeight::MEDIUM)
                         .child(name),
                 )
                 .child(
@@ -736,9 +810,15 @@ impl ChatView {
             Item::Text(text) => {
                 let body = match self.texts.get(&(session, at.1)) {
                     Some((_, md)) => md.clone().into_any_element(),
-                    None => div().child(text.clone()).into_any_element(),
+                    None => div()
+                        .text_size(theme::doc::BODY)
+                        .child(text.clone())
+                        .into_any_element(),
                 };
-                self.row(i, text.clone()).child(body).into_any_element()
+                self.row(i, text.clone())
+                    .line_height(relative(theme::doc::LINE_HEIGHT))
+                    .child(body)
+                    .into_any_element()
             }
             Item::Thought(text) => self
                 .row(i, format!("Thinking: {text}"))
@@ -930,6 +1010,9 @@ impl ChatView {
                 "Copy the answer",
             )
             .test_support()
+            // Transparent, not invisible: a hidden button takes no clicks.
+            .opacity(0.)
+            .group_hover(ui::HOVER, |s| s.opacity(1.))
             .on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(answer.clone()))
             })
@@ -938,10 +1021,11 @@ impl ChatView {
             .id(("chat.item", i))
             .test_support()
             .aria_label(SharedString::from(label.clone()))
+            .group(ui::HOVER)
             .flex()
             .items_center()
-            .gap(px(6.))
-            .text_size(text::SMALL)
+            .gap(px(4.))
+            .text_size(text::LABEL)
             .text_color(t.muted)
             .child(label)
             .children(copy)
@@ -1646,7 +1730,7 @@ impl Render for ChatView {
         let suggestions = self.suggestions(cx);
         let bar = self.bar(cx);
         // A column to read in, as wide as a line of text should be.
-        let column = || div().flex().flex_col().w_full().max_w(px(860.)).mx_auto();
+        let column = || div().flex().flex_col().w_full().max_w(px(760.)).mx_auto();
         div()
             .id("chat")
             .test_support()
@@ -1663,12 +1747,12 @@ impl Render for ChatView {
                     .flex_1()
                     .min_h_0()
                     .px(px(20.))
-                    .py(px(16.))
+                    .pt(px(16.))
+                    .pb(px(24.))
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
                     .child(
                         column()
-                            .gap(px(12.))
                             .when(empty.is_some(), |c| c.flex_1().justify_center())
                             .children(items)
                             .children(empty),
@@ -1678,8 +1762,8 @@ impl Render for ChatView {
                 div()
                     .flex_none()
                     .px(px(20.))
-                    .pt(px(10.))
-                    .pb(px(8.))
+                    .pt(px(12.))
+                    .pb(px(10.))
                     .border_t_1()
                     .border_color(t.line)
                     .child(
@@ -1719,7 +1803,7 @@ impl Render for ChatView {
                             .capture_action(
                                 cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)),
                             )
-                            .child(Textarea::new(&self.input))
+                            .child(Textarea::new(&self.input).rounded(radius::FIELD))
                             .child(bar),
                     ),
             )
@@ -1727,7 +1811,7 @@ impl Render for ChatView {
 }
 
 fn placeholder(name: &str) -> String {
-    format!("Message {name}. / for commands, @ for files, Enter sends.")
+    format!("Message {name}…")
 }
 
 fn seconds(ms: u64) -> String {
@@ -1741,11 +1825,6 @@ fn seconds(ms: u64) -> String {
 fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let used = l.used.clamp(0., 100.);
-    let color = match used {
-        u if u >= 90. => t.error,
-        u if u >= 70. => t.warning,
-        _ => t.accent,
-    };
     let name = match l.name.as_str() {
         "5h" => "5-hour",
         "Week" => "Weekly",
@@ -1771,16 +1850,31 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .child(l.name.clone())
-        .child(
-            div().w(px(36.)).h(px(4.)).rounded_full().bg(t.line).child(
-                div()
-                    .h_full()
-                    .rounded_full()
-                    .bg(color)
-                    .w(relative(used as f32 / 100.)),
-            ),
-        )
+        .child(meter(used as f32, cx))
         .child(left)
+}
+
+/// A short bar `used` percent full, warning from 70 and error from 90.
+fn meter(used: f32, cx: &App) -> Div {
+    let t = theme(cx);
+    let color = match used {
+        u if u >= 90. => t.error,
+        u if u >= 70. => t.warning,
+        _ => t.accent,
+    };
+    div()
+        .flex_none()
+        .w(px(36.))
+        .h(px(4.))
+        .rounded_full()
+        .bg(t.line)
+        .child(
+            div()
+                .h_full()
+                .rounded_full()
+                .bg(color)
+                .w(relative(used.clamp(0., 100.) / 100.)),
+        )
 }
 
 #[cfg(test)]

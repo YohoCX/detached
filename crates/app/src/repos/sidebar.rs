@@ -14,10 +14,10 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, BoxShadow, ClickEvent, ClipboardItem, Context, Div, Entity,
+    AnyElement, AnyView, App, AppContext, ClickEvent, ClipboardItem, Context, Div, Entity,
     FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window,
-    div, prelude::FluentBuilder, px, relative, uniform_list,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity,
+    Window, div, prelude::FluentBuilder, px, relative, uniform_list,
 };
 
 use super::branches::{self, Intent};
@@ -74,6 +74,8 @@ struct RepoRow {
     worktree: bool,
     worktrees: usize,
     depth: usize,
+    /// Under a folder row, so drawn a level deeper than `depth`.
+    nested: bool,
 }
 
 /// The rows per active workspace. `collapsed` holds `workspace:<name>`, folder paths and repo paths
@@ -204,6 +206,7 @@ impl<'a> Tree<'a> {
                     worktree,
                     worktrees,
                     depth,
+                    nested: !solo,
                 })
             };
             self.out.push(row(repo, false, wts.len(), depth));
@@ -265,6 +268,10 @@ pub fn sidebar(window: &mut Window, cx: &mut App) -> AnyView {
 
 struct Sidebar {
     collapsed: BTreeSet<String>,
+    /// The rows shown before the last unfold, by `key`; the ones it added fade in until `fade`
+    /// ends.
+    before: Option<HashSet<String>>,
+    fade: Option<Task<()>>,
     filter: Entity<InputState>,
     _subs: [Subscription; 3],
 }
@@ -274,6 +281,8 @@ impl Sidebar {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
         Sidebar {
             collapsed: ui_state::get(COLLAPSED, cx).unwrap_or_default(),
+            before: None,
+            fade: None,
             _subs: [
                 Workspace::observe(cx, |_, cx| cx.notify()),
                 cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
@@ -283,8 +292,21 @@ impl Sidebar {
         }
     }
 
+    fn shown(&self, cx: &App) -> Vec<Row> {
+        let filter = self.filter.read(cx).value();
+        let ws = &Settings::get(cx).workspaces;
+        rows(Workspace::get(cx).repos(), ws, &self.collapsed, &filter)
+    }
+
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
-        if !self.collapsed.remove(&key) {
+        let shown = self.shown(cx).iter().map(self::key).collect();
+        if self.collapsed.remove(&key) {
+            self.before = Some(shown);
+            self.fade = Some(cx.spawn(async |this, cx| {
+                cx.background_executor().timer(ui::motion::FAST).await;
+                _ = this.update(cx, |s, _| s.before = None);
+            }));
+        } else {
             self.collapsed.insert(key);
         }
         ui_state::set(COLLAPSED, &self.collapsed, cx);
@@ -292,13 +314,21 @@ impl Sidebar {
     }
 
     /// A list item is laid out on its own, so it takes the width itself.
-    fn row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> Div {
+    fn row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
         let item = div().w_full();
-        match row {
+        let item = match row {
             Row::Workspace(name) => item.child(self.workspace(ix, name, cx)),
             Row::Folder { workspace, folder } => item.child(self.folder(ix, workspace, folder, cx)),
-            Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, *depth, cx)),
+            // Folders only exist under a folder row.
+            Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, depth + 1, cx)),
             Row::Repo(r) => item.child(self.repo(ix, r, cx)),
+        };
+        let key = key(row);
+        match &self.before {
+            Some(before) if !before.contains(&key) => {
+                ui::appear(key, item, 2., ui::motion::FAST).into_any_element()
+            }
+            _ => item.into_any_element(),
         }
     }
 
@@ -308,8 +338,6 @@ impl Sidebar {
         let (menu, add) = (name.to_string(), name.to_string());
         header(ix, open, cx)
             .test_support()
-            .text_size(text::SMALL)
-            .text_color(theme(cx).fg)
             .aria_label(name.to_string())
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
             .on_aux_click(move |e, window, cx| {
@@ -347,17 +375,25 @@ impl Sidebar {
                     .show(e.position(), window, cx);
             }
         };
-        header(ix, open, cx)
-            .test_support()
-            .text_size(text::LABEL)
-            .text_color(theme(cx).muted)
+        let t = theme(cx);
+        line(ix, 0, cx)
+            .group(ui::HOVER)
+            .hover(|s| s.bg(t.hover))
+            .role(Role::Button)
+            .aria_expanded(open)
             .aria_label(folder_name(folder).to_string())
             .aria_description(tip.clone())
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
             .on_aux_click(menu)
-            .child(Icon::Folder)
-            .child(label(folder_name(folder)))
+            .child(slot().text_color(t.muted).child(chevron(open)))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(t.muted)
+                    .child(Icon::Folder.size(px(14.))),
+            )
+            .child(name_of(folder_name(folder).to_string()).font_weight(FontWeight::MEDIUM))
             .child(
                 ui::hover_button("remove", Icon::Minus, "Remove folder", cx)
                     .test_support()
@@ -491,14 +527,16 @@ impl Sidebar {
                     .map(|ab| div().flex_none().text_color(t.fg).child(ab)),
             );
 
-        let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring)
-            .spread_radius(px(1.))
-            .inset();
         let (ws, solo, select) = (r.workspace.clone(), r.solo, path.clone());
-        line(ix, r.depth, cx)
+        let weight = if r.worktree {
+            FontWeight::NORMAL
+        } else {
+            FontWeight::MEDIUM
+        };
+        line(ix, r.depth + r.nested as usize, cx)
             .group(ui::HOVER)
             .map(|d| match selected {
-                true => d.bg(t.selected).shadow(vec![ring]),
+                true => d.bg(t.selected),
                 false => d.hover(|s| s.bg(t.hover)),
             })
             .role(Role::ListItem)
@@ -514,7 +552,7 @@ impl Sidebar {
                 }
             })
             .child(slot().children(toggle))
-            .child(name_of(name).font_weight(FontWeight::SEMIBOLD))
+            .child(name_of(name).font_weight(weight))
             .children(
                 st.and_then(|s| s.in_progress.clone())
                     .map(|p| ui::badge(badge_text(p), t.warning, cx)),
@@ -537,12 +575,7 @@ impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = &Settings::get(cx).workspaces;
         let filter = self.filter.read(cx).value();
-        let rows = Rc::new(rows(
-            Workspace::get(cx).repos(),
-            ws,
-            &self.collapsed,
-            &filter,
-        ));
+        let rows = Rc::new(self.shown(cx));
         let none_on = !ws.is_empty() && !ws.iter().any(|w| w.active);
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| invalidate::rescan(cx);
         let t = theme(cx);
@@ -621,6 +654,7 @@ impl Render for Sidebar {
 
 /// A workspace or folder header: chevron, then the caller's children.
 fn header(ix: usize, open: bool, cx: &App) -> Stateful<Div> {
+    let t = theme(cx);
     div()
         .id(("sidebar.row", ix))
         .group(ui::HOVER)
@@ -629,10 +663,13 @@ fn header(ix: usize, open: bool, cx: &App) -> Stateful<Div> {
         .gap(px(6.))
         .h(ROW)
         .px(px(8.))
-        .font_weight(FontWeight::BOLD)
+        .text_size(text::LABEL)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(t.muted)
+        .hover(|s| s.text_color(t.fg))
         .role(Role::Button)
         .aria_expanded(open)
-        .child(slot().text_color(theme(cx).muted).child(chevron(open)))
+        .child(slot().child(chevron(open)))
 }
 
 /// A tree row at `depth`, with a guide down each level it is nested in.
@@ -683,16 +720,33 @@ fn name_of(name: String) -> ObservedElement<Stateful<Div>> {
         .child(name)
 }
 
+/// A pencil and the count of changed files.
 fn changed(n: usize, t: &Theme) -> impl IntoElement {
+    let tip = format!("{n} changed file{}", if n == 1 { "" } else { "s" });
     div()
         .id("dirty")
         .test_support()
         .aria_label(n.to_string())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(2.))
         .text_size(text::LABEL)
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(t.warning)
-        .tooltip(|window, cx| Tooltip::new("Changed files").build(window, cx))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .child(Icon::Edit.size(px(10.)))
         .child(n.to_string())
+}
+
+/// A row's identity across renders.
+fn key(row: &Row) -> String {
+    match row {
+        Row::Workspace(name) => format!("workspace:{name}"),
+        Row::Folder { workspace, folder } => format!("{workspace}:{folder}"),
+        Row::Dir { path, .. } => path.clone(),
+        Row::Repo(r) => format!("{}:{}", r.workspace, r.repo.path),
+    }
 }
 
 fn dot(tone: Tone, t: &Theme) -> impl IntoElement {

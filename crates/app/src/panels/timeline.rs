@@ -424,7 +424,7 @@ pub(super) fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
         .flex()
         .flex_col()
         .gap(GAP)
-        .child(format!("Shared axis · {}", elapsed_text(initial.duration)))
+        .child(format!("{} in all", elapsed_text(initial.duration)))
         .when(run.timeline.is_empty(), |d| {
             d.child("No timestamped events in this archive")
         })
@@ -433,6 +433,7 @@ pub(super) fn render(run: &Run, cx: &Context<round::RunView>) -> AnyElement {
                 .id("panel.timeline.scroll")
                 .w_full()
                 .overflow_x_scroll()
+                .restrict_scroll_to_axis()
                 .child(
                     canvas(
                         move |bounds, window, cx| {

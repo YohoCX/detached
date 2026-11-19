@@ -442,7 +442,7 @@ impl MrPage {
             .whitespace_nowrap()
             .child(
                 labeled("mr.number", format!("{sign}{}", self.number))
-                    .font_weight(FontWeight::EXTRA_BOLD),
+                    .font_weight(FontWeight::BOLD),
             )
             .when_some(m, |d, m| {
                 let (title, tip) = (bare_title(m).to_string(), m.title.clone());
@@ -455,7 +455,7 @@ impl MrPage {
                     labeled("mr.title", title)
                         .min_w_0()
                         .truncate()
-                        .font_weight(FontWeight::BOLD)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)),
                 )
                 .when(m.draft, |d| {
@@ -499,11 +499,7 @@ impl MrPage {
             .flex_wrap()
             .items_center()
             .gap(px(6.))
-            .child(
-                div()
-                    .font_weight(FontWeight::EXTRA_BOLD)
-                    .child(m.author.clone()),
-            )
+            .child(div().font_weight(FontWeight::BOLD).child(m.author.clone()))
             .child("wants to merge")
             .child(branch(source))
             .child(div().text_color(t.muted).child("into"))
@@ -539,7 +535,7 @@ impl MrPage {
                 .rounded(radius::PILL)
                 .bg(t.hover)
                 .text_size(text::LABEL)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(l.clone())
         };
         let facts = [
@@ -686,7 +682,7 @@ impl MrPage {
                         div()
                             .mt(px(6.))
                             .text_size(text::LABEL)
-                            .font_weight(FontWeight::BOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(t.muted)
                             .child("ACTIVITY"),
                     )
@@ -793,7 +789,7 @@ impl MrPage {
                                 .bg(t.selected)
                                 .text_color(t.accent)
                                 .text_size(text::LABEL)
-                                .font_weight(FontWeight::BOLD)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .tooltip(move |window, cx| {
                                     Tooltip::new(tip.clone()).build(window, cx)
                                 })
@@ -815,7 +811,7 @@ impl MrPage {
                     .pt(px(8.))
                     .pb(px(6.))
                     .text_size(text::LABEL)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.muted)
                     .child(head.to_uppercase()),
             )
@@ -1077,7 +1073,7 @@ fn pill(
         .rounded(radius::PILL)
         .bg(theme(cx).hover)
         .text_size(text::LABEL)
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(color)
         .child(shown)
 }

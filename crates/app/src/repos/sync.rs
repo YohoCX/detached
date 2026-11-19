@@ -9,9 +9,9 @@ use futures::{FutureExt, StreamExt, stream};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, FontFeatures, FontWeight, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
-    prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, FontFeatures, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Task, Window,
+    div, prelude::FluentBuilder, px,
 };
 
 use super::State;
@@ -258,6 +258,7 @@ impl Render for SyncButtons {
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
         let button = |kind, id: &'static str, icon: Icon, label: &str| {
             let title = format!("{label} Repositories");
+            let running = bulk.is_some_and(|b| b.kind == kind);
             let label = match bulk {
                 Some(b) if b.kind == kind => format!("{}/{}", b.done, b.total),
                 _ => label.to_string(),
@@ -265,18 +266,21 @@ impl Render for SyncButtons {
             ui::pressable(id)
                 .test_support()
                 .gap(px(6.))
-                .h(px(30.))
+                .h(px(28.))
                 .px(px(14.))
                 .rounded(radius::PILL)
                 .border_1()
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .font_features(tnum.clone())
                 .map(|b| match kind {
                     Kind::Pull => b
                         .bg(t.primary)
                         .border_color(t.primary)
-                        .text_color(t.primary_fg),
-                    Kind::Fetch => b.bg(t.input).border_color(t.line),
+                        .text_color(t.primary_fg)
+                        .when(idle, |b| b.hover(|s| s.bg(t.primary.opacity(0.88)))),
+                    Kind::Fetch => b.bg(t.input).border_color(t.line).when(idle, |b| {
+                        b.hover(|s| s.bg(t.hover).border_color(t.selected_ring))
+                    }),
                 })
                 .role(Role::Button)
                 .aria_label(label.clone())
@@ -289,10 +293,26 @@ impl Render for SyncButtons {
                     Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
                 })
                 .map(|b| match idle {
-                    true => b.on_click(move |_, _, cx| sync_repos(kind, None, cx)),
-                    false => b.opacity(0.5),
+                    true => b
+                        .active(|s| s.opacity(0.75))
+                        .on_click(move |_, _, cx| sync_repos(kind, None, cx)),
+                    false => b.when(!running, |b| b.opacity(0.5)),
                 })
-                .child(icon.size(px(14.)))
+                .map(|b| match running {
+                    true => b.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .size(px(14.))
+                            .items_center()
+                            .justify_center()
+                            .child(ui::spinner(match kind {
+                                Kind::Pull => t.primary_fg,
+                                Kind::Fetch => t.fg,
+                            })),
+                    ),
+                    false => b.child(icon.size(px(14.))),
+                })
                 .child(label)
         };
         div()

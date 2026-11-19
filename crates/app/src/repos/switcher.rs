@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::sidebar::tone_of;
-use super::widget;
+use super::{caret, widget};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{folder_name, fuzzy};
 use kernel::repo::Repo;
@@ -177,7 +177,7 @@ impl Switcher {
                     .min_w_0()
                     .items_center()
                     .gap(px(4.))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::MEDIUM)
                     .child(div().min_w_0().truncate().child(ui::highlighted(
                         repo.name.clone(),
                         hits,
@@ -279,29 +279,31 @@ impl Switcher {
 
 impl Render for Switcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
         let w = Workspace::get(cx);
         let none = w.repos().is_empty();
         let label = w
             .current()
             .map_or("No repository".into(), |c| w.name_of(c).to_string());
-        let trigger = widget("switcher", "Switch repository", label.clone(), cx)
-            .max_w(px(320.))
-            .bg(t.input)
-            .border_1()
-            .border_color(t.line)
-            .map(|b| match none {
-                true => b.opacity(0.5),
-                false => b.on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::BOLD)
-                    .child(label),
-            )
-            .child(Icon::Down.size(px(12.)));
+        let trigger = widget(
+            "switcher",
+            "Switch repository",
+            label.clone(),
+            self.open.is_some(),
+            cx,
+        )
+        .max_w(px(320.))
+        .map(|b| match none {
+            true => b.opacity(0.5),
+            false => b.on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(label),
+        )
+        .child(caret(cx));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
         let this = cx.weak_entity();
         let close = move |_: &mut Window, cx: &mut App| {

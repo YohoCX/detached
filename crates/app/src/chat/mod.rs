@@ -201,13 +201,21 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Chat>)> {
     all
 }
 
-/// The open chats with something in them, by their tabs' titles.
+/// The open chats with something in them, each as "place · title".
 pub fn live(cx: &App) -> Vec<String> {
     let live = open(cx)
         .into_iter()
         .filter(|(.., s)| !s.read(cx).is_new(cx));
-    live.map(|(repo, n, _)| ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into())
-        .collect()
+    live.map(|(repo, n, _)| named(repo, n, cx)).collect()
+}
+
+/// A chat by its place and its tab's title.
+fn named(repo: String, n: u32, cx: &App) -> String {
+    let place = label(&repo, cx);
+    format!(
+        "{place} · {}",
+        ChatDocs.title(&Doc::Chat { repo, n }, None, cx)
+    )
 }
 
 /// Resets the idle open chat that shows past conversation `id`, which is going away.
@@ -220,14 +228,12 @@ pub fn forget(id: &str, cx: &mut App) {
     }
 }
 
-/// The open chat on conversation `id` by its place and topic, else the id.
+/// The open chat on conversation `id` as "place · title", else the id.
 pub fn name_of(id: &str, cx: &App) -> String {
     let chat = open(cx)
         .into_iter()
         .find(|(.., s)| s.read(cx).conversation(cx) == Some(id));
-    chat.map_or(id.into(), |(repo, n, _)| {
-        ChatDocs.title(&Doc::Chat { repo, n }, None, cx).into()
-    })
+    chat.map_or(id.into(), |(repo, n, _)| named(repo, n, cx))
 }
 
 /// How a chat stands: working, waiting for you, done, stopped, or not started.
@@ -270,16 +276,20 @@ impl DocKind for ChatDocs {
         let Doc::Chat { repo, n } = doc else {
             unreachable!()
         };
-        let place = label(repo, cx);
         let chat = find(repo, *n, cx);
-        let chat = chat.as_ref().map(|s| s.read(cx));
-        match chat.and_then(|s| s.topic(cx)) {
-            Some(t) => format!("{place} · {}", first_line(t)).into(),
-            None => {
-                let name = chat.map_or(CLAUDE.name, |c| c.provider.name);
-                format!("{name} · {place}").into()
-            }
-        }
+        let topic = chat.as_ref().and_then(|s| s.read(cx).topic(cx));
+        topic.map_or("New chat".into(), |t| first_line(t).into())
+    }
+
+    fn tip(&self, doc: &Doc, cx: &App) -> Option<SharedString> {
+        let Doc::Chat { repo, n } = doc else {
+            return None;
+        };
+        let chat = find(repo, *n, cx);
+        let name = chat
+            .as_ref()
+            .map_or(CLAUDE.name, |s| s.read(cx).provider.name);
+        Some(format!("{name} · {}", label(repo, cx)).into())
     }
 
     /// While it works or waits for you.

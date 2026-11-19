@@ -130,7 +130,7 @@ impl Page {
         let input = self.paths[i].clone();
         let login = found.map(|cli| adapters::login(p, &cli));
         div()
-            .child(row().child(labeled(el("name"), p.name).font_weight(FontWeight::BOLD)))
+            .child(row().child(labeled(el("name"), p.name).font_weight(FontWeight::SEMIBOLD)))
             .when(p.backend == Name::Acp, |d| {
                 d.child(
                     row().child(

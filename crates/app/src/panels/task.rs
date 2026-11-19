@@ -282,13 +282,13 @@ impl Render for TaskView {
                     models.sort();
                     models.dedup();
                     if models.is_empty() {
-                        "model unavailable".into()
+                        "–".into()
                     } else {
                         models.join(", ")
                     }
                 };
                 let time = if run.started_at == 0 {
-                    "time unavailable".into()
+                    "–".into()
                 } else {
                     crate::util::ago_text(run.started_at / 1000, now)
                 };

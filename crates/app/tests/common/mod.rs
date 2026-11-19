@@ -387,6 +387,8 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     cx.executor().allow_parking();
     let keys = cx.update(|cx| {
         gpui_kit::init(cx);
+        // The test clock stands still, so an animation would stay on its first frame.
+        cx.set_reduce_motion(true);
         cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
         ui_state::init(&dir, cx);

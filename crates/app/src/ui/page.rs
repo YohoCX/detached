@@ -87,7 +87,7 @@ pub fn muted(text: impl Into<SharedString>, cx: &App) -> Div {
 pub fn heading(title: &str, cx: &App) -> Div {
     div()
         .text_size(text::LABEL)
-        .font_weight(FontWeight::BOLD)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme(cx).muted)
         .child(title.to_uppercase())
 }
