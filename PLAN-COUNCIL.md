@@ -282,8 +282,8 @@ done           { nothing_found: bool, note? }
 1. **The quote is checked mechanically**: it must exist at `file:line`, within a few lines, in the
    pinned commit, or the finding is `unverified` with the reason.
 2. **Another model verifies**, and it sees the finding and the code, not the finder's transcript.
-3. **The verifier is measured.** P7's corpus gives each verifier model a catch rate and a
-   false-confirm rate.
+3. **The verifier is measured.** P7 gives each verifier model a false-confirm rate from the owner's
+   dismissals; a catch rate waits for the benchmark (docs/BACKLOG.md, "Council calibration").
 4. **Verdicts.** `rejected`, `immaterial` and `pre_existing` go to "Set aside", never deleted.
 
 ## 7. Failure, offline and cancel
@@ -935,40 +935,20 @@ The owner checks: a dialectic on an open question of these plans; a brainstorm o
 
 ### Step P7. Corpus, calibration and stats
 
-**Status (2026-11-17): built; the corpus has not run on real agents, so its rates are not written yet;
-waiting for the owner's run and check.**
-- Built: `core::council::corpus` with `corpus.toml`: 10 fix commits, each with a patch that puts its
-  bug back on top as a commit of its own (`worktree-untracked`, `store-link-escape`,
-  `hidden-name-slash`, `fix-range-commits`, `folder-backslash`, `watch-made-again`,
-  `chat-list-stdin`, `forge-form-key`, `update-cancel`, `files-stale-fallback`), reviewed against the
-  fix, and 10 clean commits against their parents. `kernel::council::corpus` runs a mode over it, one
-  pass in the app and one run at a time, within one budget; the Stats page (Council → Stats, `Doc::CouncilStats`) shows the one
-  suggestion, the dispositions by role, lens, model, mode and verifier (`core::council::stats`), each
-  pass's catch and false-confirm rates per verifier model (`corpus::calibrate`), and the Run button
-  with the estimate, which is the budget.
-- Tests: `core::council::corpus` (the corpus's shape and bug lines, a bug put back as the same commit
-  each pass in a clone that leaves the repo without a new ref or object, calibration on a written
-  corpus run, passes latest first by time), `core::council::stats` (every
-  column from the fixture of dispositions under `tests/fixtures/council`, each suggestion),
-  `kernel::council::tests::corpus` (two subjects on `fake_claude`, one at a time, scored; the budget
-  and a cancel end it, a second pass is refused while one runs, the repo's refs are unchanged),
-  `tests/council.rs` (the Stats page, and Run refused on a repo without the
-  history).
-- Choices: a bug subject is the fix's commit with the bug's patch on top, so its diff is the bug
-  alone; the patch's commit has a fixed author and date, so every pass reviews the same SHA. Corpus
-  runs are untrusted (read-only, no trust files to accept per head) and sequential, in a
-  `git clone --shared` under the cache tier that holds the patched commits and the
-  `detached-corpus/<pass>/<subject>` branches; each run's record is copied into the repo's
-  `detached/council`, and the clone goes at the pass's end or the next start after a crash. Their
-  tasks stay off the Council list and out of the disposition stats. A finding is about the bug within 3 lines of the
-  patch's changed lines. Catch: the bug's subject got a verified major or critical there; a
-  verifier's catch rate is its confirms of findings at a bug, its false-confirm rate its confirms
-  of majors and criticals on clean subjects. The estimate is the mean of earlier corpus runs of the
-  mode, else of the repo's runs of it, else 3 M a subject. Stats count an issue once across rounds,
-  under the role, model and lenses that raised it; a suggestion needs 5 findings behind it, and the
-  corpus's rates come first.
-- The owner checks: a gate pass over the corpus from the Stats page, then its rates written here;
-  the comparison with revmux is not built.
+**Status (2026-11-19): the Stats page is built; calibration was removed in 0.6.1 pending its
+redesign ([decision](docs/decisions/2026-11-19-council-calibration.md), docs/BACKLOG.md "Council
+calibration"), so the rates below are not written.**
+- Built: the Stats page (Council → Stats, `Doc::CouncilStats`) shows the one suggestion and the
+  dispositions by role, lens, model, mode and verifier (`core::council::stats`). An issue counts once
+  across rounds, under the role, model and lenses that raised it; a suggestion needs 5 findings
+  behind it.
+- Removed: the corpus (`core::council::corpus`, `corpus.toml`: 10 fix commits with their bug put
+  back, 10 clean), its runner (`kernel::council::corpus`) and the page's Calibration section, whose
+  Run button spent a guessed 3 M tokens a subject on one click. The code is in git history.
+- Tests: `core::council::stats` (every column from the fixture of dispositions under
+  `tests/fixtures/council`, each suggestion), `tests/council.rs` (the Stats page).
+- The owner checks: the redesign, then a benchmark's rates written here; the comparison with revmux
+  is not built.
 
 Work:
 1. A corpus of 20 subjects from this repo: 10 commits with a known bug put back, 10 clean.

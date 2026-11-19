@@ -16,8 +16,6 @@ use super::live::{self, Council, Phase};
 use crate::session::tests::{Fixture, boot_on};
 use crate::wait_for;
 
-#[cfg(unix)]
-mod corpus;
 mod fixes;
 mod modes;
 mod real;

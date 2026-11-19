@@ -118,10 +118,7 @@ impl Render for List {
                 .into()
             });
             if let Some(rounds) = &resource.value {
-                let corpus =
-                    detached_core::council::run::task(detached_core::council::corpus::BRANCHES);
                 let mut tasks: Vec<_> = rounds.runs.iter().map(|r| r.task.clone()).collect();
-                tasks.retain(|t| !t.starts_with(&corpus));
                 tasks.sort();
                 tasks.dedup();
                 tasks.sort_by_key(|task| {

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub mod brief;
-pub mod corpus;
 pub mod fix;
 mod graphs;
 pub mod marks;

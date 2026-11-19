@@ -1060,9 +1060,7 @@ fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_rou
 }
 
 #[gpui_kit::test]
-fn the_stats_page_shows_dispositions_and_the_corpus_pass_and_its_run_checks_the_history(
-    cx: &mut TestAppContext,
-) {
+fn the_stats_page_shows_dispositions(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, |sb| {
         let repo = repo(sb, "reviewed");
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/council");
@@ -1082,11 +1080,6 @@ fn the_stats_page_shows_dispositions_and_the_corpus_pass_and_its_run_checks_the_
     };
     open_tab(&mut app, "tab.council");
     wait_until(&mut app, |cx| cx.find("council.task.feat").is_some());
-    assert!(
-        app.find("council.task.detached-corpus-p1-worktree-untracked")
-            .is_none(),
-        "corpus runs show on the Stats page"
-    );
     app.click("council.list.stats");
     wait_until(&mut app, |cx| cx.find("council.stats.role.bugs").is_some());
     assert_eq!(
@@ -1103,29 +1096,6 @@ fn the_stats_page_shows_dispositions_and_the_corpus_pass_and_its_run_checks_the_
         label(&mut app, "council.stats.suggestion").as_deref(),
         Some("No change to suggest: none has five findings or more behind it.")
     );
-    assert_eq!(
-        app.find(("council.stats.pass", 0usize)).unwrap().label(),
-        Some("p1: caught 1 of 1 bugs, blocked 0 of 0 clean, 1 of 1 runs done, 900.0 K tokens")
-    );
-    assert_eq!(
-        label(&mut app, "council.stats.pass.0.sonnet").as_deref(),
-        Some("sonnet: catch 1 of 1 (100%), false confirms 0 of 0 (–)")
-    );
-    let run = "Run the gate over the corpus's 20 subjects: about 18.0 M tokens, its budget";
-    assert_eq!(
-        label(&mut app, "council.stats.corpus").as_deref(),
-        Some(run)
-    );
-    app.click("council.stats.corpus");
-    wait_until(&mut app, |cx| cx.find("council.stats.last").is_some());
-    let last = label(&mut app, "council.stats.last").unwrap();
-    assert!(
-        last.starts_with(
-            "Last corpus run: The corpus runs on Detached's own history, and this repo lacks"
-        ),
-        "{last}"
-    );
-    assert!(last.ends_with("0 of 20 subjects, 0 tokens"), "{last}");
 }
 
 /// A live review's mode, the Fix's re-check mode, and roles whose text is the fake's script; the

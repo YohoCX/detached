@@ -1,9 +1,8 @@
 use super::*;
-use crate::council::corpus::Verifier;
 
 /// The records under `tests/fixtures/council`: a review and the gate that re-checked it, with a
-/// fix, a dismissal, a deferral and a set-aside finding, and a corpus run.
-pub(crate) fn fixture() -> BTreeMap<(String, String), State> {
+/// fix, a dismissal, a deferral and a set-aside finding.
+fn fixture() -> BTreeMap<(String, String), State> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/council");
     let mut all = BTreeMap::new();
     for task in std::fs::read_dir(&root).unwrap() {
@@ -54,11 +53,7 @@ fn stats_count_each_issue_once_by_role_lens_model_mode_and_verifier() {
     let (b, i) = (row(&s, By::Lens, "bugs"), row(&s, By::Lens, "impl"));
     assert_eq!((b.raised, b.fixed, i.raised, i.dismissed), (1, 1, 1, 1));
     assert_eq!((b.tokens, i.tokens), (1_500_000, 1_500_000));
-    assert_eq!(
-        row(&s, By::Model, "opus").tokens,
-        1_500_000,
-        "no corpus run"
-    );
+    assert_eq!(row(&s, By::Model, "opus").tokens, 1_500_000);
     let review = row(&s, By::Mode, "review");
     assert_eq!(
         (
@@ -100,7 +95,7 @@ fn many(by: By, key: &str, r: Row) -> Stats {
 #[test]
 fn one_suggestion_with_the_number_behind_it_and_none_from_few_findings() {
     let s = stats(&fixture());
-    assert_eq!(suggest(&s, &[]), None, "too few findings");
+    assert_eq!(suggest(&s), None, "too few findings");
     let lens = Row {
         raised: 6,
         dismissed: 4,
@@ -108,7 +103,7 @@ fn one_suggestion_with_the_number_behind_it_and_none_from_few_findings() {
         ..Row::default()
     };
     assert_eq!(
-        suggest(&many(By::Lens, "docs", lens), &[]).unwrap(),
+        suggest(&many(By::Lens, "docs", lens)).unwrap(),
         "Rewrite or drop the docs lens: you dismissed 4 of its 6 findings, most often as \"style\"."
     );
     let verifier = Row {
@@ -118,7 +113,7 @@ fn one_suggestion_with_the_number_behind_it_and_none_from_few_findings() {
         ..Row::default()
     };
     assert_eq!(
-        suggest(&many(By::Verifier, "haiku", verifier), &[]).unwrap(),
+        suggest(&many(By::Verifier, "haiku", verifier)).unwrap(),
         "Verify on another model than haiku: you dismissed 2 of the 6 findings it confirmed."
     );
     let model = |fixed, tokens| Row {
@@ -130,7 +125,7 @@ fn one_suggestion_with_the_number_behind_it_and_none_from_few_findings() {
     let mut cost = many(By::Model, "opus", model(1, 4_000_000));
     cost.insert((By::Model, "sonnet".into()), model(2, 2_000_000));
     assert_eq!(
-        suggest(&cost, &[]).unwrap(),
+        suggest(&cost).unwrap(),
         "Seat more roles on sonnet: opus spent 4.0 M per fixed finding, sonnet 1.0 M."
     );
     let role = Row {
@@ -140,34 +135,7 @@ fn one_suggestion_with_the_number_behind_it_and_none_from_few_findings() {
         ..Row::default()
     };
     assert_eq!(
-        suggest(&many(By::Role, "adversarial", role), &[]).unwrap(),
+        suggest(&many(By::Role, "adversarial", role)).unwrap(),
         "Rewrite or drop the adversarial role: none of its 5 findings was fixed."
-    );
-    let pass = Pass {
-        verifiers: [
-            (
-                "opus".to_string(),
-                Verifier {
-                    clean: 10,
-                    false_confirms: 1,
-                    ..Verifier::default()
-                },
-            ),
-            (
-                "sonnet".into(),
-                Verifier {
-                    clean: 8,
-                    false_confirms: 4,
-                    ..Verifier::default()
-                },
-            ),
-        ]
-        .into(),
-        ..Pass::default()
-    };
-    assert_eq!(
-        suggest(&many(By::Lens, "docs", Row::default()), &[pass]).unwrap(),
-        "Put opus before sonnet in the verifiers: on the corpus's clean subjects sonnet confirmed 4 \
-         of 8 majors, opus 1 of 10."
     );
 }

@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::corpus::{self, Pass};
 use super::mode::Stage;
 use super::record::{self, State};
 use super::track::{self, Fate};
@@ -57,14 +56,11 @@ impl Row {
 
 pub type Stats = BTreeMap<(By, String), Row>;
 
-/// The stats of every live run in `records` but the corpus's.
+/// The stats of every live run in `records`.
 pub fn stats(records: &BTreeMap<(String, String), State>) -> Stats {
     let mut tasks: BTreeMap<&str, Vec<(&str, &State)>> = BTreeMap::new();
     for ((task, run), s) in records {
-        let branch = s.started.as_ref().map(|x| x.subject.branch.as_str());
-        if branch.and_then(corpus::of).is_none() {
-            tasks.entry(task).or_default().push((run, s));
-        }
+        tasks.entry(task).or_default().push((run, s));
     }
     let mut rows = Stats::new();
     for runs in tasks.values_mut() {
@@ -162,33 +158,8 @@ fn millions(t: u64) -> String {
     format!("{:.1} M", t as f64 / 1e6)
 }
 
-/// The one change the numbers suggest, with the number behind it: the corpus's verdicts first,
-/// since there the truth is known.
-pub fn suggest(stats: &Stats, passes: &[Pass]) -> Option<String> {
-    if let Some(p) = passes.first() {
-        let mut v: Vec<_> = (p.verifiers.iter())
-            .filter(|(_, v)| v.clean >= MIN)
-            .collect();
-        v.sort_by_key(|(_, v)| v.false_confirms * 1000 / v.clean);
-        if let (Some((best, b)), Some((worst, w))) = (v.first(), v.last())
-            && pct(w.false_confirms, w.clean) >= 25
-        {
-            let (fw, cw) = (w.false_confirms, w.clean);
-            return Some(
-                match best != worst && b.false_confirms * cw < fw * b.clean {
-                    true => format!(
-                        "Put {best} before {worst} in the verifiers: on the corpus's clean subjects \
-                     {worst} confirmed {fw} of {cw} majors, {best} {} of {}.",
-                        b.false_confirms, b.clean
-                    ),
-                    false => format!(
-                        "Verify on another model before {worst}: it confirmed {fw} of {cw} majors on \
-                     the corpus's clean subjects."
-                    ),
-                },
-            );
-        }
-    }
+/// The one change the numbers suggest, with the number behind it.
+pub fn suggest(stats: &Stats) -> Option<String> {
     let rows = |by: By| {
         let mut all: Vec<(&String, &Row)> = (stats.iter())
             .filter(move |((b, _), _)| *b == by)
@@ -250,4 +221,4 @@ pub fn suggest(stats: &Stats, passes: &[Pass]) -> Option<String> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

@@ -10,7 +10,6 @@ use gpui::{App, Entity};
 
 use crate::resource::{self, Policy, Resource};
 
-pub mod corpus;
 pub mod fixes;
 pub mod live;
 
