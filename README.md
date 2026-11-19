@@ -1,13 +1,21 @@
 # Detached
 
-A multi-repo git client for macOS, Windows and Linux with the JetBrains git features and keymap,
-native (GPU-drawn, no web view), with AI agents beside your repos: one sidebar for every repo under
-your folders with fetch and pull all, branches and smart checkout, diffs, file browsing and find in
-files at any ref, the git log, merge requests and pipelines for GitLab and GitHub (including
-self-hosted GitLab and GitHub Enterprise), terminal tabs in the current repo, chats with Claude
-Code and Codex, and panels of agents that review your branches. Default shortcuts:
-[docs/KEYMAP.md](docs/KEYMAP.md); Settings › Keymap lists them all, and `keymap.json` in the config
-folder overrides them.
+A native multi-repo git client for macOS, Windows and Linux, with AI agents beside your repos.
+
+- **Every repo in one sidebar:** fetch and pull all, branches and smart checkout, diffs, files and
+  find in files at any ref, the git log.
+- **Merge requests and pipelines** for GitLab and GitHub, self-hosted GitLab and GitHub Enterprise
+  included.
+- **Agent chats** with Claude Code and Codex: per-repo trust, turn snapshots you can restore,
+  skills, and a read-only view of the client.
+- **Panels of agents:** review a branch, gate a merge, triage an MR or issue, review a plan, argue
+  a question. Each finding can be fixed in its own worktree and reaches your branch on your click.
+- **Docs, processes, terminals:** a repo's plans and decisions, dev servers with encrypted env
+  profiles, terminal tabs in the current repo.
+- **JetBrains git features and keymap**, GPU-drawn (no web view), themes.
+
+Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md); Settings › Keymap lists them all, and
+`keymap.json` in the config folder overrides them.
 
 Detached itself does not commit, stage or push your code. It changes a repo only when you ask:
 switch, stash and pull; worktrees it creates and removes for you; restoring a chat's turn; and a
