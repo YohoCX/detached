@@ -4,17 +4,20 @@
 use std::collections::BTreeMap;
 
 use detached_core::secrets;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div,
+    AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px,
 };
 use kernel::blocking;
 use kernel::settings::Settings;
 
 use crate::ui::{
     self,
-    page::{button, labeled, muted, row, section},
+    page::{button, card, item, labeled, layout, muted},
+    text,
 };
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
@@ -126,81 +129,112 @@ impl Page {
     }
 
     fn editor(&self, f: &Form, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut form = div().flex().flex_col();
-        form = match &f.profile {
-            Some(p) => form.child(labeled("env.editing", format!("Profile {p}"))),
-            None => form.child(row().child(ui::input(&f.name, cx).id("env.name"))),
-        };
+        let mut rows = vec![];
+        if f.profile.is_none() {
+            let name = div()
+                .w(px(240.))
+                .child(ui::input(&f.name, cx).id("env.name"));
+            rows.push(item("Name", None, cx).child(name));
+        }
         for (i, (name, value)) in f.vars.iter().enumerate() {
             let id = |what| SharedString::from(format!("env.var.{i}.{what}"));
-            form = form.child(
-                row()
+            rows.push(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .px(px(14.))
+                    .py(px(8.))
                     .child(div().w_1_3().child(ui::input(name, cx).id(id("name"))))
                     .child(div().flex_1().child(ui::input(value, cx).id(id("value")))),
             );
         }
-        form.child(muted("An empty value keeps the stored one.", cx))
-            .child(
-                row()
-                    .mt(ui::theme::GAP)
-                    .child(button("env.add", "Add variable", true, cx, |p, w, cx| {
-                        p.add(w, cx)
-                    }))
-                    .child(button("env.save", "Save", !self.busy, cx, |p, _, cx| {
-                        p.save(cx)
-                    }))
-                    .child(button("env.cancel", "Cancel", true, cx, |p, _, cx| {
-                        (p.form, p.error) = (None, None);
-                        cx.notify();
-                    })),
+        rows.push(
+            item(
+                muted("An empty value keeps the stored one.", cx).text_size(text::SMALL),
+                None,
+                cx,
             )
+            .child(button("env.add", "Add variable", true, cx, |p, w, cx| {
+                p.add(w, cx)
+            }))
+            .child(button("env.cancel", "Cancel", true, cx, |p, _, cx| {
+                (p.form, p.error) = (None, None);
+                cx.notify();
+            }))
+            .child(button("env.save", "Save", !self.busy, cx, |p, _, cx| {
+                p.save(cx)
+            })),
+        );
+        let title = match &f.profile {
+            Some(p) => format!("Profile {p}"),
+            None => "New profile".into(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                labeled("env.editing", title)
+                    .px(px(4.))
+                    .font_weight(FontWeight::SEMIBOLD),
+            )
+            .child(card(None, None, rows, cx))
     }
 }
 
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut page = section("settings.env", "Env profiles".into(), cx).child(muted(
-            "A process runs with its profile's variables, and `detached-cli env run <profile>` \
-                in a terminal tab gets them once you allow it. Values are encrypted under a key \
-                in the system's credential store. A process's log shows each value of 4 \
-                characters or more as [redacted]; a shorter one shows as it is, to agents that \
-                read the log too.",
-            cx,
-        ));
-        for (name, vars) in profiles(cx) {
-            let id = |what| SharedString::from(format!("env.{what}.{name}"));
-            let (edit, remove) = (name.clone(), name.clone());
-            page = page.child(
-                row()
-                    .mt(ui::theme::GAP)
-                    .child(labeled(
-                        id("profile"),
-                        format!("{name} · {}", vars.join(", ")),
-                    ))
-                    .child(button(id("edit"), "Edit", true, cx, move |p, w, cx| {
-                        p.edit(Some(edit.clone()), w, cx)
-                    }))
-                    .child(button(
-                        id("remove"),
-                        "Remove",
-                        !self.busy,
-                        cx,
-                        move |p, _, cx| p.remove(remove.clone(), cx),
-                    )),
-            );
-        }
+        let about = "Variables for processes, and for `detached-cli env run <profile>` once you \
+                     allow it.";
+        let new = self.form.is_none().then(|| {
+            button("env.new", "New profile", true, cx, |p, w, cx| {
+                p.edit(None, w, cx)
+            })
+            .into_any_element()
+        });
+        let mut page = layout("settings.env", "Env profiles", about, new, cx);
         if let Some(e) = &self.error {
             page = page.child(labeled("env.error", e.clone()).text_color(ui::theme(cx).error));
         }
-        match &self.form {
-            Some(f) => page.child(self.editor(f, cx)),
-            None => page.child(row().mt(ui::theme::GAP).child(button(
-                "env.new",
-                "New profile",
-                true,
-                cx,
-                |p, w, cx| p.edit(None, w, cx),
-            ))),
+        let profiles = profiles(cx);
+        let mut rows: Vec<_> = profiles
+            .iter()
+            .map(|(name, vars)| {
+                let id = |what| SharedString::from(format!("env.{what}.{name}"));
+                let (edit, remove) = (name.clone(), name.clone());
+                item(
+                    div().font_weight(FontWeight::MEDIUM).child(name.clone()),
+                    None,
+                    cx,
+                )
+                .id(id("profile"))
+                .test_support()
+                .aria_label(format!("{name} · {}", vars.join(", ")))
+                .child(
+                    muted(vars.join(", "), cx)
+                        .font_family(ui::theme::mono(cx))
+                        .text_size(text::SMALL)
+                        .truncate(),
+                )
+                .child(button(id("edit"), "Edit", true, cx, move |p, w, cx| {
+                    p.edit(Some(edit.clone()), w, cx)
+                }))
+                .child(button(
+                    id("remove"),
+                    "Remove",
+                    !self.busy,
+                    cx,
+                    move |p, _, cx| p.remove(remove.clone(), cx),
+                ))
+                .into_any_element()
+            })
+            .collect();
+        if rows.is_empty() {
+            rows.push(item(muted("No profiles yet.", cx), None, cx).into_any_element());
         }
+        let about = "Values are encrypted under a key in the system's credential store. A log shows \
+                     each value of 4 characters or more as [redacted]; a shorter one shows as it \
+                     is, to agents that read the log too.";
+        page = page.child(card(Some("Profiles"), Some(about.into()), rows, cx));
+        page.children(self.form.as_ref().map(|f| self.editor(f, cx)))
     }
 }

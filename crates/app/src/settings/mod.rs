@@ -242,6 +242,7 @@ impl Render for Dialog {
         let shown = self.pages.iter().find(|p| p.0.id == self.page);
         let page = div()
             .id("settings.body")
+            .test_support()
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
             .flex_1()

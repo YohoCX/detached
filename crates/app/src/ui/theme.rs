@@ -102,6 +102,8 @@ pub mod text {
     pub const LETTER: Pixels = px(10.);
     /// A dialog's title.
     pub const HEADING: Pixels = px(15.);
+    /// A Settings page's title.
+    pub const PAGE: Pixels = px(18.);
 }
 
 /// A markdown file's column.

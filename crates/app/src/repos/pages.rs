@@ -15,15 +15,19 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{Enter, InputState};
 use gpui_kit::component::select::{SelectEvent, SelectState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
-    InteractiveElement, IntoElement, ParentElement, Render, Role, StatefulInteractiveElement,
-    Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder, px,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder, px,
 };
 
 use super::{say, settings_call};
 use crate::settings::{Group, register_page};
-use crate::ui::page::{Opt, Pick, button, heading, labeled, muted, row, section, select};
+use crate::ui::page::{
+    Opt, Pick, Tone, button, card, chip, item, labeled, layout, muted, path, select,
+};
 use crate::ui::{self, radius, text, theme, theme::mono};
 use kernel::blocking;
 use kernel::workspace::Workspace;
@@ -77,15 +81,20 @@ impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kind = self.kind;
         self.model.update(cx, |m, cx| {
-            let page = div().track_focus(&m.focus).flex().flex_col().gap(px(22.));
+            let page = div().track_focus(&m.focus).flex().flex_col();
             match kind {
                 Kind::Accounts => page.child(m.accounts_view(cx)),
                 Kind::Repository => {
                     let repo = m.repo.clone();
                     let mrs = repo.clone().filter(|_| m.data.forge.is_some());
-                    page.children(repo.map(|r| m.repo_view(&r, cx)))
-                        .children(mrs.map(|r| m.mrs_view(&r, cx)))
-                        .child(m.removed_view(cx))
+                    let about = "The accounts and remote this repository uses, and the \
+                                 repositories taken off the sidebar.";
+                    page.child(
+                        layout("settings.repository", "Repository", about, None, cx)
+                            .children(repo.map(|r| m.repo_view(&r, cx)))
+                            .children(mrs.map(|r| m.mrs_view(&r, cx)))
+                            .child(m.removed_view(cx)),
+                    )
                 }
                 Kind::Git => page.child(m.git_view(cx)),
             }
@@ -524,13 +533,17 @@ impl Model {
         let rows = self.data.accounts.iter().enumerate().map(|(i, a)| {
             let check = self.checks.get(&a.id);
             let state = match check {
-                Some(None) => Some(("Checking…".to_string(), t.muted)),
+                Some(None) => Some(("Checking…".to_string(), "Checking…", Tone::Muted)),
                 Some(Some(VerifyResult::Ok { user })) => {
-                    Some((format!("Token ok: {user}"), t.added))
+                    Some((format!("Token ok: {user}"), "Token ok", Tone::Good))
                 }
                 Some(Some(VerifyResult::Failed { status, error })) => {
                     let status = status.map_or(String::new(), |s| format!(" ({s})"));
-                    Some((format!("Check failed{status}: {error}"), t.error))
+                    Some((
+                        format!("Check failed{status}: {error}"),
+                        "Check failed",
+                        Tone::Bad,
+                    ))
                 }
                 None => None,
             };
@@ -547,6 +560,10 @@ impl Model {
             let (id, edit, rm) = (a.id.clone(), a.clone(), a.id.clone());
             let remove = match self.removing.as_ref() == Some(&a.id) {
                 true => vec![
+                    button("cancel", "Cancel", true, cx, |this, _, cx| {
+                        this.removing = None;
+                        cx.notify();
+                    }),
                     button(
                         "confirm",
                         "Confirm remove",
@@ -555,137 +572,113 @@ impl Model {
                         move |this, window, cx| this.remove(rm.clone(), window, cx),
                     )
                     .text_color(t.error),
-                    button("cancel", "Cancel", true, cx, |this, _, cx| {
-                        this.removing = None;
-                        cx.notify();
-                    }),
                 ],
                 false => vec![button("remove", "Remove", true, cx, move |this, _, cx| {
                     this.removing = Some(rm.clone());
                     cx.notify();
                 })],
             };
-            div()
+            let label = div()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(title.clone());
+            item(label, Some(about.clone().into()), cx)
                 .id(("accounts.row", i))
                 .test_support()
-                .aria_label(title.clone())
-                .aria_description(about.clone())
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .py(px(10.))
-                .px(px(12.))
-                .bg(t.hover)
-                .border_1()
-                .border_color(t.line)
-                .rounded(radius::FIELD)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(title),
-                        )
-                        .child(div().truncate().text_color(t.muted).child(about))
-                        .children(state.map(|(s, color)| {
-                            div()
-                                .id("state")
-                                .test_support()
-                                .aria_label(s.clone())
-                                .truncate()
-                                .text_color(color)
-                                .child(s)
-                        })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(6.))
-                        .child(button(
-                            "verify",
-                            "Check token",
-                            check != Some(&None),
-                            cx,
-                            move |this, _, cx| this.check(id.clone(), cx),
-                        ))
-                        .child(button(
-                            "edit",
-                            "Edit",
-                            !editing,
-                            cx,
-                            move |this, window, cx| this.edit(Some(&edit), window, cx),
-                        ))
-                        .children(remove),
-                )
+                .aria_label(title)
+                .aria_description(about)
+                .children(state.map(|(full, word, tone)| {
+                    let tip = SharedString::from(full.clone());
+                    chip(word, tone, cx)
+                        .id("state")
+                        .test_support()
+                        .aria_label(full)
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                }))
+                .child(button(
+                    "verify",
+                    "Check token",
+                    check != Some(&None),
+                    cx,
+                    move |this, _, cx| this.check(id.clone(), cx),
+                ))
+                .child(button(
+                    "edit",
+                    "Edit",
+                    !editing,
+                    cx,
+                    move |this, window, cx| this.edit(Some(&edit), window, cx),
+                ))
+                .children(remove)
         });
+        let rows: Vec<_> = rows.collect();
         let empty = "No accounts. Add one to fetch and pull over https with a token.";
-        div()
-            .id("settings.accounts")
-            .test_support()
-            .track_focus(&self.accounts)
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(heading("Accounts", cx))
-                    .child(button(
-                        "accounts.add",
-                        "Add account",
-                        !editing,
-                        cx,
-                        |this, window, cx| this.edit(None, window, cx),
-                    )),
-            )
-            .children(
-                self.error
-                    .clone()
-                    .map(|e| labeled("accounts.error", e).text_color(t.error)),
-            )
-            .children(rows)
-            .when(self.data.accounts.is_empty() && !editing, |d| {
-                d.child(labeled("accounts.empty", empty).text_color(t.muted))
-            })
-            .children(self.form.as_ref().map(|f| form_view(f, cx)))
+        let add = button(
+            "accounts.add",
+            "Add account",
+            !editing,
+            cx,
+            |this, window, cx| this.edit(None, window, cx),
+        );
+        let about = "Tokens for fetching and pulling over https, and for merge requests.";
+        layout(
+            "settings.accounts",
+            "Accounts",
+            about,
+            Some(add.into_any_element()),
+            cx,
+        )
+        .track_focus(&self.accounts)
+        .children(
+            self.error
+                .clone()
+                .map(|e| labeled("accounts.error", e).text_color(t.error)),
+        )
+        .when(!rows.is_empty(), |d| d.child(card(None, None, rows, cx)))
+        .when(self.data.accounts.is_empty() && !editing, |d| {
+            d.child(labeled("accounts.empty", empty).text_color(t.muted))
+        })
+        .children(self.form.as_ref().map(|f| form_view(f, cx)))
     }
 
     fn repo_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = Workspace::get(cx).name_of(repo).to_string();
         let rows = self.data.hosts.iter().zip(&self.picks.hosts).enumerate();
+        let rows: Vec<_> = rows
+            .map(|(i, (h, p))| host(h, select(p, ("settings.account", i), cx), cx))
+            .collect();
         let none = "No https remotes; git uses your own credentials (ssh agent, keychain).";
-        section("settings.repo", format!("Account for {name}"), cx)
-            .children(rows.map(|(i, (h, p))| host(h, select(p, ("settings.account", i), cx), cx)))
-            .when(self.data.hosts.is_empty(), |s| s.child(muted(none, cx)))
+        let title = format!("Account for {name}");
+        match rows.is_empty() {
+            true => card(Some(&title), None, [item(muted(none, cx), None, cx)], cx),
+            false => card(Some(&title), None, rows, cx),
+        }
+        .id("settings.repo")
+        .test_support()
     }
 
     fn mrs_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let name = Workspace::get(cx).name_of(repo).to_string();
-        let s = section("settings.mrs", format!("Merge requests for {name}"), cx);
+        let title = format!("Merge requests for {name}");
         let (Some(f), Some((remote, picks))) = (&self.data.forge, &self.picks.forge) else {
-            return s.child(muted("No remote is on GitLab or GitHub.", cx));
+            let none = item(muted("No remote is on GitLab or GitHub.", cx), None, cx);
+            return card(Some(&title), None, [none], cx)
+                .id("settings.mrs")
+                .test_support();
         };
+        let remote = item("Remote", Some("Where merge requests are read".into()), cx).child(
+            div()
+                .w(px(240.))
+                .child(select(remote, "settings.mrRemote", cx)),
+        );
         let rows = f.hosts.iter().zip(picks).enumerate();
-        s.child(
-            row().child("Remote").child(div().w(px(240.)).child(select(
-                remote,
-                "settings.mrRemote",
-                cx,
-            ))),
-        )
-        .children(rows.map(|(i, (h, p))| host(h, select(p, ("settings.forgeAccount", i), cx), cx)))
+        let rows = rows.map(|(i, (h, p))| host(h, select(p, ("settings.forgeAccount", i), cx), cx));
+        card(Some(&title), None, std::iter::once(remote).chain(rows), cx)
+            .id("settings.mrs")
+            .test_support()
     }
 
     fn removed_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let t = theme(cx);
         let workspaces = &self.data.settings.workspaces;
         let several = workspaces.len() > 1;
         let excluded = workspaces.iter().flat_map(|w| {
@@ -693,23 +686,15 @@ impl Model {
                 .iter()
                 .map(move |p| (w.name.clone(), p.clone()))
         });
-        let rows: Vec<_> = excluded
+        let mut rows: Vec<_> = excluded
             .enumerate()
-            .map(|(i, (ws, path))| {
-                let (w, p) = (ws.clone(), path.clone());
-                row()
+            .map(|(i, (ws, path_))| {
+                let (w, p) = (ws.clone(), path_.clone());
+                item(path("path", path_.clone(), cx), None, cx)
                     .id(("settings.excluded", i))
                     .test_support()
-                    .aria_label(path.clone())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(mono(cx))
-                            .text_size(text::SMALL)
-                            .child(path),
-                    )
-                    .when(several, |r| r.child(div().text_color(t.muted).child(ws)))
+                    .aria_label(path_)
+                    .when(several, |r| r.child(chip(ws, Tone::Muted, cx)))
                     .child(button(
                         "restore",
                         "Restore",
@@ -725,51 +710,66 @@ impl Model {
                             .detach();
                         },
                     ))
+                    .into_any_element()
             })
             .collect();
-        let none = rows.is_empty();
-        section("settings.removed", "Removed repositories".into(), cx)
-            .children(rows)
-            .when(none, |s| s.child(muted("None.", cx)))
+        if rows.is_empty() {
+            let none = item(muted("None.", cx), None, cx);
+            rows.push(none.into_any_element());
+        }
+        let about = "Taken off the sidebar; Restore lists one again.";
+        card(Some("Removed repositories"), Some(about.into()), rows, cx)
+            .id("settings.removed")
+            .test_support()
     }
 
     fn git_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let t = theme(cx);
         let env = self.data.env.as_ref().map(|e| {
-            let line = format!("{} · {}", e.git_version, e.git_path);
-            labeled("settings.env", line)
-                .text_color(t.muted)
-                .font_family(mono(cx))
-                .text_size(text::SMALL)
+            let version = Some(e.git_version.clone()).filter(|v| !v.is_empty());
+            let label = div()
+                .id("settings.env")
+                .test_support()
+                .aria_label(format!("{} · {}", e.git_version, e.git_path))
+                .child(version.unwrap_or("Not found".into()));
+            item(label, None, cx).child(path("settings.gitBinary", e.git_path.clone(), cx))
         });
-        section("settings.git", "Git".into(), cx)
-            .children(env)
-            .child(
-                row()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(ui::input(&self.git, cx).id("settings.gitPath")),
-                    )
-                    .child(button(
-                        "settings.apply",
-                        "Apply",
-                        true,
-                        cx,
-                        |this, window, cx| {
-                            let path = this.git.read(cx).value().trim().to_string();
-                            let path = Some(path).filter(|p| !p.is_empty());
-                            let set = move |core: &AppState| api::set_git_path(core, path);
-                            this.call(
-                                false,
-                                set,
-                                |this, env, _, _| this.data.env = Some(env),
-                                window,
-                                cx,
-                            );
-                        },
-                    )),
-            )
+        let custom = item(
+            "Binary",
+            Some("Empty: the one on your shell's PATH".into()),
+            cx,
+        )
+        .child(
+            div()
+                .w(px(280.))
+                .child(ui::input(&self.git, cx).id("settings.gitPath")),
+        )
+        .child(button(
+            "settings.apply",
+            "Apply",
+            true,
+            cx,
+            |this, window, cx| {
+                let path = this.git.read(cx).value().trim().to_string();
+                let path = Some(path).filter(|p| !p.is_empty());
+                let set = move |core: &AppState| api::set_git_path(core, path);
+                this.call(
+                    false,
+                    set,
+                    |this, env, _, _| this.data.env = Some(env),
+                    window,
+                    cx,
+                );
+            },
+        ));
+        let rows = env.into_iter().chain([custom]);
+        layout(
+            "settings.git",
+            "Git",
+            "The git that Detached runs.",
+            None,
+            cx,
+        )
+        .child(card(None, None, rows, cx))
     }
 }
 
@@ -836,18 +836,10 @@ fn form_view(f: &Form, cx: &mut Context<Model>) -> impl IntoElement + use<> {
 }
 
 fn host(h: &HostAccount, select: impl IntoElement, cx: &App) -> Div {
-    row()
-        .child(
-            div()
-                .min_w_0()
-                .font_family(mono(cx))
-                .text_size(text::SMALL)
-                .child(h.host.clone()),
-        )
-        .child(
-            div()
-                .text_color(theme(cx).muted)
-                .child(h.remotes.join(", ")),
-        )
-        .child(div().w(px(240.)).child(select))
+    let host = div()
+        .truncate()
+        .font_family(mono(cx))
+        .text_size(text::SMALL)
+        .child(h.host.clone());
+    item(host, Some(h.remotes.join(", ").into()), cx).child(div().w(px(240.)).child(select))
 }

@@ -10,7 +10,7 @@ use gpui_kit::{
 use kernel::activity::Activity;
 use kernel::blocking;
 
-use super::page::{Opt, Pick, button, labeled, muted, row, section, select};
+use super::page::{Opt, Pick, button, card, item, labeled, layout, select};
 use super::{text, theme};
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
@@ -45,37 +45,39 @@ impl Render for Appearance {
                 .text_color(theme(cx).warning)
                 .text_size(text::SMALL)
         });
-        section("settings.appearance", "Appearance".into(), cx)
-            .child(
-                row()
-                    .child(div().w(px(240.)).child(select(&self.theme, "settings.theme", cx)))
-                    .child(button(
-                        "settings.themes",
-                        "Open themes folder",
-                        true,
-                        cx,
-                        move |_, _, cx| {
-                            let dir = dir.clone();
-                            let opened = blocking::run(cx, move || {
-                                theme::seed(&dir)?;
-                                api::open_folder(&dir.to_string_lossy())
-                            });
-                            cx.spawn(async move |_, cx| {
-                                if let Err(e) = opened.await {
-                                    cx.update(|cx| {
-                                        let activity = Activity::global(cx);
-                                        activity.update(cx, |a, cx| a.say(e.to_string(), true, cx))
-                                    });
-                                }
-                            })
-                            .detach();
-                        },
-                    )),
-            )
-            .child(muted(
-                "Each file there is a theme, and an edit shows at once. A file needs only the colors it changes over the theme it extends.",
-                cx,
-            ))
-            .children(error)
+        let pick = item("Theme", Some("Light and dark follow the system".into()), cx).child(
+            div()
+                .w(px(240.))
+                .child(select(&self.theme, "settings.theme", cx)),
+        );
+        let detail = "Each file is a theme over the one it extends; an edit shows at once";
+        let folder = item("Theme files", Some(detail.into()), cx).child(button(
+            "settings.themes",
+            "Open folder",
+            true,
+            cx,
+            move |_, _, cx| {
+                let dir = dir.clone();
+                let opened = blocking::run(cx, move || {
+                    theme::seed(&dir)?;
+                    api::open_folder(&dir.to_string_lossy())
+                });
+                cx.spawn(async move |_, cx| {
+                    if let Err(e) = opened.await {
+                        cx.update(|cx| {
+                            let activity = Activity::global(cx);
+                            activity.update(cx, |a, cx| a.say(e.to_string(), true, cx))
+                        });
+                    }
+                })
+                .detach();
+            },
+        ));
+        let rows = [pick, folder]
+            .into_iter()
+            .chain(error.map(|e| item(e, None, cx)));
+        let about = "How Detached looks.";
+        layout("settings.appearance", "Appearance", about, None, cx)
+            .child(card(None, None, rows, cx))
     }
 }

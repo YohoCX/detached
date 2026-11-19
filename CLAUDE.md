@@ -105,6 +105,8 @@ Keep this list in sync with the Makefile.
 - Windows fix loop: a push to `win/<name>` runs win.yml, Check's Windows job and Agent's native
   Windows job with its WSL pass, on main's caches; a `WIN_TESTS` file narrows them (format in
   win.yml) and goes before merge. Agent's wsl2 job is not in it: dispatch Agent on the branch.
+- Settings screenshots, macOS: `SHOTS=<dir> [PAGES=skills,sharing] cargo test -p detached-app
+  --test shots` draws each page (or the listed page ids) to `<dir>/<id>.png` for a look by eye.
 
 ## Parallel work (PLAN-NATIVE verticals)
 

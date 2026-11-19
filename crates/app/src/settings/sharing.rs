@@ -2,16 +2,22 @@ use detached_core::error::Result;
 use detached_core::panel::marks::{self, Mark, Panels};
 use detached_core::state::AppState;
 use detached_core::store::{Kind, RepoStore, Scope};
+use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, SharedString,
-    Subscription, Window, div,
+    AnyView, App, AppContext, Context, Div, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::resource::Interest;
 use kernel::sharing::Sharing;
 use kernel::workspace::Workspace;
 use kernel::{blocking, invalidate};
 
-use crate::ui::page::{button, labeled, row, section};
+use crate::ui::page::{
+    Tone, button, card, chip, item, labeled, layout, muted, path, refresh, toggle,
+};
+use crate::ui::theme;
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| {
@@ -88,40 +94,58 @@ impl Page {
 }
 
 impl Page {
-    /// The panels' trust marks for this repo: the repo, its workspaces, forks and marked branches.
-    /// Personal and per machine, never shared.
-    fn marks(
-        &self,
-        mut page: gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>,
-        cx: &Context<Self>,
-    ) -> gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>> {
-        let Some(repo) = self.repo.clone() else {
-            return page;
-        };
+    /// The panels' trust marks for this repo: the repo, its workspaces and marked branches.
+    fn marks(&self, cx: &Context<Self>) -> Option<ObservedElement<Stateful<Div>>> {
+        let repo = self.repo.clone()?;
         let settings = kernel::settings::Settings::get(cx);
         let p: Panels = settings.block(marks::BLOCK).unwrap_or_default();
-        page = page.child(labeled(
-            "sharing.marks",
-            "Panels: a trusted subject runs in orchestrator mode, unsandboxed; anything else gets a \
-             sandboxed, read-only review. These marks stay on this machine.",
-        ));
-        let mark = p.repos.iter().find(|m| m.name == repo).cloned();
-        let text = match &mark {
-            Some(m) => format!(
-                "This repo is trusted, its own remote {}{}",
-                m.remote.as_deref().unwrap_or("origin"),
-                if m.forks { ", forks included" } else { "" }
-            ),
-            None => "This repo is not marked trusted".into(),
+        let trusted = |on: bool| match on {
+            true => chip("trusted", Tone::Good, cx),
+            false => chip("not trusted", Tone::Muted, cx),
         };
+        let mut rows = vec![];
+        let mark = p.repos.iter().find(|m| m.name == repo).cloned();
+        let detail = mark.as_ref().map(|m| {
+            let remote = m.remote.as_deref().unwrap_or("origin");
+            let forks = if m.forks { ", forks included" } else { "" };
+            SharedString::from(format!("Its own remote {remote}{forks}"))
+        });
         let r = repo.clone();
-        let mut line = row().child(text).child(button(
+        let mut line = item("This repo", detail, cx)
+            .child(trusted(mark.is_some()))
+            .children(mark.as_ref().map(|m| {
+                let r = repo.clone();
+                let label = if m.forks {
+                    "Exclude forks"
+                } else {
+                    "Include forks"
+                };
+                button(
+                    "sharing.marks.forks",
+                    label,
+                    !self.busy,
+                    cx,
+                    move |this, _, cx| {
+                        let r = r.clone();
+                        this.run(cx, move |_, core| {
+                            marks::change(core, |p| {
+                                p.repos
+                                    .iter_mut()
+                                    .filter(|m| m.name == r)
+                                    .for_each(|m| m.forks = !m.forks)
+                            })
+                        })
+                    },
+                )
+            }));
+        let label = if mark.is_some() {
+            "Stop trusting"
+        } else {
+            "Trust"
+        };
+        line = line.child(button(
             "sharing.marks.repo",
-            if mark.is_some() {
-                "Stop trusting it"
-            } else {
-                "Trust this repo"
-            },
+            label,
             !self.busy,
             cx,
             move |this, _, cx| {
@@ -137,31 +161,7 @@ impl Page {
                 })
             },
         ));
-        if let Some(m) = mark {
-            let r = repo.clone();
-            line = line.child(button(
-                "sharing.marks.forks",
-                if m.forks {
-                    "Exclude forks"
-                } else {
-                    "Include forks"
-                },
-                !self.busy,
-                cx,
-                move |this, _, cx| {
-                    let r = r.clone();
-                    this.run(cx, move |_, core| {
-                        marks::change(core, |p| {
-                            p.repos
-                                .iter_mut()
-                                .filter(|m| m.name == r)
-                                .for_each(|m| m.forks = !m.forks)
-                        })
-                    })
-                },
-            ));
-        }
-        page = page.child(line);
+        rows.push(line);
         let holds = |w: &&detached_core::settings::Workspace| {
             w.folders
                 .iter()
@@ -170,24 +170,12 @@ impl Page {
         for w in settings.workspaces.iter().filter(holds) {
             let marked = p.workspaces.iter().any(|m| m.name == w.name);
             let name = w.name.clone();
-            page = page.child(
-                row()
-                    .child(format!(
-                        "Workspace {}: {}",
-                        w.name,
-                        if marked {
-                            "trusted"
-                        } else {
-                            "not marked trusted"
-                        }
-                    ))
+            rows.push(
+                item(format!("Workspace {}", w.name), None, cx)
+                    .child(trusted(marked))
                     .child(button(
                         SharedString::from(format!("sharing.marks.workspace.{}", w.name)),
-                        if marked {
-                            "Stop trusting it"
-                        } else {
-                            "Trust this workspace"
-                        },
+                        if marked { "Stop trusting" } else { "Trust" },
                         !self.busy,
                         cx,
                         move |this, _, cx| {
@@ -209,13 +197,10 @@ impl Page {
         }
         for b in p.branches.iter().filter(|b| b.repo == repo) {
             let (r, branch) = (b.repo.clone(), b.branch.clone());
-            page = page.child(
-                row()
-                    .child(format!(
-                        "Branch {} trusted by you at {}",
-                        b.branch,
-                        &b.head[..b.head.len().min(8)]
-                    ))
+            let at = format!("Trusted by you at {}", &b.head[..b.head.len().min(8)]);
+            rows.push(
+                item(format!("Branch {}", b.branch), Some(at.into()), cx)
+                    .child(trusted(true))
                     .child(button(
                         SharedString::from(format!("sharing.marks.branch.{}", b.branch)),
                         "Remove",
@@ -232,118 +217,146 @@ impl Page {
                     )),
             );
         }
-        page
+        let about = "A trusted subject runs panels unsandboxed, anything else a sandboxed \
+                     read-only review. Kept on this machine.";
+        let trust = card(Some("Panels trust"), Some(about.into()), rows, cx);
+        Some(trust.id("sharing.marks").test_support())
     }
 }
 
 impl Render for Page {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut page = section("settings.sharing", "Sharing".into(), cx);
-        let Some(data) = &self.data else {
-            return page.child(labeled(
-                "sharing.empty",
-                "Select a repository to manage sharing.",
-            ));
-        };
-        page = page.child(row().child(button(
-            "sharing.refresh",
-            "Refresh",
-            !self.busy,
-            cx,
-            |this, _, cx| {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let about = "Where this repository's agent setup lives, and what panels may trust.";
+        let refresh = self.data.as_ref().map(|_| {
+            refresh("sharing.refresh", !self.busy, cx, |this, cx| {
                 if let Some(data) = &this.data {
                     data.refresh(cx);
                 }
-            },
-        )));
-        let resource = data.read(cx);
-        if let Some(error) = self.error.as_ref().or(resource.error.as_ref()) {
-            page = page.child(labeled("sharing.error", error.clone()));
-        }
-        let Some(value) = &resource.value else {
-            return page.child(labeled("sharing.loading", "Loading…"));
+            })
+        });
+        let mut page = layout("settings.sharing", "Sharing", about, refresh, cx);
+        let Some(data) = &self.data else {
+            return page.child(
+                muted("Select a repository to manage sharing.", cx)
+                    .id("sharing.empty")
+                    .test_support(),
+            );
         };
-        page = page.child(labeled("sharing.local", value.local.clone()));
-        page = page.child(labeled(
-            "sharing.explain",
-            "Shared items appear in Changes. Commit them when ready. Run records stay local.",
-        ));
-        for kind in Kind::ALL {
-            let shared = value.defaults.get(&kind) == Some(&Scope::Shared);
-            let text = format!(
-                "{}: new items are {}",
-                kind.title(),
-                if shared { "shared" } else { "local" }
-            );
-            page = page.child(row().child(text).child(button(
-                SharedString::from(format!("sharing.default.{}", kind.dir())),
-                if shared {
-                    "Keep new items local"
-                } else {
-                    "Share new items"
-                },
-                !self.busy,
-                cx,
-                move |this, _, cx| {
-                    this.run(cx, move |store, core| {
-                        store.set_default(
-                            core,
-                            kind,
-                            if shared { Scope::Local } else { Scope::Shared },
-                        )
-                    })
-                },
-            )));
+        let resource = data.read(cx);
+        let error = self.error.clone().or(resource.error.clone());
+        let value = (resource.value.as_ref())
+            .map(|v| (v.local.clone(), v.defaults.clone(), v.items.clone()));
+        if let Some(error) = error {
+            page = page.child(labeled("sharing.error", error).text_color(theme(cx).error));
         }
-        page = self.marks(page, cx);
-        for item in &value.items {
-            let label = format!(
-                "{} / {} · {:?}{}",
-                item.kind.title(),
-                item.name,
-                item.scope,
-                if item.overridden {
-                    " · overridden"
-                } else {
-                    ""
-                }
+        let Some((local, defaults, items)) = value else {
+            return page.child(muted("Loading…", cx).id("sharing.loading").test_support());
+        };
+        let store = item(
+            "Local items",
+            Some("Outside git, on this machine".into()),
+            cx,
+        )
+        .child(path("sharing.local", local, cx));
+        let about =
+            "Shared items appear in Changes; commit them when ready. Run records stay local.";
+        page = page.child(card(Some("Store"), Some(about.into()), [store], cx));
+        let defaults = Kind::ALL.map(|kind| {
+            let shared = defaults.get(&kind) == Some(&Scope::Shared);
+            let label = format!("Share new {}", kind.title().to_lowercase());
+            let id = SharedString::from(format!("sharing.default.{}", kind.dir()));
+            item(kind.title(), None, cx).child(toggle(id, shared, label, window, cx).when(
+                !self.busy,
+                |t| {
+                    t.on_click(cx.listener(move |this, _, _, cx| {
+                        this.run(cx, move |store, core| {
+                            let to = if shared { Scope::Local } else { Scope::Shared };
+                            store.set_default(core, kind, to)
+                        })
+                    }))
+                },
+            ))
+        });
+        let about = "New items of a kind turned on here go to the shared folder, in git.";
+        page = page.child(card(
+            Some("Share new items"),
+            Some(about.into()),
+            defaults,
+            cx,
+        ));
+        let items = items.iter().map(|entry| {
+            let id = format!(
+                "sharing.{}.{}.{:?}",
+                entry.kind.dir(),
+                entry.name,
+                entry.scope
             );
-            let mut detail = div().child(label).child(item.path.display().to_string());
-            let mut line = row();
-            let id = format!("sharing.{}.{}.{:?}", item.kind.dir(), item.name, item.scope);
-            if !item.trusted {
-                let accept = item.clone();
-                detail = detail.child(format!("Needs acceptance: {}", item.hash));
-                line = line.child(button(
-                    SharedString::from(format!("{id}.accept")),
-                    "Accept hash",
-                    !self.busy,
-                    cx,
-                    move |this, _, cx| {
-                        let item = accept.clone();
-                        this.run(cx, move |store, core| store.accept(core, &item));
-                    },
-                ));
+            let scope = format!("{:?}", entry.scope).to_lowercase();
+            let name = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(entry.name.clone()),
+                )
+                .child(chip(scope, Tone::Muted, cx))
+                .children(
+                    entry
+                        .overridden
+                        .then(|| chip("overridden", Tone::Muted, cx)),
+                );
+            let tip = SharedString::from(entry.path.display().to_string());
+            let mut line = item(name, Some(entry.kind.title().into()), cx)
+                .id(SharedString::from(id.clone()))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
+            if !entry.trusted {
+                let accept = entry.clone();
+                let hash = SharedString::from(format!("Its hash: {}", entry.hash));
+                line = line
+                    .child(
+                        chip("needs acceptance", Tone::Warn, cx)
+                            .id(SharedString::from(format!("{id}.hash")))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(hash.clone()).build(window, cx)
+                            }),
+                    )
+                    .child(button(
+                        SharedString::from(format!("{id}.accept")),
+                        "Accept",
+                        !self.busy,
+                        cx,
+                        move |this, _, cx| {
+                            let item = accept.clone();
+                            this.run(cx, move |store, core| store.accept(core, &item));
+                        },
+                    ));
             }
-            if matches!(item.scope, Scope::Local | Scope::Shared) {
-                let item = item.clone();
+            if matches!(entry.scope, Scope::Local | Scope::Shared) {
+                let it = entry.clone();
                 line = line.child(button(
                     SharedString::from(format!("{id}.move")),
-                    if item.scope == Scope::Local {
+                    if it.scope == Scope::Local {
                         "Share"
                     } else {
                         "Make local"
                     },
-                    !self.busy && item.trusted,
+                    !self.busy && it.trusted,
                     cx,
                     move |this, _, cx| {
-                        let item = item.clone();
+                        let item = it.clone();
                         this.run(cx, move |store, core| store.move_item(core, &item));
                     },
                 ));
             }
-            page = page.child(detail.child(line));
+            line
+        });
+        let items: Vec<_> = items.collect();
+        if !items.is_empty() {
+            page = page.child(card(Some("Items"), None, items, cx));
         }
-        page
+        page.children(self.marks(cx))
     }
 }
