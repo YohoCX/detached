@@ -412,9 +412,7 @@ fn an_untrusted_participant_cannot_read_a_fix_s_worktree_or_its_env_copy_made_af
             &recipe,
         )
         .unwrap();
-    f.core
-        .add_folder("Default".into(), ws.display().to_string())
-        .unwrap();
+    f.core.add_folder(None, ws.display().to_string()).unwrap();
     let mark = marks::Mark {
         name: path.clone(),
         ..Default::default()

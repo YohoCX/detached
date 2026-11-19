@@ -306,7 +306,7 @@ mod tests {
         api::save_account(&sb.state, account).unwrap();
         let Sandbox { dir: _dir, state } = sb;
         let folder = repo.parent().unwrap().display().to_string();
-        state.add_folder("Default".into(), folder).unwrap();
+        state.add_folder(None, folder).unwrap();
         cx.update(|cx| crate::init(Arc::new(state), cx));
         wait_until(cx, |cx| Workspace::get(cx).current().is_some());
         let mrs = cx.update(|cx| {

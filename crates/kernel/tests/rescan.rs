@@ -43,9 +43,7 @@ fn a_repo_added_while_the_list_loads_is_not_missed(cx: &mut TestAppContext) {
     }
     let (repos, more) = (sb.path("repos"), sb.path("more"));
     let Sandbox { dir: _dir, state } = sb;
-    state
-        .add_folder("Default".into(), repos.display().to_string())
-        .unwrap();
+    state.add_folder(None, repos.display().to_string()).unwrap();
     let core = Arc::new(state);
     cx.update(|cx| detached_kernel::init(core.clone(), cx));
     wait_until(cx, |cx| {
@@ -70,7 +68,7 @@ fn a_repo_added_while_the_list_loads_is_not_missed(cx: &mut TestAppContext) {
         .recv_timeout(scaled(Duration::from_secs(30)))
         .expect("the listing ran");
 
-    let list = api::add_folder(&core, "Default".into(), more.display().to_string()).unwrap();
+    let list = api::add_folder(&core, None, more.display().to_string()).unwrap();
     let missed = Rc::new(Cell::new(false));
     let seen = missed.clone();
     let workspace = cx.read(Workspace::global);
@@ -79,7 +77,10 @@ fn a_repo_added_while_the_list_loads_is_not_missed(cx: &mut TestAppContext) {
             seen.set(seen.get() || !listed(cx, "c"))
         })
     });
-    cx.update(|cx| invalidate::listed(cx, list));
+    cx.update(|cx| {
+        let id = Workspace::get(cx).id().map(String::from);
+        invalidate::listed(cx, id, list)
+    });
     assert!(cx.read(|cx| listed(cx, "c")));
     drop(held);
     wait_until(cx, |cx| !invalidate::rescanning(cx));

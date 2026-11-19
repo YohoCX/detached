@@ -12,10 +12,7 @@ use detached_core::api;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{
-    ElementId, KeyDownEvent, KeyUpEvent, Keystroke, Pixels, Role, TestAppContext,
-    VisualTestContext, point, px,
-};
+use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px};
 use kernel::activity::{Activity, Level, Message, Notice};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -144,7 +141,8 @@ fn a_worktree_deleted_on_disk_drops_out_when_the_window_gets_focus(cx: &mut Test
 fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         layout(sb);
-        api::remove_workspace(&sb.state, "Default".into()).unwrap();
+        let id = api::get_settings(&sb.state).workspaces[0].id.clone();
+        api::remove_workspace(&sb.state, id).unwrap();
     });
     assert!(cx.settings(|s| s.workspaces.is_empty()));
     assert!(rows(cx).is_empty());
@@ -437,16 +435,6 @@ fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> String {
         .unwrap_or_default()
 }
 
-/// The sidebar's workspace headers: header rows without a folder path.
-fn workspace_headers(cx: &mut VisualTestContext) -> Vec<String> {
-    let rows = rows(cx).into_iter().filter(|r| r.path.is_none());
-    let rows: Vec<_> = rows.map(|r| (r.id, r.label)).collect();
-    rows.into_iter()
-        .filter(|(id, _)| cx.find(id.clone()).unwrap().description().is_none())
-        .map(|(_, label)| label)
-        .collect()
-}
-
 /// The Workspaces popup's rows: id, name and whether it is on.
 fn workspace_rows(cx: &mut VisualTestContext) -> Vec<(ElementId, String, bool)> {
     cx.update(|w, cx| {
@@ -472,83 +460,121 @@ fn names(cx: &mut VisualTestContext) -> Vec<String> {
     workspace_rows(cx).into_iter().map(|r| r.1).collect()
 }
 
+fn id_of(cx: &mut VisualTestContext, name: &str) -> String {
+    let all = cx.settings(|s| s.workspaces.clone());
+    all.into_iter().find(|w| w.name == name).unwrap().id
+}
+
 #[gpui_kit::test]
-fn workspaces_several_on_at_once_each_with_its_folders_rename_turn_off_delete(
+fn the_switcher_swaps_the_sidebar_a_rename_keeps_the_id_and_a_delete_leaves_the_projects(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    let lib = path(cx.sb.repo("lib"));
+    let (lib, solo) = (path(cx.sb.repo("lib")), path(cx.sb.solo()));
+    let id = row(cx, &solo).id;
+    cx.click(id);
+    assert_eq!(label(cx, "workspaces"), "Default");
     cx.click("workspaces");
     cx.click("workspaces.new");
     cx.input("Home");
     cx.press("enter");
-    wait_until(cx, |cx| workspace_headers(cx) == ["Default", "Home"]);
-    assert_eq!(cx.find("workspaces.new").unwrap().value(), Some(""));
-    cx.press("escape");
-    assert!(cx.find("workspaces.popup").is_none());
+    wait_until(cx, |cx| label(cx, "workspaces") == "Home");
+    assert!(
+        cx.find("workspaces.popup").is_none(),
+        "a new one is switched to"
+    );
+    wait_until(cx, |cx| paths(cx).is_empty());
+    assert_eq!(label(cx, "sidebar.empty"), "No repositories yet.");
 
-    let home = rows(cx).into_iter().find(|r| r.label == "Home").unwrap();
+    cx.click("sidebar.add");
     let picked = vec![cx.sb.repo("lib")];
-    click_in(cx, &home.id, "add");
     cx.simulate_path_prompt_response(|_| Some(picked));
-    wait_until(cx, |cx| {
-        paths(cx).iter().filter(|p| **p == lib).count() == 2
+    wait_until(cx, |cx| paths(cx) == [lib.as_str()]);
+    let home = id_of(cx, "Home");
+    let folders = cx.settings(|s| {
+        s.workspaces
+            .iter()
+            .map(|w| w.folders.len())
+            .collect::<Vec<_>>()
     });
+    assert_eq!(folders, [2, 1], "the folder went to the current workspace");
 
     cx.click("workspaces");
     let default = workspace_row(cx, "Default");
     cx.click(default);
-    wait_until(cx, |cx| {
-        workspace_headers(cx).is_empty() && paths(cx) == [lib.as_str()]
-    });
-    assert_eq!(label(cx, "workspaces"), "Home");
+    wait_until(cx, |cx| paths(cx).len() == 6);
+    assert_eq!(label(cx, "workspaces"), "Default");
+    assert_eq!(
+        cx.workspace(|w, _| w.current().map(String::from)),
+        Some(solo),
+        "its current repo is back"
+    );
 
-    let home = workspace_row(cx, "Home");
-    click_in(cx, &home, "rename");
+    cx.click("workspaces");
+    let row = workspace_row(cx, "Home");
+    click_in(cx, &row, "rename");
     let input = cx.find("workspaces.rename").unwrap();
     assert_eq!(input.label(), Some("Workspace name"));
     assert_eq!(input.value(), Some("Home"));
     cx.input("Family");
     cx.press("enter");
-    wait_until(cx, |cx| label(cx, "workspaces") == "Family");
+    wait_until(cx, |cx| names(cx) == ["Default", "Family"]);
+    assert_eq!(id_of(cx, "Family"), home, "a rename keeps the id");
 
-    let family = workspace_row(cx, "Family");
-    cx.click(family);
-    wait_until(cx, |cx| label(cx, "workspaces") == "No workspace");
-    let empty = label(cx, "sidebar.empty");
-    assert_eq!(empty, "No workspace is on. Turn one on in the top bar.");
-
-    let family = workspace_row(cx, "Family");
-    click_in(cx, &family, "remove");
+    let row = workspace_row(cx, "Family");
+    click_in(cx, &row, "remove");
+    cx.click("workspaces.delete.cancel");
+    assert_eq!(names(cx), ["Default", "Family"]);
+    let row = workspace_row(cx, "Family");
+    click_in(cx, &row, "remove");
+    cx.click("workspaces.delete.confirm");
     wait_until(cx, |cx| names(cx) == ["Default"]);
+    assert!(cx.sb.repo("lib").join(".git").exists());
+    assert!(paths(cx).contains(&lib), "Default still lists lib");
 }
 
 #[gpui_kit::test]
-fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_cancels(
-    cx: &mut TestAppContext,
-) {
-    let cx = &mut open_app_with(cx, layout);
-    let on = |cx: &mut VisualTestContext| workspace_rows(cx)[0].2;
+fn deleting_the_current_workspace_switches_to_another(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        api::save_workspace(&sb.state, "Empty".into(), None).unwrap();
+    });
     cx.click("workspaces");
+    let empty = workspace_row(cx, "Empty");
+    cx.click(empty);
+    wait_until(cx, |cx| {
+        label(cx, "workspaces") == "Empty" && paths(cx).is_empty()
+    });
+    cx.click("workspaces");
+    let empty = workspace_row(cx, "Empty");
+    click_in(cx, &empty, "remove");
+    cx.click("workspaces.delete.confirm");
+    wait_until(cx, |cx| {
+        label(cx, "workspaces") == "Default" && paths(cx).len() == 6
+    });
+}
+
+#[gpui_kit::test]
+fn a_row_switches_on_click_and_escape_cancels_a_rename_or_a_delete_first(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        api::save_workspace(&sb.state, "Home".into(), None).unwrap();
+    });
+    let on = |cx: &mut VisualTestContext, name: &str| {
+        workspace_rows(cx).into_iter().any(|r| r.1 == name && r.2)
+    };
+    cx.click("workspaces");
+    assert!(on(cx, "Default"));
+    let home = workspace_row(cx, "Home");
+    cx.click(home);
+    wait_until(cx, |cx| label(cx, "workspaces") == "Home");
+    cx.click("workspaces");
+    assert!(on(cx, "Home") && !on(cx, "Default"));
     let default = workspace_row(cx, "Default");
     cx.click(default);
-    wait_until(cx, |cx| !on(cx));
-    // Released only after a frame, so a toggle on key down would be drawn before the key up.
-    let keystroke = Keystroke::parse("space").unwrap();
-    cx.simulate_event(KeyDownEvent {
-        keystroke: keystroke.clone(),
-        is_held: false,
-        prefer_character_input: false,
-    });
-    settle(cx);
-    cx.update(|w, cx| w.render_frame(cx));
-    cx.simulate_event(KeyUpEvent { keystroke });
-    wait_until(cx, on);
-    settle(cx);
-    assert!(on(cx), "one toggle per press");
-    cx.press("enter");
-    wait_until(cx, |cx| !on(cx));
+    wait_until(cx, |cx| label(cx, "workspaces") == "Default");
 
+    cx.click("workspaces");
     let default = workspace_row(cx, "Default");
     click_in(cx, &default, "rename");
     cx.input("X");
@@ -559,7 +585,16 @@ fn a_workspace_row_toggles_with_space_and_enter_and_escape_while_renaming_only_c
         "only the rename closes"
     );
     settle(cx);
-    assert_eq!(names(cx), ["Default"]);
+    assert_eq!(names(cx), ["Default", "Home"]);
+    let home = workspace_row(cx, "Home");
+    click_in(cx, &home, "remove");
+    assert!(cx.find("workspaces.delete.confirm").is_some());
+    cx.press("escape");
+    assert!(cx.find("workspaces.delete.confirm").is_none());
+    assert!(
+        cx.find("workspaces.popup").is_some(),
+        "only the confirm closes"
+    );
     cx.press("escape");
     assert!(cx.find("workspaces.popup").is_none());
 }
@@ -599,6 +634,8 @@ fn a_rename_commits_on_blur_a_click_outside_or_another_rename_and_a_taken_name_i
     cx.click("workspaces.new");
     cx.input("Work");
     cx.press("enter");
+    wait_until(cx, |cx| label(cx, "workspaces") == "Work");
+    cx.click("workspaces");
     wait_until(cx, |cx| names(cx) == ["Home", "Work"]);
     let home = workspace_row(cx, "Home");
     click_in(cx, &home, "rename");

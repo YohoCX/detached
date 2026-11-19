@@ -39,7 +39,6 @@ use branches::Intent;
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::invalidate;
-use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 use sync::{Bulk, Kind};
 
@@ -150,31 +149,42 @@ fn register_actions(cx: &mut App) -> Vec<Registration> {
     ]
 }
 
-/// Runs a settings command, then reloads the repos it returns; its error is said in red.
+/// Runs a settings command on workspace `ws`, then reloads the repos it returns; its error is
+/// said in red.
 pub(crate) fn settings_call(
     cx: &mut App,
+    ws: Option<String>,
     f: impl FnOnce(&AppState) -> Result<Vec<RepoInfo>> + Send + 'static,
+) -> Task<()> {
+    core_then(cx, f, move |list, cx| invalidate::listed(cx, ws, list))
+}
+
+/// Runs `f` on core's threads, then `then` with its value; its error is said in red.
+pub(crate) fn core_then<T: Send + 'static>(
+    cx: &mut App,
+    f: impl FnOnce(&AppState) -> Result<T> + Send + 'static,
+    then: impl FnOnce(T, &mut App) + 'static,
 ) -> Task<()> {
     let core = kernel::core(cx).clone();
     let done = blocking::run(cx, move || f(&core));
     cx.spawn(async move |cx| {
         let r = done.await;
         cx.update(|cx| match r {
-            Ok(list) => invalidate::listed(cx, list),
-            Err(e) => Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx)),
+            Ok(v) => then(v, cx),
+            Err(e) => say(e.to_string(), true, cx),
         })
     })
 }
 
-/// Picks folders and adds them in order to `workspace`, by default the first active one; the first
-/// folder ever creates the workspace.
-pub(crate) fn add_folders(workspace: Option<String>, cx: &mut App) {
-    let first_on = Settings::get(cx)
-        .workspaces
-        .iter()
-        .find(|w| w.active)
-        .map(|w| w.name.clone());
-    let workspace = workspace.or(first_on).unwrap_or_else(|| "Default".into());
+/// The current workspace's id.
+fn current(cx: &App) -> Option<String> {
+    Workspace::get(cx).id().map(String::from)
+}
+
+/// Picks folders and adds them in order to the current workspace; the first folder ever creates
+/// the workspace.
+pub(crate) fn add_folders(cx: &mut App) {
+    let workspace = current(cx);
     let picked = cx.prompt_for_paths(PathPromptOptions {
         files: false,
         directories: true,
@@ -189,8 +199,10 @@ pub(crate) fn add_folders(workspace: Option<String>, cx: &mut App) {
         };
         for path in paths {
             let (ws, path) = (workspace.clone(), path.to_string_lossy().into_owned());
-            let added =
-                cx.update(|cx| settings_call(cx, move |core| core::add_folder(core, ws, path)));
+            let added = cx.update(|cx| {
+                let to = ws.clone();
+                settings_call(cx, to, move |core| core::add_folder(core, ws, path))
+            });
             added.await;
         }
     })

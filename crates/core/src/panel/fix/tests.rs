@@ -26,7 +26,7 @@ fn sandbox() -> (Sandbox, PathBuf) {
         .unwrap()
         .write(&sb.state, store::Kind::Recipes, worktree::RECIPE, &files)
         .unwrap();
-    sb.state.add_folder("Default".into(), s(&ws)).unwrap();
+    sb.state.add_folder(None, s(&ws)).unwrap();
     (sb, repo)
 }
 

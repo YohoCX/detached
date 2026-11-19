@@ -1100,10 +1100,9 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
         let far = sb.path("far");
         std::fs::create_dir_all(&far).unwrap();
         past(sb, &far, "far", "Elsewhere", 30);
-        let off = || "Off".to_string();
-        detached_core::api::save_workspace(&sb.state, off(), None).unwrap();
-        detached_core::api::add_folder(&sb.state, off(), far.display().to_string()).unwrap();
-        detached_core::api::set_workspace_active(&sb.state, off(), false).unwrap();
+        let other = detached_core::api::save_workspace(&sb.state, "Other".into(), None).unwrap();
+        let far = far.display().to_string();
+        detached_core::api::add_folder(&sb.state, Some(other), far).unwrap();
     });
     open_tab(cx, "tab.chats");
     wait_until(cx, |cx| cx.find(("chats.past", 0usize)).is_some());
@@ -1113,7 +1112,7 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
     );
     assert!(
         cx.find(("chats.past", 1usize)).is_none(),
-        "outside the workspace, or in one turned off"
+        "outside the current workspace"
     );
     assert_eq!(label(cx, ("chats.open", 0usize)).as_deref(), Some("solo"));
     // On its title: the hover buttons sit right of it.
@@ -1121,6 +1120,14 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
     cx.update(|w, cx| w.click_at(("chats.past", 0usize), at, cx));
     settle(cx);
     wait_for_item(cx, "fixed");
+
+    let all = cx.settings(|s| s.workspaces.clone());
+    let other = all.into_iter().find(|w| w.name == "Other").unwrap().id;
+    cx.workspace(|w, cx| w.switch(other, cx));
+    wait_until(cx, |cx| {
+        label(cx, ("chats.past", 0usize)).as_deref() == Some("Elsewhere")
+    });
+    assert!(cx.find(("chats.past", 1usize)).is_none());
 }
 
 #[gpui_kit::test]

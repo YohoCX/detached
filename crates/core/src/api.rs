@@ -22,11 +22,15 @@ pub fn get_settings(s: &AppState) -> Settings {
     s.get_settings()
 }
 
-pub fn list_repos(s: &AppState) -> Vec<RepoInfo> {
-    s.list_repos()
+pub fn list_repos(s: &AppState, workspace: &str) -> Vec<RepoInfo> {
+    s.list_repos(workspace)
 }
 
-pub fn add_folder(s: &AppState, workspace: String, path: String) -> Result<Vec<RepoInfo>> {
+pub fn assign_ids(s: &AppState) -> Result<()> {
+    s.assign_ids()
+}
+
+pub fn add_folder(s: &AppState, workspace: Option<String>, path: String) -> Result<Vec<RepoInfo>> {
     s.add_folder(workspace, path)
 }
 
@@ -42,16 +46,12 @@ pub fn include_repo(s: &AppState, workspace: String, path: String) -> Result<Vec
     s.include_repo(workspace, path)
 }
 
-pub fn set_workspace_active(s: &AppState, name: String, active: bool) -> Result<Vec<RepoInfo>> {
-    s.set_workspace_active(name, active)
-}
-
-pub fn save_workspace(s: &AppState, name: String, from: Option<String>) -> Result<Vec<RepoInfo>> {
+pub fn save_workspace(s: &AppState, name: String, from: Option<String>) -> Result<String> {
     s.save_workspace(name, from)
 }
 
-pub fn remove_workspace(s: &AppState, name: String) -> Result<Vec<RepoInfo>> {
-    s.remove_workspace(name)
+pub fn remove_workspace(s: &AppState, id: String) -> Result<()> {
+    s.remove_workspace(id)
 }
 
 pub fn set_repo_account(

@@ -147,10 +147,11 @@ fn lines(n: usize, edit: &[(usize, &str)]) -> String {
 
 /// Makes `folders` the Default workspace's, in place of `repos/`.
 fn folders(sb: &Sandbox, folders: &[PathBuf]) {
-    let (s, ws) = (&sb.state, || "Default".to_string());
-    api::remove_folder(s, ws(), sb.path("repos").display().to_string()).unwrap();
+    let s = &sb.state;
+    let ws = api::get_settings(s).workspaces[0].id.clone();
+    api::remove_folder(s, ws.clone(), sb.path("repos").display().to_string()).unwrap();
     for f in folders {
-        api::add_folder(s, ws(), f.display().to_string()).unwrap();
+        api::add_folder(s, Some(ws.clone()), f.display().to_string()).unwrap();
     }
 }
 
@@ -377,13 +378,16 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     let sb = Sandbox::new();
     let folder = sb.path("repos");
     std::fs::create_dir(&folder).unwrap();
-    api::add_folder(&sb.state, "Default".into(), folder.display().to_string()).unwrap();
+    api::add_folder(&sb.state, None, folder.display().to_string()).unwrap();
     seed(&sb);
     let s = &sb.state;
     let dir = s.config_dir.clone();
     let core = AppState::new(dir.clone(), Settings::load(&dir), s.env(), s.tokens.clone());
     let core = Arc::new(core);
-    let (repos, workspaces) = (api::list_repos(&core), api::get_settings(&core).workspaces);
+    api::assign_ids(&core).unwrap();
+    let workspaces = api::get_settings(&core).workspaces;
+    let first = workspaces.iter().find(|w| w.active).or(workspaces.first());
+    let repos = first.map_or(vec![], |w| api::list_repos(&core, &w.id));
     cx.executor().allow_parking();
     let keys = cx.update(|cx| {
         gpui_kit::init(cx);

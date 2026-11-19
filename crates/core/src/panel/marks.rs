@@ -384,7 +384,8 @@ mod tests {
 
         change(core, |p| p.repos.clear()).unwrap();
         let ws = t.repo.parent().unwrap().display().to_string();
-        core.add_folder("Work".into(), ws).unwrap();
+        let work = core.save_workspace("Work".into(), None).unwrap();
+        core.add_folder(Some(work), ws).unwrap();
         let work = Mark {
             name: "Work".into(),
             forks: true,
@@ -431,7 +432,8 @@ mod tests {
             ..Panels::default()
         };
         let dir = t.sb.dir.path().display().to_string();
-        t.sb.state.add_folder("Work".into(), dir).unwrap();
+        let work = t.sb.state.save_workspace("Work".into(), None).unwrap();
+        t.sb.state.add_folder(Some(work), dir).unwrap();
         let why = classify(&t.sb.state, &ws, &t.subject("origin/main", true)).unwrap();
         assert_eq!(
             why,

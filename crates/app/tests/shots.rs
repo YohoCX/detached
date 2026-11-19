@@ -138,7 +138,7 @@ fn main() {
     let sb = Sandbox::new();
     let folder = sb.path("repos");
     std::fs::create_dir(&folder).unwrap();
-    api::add_folder(&sb.state, "Default".into(), folder.display().to_string()).unwrap();
+    api::add_folder(&sb.state, None, folder.display().to_string()).unwrap();
     let repo = seed(&sb);
     let s = &sb.state;
     let dir = s.config_dir.clone();

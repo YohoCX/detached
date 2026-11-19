@@ -101,16 +101,20 @@ fn two_repo_folder_workspaces_with_one_basename_each_show_their_own_worktrees(
             sb.git(&repo, &["init", "-q"]);
             sb.commit(&repo, "README.md", "hello\n", "initial");
             let path = repo.display().to_string();
-            api::save_workspace(&sb.state, ws.into(), None).unwrap();
-            api::add_folder(&sb.state, ws.into(), path.clone()).unwrap();
+            let id = api::save_workspace(&sb.state, ws.into(), None).unwrap();
+            api::add_folder(&sb.state, Some(id), path.clone()).unwrap();
             let id = sb.state.ops.id();
             api::create_worktree(&sb.state, &path, &path, &path, "feat", id, &|_| {}).unwrap();
         }
     });
-    let paths = rows(cx);
     let mut trees = vec![];
     for ws in ["a", "b"] {
         let main = cx.sb.path(ws).join("app").display().to_string();
+        let all = cx.settings(|s| s.workspaces.clone());
+        let id = all.into_iter().find(|w| w.name == ws).unwrap().id;
+        cx.workspace(|w, cx| w.switch(id, cx));
+        wait_until(cx, |cx| rows(cx).contains(&main));
+        let paths = rows(cx);
         let at = paths.iter().position(|p| *p == main).unwrap();
         let tree = real(&paths[at + 1]);
         assert!(

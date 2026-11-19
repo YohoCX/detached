@@ -1,7 +1,7 @@
-//! The top bar's Workspaces widget and its popup: turn workspaces on and off, rename, delete, create.
+//! The top bar's workspace switcher and its popup: switch, rename, delete, create.
 
 use detached_core::api;
-use detached_core::settings::Workspace;
+use detached_core::settings;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -12,22 +12,26 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 
-use super::{caret, settings_call, widget};
+use super::{caret, core_then, widget};
 use crate::ui::{self, Icon, radius, text, theme};
 use kernel::settings::Settings;
+use kernel::workspace::Workspace;
 
 /// The widget, shown while there are workspaces.
 pub fn workspaces(cx: &mut App) -> AnyView {
     cx.new(|cx| Workspaces {
         open: None,
-        _settings: cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+        _subs: [
+            cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+            cx.observe(&Workspace::global(cx), |_, _, cx| cx.notify()),
+        ],
     })
     .into()
 }
 
 struct Workspaces {
     open: Option<Open>,
-    _settings: Subscription,
+    _subs: [Subscription; 2],
 }
 
 struct Open {
@@ -35,10 +39,13 @@ struct Open {
     focus: FocusHandle,
     new: Entity<InputState>,
     rename: Option<Rename>,
+    /// The workspace whose delete waits for a confirm.
+    deleting: Option<String>,
     _new: Subscription,
 }
 
 struct Rename {
+    /// The workspace's id.
     from: String,
     input: Entity<InputState>,
     _input: Subscription,
@@ -57,7 +64,12 @@ impl Workspaces {
                     return;
                 }
                 new.update(cx, |s, cx| s.set_value("", window, cx));
-                settings_call(cx, move |core| api::save_workspace(core, name, None)).detach();
+                let made = core_then(
+                    cx,
+                    move |core| api::save_workspace(core, name, None),
+                    switch,
+                );
+                made.detach();
             });
             let focus = cx.focus_handle();
             window.focus(&focus, cx);
@@ -65,19 +77,40 @@ impl Workspaces {
                 focus,
                 new,
                 rename: None,
+                deleting: None,
                 _new: sub,
             });
         }
         cx.notify();
     }
 
-    /// Cancels a rename, otherwise closes.
+    /// Cancels a rename or a delete, otherwise closes.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = &mut self.open else { return };
-        match open.rename.take() {
-            Some(_) => window.focus(&open.focus, cx),
-            None => self.open = None,
+        match (open.rename.take(), open.deleting.take()) {
+            (Some(_), _) => window.focus(&open.focus, cx),
+            (_, Some(_)) => {}
+            _ => self.open = None,
         }
+        cx.notify();
+    }
+
+    fn switch(&mut self, id: String, cx: &mut Context<Self>) {
+        self.open = None;
+        switch(id, cx);
+        cx.notify();
+    }
+
+    fn delete(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(open) = &mut self.open {
+            open.deleting = None;
+        }
+        core_then(
+            cx,
+            move |core| api::remove_workspace(core, id),
+            |_, cx| kernel::invalidate::rescan(cx),
+        )
+        .detach();
         cx.notify();
     }
 
@@ -113,28 +146,37 @@ impl Workspaces {
             window.focus(&open.focus, cx);
         }
         let to = input.read(cx).value().trim().to_string();
-        if !to.is_empty() && to != from {
-            settings_call(cx, move |core| api::save_workspace(core, to, Some(from))).detach();
+        let was = Settings::get(cx).workspaces.iter().find(|w| w.id == from);
+        if !to.is_empty() && was.is_some_and(|w| w.name != to) {
+            core_then(
+                cx,
+                move |core| api::save_workspace(core, to, Some(from)),
+                |_, _| {},
+            )
+            .detach();
         }
         cx.notify();
     }
 
-    fn row(&self, i: usize, w: &Workspace, cx: &mut Context<Self>) -> AnyElement {
+    fn row(&self, i: usize, w: &settings::Workspace, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let open = self.open.as_ref();
         if let Some(r) = open
             .and_then(|o| o.rename.as_ref())
-            .filter(|r| r.from == w.name)
+            .filter(|r| r.from == w.id)
         {
             let input = ui::input(&r.input, cx)
                 .id("workspaces.rename")
                 .aria_label("Workspace name");
             return field(input).into_any_element();
         }
-        let (name, active) = (w.name.clone(), w.active);
+        if open.and_then(|o| o.deleting.as_ref()) == Some(&w.id) {
+            return self.confirm(i, w, cx);
+        }
+        let current = Workspace::get(cx).id() == Some(w.id.as_str());
         let tip = SharedString::from(w.folders.join("\n"));
         let n = w.folders.len();
-        let (rename, remove) = (w.name.clone(), w.name.clone());
+        let (id, rename, remove) = (w.id.clone(), w.id.clone(), w.id.clone());
         div()
             .id(("workspaces.row", i))
             .test_support()
@@ -148,26 +190,20 @@ impl Workspaces {
             .rounded(radius::ITEM)
             .hover(|s| s.bg(t.hover))
             .tab_index(0)
-            .role(Role::CheckBox)
-            .aria_toggled(active.into())
+            .role(Role::RadioButton)
+            .aria_toggled(current.into())
             .aria_label(w.name.clone())
             .aria_description(tip.clone())
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             // GPUI clicks a focused element on Space and Enter.
-            .on_click(move |_, _, cx| {
-                let name = name.clone();
-                settings_call(cx, move |core| {
-                    api::set_workspace_active(core, name, !active)
-                })
-                .detach();
-            })
+            .on_click(cx.listener(move |this, _, _, cx| this.switch(id.clone(), cx)))
             .child(
                 div()
                     .flex()
                     .flex_none()
                     .w(px(14.))
                     .text_color(t.accent)
-                    .when(active, |d| d.child(Icon::Check.size(px(14.)))),
+                    .when(current, |d| d.child(Icon::Check.size(px(14.)))),
             )
             .child(
                 div()
@@ -190,11 +226,65 @@ impl Workspaces {
             )
             .child(
                 hover_button("remove", Icon::Close, format!("Delete {}", w.name), cx).on_click(
-                    move |_, _, cx| {
-                        let name = remove.clone();
-                        settings_call(cx, move |core| api::remove_workspace(core, name)).detach();
-                    },
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(o) = &mut this.open {
+                            o.deleting = Some(remove.clone());
+                        }
+                        cx.notify();
+                    }),
                 ),
+            )
+            .into_any_element()
+    }
+
+    /// A delete's confirm in place of the row: its folders and repos stay where they are.
+    fn confirm(&self, i: usize, w: &settings::Workspace, cx: &mut Context<Self>) -> AnyElement {
+        let t = theme(cx);
+        let small = |id: &'static str, label: &'static str| {
+            ui::pressable(id)
+                .test_support()
+                .h(px(20.))
+                .px(px(8.))
+                .rounded(radius::ICON_BUTTON)
+                .text_size(text::SMALL)
+                .font_weight(FontWeight::SEMIBOLD)
+                .hover(|s| s.bg(t.hover))
+                .child(label)
+        };
+        let id = w.id.clone();
+        div()
+            .id(("workspaces.confirm", i))
+            .test_support()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .h(px(32.))
+            .mx(px(8.))
+            .px(px(6.))
+            .rounded(radius::ITEM)
+            .bg(t.hover)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(format!("Delete {}? Its folders stay.", w.name)),
+            )
+            .child(
+                small("workspaces.delete.confirm", "Delete")
+                    .text_color(t.error)
+                    .on_click(cx.listener(move |this, _, _, cx| this.delete(id.clone(), cx))),
+            )
+            .child(
+                small("workspaces.delete.cancel", "Cancel").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(o) = &mut this.open {
+                            o.deleting = None;
+                        }
+                        cx.notify();
+                    },
+                )),
             )
             .into_any_element()
     }
@@ -262,28 +352,22 @@ fn hover_button(
 
 impl Render for Workspaces {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = Settings::get(cx);
-        if s.workspaces.is_empty() {
+        if Settings::get(cx).workspaces.is_empty() {
             return div().into_any_element();
         }
-        let on: Vec<_> = s
-            .workspaces
-            .iter()
-            .filter(|w| w.active)
-            .map(|w| w.name.as_str())
-            .collect();
-        let label = match on.join(", ") {
-            l if l.is_empty() => "No workspace".to_string(),
-            l => l,
-        };
+        let label = Workspace::get(cx)
+            .name(cx)
+            .unwrap_or("Workspaces")
+            .to_string();
         let trigger = widget(
             "workspaces",
-            "Workspaces",
+            "Workspace",
             label.clone(),
             self.open.is_some(),
             cx,
         )
         .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
+        .child(Icon::Folder.size(px(14.)))
         .child(div().min_w_0().truncate().child(label))
         .child(caret(cx));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
@@ -299,4 +383,9 @@ impl Render for Workspaces {
         };
         ui::popup("workspaces", trigger, content, close, window, cx).into_any_element()
     }
+}
+
+/// Makes workspace `id` the window's.
+fn switch(id: String, cx: &mut App) {
+    Workspace::global(cx).update(cx, |w, cx| w.switch(id, cx));
 }

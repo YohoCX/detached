@@ -485,6 +485,21 @@ Done when the owner's chat lists Detached's server alone and his skills still ru
 
 ### Step W3. The workspace as context
 
+**Status (2026-11-19): built on `ws/context`, unverified: the owner ordered no test runs, so it is
+compiled and clippy-clean, its tests written and not run.** Core: `id` (made once, 8 hex),
+`readOnly` and unknown fields kept, `list_repos(id)`, `all_repos()` for the untrusted deny list and
+Fix's folder, folder calls by id (`add_folder(None, …)` the first workspace, made as Default when
+there is none), `assign_ids` run before each listing. Kernel: `Workspace::{id, name, switch, hold,
+release}`, `workspace.current`, `workspace.repo.<id>`; a switch lists in the rescan and emits
+`Switched` once its repos are in; a session keeps the repos of its open on its `Identity`, holds
+them, and its snapshots, `proc`, `watch` and the read tool read them. UI: the top bar's switcher
+(a click switches; a new workspace is switched to; rename; delete after an inline confirm), the
+sidebar shows the current workspace's folders alone, no workspace headers; the Chats app lists the
+current workspace's past chats. Choices: `active` stays unused; Delete is not yet refused while
+something runs (W4 for terminals, W5 for chats). Owner's check: his workspaces carry over with
+ids, switching shows each one's projects and restores its current repo, a chat goes on across a
+switch.
+
 Work:
 1. Core: `id`, `readOnly` (stored, no role yet), the flattened map, `list_repos(ws)`, the folder
    calls by id, the boot migration (§10).

@@ -162,8 +162,8 @@ Streams (log rows, find matches, progress lines) come back over a channel draine
 task that batches per frame. Each op or query has an id from the kernel (`Activity::run_op`'s op id,
 `blocking::QueryId`); dropping the view or starting a new query cancels the old id.
 
-**Workspace and Repo.** The kernel's `Workspace` holds the repos the active workspaces list, the
-current repo and the document of the tab last on screen (`shown: Option<Doc>`); each listed repo
+**Workspace and Repo.** The kernel's `Workspace` holds the current workspace (`id()`, `name()`;
+`switch(id)` emits `Switched`), the repos it lists, the current repo per workspace and the document of the tab last on screen (`shown: Option<Doc>`); each listed repo
 has a `Repo` entity with its status, its last sync's outcome, the tree ref (`tree_ref`) and Compare
 base (`compare`) other verticals read, and its branch names for the ref inputs (`branch_names`,
 loaded on demand). A repo's change notifies its own entity; `Workspace` emits `Changed(path)` for
@@ -285,7 +285,8 @@ variant, a function) adds it with a stub to the provider's `api.rs` or the kerne
 commit on main, with the matching line in this section, without changing what is there; the
 provider then fills it in.
 
-- **Workspace and Repo:** fields and events above; `Workspace::current()`, `Repo::get(cx, repo)`
+- **Workspace and Repo:** fields and events above; `Workspace::{id, name, switch, hold, release}`,
+  `Workspace::current()`, `Repo::get(cx, repo)`
   with its `status()`, `tree_ref` and `compare`, `Activity::run_op(...)`, `Workspace::shown()`,
   `Workspace::show(Doc)`, which opens the doc in a tab or brings its tab forward.
 - **Dock:** `dock::open(name, window, cx)`, which shows the app of that name in its zone (never

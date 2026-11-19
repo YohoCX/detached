@@ -66,9 +66,7 @@ pub(crate) struct Fixture {
 impl Fixture {
     /// Lists the repo in the workspace, its status loaded.
     pub fn list(&self, cx: &mut TestAppContext) {
-        self.core
-            .add_folder("Default".into(), self.repo.clone())
-            .unwrap();
+        self.core.add_folder(None, self.repo.clone()).unwrap();
         cx.update(crate::invalidate::rescan);
         wait_until(cx, |cx| {
             let repo = crate::repo::Repo::get(cx, &self.repo);
@@ -280,6 +278,67 @@ fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestA
         )
     });
     assert!(!Path::new(&f.repo).join("a.txt").exists());
+}
+
+#[gpui::test]
+fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_them(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::git::runner::{Kind as Git, out};
+    use detached_core::host::{Op, ProcAct, WatchAct};
+    let f = boot_fake(cx, Fake::Claude);
+    f.list(cx);
+    let other = f.dir.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    out(&f.core.env(), &other, &["init", "-q"], Git::Write).unwrap();
+    let id = f.core.save_workspace("Other".into(), None).unwrap();
+    let path = other.display().to_string();
+    f.core.add_folder(Some(id.clone()), path).unwrap();
+    let s = open(&f, Kind::Chat, cx);
+    let workspace = cx.read(Workspace::global);
+    workspace.update(cx, |w, cx| w.switch(id.clone(), cx));
+    wait_until(cx, |cx| {
+        Workspace::get(cx).id() == Some(id.as_str()) && !crate::invalidate::rescanning(cx)
+    });
+    cx.read(|cx| {
+        let w = Workspace::get(cx);
+        assert!(w.repos().iter().all(|r| r.path != f.repo));
+        assert!(w.repo(&f.repo).is_some(), "the chat holds its repo");
+    });
+    s.update(cx, |s, cx| s.wake(cx));
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    turn(&s, "write a.txt made;say done", cx);
+    s.read_with(cx, |s, cx| {
+        assert_eq!(s.repos(cx), std::slice::from_ref(&f.repo));
+        let changed: Vec<_> = (s.items.iter())
+            .filter_map(|i| match i {
+                Item::Changes { repo, .. } => Some(repo.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(changed, std::slice::from_ref(&f.repo));
+    });
+    let who = s.read_with(cx, |s, _| s.who.clone());
+    let act = ProcAct {
+        op: Op::Stop,
+        repo: f.repo.clone(),
+        name: "dev".into(),
+    };
+    let done = cx.update(|cx| crate::proc::act(cx, &who, &act));
+    let e = cx.foreground_executor().block_test(done).unwrap_err();
+    assert!(!e.to_string().contains("has no repo"), "{e}");
+    let w = WatchAct {
+        repo: f.repo.clone(),
+        process: Some("dev".into()),
+        pipeline: None,
+    };
+    let e = cx
+        .update(|cx| crate::inbox::watch(cx, "w", &who, &w))
+        .unwrap_err();
+    assert!(!e.to_string().contains("has no repo"), "{e}");
+    drop(s);
+    cx.run_until_parked();
+    assert!(cx.read(|cx| Workspace::get(cx).repo(&f.repo).is_none()));
 }
 
 #[gpui::test]

@@ -393,11 +393,12 @@ fn a_process_becoming_ready_puts_one_message_into_the_watcher_s_inbox(cx: &mut T
         process: process.map(String::from),
         pipeline: None,
     };
-    let refused = cx.update(|cx| watch(cx, "w", &w(Some("dev"))));
+    let refused = cx.update(|cx| watch(cx, "w", &Identity::owner(), &w(Some("dev"))));
     assert!(refused.unwrap_err().to_string().contains("does not run"));
     let started = cx.update(|cx| proc::start(cx, &f.repo, "dev", false));
     cx.foreground_executor().block_test(started).unwrap();
-    cx.update(|cx| watch(cx, "w", &w(Some("dev")))).unwrap();
+    cx.update(|cx| watch(cx, "w", &Identity::owner(), &w(Some("dev"))))
+        .unwrap();
     cx.run_until_parked();
     assert!(inbox_of("w", cx).is_empty());
     std::fs::write(Path::new(&f.repo).join("go"), "").unwrap();
@@ -454,7 +455,8 @@ fn a_pipeline_ending_after_the_watch_puts_one_message_into_the_watcher_s_inbox(
         cx.executor().advance_clock(Duration::from_secs(10));
         wait_until(cx, |cx| !held.read(cx).loading());
     };
-    cx.update(|cx| watch(cx, "w", &w)).unwrap();
+    cx.update(|cx| watch(cx, "w", &Identity::owner(), &w))
+        .unwrap();
     tick(cx);
     assert!(inbox_of("w", cx).is_empty(), "the pipeline that had ended");
     forge.reset(seed(vec![
