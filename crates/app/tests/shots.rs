@@ -1,17 +1,19 @@
-//! Pictures of the Settings pages over a seeded sandbox, for a look by eye:
-//! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `<dir>/<page id>.png`, and
-//! `<id>-end.png` scrolled down when the page is taller; `PAGES=skills,sharing` draws only those ids,
-//! `MODE=light|dark` in that mode.
+//! Pictures of the window over a seeded sandbox, for a look by eye:
+//! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `main.png` (a diff), `chat.png` and
+//! each Settings page as `<dir>/<page id>.png`, and `<id>-end.png` scrolled down when the page is
+//! taller; `PAGES=main,skills` draws only those ids, `MODE=light|dark` in that mode, `THEME=<name>`
+//! in that theme.
 //! macOS only, on the main thread its platform needs; without SHOTS it does nothing.
+
+mod common;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use detached_app::files::{self, DiffDoc, Side};
 use detached_app::{actions, keymap, settings, shell};
-use detached_core::adapters::testutil::fake_cli;
-use detached_core::adapters::{self, CLAUDE};
 use detached_core::api;
 use detached_core::git::files::TreeSettings;
 use detached_core::git::testutil::Sandbox;
@@ -44,6 +46,9 @@ const PAGES: [(&str, &str, &str); 13] = [
     ("worktrees", "worktrees.recipe", "Recipe:"),
 ];
 
+const LIB: &str = "/// Adds two counts.\npub fn add(a: u32, b: u32) -> u32 {\n    a + b\n}\n\n\
+                   #[test]\nfn adds() {\n    assert_eq!(add(2, 2), 4);\n}\n";
+
 fn skill(dir: &Path, description: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let text = format!("---\ndescription: {description}\n---\n");
@@ -55,6 +60,12 @@ fn seed(sb: &Sandbox) -> String {
     std::fs::create_dir_all(&r).unwrap();
     sb.git(&r, &["init", "-q"]);
     sb.commit(&r, "README.md", "hello\n", "initial");
+    sb.commit(&r, "lib.rs", LIB, "lib");
+    std::fs::write(
+        r.join("lib.rs"),
+        LIB.replace("a + b", "a.saturating_add(b)"),
+    )
+    .unwrap();
     skill(
         &r.join(".claude/skills/review-pr"),
         "Reviews the open pull request against the team's checklist. Use when asked to review, \
@@ -80,12 +91,7 @@ fn seed(sb: &Sandbox) -> String {
     store
         .write(&sb.state, Kind::Recipes, RECIPE, &recipe)
         .unwrap();
-    let bin = sb.path("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let cli = fake_cli(&bin, "2.1.400").display().to_string();
-    let cli = [(CLAUDE.id.into(), cli)].into();
-    let config = adapters::Config { cli, codex: false };
-    sb.state.set_block(adapters::BLOCK, config).unwrap();
+    common::claude(sb, &detached_core::testutil::claude::fake());
     let input = AccountInput {
         id: None,
         provider: Provider::GitlabSelfHosted,
@@ -117,6 +123,11 @@ fn wait_until(cx: &mut HeadlessAppContext, mut done: impl FnMut(&mut HeadlessApp
         let tick = cx.background_executor().timer(Duration::from_millis(10));
         cx.foreground_executor().block_test(tick);
     }
+}
+
+fn save(cx: &mut HeadlessAppContext, window: AnyWindowHandle, out: &Path, name: &str) {
+    let img = cx.capture_screenshot(window).unwrap();
+    img.save(out.join(format!("{name}.png"))).unwrap();
 }
 
 /// Whether the element `id` is drawn with `text` in its label.
@@ -155,6 +166,9 @@ fn main() {
         if let Ok(mode) = std::env::var("MODE") {
             ui_state::set("theme.mode", mode, cx);
         }
+        if let Ok(name) = std::env::var("THEME") {
+            ui_state::set("theme.name", name, cx);
+        }
         let keys = keymap::load(core.clone(), cx);
         kernel::init(core, cx);
         detached_app::register(cx);
@@ -171,13 +185,45 @@ fn main() {
             loaded && w.repos().iter().any(|r| r.path == repo)
         })
     });
-    cx.update(|cx| Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo), cx)));
+    let r = repo.clone();
+    cx.update(|cx| Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(r), cx)));
     let only = std::env::var("PAGES").ok();
+    let wanted = |page: &str| {
+        only.as_ref()
+            .is_none_or(|o| o.split(',').any(|p| p == page))
+    };
+    if wanted("main") {
+        let doc = DiffDoc {
+            repo: repo.clone(),
+            path: "lib.rs".into(),
+            orig_path: None,
+            left: Side::Head,
+            right: Side::Worktree,
+        };
+        cx.update(|cx| files::show_diff(cx, doc, false));
+        wait_until(&mut cx, |cx| shows(cx, window, "diff.current".into(), ""));
+        save(&mut cx, window, &out, "main");
+    }
+    if wanted("chat") {
+        let turn = |cx: &mut HeadlessAppContext, prompt: &str, done: &str| {
+            cx.update_window(window, |_, w, cx| {
+                w.input(prompt, cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            wait_until(cx, |cx| {
+                (0usize..20).any(|i| shows(cx, window, ("chat.item", i).into(), done))
+            });
+        };
+        cx.update_window(window, |_, w, cx| w.click("top.chat", cx))
+            .unwrap();
+        turn(&mut cx, "tools", "Edit README.md ok");
+        let say = "say Done: `add` now saturates, and **the test** still passes.";
+        turn(&mut cx, say, "still passes");
+        save(&mut cx, window, &out, "chat");
+    }
     for (page, ready, text) in PAGES {
-        if only
-            .as_ref()
-            .is_some_and(|o| !o.split(',').any(|p| p == page))
-        {
+        if !wanted(page) {
             continue;
         }
         cx.update(|cx| settings::open(cx, page));

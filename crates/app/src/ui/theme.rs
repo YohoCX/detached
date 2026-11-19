@@ -565,6 +565,83 @@ mod tests {
         let v: Value = serde_json::from_str(r#"{"extends": "Nope"}"#).unwrap();
         assert!(pair(&v, &bundled()).is_err());
     }
+
+    #[test]
+    fn a_theme_extends_any_bundled_one() {
+        for name in bundled().into_keys() {
+            let v = serde_json::json!({"extends": name, "dark": {"accent": "#ff0000"}});
+            let (light, dark) = pair(&v, &bundled()).unwrap();
+            let (base, _) = pair(&bundled()[&name], &bundled()).unwrap();
+            assert_eq!(light.accent, base.accent, "{name}");
+            assert_eq!(dark.accent, hex("#ff0000").unwrap(), "{name}");
+        }
+    }
+
+    /// WCAG's contrast ratio of two opaque colors.
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let lum = |c: Hsla| {
+            let c = gpui_kit::Rgba::from(c);
+            let f = |v: f32| match v <= 0.04045 {
+                true => v / 12.92,
+                false => ((v + 0.055) / 1.055).powf(2.4),
+            };
+            0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b)
+        };
+        let (a, b) = (lum(a), lum(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn text_keeps_4_5_to_1_on_every_ground_it_sits_on() {
+        let black: Hsla = rgba(0x000000ff).into();
+        for (name, v) in bundled() {
+            let (light, dark) = pair(&v, &bundled()).unwrap();
+            for (mode, t) in [("light", light), ("dark", dark)] {
+                let ground = black.blend(t.ground);
+                let panel = ground.blend(t.panel);
+                let grounds = [
+                    ("ground", ground),
+                    ("panel", panel),
+                    ("popup", ground.blend(t.popup)),
+                    ("code", panel.blend(t.code)),
+                    ("card", panel.blend(t.hover)),
+                    ("input", panel.blend(t.input)),
+                    ("selected", panel.blend(t.selected)),
+                    ("selected_inactive", panel.blend(t.selected_inactive)),
+                ];
+                let mut pairs = vec![
+                    ("primary_fg", t.primary_fg, "primary", t.primary),
+                    ("accent_fg", t.accent_fg, "accent", t.accent),
+                ];
+                for (g, bg) in grounds {
+                    pairs.push(("fg", t.fg, g, bg));
+                    pairs.push(("muted", t.muted, g, bg));
+                }
+                let colored = [
+                    ("accent", t.accent),
+                    ("hit", t.hit),
+                    ("error", t.error),
+                    ("warning", t.warning),
+                    ("success", t.success),
+                    ("added", t.added),
+                    ("modified", t.modified),
+                    ("deleted", t.deleted),
+                    ("conflict", t.conflict),
+                    ("untracked", t.untracked),
+                ];
+                for (k, c) in colored {
+                    for (g, bg) in &grounds[1..6] {
+                        pairs.push((k, c, g, *bg));
+                    }
+                    pairs.push((k, c, "selected", grounds[6].1));
+                }
+                for (k, c, g, bg) in pairs {
+                    let r = contrast(c, bg);
+                    assert!(r >= 4.5, "{name} {mode}: {k} on {g} is {r:.2}:1");
+                }
+            }
+        }
+    }
 }
 
 pub mod graph {
