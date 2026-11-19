@@ -102,7 +102,7 @@ impl Drop for Api {
 
 /// The request's path and JSON body.
 fn read(stream: &TcpStream) -> Option<(String, Value)> {
-    let mut r = BufReader::new(stream.try_clone().ok()?);
+    let mut r = BufReader::new(stream);
     let (mut head, mut len) = (String::new(), 0);
     while r.read_line(&mut head).is_ok_and(|n| n > 2) {
         let line = head.lines().last()?.to_ascii_lowercase();

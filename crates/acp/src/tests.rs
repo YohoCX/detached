@@ -486,6 +486,33 @@ fn a_second_initialize_ends_the_session_and_refuses_its_tools_after() {
     assert_eq!(list.status, 404);
 }
 
+#[cfg(windows)]
+#[test]
+fn a_child_spawned_while_a_client_is_connected_does_not_hold_its_connection() {
+    use std::io::{Read, Write};
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (_open, _rx, url, _calls) = with_tools(&acp, &sb);
+    let rest = url.trim_start_matches("http://");
+    let (host, path) = rest.split_at(rest.find('/').unwrap());
+    let mut s = std::net::TcpStream::connect(host).unwrap();
+    let body = rpc("tools/list").to_string();
+    let len = body.len();
+    write!(
+        s,
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {len}\r\n\r\n{body}"
+    )
+    .unwrap();
+    s.read_exact(&mut [0; 12]).unwrap();
+    let mut child = std::process::Command::new("cmd")
+        .args(["/c", "ping -n 4 127.0.0.1 >NUL"])
+        .spawn()
+        .unwrap();
+    s.shutdown(std::net::Shutdown::Write).unwrap();
+    let end = s.read_to_end(&mut vec![]);
+    let _ = (child.kill(), child.wait());
+    assert!(end.is_ok(), "{end:?}");
+}
+
 #[test]
 fn a_session_s_tools_are_refused_once_it_closes_and_a_load_gets_a_new_path() {
     let (acp, sb) = (Acp::default(), sandbox());
