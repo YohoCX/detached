@@ -162,15 +162,23 @@ fn groups(area: &DockArea) -> Vec<(Vec<PanelId>, usize)> {
     out
 }
 
-/// Tabs of a layout from before workspaces join the current workspace.
+/// Tabs of a layout from before workspaces join the current workspace, which shows the category
+/// of the tab that layout showed.
 pub(super) fn adopt(area: &DockArea, cx: &mut App) {
     let Some(id) = Workspace::get(cx).id().map(String::from) else {
         return;
     };
+    let mut adopted = false;
     for (_, _, t) in super::docs(area) {
         if t.read(cx).workspace.is_none() {
             t.update(cx, |t, _| t.workspace = Some(id.clone()));
+            adopted = true;
         }
+    }
+    let first = groups(area).into_iter().next();
+    let active = first.and_then(|(panels, at)| tab(area, *panels.get(at)?));
+    if let Some(t) = active.filter(|_| adopted && state(cx).category.is_none()) {
+        set(t.read(cx).category(), cx);
     }
 }
 

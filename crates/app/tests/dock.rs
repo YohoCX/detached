@@ -152,13 +152,21 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
         }
         assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
         assert_eq!(w.find("tool.Project").checked(), Some(true));
-        assert!(w.try_find("doc.diff.README.md").is_some());
-        assert_eq!(w.find("doc.chat").checked(), Some(true));
+        assert_eq!(w.find("doc.chat").checked(), Some(true), "Chats shows it");
+        assert!(w.try_find("doc.diff.README.md").is_none(), "in Code");
     });
-    let saved = app(cx, |cx| {
-        ui_state::get::<serde_json::Value>("dock.layout", cx)
+    let (saved, id) = app(cx, |cx| {
+        let id = kernel::workspace::Workspace::get(cx).id().map(String::from);
+        (ui_state::get::<serde_json::Value>("dock.layout", cx), id)
     });
-    let mut saved = saved.unwrap();
+    let joined = format!(",\"workspace\":\"{}\"", id.unwrap());
+    let text = saved.unwrap().to_string();
+    assert_eq!(
+        text.matches(&joined).count(),
+        2,
+        "both tabs join the workspace"
+    );
+    let mut saved: serde_json::Value = serde_json::from_str(&text.replace(&joined, "")).unwrap();
     let left = saved["left_dock"]["panel"]["children"]
         .as_array_mut()
         .unwrap();
@@ -202,7 +210,7 @@ fn a_layout_saved_by_0_6_0_keeps_its_panels_tabs_as_council_s(cx: &mut TestAppCo
         assert!(w.try_find("dock.missing").is_none(), "no placeholder");
         assert!(w.try_find("tab.council").is_some());
     });
-    let kept = cx.update(|_, cx| {
+    let kept = app(cx, |cx| {
         let area = dock::zones(cx).unwrap();
         dock::docs(area.read(cx))
             .iter()
@@ -653,40 +661,32 @@ fn a_saved_center_from_before_workspaces_joins_the_current_one_and_a_doc_that_no
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    let app = cx.sb.repo("app");
-    show(cx, file(&app, "src/index.ts"));
+    let (index, readme) = (
+        file(&cx.sb.repo("app"), "src/index.ts"),
+        diff(cx, "README.md"),
+    );
+    show(cx, index);
+    cx.update(|w, cx| w.double_click("doc.file.src/index.ts", cx));
+    show_diff(cx, &readme);
     let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
     let text = saved.unwrap().to_string();
     let id = cx.workspace(|w, _| w.id().unwrap().to_string());
     let old = text.replace(&format!("\"workspace\":\"{id}\""), "\"workspace\":null");
-    assert_ne!(old, text);
-    let old = old.replace("\"File\":{", "\"Gone\":{\"x\":1},\"Was\":{");
+    let old = old.replace("\"Diff\":{", "\"Gone\":{\"x\":1},\"Was\":{");
+    assert!(!old.contains(&id) && old.contains("Gone"));
     let old: serde_json::Value = serde_json::from_str(&old).unwrap();
     cx.update(|_, cx| ui_state::set("dock.layout", old, cx));
-    let again = reopen(cx);
-    let left = in_window(cx, again, |w, _| {
-        (
-            w.try_find("dock.missing").is_none(),
-            w.find("chip.code").description().map(String::from),
-        )
-    });
-    assert_eq!(left, (true, Some("0".into())), "dropped, no placeholder");
 
-    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
-    let mut text = saved.unwrap().to_string();
-    if !text.contains("src/index.ts") {
-        show(cx, file(&app, "src/index.ts"));
-        let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
-        text = saved.unwrap().to_string();
-    }
-    let old = text.replace(&format!("\"workspace\":\"{id}\""), "\"workspace\":null");
-    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
-    cx.update(|_, cx| ui_state::set("dock.layout", old, cx));
     let again = reopen(cx);
-    let drawn = in_window(cx, again, |w, _| {
-        w.try_find("doc.file.src/index.ts").is_some()
+    in_window(cx, again, |w, _| {
+        assert!(w.try_find("dock.missing").is_none(), "no placeholder");
+        assert!(
+            w.try_find("doc.file.src/index.ts").is_some(),
+            "an old tab joins the current workspace"
+        );
+        let n = w.find("chip.code").description().map(String::from);
+        assert_eq!(n.as_deref(), Some("1"), "the diff is dropped");
     });
-    assert!(drawn, "an old tab joins the current workspace");
 }
 
 #[gpui_kit::test]
@@ -893,6 +893,7 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     assert!(cx.settings(|s| s.workspaces.iter().any(|w| w.name == "Other")));
     let said = cx.activity(|a, _| a.message.clone()).map(|m| m.text);
     assert!(said.is_some_and(|t| t.starts_with("Close its terminal tabs first")));
+    cx.press("escape");
 
     let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
     let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
@@ -901,7 +902,6 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     cx.update(|w, cx| w.within(SharedString::from(id)).click("tab.close", cx));
     settle(cx);
     switch(cx, "Default");
-    cx.press("escape");
     cx.click("workspaces");
     let row = (0usize..8)
         .map(|i| ("workspaces.row", i))
