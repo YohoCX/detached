@@ -18,7 +18,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
 | `panel.project` | Project tree app | Cmd+1 | M1 | F |
 | `panel.log` | Git log app | Cmd+9 | M2 | F |
-| `panel.panels` | Panels app | — | P1 | P1 |
+| `panel.council` | Council app | — | P1 | P1 |
 | `panel.docs` | Docs app | — | H7 | H7 |
 | `panel.processes` | Processes app | — | H9 | H9 |
 | `panel.commit` | Commit panel | Cmd+0 | M3 | — |

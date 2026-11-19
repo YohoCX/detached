@@ -38,5 +38,5 @@ host tools ride the session's own pipes; the gateway address and its firewall ru
   - host tools in place of the shell.
 - **Later:** a native Windows sandbox (AppContainer or a restricted token with a proxy allowlist),
   in docs/BACKLOG.md.
-- **Plan:** [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §4;
+- **Plan:** [PLAN-COUNCIL.md](../../PLAN-COUNCIL.md) §3, §4;
   [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §5, H0b.

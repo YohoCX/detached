@@ -1,5 +1,5 @@
+use detached_core::council::marks::{self, Council, Mark};
 use detached_core::error::Result;
-use detached_core::panel::marks::{self, Mark, Panels};
 use detached_core::state::AppState;
 use detached_core::store::{Kind, RepoStore, Scope};
 use gpui_kit::base::{ObservedElement, TestSupportExt};
@@ -94,11 +94,11 @@ impl Page {
 }
 
 impl Page {
-    /// The panels' trust marks for this repo: the repo, its workspaces and marked branches.
+    /// Council's trust marks for this repo: the repo, its workspaces and marked branches.
     fn marks(&self, cx: &Context<Self>) -> Option<ObservedElement<Stateful<Div>>> {
         let repo = self.repo.clone()?;
         let settings = kernel::settings::Settings::get(cx);
-        let p: Panels = settings.block(marks::BLOCK).unwrap_or_default();
+        let p: Council = settings.block(marks::BLOCK).unwrap_or_default();
         let trusted = |on: bool| match on {
             true => chip("trusted", Tone::Good, cx),
             false => chip("not trusted", Tone::Muted, cx),
@@ -217,16 +217,16 @@ impl Page {
                     )),
             );
         }
-        let about = "A trusted subject runs panels unsandboxed, anything else a sandboxed \
+        let about = "A trusted subject runs councils unsandboxed, anything else a sandboxed \
                      read-only review. Kept on this machine.";
-        let trust = card(Some("Panels trust"), Some(about.into()), rows, cx);
+        let trust = card(Some("Council trust"), Some(about.into()), rows, cx);
         Some(trust.id("sharing.marks").test_support())
     }
 }
 
 impl Render for Page {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let about = "Where this repository's agent setup lives, and what panels may trust.";
+        let about = "Where this repository's agent setup lives, and what councils may trust.";
         let refresh = self.data.as_ref().map(|_| {
             refresh("sharing.refresh", !self.busy, cx, |this, cx| {
                 if let Some(data) = &this.data {

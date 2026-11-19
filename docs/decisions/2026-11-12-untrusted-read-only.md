@@ -27,5 +27,5 @@ orchestrator-mode decision for untrusted subjects.
   - clones filling the disk.
 - **Rejected:** the sandboxed clone with an in-sandbox bundle, kept as a backlog feature with its
   own spike.
-- **Plan:** [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §4, §12;
+- **Plan:** [PLAN-COUNCIL.md](../../PLAN-COUNCIL.md) §3, §4, §12;
   [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §5.

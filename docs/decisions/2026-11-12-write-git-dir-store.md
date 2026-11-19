@@ -9,5 +9,5 @@ Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 - Why: per-repo data follows every linked worktree, stays out of the working tree and is never
   pushed or cloned.
 - Rejected: a `.revmux/`-style folder in the working tree.
-- Test: PLAN-AGENT-HOST H2, a write there reloads no status; PLAN-PANELS P5, a fetched MR head is
+- Test: PLAN-AGENT-HOST H2, a write there reloads no status; PLAN-COUNCIL P5, a fetched MR head is
   pruned with its run.

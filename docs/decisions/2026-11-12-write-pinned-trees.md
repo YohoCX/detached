@@ -27,7 +27,7 @@ Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
   mode their commits are the work the owner reviews.
 - Rejected: running participants in the owner's worktree, and a shared detached tree that keeps no
   commits.
-- Test: PLAN-PANELS P2:
+- Test: PLAN-COUNCIL P2:
   - a branch that commits a `post-checkout` hook and an LFS filter makes trees with nothing run;
   - the run-end cases;
   - an existing `detached-run` branch refuses the run;

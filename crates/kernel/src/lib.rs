@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod agents;
 pub mod blocking;
+pub mod council;
 pub mod crash;
 pub mod doc;
 pub mod docs;
@@ -13,7 +14,6 @@ pub mod host;
 pub mod inbox;
 pub mod invalidate;
 pub mod nav;
-pub mod panel;
 pub mod proc;
 pub mod repo;
 pub mod resource;
@@ -43,7 +43,7 @@ pub fn init(core: Arc<AppState>, cx: &mut App) {
     agents::init(cx);
     session::init(cx);
     inbox::init(cx);
-    panel::live::init(cx);
+    council::live::init(cx);
     invalidate::init(cx);
     workspace::init(cx);
 }

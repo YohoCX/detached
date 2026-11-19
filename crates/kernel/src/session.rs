@@ -135,7 +135,7 @@ pub enum Item {
     Woken,
 }
 
-/// A panel participant's place: whom its tools answer as, and the repo whose acceptance of its
+/// A council participant's place: whom its tools answer as, and the repo whose acceptance of its
 /// tree's trust files counts; None never loads them. It takes no snapshots.
 #[derive(Clone, Debug)]
 pub struct Seat {
@@ -394,7 +394,7 @@ impl Session {
         Session::open_as(spec, past, None, cx)
     }
 
-    /// `open` for a panel participant in its seat.
+    /// `open` for a council participant in its seat.
     pub fn open_as(
         mut spec: Spec,
         past: Option<String>,

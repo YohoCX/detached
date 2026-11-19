@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod chat;
+pub mod council;
 pub mod dock;
 pub mod docs;
 pub mod events;
@@ -10,7 +11,6 @@ pub mod keymap;
 pub mod nav;
 pub mod notices;
 pub mod owner;
-pub mod panels;
 pub mod processes;
 pub mod repos;
 pub mod search;
@@ -38,7 +38,7 @@ pub fn register(cx: &mut App) {
         search::register(cx),
         terminal::register(cx),
         events::register(cx),
-        panels::register(cx),
+        council::register(cx),
         docs::register(cx),
         processes::register(cx),
     ];

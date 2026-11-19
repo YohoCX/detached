@@ -13,4 +13,4 @@ Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
 - Why: in orchestrator mode the owner takes a finder's work, or drops it, without leaving the run.
 - Rejected: merge commits and conflict resolution in the client; Merge for a remote-branch or MR
   subject, whose branch is kept for the owner to push.
-- Test: PLAN-PANELS P2.
+- Test: PLAN-COUNCIL P2.

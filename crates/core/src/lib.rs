@@ -4,6 +4,7 @@ pub mod api;
 // A backend's protocol stays in a private module of its crate; only its constructor leaves it.
 pub mod backend;
 mod claude;
+pub mod council;
 pub mod crash;
 pub mod docs;
 pub mod env;
@@ -13,7 +14,6 @@ pub mod git;
 pub mod host;
 pub mod os;
 pub mod owner;
-pub mod panel;
 pub mod paths;
 pub mod proc;
 pub mod processes;

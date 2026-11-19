@@ -23,7 +23,7 @@ ui-test:
 # `claude` and runs a 3-minute command. A missing one fails.
 agent-test:
 	cargo test -p detached-kernel --lib session::tests::real -- --ignored
-	cargo test -p detached-kernel --lib panel::tests::real -- --ignored
+	cargo test -p detached-kernel --lib council::tests::real -- --ignored
 
 # The owner's, never CI's: Codex's live rows through the bun build of its adapter, on his own `codex`
 # and login. Three short model turns; each checks his config.toml unchanged.

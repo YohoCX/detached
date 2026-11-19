@@ -361,7 +361,7 @@ fn a_session_gone_mid_command_leaves_no_process(cx: &mut TestAppContext) {
     wait_for(cx, Duration::from_secs(30), |_| !running(&marker));
 }
 
-/// Panels' stall rule counts a tool call in progress as activity.
+/// Council's stall rule counts a tool call in progress as activity.
 #[gpui::test]
 #[ignore = "make agent-test"]
 fn a_three_minute_command_reports_in_progress_before_it_ends(cx: &mut TestAppContext) {

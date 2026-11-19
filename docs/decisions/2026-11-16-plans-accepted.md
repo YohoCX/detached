@@ -5,7 +5,7 @@ listed to him: "сделай всё, письмо я уже написал." (Do
 
 ## What was decided
 
-- **H1.** PLAN-AGENT-HOST and PLAN-PANELS are accepted as they stand after review round 16, with
+- **H1.** PLAN-AGENT-HOST and PLAN-COUNCIL are accepted as they stand after review round 16, with
   the seven repo writes of host §16 (`2026-11-12-write-*.md`).
 - **H11's three choices stand:**
   - the chat starts its `claude` as soon as it shows, so the account, the limits and the

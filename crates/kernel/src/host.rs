@@ -21,7 +21,7 @@ use crate::resource::Interest;
 use crate::session::{self, Answer, Item, State};
 use crate::skills;
 use crate::workspace::Workspace;
-use exec::{FindingSnap, Need, PanelSnap, ProcSnap, RepoSnap, SessionSnap, Snap};
+use exec::{CouncilSnap, FindingSnap, Need, ProcSnap, RepoSnap, SessionSnap, Snap};
 
 mod exec;
 #[cfg(test)]
@@ -36,8 +36,8 @@ pub struct Identity {
     /// None reads the workspace.
     pub subject: Option<Subject>,
     pub can: &'static [&'static str],
-    /// A panel participant's own corner of its run.
-    pub panel: Option<Scope>,
+    /// A council participant's own corner of its run.
+    pub council: Option<Scope>,
     /// The session asking, whose `inbox` and `group` it reads.
     pub session: Option<String>,
     /// The repos it works in, kept from its open; None reads the current workspace's.
@@ -65,7 +65,7 @@ impl Identity {
         Identity {
             subject: None,
             can: &[],
-            panel: None,
+            council: None,
             session: None,
             repos: None,
         }
@@ -77,16 +77,16 @@ impl Identity {
         Identity {
             subject: Some(Subject { repo, mr }),
             can: REPORTS,
-            panel: None,
+            council: None,
             session: None,
             repos: None,
         }
     }
 
-    /// A panel participant's: its subject's repo, its corner of the run, the actions of its stage.
+    /// A council participant's: its subject's repo, its corner of the run, the actions of its stage.
     pub fn participant(repo: &str, scope: Scope, can: &'static [&'static str]) -> Identity {
         Identity {
-            panel: Some(scope),
+            council: Some(scope),
             can,
             ..Identity::subject(repo, None)
         }
@@ -115,7 +115,7 @@ impl Identity {
         if !self.can.contains(&act.name()) {
             return Err(format!("This session cannot {}.", act.name()));
         }
-        let mine = self.panel.as_ref().and_then(|p| p.finding.as_deref());
+        let mine = self.council.as_ref().and_then(|p| p.finding.as_deref());
         match (act, mine) {
             (Act::ReportVerdict(v), Some(f)) if v.finding != f => {
                 Err(format!("This session judges finding {f} alone."))
@@ -296,25 +296,25 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
         group: group.map_or(vec![], |(id, g)| {
             g.members.iter().filter(|x| *x != id).cloned().collect()
         }),
-        panels: panels(cx, who),
+        councils: councils(cx, who),
         env: Some(crate::core(cx).env()),
     }
 }
 
-/// The live panels `who` reads: the owner every one, a participant its own run with its own
+/// The live councils `who` reads: the owner every one, a participant its own run with its own
 /// findings, a verifier the one it judges; another session none.
-fn panels(cx: &App, who: &Identity) -> Vec<PanelSnap> {
-    if who.subject.is_some() && who.panel.is_none() {
+fn councils(cx: &App, who: &Identity) -> Vec<CouncilSnap> {
+    if who.subject.is_some() && who.council.is_none() {
         return vec![];
     }
-    let scope = who.panel.as_ref();
+    let scope = who.council.as_ref();
     let mut all = vec![];
-    for p in crate::panel::live::all(cx) {
+    for p in crate::council::live::all(cx) {
         let p = p.read(cx);
         if scope.is_some_and(|s| s.run != p.run) {
             continue;
         }
-        let mine = |f: &&detached_core::panel::record::Found| match scope {
+        let mine = |f: &&detached_core::council::record::Found| match scope {
             None => true,
             Some(s) => s
                 .finding
@@ -334,7 +334,7 @@ fn panels(cx: &App, who: &Identity) -> Vec<PanelSnap> {
             verdict: f
                 .verdict
                 .as_ref()
-                .map(|_| detached_core::panel::record::verdict(f)),
+                .map(|_| detached_core::council::record::verdict(f)),
         });
         let seen = p
             .state
@@ -349,7 +349,7 @@ fn panels(cx: &App, who: &Identity) -> Vec<PanelSnap> {
                 format!("{:?}", x.status).to_lowercase(),
             ]
         });
-        all.push(PanelSnap {
+        all.push(CouncilSnap {
             run: p.run.clone(),
             mode: p.start.mode.clone(),
             stage: p.state.stage.map(|s| format!("{s:?}").to_lowercase()),

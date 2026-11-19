@@ -14,5 +14,5 @@ Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
   as the owner. Changed hook files are shown as their own diff before the click.
 - Why: the owner takes a fix without leaving the client, and their tree is never left mid-merge.
 - Rejected: merge commits and conflict resolution in the client; an automatic merge.
-- Test: PLAN-PANELS P4: a dirty tree, a non-fast-forward subject, a `.husky/post-merge` that never
+- Test: PLAN-COUNCIL P4: a dirty tree, a non-fast-forward subject, a `.husky/post-merge` that never
   runs, a remote-branch subject with no Merge; P5: an MR subject with no Merge.

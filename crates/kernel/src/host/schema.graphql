@@ -5,7 +5,7 @@ type Query {
   workspace: Workspace!
   repo(path: String!): Repo
   sessions(repo: String): [Session!]!
-  panels: [Panel!]!                          # a participant sees its own run alone
+  councils: [Council!]!                      # a participant sees its own run alone
   inbox(all: Boolean): [Message!]!           # this session's unread messages, or all; read once returned
   group: [Session!]!                         # the sessions `send` reaches: none outside an owner's group
 }
@@ -22,8 +22,8 @@ type Repo {
 }
 type Commit { sha: String!  author: String!  subject: String! }
 type Match { path: String!  line: Int!  text: String! }
-type Panel { run: String!  mode: String!  stage: String  participants: [Participant!]!
-             findings: [Finding!]! }
+type Council { run: String!  mode: String!  stage: String  participants: [Participant!]!
+               findings: [Finding!]! }
 type Participant { name: String!  role: String!  model: String!  state: String! }
 type Finding { id: ID!  severity: String!  file: String!  line: Int!  title: String!  body: String!
                verdict: String }

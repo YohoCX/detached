@@ -3,9 +3,9 @@
 use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
+use detached_core::council::tree;
 use detached_core::docs::{Doc, Docs, Section};
 use detached_core::env::Env;
-use detached_core::panel::tree;
 use detached_core::processes::Agents;
 use detached_core::skills::{Skill, Source};
 use detached_core::types::{FileChange, MergeRequest, MrState, RepoInfo, RepoStatus};
@@ -32,14 +32,14 @@ pub struct Snap {
     pub repos: Vec<RepoSnap>,
     pub current: Option<String>,
     pub sessions: Vec<SessionSnap>,
-    pub panels: Vec<PanelSnap>,
+    pub councils: Vec<CouncilSnap>,
     pub env: Option<Env>,
     /// The asking session's messages, and the ids of the others in its group.
     pub inbox: Vec<Message>,
     pub group: Vec<String>,
 }
 
-pub struct PanelSnap {
+pub struct CouncilSnap {
     pub run: String,
     pub mode: String,
     pub stage: Option<String>,
@@ -150,7 +150,7 @@ enum Node<'a> {
     Skill(&'a Skill),
     /// A doc's section, or the whole doc.
     Doc(&'a Doc, Option<&'a Section>),
-    Panel(&'a PanelSnap),
+    Council(&'a CouncilSnap),
     Participant(&'a [String; 4]),
     Finding(&'a FindingSnap),
     /// A value with fields of its own: a commit, a match.
@@ -214,24 +214,26 @@ const RESOLVERS: &[(&str, &str, Resolve)] = &[
     ("Message", "replyTo", |_, n, _| val(&n.message().reply_to)),
     ("Message", "text", |_, n, _| val(&n.message().text)),
     ("Message", "read", |_, n, _| val(n.message().read)),
-    ("Query", "panels", |c, _, _| {
-        Ok(Out::List(c.snap.panels.iter().map(Node::Panel).collect()))
-    }),
-    ("Panel", "run", |_, n, _| val(&n.panel().run)),
-    ("Panel", "mode", |_, n, _| val(&n.panel().mode)),
-    ("Panel", "stage", |_, n, _| val(&n.panel().stage)),
-    ("Panel", "participants", |_, n, _| {
+    ("Query", "councils", |c, _, _| {
         Ok(Out::List(
-            n.panel()
+            c.snap.councils.iter().map(Node::Council).collect(),
+        ))
+    }),
+    ("Council", "run", |_, n, _| val(&n.council().run)),
+    ("Council", "mode", |_, n, _| val(&n.council().mode)),
+    ("Council", "stage", |_, n, _| val(&n.council().stage)),
+    ("Council", "participants", |_, n, _| {
+        Ok(Out::List(
+            n.council()
                 .participants
                 .iter()
                 .map(Node::Participant)
                 .collect(),
         ))
     }),
-    ("Panel", "findings", |_, n, _| {
+    ("Council", "findings", |_, n, _| {
         Ok(Out::List(
-            n.panel().findings.iter().map(Node::Finding).collect(),
+            n.council().findings.iter().map(Node::Finding).collect(),
         ))
     }),
     ("Participant", "name", |_, n, _| val(&n.participant()[0])),
@@ -441,8 +443,10 @@ impl<'a> Node<'a> {
         };
         s
     }
-    fn panel(self) -> &'a PanelSnap {
-        let Node::Panel(p) = self else { unreachable!() };
+    fn council(self) -> &'a CouncilSnap {
+        let Node::Council(p) = self else {
+            unreachable!()
+        };
         p
     }
     fn participant(self) -> &'a [String; 4] {
