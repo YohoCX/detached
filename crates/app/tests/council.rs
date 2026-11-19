@@ -1046,6 +1046,14 @@ fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_rou
     app.click("council.finding.f1-1");
     app.click("council.dismiss");
     app.input("the caller checks the bound");
+    // The detail is short in the test's window, and its rows wrap with the platform's font.
+    let bottom =
+        |app: &mut VisualTestContext, id: &str| app.find(id.to_string()).unwrap().bounds().bottom();
+    let dy =
+        bottom(&mut app, "council.findings.detail") - bottom(&mut app, "council.dismiss.confirm");
+    let delta = ScrollDelta::Pixels(point(px(0.), dy));
+    app.update(|w, cx| w.scroll("council.findings.detail", delta, cx));
+    settle(&app);
     app.click("council.dismiss.confirm");
     wait_until(&mut app, |cx| {
         label(cx, "council.disposition").as_deref()
