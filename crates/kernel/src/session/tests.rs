@@ -740,12 +740,13 @@ fn a_trust_change_before_the_prompt_went_out_ends_the_session_unsent(
     let s = open(&f, Kind::Chat, cx);
     s.update(cx, |s, cx| {
         s.prompt("say not sent".into(), cx);
+        s.note("a note after it".into());
         s.recheck(Some("moved".into()), cx);
     });
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     s.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Trust));
-        let sent = |i: &Item| matches!(i, Item::Text(_) | Item::End { .. });
+        let sent = |i: &Item| matches!(i, Item::User(_) | Item::Text(_) | Item::End { .. });
         assert!(!s.items.iter().any(sent), "{:?}", s.items);
         assert_eq!(
             s.unsent.as_deref(),

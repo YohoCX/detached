@@ -701,8 +701,13 @@ impl Session {
             (Some(trees), None) => return self.prompted(trees, text, cx),
         };
         if !self.woken {
-            if self.items.last() == Some(&Item::User(text.clone())) {
-                self.items.pop();
+            // A note may have come after it, as a trust's while the snapshots ran.
+            if let Some(i) = self
+                .items
+                .iter()
+                .rposition(|i| matches!(i, Item::User(t) if *t == text))
+            {
+                self.items.remove(i);
             }
             self.unsent = Some(text);
         }
