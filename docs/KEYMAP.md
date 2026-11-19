@@ -45,6 +45,9 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `zone.left` | Open or close the left zone | Cmd+B | M2 | F |
 | `zone.bottom` | Open or close the bottom zone | Cmd+J | M2 | F |
 | `zone.right` | Open or close the right zone | Cmd+Alt+B | M2 | F |
+| `tabs.nextCategory` / `tabs.prevCategory` | Next / previous tab category of the center | Ctrl+Tab / Ctrl+Shift+Tab | W4 | F |
+| `tabs.next` / `tabs.prev` | Next / previous tab in the category | Cmd+Shift+] / Cmd+Shift+[ | W4 | F |
+| `tabs.docs` / `tabs.chats` / `tabs.code` | Show that category's tabs | | W4 | F |
 
 Chords are bound in the window's context, so a focused text field or editor keeps its own binding
 of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable multi-line field, and on macOS

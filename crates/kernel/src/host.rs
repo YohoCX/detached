@@ -10,7 +10,7 @@ use detached_core::error::{Error, Result};
 use detached_core::host::Act;
 use detached_core::processes::{Agents, Entry};
 use detached_core::skills::Skills;
-use detached_core::types::{MergeRequest, MrFilter};
+use detached_core::types::{MergeRequest, MrFilter, RepoInfo};
 use gpui::{App, Task};
 use serde_json::Value;
 
@@ -40,6 +40,8 @@ pub struct Identity {
     pub panel: Option<Scope>,
     /// The session asking, whose `inbox` and `group` it reads.
     pub session: Option<String>,
+    /// The repos it works in, kept from its open; None reads the current workspace's.
+    pub repos: Option<Vec<RepoInfo>>,
 }
 
 /// What a participant reads of its run: its own findings, and in verify the one it judges.
@@ -65,6 +67,7 @@ impl Identity {
             can: &[],
             panel: None,
             session: None,
+            repos: None,
         }
     }
 
@@ -76,6 +79,7 @@ impl Identity {
             can: REPORTS,
             panel: None,
             session: None,
+            repos: None,
         }
     }
 
@@ -98,6 +102,13 @@ impl Identity {
             },
             Kind::Verifier | Kind::Untrusted => Identity::subject(repo, None),
         }
+    }
+
+    /// The repos it reads: its own, or the current workspace's.
+    pub fn repos<'a>(&'a self, cx: &'a App) -> &'a [RepoInfo] {
+        self.repos
+            .as_deref()
+            .unwrap_or_else(|| Workspace::get(cx).repos())
     }
 
     pub fn may(&self, act: &Act) -> std::result::Result<(), String> {
@@ -196,7 +207,6 @@ fn ready(cx: &App, held: &Held, needs: &[Need]) -> bool {
 
 /// What `who` reads now, with the held MRs as they loaded.
 fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
-    let w = Workspace::get(cx);
     let sees = |path: &str| who.subject.as_ref().is_none_or(|s| s.repo == path);
     let mrs = |path: &str| {
         let held = held.mrs.iter().filter(|(r, ..)| r == path);
@@ -230,8 +240,8 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
             (None, None) => Err("not loaded".into()),
         })
     };
-    let repos = w
-        .repos()
+    let repos = who
+        .repos(cx)
         .iter()
         .filter(|r| sees(&r.path))
         .map(|info| RepoSnap {
@@ -278,7 +288,9 @@ fn snapshot(cx: &App, who: &Identity, held: &Held) -> Snap {
     let group = me.and_then(|id| m.group(id).map(|g| (id, g)));
     Snap {
         repos: repos.collect(),
-        current: w.current().filter(|c| sees(c)).map(String::from),
+        current: (Workspace::get(cx).current())
+            .filter(|c| sees(c))
+            .map(String::from),
         sessions: sessions.collect(),
         inbox: me.map_or(vec![], |id| m.inbox(id).to_vec()),
         group: group.map_or(vec![], |(id, g)| {

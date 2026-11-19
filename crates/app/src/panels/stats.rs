@@ -13,6 +13,9 @@ use super::*;
 
 pub(super) struct StatsDocs;
 impl DocKind for StatsDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "chats"
+    }
     fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::PanelStats { repo } = doc else {
             unreachable!()

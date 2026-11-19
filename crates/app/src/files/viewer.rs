@@ -196,6 +196,19 @@ pub(super) fn conflict_bar(cx: &App) -> impl IntoElement {
 pub struct ViewerDocs;
 
 impl DocKind for ViewerDocs {
+    /// Markdown files are Docs; other files and diffs are Code.
+    fn category(&self, doc: &Doc) -> &'static str {
+        let md = |p: &str| {
+            [".md", ".mdx", ".markdown"]
+                .iter()
+                .any(|x| p.to_lowercase().ends_with(x))
+        };
+        match doc {
+            Doc::File(l) if md(&l.path) => "docs",
+            _ => "code",
+        }
+    }
+
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
         let v = cx.new(Viewer::new);
         v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx));

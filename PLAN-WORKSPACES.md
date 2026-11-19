@@ -534,6 +534,21 @@ Done when the owner's chat lists Detached's server alone and his skills still ru
 
 ### Step W3. The workspace as context
 
+**Status (2026-11-19): built on `ws/context`, unverified: the owner ordered no test runs, so it is
+compiled and clippy-clean, its tests written and not run.** Core: `id` (made once, 8 hex),
+`readOnly` and unknown fields kept, `list_repos(id)`, `all_repos()` for the untrusted deny list and
+Fix's folder, folder calls by id (`add_folder(None, …)` the first workspace, made as Default when
+there is none), `assign_ids` run before each listing. Kernel: `Workspace::{id, name, switch, hold,
+release}`, `workspace.current`, `workspace.repo.<id>`; a switch lists in the rescan and emits
+`Switched` once its repos are in; a session keeps the repos of its open on its `Identity`, holds
+them, and its snapshots, `proc`, `watch` and the read tool read them. UI: the top bar's switcher
+(a click switches; a new workspace is switched to; rename; delete after an inline confirm), the
+sidebar shows the current workspace's folders alone, no workspace headers; the Chats app lists the
+current workspace's past chats. Choices: `active` stays unused; Delete is not yet refused while
+something runs (W4 for terminals, W5 for chats). Owner's check: his workspaces carry over with
+ids, switching shows each one's projects and restores its current repo, a chat goes on across a
+switch.
+
 Work:
 1. Core: `id`, `readOnly` (stored, no role yet), the flattened map, `list_repos(ws)`, the folder
    calls by id, the boot migration (§10).
@@ -552,6 +567,22 @@ Done when the owner's workspaces carry over, switching shows each one's projects
 running chat goes on across a switch.
 
 ### Step W4. Tabs by category
+
+**Status (2026-11-19): built on `ws/context`, unverified: compiled and clippy-clean, its tests
+written and not run, at the owner's order.** `dock::register_category`, `DocKind::category` on
+every kind, `DocTab.workspace` saved with the tab; our skin draws the chips with counts and only
+the current workspace's tabs of the shown category in each center strip, an empty state for a
+group with none, and brings the category's remembered tab forward (also after a close). Nothing is
+removed on a switch. `show_doc` matches and reuses previews in the current workspace and the doc's
+category, `tabs.<id>` keeps each workspace's category and selected tabs, the seven `tabs.*`
+actions with their chords, the terminal passes the four chorded ones. A saved doc that no longer
+parses is dropped, an old tab with no workspace joins the current one, and a workspace's delete is
+refused while its docked terminal is open, else closes its tabs. Choices: the category state lives
+in ui_state alone; side zones are not filtered by workspace either. Deviation: Doc::Chat and the
+panel docs still parse in W4 (their shapes change in W5 and W6), so the dropped-doc test uses a
+doc of an unknown shape. Owner's check: his `align-2-0` chat and `biome.json` sit in Chats and
+Code, each workspace keeps its own tabs across a switch and a restart, a docked terminal keeps
+running.
 
 Needs W3. Work: §8.
 

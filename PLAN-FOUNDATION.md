@@ -79,7 +79,7 @@ and events. In code it is a set of GPUI entities on the foreground executor:
 
 | Entity | Holds | Was |
 | --- | --- | --- |
-| `Workspace` | discovered repos (what core's `list_repos` returns), the current repo, the document shown | `Store.repos`, `current`, `shown` |
+| `Workspace` | the current workspace's `id()` and its discovered repos (core's `list_repos(id)`), the current repo, the document shown; `switch(id)` swaps them and emits `Switched`; `hold`/`release` keep a live session's repos readable off the list (PLAN-WORKSPACES §2) | `Store.repos`, `current`, `shown` |
 | `Repo`, one per repo | status, branch names, compare base, tree ref, its last outcome | five tables in `Store` keyed by a path string |
 | `Resource<T>` | a loaded value, the last error, when it loaded, a loading flag, a refresh policy (§7) | `Cache<T>` (forge only) and `last` fields in views |
 | `Activity` | jobs, notices, the status message, the log the Events app shows | `Store.ops`, `notices`, `message`, `log`, `unread` |

@@ -684,12 +684,12 @@ impl Model {
         let excluded = workspaces.iter().flat_map(|w| {
             w.excluded_repos
                 .iter()
-                .map(move |p| (w.name.clone(), p.clone()))
+                .map(move |p| (w.name.clone(), w.id.clone(), p.clone()))
         });
         let mut rows: Vec<_> = excluded
             .enumerate()
-            .map(|(i, (ws, path_))| {
-                let (w, p) = (ws.clone(), path_.clone());
+            .map(|(i, (ws, id, path_))| {
+                let (w, p) = (id, path_.clone());
                 item(path("path", path_.clone(), cx), None, cx)
                     .id(("settings.excluded", i))
                     .test_support()
@@ -702,7 +702,9 @@ impl Model {
                         cx,
                         move |_, window, cx| {
                             let (w, p) = (w.clone(), p.clone());
-                            let restored = settings_call(cx, |core| api::include_repo(core, w, p));
+                            let restored = settings_call(cx, Some(w.clone()), |core| {
+                                api::include_repo(core, w, p)
+                            });
                             cx.spawn_in(window, async move |this, cx| {
                                 restored.await;
                                 this.update_in(cx, |this, window, cx| this.reload(window, cx))

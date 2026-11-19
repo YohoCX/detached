@@ -108,14 +108,17 @@ mod tests {
     fn the_snapshot_follows_each_writer_and_a_removed_account(cx: &mut TestAppContext) {
         let _dir = crate::boot(cx);
         wait_until(cx, loaded);
-        let writers: [fn(&AppState); 13] = [
-            |s| drop(api::add_folder(s, "Office".into(), "/a".into()).unwrap()),
+        fn named(s: &AppState, name: &str) -> String {
+            let ws = api::get_settings(s).workspaces;
+            ws.into_iter().find(|w| w.name == name).unwrap().id
+        }
+        let writers: [fn(&AppState); 12] = [
+            |s| drop(api::add_folder(s, None, "/a".into()).unwrap()),
             |s| drop(api::save_workspace(s, "Home".into(), None).unwrap()),
-            |s| drop(api::set_workspace_active(s, "Home".into(), false).unwrap()),
-            |s| drop(api::exclude_repo(s, "Office".into(), "/a/b".into()).unwrap()),
-            |s| drop(api::include_repo(s, "Office".into(), "/a/b".into()).unwrap()),
-            |s| drop(api::remove_folder(s, "Office".into(), "/a".into()).unwrap()),
-            |s| drop(api::remove_workspace(s, "Home".into()).unwrap()),
+            |s| drop(api::exclude_repo(s, named(s, "Default"), "/a/b".into()).unwrap()),
+            |s| drop(api::include_repo(s, named(s, "Default"), "/a/b".into()).unwrap()),
+            |s| drop(api::remove_folder(s, named(s, "Default"), "/a".into()).unwrap()),
+            |s| api::remove_workspace(s, named(s, "Home")).unwrap(),
             |s| drop(api::set_repo_account(s, "/r".into(), Some("a1".into())).unwrap()),
             |s| {
                 drop(api::set_forge_account(s, "/r".into(), "h".into(), Some("a1".into())).unwrap())

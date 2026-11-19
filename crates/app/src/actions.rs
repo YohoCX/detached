@@ -66,6 +66,13 @@ pub const ACTIONS: &[Action] = &[
     a("zone.right", "Right Zone", Group::View),
     a("panel.docs", "Docs", Group::View),
     a("panel.processes", "Processes", Group::View),
+    a("tabs.nextCategory", "Next Tab Category", Group::View),
+    a("tabs.prevCategory", "Previous Tab Category", Group::View),
+    a("tabs.next", "Next Tab", Group::View),
+    a("tabs.prev", "Previous Tab", Group::View),
+    a("tabs.docs", "Show Docs Tabs", Group::View),
+    a("tabs.chats", "Show Chats Tabs", Group::View),
+    a("tabs.code", "Show Code Tabs", Group::View),
 ];
 
 pub fn find(id: &str) -> Option<&'static Action> {

@@ -16,7 +16,7 @@ use crate::activity::{Activity, OpEnded};
 use crate::blocking;
 use crate::repo::Repo;
 use crate::resource::{self, Input, On};
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, pick};
 
 struct Visible(bool);
 
@@ -130,19 +130,28 @@ fn pass(cx: &mut App, all: bool) {
     r.running = true;
     cx.spawn(async move |cx| {
         loop {
-            let (core, listed, all) = cx.update(|cx| {
+            let (core, listed, all, asked) = cx.update(|cx| {
                 let r = cx.global_mut::<Rescan>();
                 r.again = false;
                 let (listed, all) = (r.listed, mem::take(&mut r.all));
-                (crate::core(cx).clone(), listed, all)
+                let asked = Workspace::get(cx).wanted();
+                (crate::core(cx).clone(), listed, all, asked)
             });
-            let list = cx
-                .update(|cx| blocking::run(cx, move || api::list_repos(&core)))
+            let want = asked.clone();
+            let (id, list) = cx
+                .update(|cx| {
+                    blocking::run(cx, move || {
+                        _ = api::assign_ids(&core);
+                        let id = pick(&api::get_settings(&core).workspaces, want.as_deref());
+                        let list = id.as_deref().map(|id| api::list_repos(&core, id));
+                        (id, list.unwrap_or_default())
+                    })
+                })
                 .await;
             let repos = cx.update(|cx| {
                 let workspace = Workspace::global(cx);
                 if cx.global::<Rescan>().listed == listed {
-                    workspace.update(cx, |w, cx| w.set_repos(list, cx));
+                    workspace.update(cx, |w, cx| w.listed(asked, id, list, cx));
                 }
                 let away = cx.try_global::<Away>().map_or(0, |a| a.0);
                 let loaded = cx.try_global::<Loaded>().map(|l| &l.0);
@@ -169,10 +178,20 @@ fn pass(cx: &mut App, all: bool) {
     .detach();
 }
 
-/// The repos a settings change returned: they are listed at once, then rescanned.
-pub fn listed(cx: &mut App, list: Vec<RepoInfo>) {
+/// The repos a settings change of workspace `ws` returned: they are listed at once when it is the
+/// current one, then rescanned.
+pub fn listed(cx: &mut App, ws: Option<String>, list: Vec<RepoInfo>) {
+    let w = Workspace::global(cx);
+    if w.read(cx).wanted() == ws {
+        cx.default_global::<Rescan>().listed += 1;
+        w.update(cx, |w, cx| w.listed(ws.clone(), ws, list, cx));
+    }
+    rescan(cx);
+}
+
+/// A switch: a listing already on its way is for the workspace left, so it is dropped.
+pub(crate) fn relist(cx: &mut App) {
     cx.default_global::<Rescan>().listed += 1;
-    Workspace::global(cx).update(cx, |w, cx| w.set_repos(list, cx));
     rescan(cx);
 }
 
@@ -306,10 +325,7 @@ mod tests {
         sb.git(&repo, &["init", "-q"]);
         let detached_core::git::testutil::Sandbox { dir: _dir, state } = sb;
         state
-            .add_folder(
-                "Default".into(),
-                repo.parent().unwrap().display().to_string(),
-            )
+            .add_folder(None, repo.parent().unwrap().display().to_string())
             .unwrap();
         cx.update(|cx| crate::init(std::sync::Arc::new(state), cx));
         wait_until(cx, |cx| {

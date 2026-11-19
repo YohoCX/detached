@@ -12,10 +12,10 @@ use detached_core::host::{SendAct, WatchAct};
 use gpui::{App, AppContext, Entity, Global};
 
 use crate::forge;
+use crate::host::Identity;
 use crate::proc;
 use crate::resource::Interest;
 use crate::session::{self, Session, State};
-use crate::workspace::Workspace;
 
 /// The wake prompt.
 pub const WAKE: &str = "You have new messages";
@@ -243,8 +243,8 @@ pub fn stop(cx: &mut App, s: &Entity<Session>) {
 
 /// `watcher`'s `watch`: one message into its inbox once the process is ready or the pipeline
 /// ended.
-pub fn watch(cx: &mut App, watcher: &str, w: &WatchAct) -> Result<String> {
-    let found = Workspace::get(cx).repos().iter().find(|r| r.path == w.repo);
+pub fn watch(cx: &mut App, watcher: &str, who: &Identity, w: &WatchAct) -> Result<String> {
+    let found = who.repos(cx).iter().find(|r| r.path == w.repo);
     let repo = found.map(|r| r.name.clone());
     let repo = repo.ok_or_else(|| Error::Other(format!("This session has no repo {}.", w.repo)))?;
     if let Some(name) = &w.process {

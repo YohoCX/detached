@@ -74,6 +74,9 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 struct MrDocs;
 
 impl DocKind for MrDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Mr { repo, number } = doc.clone() else {
             unreachable!()
@@ -113,6 +116,9 @@ impl DocKind for MrDocs {
 struct JobDocs;
 
 impl DocKind for JobDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
     fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
         cx.new(|cx| JobLog::new(doc.clone(), cx)).into()
     }

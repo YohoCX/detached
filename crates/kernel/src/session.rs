@@ -213,6 +213,7 @@ pub struct Session {
     /// Taken by the recheck loop once the session started.
     changes: Option<mpsc::UnboundedReceiver<()>>,
     _watch: Option<trust::Watch>,
+    _held: gpui::Subscription,
     _tasks: Vec<Task<()>>,
 }
 
@@ -303,7 +304,7 @@ fn host_tools(
                     let id = id.unwrap_or_default();
                     let done = match &act {
                         Act::Send(m) => crate::inbox::send(cx, &id, m),
-                        Act::Watch(w) => crate::inbox::watch(cx, &id, w),
+                        Act::Watch(w) => crate::inbox::watch(cx, &id, &who, w),
                         _ => unreachable!("matched above"),
                     };
                     if done.is_ok() {
@@ -401,9 +402,17 @@ impl Session {
         cx: &mut App,
     ) -> Entity<Session> {
         let s = cx.new(|cx| {
-            let who = seat
+            let mut who = seat
                 .as_ref()
                 .map_or_else(|| Identity::of(spec.kind, &spec.repo), |s| s.who.clone());
+            let repos = who.repos(cx).to_vec();
+            let workspace = Workspace::global(cx);
+            workspace.update(cx, |w, _| repos.iter().for_each(|r| w.hold(&r.path)));
+            let held = cx.on_release(move |s: &mut Session, cx| {
+                let repos = s.who.repos.take().unwrap_or_default();
+                workspace.update(cx, |w, _| repos.iter().for_each(|r| w.release(&r.path)));
+            });
+            who.repos = Some(repos);
             let tx = cx.global::<Sessions>().tx.clone();
             spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
             let (changed, changes) = mpsc::unbounded();
@@ -447,6 +456,7 @@ impl Session {
                 changed,
                 changes: Some(changes),
                 _watch: None,
+                _held: held,
                 _tasks: vec![],
             };
             s.start(cx);
@@ -579,9 +589,9 @@ impl Session {
         self.state == State::Running || self.queued.is_some()
     }
 
-    /// The repos the session works in: its own, or each one the workspace has in its folder.
+    /// The repos the session snapshots: its own, or each one of its workspace in its folder.
     pub fn repos(&self, cx: &App) -> Vec<String> {
-        let all = Workspace::get(cx).repos();
+        let all = self.who.repos(cx);
         if all.iter().any(|r| r.path == self.spec.repo) {
             return vec![self.spec.repo.clone()];
         }

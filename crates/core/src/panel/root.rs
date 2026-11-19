@@ -163,9 +163,7 @@ mod tests {
         let ws = sb.path("ws");
         fs::create_dir_all(ws.join("r")).unwrap();
         sb.git(&ws.join("r"), &["init", "-q"]);
-        sb.state
-            .add_folder("Default".into(), ws.display().to_string())
-            .unwrap();
+        sb.state.add_folder(None, ws.display().to_string()).unwrap();
         let all = denied(&sb.state).unwrap();
         let home = sb.path("home");
         for p in [
@@ -179,11 +177,12 @@ mod tests {
         assert!(all.contains(&sb.state.data_dir) && all.contains(&ws.join("r")));
         for folder in [home, sb.dir.path().to_path_buf()] {
             sb.state
-                .add_folder("Default".into(), folder.display().to_string())
+                .add_folder(None, folder.display().to_string())
                 .unwrap();
             assert!(denied(&sb.state).is_err(), "{folder:?}");
+            let id = sb.state.get_settings().workspaces[0].id.clone();
             sb.state
-                .remove_folder("Default".into(), folder.display().to_string())
+                .remove_folder(id, folder.display().to_string())
                 .unwrap();
         }
     }
@@ -276,6 +275,6 @@ pub fn denied(core: &crate::state::AppState) -> Result<Vec<PathBuf>> {
         }
         all.push(f);
     }
-    all.extend(core.list_repos().into_iter().map(|r| PathBuf::from(r.path)));
+    all.extend(core.all_repos().into_iter().map(|r| PathBuf::from(r.path)));
     Ok(all)
 }

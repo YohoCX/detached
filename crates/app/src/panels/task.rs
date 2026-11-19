@@ -5,6 +5,9 @@ use gpui_kit::{Bounds, ContentMask, PathBuilder, canvas, fill, point, relative, 
 
 pub(super) struct TaskDocs;
 impl DocKind for TaskDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "chats"
+    }
     fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::PanelTask { repo, task } = doc else {
             unreachable!()

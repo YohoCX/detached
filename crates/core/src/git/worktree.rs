@@ -659,9 +659,9 @@ mod tests {
             .map(|ws| {
                 fs::create_dir(sb.path(ws)).unwrap();
                 let repo = sb.clone_pair(&format!("{ws}/app"));
-                sb.state.save_workspace(ws.into(), None).unwrap();
+                let id = sb.state.save_workspace(ws.into(), None).unwrap();
                 let s = repo.display().to_string();
-                sb.state.add_folder(ws.into(), s.clone()).unwrap();
+                sb.state.add_folder(Some(id), s.clone()).unwrap();
                 let path = create(
                     &sb.state,
                     &repo,
@@ -677,7 +677,7 @@ mod tests {
             })
             .collect();
         assert_ne!(mains[0].1, mains[1].1);
-        let repos = sb.state.list_repos();
+        let repos = sb.state.all_repos();
         for (main, path) in &mains {
             let trees: Vec<_> = repos
                 .iter()

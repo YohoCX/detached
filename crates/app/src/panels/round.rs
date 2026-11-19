@@ -10,6 +10,9 @@ use kernel::panel::live;
 
 pub(super) struct PanelDocs;
 impl DocKind for PanelDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "chats"
+    }
     fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Panel { repo, task, round } = doc else {
             unreachable!()

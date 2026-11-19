@@ -1,4 +1,4 @@
-//! The Repositories pane: workspace and folder headers over a tree of the repos and their worktrees.
+//! The Repositories pane: the current workspace's folders over a tree of its repos and worktrees.
 
 use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
@@ -51,7 +51,6 @@ const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
-    Workspace(String),
     Folder {
         workspace: String,
         folder: String,
@@ -78,12 +77,12 @@ struct RepoRow {
     nested: bool,
 }
 
-/// The rows per active workspace. `collapsed` holds `workspace:<name>`, folder paths and repo paths
-/// (their worktrees hidden). A `filter` keeps the repos whose path from their added folder's name
-/// holds it, ignoring case, all unfolded.
+/// The rows of workspace `w`. `collapsed` holds folder paths and repo paths (their worktrees
+/// hidden). A `filter` keeps the repos whose path from their added folder's name holds it,
+/// ignoring case, all unfolded.
 fn rows(
     repos: &[RepoInfo],
-    workspaces: &[settings::Workspace],
+    w: Option<&settings::Workspace>,
     collapsed: &BTreeSet<String>,
     filter: &str,
 ) -> Vec<Row> {
@@ -95,20 +94,12 @@ fn rows(
         &unfolded
     };
     let listed: HashSet<&str> = repos.iter().map(|r| r.path.as_str()).collect();
-    let active: Vec<_> = workspaces.iter().filter(|w| w.active).collect();
     let mut out = vec![];
-    for w in &active {
-        // Headers only tell several workspaces apart.
-        if active.len() > 1 {
-            out.push(Row::Workspace(w.name.clone()));
-            if collapsed.contains(&format!("workspace:{}", w.name)) {
-                continue;
-            }
-        }
+    if let Some(w) = w {
         let mut tree = Tree {
             repos,
             collapsed,
-            workspace: &w.name,
+            workspace: &w.id,
             out: &mut out,
         };
         let mut seen = HashSet::new();
@@ -132,7 +123,7 @@ fn rows(
             let solo = matches!(inside[..], [(_, r)] if r.path == folder);
             if !solo {
                 tree.out.push(Row::Folder {
-                    workspace: w.name.clone(),
+                    workspace: w.id.clone(),
                     folder: folder.into(),
                 });
                 if collapsed.contains(folder) {
@@ -294,8 +285,10 @@ impl Sidebar {
 
     fn shown(&self, cx: &App) -> Vec<Row> {
         let filter = self.filter.read(cx).value();
-        let ws = &Settings::get(cx).workspaces;
-        rows(Workspace::get(cx).repos(), ws, &self.collapsed, &filter)
+        let w = Workspace::get(cx);
+        let mut all = Settings::get(cx).workspaces.iter();
+        let ws = all.find(|x| Some(x.id.as_str()) == w.id());
+        rows(w.repos(), ws, &self.collapsed, &filter)
     }
 
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
@@ -317,7 +310,6 @@ impl Sidebar {
     fn row(&self, ix: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
         let item = div().w_full();
         let item = match row {
-            Row::Workspace(name) => item.child(self.workspace(ix, name, cx)),
             Row::Folder { workspace, folder } => item.child(self.folder(ix, workspace, folder, cx)),
             // Folders only exist under a folder row.
             Row::Dir { path, name, depth } => item.child(self.dir(ix, path, name, depth + 1, cx)),
@@ -330,27 +322,6 @@ impl Sidebar {
             }
             _ => item.into_any_element(),
         }
-    }
-
-    fn workspace(&self, ix: usize, name: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let key = format!("workspace:{name}");
-        let open = !self.collapsed.contains(&key);
-        let (menu, add) = (name.to_string(), name.to_string());
-        header(ix, open, cx)
-            .test_support()
-            .aria_label(name.to_string())
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)))
-            .on_aux_click(move |e, window, cx| {
-                if e.is_secondary() {
-                    workspace_menu(&menu).show(e.position(), window, cx)
-                }
-            })
-            .child(label(name))
-            .child(
-                ui::hover_button("add", Icon::Plus, format!("Add folder to {name}"), cx)
-                    .test_support()
-                    .on_click(move |_, _, cx| add_folders(Some(add.clone()), cx)),
-            )
     }
 
     fn folder(
@@ -573,10 +544,8 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ws = &Settings::get(cx).workspaces;
         let filter = self.filter.read(cx).value();
         let rows = Rc::new(self.shown(cx));
-        let none_on = !ws.is_empty() && !ws.iter().any(|w| w.active);
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| invalidate::rescan(cx);
         let t = theme(cx);
         let toolbar = div()
@@ -605,13 +574,11 @@ impl Render for Sidebar {
                             .rounded(radius::ITEM),
                     ),
             )
-            .when(!none_on, |d| {
-                d.child(
-                    ui::titled(ui::icon_button("sidebar.add", Icon::Plus, cx), "Add folder")
-                        .test_support()
-                        .on_click(|_, _, cx| add_folders(None, cx)),
-                )
-            })
+            .child(
+                ui::titled(ui::icon_button("sidebar.add", Icon::Plus, cx), "Add folder")
+                    .test_support()
+                    .on_click(|_, _, cx| add_folders(cx)),
+            )
             .child(
                 ui::titled(
                     ui::icon_button("sidebar.refresh", Icon::Refresh, cx),
@@ -630,14 +597,12 @@ impl Render for Sidebar {
                 .into_any_element()
         } else if !filter.is_empty() {
             empty("No repository matches.", cx).into_any_element()
-        } else if none_on {
-            empty("No workspace is on. Turn one on in the top bar.", cx).into_any_element()
         } else {
             empty("No repositories yet.", cx)
                 .child(
                     ui::primary_button("sidebar.addFolder", "Add folder…", cx)
                         .test_support()
-                        .on_click(|_, _, cx| add_folders(None, cx)),
+                        .on_click(|_, _, cx| add_folders(cx)),
                 )
                 .into_any_element()
         };
@@ -650,26 +615,6 @@ impl Render for Sidebar {
             .child(toolbar)
             .child(body)
     }
-}
-
-/// A workspace or folder header: chevron, then the caller's children.
-fn header(ix: usize, open: bool, cx: &App) -> Stateful<Div> {
-    let t = theme(cx);
-    div()
-        .id(("sidebar.row", ix))
-        .group(ui::HOVER)
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .h(ROW)
-        .px(px(8.))
-        .text_size(text::LABEL)
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(t.muted)
-        .hover(|s| s.text_color(t.fg))
-        .role(Role::Button)
-        .aria_expanded(open)
-        .child(slot().child(chevron(open)))
 }
 
 /// A tree row at `depth`, with a guide down each level it is nested in.
@@ -742,7 +687,6 @@ fn changed(n: usize, t: &Theme) -> impl IntoElement {
 /// A row's identity across renders.
 fn key(row: &Row) -> String {
     match row {
-        Row::Workspace(name) => format!("workspace:{name}"),
         Row::Folder { workspace, folder } => format!("{workspace}:{folder}"),
         Row::Dir { path, .. } => path.clone(),
         Row::Repo(r) => format!("{}:{}", r.workspace, r.repo.path),
@@ -754,14 +698,6 @@ fn dot(tone: Tone, t: &Theme) -> impl IntoElement {
         .id("dot")
         .test_support()
         .aria_label(format!("{tone:?}"))
-}
-
-fn label(text: &str) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .truncate()
-        .child(text.to_uppercase())
 }
 
 fn empty(text: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
@@ -844,7 +780,7 @@ fn in_workspace(
     let (ws, path) = (workspace.to_string(), path.to_string());
     move |_, cx| {
         let (ws, path) = (ws.clone(), path.clone());
-        settings_call(cx, move |core| f(core, ws, path)).detach();
+        settings_call(cx, Some(ws.clone()), move |core| f(core, ws, path)).detach();
     }
 }
 
@@ -905,18 +841,6 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
         .item("Remove from List", remove_repo(workspace, repo, solo))
 }
 
-fn workspace_menu(name: &str) -> Menu {
-    let (add, off) = (name.to_string(), name.to_string());
-    Menu::default()
-        .item("Add Folder…", move |_, cx| {
-            add_folders(Some(add.clone()), cx)
-        })
-        .item("Turn Off", move |_, cx| {
-            let name = off.clone();
-            settings_call(cx, move |core| api::set_workspace_active(core, name, false)).detach();
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use detached_core::types::{CommitSummary, FileChange};
@@ -932,37 +856,31 @@ mod tests {
         }
     }
 
-    fn ws(name: &str, folders: &[&str], active: bool) -> settings::Workspace {
+    fn ws(folders: &[&str]) -> settings::Workspace {
         settings::Workspace {
-            name: name.into(),
+            id: "a1b2c3d4".into(),
             folders: folders.iter().map(|f| f.to_string()).collect(),
-            excluded_repos: vec![],
-            active,
+            ..Default::default()
         }
     }
 
-    /// `ws:<name>`, `dir:<folder>`, then the tree indented two spaces a level: folders as `<name>/`,
+    /// `dir:<folder>`, then the tree indented two spaces a level: folders as `<name>/`,
     /// repos as their path, `+` marking a solo one and `>` a worktree.
-    fn show(
-        repos: &[RepoInfo],
-        workspaces: &[settings::Workspace],
-        collapsed: &[&str],
-    ) -> Vec<String> {
-        filtered(repos, workspaces, collapsed, "")
+    fn show(repos: &[RepoInfo], w: &settings::Workspace, collapsed: &[&str]) -> Vec<String> {
+        filtered(repos, w, collapsed, "")
     }
 
     fn filtered(
         repos: &[RepoInfo],
-        workspaces: &[settings::Workspace],
+        w: &settings::Workspace,
         collapsed: &[&str],
         filter: &str,
     ) -> Vec<String> {
         let collapsed = collapsed.iter().map(|c| c.to_string()).collect();
         let pad = |depth| "  ".repeat(depth);
-        rows(repos, workspaces, &collapsed, filter)
+        rows(repos, Some(w), &collapsed, filter)
             .into_iter()
             .map(|r| match r {
-                Row::Workspace(w) => format!("ws:{w}"),
                 Row::Folder { folder, .. } => format!("dir:{folder}"),
                 Row::Dir { name, depth, .. } => format!("{}{name}/", pad(depth)),
                 Row::Repo(r) => {
@@ -990,7 +908,7 @@ mod tests {
             "/w/p/q",
         ];
         let repos = paths.map(|p| repo(p, None));
-        let w = [ws("A", &["/w"], true)];
+        let w = ws(&["/w"]);
         let tree = [
             "dir:/w",
             "c/",
@@ -1013,7 +931,7 @@ mod tests {
     fn a_filter_keeps_matching_repos_in_their_folders_unfolded() {
         let paths = ["/w/c/api", "/w/c/web", "/w/top", "/s"];
         let repos = paths.map(|p| repo(p, None));
-        let w = [ws("A", &["/w", "/s"], true)];
+        let w = ws(&["/w", "/s"]);
         let f = |q| filtered(&repos, &w, &["/w/c"], q);
         assert_eq!(f("API"), ["dir:/w", "c/", "  /w/c/api"]);
         assert_eq!(f("c/"), ["dir:/w", "c/", "  /w/c/api", "  /w/c/web"]);
@@ -1026,26 +944,16 @@ mod tests {
     }
 
     #[test]
-    fn heads_workspaces_only_when_several_are_on() {
-        let repos = [repo("/a/x", None), repo("/b/y", None)];
-        let one = [ws("A", &["/a"], true), ws("B", &["/b"], false)];
-        assert_eq!(show(&repos, &one, &[]), ["dir:/a", "/a/x"]);
-        let two = [ws("A", &["/a"], true), ws("B", &["/b"], true)];
-        assert_eq!(
-            show(&repos, &two, &[]),
-            ["ws:A", "dir:/a", "/a/x", "ws:B", "dir:/b", "/b/y"]
-        );
-        assert_eq!(
-            show(&repos, &two, &["workspace:A"]),
-            ["ws:A", "ws:B", "dir:/b", "/b/y"]
-        );
-        assert!(show(&repos, &[ws("A", &["/a"], false)], &[]).is_empty());
+    fn shows_one_workspace_without_a_header_and_none_without_one() {
+        let repos = [repo("/a/x", None)];
+        assert_eq!(show(&repos, &ws(&["/a"]), &[]), ["dir:/a", "/a/x"]);
+        assert!(rows(&repos, None, &BTreeSet::new(), "").is_empty());
     }
 
     #[test]
     fn dedupes_folders_after_stripping_trailing_separators() {
         let repos = [repo("/a/x", None), repo(r"C:\w\y", None)];
-        let w = [ws("A", &["/a/", "/a", r"C:\w\", r"C:\w"], true)];
+        let w = ws(&["/a/", "/a", r"C:\w\", r"C:\w"]);
         assert_eq!(
             show(&repos, &w, &[]),
             ["dir:/a", "/a/x", r"dir:C:\w", r"C:\w\y"]
@@ -1059,7 +967,7 @@ mod tests {
     #[test]
     fn a_folder_that_is_its_only_repo_has_no_header() {
         let repos = [repo("/s", None), repo("/a/x", None)];
-        let w = [ws("A", &["/s", "/a"], true)];
+        let w = ws(&["/s", "/a"]);
         assert_eq!(show(&repos, &w, &["/s"]), ["+/s", "dir:/a", "/a/x"]);
     }
 
@@ -1071,7 +979,7 @@ mod tests {
             repo("/b/far-wt", Some("/a/app")),
             repo("/b/lone-wt", Some("/gone")),
         ];
-        let w = [ws("A", &["/a", "/b"], true)];
+        let w = ws(&["/a", "/b"]);
         assert_eq!(
             show(&repos, &w, &[]),
             [
@@ -1087,20 +995,10 @@ mod tests {
             show(&repos, &w, &["/a/app"]),
             ["dir:/a", "/a/app", "dir:/b", "/b/lone-wt"]
         );
-        let Row::Repo(app) = &rows(&repos, &w, &BTreeSet::new(), "")[1] else {
+        let Row::Repo(app) = &rows(&repos, Some(&w), &BTreeSet::new(), "")[1] else {
             panic!("not a repo row")
         };
         assert_eq!(app.worktrees, 2);
-    }
-
-    #[test]
-    fn a_repo_in_two_workspaces_shows_under_each() {
-        let repos = [repo("/a/lib", None)];
-        let w = [ws("A", &["/a"], true), ws("B", &["/a"], true)];
-        assert_eq!(
-            show(&repos, &w, &[]),
-            ["ws:A", "dir:/a", "/a/lib", "ws:B", "dir:/a", "/a/lib"]
-        );
     }
 
     #[test]

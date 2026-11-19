@@ -1,14 +1,21 @@
-//! The repos the active workspaces list, one `Repo` each, the current one and the document shown.
+//! The current workspace: its id, its repos with one `Repo` each, the current repo and the
+//! document shown. A switch swaps them all; what a live session holds stays.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use detached_core::api;
+use detached_core::settings;
 use detached_core::types::{RepoInfo, RepoStatus};
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
 use crate::blocking;
 use crate::doc::Doc;
 use crate::repo::Repo;
+use crate::settings::Settings;
+use crate::ui_state;
+
+const CURRENT: &str = "workspace.current";
 
 pub enum Event {
     /// `show` ran, even with the same doc: its tab comes forward and focuses it.
@@ -17,14 +24,24 @@ pub enum Event {
     Status(String),
     /// A listed repo's entity changed. Views that follow a repo by path take this.
     Changed(String),
+    /// Another workspace is current, its repos listed and its current repo back.
+    Switched,
 }
 
+type Held = (Entity<Repo>, Subscription);
+
 pub struct Workspace {
+    id: Option<String>,
+    /// The workspace a `switch` asked for, until its repos are listed.
+    to: Option<String>,
     repos: Vec<RepoInfo>,
     /// One per listed repo, in `repos`' order.
-    entities: Vec<(Entity<Repo>, Subscription)>,
+    entities: Vec<Held>,
     current: Option<String>,
     shown: Option<Doc>,
+    /// How many live sessions hold each repo, and the entities of held repos not listed.
+    held: HashMap<String, usize>,
+    kept: Vec<(String, Held)>,
 }
 
 struct GlobalWorkspace(Entity<Workspace>);
@@ -33,16 +50,30 @@ impl Global for GlobalWorkspace {}
 
 impl EventEmitter<Event> for Workspace {}
 
-/// Makes the workspace global and lists the repos.
+/// Makes the workspace global and lists the repos of the one current at the last quit.
 pub(crate) fn init(cx: &mut App) {
+    let to = ui_state::get(CURRENT, cx);
     let workspace = cx.new(|_| Workspace {
+        id: None,
+        to,
         repos: vec![],
         entities: vec![],
         current: None,
         shown: None,
+        held: HashMap::new(),
+        kept: vec![],
     });
     cx.set_global(GlobalWorkspace(workspace));
     crate::invalidate::rescan(cx);
+}
+
+/// `want` when it is a workspace, else the first one on, else the first.
+pub(crate) fn pick(all: &[settings::Workspace], want: Option<&str>) -> Option<String> {
+    let found = all.iter().find(|w| Some(w.id.as_str()) == want);
+    let found = found
+        .or_else(|| all.iter().find(|w| w.active))
+        .or(all.first());
+    found.map(|w| w.id.clone())
 }
 
 impl Workspace {
@@ -69,13 +100,56 @@ impl Workspace {
         cx.global::<GlobalWorkspace>().0.read(cx)
     }
 
+    /// The current workspace's id; None while there is none.
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    pub fn name<'a>(&self, cx: &'a App) -> Option<&'a str> {
+        let all = &Settings::get(cx).workspaces;
+        let w = all.iter().find(|w| Some(w.id.as_str()) == self.id());
+        w.map(|w| w.name.as_str())
+    }
+
+    /// The workspace to list: the one a switch asked for, else the current one.
+    pub(crate) fn wanted(&self) -> Option<String> {
+        self.to.clone().or(self.id.clone())
+    }
+
+    /// Makes workspace `id` current once its repos are listed; that listing emits `Switched`.
+    pub fn switch(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.wanted().as_deref() != Some(&id) {
+            self.to = Some(id);
+            crate::invalidate::relist(cx);
+        }
+    }
+
     pub fn repos(&self) -> &[RepoInfo] {
         &self.repos
     }
 
+    /// A listed repo's entity, or a held one's.
     pub fn repo(&self, path: &str) -> Option<&Entity<Repo>> {
-        let i = self.repos.iter().position(|r| r.path == path)?;
-        Some(&self.entities[i].0)
+        match self.repos.iter().position(|r| r.path == path) {
+            Some(i) => Some(&self.entities[i].0),
+            None => self.kept.iter().find(|(p, _)| p == path).map(|k| &k.1.0),
+        }
+    }
+
+    /// Keeps `repo`'s entity while a live session works in it, listed or not.
+    pub fn hold(&mut self, repo: &str) {
+        *self.held.entry(repo.into()).or_default() += 1;
+    }
+
+    pub fn release(&mut self, repo: &str) {
+        let Some(n) = self.held.get_mut(repo) else {
+            return;
+        };
+        *n -= 1;
+        if *n == 0 {
+            self.held.remove(repo);
+            self.kept.retain(|(p, _)| p != repo);
+        }
     }
 
     pub fn name_of<'a>(&'a self, repo: &'a str) -> &'a str {
@@ -89,7 +163,11 @@ impl Workspace {
         self.current.as_deref()
     }
 
+    /// Remembered per workspace, so a switch back restores it.
     pub fn set_current(&mut self, repo: Option<String>, cx: &mut Context<Self>) {
+        if let (Some(id), Some(r)) = (&self.id, &repo) {
+            ui_state::set(&format!("workspace.repo.{id}"), r, cx);
+        }
         self.current = repo;
         cx.notify();
     }
@@ -141,11 +219,43 @@ impl Workspace {
         })
     }
 
-    /// Keeps the entities of repos still listed, makes one for each new repo and drops the rest.
+    /// The repos of workspace `id`, picked for `asked`: a new id is a switch, which brings back
+    /// its current repo. A listing asked for a workspace no longer wanted is dropped.
+    pub(crate) fn listed(
+        &mut self,
+        asked: Option<String>,
+        id: Option<String>,
+        list: Vec<RepoInfo>,
+        cx: &mut Context<Self>,
+    ) {
+        if asked != self.wanted() {
+            return;
+        }
+        self.to = None;
+        let switched = self.id != id;
+        if switched {
+            self.current = id
+                .as_ref()
+                .and_then(|id| ui_state::get(&format!("workspace.repo.{id}"), cx));
+            if let Some(id) = &id {
+                ui_state::set(CURRENT, id, cx);
+            }
+            self.id = id;
+        }
+        self.set_repos(list, cx);
+        if switched {
+            cx.emit(Event::Switched);
+        }
+    }
+
+    /// Keeps the entities of repos still listed or held, makes one for each new repo and drops the
+    /// rest.
     pub(crate) fn set_repos(&mut self, list: Vec<RepoInfo>, cx: &mut Context<Self>) {
-        let mut old: Vec<_> = self.repos.drain(..).zip(self.entities.drain(..)).collect();
+        let old = self.repos.drain(..).zip(self.entities.drain(..));
+        let mut old: Vec<_> = old.map(|(r, e)| (r.path, e)).collect();
+        old.append(&mut self.kept);
         for r in &list {
-            let kept = old.iter().position(|(o, _)| o.path == r.path);
+            let kept = old.iter().position(|(o, _)| *o == r.path);
             let entity = match kept {
                 Some(i) => old.swap_remove(i).1,
                 None => {
@@ -158,6 +268,10 @@ impl Workspace {
             };
             self.entities.push(entity);
         }
+        self.kept = old
+            .into_iter()
+            .filter(|(p, _)| self.held.contains_key(p))
+            .collect();
         let listed = |repo: &String| list.iter().any(|r| &r.path == repo);
         if !self.current.as_ref().is_some_and(listed) {
             self.current = list.first().map(|r| r.path.clone());
@@ -198,7 +312,7 @@ mod tests {
         }
         let Sandbox { dir, state } = sb;
         let folder = dir.path().join("repos").display().to_string();
-        state.add_folder("Default".into(), folder).unwrap();
+        state.add_folder(None, folder).unwrap();
         cx.update(|cx| crate::init(Arc::new(state), cx));
         wait_until(cx, |cx| {
             let w = Workspace::get(cx);
@@ -266,6 +380,7 @@ mod tests {
                 Event::Status(r) => seen.borrow_mut().push(format!("status {r}")),
                 Event::Changed(r) => seen.borrow_mut().push(format!("changed {r}")),
                 Event::Shown => seen.borrow_mut().push("shown".into()),
+                Event::Switched => seen.borrow_mut().push("switched".into()),
             })
         });
         std::fs::write(Path::new(&a).join("f"), "y\n").unwrap();
@@ -399,6 +514,71 @@ mod tests {
         cx.run_until_parked();
         assert_eq!((of_w.get(), of_a.get()), (1, 0));
         assert_eq!(cx.read(|cx| Workspace::get(cx).current.clone()), Some(b));
+    }
+
+    #[gpui::test]
+    fn a_switch_relists_emits_once_and_brings_back_each_workspace_s_current_repo(
+        cx: &mut TestAppContext,
+    ) {
+        let (dir, _a, b) = boot(cx);
+        let core = cx.read(|cx| crate::core(cx).clone());
+        let first = cx.read(|cx| Workspace::get(cx).id().unwrap().to_string());
+        let other = core.save_workspace("Other".into(), None).unwrap();
+        let later = dir.path().join("later").display().to_string();
+        core.add_folder(Some(other.clone()), later).unwrap();
+        let workspace = cx.read(Workspace::global);
+        workspace.update(cx, |w, cx| w.set_current(Some(b.clone()), cx));
+        let switched = Rc::new(Cell::new(0));
+        let n = switched.clone();
+        let _s = cx.update(|cx| {
+            cx.subscribe(&workspace, move |_, e: &Event, _| {
+                if matches!(e, Event::Switched) {
+                    n.set(n.get() + 1)
+                }
+            })
+        });
+        let switch = |cx: &mut TestAppContext, id: &str| {
+            let id = id.to_string();
+            workspace.update(cx, |w, cx| w.switch(id.clone(), cx));
+            wait_until(cx, |cx| {
+                Workspace::get(cx).id() == Some(id.as_str()) && !crate::invalidate::rescanning(cx)
+            });
+        };
+        switch(cx, &other);
+        assert_eq!(switched.get(), 1);
+        cx.read(|cx| {
+            let w = Workspace::get(cx);
+            let names: Vec<_> = w.repos().iter().map(|r| r.name.as_str()).collect();
+            assert_eq!(names, ["c"]);
+            assert_eq!(w.current(), Some(w.repos()[0].path.as_str()));
+            assert_eq!(w.name(cx), Some("Other"));
+            assert!(w.repo(&b).is_none(), "nothing holds it");
+            assert_eq!(ui_state::get::<String>(CURRENT, cx), Some(other.clone()));
+        });
+        switch(cx, &first);
+        assert_eq!(switched.get(), 2);
+        cx.read(|cx| {
+            let w = Workspace::get(cx);
+            assert_eq!(w.repos().len(), 2);
+            assert_eq!(w.current(), Some(b.as_str()), "its current repo is back");
+        });
+    }
+
+    #[gpui::test]
+    fn a_held_repo_keeps_its_entity_off_the_list_until_released(cx: &mut TestAppContext) {
+        let (_dir, a, b) = boot(cx);
+        let workspace = cx.read(Workspace::global);
+        let kept = entity(cx, &a);
+        workspace.update(cx, |w, cx| {
+            w.hold(&a);
+            let rb = w.repos[1].clone();
+            w.set_repos(vec![rb.clone()], cx);
+            assert!(w.repo(&a).is_some_and(|e| *e == kept));
+            assert!(w.repos().iter().all(|r| r.path != a));
+            w.release(&a);
+            assert!(w.repo(&a).is_none());
+            assert_eq!(w.current(), Some(b.as_str()));
+        });
     }
 
     #[gpui::test]

@@ -23,6 +23,8 @@ pub trait DocKind {
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView;
     /// The tab's element id, stable for tests.
     fn id(&self, doc: &Doc) -> SharedString;
+    /// The center category its tab is in, one `register_category` made.
+    fn category(&self, doc: &Doc) -> &'static str;
     fn title(&self, doc: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString;
     /// The tab's tooltip.
     fn tip(&self, _: &Doc, _: &App) -> Option<SharedString> {
@@ -68,6 +70,9 @@ pub fn doc_kind(kind: &str, cx: &App) -> Option<Rc<dyn DocKind>> {
 
 pub struct DocTab {
     pub doc: Doc,
+    /// The workspace it was opened in; None for a tab of a layout from before workspaces, until
+    /// one is current.
+    pub workspace: Option<String>,
     /// A preview tab takes the next file or diff shown; a double click on it keeps it.
     pub keep: bool,
     kind: Rc<dyn DocKind>,
@@ -80,12 +85,16 @@ pub struct DocTab {
 struct Saved {
     doc: Doc,
     keep: bool,
+    #[serde(default)]
+    workspace: Option<String>,
 }
 
 impl DocTab {
     pub fn new(doc: Doc, kind: Rc<dyn DocKind>, keep: bool, cx: &mut App) -> Entity<DocTab> {
+        let workspace = Workspace::get(cx).id().map(String::from);
         cx.new(|cx| DocTab {
             doc,
+            workspace,
             keep,
             kind,
             view: None,
@@ -130,6 +139,10 @@ impl DocTab {
     pub fn tip(&self, cx: &App) -> Option<SharedString> {
         self.kind.tip(&self.doc, cx)
     }
+
+    pub fn category(&self) -> &'static str {
+        self.kind.category(&self.doc)
+    }
 }
 
 pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
@@ -138,7 +151,9 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
     };
     let s: Saved = serde_json::from_value(v.clone()).ok()?;
     let kind = doc_kind(s.doc.kind(), cx)?;
-    Some(Arc::new(DocTab::new(s.doc, kind, s.keep, cx)))
+    let tab = DocTab::new(s.doc, kind, s.keep, cx);
+    tab.update(cx, |t, _| t.workspace = s.workspace);
+    Some(Arc::new(tab))
 }
 
 impl EventEmitter<PanelEvent> for DocTab {}
@@ -174,12 +189,14 @@ impl Panel for DocTab {
     }
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if !active {
+        // Another workspace's tab, hidden, can be its group's active one.
+        if !active || !super::tabs::mine(self, cx) {
             return;
         }
         if let Some(v) = &self.view {
             self.kind.activated(v, window, cx);
         }
+        super::tabs::selected(self, cx);
         let doc = self.doc.clone();
         Workspace::global(cx).update(cx, |w, cx| w.set_shown(Some(doc), cx));
     }
@@ -200,6 +217,7 @@ impl Panel for DocTab {
         let saved = Saved {
             doc: self.doc.clone(),
             keep: self.keep,
+            workspace: self.workspace.clone(),
         };
         PanelState {
             info: PanelInfo::Panel(serde_json::to_value(saved).unwrap_or_default()),

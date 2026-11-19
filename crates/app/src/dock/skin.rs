@@ -18,7 +18,7 @@ use gpui_kit::{
     size,
 };
 
-use super::{DocTab, DragDoc, Tab, missing};
+use super::{DocTab, DragDoc, Tab, missing, tabs};
 use crate::ui::{self, GAP, Icon, radius, theme};
 use crate::{actions, keymap};
 
@@ -238,7 +238,7 @@ impl DockAreaRenderer for Skin {
     }
 
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
-        Rc::new(Group)
+        Rc::new(Group(self.area.clone()))
     }
 }
 
@@ -269,7 +269,73 @@ fn grip(p: DockPlacement) -> &'static str {
     }
 }
 
-struct Group;
+struct Group(WeakEntity<DockArea>);
+
+impl Group {
+    /// Whether the group is in the center, where tabs show by workspace and category.
+    fn center(&self, group: &TabGroupContext, cx: &App) -> bool {
+        self.0.upgrade().is_some_and(|a| {
+            let tree = a.read(cx).layout(DockPlacement::Center);
+            tree.is_some_and(|t| t.find_node(group.node()).is_some())
+        })
+    }
+}
+
+/// Whether a tab is drawn in a center group: an app always, a document of the current workspace
+/// and category.
+fn drawn(label: &Label, cx: &App) -> bool {
+    label
+        .doc
+        .as_ref()
+        .is_none_or(|d| tabs::in_view(d.read(cx), cx))
+}
+
+/// The category chips at the start of a center strip, each with its count of tabs here.
+fn chips(labels: &[Label], cx: &App) -> Vec<AnyElement> {
+    let t = theme(cx);
+    let now = tabs::category(cx);
+    tabs::categories(cx)
+        .into_iter()
+        .map(|c| {
+            let n = labels
+                .iter()
+                .filter_map(|l| l.doc.as_ref())
+                .filter(|d| tabs::mine(d.read(cx), cx) && d.read(cx).category() == c.id)
+                .count();
+            let on = c.id == now;
+            div()
+                .id(SharedString::from(format!("chip.{}", c.id)))
+                .test_support()
+                .role(Role::Tab)
+                .aria_toggled(on.into())
+                .aria_label(c.title)
+                .aria_description(n.to_string())
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(5.))
+                .px(px(8.))
+                .py(px(3.))
+                .rounded(radius::ICON_BUTTON)
+                .font_weight(FontWeight::SEMIBOLD)
+                .map(|d| match on {
+                    true => d.bg(t.selected).text_color(t.fg),
+                    false => d
+                        .text_color(t.muted)
+                        .hover(|s| s.bg(t.hover).text_color(t.fg)),
+                })
+                .on_click(move |_, window, cx| tabs::show(c.id, window, cx))
+                .child(c.title)
+                .child(
+                    div()
+                        .text_size(crate::ui::text::SMALL)
+                        .text_color(if on { t.accent } else { t.muted })
+                        .child(n.to_string()),
+                )
+                .into_any_element()
+        })
+        .collect()
+}
 
 /// What a tab shows: an app, a document, or a saved panel this build lacks.
 struct Label {
@@ -322,97 +388,125 @@ impl TabGroupRenderer for Group {
             .when(docs, |f| f.bg(theme(cx).code))
     }
 
-    fn render_tab_bar(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> AnyElement {
+    fn render_tab_bar(
+        &self,
+        group: &TabGroupContext,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let labels = labels(group, cx);
         let t = theme(cx);
         let collapsed = group.is_collapsed();
         let active = (!collapsed).then(|| group.active_ix());
         let count = group.panels().len();
         let ids: Vec<_> = group.panels().iter().map(|p| p.panel_id(cx)).collect();
-        let tabs = labels.into_iter().enumerate().map(|(ix, l)| {
-            let (on, id) = (active == Some(ix), ids[ix]);
-            let preview = l.doc.as_ref().is_some_and(|d| !d.read(cx).keep);
-            // The kit keeps the last tab of a zone; a document still closes, to an empty center.
-            let closable = l.doc.is_some() || group.is_panel_closable(id, cx);
-            let (clicked, dropped, group_) = (group.clone(), group.clone(), group.clone());
-            let doc = l.doc.clone();
-            let closed = move |window: &mut Window, cx: &mut App| match &doc {
-                Some(d) => super::close_doc(d.clone(), window, cx),
-                None => group_.close(id, window, cx),
-            };
-            let closed = Rc::new(closed);
-            let (title, kept) = (l.title.clone(), l.doc.clone());
-            let close = closable.then(|| {
-                let closed = closed.clone();
-                ui::icon_button("tab.close", Icon::Close.size(px(10.)), cx)
+        let center = self.center(group, cx);
+        let chips = match center {
+            true => chips(&labels, cx),
+            false => vec![],
+        };
+        // A closed tab or a switch can leave a hidden tab active: the shown category's comes forward.
+        if center && labels.get(group.active_ix()).is_some_and(|l| !drawn(l, cx)) {
+            let pick = self
+                .0
+                .upgrade()
+                .and_then(|a| tabs::pick(a.read(cx), &ids, group.active_ix(), cx));
+            if let Some(ix) = pick.and_then(|id| ids.iter().position(|i| *i == id)) {
+                let g = group.clone();
+                window.defer(cx, move |window, cx| g.select_tab(ix, window, cx));
+            }
+        }
+        let shown: Vec<bool> = labels.iter().map(|l| !center || drawn(l, cx)).collect();
+        let tabs = labels
+            .into_iter()
+            .enumerate()
+            .filter(|(ix, _)| shown[*ix])
+            .map(|(ix, l)| {
+                let (on, id) = (active == Some(ix), ids[ix]);
+                let preview = l.doc.as_ref().is_some_and(|d| !d.read(cx).keep);
+                // The kit keeps the last tab of a zone; a document still closes, to an empty center.
+                let closable = l.doc.is_some() || group.is_panel_closable(id, cx);
+                let (clicked, dropped, group_) = (group.clone(), group.clone(), group.clone());
+                let doc = l.doc.clone();
+                let closed = move |window: &mut Window, cx: &mut App| match &doc {
+                    Some(d) => super::close_doc(d.clone(), window, cx),
+                    None => group_.close(id, window, cx),
+                };
+                let closed = Rc::new(closed);
+                let (title, kept) = (l.title.clone(), l.doc.clone());
+                let close = closable.then(|| {
+                    let closed = closed.clone();
+                    ui::icon_button("tab.close", Icon::Close.size(px(10.)), cx)
+                        .test_support()
+                        .size(px(16.))
+                        .min_w(px(16.))
+                        .px_0()
+                        .when(!on, |b| b.invisible().group_hover("tab", |s| s.visible()))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            closed(window, cx)
+                        })
+                });
+                div()
+                    .id(l.id)
                     .test_support()
-                    .size(px(16.))
-                    .min_w(px(16.))
-                    .px_0()
-                    .when(!on, |b| b.invisible().group_hover("tab", |s| s.visible()))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        closed(window, cx)
+                    .role(Role::Tab)
+                    .aria_toggled(on.into())
+                    .aria_label(l.title.clone())
+                    .group("tab")
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .pl(px(10.))
+                    .pr(px(if closable { 4. } else { 10. }))
+                    .py(px(if collapsed { 1. } else { 3. }))
+                    .rounded(radius::ICON_BUTTON)
+                    .when(preview, |d| d.italic())
+                    .when_some(l.tip.clone(), |d, tip| {
+                        d.aria_description(tip.clone())
+                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                     })
+                    .relative()
+                    .font_weight(FontWeight::MEDIUM)
+                    .map(|d| match on {
+                        true => d.bg(t.selected_inactive).text_color(t.fg),
+                        false => d
+                            .text_color(t.muted)
+                            .hover(|s| s.bg(t.hover).text_color(t.fg))
+                            .active(|s| s.bg(t.selected_inactive)),
+                    })
+                    .when(on && !collapsed, |d| d.child(underline(t.accent)))
+                    .on_click(move |e, window, cx| {
+                        clicked.select_tab(ix, window, cx);
+                        if let Some(a) = super::zones(cx) {
+                            a.update(cx, |a, cx| super::reveal(a, id, window, cx));
+                        }
+                        if let (2, Some(d)) = (e.click_count(), &kept) {
+                            d.update(cx, |d, cx| d.keep(cx));
+                        }
+                    })
+                    .when(closable, |d| {
+                        d.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                            closed(window, cx)
+                        })
+                    })
+                    .when_some(group.drag_panel(ix, cx), |d, drag| {
+                        d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
+                            cx.stop_propagation();
+                            drag.set_drag_offset(offset);
+                            drag.set_preview_size(size(px(120.), px(28.)));
+                            cx.new(|_| Preview(title.clone()))
+                        })
+                    })
+                    .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
+                    .on_drop(move |drag: &DragPanel, window, cx| {
+                        dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
+                    })
+                    .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
+                    .child(l.title)
+                    .children(close)
             });
-            div()
-                .id(l.id)
-                .test_support()
-                .role(Role::Tab)
-                .aria_toggled(on.into())
-                .aria_label(l.title.clone())
-                .group("tab")
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .pl(px(10.))
-                .pr(px(if closable { 4. } else { 10. }))
-                .py(px(if collapsed { 1. } else { 3. }))
-                .rounded(radius::ICON_BUTTON)
-                .when(preview, |d| d.italic())
-                .when_some(l.tip.clone(), |d, tip| {
-                    d.aria_description(tip.clone())
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                })
-                .relative()
-                .font_weight(FontWeight::MEDIUM)
-                .map(|d| match on {
-                    true => d.bg(t.selected_inactive).text_color(t.fg),
-                    false => d
-                        .text_color(t.muted)
-                        .hover(|s| s.bg(t.hover).text_color(t.fg))
-                        .active(|s| s.bg(t.selected_inactive)),
-                })
-                .when(on && !collapsed, |d| d.child(underline(t.accent)))
-                .on_click(move |e, window, cx| {
-                    clicked.select_tab(ix, window, cx);
-                    if let Some(a) = super::zones(cx) {
-                        a.update(cx, |a, cx| super::reveal(a, id, window, cx));
-                    }
-                    if let (2, Some(d)) = (e.click_count(), &kept) {
-                        d.update(cx, |d, cx| d.keep(cx));
-                    }
-                })
-                .when(closable, |d| {
-                    d.on_mouse_down(MouseButton::Middle, move |_, window, cx| closed(window, cx))
-                })
-                .when_some(group.drag_panel(ix, cx), |d, drag| {
-                    d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
-                        cx.stop_propagation();
-                        drag.set_drag_offset(offset);
-                        drag.set_preview_size(size(px(120.), px(28.)));
-                        cx.new(|_| Preview(title.clone()))
-                    })
-                })
-                .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
-                .on_drop(move |drag: &DragPanel, window, cx| {
-                    dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
-                })
-                .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
-                .child(l.title)
-                .children(close)
-        });
         let end = group.clone();
         let node = group.node();
         div()
@@ -428,6 +522,10 @@ impl TabGroupRenderer for Group {
             .map(|d| match collapsed {
                 true => d.h_full().px(px(2.)),
                 false => d.px(px(8.)).py(px(6.)).border_b_1().border_color(t.line),
+            })
+            .children(chips)
+            .when(center, |d| {
+                d.child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(2.)).bg(t.line))
             })
             .children(tabs)
             .child(
@@ -449,10 +547,17 @@ impl TabGroupRenderer for Group {
         panel: AnyView,
         group: &TabGroupContext,
         _: &mut Window,
-        _: &mut App,
+        cx: &mut App,
     ) -> AnyElement {
         if group.is_collapsed() {
             return Empty.into_any_element();
+        }
+        let hidden = panel
+            .clone()
+            .downcast::<DocTab>()
+            .is_ok_and(|d| !tabs::in_view(d.read(cx), cx));
+        if hidden && self.center(group, cx) {
+            return empty(self.0.clone(), cx).into_any_element();
         }
         // Keyed by the view, so reordering or closing other tabs keeps its state.
         let id = ("panel.in", panel.entity_id().as_u64() as usize);
@@ -503,8 +608,37 @@ impl Render for Preview {
     }
 }
 
+/// A center group with no tab of the category shown: what it lacks, and the hints.
+fn empty(area: WeakEntity<DockArea>, cx: &App) -> impl IntoElement + use<> {
+    let title = tabs::categories(cx)
+        .into_iter()
+        .find(|c| c.id == tabs::category(cx))
+        .map_or("", |c| c.title);
+    let said = SharedString::from(format!(
+        "No {} tabs in this workspace",
+        title.to_lowercase()
+    ));
+    div()
+        .id("dock.empty")
+        .test_support()
+        .aria_label(said.clone())
+        .flex()
+        .flex_col()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap(px(16.))
+        .child(div().text_color(theme(cx).muted).child(said))
+        .child(hints_of(area, true, cx))
+}
+
 /// Rows that run their action, each with its chord.
 fn hints(area: WeakEntity<DockArea>, cx: &App) -> Div {
+    hints_of(area, false, cx)
+}
+
+/// `hints`; `always` runs a row's action with tabs in the center, as the empty state over them.
+fn hints_of(area: WeakEntity<DockArea>, always: bool, cx: &App) -> Div {
     let t = theme(cx);
     let hints = [
         ("Go to file", "file.goto"),
@@ -533,7 +667,7 @@ fn hints(area: WeakEntity<DockArea>, cx: &App) -> Div {
                 let empty = area
                     .upgrade()
                     .is_some_and(|a| a.read(cx).is_empty(DockPlacement::Center, cx));
-                if empty {
+                if always || empty {
                     actions::dispatch(window, cx, id);
                 }
             })

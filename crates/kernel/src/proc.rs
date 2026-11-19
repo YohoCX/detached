@@ -17,7 +17,6 @@ use crate::activity::{Activity, Level};
 use crate::blocking::{self, FRAME};
 use crate::host::Identity;
 use crate::resource::{self, On, Policy, Resource};
-use crate::workspace::Workspace;
 
 /// The lines of a run's log kept.
 pub const LOG: usize = 2000;
@@ -347,7 +346,7 @@ impl Queue {
 pub fn act(cx: &mut App, who: &Identity, act: &ProcAct) -> Task<Result<String>> {
     let (repo, name) = (act.repo.as_str(), act.name.as_str());
     let sees = who.subject.as_ref().is_none_or(|s| s.repo == repo);
-    let mut repos = Workspace::get(cx).repos().iter();
+    let mut repos = who.repos(cx).iter();
     let Some(shown) = repos
         .find(|r| r.path == repo)
         .filter(|_| sees)

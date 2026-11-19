@@ -36,14 +36,39 @@ pub struct Settings {
     pub other: BTreeMap<String, Value>,
 }
 
-/// Named folders; the repos of every active one are listed.
+/// Named folders, the window's context: the window shows one workspace's repos at a time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Workspace {
+    /// Made once; what chats, tabs and ui_state keys name.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     pub folders: Vec<String>,
     pub excluded_repos: Vec<String>,
+    /// Repos and folders attached read-only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub read_only: Vec<String>,
+    /// Unused since one workspace shows at a time; kept so an older build still lists repos.
     pub active: bool,
+    /// Fields a later build added, kept as they are.
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
+}
+
+fn new_id() -> String {
+    crate::backend::random()[..8].into()
+}
+
+impl Workspace {
+    fn new(name: String) -> Workspace {
+        Workspace {
+            id: new_id(),
+            name,
+            active: true,
+            ..Default::default()
+        }
+    }
 }
 
 const FILE: &str = "settings.json";
@@ -109,75 +134,95 @@ impl AppState {
         })
     }
 
-    /// Repos of the active workspaces; one in several of them is listed once.
-    pub fn list_repos(&self) -> Vec<RepoInfo> {
+    /// The repos of workspace `id`; none when there is no such workspace.
+    pub fn list_repos(&self, id: &str) -> Vec<RepoInfo> {
         let s = self.get_settings();
-        let mut seen = HashSet::new();
         s.workspaces
             .iter()
-            .filter(|w| w.active)
-            .flat_map(|w| {
-                let mut repos = discovery::discover(&w.folders, &w.excluded_repos);
-                worktree::add_linked(self, &mut repos, &w.excluded_repos);
-                repos
-            })
-            .filter(|r| seen.insert(r.path.clone()))
-            .collect()
+            .find(|w| w.id == id)
+            .map_or(vec![], |w| self.repos_of(w))
     }
 
-    /// Changes workspace `name` and lists the repos again.
-    fn in_workspace(&self, name: &str, f: impl FnOnce(&mut Workspace)) -> Result<Vec<RepoInfo>> {
+    /// Every workspace's repos; one in several of them is listed once.
+    pub fn all_repos(&self) -> Vec<RepoInfo> {
+        let mut seen = HashSet::new();
+        let s = self.get_settings();
+        let all = s.workspaces.iter().flat_map(|w| self.repos_of(w));
+        all.filter(|r| seen.insert(r.path.clone())).collect()
+    }
+
+    fn repos_of(&self, w: &Workspace) -> Vec<RepoInfo> {
+        let mut repos = discovery::discover(&w.folders, &w.excluded_repos);
+        worktree::add_linked(self, &mut repos, &w.excluded_repos);
+        repos
+    }
+
+    /// Gives every workspace without an id one, in one save; none when all have one.
+    pub fn assign_ids(&self) -> Result<()> {
+        if self
+            .get_settings()
+            .workspaces
+            .iter()
+            .all(|w| !w.id.is_empty())
+        {
+            return Ok(());
+        }
+        self.update(|s| {
+            for w in s.workspaces.iter_mut().filter(|w| w.id.is_empty()) {
+                w.id = new_id();
+            }
+        })
+        .map(drop)
+    }
+
+    /// Changes workspace `id` and lists its repos again.
+    fn in_workspace(&self, id: &str, f: impl FnOnce(&mut Workspace)) -> Result<Vec<RepoInfo>> {
         let mut found = true;
-        self.update(|s| match s.workspaces.iter_mut().find(|w| w.name == name) {
+        self.update(|s| match s.workspaces.iter_mut().find(|w| w.id == id) {
             Some(w) => f(w),
             None => found = false,
         })?;
         if !found {
-            return Err(Error::Other(format!("No workspace {name}")));
+            return Err(Error::Other(format!("No workspace {id}")));
         }
-        Ok(self.list_repos())
+        Ok(self.list_repos(id))
     }
 
-    /// Creates the workspace, active, when there is none yet, so a first folder needs no setup.
-    pub fn add_folder(&self, workspace: String, path: String) -> Result<Vec<RepoInfo>> {
+    /// Adds to workspace `id`, by default the first one, made as Default when there is none, so a
+    /// first folder needs no setup.
+    pub fn add_folder(&self, id: Option<String>, path: String) -> Result<Vec<RepoInfo>> {
+        let mut first = String::new();
         self.update(|s| {
             if s.workspaces.is_empty() {
-                s.workspaces.push(Workspace {
-                    name: workspace.clone(),
-                    active: true,
-                    ..Default::default()
-                });
+                s.workspaces.push(Workspace::new("Default".into()));
             }
+            first = s.workspaces[0].id.clone();
         })?;
-        self.in_workspace(&workspace, |w| {
+        self.in_workspace(&id.unwrap_or(first), |w| {
             if !w.folders.contains(&path) {
                 w.folders.push(path);
             }
         })
     }
 
-    pub fn remove_folder(&self, workspace: String, path: String) -> Result<Vec<RepoInfo>> {
-        self.in_workspace(&workspace, |w| w.folders.retain(|f| *f != path))
+    pub fn remove_folder(&self, id: String, path: String) -> Result<Vec<RepoInfo>> {
+        self.in_workspace(&id, |w| w.folders.retain(|f| *f != path))
     }
 
-    pub fn exclude_repo(&self, workspace: String, path: String) -> Result<Vec<RepoInfo>> {
-        self.in_workspace(&workspace, |w| {
+    pub fn exclude_repo(&self, id: String, path: String) -> Result<Vec<RepoInfo>> {
+        self.in_workspace(&id, |w| {
             if !w.excluded_repos.contains(&path) {
                 w.excluded_repos.push(path);
             }
         })
     }
 
-    pub fn include_repo(&self, workspace: String, path: String) -> Result<Vec<RepoInfo>> {
-        self.in_workspace(&workspace, |w| w.excluded_repos.retain(|p| *p != path))
+    pub fn include_repo(&self, id: String, path: String) -> Result<Vec<RepoInfo>> {
+        self.in_workspace(&id, |w| w.excluded_repos.retain(|p| *p != path))
     }
 
-    pub fn set_workspace_active(&self, name: String, active: bool) -> Result<Vec<RepoInfo>> {
-        self.in_workspace(&name, |w| w.active = active)
-    }
-
-    /// A new, active and empty workspace, or `from` renamed when given.
-    pub fn save_workspace(&self, name: String, from: Option<String>) -> Result<Vec<RepoInfo>> {
+    /// A new empty workspace, or workspace `from` renamed when given: its id.
+    pub fn save_workspace(&self, name: String, from: Option<String>) -> Result<String> {
         let name = name.trim().to_string();
         let s = self.get_settings();
         if name.is_empty() {
@@ -187,23 +232,20 @@ impl AppState {
             return Err(Error::Other(format!("Workspace {name} already exists")));
         }
         match from {
-            Some(from) => self.in_workspace(&from, |w| w.name = name),
+            Some(id) => self.in_workspace(&id, |w| w.name = name).map(|_| id),
             None => {
-                self.update(|s| {
-                    s.workspaces.push(Workspace {
-                        name,
-                        active: true,
-                        ..Default::default()
-                    })
-                })?;
-                Ok(self.list_repos())
+                let w = Workspace::new(name);
+                let id = w.id.clone();
+                self.update(|s| s.workspaces.push(w))?;
+                Ok(id)
             }
         }
     }
 
-    pub fn remove_workspace(&self, name: String) -> Result<Vec<RepoInfo>> {
-        self.update(|s| s.workspaces.retain(|w| w.name != name))?;
-        Ok(self.list_repos())
+    /// Drops workspace `id` from the settings; its folders and repos stay where they are.
+    pub fn remove_workspace(&self, id: String) -> Result<()> {
+        self.update(|s| s.workspaces.retain(|w| w.id != id))
+            .map(drop)
     }
 
     pub fn set_repo_account(&self, repo: String, account_id: Option<String>) -> Result<Settings> {
@@ -263,7 +305,9 @@ mod tests {
         assert_eq!(Settings::load(dir.path()), Settings::default());
         let s = Settings {
             workspaces: vec![Workspace {
+                id: "1234abcd".into(),
                 name: "Office".into(),
+                read_only: vec!["/kb".into()],
                 folders: vec!["/a".into()],
                 ..Default::default()
             }],
@@ -275,7 +319,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn lists_the_repos_of_active_workspaces_once() {
+    fn lists_one_workspace_s_repos_or_all_once_and_a_delete_keeps_the_folder() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
         for r in ["work/a", "work/b", "home/c"] {
@@ -283,43 +327,72 @@ mod tests {
         }
         let state = memory_state(dir.path().join("config"));
         let names = |l: Vec<RepoInfo>| l.into_iter().map(|r| r.name).collect::<Vec<_>>();
+        let work = format!("{root}/work");
         assert_eq!(
-            names(
-                state
-                    .add_folder("Office".into(), format!("{root}/work"))
-                    .unwrap()
-            ),
+            names(state.add_folder(None, work.clone()).unwrap()),
             ["a", "b"]
         );
-        state.save_workspace("Home".into(), None).unwrap();
+        let office = state.get_settings().workspaces[0].id.clone();
+        assert_eq!(office.len(), 8);
+        let home = state.save_workspace("Home".into(), None).unwrap();
+        assert_ne!(home, office);
         state
-            .add_folder("Home".into(), format!("{root}/home"))
+            .add_folder(Some(home.clone()), format!("{root}/home"))
             .unwrap();
+        state.add_folder(Some(home.clone()), work).unwrap();
         state
-            .add_folder("Home".into(), format!("{root}/work"))
+            .exclude_repo(home.clone(), format!("{root}/work/b"))
             .unwrap();
-        state
-            .exclude_repo("Home".into(), format!("{root}/work/b"))
-            .unwrap();
-        assert_eq!(names(state.list_repos()), ["a", "b", "c"]);
-        assert_eq!(
-            names(state.set_workspace_active("Office".into(), false).unwrap()),
-            ["c", "a"]
-        );
+        assert_eq!(names(state.list_repos(&home)), ["c", "a"]);
+        assert_eq!(names(state.list_repos(&office)), ["a", "b"]);
+        assert_eq!(names(state.all_repos()), ["a", "b", "c"]);
+        assert!(state.list_repos("gone").is_empty());
         assert!(
             state
-                .save_workspace("Office".into(), Some("Home".into()))
+                .save_workspace("Default".into(), Some(home.clone()))
                 .is_err()
         );
         assert!(state.save_workspace(" ".into(), None).is_err());
-        state
-            .save_workspace("Family".into(), Some("Home".into()))
-            .unwrap();
-        assert!(state.add_folder("Home".into(), "/x".into()).is_err());
+        let renamed = state.save_workspace("Family".into(), Some(home.clone()));
+        assert_eq!(renamed.unwrap(), home, "a rename keeps the id");
+        assert!(state.add_folder(Some("gone".into()), "/x".into()).is_err());
+        state.remove_workspace(home.clone()).unwrap();
+        assert!(state.list_repos(&home).is_empty());
+        assert!(dir.path().join("home/c/.git").exists());
+        assert_eq!(names(state.all_repos()), ["a", "b"]);
+    }
+
+    #[test]
+    fn ids_are_given_once_and_active_and_unknown_fields_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = serde_json::json!({ "workspaces": [
+            { "name": "A", "active": false, "later": { "x": 1 } },
+            { "id": "0000beef", "name": "B", "active": true, "readOnly": ["/kb"] },
+        ] });
+        std::fs::write(dir.path().join(FILE), file.to_string()).unwrap();
+        let state = memory_state(dir.path().into());
+        state.assign_ids().unwrap();
+        let ws = state.get_settings().workspaces;
+        let a = ws[0].id.clone();
+        assert_eq!(a.len(), 8);
+        assert_eq!(ws[1].id, "0000beef");
+        assert_eq!((ws[0].active, ws[1].active), (false, true));
+        assert_eq!(ws[1].read_only, ["/kb"]);
+        let rev = state.revision();
+        state.assign_ids().unwrap();
         assert_eq!(
-            names(state.remove_workspace("Family".into()).unwrap()),
-            Vec::<String>::new()
+            state.revision(),
+            rev,
+            "no save when every workspace has one"
         );
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join(FILE)).unwrap()).unwrap();
+        assert_eq!(
+            saved["workspaces"][0]["later"],
+            serde_json::json!({ "x": 1 })
+        );
+        assert_eq!(saved["workspaces"][0]["id"], a.as_str());
+        assert_eq!(Settings::load(dir.path()).workspaces, ws);
     }
 
     fn memory_state(dir: std::path::PathBuf) -> AppState {
@@ -373,32 +446,27 @@ mod tests {
         fn ws(r: Result<Vec<RepoInfo>>) -> Result<()> {
             r.map(drop)
         }
-        let writers: [(&[&str], Write); 14] = [
+        let writers: [(&[&str], Write); 13] = [
             (&["workspaces"], |s| {
-                ws(s.add_folder("Office".into(), "/x".into()))
+                ws(s.add_folder(Some("office01".into()), "/x".into()))
             }),
             (&["workspaces"], |s| {
-                ws(s.remove_folder("Office".into(), "/home/me/tools".into()))
+                ws(s.remove_folder("office01".into(), "/home/me/tools".into()))
             }),
             (&["workspaces"], |s| {
-                ws(s.exclude_repo("Office".into(), "/home/me/work/new".into()))
+                ws(s.exclude_repo("office01".into(), "/home/me/work/new".into()))
             }),
             (&["workspaces"], |s| {
-                ws(s.include_repo("Office".into(), "/home/me/work/old".into()))
+                ws(s.include_repo("office01".into(), "/home/me/work/old".into()))
             }),
             (&["workspaces"], |s| {
-                ws(s.set_workspace_active("Personal".into(), true))
-            }),
-            (
-                &["workspaces"],
-                |s| ws(s.save_workspace("New".into(), None)),
-            ),
-            (&["workspaces"], |s| {
-                ws(s.save_workspace("Home".into(), Some("Personal".into())))
+                s.save_workspace("New".into(), None).map(drop)
             }),
             (&["workspaces"], |s| {
-                ws(s.remove_workspace("Personal".into()))
+                s.save_workspace("Home".into(), Some("person01".into()))
+                    .map(drop)
             }),
+            (&["workspaces"], |s| s.remove_workspace("person01".into())),
             (&["repoAccounts"], |s| {
                 s.set_repo_account("/home/me/work/web".into(), Some("a2".into()))
                     .map(drop)
@@ -416,7 +484,9 @@ mod tests {
                 crate::accounts::remove(s, "a1")
             }),
         ];
-        let v050: Value = serde_json::from_str(V050).unwrap();
+        let mut v050: Value = serde_json::from_str(V050).unwrap();
+        v050["workspaces"][0]["id"] = "office01".into();
+        v050["workspaces"][1]["id"] = "person01".into();
         let mut with_block = v050.clone();
         with_block["agent"] = serde_json::json!({ "model": "opus" });
         for file in [v050, with_block] {

@@ -72,7 +72,7 @@ pub(crate) fn boot(cx: &mut TestAppContext) -> (TempDir, Forge, String, String) 
     api::save_account(&sb.state, account).unwrap();
     let Sandbox { dir, state } = sb;
     let folder = dir.path().join("repos").display().to_string();
-    state.add_folder("Default".into(), folder).unwrap();
+    state.add_folder(None, folder).unwrap();
     cx.update(|cx| crate::init(Arc::new(state), cx));
     wait_until(cx, |cx| {
         let repos = Workspace::get(cx).repos();
