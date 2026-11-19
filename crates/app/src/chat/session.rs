@@ -259,7 +259,7 @@ impl Chat {
     }
 
     /// The feed: each session's items by session and index, a resume's history left out but its
-    /// notes, blank text left out.
+    /// notes, blank text left out, and what came before the last `/clear`.
     pub fn feed<'a>(&'a self, cx: &'a App) -> Vec<((usize, usize), &'a Item)> {
         let mut out = vec![];
         for (k, s) in self.sessions.iter().enumerate() {
@@ -269,6 +269,10 @@ impl Chat {
                     && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
             });
             out.extend(shown.map(|(i, it)| ((k, i), it)));
+        }
+        let clear = |it: &Item| matches!(it, Item::User(t) if t.trim() == "/clear");
+        if let Some(at) = out.iter().rposition(|(_, it)| clear(it)) {
+            out.drain(..at);
         }
         out
     }
