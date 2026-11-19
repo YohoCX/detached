@@ -14,6 +14,7 @@ use detached_core::store::{Kind as StoreKind, RepoStore};
 use detached_core::testutil::api::Api;
 
 use super::*;
+use crate::wait_on;
 
 const SECRET: &str = "SECRET=fixture-not-for-agents";
 
@@ -167,13 +168,13 @@ fn running(marker: &str) -> bool {
     !commands(marker).is_empty()
 }
 
-/// The command lines that hold `marker`.
+/// Process rows whose command line holds `marker`.
 fn commands(marker: &str) -> Vec<String> {
     let ps = ["ps", "-ww", "-A", "-o", "command="];
     let out = match wsl() {
         Some(d) => Command::new("wsl.exe")
             .args(["-d", &d, "-e"])
-            .args(ps)
+            .args(["ps", "-ww", "-A", "-o", "pid=,ppid=,pgid=,sid=,command="])
             .output(),
         None if cfg!(windows) => Command::new("powershell")
             .args(["-NoProfile", "-Command"])
@@ -683,10 +684,32 @@ fn a_killed_host_leaves_no_process(cx: &mut TestAppContext) {
     let mut line = line.filter_map(|l| Some(l.strip_prefix("host ")?.to_string()));
     let line = line.next().expect("the host's session ran its command");
     let (marker, id) = line.split_once(' ').unwrap();
+    let wsl_rows = wsl().map(|_| (commands(marker), commands(id)));
     host.kill().unwrap();
     host.wait().unwrap();
-    // The leash's SIGTERM, then its 5 s before a SIGKILL.
-    wait_for(cx, Duration::from_secs(30), |_| {
-        !running(marker) && !running(id)
-    });
+    wait_on(
+        cx,
+        Duration::from_secs(30),
+        |_| (commands(marker), commands(id)),
+        |(marked, session)| marked.is_empty() && session.is_empty(),
+    );
+    if let Some((marked, session)) = wsl_rows {
+        let ids = |row: &String| {
+            let mut fields = row.split_whitespace();
+            std::array::from_fn(|_| fields.next().unwrap().parse::<u32>().unwrap())
+        };
+        let in_group = session.iter().map(ids).any(|[pid, ppid, pgid, sid]| {
+            pid == pgid
+                && pid == sid
+                && session.iter().map(ids).any(|[parent, ..]| parent == ppid)
+                && marked
+                    .iter()
+                    .map(ids)
+                    .all(|[_, _, pgid, sid]| pgid == pid && sid == pid)
+        });
+        assert!(
+            !marked.is_empty() && in_group,
+            "expected the marked command in the CLI's process group (pid, ppid, pgid, sid, command): {marked:?}, session: {session:?}"
+        );
+    }
 }

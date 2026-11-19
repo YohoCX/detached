@@ -324,7 +324,7 @@ fn a_wsl_place_runs_wsl_exe_before_the_leash_and_names_the_env_through_wslenv() 
     );
     assert_eq!(program, PathBuf::from("wsl.exe"));
     let front = [
-        "-d", "Ubuntu", "--cd", &run.repo, "-e", "sh", "-c", LEASH, "leash", "claude",
+        "-d", "Ubuntu", "--cd", &run.repo, "-e", "sh", "-c", WSL_LEASH, "leash", "claude",
     ];
     assert_eq!(args[..front.len()], front.map(OsString::from));
     assert_eq!(

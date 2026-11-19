@@ -64,6 +64,12 @@ const PLUGIN: &str = "detached";
 const LEASH: &str = "trap gone=1 HUP; exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; \
     while kill -0 $! 2>/dev/null; do [ -z \"$gone\" ] && kill -0 $PPID 2>/dev/null \
     || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; done; wait $!";
+// With job control off, setsid execs in place and $! is the new group's id.
+const WSL_LEASH: &str = "trap gone=1 HUP; exec 3<&0; setsid \"$@\" <&3 3<&- & exec 3<&-; \
+    pid=$!; while [ -z \"$gone\" ] && kill -0 \"$PPID\" 2>/dev/null \
+    && kill -0 \"$pid\" 2>/dev/null; do sleep 1; done; \
+    if kill -s TERM -- \"-$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null; then \
+        sleep 5; kill -s KILL -- \"-$pid\" 2>/dev/null; fi; wait \"$pid\"";
 const WAIT: Duration = Duration::from_secs(60);
 /// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
 const PATHS: &[&str] = &[
@@ -226,14 +232,22 @@ fn distro_cli(distro: &str, env: &[(String, OsString)]) -> Result<(OsString, ada
 /// Windows, where the session's job holds it.
 fn command(spec: &Spec, cli: OsString, flags: Vec<String>) -> (PathBuf, Vec<OsString>) {
     let flags = flags.into_iter().map(OsString::from);
-    let leash = ["-c", LEASH, "leash"].map(OsString::from).into_iter();
-    let leashed = leash.chain([cli.clone()]).chain(flags.clone());
+    let leashed = |script| {
+        ["-c", script, "leash"]
+            .map(OsString::from)
+            .into_iter()
+            .chain([cli.clone()])
+            .chain(flags.clone())
+    };
     match &spec.wsl {
         Some(d) => {
             let front = ["-d", d, "--cd", &spec.repo, "-e", "sh"].map(OsString::from);
-            ("wsl.exe".into(), front.into_iter().chain(leashed).collect())
+            (
+                "wsl.exe".into(),
+                front.into_iter().chain(leashed(WSL_LEASH)).collect(),
+            )
         }
-        None if cfg!(unix) => ("/bin/sh".into(), leashed.collect()),
+        None if cfg!(unix) => ("/bin/sh".into(), leashed(LEASH).collect()),
         None => (cli.into(), flags.collect()),
     }
 }
