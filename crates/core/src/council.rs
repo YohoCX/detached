@@ -8,6 +8,7 @@ pub mod corpus;
 pub mod fix;
 mod graphs;
 pub mod marks;
+pub mod migrate;
 pub mod mode;
 pub mod record;
 pub mod root;

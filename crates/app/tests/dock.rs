@@ -176,6 +176,41 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
     );
 }
 
+#[gpui_kit::test]
+fn a_layout_saved_by_0_6_0_keeps_its_panels_tabs_as_council_s(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let stats = Doc::CouncilStats {
+        repo: cx.sb.repo("app").display().to_string(),
+    };
+    show(cx, stats.clone());
+    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
+    let old = saved
+        .unwrap()
+        .to_string()
+        .replace("\"CouncilStats\"", "\"PanelStats\"")
+        .replace("\"panel_name\":\"council\"", "\"panel_name\":\"panels\"");
+    assert!(old.contains("\"PanelStats\"") && old.contains("\"panels\""));
+    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
+    let dir = cx.sb.state.config_dir.clone();
+    cx.update(|_, cx| {
+        ui_state::set("dock.layout", old, cx);
+        ui_state::init(&dir, cx);
+    });
+
+    let again = reopen(cx);
+    in_window(cx, again, |w, _| {
+        assert!(w.try_find("dock.missing").is_none(), "no placeholder");
+        assert!(w.try_find("tab.council").is_some());
+    });
+    let kept = cx.update(|_, cx| {
+        let area = dock::zones(cx).unwrap();
+        dock::docs(area.read(cx))
+            .iter()
+            .any(|(_, _, t)| t.read(cx).doc == stats)
+    });
+    assert!(kept, "the stats tab loads");
+}
+
 struct Stub;
 
 impl Render for Stub {

@@ -121,8 +121,7 @@ pub fn common(core: &AppState, repo: &Path) -> Result<PathBuf> {
 
 /// A run's record folder.
 pub fn dir(core: &AppState, repo: &Path, task: &str, run: &str) -> Result<PathBuf> {
-    Ok(common(core, repo)?
-        .join("detached/council")
+    Ok(super::migrate::records(&common(core, repo)?)
         .join(task)
         .join(run))
 }
@@ -692,7 +691,7 @@ pub fn brief_file(p: &Prepared, name: &str, text: &str) -> Result<()> {
 
 /// Every run record of `repo`: its task, run id and folder.
 pub fn records(core: &AppState, repo: &Path) -> Result<Vec<(String, String, PathBuf)>> {
-    let root = common(core, repo)?.join("detached/council");
+    let root = super::migrate::records(&common(core, repo)?);
     let mut all = vec![];
     for task in fs::read_dir(&root).into_iter().flatten().flatten() {
         for run in fs::read_dir(task.path()).into_iter().flatten().flatten() {

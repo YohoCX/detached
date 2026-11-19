@@ -67,6 +67,8 @@ impl AppState {
         let mut state = AppState::new(config_dir, settings, env, tokens);
         state.data_dir = storage.data;
         state.cache_dir = storage.cache;
+        // A failed move is retried at the next boot.
+        _ = crate::council::migrate::run(&state);
         Ok(state)
     }
 
