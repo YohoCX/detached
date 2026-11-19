@@ -112,7 +112,7 @@ impl Proc {
             }
         };
         let stderr = Arc::new(Mutex::new(vec![]));
-        let (done, drained) = mpsc::channel();
+        let (stderr_done, drained) = mpsc::channel();
         if let Some(mut pipe) = child.stderr.take() {
             let tail = stderr.clone();
             thread::spawn(move || {
@@ -123,7 +123,7 @@ impl Proc {
                     let over = t.len().saturating_sub(TAIL);
                     t.drain(..over);
                 }
-                drop(done);
+                drop(stderr_done);
             });
         }
         let (pid, stdin, stdout) = (child.id(), child.stdin.take(), child.stdout.take());

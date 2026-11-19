@@ -851,6 +851,7 @@ impl Client {
                 break s;
             }
         };
+        let stderr = self.proc.stderr_after_exit();
         let mut st = self.state.lock().unwrap();
         st.gone = true;
         if let Some(mut sink) = st.sink.take() {
@@ -858,7 +859,7 @@ impl Client {
                 true => Event::Closed,
                 false => Event::Exited(Exit {
                     code: status.code(),
-                    stderr: self.proc.stderr_after_exit(),
+                    stderr,
                 }),
             });
         }
