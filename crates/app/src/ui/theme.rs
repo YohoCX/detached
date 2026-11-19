@@ -19,9 +19,10 @@ use kernel::ui_state;
 use kernel::workspace::Workspace;
 
 pub const DEFAULT: &str = "Fleet";
-const BUNDLED: [&str; 2] = [
+const BUNDLED: [&str; 3] = [
     include_str!("../../themes/fleet.json"),
     include_str!("../../themes/classic.json"),
+    include_str!("../../themes/catppuccin.json"),
 ];
 const FONTS: [&[u8]; 8] = [
     include_bytes!("../../fonts/Inter-Regular.ttf"),

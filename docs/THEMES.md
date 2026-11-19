@@ -15,15 +15,26 @@ running app within a second. A file that does not load keeps the theme in use an
 }
 ```
 
-- `extends`: a bundled theme, `Fleet` (the default) or `Classic`. Every token the file leaves out
-  comes from it, so a file holds only what it changes.
+- `extends`: a bundled theme, `Fleet` (the default), `Classic` or `Catppuccin`. Every token the
+  file leaves out comes from it, so a file holds only what it changes.
 - `font`, `mono_font`: family names. Inter and JetBrains Mono come with the app; leaving them out
   uses the system's.
 - `light`, `dark`: the tokens for each appearance: the system's, or the one Settings › Appearance ›
   Mode forces. Colors are `#rrggbb` or `#rrggbbaa`.
 
-The full token list, with values, is in the bundled files:
-[fleet.json](../crates/app/themes/fleet.json), [classic.json](../crates/app/themes/classic.json).
+The bundled themes:
+
+| Theme | Light | Dark |
+| --- | --- | --- |
+| [Fleet](../crates/app/themes/fleet.json) | neutral grays, blue accent | the same at night |
+| [Classic](../crates/app/themes/classic.json) | translucent glass panes, indigo accent | the same at night |
+| [Catppuccin](../crates/app/themes/catppuccin.json) | Latte, mauve accent | Mocha, mauve accent |
+
+Catppuccin is the [Catppuccin](https://github.com/catppuccin/palette) palette (MIT); its Latte
+status colors are darkened in hue to read as text. Every bundled theme keeps text at 4.5:1 or more
+on the grounds it sits on, which a unit test in `ui/theme.rs` holds.
+
+The full token list, with values, is in the bundled files.
 Opening the themes folder the first time puts a copy of Fleet there to edit.
 
 | Tokens | What they color |
