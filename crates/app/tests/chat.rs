@@ -1100,6 +1100,10 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
         let far = sb.path("far");
         std::fs::create_dir_all(&far).unwrap();
         past(sb, &far, "far", "Elsewhere", 30);
+        let off = || "Off".to_string();
+        detached_core::api::save_workspace(&sb.state, off(), None).unwrap();
+        detached_core::api::add_folder(&sb.state, off(), far.display().to_string()).unwrap();
+        detached_core::api::set_workspace_active(&sb.state, off(), false).unwrap();
     });
     open_tab(cx, "tab.chats");
     wait_until(cx, |cx| cx.find(("chats.past", 0usize)).is_some());
@@ -1109,7 +1113,7 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
     );
     assert!(
         cx.find(("chats.past", 1usize)).is_none(),
-        "outside the workspace"
+        "outside the workspace, or in one turned off"
     );
     assert_eq!(label(cx, ("chats.open", 0usize)).as_deref(), Some("solo"));
     // On its title: the hover buttons sit right of it.

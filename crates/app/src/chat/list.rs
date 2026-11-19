@@ -105,14 +105,15 @@ impl ChatList {
         list
     }
 
-    /// Holds the past conversations of each place in the workspace, and no other.
+    /// Holds the past conversations of each place in the workspaces turned on, and no other.
     fn watch(&mut self, cx: &mut Context<Self>) {
         let mut places: Vec<String> = Workspace::get(cx)
             .repos()
             .iter()
             .map(|r| r.path.clone())
             .collect();
-        for f in Settings::get(cx).workspaces.iter().flat_map(|w| &w.folders) {
+        let on = Settings::get(cx).workspaces.iter().filter(|w| w.active);
+        for f in on.flat_map(|w| &w.folders) {
             if !places.contains(f) {
                 places.push(f.clone());
             }
