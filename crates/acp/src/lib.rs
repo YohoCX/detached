@@ -237,17 +237,21 @@ impl Acp {
         };
         let mut vars = proc::env(p.env, proc::parent(&env));
         vars.push((p.cli_var.into(), cli.into()));
-        if p.id == CODEX.id && spec.kind == Kind::Untrusted {
-            let tmp = spec.sandbox.as_ref().and_then(|s| s.tmp.as_deref());
-            let own = || Error::Other("An untrusted Codex runs in a folder of its own".into());
+        if p.id == CODEX.id {
             let var = |k: &str| {
                 let v = vars.iter().find(|(n, v)| n == k && !v.is_empty());
                 v.map(|(_, v)| PathBuf::from(v))
             };
             let owner = var("CODEX_HOME").or_else(|| Some(var("HOME")?.join(".codex")));
-            let home = codex_home(tmp.ok_or_else(own)?, owner.as_deref())?;
-            vars.retain(|(k, _)| k != "CODEX_HOME");
-            vars.push(("CODEX_HOME".into(), home.into()));
+            if spec.kind == Kind::Untrusted {
+                let tmp = spec.sandbox.as_ref().and_then(|s| s.tmp.as_deref());
+                let own = || Error::Other("An untrusted Codex runs in a folder of its own".into());
+                let home = codex_home(tmp.ok_or_else(own)?, owner.as_deref())?;
+                vars.retain(|(k, _)| k != "CODEX_HOME");
+                vars.push(("CODEX_HOME".into(), home.into()));
+            } else if let Some(off) = mcp_off(owner.as_deref(), Path::new(&spec.repo)) {
+                vars.push(("CODEX_CONFIG".into(), off.into()));
+            }
         }
         let program = adapters::exe(&core.data_dir, p.adapter, &version);
         let spec_proc = proc::Spec {
@@ -311,6 +315,25 @@ fn wire(id: &str, codex: bool) -> String {
 }
 
 const EFFORT: &str = "reasoning_effort";
+
+/// The adapter's session config turning off, by name, each MCP server of the user's Codex config
+/// and of `cwd`'s project layer: Codex's layers merge, so no override empties `mcp_servers`. Only
+/// the table names are read. None when there is none.
+fn mcp_off(home: Option<&Path>, cwd: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Layer {
+        #[serde(default)]
+        mcp_servers: HashMap<String, serde::de::IgnoredAny>,
+    }
+    let files = home.map(|h| h.join("config.toml"));
+    let files = files.into_iter().chain([cwd.join(".codex/config.toml")]);
+    let off: serde_json::Map<_, _> = files
+        .filter_map(|f| toml::from_str::<Layer>(&std::fs::read_to_string(f).ok()?).ok())
+        .flat_map(|l| l.mcp_servers.into_keys())
+        .map(|name| (name, json!({"enabled": false})))
+        .collect();
+    (!off.is_empty()).then(|| json!({"mcp_servers": off}).to_string())
+}
 
 /// Codex's project layer in `cwd`, a tree the host made: a permission profile that extends
 /// `:read-only` and denies reading `deny`. The adapter trusts the cwd, so the layer loads.
