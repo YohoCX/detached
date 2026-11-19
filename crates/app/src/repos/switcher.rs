@@ -279,27 +279,31 @@ impl Switcher {
 
 impl Render for Switcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
         let w = Workspace::get(cx);
         let none = w.repos().is_empty();
         let label = w
             .current()
             .map_or("No repository".into(), |c| w.name_of(c).to_string());
-        let trigger = widget("switcher", "Switch repository", label.clone(), cx)
-            .max_w(px(320.))
-            .when(self.open.is_some(), |b| b.bg(t.selected_inactive))
-            .map(|b| match none {
-                true => b.opacity(0.5),
-                false => b.on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(label),
-            )
-            .child(caret(cx));
+        let trigger = widget(
+            "switcher",
+            "Switch repository",
+            label.clone(),
+            self.open.is_some(),
+            cx,
+        )
+        .max_w(px(320.))
+        .map(|b| match none {
+            true => b.opacity(0.5),
+            false => b.on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
+        })
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .child(label),
+        )
+        .child(caret(cx));
         let content = self.open.as_ref().map(|o| self.popup(o, cx));
         let this = cx.weak_entity();
         let close = move |_: &mut Window, cx: &mut App| {

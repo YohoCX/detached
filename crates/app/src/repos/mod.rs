@@ -19,7 +19,8 @@ use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     App, AppContext, Div, Entity, Global, InteractiveElement, ParentElement, PathPromptOptions,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, div, px,
+    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, div,
+    prelude::FluentBuilder, px,
 };
 
 pub use api::*;
@@ -217,6 +218,7 @@ fn widget(
     id: &'static str,
     title: &'static str,
     label: impl Into<SharedString>,
+    open: bool,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
     let t = theme(cx);
@@ -232,7 +234,11 @@ fn widget(
         .role(Role::Button)
         .aria_label(label)
         .aria_description(title)
-        .tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+        .when(open, |b| b.bg(t.selected_inactive))
+        // The tooltip would cover the open popup.
+        .when(!open, |b| {
+            b.tooltip(move |window, cx| Tooltip::new(title).build(window, cx))
+        })
 }
 
 /// A widget's muted chevron.

@@ -96,29 +96,34 @@ impl Render for Widget {
                 .map(|(a, n)| format!("{a}{n}"))
                 .collect()
         });
-        let trigger = widget("branches", "Branches", label.clone(), cx)
-            .when(self.open.is_some(), |b| b.bg(t.selected_inactive))
-            .map(|b| match current {
-                false => b.opacity(0.5),
-                true => b.on_click(cx.listener(|this, _, window, cx| {
-                    let shown = State::global(cx).read(cx).branches.is_some();
-                    open((!shown).then_some(Intent::Checkout), cx);
-                    this.sync(window, cx);
-                })),
-            })
-            .child(
-                div()
-                    .flex()
-                    .text_color(t.accent)
-                    .child(Icon::Branch.size(px(14.))),
-            )
-            .child(div().min_w_0().truncate().child(label))
-            .children(
-                counts
-                    .into_iter()
-                    .map(|c| div().text_color(t.muted).child(c)),
-            )
-            .child(caret(cx));
+        let trigger = widget(
+            "branches",
+            "Branches",
+            label.clone(),
+            self.open.is_some(),
+            cx,
+        )
+        .map(|b| match current {
+            false => b.opacity(0.5),
+            true => b.on_click(cx.listener(|this, _, window, cx| {
+                let shown = State::global(cx).read(cx).branches.is_some();
+                open((!shown).then_some(Intent::Checkout), cx);
+                this.sync(window, cx);
+            })),
+        })
+        .child(
+            div()
+                .flex()
+                .text_color(t.accent)
+                .child(Icon::Branch.size(px(14.))),
+        )
+        .child(div().min_w_0().truncate().child(label))
+        .children(
+            counts
+                .into_iter()
+                .map(|c| div().text_color(t.muted).child(c)),
+        )
+        .child(caret(cx));
         let content = self.open.as_ref().map(|o| o.1.clone().into_any_element());
         ui::popup(
             "branches",
