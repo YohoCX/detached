@@ -256,6 +256,9 @@ fn state_icon(state: State, cx: &App) -> AnyElement {
 struct ChatDocs;
 
 impl DocKind for ChatDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "chats"
+    }
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Chat { repo, n } = doc else {
             unreachable!()

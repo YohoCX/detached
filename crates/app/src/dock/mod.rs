@@ -2,8 +2,10 @@
 
 mod doc;
 mod skin;
+mod tabs;
 
 pub use doc::{DocKind, DocTab, doc_kind, register_doc};
+pub use tabs::{Category, categories, category, register_category, tabs_of};
 
 use std::sync::Arc;
 
@@ -22,6 +24,7 @@ use crate::actions::{self, Group, Registration};
 use crate::ui::theme;
 use kernel::doc::Doc;
 use kernel::ui_state;
+use kernel::workspace::{self, Workspace};
 
 const KEY: &str = "dock.layout";
 const VERSION: usize = 2;
@@ -67,18 +70,30 @@ pub fn apps(cx: &App) -> Vec<AppSpec> {
     cx.try_global::<Apps>().map_or(vec![], |a| a.apps.clone())
 }
 
-/// The zones' actions.
+/// The zones' actions, the center's categories and theirs.
 pub fn register(cx: &mut App) -> Vec<Registration> {
     let zone = |cx: &mut App, id, title, p| {
         actions::register(cx, id, title, Group::View, move |w, cx| {
             toggle_zone(p, w, cx)
         })
     };
-    vec![
+    let mut all = vec![
         zone(cx, "zone.left", "Left Zone", DockPlacement::Left),
         zone(cx, "zone.bottom", "Bottom Zone", DockPlacement::Bottom),
         zone(cx, "zone.right", "Right Zone", DockPlacement::Right),
-    ]
+    ];
+    all.extend(tabs::register(cx));
+    all
+}
+
+/// Shows `category` in the current workspace's center.
+pub fn show_category(category: &str, window: &mut Window, cx: &mut App) {
+    tabs::show(category, window, cx);
+}
+
+/// Closes workspace `id`'s tabs and forgets its center's categories.
+pub fn forget_workspace(id: &str, window: &mut Window, cx: &mut App) {
+    tabs::forget(id, window, cx);
 }
 
 /// One app in a zone; the dock moves this entity, so its view and state go with it.
@@ -224,6 +239,14 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
         if !matches!(loaded, Some(Ok(()))) {
             default_layout(&mut area, window, cx);
         }
+        drop_unparsed(&mut area, window, cx);
+        let w = Workspace::global(cx);
+        cx.subscribe_in(&w, window, |area, _, e: &workspace::Event, window, cx| {
+            if matches!(e, workspace::Event::Switched) {
+                tabs::apply(area, window, cx);
+            }
+        })
+        .detach();
         // An app newer than the saved layout goes where it would by default, behind the tab shown.
         let shown = active(&area);
         for app in apps(cx) {
@@ -235,6 +258,7 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
         for id in shown {
             area.select_panel(id, window, cx);
         }
+        tabs::apply(&mut area, window, cx);
         area
     });
     cx.set_global(Zones(area.downgrade()));
@@ -251,6 +275,23 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
     })
     .detach();
     area
+}
+
+/// A saved doc that no longer parses goes, with no placeholder; an unknown app keeps its own.
+fn drop_unparsed(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
+    let ids: Vec<_> = placements()
+        .into_iter()
+        .filter_map(|p| area.layout(p))
+        .flat_map(|t| t.panels().collect::<Vec<_>>())
+        .collect();
+    for id in ids {
+        let gone = area.panel(id).map(|p| p.view().downcast::<Missing>());
+        if let Some(Ok(m)) = gone
+            && m.read(cx).name == doc::NAME
+        {
+            area.remove_panel(m, window, cx);
+        }
+    }
 }
 
 fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
@@ -335,14 +376,18 @@ pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Co
     }
 }
 
-/// Brings forward the tab holding `doc`, else shows a file or diff in the center's preview tab,
-/// else opens a new tab in the center.
+/// Brings forward the current workspace's tab holding `doc`, else shows a file or diff in the
+/// preview tab of its category in the center, else opens a new tab there; its category comes
+/// forward.
 pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Context<DockArea>) {
     let Some(kind) = doc_kind(doc.kind(), cx) else {
         return;
     };
-    let preview = kind.preview();
-    let tabs = docs(area);
+    let (preview, category) = (kind.preview(), kind.category(&doc));
+    let tabs: Vec<_> = docs(area)
+        .into_iter()
+        .filter(|(_, _, t)| tabs::mine(t.read(cx), cx))
+        .collect();
     let found = tabs
         .iter()
         .find(|(_, _, t)| {
@@ -351,17 +396,22 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
         })
         .or_else(|| {
             let free = |(p, _, t): &&(_, _, Entity<DocTab>)| {
-                *p == DockPlacement::Center && !t.read(cx).keep
+                let t = t.read(cx);
+                *p == DockPlacement::Center && !t.keep && t.category() == category
             };
             tabs.iter().find(free).filter(|_| preview)
         })
-        .map(|(_, id, t)| (*id, t.clone()));
+        .map(|(p, id, t)| (*p, *id, t.clone()));
     match found {
-        Some((id, tab)) => {
+        Some((p, id, tab)) => {
+            if p == DockPlacement::Center {
+                tabs::set(category, cx);
+            }
             tab.update(cx, |t, cx| t.set_doc(doc, kind, window, cx));
             reveal(area, id, window, cx);
         }
         None => {
+            tabs::set(category, cx);
             let tab = DocTab::new(doc, kind, !preview, cx);
             area.add_panel(tab, DockPlacement::Center, None, window, cx);
         }
@@ -396,6 +446,9 @@ pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut Ap
                 .into_iter()
                 .find(|p| a.layout(*p).is_some_and(|t| t.find_node(n).is_some()))
         });
+        if p.is_none_or(|p| p == DockPlacement::Center) {
+            tabs::set(kind.category(&doc), cx);
+        }
         let tab = DocTab::new(doc, kind, true, cx);
         a.add_panel(tab, p.unwrap_or(DockPlacement::Center), None, window, cx);
     });

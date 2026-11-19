@@ -34,6 +34,10 @@ const PASS: &[&str] = &[
     "panel.log",
     "app.settings",
     "panel.terminal",
+    "tabs.nextCategory",
+    "tabs.prevCategory",
+    "tabs.next",
+    "tabs.prev",
 ];
 
 #[derive(Default)]
@@ -233,6 +237,9 @@ fn shown(window: &mut Window, cx: &mut App) {
 struct TerminalDocs;
 
 impl DocKind for TerminalDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
     fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Terminal { id, cwd } = doc else {
             unreachable!()

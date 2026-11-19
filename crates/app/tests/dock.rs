@@ -12,7 +12,12 @@ use gpui_kit::{
     AnyView, AnyWindowHandle, App, AppContext, Context, InteractiveElement, IntoElement,
     ParentElement, Pixels, Render, TestAppContext, VisualTestContext, Window, div, point, px,
 };
-use kernel::doc::Doc;
+use std::path::Path;
+
+use detached_app::actions;
+use detached_core::api;
+use gpui_kit::SharedString;
+use kernel::doc::{Doc, Location};
 use kernel::ui_state;
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
@@ -208,6 +213,10 @@ fn an_app_registered_by_a_test_alone_gets_a_tab_in_its_zone(cx: &mut TestAppCont
 struct StubDocs;
 
 impl DocKind for StubDocs {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
+
     fn view(&self, _: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
         cx.new(|_| Stub).into()
     }
@@ -294,10 +303,14 @@ fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut T
     show_diff(cx, &readme);
     cx.click("top.chat");
     let again = reopen(cx);
-    let tabs = in_window(cx, again, |w, _| {
-        ["doc.diff.README.md", "doc.chat"].map(|id| w.try_find(id).is_some())
-    });
-    assert_eq!(tabs, [true, true]);
+    let chat = in_window(cx, again, |w, _| w.try_find("doc.chat").is_some());
+    assert!(chat, "Chats, the category shown last");
+    in_window(cx, again, |w, cx| actions::dispatch(w, cx, "tabs.code"));
+    settle(cx);
+    let diff = in_window(cx, again, |w, _| w.try_find("doc.diff.README.md").is_some());
+    assert!(diff);
+    in_window(cx, again, |w, cx| actions::dispatch(w, cx, "tabs.chats"));
+    settle(cx);
     in_window(cx, again, |w, cx| {
         w.within("doc.chat").click("tab.close", cx)
     });
@@ -420,4 +433,458 @@ fn a_shell_released_over_no_target_stays_in_the_terminal_app(cx: &mut TestAppCon
         (t.sessions.len(), t.docked.len())
     });
     assert_eq!((left, docked), (1, 0));
+}
+
+fn file(repo: &Path, path: &str) -> Doc {
+    Doc::File(Location {
+        repo: repo.display().to_string(),
+        rev: None,
+        path: path.into(),
+        line: None,
+        doc: None,
+    })
+}
+
+fn show(cx: &mut VisualTestContext, doc: Doc) {
+    cx.workspace(|w, cx| w.show(doc, cx));
+    settle(cx);
+}
+
+/// The chip of `category`: whether it is the one shown, and its count.
+fn chip(cx: &mut VisualTestContext, category: &str) -> (bool, String) {
+    let e = cx
+        .find(SharedString::from(format!("chip.{category}")))
+        .unwrap();
+    (
+        e.checked() == Some(true),
+        e.description().unwrap_or("").into(),
+    )
+}
+
+fn run(cx: &mut VisualTestContext, id: &str) {
+    cx.update(|w, cx| actions::dispatch(w, cx, id));
+    settle(cx);
+}
+
+/// Switches to workspace `name` and waits for its repos.
+fn switch(cx: &mut VisualTestContext, name: &str) {
+    let all = cx.settings(|s| s.workspaces.clone());
+    let id = all.into_iter().find(|w| w.name == name).unwrap().id;
+    let to = id.clone();
+    cx.workspace(|w, cx| w.switch(to, cx));
+    wait_until(cx, |cx| cx.workspace(|w, _| w.id() == Some(id.as_str())));
+    settle(cx);
+}
+
+/// The layout's repos, and a workspace "Other" over `solo` alone.
+fn two_workspaces(sb: &Sandbox) {
+    layout(sb);
+    let other = api::save_workspace(&sb.state, "Other".into(), None).unwrap();
+    api::add_folder(&sb.state, Some(other), sb.solo().display().to_string()).unwrap();
+}
+
+#[gpui_kit::test]
+fn a_file_a_markdown_file_and_a_chat_open_in_their_categories_each_shown_alone(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    show(cx, file(&app, "src/index.ts"));
+    assert_eq!(chip(cx, "code"), (true, "1".into()));
+    show(cx, file(&app, "README.md"));
+    assert_eq!(chip(cx, "docs"), (true, "1".into()));
+    assert!(
+        cx.find("doc.file.src/index.ts").is_none(),
+        "Code's tab is hidden"
+    );
+    assert!(cx.find("doc.file.README.md").is_some());
+    let repo = app.display().to_string();
+    show(cx, Doc::Chat { repo, n: 0 });
+    assert_eq!(chip(cx, "chats"), (true, "1".into()));
+    assert!(cx.find("doc.chat").is_some());
+    assert!(cx.find("doc.file.README.md").is_none());
+
+    cx.click("chip.code");
+    settle(cx);
+    assert!(cx.find("doc.file.src/index.ts").is_some());
+    assert!(cx.find("doc.chat").is_none());
+    let shown = cx.workspace(|w, _| w.shown().cloned());
+    assert_eq!(shown, Some(file(&app, "src/index.ts")));
+}
+
+#[gpui_kit::test]
+fn each_category_has_its_own_preview_tab(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    show(cx, file(&app, "src/index.ts"));
+    show(cx, file(&app, "README.md"));
+    show(cx, file(&app, "src/old.ts"));
+    assert!(cx.find("doc.file.src/old.ts").is_some());
+    assert!(
+        cx.find("doc.file.src/index.ts").is_none(),
+        "Code's preview took it"
+    );
+    show(cx, file(&app, "CHANGELOG.md"));
+    assert!(cx.find("doc.file.CHANGELOG.md").is_some());
+    assert_eq!(chip(cx, "docs").1, "1", "Docs' preview took it");
+    assert_eq!(chip(cx, "code").1, "1", "Code's preview stays");
+}
+
+#[gpui_kit::test]
+fn the_tab_actions_step_categories_and_tabs(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    show(cx, file(&app, "src/index.ts"));
+    cx.update(|w, cx| w.double_click("doc.file.src/index.ts", cx));
+    show(cx, file(&app, "src/old.ts"));
+    show(cx, file(&app, "README.md"));
+    run(cx, "tabs.code");
+    assert!(chip(cx, "code").0);
+    run(cx, "tabs.next");
+    assert_eq!(
+        cx.find("doc.file.src/index.ts").unwrap().checked(),
+        Some(true)
+    );
+    run(cx, "tabs.prev");
+    assert_eq!(
+        cx.find("doc.file.src/old.ts").unwrap().checked(),
+        Some(true)
+    );
+    run(cx, "tabs.nextCategory");
+    assert!(chip(cx, "docs").0, "around to the first");
+    run(cx, "tabs.prevCategory");
+    assert!(chip(cx, "code").0);
+    run(cx, "tabs.chats");
+    assert!(chip(cx, "chats").0);
+    assert!(cx.find("dock.empty").is_some(), "no chat here");
+    run(cx, "tabs.docs");
+    assert!(cx.find("doc.file.README.md").is_some());
+}
+
+#[gpui_kit::test]
+fn a_workspace_switch_hides_its_tabs_shows_the_other_s_and_a_restart_keeps_both(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, two_workspaces);
+    let (app, solo) = (cx.sb.repo("app"), cx.sb.solo());
+    show(cx, file(&app, "src/index.ts"));
+    show(cx, file(&app, "README.md"));
+    switch(cx, "Other");
+    assert!(cx.find("doc.file.README.md").is_none());
+    assert_eq!(chip(cx, "docs").1, "0");
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), None);
+    show(cx, file(&solo, "README.md"));
+    assert!(chip(cx, "docs").0);
+    run(cx, "tabs.code");
+    switch(cx, "Default");
+    assert!(chip(cx, "docs").0, "each workspace keeps its category");
+    assert!(cx.find("doc.file.README.md").is_some());
+    let shown = cx.workspace(|w, _| w.shown().cloned());
+    assert_eq!(shown, Some(file(&app, "README.md")));
+
+    let again = reopen(cx);
+    let drawn = in_window(cx, again, |w, _| w.try_find("doc.file.README.md").is_some());
+    assert!(drawn, "Default's docs tab is back");
+    let n = in_window(cx, again, |w, _| {
+        w.find("chip.code").description().map(String::from)
+    });
+    assert_eq!(n.as_deref(), Some("1"), "Other's tabs stay hidden");
+}
+
+#[gpui_kit::test]
+fn a_file_of_a_project_in_two_workspaces_gets_a_tab_in_each(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, two_workspaces);
+    let solo = cx.sb.solo();
+    let readme = file(&solo, "README.md");
+    show(cx, readme.clone());
+    switch(cx, "Other");
+    show(cx, readme.clone());
+    assert!(cx.find("doc.file.README.md").is_some());
+    let mine = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let tabs = dock::zones(cx)
+                .map(|a| dock::docs(a.read(cx)))
+                .unwrap_or_default();
+            tabs.iter()
+                .filter(|(_, _, t)| t.read(cx).doc == readme)
+                .count()
+        })
+    };
+    assert_eq!(mine(cx), 2, "neither took the other's preview");
+}
+
+#[gpui_kit::test]
+fn a_saved_center_from_before_workspaces_joins_the_current_one_and_a_doc_that_no_longer_parses_goes(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    show(cx, file(&app, "src/index.ts"));
+    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
+    let text = saved.unwrap().to_string();
+    let id = cx.workspace(|w, _| w.id().unwrap().to_string());
+    let old = text.replace(&format!("\"workspace\":\"{id}\""), "\"workspace\":null");
+    assert_ne!(old, text);
+    let old = old.replace("\"File\":{", "\"Gone\":{\"x\":1},\"Was\":{");
+    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
+    cx.update(|_, cx| ui_state::set("dock.layout", old, cx));
+    let again = reopen(cx);
+    let left = in_window(cx, again, |w, _| {
+        (
+            w.try_find("dock.missing").is_none(),
+            w.find("chip.code").description().map(String::from),
+        )
+    });
+    assert_eq!(left, (true, Some("0".into())), "dropped, no placeholder");
+
+    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
+    let mut text = saved.unwrap().to_string();
+    if !text.contains("src/index.ts") {
+        show(cx, file(&app, "src/index.ts"));
+        let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
+        text = saved.unwrap().to_string();
+    }
+    let old = text.replace(&format!("\"workspace\":\"{id}\""), "\"workspace\":null");
+    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
+    cx.update(|_, cx| ui_state::set("dock.layout", old, cx));
+    let again = reopen(cx);
+    let drawn = in_window(cx, again, |w, _| {
+        w.try_find("doc.file.src/index.ts").is_some()
+    });
+    assert!(drawn, "an old tab joins the current workspace");
+}
+
+#[gpui_kit::test]
+fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    let at = |path: &str| Location {
+        repo: "/r".into(),
+        rev: None,
+        path: path.into(),
+        line: None,
+        doc: None,
+    };
+    let docs = [
+        Doc::File(at("a.ts")),
+        Doc::File(at("a.md")),
+        Doc::Diff(DiffDoc {
+            repo: "/r".into(),
+            path: "a".into(),
+            orig_path: None,
+            left: Side::Head,
+            right: Side::Worktree,
+        }),
+        Doc::Mr {
+            repo: "/r".into(),
+            number: 1,
+        },
+        Doc::Job {
+            repo: "/r".into(),
+            project: detached_core::types::Project {
+                host: "h".into(),
+                path: "p".into(),
+            },
+            id: 1,
+            name: "j".into(),
+        },
+        Doc::Chat {
+            repo: "/r".into(),
+            n: 0,
+        },
+        Doc::Terminal {
+            id: 1,
+            cwd: "/r".into(),
+        },
+        Doc::Panel {
+            repo: "/r".into(),
+            task: "t".into(),
+            round: "01".into(),
+        },
+        Doc::PanelTask {
+            repo: "/r".into(),
+            task: "t".into(),
+        },
+        Doc::PanelStats { repo: "/r".into() },
+    ];
+    cx.update(|_, cx| {
+        let known: Vec<_> = dock::categories(cx).into_iter().map(|c| c.id).collect();
+        for kind in Doc::KINDS {
+            assert!(docs.iter().any(|d| d.kind() == kind), "{kind} has a sample");
+        }
+        for d in &docs {
+            let kind = dock::doc_kind(d.kind(), cx).unwrap();
+            assert!(known.contains(&kind.category(d)), "{}", d.kind());
+        }
+        assert_eq!(
+            dock::doc_kind("file", cx).unwrap().category(&docs[1]),
+            "docs"
+        );
+        assert_eq!(
+            dock::doc_kind("chat", cx).unwrap().category(&docs[5]),
+            "chats"
+        );
+    });
+}
+
+/// Counts its views' removals; its docs are Code's.
+struct Counted(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl DocKind for Counted {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
+
+    fn view(&self, _: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+        cx.new(|_| Stub).into()
+    }
+
+    fn id(&self, _: &Doc) -> gpui_kit::SharedString {
+        "counted.doc".into()
+    }
+
+    fn title(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> gpui_kit::SharedString {
+        "Counted".into()
+    }
+
+    fn removed(&self, _: &AnyView, _: &mut Window, _: &mut App) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+#[gpui_kit::test]
+fn no_switch_removes_a_tab_and_its_view_is_the_same_after(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, two_workspaces);
+    let removed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let n = removed.clone();
+    app(cx, |cx| dock::register_doc(cx, "mr", Counted(n)));
+    show(
+        cx,
+        Doc::Mr {
+            repo: "/r".into(),
+            number: 7,
+        },
+    );
+    let view = |cx: &mut VisualTestContext| cx.find("stub.view").map(|e| e.bounds());
+    assert!(view(cx).is_some());
+    run(cx, "tabs.docs");
+    switch(cx, "Other");
+    switch(cx, "Default");
+    run(cx, "tabs.code");
+    assert!(view(cx).is_some());
+    assert_eq!(removed.get(), 0);
+}
+
+#[gpui_kit::test]
+fn a_docked_terminal_lives_on_across_category_and_workspace_switches(cx: &mut TestAppContext) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, two_workspaces);
+    cx.press("alt-f12");
+    cx.input(ANSWER);
+    cx.press("enter");
+    let answered = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("terminal.row", i)))
+                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
+        })
+    };
+    wait_until(cx, answered);
+    drag_tab(cx, ("terminal.tab", 0usize), "dock.hints");
+    let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
+    assert_eq!(docked.len(), 1);
+    let tab = SharedString::from(format!("doc.terminal.{}", docked[0].entity_id().as_u64()));
+
+    run(cx, "tabs.chats");
+    assert!(cx.find(tab.clone()).is_none());
+    switch(cx, "Other");
+    switch(cx, "Default");
+    run(cx, "tabs.code");
+    assert!(cx.find(tab.clone()).is_some());
+    assert!(answered(cx), "the same screen");
+    let now = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
+    assert_eq!(now, docked, "the same shell");
+
+    cx.click(("terminal.row", 0usize));
+    cx.press("ctrl-tab");
+    assert!(
+        chip(cx, "docs").0,
+        "the terminal passes the category chord on"
+    );
+    run(cx, "tabs.code");
+
+    cx.click(("terminal.row", 0usize));
+    cx.input("exit");
+    cx.press("enter");
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| Terminals::global(cx).read(cx).docked.is_empty())
+    });
+    assert!(cx.find(tab).is_none(), "its exit closes its tab");
+}
+
+#[gpui_kit::test]
+fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
+    cx: &mut TestAppContext,
+) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, two_workspaces);
+    switch(cx, "Other");
+    cx.press("alt-f12");
+    wait_until(cx, |cx| cx.find(("terminal.tab", 0usize)).is_some());
+    drag_tab(cx, ("terminal.tab", 0usize), "dock.hints");
+    let solo = cx.sb.solo();
+    show(cx, file(&solo, "README.md"));
+    switch(cx, "Default");
+    let all = cx.settings(|s| s.workspaces.clone());
+    let other = all.into_iter().find(|w| w.name == "Other").unwrap().id;
+    let terms = cx.update(|_, cx| {
+        let tabs = dock::tabs_of(&other, cx);
+        tabs.iter()
+            .filter(|t| t.read(cx).doc.kind() == "terminal")
+            .count()
+    });
+    assert_eq!(terms, 1);
+    cx.click("workspaces");
+    let row = (0usize..8)
+        .map(|i| ("workspaces.row", i))
+        .find(|id| cx.find(*id).is_some_and(|e| e.label() == Some("Other")))
+        .unwrap();
+    cx.update(|w, cx| {
+        w.hover(row, cx);
+        w.within(row).click("remove", cx)
+    });
+    cx.click("workspaces.delete.confirm");
+    settle(cx);
+    assert!(cx.settings(|s| s.workspaces.iter().any(|w| w.name == "Other")));
+    let said = cx.activity(|a, _| a.message.clone()).map(|m| m.text);
+    assert!(said.is_some_and(|t| t.starts_with("Close its terminal tabs first")));
+
+    let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
+    let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
+    switch(cx, "Other");
+    run(cx, "tabs.code");
+    cx.update(|w, cx| w.within(SharedString::from(id)).click("tab.close", cx));
+    settle(cx);
+    switch(cx, "Default");
+    cx.press("escape");
+    cx.click("workspaces");
+    let row = (0usize..8)
+        .map(|i| ("workspaces.row", i))
+        .find(|id| cx.find(*id).is_some_and(|e| e.label() == Some("Other")))
+        .unwrap();
+    cx.update(|w, cx| {
+        w.hover(row, cx);
+        w.within(row).click("remove", cx)
+    });
+    cx.click("workspaces.delete.confirm");
+    wait_until(cx, |cx| cx.settings(|s| s.workspaces.len() == 1));
+    assert!(cx.update(|_, cx| dock::tabs_of(&other, cx).is_empty()));
+    let again = reopen(cx);
+    let n = in_window(cx, again, |_, cx| {
+        let tabs = dock::zones(cx)
+            .map(|a| dock::docs(a.read(cx)))
+            .unwrap_or_default();
+        tabs.len()
+    });
+    assert_eq!(n, 0, "its tabs do not come back");
 }

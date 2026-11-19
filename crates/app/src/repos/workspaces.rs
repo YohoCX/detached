@@ -101,17 +101,24 @@ impl Workspaces {
         cx.notify();
     }
 
-    fn delete(&mut self, id: String, cx: &mut Context<Self>) {
+    /// Refused while a docked terminal of it runs; otherwise its tabs close with it.
+    fn delete(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(open) = &mut self.open {
             open.deleting = None;
         }
-        core_then(
-            cx,
-            move |core| api::remove_workspace(core, id),
-            |_, cx| kernel::invalidate::rescan(cx),
-        )
-        .detach();
         cx.notify();
+        let tabs = crate::dock::tabs_of(&id, cx);
+        let terminals: Vec<_> = (tabs.iter())
+            .filter(|t| t.read(cx).doc.kind() == "terminal")
+            .map(|t| t.read(cx).title(cx).to_string())
+            .collect();
+        if !terminals.is_empty() {
+            let said = format!("Close its terminal tabs first: {}", terminals.join(", "));
+            return super::say(said, true, cx);
+        }
+        crate::dock::forget_workspace(&id, window, cx);
+        let gone = move |core: &_| api::remove_workspace(core, id);
+        core_then(cx, gone, |_, cx| kernel::invalidate::rescan(cx)).detach();
     }
 
     fn rename(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -274,7 +281,9 @@ impl Workspaces {
             .child(
                 small("workspaces.delete.confirm", "Delete")
                     .text_color(t.error)
-                    .on_click(cx.listener(move |this, _, _, cx| this.delete(id.clone(), cx))),
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.delete(id.clone(), window, cx)),
+                    ),
             )
             .child(
                 small("workspaces.delete.cancel", "Cancel").on_click(cx.listener(

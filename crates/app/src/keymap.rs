@@ -50,6 +50,10 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("zone.left", "Cmd+B"),
     ("zone.bottom", "Cmd+J"),
     ("zone.right", "Cmd+Alt+B"),
+    ("tabs.nextCategory", "Ctrl+Tab"),
+    ("tabs.prevCategory", "Ctrl+Shift+Tab"),
+    ("tabs.next", "Cmd+Shift+]"),
+    ("tabs.prev", "Cmd+Shift+["),
 ];
 
 /// Chords kept free for actions that do not exist yet.

@@ -317,8 +317,9 @@ provider then fills it in.
   lists its apps in the list's order. It gives each `Doc::kind()` it shows (`file`, `diff`, `mr`,
   `job`, `chat`, `terminal`; `Doc` stays a closed enum) an object of `dock::DocKind` with
   `dock::register_doc`: the tab's view, id, title, tooltip (`tip`) and badge, what it does when it
-  comes forward or closes, which docs share a tab, the preview tab, and how it takes a dropped doc
-  (`adopt`); a doc dragged out of an app's own list is a `dock::DragDoc` carrying the `Doc`. It
+  comes forward or closes, which docs share a tab, the preview tab, how it takes a dropped doc
+  (`adopt`), and its center category (`category`, no default; `dock::register_category(cx, id,
+  title, order)` makes one; PLAN-WORKSPACES §8); a doc dragged out of an app's own list is a `dock::DragDoc` carrying the `Doc`. It
   adds title-bar views with `shell::top_bar(cx, slot, order, view)`: `TopBar::Left` (V1:
   workspaces, repo switcher, branch widget), `TopBar::Center` (V5: MR chip, pipeline badge),
   `TopBar::Right` (V3: search pill; V1: Fetch All, Pull All); and `shell::overlay(cx, view)`,
