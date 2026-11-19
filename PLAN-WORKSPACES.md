@@ -12,7 +12,7 @@ The workspace becomes the top-level context: chats and Council runs belong to it
 across its projects, a project can sit in several workspaces and be attached read-only as a
 knowledge base, and the center's tabs are split by category.
 
-**Status (2026-11-19): review rounds 01–06 fixed; waiting for the owner's acceptance.** After
+**Status (2026-11-19): accepted by the owner (a workspace is its own context for everything: tabs, chats, Council, processes); W0–W4 started.** After
 round 04 the owner set read-only's boundary: it stops a cooperative agent's accidental writes, not
 a deliberate escape. What the owner decided is in the
 [decision](docs/decisions/2026-11-18-workspaces.md); choices marked *Proposal* are this plan's.
