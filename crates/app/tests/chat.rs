@@ -137,6 +137,10 @@ fn label(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) -> Opti
     cx.find(id).and_then(|e| e.label().map(String::from))
 }
 
+fn description(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) -> Option<String> {
+    cx.find(id).and_then(|e| e.description().map(String::from))
+}
+
 fn set_cli(cx: &mut VisualTestContext, cli: &Path) {
     let cli = [(CLAUDE.id.into(), cli.display().to_string())].into();
     let config = Config { cli, codex: false };
@@ -283,6 +287,8 @@ fn the_answer_copies_from_under_the_turn(cx: &mut TestAppContext) {
     say(cx, "hello");
     wait_for_item(cx, "Done in");
     let end = index_of(cx, "Done in");
+    // The copy button shows on hover.
+    cx.update(|w, cx| w.hover(("chat.item", end), cx));
     cx.click(("chat.copy", end));
     let copied = cx.read_from_clipboard().and_then(|c| c.text());
     assert_eq!(copied.as_deref(), Some("said hello"));
@@ -426,10 +432,13 @@ fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_session(cx: &mut 
     settle(cx);
     assert!(items(cx).is_empty());
     assert!(cx.find("doc.chat.1").is_some() && cx.find("doc.chat").is_some());
-    assert!(
-        label(cx, "doc.chat").is_some_and(|l| l == "solo · hello"),
+    assert_eq!(
+        label(cx, "doc.chat").as_deref(),
+        Some("hello"),
         "named by what was said"
     );
+    let tip = format!("{} · solo", CLAUDE.name);
+    assert_eq!(description(cx, "doc.chat"), Some(tip));
     let second = id(cx, 1);
     let dir = cx.sb.path("claude");
     let live = |id: &str| dir.join(format!("{id}.live"));
@@ -1032,8 +1041,9 @@ fn a_claude_the_client_cannot_talk_to_names_the_terminal_and_the_floor(cx: &mut 
 fn the_chat_names_what_runs_by_the_provider_s_label(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+    assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert_eq!(
-        label(cx, "doc.chat").as_deref(),
+        description(cx, "doc.chat").as_deref(),
         Some(format!("{} · solo", CLAUDE.name).as_str())
     );
     say(cx, ASK);
@@ -1073,7 +1083,7 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     let repo = group.display().to_string();
     cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
     settle(cx);
-    assert!(label(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
+    assert!(description(cx, "doc.chat").is_some_and(|l| l.ends_with("group/")));
     say(cx, "write api/README.md agent; write web/by-agent.txt x");
     // Nested repo names hold `\` on Windows (docs/TECHDEBT.md).
     let sep = std::path::MAIN_SEPARATOR;

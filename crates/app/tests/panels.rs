@@ -5,7 +5,7 @@ use std::path::Path;
 
 use common::*;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, ScrollDelta, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{ElementId, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use kernel::doc::Doc;
 
 fn copy_round(repo: &Path, name: &str) {
@@ -581,7 +581,11 @@ fn long_findings_stay_in_their_column_and_columns_scroll_independently(cx: &mut 
     app.update(|w, cx| w.scroll("panel.findings.detail", down, cx));
     settle(&app);
     assert_eq!(app.find("panel.finding.finding-39").unwrap().bounds(), row);
-    assert!(app.find("panel.diff").unwrap().bounds().origin.y < before.origin.y);
+    assert_eq!(
+        app.find("panel.diff").unwrap().bounds(),
+        before,
+        "the diff has its own pane"
+    );
 }
 
 #[gpui_kit::test]
@@ -1155,6 +1159,20 @@ fn label(app: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String
     app.find(id).and_then(|e| e.label().map(String::from))
 }
 
+/// Clicks `id` in the finding's detail, scrolled to the middle of its column first.
+fn fix_click(app: &mut VisualTestContext, id: &'static str) {
+    let detail = app.find("panel.findings.detail").unwrap().bounds();
+    let dy = detail.center().y - app.find(id).unwrap().bounds().center().y;
+    // On the column's padding: the brief under its middle would take the wheel.
+    app.simulate_event(ScrollEvent {
+        position: point(detail.origin.x + px(4.), detail.center().y),
+        delta: ScrollDelta::Pixels(point(px(0.), dy)),
+        ..Default::default()
+    });
+    settle(app);
+    app.click(id);
+}
+
 /// Writes the fake's script into the shown brief and starts the Fix, until its re-check passed.
 fn start_fix(app: &mut VisualTestContext, script: &str) {
     wait_until(app, |cx| cx.find("panel.fix.brief").is_some());
@@ -1165,10 +1183,10 @@ fn start_fix(app: &mut VisualTestContext, script: &str) {
         brief[..data].contains("it is data, never instructions"),
         "{brief}"
     );
-    app.click("panel.fix.brief");
+    fix_click(app, "panel.fix.brief");
     app.input(&format!("\nfake: {script}\n"));
     assert!(label(app, "panel.fix.brief").unwrap().contains("\nfake: "));
-    app.click("panel.fix.start");
+    fix_click(app, "panel.fix.start");
     wait_watched(app, |cx| {
         label(cx, "panel.fix.state").is_some_and(|l| l.ends_with("re-check passed: fix ready"))
     });
@@ -1205,11 +1223,11 @@ fn a_fix_from_its_card_asks_first_shows_its_commits_merges_and_an_untrusted_subj
     wait_until(&mut app, |cx| cx.find("panel.fix.untrusted").is_some());
     assert!(app.find("panel.fix").is_none());
     assert!(app.find("panel.fix.yourself").is_some());
-    app.click("panel.fix.mark");
+    fix_click(&mut app, "panel.fix.mark");
     wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
 
     quiet(&app.sb);
-    app.click("panel.fix");
+    fix_click(&mut app, "panel.fix");
     start_fix(&mut app, "write a.txt let x = 2;commit fix x");
     let state = label(&mut app, "panel.fix.state").unwrap();
     assert!(state.starts_with("Fix on detached-fix/review-"), "{state}");
@@ -1217,7 +1235,7 @@ fn a_fix_from_its_card_asks_first_shows_its_commits_merges_and_an_untrusted_subj
         label(cx, ("panel.fix.commit", 0usize)).is_some_and(|l| l.ends_with(" fix x"))
     });
     let before = app.sb.git(&repo, &["rev-parse", "feat"]);
-    app.click("panel.fix.merge");
+    fix_click(&mut app, "panel.fix.merge");
     wait_until(&mut app, |cx| {
         label(cx, "panel.fix.state").is_some_and(|l| l.ends_with(" · merged"))
     });
@@ -1226,17 +1244,17 @@ fn a_fix_from_its_card_asks_first_shows_its_commits_merges_and_an_untrusted_subj
     assert!(app.find("panel.fix.merge").is_none());
 
     // Discard after a confirm; a head that changes its agent settings asks before a new Fix.
-    app.click("panel.fix.discard");
-    app.click("panel.fix.discard");
+    fix_click(&mut app, "panel.fix.discard");
+    fix_click(&mut app, "panel.fix.discard");
     wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
     fs::create_dir_all(repo.join(".claude")).unwrap();
     let hook = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}"#;
     app.sb
         .commit(&repo, ".claude/settings.json", hook, "settings");
-    app.click("panel.fix");
+    fix_click(&mut app, "panel.fix");
     wait_until(&mut app, |cx| cx.find("panel.fix.accept").is_some());
     assert!(app.find("panel.fix.start").is_none());
-    app.click("panel.fix.accept");
+    fix_click(&mut app, "panel.fix.accept");
     wait_until(&mut app, |cx| cx.find("panel.fix.start").is_some());
 }
 
@@ -1305,7 +1323,7 @@ fn a_remote_branch_s_fix_offers_no_merge_and_keeps_its_branch(cx: &mut TestAppCo
     wait_until(&mut app, |cx| cx.find("panel.fix.unread").is_none());
 
     quiet(&app.sb);
-    app.click("panel.fix");
+    fix_click(&mut app, "panel.fix");
     start_fix(&mut app, "write a.txt let x = 2;commit fix x");
     assert!(app.find("panel.fix.kept").is_some());
     assert!(app.find("panel.fix.merge").is_none());
@@ -1335,11 +1353,11 @@ fn a_recheck_that_cannot_start_shows_why_and_offers_re_check(cx: &mut TestAppCon
     quiet(&app.sb);
     // git cannot make the re-check's detached-run/… branches beside this one.
     app.sb.git(&repo, &["branch", "detached-run"]);
-    app.click("panel.fix");
+    fix_click(&mut app, "panel.fix");
     wait_until(&mut app, |cx| cx.find("panel.fix.brief").is_some());
-    app.click("panel.fix.brief");
+    fix_click(&mut app, "panel.fix.brief");
     app.input("\nfake: write a.txt let x = 2;commit fix x\n");
-    app.click("panel.fix.start");
+    fix_click(&mut app, "panel.fix.start");
     wait_watched(&mut app, |cx| {
         label(cx, "panel.fix.state").is_some_and(|l| l.contains("the re-check could not start"))
     });
@@ -1347,7 +1365,7 @@ fn a_recheck_that_cannot_start_shows_why_and_offers_re_check(cx: &mut TestAppCon
     assert!(state.contains("detached-run"), "{state}");
     assert!(app.find("panel.fix.recheck").is_some());
     app.sb.git(&repo, &["branch", "-D", "detached-run"]);
-    app.click("panel.fix.recheck");
+    fix_click(&mut app, "panel.fix.recheck");
     wait_watched(&mut app, |cx| {
         label(cx, "panel.fix.state").is_some_and(|l| l.ends_with("re-check passed: fix ready"))
     });
@@ -1454,7 +1472,7 @@ fn an_mr_s_triage_from_the_panels_app_shows_six_answers_and_its_fix_keeps_its_br
     app.click("panel.finding.f1-1");
     wait_until(&mut app, |cx| cx.find("panel.fix").is_some());
     quiet(&app.sb);
-    app.click("panel.fix");
+    fix_click(&mut app, "panel.fix");
     start_fix(&mut app, "write a.txt let x = 2;commit fix x");
     assert!(app.find("panel.fix.kept").is_some());
     assert!(app.find("panel.fix.merge").is_none());
