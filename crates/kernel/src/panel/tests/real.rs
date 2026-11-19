@@ -198,7 +198,7 @@ fn a_sandboxed_trusted_verifier_cannot_write_the_tree_or_a_ref_and_is_not_asked(
 
 #[gpui::test]
 #[ignore = "make agent-test"]
-fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_argv(
+fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_starts_no_repo_server(
     cx: &mut TestAppContext,
 ) {
     let (f, api) = boot(
@@ -215,6 +215,11 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
             .unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     };
+    // Made here, so no other process's command line names it.
+    let secret = format!("s{}", detached_core::panel::record::now() * 7919);
+    let server =
+        json!({"mcpServers": {"local": {"command": "sh", "args": ["-c", "sleep 60", &secret]}}});
+    std::fs::write(Path::new(&f.repo).join(".mcp.json"), server.to_string()).unwrap();
     // The project's settings committed, the owner's local ones beside them, both accepted.
     let dot = Path::new(&f.repo).join(".claude");
     std::fs::create_dir_all(&dot).unwrap();
@@ -240,7 +245,7 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
     ]);
     std::fs::write(
         dot.join("settings.local.json"),
-        r#"{"env": {"FROM_LOCAL": "yes"}}"#,
+        r#"{"env": {"FROM_LOCAL": "yes"}, "enableAllProjectMcpServers": true}"#,
     )
     .unwrap();
     let start = detached_core::panel::run::Start {
@@ -270,13 +275,8 @@ fn an_orchestrator_finder_commits_on_its_branch_with_no_prompt_and_no_secret_in_
     let (cwd, branch) =
         tree::finder(&f.core, Path::new(&f.repo), "real", "f1", sha.trim()).unwrap();
     detached_core::panel::run::copy_local(Path::new(&f.repo), &cwd).unwrap();
-    let mcp = f.dir.path().join("mcp.json");
-    // Made here, so no other process's command line names it.
-    let secret = format!("s{}", detached_core::panel::record::now() * 7919);
-    let server = json!({"mcpServers": {"local": {"command": "cat", "env": {"TOKEN": secret}}}});
-    std::fs::write(&mcp, server.to_string()).unwrap();
     let mut spec = Spec::new(&CLAUDE, &cwd.display().to_string(), Kind::Chat);
-    (spec.mode, spec.mcp) = ("bypassPermissions".into(), Some(mcp));
+    spec.mode = "bypassPermissions".into();
     let (s, results) = run(spec, Some(f.repo.clone()), &api, cx);
     let all = results.join("\n");
     assert!(

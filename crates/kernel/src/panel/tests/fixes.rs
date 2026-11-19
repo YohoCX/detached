@@ -181,7 +181,6 @@ fn a_fix_commits_on_its_own_branch_passes_its_recheck_and_stays_fix_ready_until_
         fixes::discard(
             [&*repo, &task, &run, "f1-1"],
             fixing.tree.clone().into(),
-            fixing.branch.clone(),
             cx,
         )
     });

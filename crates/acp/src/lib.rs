@@ -168,10 +168,6 @@ impl Acp {
             cwd: spec.repo.clone().into(),
             config: config_of(spec),
             server,
-            mcp: match &spec.mcp {
-                Some(file) => from_file(file)?,
-                None => vec![],
-            },
             codex,
         };
         let opened = match resume {
@@ -315,39 +311,6 @@ fn wire(id: &str, codex: bool) -> String {
 }
 
 const EFFORT: &str = "reasoning_effort";
-
-/// The servers of a run's MCP file, as Claude's `--mcp-config` takes them.
-fn from_file(file: &Path) -> Result<Vec<McpServer>> {
-    let all: Value = serde_json::from_slice(&std::fs::read(file)?)?;
-    let pairs = |v: &Value| -> Vec<(String, String)> {
-        let all = v.as_object().into_iter().flatten();
-        all.map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().into()))
-            .collect()
-    };
-    let servers = all["mcpServers"].as_object().into_iter().flatten();
-    let server = |(name, s): (&String, &Value)| match s["url"].as_str() {
-        Some(url) => {
-            let headers = pairs(&s["headers"]);
-            let headers = headers.into_iter().map(|(k, v)| HttpHeader::new(k, v));
-            let http = McpServerHttp::new(name, url).headers(headers.collect());
-            McpServer::Http(http)
-        }
-        None => {
-            let args = s["args"].as_array().into_iter().flatten();
-            let args = args.filter_map(|a| a.as_str().map(String::from)).collect();
-            let env = pairs(&s["env"])
-                .into_iter()
-                .map(|(k, v)| EnvVariable::new(k, v));
-            let command = s["command"].as_str().unwrap_or_default();
-            McpServer::Stdio(
-                McpServerStdio::new(name, command)
-                    .args(args)
-                    .env(env.collect()),
-            )
-        }
-    };
-    Ok(servers.map(server).collect())
-}
 
 /// Codex's project layer in `cwd`, a tree the host made: a permission profile that extends
 /// `:read-only` and denies reading `deny`. The adapter trusts the cwd, so the layer loads.
@@ -630,8 +593,6 @@ struct Options {
     config: Vec<(String, String)>,
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
-    /// A run's MCP servers.
-    mcp: Vec<McpServer>,
     codex: bool,
 }
 
@@ -910,7 +871,7 @@ impl Drop for Adapter {
 
 fn servers(o: &Options) -> Vec<McpServer> {
     let http = |(name, url): &(String, String)| McpServer::Http(McpServerHttp::new(name, url));
-    o.server.iter().map(http).chain(o.mcp.clone()).collect()
+    o.server.iter().map(http).collect()
 }
 
 /// The `model` option's choices, with their names; efforts come with the `effort` option.

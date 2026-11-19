@@ -114,14 +114,7 @@ fn a_fix_branches_from_the_head_into_a_managed_worktree_that_untrusted_runs_cann
         "detached-fix/run1/f1-1-2",
         "a second Fix gets its own branch"
     );
-    discard(
-        &sb.state,
-        [&repo, &m.tree],
-        &m.branch,
-        &Cancel::default(),
-        &|_| {},
-    )
-    .unwrap();
+    discard(&sb.state, [&repo, &m.tree], &Cancel::default(), &|_| {}).unwrap();
     assert!(!m.tree.exists());
     assert_eq!(
         sb.git(&repo, &["rev-parse", &format!("refs/heads/{}", m.branch)]),
@@ -243,7 +236,6 @@ fn merge_fast_forwards_with_hooks_off_shows_hook_files_refuses_dirty_or_diverged
     discard(
         &sb.state,
         [&repo, &second.tree],
-        &second.branch,
         &Cancel::default(),
         &|_| {},
     )

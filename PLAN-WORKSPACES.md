@@ -503,6 +503,21 @@ decisions and KEYMAP matches. Independent of the rest.
 
 ### Step W2. Third-party MCP servers off
 
+**Status (2026-11-19): built, not yet run.** Claude: `--strict-mcp-config` on every spawn and
+resume, every kind, and `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the CLI's env (and `WSLENV`);
+`Spec.mcp`, `--mcp-config`, the run's and the Fix's 0600 file in `data/private/` and the ACP
+backend's file servers are gone. Codex, by W0 row 7: a chat offers Claude alone, and a trusted
+run's Codex seats go to Claude with the limit "Codex cannot turn off its MCP servers per session";
+an untrusted run still seats Codex, and Settings' `agents.codex` still turns that on. The gate is
+the app's provider list and core's run setup, not `kernel::Session`, whose Codex tests on
+`fake_acp` stay. README and `docs/releases/0.6.1.md` say it. Tests written, compiled with `cargo
+check`, not run (`make check` and `make agent-test` wait for the combined build): the fake CLI's
+argv per kind and on a resume, its env, no `data/private/`, the ACP session's empty `mcpServers`,
+Claude in Codex's seats on a trusted subject, a chat with no Codex pick; `make agent-test`'s new
+row (a user server in `~/.claude.json` never starts, the read tool answers, the user's hook runs)
+and its finder row (a trusted repo's `.mcp.json` never starts). The owner checks: his chat lists
+Detached's server alone (`/mcp`), his skills and hooks still run, claude.ai connectors absent.
+
 Needs W0 rows 4 and 7. Work: §4.5 on today's chat and Council; the README and the release notes
 say third-party MCP servers no longer load in Detached's agents, and skills with scripts replace
 them.

@@ -485,6 +485,35 @@ fn a_real_claude_reads_a_repo_s_status_through_the_host_tools(cx: &mut TestAppCo
     answered(from);
 }
 
+/// Every spawn is strict: a server of the user's `~/.claude.json` never starts, the host's read
+/// tool answers and the user's hook runs.
+#[gpui::test]
+#[ignore = "make agent-test"]
+fn a_user_s_mcp_server_never_starts_and_the_host_s_read_tool_answers(cx: &mut TestAppContext) {
+    let query = "{ workspace { repos { name } } }";
+    let call = json!({"tool": "mcp__detached-host__detached_read", "input": {"query": query}});
+    let (f, api) = boot(cx, json!([[call], text("read")]));
+    let marker = format!("usersrv{}", std::process::id());
+    let config = f.claude_dir().join(".claude.json");
+    let mut user: Value = (std::fs::read(&config).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!({}));
+    user["mcpServers"] = json!({"usersrv": {"command": "sh", "args": ["-c", "sleep 60", &marker]}});
+    std::fs::write(&config, user.to_string()).unwrap();
+    std::fs::write(f.claude_dir().join("settings.json"), hook("user-hooked")).unwrap();
+    f.list(cx);
+    let s = open(&f, Kind::Chat, cx);
+    run(&s, "go", cx);
+    let sent: Vec<String> = api.requests().iter().map(Value::to_string).collect();
+    assert!(
+        sent.iter().any(|r| r.contains(r#"{\"name\":\"repo\"}"#)),
+        "{sent:?}"
+    );
+    assert!(!sent.iter().any(|r| r.contains("mcp__usersrv")));
+    assert!(!running(&marker));
+    assert!(Path::new(&f.repo).join("user-hooked").exists());
+}
+
 /// Asked about the watcher, `claude` reads the doc's section
 /// through `docs`, and the model gets it.
 #[gpui::test]

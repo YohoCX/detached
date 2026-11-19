@@ -6,7 +6,7 @@ A native multi-repo git client for macOS, Windows and Linux, with AI agents besi
   find in files at any ref, the git log.
 - **Merge requests and pipelines** for GitLab and GitHub, self-hosted GitLab and GitHub Enterprise
   included.
-- **Agent chats** with Claude Code and Codex: per-repo trust, turn snapshots you can restore,
+- **Agent chats** with Claude Code: per-repo trust, turn snapshots you can restore,
   skills, and a read-only view of the client.
 - **Panels of agents:** review a branch, gate a merge, triage an MR or issue, review a plan, argue
   a question. Each finding can be fixed in its own worktree and reaches your branch on your click.
@@ -44,7 +44,9 @@ made or endorsed by Anthropic or OpenAI.
 
 Codex is optional and off until `settings.json` has `"agents": {"codex": true}`. It runs on your
 `codex`, 0.166.0 or later, and its login, through its ACP adapter `codex-acp`, which Settings ›
-Agents installs from Detached's signed adapter catalog.
+Agents installs from Detached's signed adapter catalog. It takes the Codex seats of a panel on a
+subject you have not trusted; Codex chats and Codex in trusted panels are off, since Codex cannot
+turn off your MCP servers for one session.
 
 - **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. Each
   tool call that needs permission asks you; "Always" is kept by Detached for that exact call, never
@@ -52,11 +54,15 @@ Agents installs from Detached's signed adapter catalog.
   For Claude, the bar shows what is left of your plan's 5-hour and weekly limits. Past
   conversations, Claude Code's own from a terminal included, can be resumed, archived or deleted.
   Images in an agent's reply show as links and never load by themselves.
-- **Trust.** A repo's own agent settings (hooks, MCP servers, permissions, skills, commands) load
-  only once you accept them, and a change to them asks again.
+- **Trust.** A repo's own agent settings (hooks, permissions, skills, commands) load only once you
+  accept them, and a change to them asks again.
   Claude Code's Read tool and a plain `cat`, `head`, `tail` or `less` of a `.env` file are refused;
   other commands and scripts are not, so a `.env` is not safe from an agent that runs commands
-  without asking. Codex chats have no such refusal.
+  without asking.
+- **No third-party MCP servers.** Detached's chats and panels load no MCP server but Detached's
+  own: not yours, not a repo's `.mcp.json`, not a plugin's, not claude.ai connectors. They run
+  outside every permission rule and cost context on every turn; extend the agents with skills that
+  run scripts instead.
 - **Panels** put several agents on one subject: a review or a pre-merge gate of a branch, triage of
   a merge request or an issue, a review of a plan or any document. On a question, a dialectic has
   two agents argue opposite sides and rebut each other, and a judge weighs them; a brainstorm
@@ -64,7 +70,8 @@ Agents installs from Detached's signed adapter catalog.
   agent before you see it; you Fix, Dismiss or Defer it. A Fix runs in a worktree on its own branch
   and is checked again. A subject you have not marked trusted, such as a merge request from a fork,
   gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and model did, and
-  past revmux rounds can be imported. With Codex on, Codex can verify the findings. On Windows a
+  past revmux rounds can be imported. With Codex on, Codex can verify the findings of an untrusted
+  subject. On Windows a
   panel reviews only subjects you trusted; the sandboxed review needs WSL, not built yet.
 - **Agents read the client, not pasted text:** branches, merge requests, pipelines, docs and
   processes come to them through a read-only tool. Chats you put in one group can message each

@@ -109,8 +109,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       is trusted;
     - model, effort, mode;
     - plugin folders (§11), the host tools' handler (§7);
-    - an isolated kind's denied reads and temp dir (§5);
-    - a run's MCP config file, by its path (PLAN-PANELS §3).
+    - an isolated kind's denied reads and temp dir (§5).
   - **Events:**
     - `Opened`: the id, the agent's version (the CLI's on Claude, the adapter's on ACP), the
       models with each one's effort levels and whether it takes `auto`, the
@@ -146,7 +145,6 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     | host tools | `sdkMcpServers` in `initialize` | `mcpServers`, the session's URL (§7) |
     | a new id, a resume | `--session-id`, `--resume` | `session/new`, `session/load` |
     | place | `wsl.exe -d <distro> --cd <dir> -e sh` before the leash, and `WSLENV` | this machine only |
-    | MCP config file | `--mcp-config <path>` | the file's servers in `mcpServers` |
     | the probe | an untrusted participant's flags; the env without the login, cloud and proxy names, with a dummy key and the responder's `ANTHROPIC_BASE_URL` | none |
   - **Who adds what.**
     - H4c part a moves `acp`'s types of today (`Event`, `Update`, `Tool`, `Ask`, `Reply`, `Turn`,
@@ -158,8 +156,8 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
       `core::agent`'s shapes of today (`Model`, `SlashCommand`, `Question`, `Task`, `Part`,
       `Limit`, `Past`), which it re-exports until it goes.
     - ACP fills what it has at H13b and lacks the rest. H11 adds nothing to the seam.
-    - P2 adds the MCP config file and `probe`, each with Claude filling it and a fake-CLI test of
-      its argv and env. The responder, the dummy key and the names left out stay inside
+    - P2 adds `probe`, with Claude filling it and a fake-CLI test of its argv and env (P2's MCP
+      config file went in PLAN-WORKSPACES W2). The responder, the dummy key and the names left out stay inside
       `core::claude`; the kernel keeps the probe's cache.
   - **Nothing above the seam can name a protocol**: not `kernel::Session`, the chat, panels, host
     tools, trust or the Agents page. Three checks, none a lint an `#[allow]` lifts:
@@ -246,7 +244,7 @@ What every provider must do; the host holds each row:
 | Stop ends the turn and what it started | Claude: `interrupt`, then `stop_task` for each background task of the turn, with no declaration; an interrupt alone spares a background command (spike 0c rows 4, 5). On Windows a command may run on until its session's job closes: a TECHDEBT row, measured in H4c part 0. ACP: `session/cancel`, and a background stop where the adapter has one. Codex (H13a, live): the cancel ends the turn at once, but its command runs on as a background terminal until it ends or the session closes, which ends it in 20 ms. The per-task stop is AIR's `asyncTasks`, whose update the client cannot parse, so a Codex chat's Stop cancels and ends the session, which ends its commands, and the next message resumes it (H13b) |
 | "Always allow" writes no file | the host keeps always-rules and answers one call at a time: `allow` with no `updatedPermissions` on Claude, `allow_once` on ACP (§5) |
 | Setting sources | chat in an untrusted repo: `["user"]`, as today; trusted: `["user", "project", "local"]`; a trusted subject's finders: the chat's for that repo, and its verifiers: `["user"]`; an untrusted subject's participants: `[]`. Claude: `--setting-sources` on every spawn, `""` for none; with no flag the CLI loads everything |
-| MCP servers | chat and a trusted subject's finders: as the chat; a trusted subject's verifiers and an untrusted subject's participants: `strictMcpConfig: true`, only the host's tools, or the account's claude.ai connectors join |
+| MCP servers | every session: the host's tools alone ([workspaces](docs/decisions/2026-11-18-workspaces.md), PLAN-WORKSPACES §4.5). Claude: `--strict-mcp-config` on every spawn and resume, and `ENABLE_CLAUDEAI_MCP_SERVERS=false` for the account's claude.ai connectors. Codex: no per-session override empties its `mcp_servers` (PLAN-WORKSPACES W0 row 7), so it runs only as an untrusted participant, on a Codex home of its own |
 | Model, effort, mode as asked | Claude: `--model`, `--effort` and `--permission-mode` on every spawn and every `--resume`, with every other flag of the `Spec` (§6). Without `--model` a resume runs on the user's settings' model, and without `--permission-mode` the session starts in the user's `defaultMode`. Later switches are `set_model`, `apply_flag_settings` and `set_permission_mode`. The host checks a model against `initialize.models`, since the CLI takes any name. `bypassPermissions` needs `--allow-dangerously-skip-permissions` at spawn, which only orchestrator sessions get. ACP: `set_config_option` after `session/new` and every `session/load`, for each listed option that differs; Codex's effort is `reasoning_effort` |
 | Questions reach the host | Claude: an ask for `AskUserQuestion`, answered in `updatedInput.answers`. ACP: the client declares `elicitation.form` |
 | Usage is reported | Claude: `result`'s usage and cost, `get_context_usage`, `get_usage`. ACP: `usage_update`, `config_option_update`, `current_mode_update`. Missing means unknown, never zero |
@@ -682,7 +680,7 @@ Agents get Detached's data and a closed list of actions as tools.
     The CLI sends each MCP message as an `mcp_message` request on its control channel, and the
     backend answers from its read loop (spike 0c row 9).
     - No listener, no secret and nothing in argv; the session is the identity.
-    - `--strict-mcp-config` drops the user's servers and keeps this one.
+    - `--strict-mcp-config`, on every spawn, drops every other server and keeps this one.
   - **ACP providers: Streamable HTTP on `127.0.0.1`** inside the app, built with Codex in H13a
     (`crates/acp`'s `mcp`): one listener for the process, plain JSON answers, `GET` refused.
     Each session has a path with a random secret, passed in `session/new`'s `mcpServers`; Codex
@@ -1624,8 +1622,8 @@ Tests:
       `GITHUB_TOKEN` and an env-store value among them, a set `CLAUDE_CODE_USE_FOUNDRY` passes,
       and the CLI reaches the API through `ANTHROPIC_BASE_URL`;
     - a chat in an untrusted repo gets `--setting-sources user`, in a trusted one
-      `user,project,local`; a verifier `user` and `--strict-mcp-config`; an untrusted participant
-      `""` and `--strict-mcp-config`. No spawn goes without the flag;
+      `user,project,local`; a verifier `user`; an untrusted participant `""`; every one
+      `--strict-mcp-config` (PLAN-WORKSPACES W2). No spawn goes without the flags;
     - a resume passes every flag of its spawn again, the sources and the denies among them, and
       runs on its model;
     - "Always" sends no `updatedPermissions`, and no file appears in the repo;

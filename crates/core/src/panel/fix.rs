@@ -58,16 +58,15 @@ pub fn now(core: &AppState, s: &Subject, moved: bool) -> Result<(bool, bool)> {
     Ok((trust.trusted, now.head_sha != s.head_sha))
 }
 
-/// A Fix's branch and its managed worktree, with the MCP file its session reads.
+/// A Fix's branch and its managed worktree.
 pub struct Made {
     pub branch: String,
     pub tree: PathBuf,
-    pub mcp: Option<PathBuf>,
 }
 
 /// Makes the Fix's branch at the head the owner saw and checks it out in a managed worktree, with
-/// the owner's local settings and the repo's MCP servers. Refused on an untrusted subject, a head
-/// that moved, or trust files not accepted.
+/// the owner's local settings. Refused on an untrusted subject, a head that moved, or trust files
+/// not accepted.
 pub fn make(
     core: &AppState,
     pv: &Preview,
@@ -117,28 +116,21 @@ pub fn make(
     let made =
         worktree::create(core, repo, &main, &folder, &branch, cancel, progress).and_then(|tree| {
             run::copy_local(repo, &tree)?;
-            let mcp = run::mcp(core, repo, &tree, &private(&branch))?;
             Ok(Made {
                 branch: branch.clone(),
                 tree,
-                mcp,
             })
         });
     if made.is_err() {
         // `create` keeps a worktree whose install failed: it goes, then the branch, so no Fix
         // the card cannot see is left behind.
         let tree = worktree::root(&core.data_dir, &main, &folder).join(&branch);
-        _ = discard(core, [repo, &tree], &branch, &Cancel::default(), &|_| {});
+        _ = discard(core, [repo, &tree], &Cancel::default(), &|_| {});
         _ = locked(core, repo, || {
             worktree::hookless(&env, repo, &["branch", "-D", &branch])
         });
     }
     made
-}
-
-/// The folder under `data/private/` that holds a Fix's MCP file.
-pub fn private(branch: &str) -> String {
-    run::task(branch)
 }
 
 /// The main checkout of `repo` and the workspace folder it was found under: where managed
@@ -176,18 +168,16 @@ pub fn merge(core: &AppState, s: &Subject, branch: &str) -> Result<()> {
     tree::merge(core, Path::new(&s.repo), &s.branch, branch)
 }
 
-/// Removes the Fix's worktree, changes and all, and its private files; the branch stays.
+/// Removes the Fix's worktree, changes and all; the branch stays.
 pub fn discard(
     core: &AppState,
     [repo, tree]: [&Path; 2],
-    branch: &str,
     cancel: &Cancel,
     progress: Progress,
 ) -> Result<()> {
     if tree.exists() {
         worktree::remove(core, repo, tree, true, cancel, progress)?;
     }
-    _ = std::fs::remove_dir_all(core.data_dir.join("private").join(private(branch)));
     Ok(())
 }
 

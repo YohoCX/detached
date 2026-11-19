@@ -1395,81 +1395,12 @@ fn codex(sb: &Sandbox) {
     sb.state.env.write().unwrap().vars.push(home);
 }
 
+/// Codex cannot turn off its MCP servers per session: a chat never offers it, even with Codex on.
 #[cfg(unix)]
 #[gpui_kit::test]
-fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_background_command(
-    cx: &mut TestAppContext,
-) {
+fn a_chat_offers_no_codex_even_with_codex_on(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, codex);
-    cx.click("chat.provider.pick");
-    cx.update(|w, cx| assert!(menu::pick("Codex", w, cx)));
-    wait_until(cx, |cx| label(cx, "chat.name").as_deref() == Some("Codex"));
-    let mode = cx
-        .find("chat.mode")
-        .and_then(|e| e.description().map(String::from));
-    assert_eq!(mode.as_deref(), Some("Auto review"));
-    say(cx, "run hi");
-    let run = index_of(cx, "execute Run echo hi ok");
-    cx.click(("chat.item", run));
-    assert_eq!(label(cx, ("chat.output", run)).as_deref(), Some("hi\nhi\n"));
-    idle(cx);
-    let first = id(cx, 0);
-    let solo = cx.sb.solo().display().to_string();
-    // Sent through the chat: the click on the output took the box's focus.
-    let send = |text: &str, cx: &mut VisualTestContext| {
-        let solo = solo.clone();
-        cx.update(|_, cx| {
-            let chat = chat::find(&solo, 0, cx).unwrap();
-            chat.update(cx, |c, cx| c.send(text.into(), cx));
-        })
-    };
-    send("bg", cx);
-    let pid = |cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            let chat = chat::find(&solo, 0, cx)?;
-            let s = chat.read(cx).current()?.read(cx);
-            s.items.iter().find_map(|i| match i {
-                kernel::session::Item::Tool(t) => t.input.as_ref()?["pid"].as_u64(),
-                _ => None,
-            })
-        })
-    };
-    wait_until(cx, |cx| pid(cx).is_some());
-    let pid1 = pid(cx).unwrap();
-    cx.click("chat.stop");
-    idle(cx);
-    wait_until(cx, |_| !detached_core::testutil::alive(pid1 as u32));
-    send("say again", cx);
-    wait_for_item(cx, "again");
-    assert_eq!(
-        id(cx, 0),
-        first,
-        "the next message resumed the conversation"
-    );
-    idle(cx);
-    cx.click("chat.effort");
-    cx.update(|w, cx| assert!(menu::pick("high", w, cx)));
-    wait_until(cx, |cx| {
-        cx.find("chat.effort")
-            .and_then(|e| e.description().map(String::from))
-            == Some("high".into())
-    });
-    // A switch the agent refuses is said, and the bar keeps what the session runs in.
-    cx.click("chat.mode");
-    cx.update(|w, cx| assert!(menu::pick("Workspace", w, cx)));
-    wait_for_item(cx, "The agent kept its setting");
-    let mode = cx
-        .find("chat.mode")
-        .and_then(|e| e.description().map(String::from));
-    assert_eq!(mode.as_deref(), Some("Auto review"));
-    // The next session, after a Stop, opens with what the agent kept, not the refused pick.
-    send("bg", cx);
-    wait_until(cx, |cx| pid(cx).is_some_and(|p| p != pid1));
-    cx.click("chat.stop");
-    idle(cx);
-    send("model", cx);
-    // The model is the one the load kept, the mode the one the agent refused to leave.
-    wait_for_item(cx, "gpt-5.5-mini agent");
+    assert!(cx.find("chat.provider.pick").is_none());
 }
 
 /// Shows the first chat on solo again: the top bar's chat button opens a new one.

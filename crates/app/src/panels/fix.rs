@@ -429,12 +429,7 @@ impl Render for FixCard {
                     }),
             );
         }
-        let (sure, tree, branch, ids) = (
-            self.confirm,
-            fixing.tree.clone(),
-            fixing.branch.clone(),
-            ids(),
-        );
+        let (sure, tree, ids) = (self.confirm, fixing.tree.clone(), ids());
         row = row.child(
             ui::button(
                 "panel.fix.discard",
@@ -449,7 +444,7 @@ impl Render for FixCard {
                 }
                 v.confirm = false;
                 let ids = ids.each_ref().map(|s| s.as_str());
-                let t = fixes::discard(ids, tree.clone().into(), branch.clone(), cx);
+                let t = fixes::discard(ids, tree.clone().into(), cx);
                 v.after(t, cx);
             })),
         );
