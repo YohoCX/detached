@@ -64,12 +64,33 @@ const PLUGIN: &str = "detached";
 const LEASH: &str = "trap gone=1 HUP; exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; \
     while kill -0 $! 2>/dev/null; do [ -z \"$gone\" ] && kill -0 $PPID 2>/dev/null \
     || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; done; wait $!";
-// With job control off, setsid execs in place and $! is the new group's id.
-const WSL_LEASH: &str = "trap gone=1 HUP; exec 3<&0; setsid \"$@\" <&3 3<&- & exec 3<&-; \
-    pid=$!; while [ -z \"$gone\" ] && kill -0 \"$PPID\" 2>/dev/null \
-    && kill -0 \"$pid\" 2>/dev/null; do sleep 1; done; \
-    if kill -s TERM -- \"-$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null; then \
-        sleep 5; kill -s KILL -- \"-$pid\" 2>/dev/null; fi; wait \"$pid\"";
+// setsid keeps WSL's hang-up from killing the CLI before the leash can see its children.
+const WSL_LEASH: &str = r#"trap gone=1 HUP
+exec 3<&0; setsid "$@" <&3 3<&- & exec 3<&-
+pid=$!
+while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+done
+if [ -n "$gone" ] || ! kill -0 "$PPID" 2>/dev/null; then
+    pids=$(ps -A -o pid=,ppid= | awk -v root="$pid" '
+        { children[$2] = children[$2] " " $1 }
+        function tree(pid, list, n, i) {
+            print pid
+            n = split(children[pid], list)
+            for (i = 1; i <= n; i++) tree(list[i])
+        }
+        END { tree(root) }')
+    kill -TERM $pids 2>/dev/null
+    for remaining in 5 4 3 2 1 0; do
+        pids=$(ps -o pid=,stat= -p "$(printf '%s\n' $pids | paste -sd , -)" |
+            awk '$2 !~ /^Z/ { print $1 }')
+        [ -n "$pids" ] || break
+        [ "$remaining" -gt 0 ] || { kill -KILL $pids 2>/dev/null; break; }
+        sleep 1
+    done
+fi
+wait "$pid""#;
 const WAIT: Duration = Duration::from_secs(60);
 /// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
 const PATHS: &[&str] = &[

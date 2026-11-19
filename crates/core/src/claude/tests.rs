@@ -302,6 +302,68 @@ fn a_hang_up_on_the_leash_ends_the_session() {
     eventually("the session ends on the hang-up", || !left(&id, child));
 }
 
+#[cfg(unix)]
+#[test]
+fn the_wsl_leash_kills_a_detached_descendant_when_its_parent_dies() {
+    let leash = format!(
+        r#"setsid() {{ exec perl -MPOSIX=setsid -e 'setsid() >= 0 or die $!; exec @ARGV' -- "$@"; }}
+{WSL_LEASH}"#
+    );
+    let cli = r#"trap 'echo term; exit 37' TERM
+sh -c '"$@" & wait' worker perl -MPOSIX=setsid -e '
+    setsid() >= 0 or die $!;
+    $SIG{TERM} = "IGNORE";
+    $| = 1;
+    print "ready\n";
+    $SIG{ALRM} = sub { print "survived\n"; exit 1; };
+    alarm 20;
+    sleep 21;
+' &
+wait"#;
+    let mut host = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "\"$@\" & wait",
+            "host",
+            "/bin/sh",
+            "-c",
+            &leash,
+            "leash",
+            "/bin/sh",
+            "-c",
+            cli,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = BufReader::new(host.stdout.take().unwrap());
+    let (send, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in stdout.lines() {
+            if send.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = crate::testutil::scaled(Duration::from_secs(10));
+    let ready = lines.recv_timeout(deadline);
+    host.kill().unwrap();
+    host.wait().unwrap();
+    assert_eq!(ready.unwrap(), "ready");
+    assert_eq!(lines.recv_timeout(deadline).unwrap(), "term");
+    assert_eq!(
+        lines.recv_timeout(deadline),
+        Err(mpsc::RecvTimeoutError::Disconnected),
+        "the detached process still holds stdout"
+    );
+    let status = Command::new("/bin/sh")
+        .args(["-c", &leash, "leash", "/bin/sh", "-c", "exit 37"])
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(37));
+}
+
 #[test]
 fn a_rule_key_does_not_hang_on_the_order_of_the_input_s_fields() {
     let input: Value =
