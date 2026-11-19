@@ -13,7 +13,7 @@ Callers: a session's host tools (`crates/kernel/src/session.rs:264`) and the own
 answers `detached-cli q` (`crates/app/src/main.rs:60`). The MCP wrapping is `core::host`.
 
 ## Public API
-- `Identity { subject, can, panel, session }` — who asks: `subject: None` reads the whole
+- `Identity { subject, can, council, session }` — who asks: `subject: None` reads the whole
   workspace; `can` lists the action names it may take; `session` is the asking session's id, which
   `inbox` and `group` read, set by the session's tools at each read (`crates/kernel/src/host.rs:35`).
 - `Subject { repo, mr }` — a review's repo path and its MR number, if any.

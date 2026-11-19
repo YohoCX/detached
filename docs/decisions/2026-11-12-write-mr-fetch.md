@@ -6,4 +6,4 @@ Proposed on 2026-11-12, accepted by the owner at H1 on 2026-11-16.
   run. Nothing else in the repo changes.
 - Why: a panel over an MR from someone else needs its commits without a checkout.
 - Rejected: checking the MR's branch out in the owner's worktree.
-- Test: PLAN-PANELS P5.
+- Test: PLAN-COUNCIL P5.

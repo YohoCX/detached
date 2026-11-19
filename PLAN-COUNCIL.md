@@ -1,15 +1,19 @@
 ---
 covers:
-  - crates/core/src/panel.rs
-  - crates/core/src/panel
-  - crates/kernel/src/panel.rs
-  - crates/app/src/panels
+  - crates/core/src/council.rs
+  - crates/core/src/council
+  - crates/kernel/src/council.rs
+  - crates/app/src/council
 ---
-# Detached — panels plan
+# Detached — Council plan
 
 Groups of agents over one subject, as stage graphs on one engine: review, pre-merge gate, triage,
 plan review, dialectic and brainstorm. Ideas come from revmux; the design is ours. It runs on
 [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md), and both plans share one order (host §14).
+
+**Status (2026-11-19): Panels is now Council in the UI, the code and an install's data
+([decision](docs/decisions/2026-11-18-council-name.md)); 0.6.0's names move over once
+(PLAN-WORKSPACES §13).**
 
 **Status (2026-11-16): accepted by the owner at the host's H1
 ([decision](docs/decisions/2026-11-16-plans-accepted.md)). The host's spike 0b is answered and §3,
@@ -20,7 +24,7 @@ Settled on 2026-11-12:
 - orchestrator mode and trust by workspace or repo (§3, §12): trusted work runs free on its own
   branch; an untrusted subject gets a sandboxed, read-only review and no Fix.
 
-revmux and `.revmux/` stay, and whether panels replace revmux is deferred. P1 imports and their round/task graph UI are built; live panels follow the steps below.**
+revmux and `.revmux/` stay, and whether councils replace revmux is deferred. P1 imports and their round/task graph UI are built; live councils follow the steps below.**
 
 **Status (2026-11-16): a Claude participant is a session on the host's direct backend, not an ACP
 session ([decision](docs/decisions/2026-11-16-claude-direct-connection.md), host §1 and H4c). §1,
@@ -40,7 +44,7 @@ What our archive showed, from 21 revmux rounds of 2026-11-09 to 11-12:
 - **A network failure looked like four failures.** In `foundation-8-watcher/02-after-fix`, four
   agents went quiet together for 76 minutes, and the round could not be re-run.
 
-## 1. What a panel is
+## 1. What a council is
 
 - **Subject**: one of the following, pinned.
   - a branch against its base at two SHAs;
@@ -112,7 +116,7 @@ Every brief says that finding nothing is a valid answer.
     The upstream rule is a best-effort guard against the common fork checkouts, not a guarantee.
     Code the owner brings into a trusted repo's checkout any other way (`FETCH_HEAD`, a pull by URL,
     a reset or a rebase) is the owner's, the same as running `claude` there from a terminal.
-    - The marks are shown on the Sharing page and in each panel's start dialog ("trusted by
+    - The marks are shown on the Sharing page and in each council's start dialog ("trusted by
       workspace X").
     - They are stored per machine, in the personal scope, and never shared through git.
   - **In a repo not trusted as a whole**, a local branch the owner marks trusted in the start
@@ -195,7 +199,7 @@ Every brief says that finding nothing is a valid answer.
 
   Toolchains under `$HOME` stay readable, since `$HOME` is not denied as a whole.
   - **Codex** runs in `read-only` with the deny profile (spike 0b row 7). It joins rosters only
-    after host H13a; until then untrusted panels are Claude-only.
+    after host H13a; until then untrusted councils are Claude-only.
   - **Linux** needs `bubblewrap` and `socat`, and on Ubuntu 24.04 also bwrap's AppArmor profile;
     Codex on 24.04 needs the sysctl. A row that cannot start shows the CLI's message and the
     commands (host §5).
@@ -322,7 +326,7 @@ done           { nothing_found: bool, note? }
 
 ## 8. Cost
 
-Panels are the client's biggest spender, so the estimate and the cap matter most if Anthropic
+Council runs are the client's biggest spender, so the estimate and the cap matter most if Anthropic
 brings back a separate Agent SDK credit pool (host §2).
 
 - **Estimate before start** from earlier runs of the mode and roster on subjects of similar size:
@@ -374,7 +378,7 @@ brings back a separate Agent SDK credit pool (host §2).
 
 ## 10. The run record
 
-`<git common dir>/detached/panels/<task>/<run>/`, or under the data tier for a subject with no
+`<git common dir>/detached/council/<task>/<run>/`, or under the data tier for a subject with no
 single repo.
 
 ```
@@ -432,7 +436,7 @@ transcripts/   pointers to the providers' own transcripts (a WSL participant's i
 
 ## 13. The progress UI
 
-A run is a document tab, `Doc::Panel`.
+A run is a document tab, `Doc::Council`.
 
 - The round tab has Flow, Timeline and Findings; a task tab shows severity per round and finding
   threads ([owner decision](docs/decisions/2026-11-13-panel-graphs.md)).
@@ -477,11 +481,11 @@ never loads a remote image.
 ## 14. Where it lives
 
 ```
-core    panel: mode and role files, the brief, the graph order, fingerprints, the quote check,
+core    council: mode and role files, the brief, the graph order, fingerprints, the quote check,
         the revmux import, the event schema; blocking, no UI
-kernel  Panel (derived state, participants, findings), the scheduler (cap, chat priority,
+kernel  Council (derived state, participants, findings), the scheduler (cap, chat priority,
         offline, back-off), dispositions; on Session (host §6)
-app     the Panels app, the Doc::Panel tab, Stats, the mode and role editor, a Panels Settings page
+app     the Council app, the Doc::Council tab, Stats, the mode and role editor, a Council Settings page
 ```
 
 Starting points:
@@ -489,7 +493,7 @@ Starting points:
 - Gate on an MR;
 - Triage on an issue or MR;
 - Review plan on a `PLAN-*.md`;
-- Dialectic and Brainstorm from the Panels app.
+- Dialectic and Brainstorm from the Council app.
 
 ## 15. Execution and acceptance
 
@@ -498,8 +502,8 @@ The host's gate (host §17) holds.
 ### Step P1. Import and list
 
 Work:
-1. `core::panel`'s revmux import into an in-memory model.
-2. The Panels app lists a repo's imported rounds.
+1. `core::council`'s revmux import into an in-memory model.
+2. The Council app lists a repo's imported rounds.
 3. A run's tab shows its participants' final states and its findings with verdicts.
 
 There are no live states and no event schema yet.
@@ -515,23 +519,23 @@ Done when the fixtures pass.
 
 The owner checks: every round under `.revmux/tasks/` imports and reads faster than revmux's JSON.
 
-### Step P2. Panels, live: review and gate
+### Step P2. Council, live: review and gate
 
 **Status (2026-11-17): built on macOS and Linux, items 1–4 and 6–11, with item 5 (Windows and WSL)
 left; waiting for the owner's check.**
-- Built: the event schema and its replay (`core::panel::record`); modes and roles as files with
+- Built: the event schema and its replay (`core::council::record`); modes and roles as files with
   TOML front matter between `+++` lines, review and gate built in; briefs with the subject as
   JSON-quoted data and the quote check (`brief`); trusted pinned and finder worktrees, the raw-object
   export, run-end removal, Merge and Discard, the verifiers' state check (`tree`, `run`); the
   untrusted root, its lock and the enumerated deny list (`root`); trust marks with the refspec,
   upstream and reflog rules (`marks`) on the Sharing page and the start form; raw-blob trust scans
   (`trust::at`); the backend's sandbox, temp dir, denied reads, MCP file and `probe`;
-  `kernel::panel::live` (stages, cap with chat turns first, attempts with resume or restart, stall
+  `kernel::council::live` (stages, cap with chat turns first, attempts with resume or restart, stall
   with a tool call's own limit, the wall-clock sleep gap, offline on the host's own probe, back-off,
-  budget, cancel, interrupted runs closed); the read tool's `panels`, `Finding`, raw `diff`, `log`
-  and `search`; the Panels app's start form, live header, stage rail, participants and status bar.
-- Tests: on `fake_claude` in `kernel::panel::tests` and `tests/panels.rs`; on the real `claude`
-  against the fake Messages API in `kernel::panel::tests::real` (`make agent-test`, now in agent CI):
+  budget, cancel, interrupted runs closed); the read tool's `councils`, `Finding`, raw `diff`, `log`
+  and `search`; the Council app's start form, live header, stage rail, participants and status bar.
+- Tests: on `fake_claude` in `kernel::council::tests` and `tests/council.rs`; on the real `claude`
+  against the fake Messages API in `kernel::council::tests::real` (`make agent-test`, now in agent CI):
   the probe passes, an untrusted participant reads a toolchain but no seeded secret (also through a
   link), writes nothing and reaches no host, a sandboxed trusted verifier writes neither the tree nor
   a ref and is not asked, an orchestrator finder commits on its branch with no prompt and no MCP
@@ -586,7 +590,7 @@ Work:
 8. The estimate and the budget.
 9. The review and gate modes.
 10. The live UI of §13.
-11. `panels` and `Finding` in the host's SDL.
+11. `councils` and `Finding` in the host's SDL.
 
 Tests (the fake CLI and the fake ACP agent, GPUI's clock, and the real `claude` against the fake
 Messages API, host §17):
@@ -708,7 +712,7 @@ Windows 11, an untrusted review in WSL2, with mirrored networking and the Hyper-
 ### Step P3. Dispositions, rounds and the loop
 
 **Status (2026-11-17): built, with the review round's fixes; waiting for the owner's check.**
-- Built: `core::panel::track` maps a finding's file and lines from its round's head to the new one
+- Built: `core::council::track` maps a finding's file and lines from its round's head to the new one
   through a raw `git diff -U0` of that literal path, with no diff setting of the owner's shaping
   the hunks; `run_started` records the task's tracked findings so mapped (`priors`) and the owner's
   trust choice and budget; the verifier sees up to 3 within 3 lines, nearest first, as `earlier`
@@ -718,11 +722,11 @@ Windows 11, an untrusted review in WSL2, with mirrored networking and the Hyper-
   events in the finding's run; Defer also copies a TECHDEBT.md row. The round tab compares with
   the round before and marks each card; the task tab shows each finding's fate and the loop, with
   Next round while it goes on.
-- Tests: `core::panel::track` (fingerprints, literal paths and diff settings, and every row above
+- Tests: `core::council::track` (fingerprints, literal paths and diff settings, and every row above
   on written records, the owner's latest disposition on any round's card, a dismissed neighbour
-  beside an open one, a new finding on changed lines), `kernel::panel::tests` (a three-round loop on
+  beside an open one, a new finding on changed lines), `kernel::council::tests` (a three-round loop on
   `fake_claude`: one major fixed by hand, one dismissed, the loop stops; Next round's trust and
-  budget), `tests/panels.rs` (Defer, Reopen, Dismiss and Next round in the UI).
+  budget), `tests/council.rs` (Defer, Reopen, Dismiss and Next round in the UI).
 - Choices: a finding takes part when it stands alone, its quote holds and no verdict set it aside;
   a link needs the verifier's `same_as`, so no ruling makes a new thread; the owner's latest
   disposition of any of a thread's findings decides it, and covers what the thread raised before it
@@ -758,12 +762,12 @@ The owner checks: a loop on a real branch.
 ### Step P4. Fix
 
 **Status (2026-11-17): built; waiting for the owner's check.**
-- Built: `core::panel::fix` makes the Fix's branch `detached-fix/<run>/<finding>` at the head the
+- Built: `core::council::fix` makes the Fix's branch `detached-fix/<run>/<finding>` at the head the
   owner saw and checks it out as an H6 managed worktree (recipe copies and install included), with
   the owner's `settings.local.json` and the repo's MCP file; the brief (`brief::fix`) holds the
-  finding as JSON-quoted data labelled as another agent's. The card (`panels/fix.rs`) shows the
+  finding as JSON-quoted data labelled as another agent's. The card (`council/fix.rs`) shows the
   brief to edit, asks to accept changed trust files first, and on an untrusted subject offers "Mark
-  the repo trusted" and "Fix it yourself" (opens the file at the line). `kernel::panel::fixes` runs
+  the repo trusted" and "Fix it yourself" (opens the file at the line). `kernel::council::fixes` runs
   the session in orchestrator mode (`bypassPermissions`, counted under the cap as a chat turn),
   then the re-check: the built-in `recheck` mode (find → merge → verify → gate, the `bugs` role,
   whose lenses are bugs and impl) over `<head>..<fix branch>`, with the role that raised the
@@ -775,16 +779,16 @@ The owner checks: a loop on a real branch.
   files as their own diff, Merge (P2's fast-forward, hooks off) or "kept for you to push" on a
   remote subject, Re-check, Open the re-check, and Discard after a confirm (worktree gone, branch
   kept).
-- Tests: `core::panel::fix` (branch and managed worktree, the untrusted deny list taken before it
+- Tests: `core::council::fix` (branch and managed worktree, the untrusted deny list taken before it
   covers the tree and its `.env` copy, untrusted, a moved head and unaccepted trust files refused,
   Merge hooks off with the hook diff, refused dirty and not fast-forward, a remote subject's branch
-  kept, Discard keeps the branch, nothing pushes), `brief` (quoted data), `kernel::panel::tests::fixes`
+  kept, Discard keeps the branch, nothing pushes), `brief` (quoted data), `kernel::council::tests::fixes`
   on `fake_claude` (a Fix commits on its branch with no prompt, its re-check runs `bugs` and the
   raising role on its commits alone and passes; Discard; a head move that leaves the range alone
   starts nothing and keeps it `fix ready` through a round; a squash onto the subject then the
   owner's re-check makes it `fixed` and the loop stops; two Fixes in parallel, one merged, the other
   no fast-forward), `tests::real` on the real `claude` (an untrusted session started before the Fix
-  cannot list or read its worktree or `.env`), `tests/panels.rs` (the untrusted card's two offers,
+  cannot list or read its worktree or `.env`), `tests/council.rs` (the untrusted card's two offers,
   marking the repo, the brief shown and edited, commits, Merge, Discard, a changed
   `.claude/settings.json` asked first; a remote branch's Fix with no Merge).
 - Choices: a Fix starts from the subject's current head, refused if it moved since the owner looked;
@@ -831,7 +835,7 @@ The owner checks: the same on a real branch in a trusted workspace.
   is read from the forge with its thread. `remotes::fetch_refs` fetches its head and target with an
   empty refmap, no tags and no `FETCH_HEAD`, so nothing of the owner's changes, under the run's
   cancel; a preview fetches only when the repo lacks them, and an MR's Check and its Fix brief run
-  as Activity ops with an op id and cancel. The Panels list's reload never fetches, and asks the
+  as Activity ops with an op id and cancel. The Council list's reload never fetches, and asks the
   forge for an MR's head only when a finding of its task is fix ready. At the run's
   start the head is fetched again and kept in `refs/detached/subjects/<run>` until teardown or the
   close of an interrupted run. The run refuses a head other than the one the start form's preview
@@ -849,7 +853,7 @@ The owner checks: the same on a real branch in a trusted workspace.
   review's verified edits with Copy edits. The forge reads issues (`forge::get_issue`); the forge
   fake seeds issues, fork and deleted-fork MRs, and serves a seeded bare repo over git's dumb HTTP,
   so the MR fetch is real in tests.
-- Tests: `kernel::panel::tests::triage` on `fake_claude` and the forge fake (a colleague's MR gets six
+- Tests: `kernel::council::tests::triage` on `fake_claude` and the forge fake (a colleague's MR gets six
   answers, its brief and the synthesizer's hold the hostile description and commit as quoted data
   under the label, its head is fetched and no ref of the repo moved, the run's own gone; an issue's
   comments; a synthesis without an outcome fails; MR trust by mark, fork and forks, and a deleted
@@ -857,7 +861,7 @@ The owner checks: the same on a real branch in a trusted workspace.
   other than the one shown is refused; a plan review ends with a verified edit), the next round
   (none for an issue or a document), `run` (task names, `claude_only`), `remotes` (the MR fetch
   moves no ref), `marks` (MR trust), `host` (the outcome's six answers), `forge::tests` (issues on
-  both forges), the fake's own, `tests/panels.rs` (an MR triage from the Panels app shows the six
+  both forges), the fake's own, `tests/council.rs` (an MR triage from the Council app shows the six
   answers, and the MR's Fix offers no Merge and keeps its branch), and on the real `claude` against
   the fake Messages API (`make agent-test`): an MR on the forge fake gets six answers and a plan
   gets a verified edit.
@@ -867,7 +871,7 @@ The owner checks: the same on a real branch in a trusted workspace.
   owner to push; tasks are `mr_<n>`, `issue_<n>` and `doc_<path>`, where a branch's task never
   holds a `_`; an issue's or a document's task has no loop and no Next round, since nothing gates
   it; the synthesizer runs on the mode's `synthesizer` model, opus by default.
-- Left: starting a triage from the MR page or a plan review from Files (the Panels app's form does
+- Left: starting a triage from the MR page or a plan review from Files (the Council app's form does
   both).
 - The owner checks: triages a real MR; reviews these plans.
 
@@ -901,12 +905,12 @@ The owner checks: triages a real MR; reviews these plans.
   Dialectic and Brainstorm (its subject row wraps now); the Findings tab shows a dialectic's
   synthesis, both cases and both rebuttals, and a brainstorm's clusters best first with value,
   cost, why and variants.
-- Tests: `kernel::panel::tests::modes` on `fake_claude` (find briefs hold neither side's output; each
+- Tests: `kernel::council::tests::modes` on `fake_claude` (find briefs hold neither side's output; each
   rebut brief's `others` is exactly the other side's case and findings; the judge gets cases and
   rebuttals; done without a rebuttal, a synthesis or every idea ranked fails; a blank reason is
   refused and a variant's rank is its lead's), `record` (clusters, ranks, a degraded cluster),
-  `host` (a rank without a reason), `mode`, `run` (the question's task), `tests/panels.rs` (both
-  modes from the Panels app's form show their outcomes), and on the real `claude` against the fake
+  `host` (a rank without a reason), `mode`, `run` (the question's task), `tests/council.rs` (both
+  modes from the Council app's form show their outcomes), and on the real `claude` against the fake
   Messages API (`make agent-test`): a dialectic ends with its synthesis, a brainstorm with a ranked
   cluster.
 - Choices: a rebut participant (`rebut-<side>`) is a fresh session in the pinned tree that sees its
@@ -933,30 +937,30 @@ The owner checks: a dialectic on an open question of these plans; a brainstorm o
 
 **Status (2026-11-17): built; the corpus has not run on real agents, so its rates are not written yet;
 waiting for the owner's run and check.**
-- Built: `core::panel::corpus` with `corpus.toml`: 10 fix commits, each with a patch that puts its
+- Built: `core::council::corpus` with `corpus.toml`: 10 fix commits, each with a patch that puts its
   bug back on top as a commit of its own (`worktree-untracked`, `store-link-escape`,
   `hidden-name-slash`, `fix-range-commits`, `folder-backslash`, `watch-made-again`,
   `chat-list-stdin`, `forge-form-key`, `update-cancel`, `files-stale-fallback`), reviewed against the
-  fix, and 10 clean commits against their parents. `kernel::panel::corpus` runs a mode over it, one
-  pass in the app and one run at a time, within one budget; the Stats page (Panels → Stats, `Doc::PanelStats`) shows the one
-  suggestion, the dispositions by role, lens, model, mode and verifier (`core::panel::stats`), each
+  fix, and 10 clean commits against their parents. `kernel::council::corpus` runs a mode over it, one
+  pass in the app and one run at a time, within one budget; the Stats page (Council → Stats, `Doc::CouncilStats`) shows the one
+  suggestion, the dispositions by role, lens, model, mode and verifier (`core::council::stats`), each
   pass's catch and false-confirm rates per verifier model (`corpus::calibrate`), and the Run button
   with the estimate, which is the budget.
-- Tests: `core::panel::corpus` (the corpus's shape and bug lines, a bug put back as the same commit
+- Tests: `core::council::corpus` (the corpus's shape and bug lines, a bug put back as the same commit
   each pass in a clone that leaves the repo without a new ref or object, calibration on a written
-  corpus run, passes latest first by time), `core::panel::stats` (every
-  column from the fixture of dispositions under `tests/fixtures/panels`, each suggestion),
-  `kernel::panel::tests::corpus` (two subjects on `fake_claude`, one at a time, scored; the budget
+  corpus run, passes latest first by time), `core::council::stats` (every
+  column from the fixture of dispositions under `tests/fixtures/council`, each suggestion),
+  `kernel::council::tests::corpus` (two subjects on `fake_claude`, one at a time, scored; the budget
   and a cancel end it, a second pass is refused while one runs, the repo's refs are unchanged),
-  `tests/panels.rs` (the Stats page, and Run refused on a repo without the
+  `tests/council.rs` (the Stats page, and Run refused on a repo without the
   history).
 - Choices: a bug subject is the fix's commit with the bug's patch on top, so its diff is the bug
   alone; the patch's commit has a fixed author and date, so every pass reviews the same SHA. Corpus
   runs are untrusted (read-only, no trust files to accept per head) and sequential, in a
   `git clone --shared` under the cache tier that holds the patched commits and the
   `detached-corpus/<pass>/<subject>` branches; each run's record is copied into the repo's
-  `detached/panels`, and the clone goes at the pass's end or the next start after a crash. Their
-  tasks stay off the Panels list and out of the disposition stats. A finding is about the bug within 3 lines of the
+  `detached/council`, and the clone goes at the pass's end or the next start after a crash. Their
+  tasks stay off the Council list and out of the disposition stats. A finding is about the bug within 3 lines of the
   patch's changed lines. Catch: the bug's subject got a verified major or critical there; a
   verifier's catch rate is its confirms of findings at a bug, its false-confirm rate its confirms
   of majors and criticals on clean subjects. The estimate is the mean of earlier corpus runs of the
@@ -980,8 +984,8 @@ Done when the gate's catch and false-confirm rates per verifier model are writte
 
 The owner checks: the Stats page.
 
-### The panels are done when
+### Council is done when
 
 - every step passed its gate, and §4's lines hold or are shown where they do not;
-- the panels' gate ran beside revmux on every step since P3, and P7 compares them;
+- the Council's gate ran beside revmux on every step since P3, and P7 compares them;
 - §13's UI shows every state from a real run.

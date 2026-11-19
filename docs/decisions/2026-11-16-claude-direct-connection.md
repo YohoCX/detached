@@ -134,7 +134,7 @@ sent.
 
 ## What the review of the proposal found
 
-`.revmux/tasks/spike-0c/01-initial`, 18 findings. PA is PLAN-AGENT-HOST, PP is PLAN-PANELS.
+`.revmux/tasks/spike-0c/01-initial`, 18 findings. PA is PLAN-AGENT-HOST, PP is PLAN-COUNCIL.
 
 | Finding | Answer |
 | --- | --- |
@@ -194,5 +194,5 @@ sent.
 - **Also for the owner:** today's chat sends no system prompt beyond one line. On the direct
   backend it gets the CLI's own default, as `claude` in a terminal does (PLAN-AGENT-HOST §13).
 - **Plan:** [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §1 to §7, §11, §13, §14, §16 and §17
-  (H3, H4c, H5, H8, H11, H12, H13); [PLAN-PANELS.md](../../PLAN-PANELS.md) §1, §3, §4, §7, §8,
+  (H3, H4c, H5, H8, H11, H12, H13); [PLAN-COUNCIL.md](../../PLAN-COUNCIL.md) §1, §3, §4, §7, §8,
   §10, P2.

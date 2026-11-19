@@ -27,5 +27,5 @@ Decided by the owner on 2026-11-12.
   - Marks are shown on the Sharing page and in each panel's start dialog, stored per machine in the
     personal scope, and never shared through git.
 - **Rejected:** trust only per branch.
-- **Plan:** [PLAN-PANELS.md](../../PLAN-PANELS.md) §3, §4, §12;
+- **Plan:** [PLAN-COUNCIL.md](../../PLAN-COUNCIL.md) §3, §4, §12;
   [PLAN-AGENT-HOST.md](../../PLAN-AGENT-HOST.md) §4, §5.

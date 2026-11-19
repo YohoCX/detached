@@ -12,7 +12,7 @@ The workspace becomes the top-level context: chats and Council runs belong to it
 across its projects, a project can sit in several workspaces and be attached read-only as a
 knowledge base, and the center's tabs are split by category.
 
-**Status (2026-11-19): accepted by the owner (a workspace is its own context for everything: tabs, chats, Council, processes); W0–W4 started.** After
+**Status (2026-11-19): accepted by the owner (a workspace is its own context for everything: tabs, chats, Council, processes); W0–W4 started; the Council rename (§13) is done.** After
 round 04 the owner set read-only's boundary: it stops a cooperative agent's accidental writes, not
 a deliberate escape. After W0 and W2 he brought Codex back with its MCP servers off by name
 (decision 12) and cut read-only's enforcement for agents to file-tool denies and an instructions
@@ -55,8 +55,8 @@ Owner's decisions, 2026-11-18:
     and processes can still write there: the accidental-write boundary, owner-accepted.
 
 Words: a **project** is a repo the workspace lists (today's `RepoInfo`); an **attachment** is a
-project in a workspace, with a **role**, read-write or read-only. Council is today's Panels; its
-code rename is separate (§13).
+project in a workspace, with a **role**, read-write or read-only. Council is 0.6.0's Panels, renamed
+([decision](docs/decisions/2026-11-18-council-name.md)).
 
 ## 1. The model
 
@@ -261,13 +261,13 @@ Every Detached session, chat and Council alike:
 
 - A run belongs to a workspace; its subject names a project's branch, MR, issue or document.
 - *Proposal:* records go to `data/workspaces/<id>/council/<task>/<run>/`, not
-  `<git common dir>/detached/panels/`. Why: the run is the workspace's; a project in two
+  `<git common dir>/detached/council/`. Why: the run is the workspace's; a project in two
   workspaces would show it in both; a read-only project's git dir takes no record. This amends
   [storage scopes](docs/decisions/2026-11-12-storage-scopes.md) and
   [the git-dir store](docs/decisions/2026-11-12-write-git-dir-store.md). Subject refs, finder
   branches, pinned worktrees and Fix stay in the subject's repo.
 - revmux imports (`.revmux/`) stay per project, under the project in the workspace's Council app.
-- **Trust marks by id**, in the same step that moves runs to workspaces (W6): `panel::marks`
+- **Trust marks by id**, in the same step that moves runs to workspaces (W6): `council::marks`
   rewrites its own block from names to ids at its first load, matches by id, and shows the
   workspace's name in its reasons.
 - **A read-only subject** runs as an untrusted subject does today, whatever its marks: sandboxed,
@@ -277,7 +277,7 @@ Every Detached session, chat and Council alike:
 - **A trusted run in a workspace with a read-only project** keeps orchestrator mode with §4.4's
   denies and instructions line, Codex seats included; nothing is refused for the read-only
   project.
-- `Doc::Panel` and `PanelTask` take a `place` in place of `repo`: `Place::Workspace(id)` for a
+- `Doc::Council` and `CouncilTask` take a `place` in place of `repo`: `Place::Workspace(id)` for a
   run recorded under the workspace, `Place::Repo(path)` for what lives in a repo, a revmux import
   or a run from before workspaces, opened from the archive. The place joins the tab's id and
   `same()`, so two projects' `review/01` stay two tabs. `PanelStats` takes `workspace` and reads
@@ -306,7 +306,7 @@ the same in every workspace. Nothing is moved or copied.
   deleted workspace are added.
 - **What it holds:** the past chats of those places, as today's Chats app lists them, less the
   index's entries with a workspace; the runs under those places' `<git common dir>/detached/
-  panels/`; a deleted workspace's chats and runs, under its name.
+  council/`; a deleted workspace's chats and runs, under its name.
 - **Chats** open as `Doc::PastChat { provider, cwd, id }` (kind `chat-archive`): the transcript,
   no composer, no resume. **Runs** open with rounds, findings and outcomes, no next round and no
   Fix; a kept finder branch keeps Merge and Discard in a read-write project.
@@ -324,7 +324,7 @@ the same in every workspace. Nothing is moved or copied.
   | Category | Kinds |
   | --- | --- |
   | `docs` "Docs" | `file` of a Markdown path (`.md`, `.mdx`, `.markdown`) |
-  | `chats` "Chats" | `chat`, `chat-archive`, `panel`, `panel-task`, `panel-stats` |
+  | `chats` "Chats" | `chat`, `chat-archive`, `council`, `council-task`, `council-stats` |
   | `code` "Code" | `file` otherwise, `diff`, `mr`, `job`, `terminal` |
 
 - **One strip, chips first.** Three chips with counts, drawn by our `skin` at the start of the
@@ -381,8 +381,8 @@ Removed everywhere:
   still lists repos. The first active workspace becomes `workspace.current`.
 - **Chats and runs are not migrated**; the archive shows them (§7).
 - **The saved layout:** the center's tabs of the old `dock.layout` load into the current
-  workspace. A saved doc that no longer parses (old `Doc::Chat`, `Panel`, `PanelTask`,
-  `PanelStats`) is dropped by the dock's loader, not kept as a `Missing` placeholder; `Missing`
+  workspace. A saved doc that no longer parses (old `Doc::Chat`, `Council`, `CouncilTask`,
+  `CouncilStats`) is dropped by the dock's loader, not kept as a `Missing` placeholder; `Missing`
   stays for an unknown app name.
 - **A stated limit:** a build older than this drops `id` and `readOnly` on its next save, and the
   index entries' `workspace`, `cwd` and `started` on its next index write. Back on this build, the
@@ -406,7 +406,7 @@ Removed everywhere:
   - §13 (the "Extra folders" row: trusted read-write projects by `--add-dir`, the others by read
     rules; the System prompt row gains the workspace's instructions);
   - H4c's test of setting sources and strict MCP per kind.
-- PLAN-PANELS §3 (read-only subjects; trusted runs beside read-only projects; "The chat's
+- PLAN-COUNCIL §3 (read-only subjects; trusted runs beside read-only projects; "The chat's
   configuration in its worktree" loses the repo's MCP file), §10 (where run records live), and
   P2's and P4's tests of the MCP file.
 - Decisions [storage scopes](docs/decisions/2026-11-12-storage-scopes.md) and
@@ -567,7 +567,7 @@ actions with their chords, the terminal passes the four chorded ones. A saved do
 parses is dropped, an old tab with no workspace joins the current one, and a workspace's delete is
 refused while its docked terminal is open, else closes its tabs. Choices: the category state lives
 in ui_state alone; side zones are not filtered by workspace either. Deviation: Doc::Chat and the
-panel docs still parse in W4 (their shapes change in W5 and W6), so the dropped-doc test uses a
+Council docs still parse in W4 (their shapes change in W5 and W6), so the dropped-doc test uses a
 doc of an unknown shape. Owner's check: his `align-2-0` chat and `biome.json` sit in Chats and
 Code, each workspace keeps its own tabs across a switch and a restart, a docked terminal keeps
 running.
@@ -584,7 +584,7 @@ exit still closes its tab, and the interceptor still passes the tab chords; no s
 tab's `removed` hook; a file of a project in two workspaces, opened in each, gets a tab in each and
 neither takes the other's preview; a workspace's delete is refused while its docked terminal is
 open, and otherwise closes its tabs, which a restart does not bring back; an old layout with
-`chat`, `panel`, `panel-task` and `panel-stats` tabs loads with them dropped and no placeholder.
+`chat`, `council`, `council-task` and `council-stats` tabs loads with them dropped and no placeholder.
 
 Done when the owner's `align-2-0` chat and `biome.json` no longer share a strip.
 
@@ -621,7 +621,7 @@ his old chats in the archive.
 Needs W3; after the Council rename. Work: §5 but its read-only rules; §7 for runs.
 
 Tests: records under the workspace; a run of a project in two workspaces lists in its own alone;
-marks rewritten to ids by `panel::marks` and a repo trusted by its workspace's mark still trusted;
+marks rewritten to ids by `council::marks` and a repo trusted by its workspace's mark still trusted;
 an old run opens read-only and a kept finder branch still merges; a deleted workspace's runs in
 the archive, cleared after a confirm; an old run has no Clear; an import and an old run open by
 `Place::Repo`, and two projects' `review/01` open two tabs; a workspace's delete is refused while
@@ -664,14 +664,16 @@ file tool and no write of Detached's touches it, and Bash in such a chat works a
 - **ui/polish** (presentation, `crates/app`) touches `dock/skin.rs`, `dock/doc.rs`, `chat/`,
   `repos/sidebar.rs`, `repos/workspaces.rs`, `notices.rs` and `files/viewer.rs`. W0, W2 and W3's
   core and kernel parts run beside it; W1, W3's UI and W4 rebase on it after it merges.
-- **The Council rename** goes before W6, so W6 writes the new names once. 0.6.0 shipped "Panels",
-  so the rename migrates what an installed copy holds, with no alias kept after it:
-  - the settings block `panels` (`panel::marks::BLOCK`), moved to its new key at load;
-  - the store's roles and modes, if their folders or titles change, moved in every scope;
-  - the action id `panel.panels`, rewritten in `keymap.json` overrides;
-  - the dock app's saved name `panels` and the doc kinds `panel`, `panel-task`, `panel-stats` in
-    `dock.layout`, so the layout loads without a placeholder.
-  W4's category table names kinds by string and takes the new ones in the rename's commit.
+- **The Council rename** is done (2026-11-19, before W6, so W6 writes the new names once;
+  [decision](docs/decisions/2026-11-18-council-name.md)). 0.6.0 shipped "Panels"; what an installed
+  copy holds moves once, with no alias kept after it:
+  - the settings block `panels` to `council` (`council::marks::BLOCK`) and the action id
+    `panel.panels` to `panel.council` in `keymap.json`, at boot (`core::council::migrate::run`);
+  - `ui.json` at launch: the dock app's saved name `panels`, the docs `Panel`, `PanelTask` and
+    `PanelStats` in `dock.layout` and `tabs.*`, and the keys `panels.*` and `size.panel.*`;
+  - a repo's run records, `detached/panels` to `detached/council`, at its first use;
+  - the store's roles and modes keep their folders (`roles/`, `modes/`); only their titles change.
+  The doc kinds are `council`, `council-task` and `council-stats`; W4's category table takes them.
 - W4 runs beside W5 and W6 after W3.
 
 ## 14. Risks

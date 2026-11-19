@@ -35,7 +35,7 @@ Agents as first-class participants of the client:
 - one storage layout with a share-or-local toggle, and skills from folders;
 - project docs read and written by a mechanism.
 
-[PLAN-PANELS.md](PLAN-PANELS.md) builds multi-agent panels on it. The two plans share one order
+[PLAN-COUNCIL.md](PLAN-COUNCIL.md) builds multi-agent councils on it. The two plans share one order
 (§14).
 
 **Status (2026-11-16): accepted by the owner at H1, with the seven write decisions of §16
@@ -60,14 +60,14 @@ Owner's decisions are in [docs/decisions/](docs/decisions/):
   - the read tool's schema;
   - Claude through the user's own `claude`, on any login;
   - the chat on ACP first, and spike 0b before H1;
-  - panels isolate by trust, with WSL2 on Windows, and agents keep the shell everywhere;
+  - councils isolate by trust, with WSL2 on Windows, and agents keep the shell everywhere;
   - the seven repo writes of §16, accepted at H1 on 2026-11-16;
 - from the owner's answers on 2026-11-12:
   - `~/.agents/skills` is read by default;
   - managed worktrees go in `<folder>/worktrees/<repo>/<branch>` for a workspace folder that holds
     repos, as `wt` does, and in `data/worktrees/<repo>-<hash>/<branch>` when the folder is itself
     a repo;
-  - revmux and `.revmux/` stay, and whether panels replace revmux is deferred.
+  - revmux and `.revmux/` stay, and whether councils replace revmux is deferred.
 
 "Right" means what it meant in the foundation:
 - each piece of state has one owner;
@@ -83,8 +83,8 @@ core    proc (spawn with pipes or a PTY, env built from nothing, groups, job obj
         secrets, docs, store, trust, snapshot (as today)
 acp     the ACP client on `agent-client-protocol` 5.2.0, core's backend for ACP providers; a
         blocking API out, `futures::executor::block_on` inside; depends on core
-kernel  Session on a backend, Proc, Inbox, Panel, the host tools' dispatch; draws nothing
-app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pages; the binary
+kernel  Session on a backend, Proc, Inbox, Council, the host tools' dispatch; draws nothing
+app     the chat, the Agents, Processes, Council and Docs apps, their Settings pages; the binary
 ```
 
 `app → kernel → acp → core`.
@@ -159,7 +159,7 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
     - P2 adds `probe`, with Claude filling it and a fake-CLI test of its argv and env (P2's MCP
       config file went in PLAN-WORKSPACES W2). The responder, the dummy key and the names left out stay inside
       `core::claude`; the kernel keeps the probe's cache.
-  - **Nothing above the seam can name a protocol**: not `kernel::Session`, the chat, panels, host
+  - **Nothing above the seam can name a protocol**: not `kernel::Session`, the chat, councils, host
     tools, trust or the Agents page. Three checks, none a lint an `#[allow]` lifts:
     - **rustc:** `core::claude` is a private module of core, and `crates/acp` exports `backend()`
       alone, beside its `testutil` feature. The two constructors are all the kernel or the app can
@@ -185,11 +185,11 @@ app     the chat, the Agents, Processes, Panels and Docs apps, their Settings pa
 - **Core spawns each adapter itself.** `AcpAgent` can only add env vars, and its drop SIGKILLs the
   process group, which orphans a running Bash command. On Windows it kills only the direct child.
 - **One adapter process per provider and version**, with one exception: on native Windows each
-  panel participant attempt gets its own adapter and job (PLAN-PANELS §7).
+  council participant attempt gets its own adapter and job (PLAN-COUNCIL §7).
 
   H4's registry is keyed so this fits. The sessions on one adapter share a crash domain. An
-  adapter's exit ends each of its sessions with that cause (H4), and panels count it as a failed
-  attempt, never as offline (PLAN-PANELS §7).
+  adapter's exit ends each of its sessions with that cause (H4), and councils count it as a failed
+  attempt, never as offline (PLAN-COUNCIL §7).
 - **Shutdown of an adapter** closes stdin and waits 5 s before any signal; a killed app gives EOF
   by itself.
   - Codex's adapter exits in 2 s.
@@ -375,11 +375,11 @@ For every provider: until the owner accepts what a repo would run, a session loa
     item: "unparsed".
   - Instruction files (`CLAUDE.md`, `AGENTS.md`) are not items, as today.
 - **Acceptance** is stored against a hash of a tree's trust files, per provider.
-- **Trust marks** for panels and Fix (a workspace, a repo, "include forks", a branch;
-  PLAN-PANELS §3) are personal and per machine, stored in config and never in `.detached/`. They
+- **Trust marks** for councils and Fix (a workspace, a repo, "include forks", a branch;
+  PLAN-COUNCIL §3) are personal and per machine, stored in config and never in `.detached/`. They
   decide orchestrator mode or the read-only sandbox (§5); a tree's trust files still need
   acceptance either way.
-- **Which tree.** A session checks its repo, pinned commit or Fix worktree. For untrusted panels,
+- **Which tree.** A session checks its repo, pinned commit or Fix worktree. For untrusted councils,
   parse raw Git blobs at the pinned SHA, never exported paths: refuse symlink trust entries or
   ancestors; reject blob sizes or reads over 1 MiB total per scan. Hash the same bytes without filters.
   A changed `.claude/settings.json` needs acceptance; a refused scan cannot start a participant.
@@ -447,7 +447,7 @@ For every provider: until the owner accepts what a repo would run, a session loa
   addition to the shell, never instead of it.
 - **Orchestrator mode for trusted work**
   ([decision](docs/decisions/2026-11-12-orchestrator-mode.md)).
-  - Over a trusted subject (PLAN-PANELS §3: a workspace or repo the owner marked, or a marked
+  - Over a trusted subject (PLAN-COUNCIL §3: a workspace or repo the owner marked, or a marked
     branch), finders and Fix agents run with no sandbox and no permission prompts
     (`bypassPermissions`), each in its own worktree on its own branch.
   - The owner reviews their commits and merges what he wants. That is the owner's call.
@@ -536,7 +536,7 @@ For every provider: until the owner accepts what a repo would run, a session loa
       cached pass is wrong anyway, `failIfUnavailable` fails the session; the host re-runs the
       probe and takes the fallback.
     - That covers `bubblewrap`, `socat` and Ubuntu 24.04's user-namespace restriction alike.
-    - Untrusted participants and trusted verifiers both use it (PLAN-PANELS §3); in WSL it is part
+    - Untrusted participants and trusted verifiers both use it (PLAN-COUNCIL §3); in WSL it is part
       of "WSL ready".
   - **Linux needs `bubblewrap` and `socat`.** Without them the prompt fails with
     `sandbox_required_unavailable`. The participant's row shows the CLI's own message and the fix:
@@ -573,7 +573,7 @@ For every provider: until the owner accepts what a repo would run, a session loa
       does not end a busy CLI, so the leash runs inside the distro (§1; H4c part 0).
     - **Its transcripts** are in the distro's filesystem; the host reads and removes them through
       `wsl.exe` (§6).
-    - **The pinned tree** is a tar stream built from raw Git trees and blobs (PLAN-PANELS §3),
+    - **The pinned tree** is a tar stream built from raw Git trees and blobs (PLAN-COUNCIL §3),
       sent through `wsl.exe` to `tar -x` in the distro. Git modes supply symlinks and executable
       bits; no Windows checkout, mount, bundle or ref is needed.
     - **Reaching the host.** Claude's host tools ride the session's own pipes (§7), so nothing
@@ -595,8 +595,8 @@ For every provider: until the owner accepts what a repo would run, a session loa
       - the firewall rule exists;
       - the "sandbox ready" probe passes there.
 
-      The panel's start screen checks each and offers its fix. Without WSL at all, it offers to
-      install it, or to run unisolated after a consent that names PLAN-PANELS §4's lines 2–4
+      The council's start screen checks each and offers its fix. Without WSL at all, it offers to
+      install it, or to run unisolated after a consent that names PLAN-COUNCIL §4's lines 2–4
       and 12.
   - **Codex:** `read-only` (no write, no network) with a permission profile that also denies reads
     (spike 0b row 7): `[permissions.reviewer] extends = ":read-only"`, and under
@@ -625,11 +625,11 @@ For every provider: until the owner accepts what a repo would run, a session loa
 
 **Agent text never makes Detached fetch.** This is new behavior, built in H11. Today
 `crates/app/src/files/markdown.rs` loads `https:` images in every Markdown, the chat's included.
-- H11 adds an agent mode to `Markdown`, used for all agent output (chat feed, panel cards,
+- H11 adds an agent mode to `Markdown`, used for all agent output (chat feed, council cards,
   transcripts, outcomes). It never loads an image over the network, whatever the scheme. Inline
   `![](u)`, reference `![][r]` and raw `<img src>` each render as a link.
 - Only a file the owner opened loads remote images.
-- H11 tests it in the chat, P2 in panels.
+- H11 tests it in the chat, P2 in Council.
 
 - **Turn sequences.**
   - Start, awaited: trust, snapshot, the prompt.
@@ -691,7 +691,7 @@ Agents get Detached's data and a closed list of actions as tools.
     - **The server's name** is `detached-host-<8 random hex>`, apart from the secret.
     - **Every `session/load` passes a new secret.**
     - **Untested:** a reconnect after a long idle or a server error. A refused reconnect fails the
-      session's tools; a panel attempt then resumes with a new secret, and a chat offers the same.
+      session's tools; a council attempt then resumes with a new secret, and a chat offers the same.
     - Every request must carry `Host: 127.0.0.1:<port>` and no `Origin` header, so a browser's DNS
       rebinding is refused.
     - The argv race and its peer check were for Claude's URL through the adapter (H0b row 6);
@@ -721,7 +721,7 @@ Agents get Detached's data and a closed list of actions as tools.
   has its capabilities and a read scope. The executor applies the scope to every field, since the
   sandbox cannot stop what the host answers.
   - **A chat session** reads the workspace.
-  - **A panel participant** reads only its run's subject repo and its own findings; in `verify`,
+  - **A council participant** reads only its run's subject repo and its own findings; in `verify`,
     only the one finding it was given.
   - **An untrusted subject's participant** sees no sessions, no other repo and no MR but its
     subject. Its revision/diff readers use raw Git blobs, never `cat-file --filters`, textconv,
@@ -775,7 +775,7 @@ enum SessionState { IDLE RUNNING WAITING ENDED }
 ```
 
 Later steps add to the SDL:
-- P2: `panels`, `Panel`, `Participant`, `Finding`, and `diff`, `log` and `search` on `Repo` for
+- P2: `councils`, `Council`, `Participant`, `Finding`, and `diff`, `log` and `search` on `Repo` for
   reviewers, over core's git and search;
 - H7: `docs`, `DocSection`;
 - H8: `skills`, `Skill`;
@@ -813,7 +813,7 @@ Later steps add to the SDL:
   was announced got lost 2 of 2 times.
 - **Groups.** Sessions message only within an owner-made group; there is none by default. At most 5
   woken turns run in a group without a user turn between. One Stop ends the group's turns.
-  Panel participants are in no group.
+  Council participants are in no group.
 - **`watch`** (H10) puts one message into the watcher's inbox when a process becomes ready or a
   pipeline ends.
 - **Left open:** a tool result can still mislead a model. The mode, the suspended rules and the cap
@@ -824,9 +824,9 @@ Later steps add to the SDL:
 | Tier | macOS | Linux | Windows | Holds |
 | --- | --- | --- | --- | --- |
 | config | `~/Library/Application Support/com.w-devs.detached/` | `$XDG_CONFIG_HOME/com.w-devs.detached/` | `%APPDATA%\com.w-devs.detached\` | today's files; personal roles and modes |
-| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, trusted panel trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo panels. Managed worktrees of a workspace folder that is itself a repo (`worktrees/<repo>/<branch>`). An untrusted run's export and temp dirs live in `<untrusted root>/<run>/` instead (§5) |
+| data | `…/com.w-devs.detached/data/` | `$XDG_DATA_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\` | adapters, the session index, trusted council trees (`trees/trusted/<run>/pinned/` and `trees/trusted/<run>/finders/<participant>/`), secret-bearing per-run files (`private/<run>/`), the owner socket, cross-repo councils. Managed worktrees of a workspace folder that is itself a repo (`worktrees/<repo>/<branch>`). An untrusted run's export and temp dirs live in `<untrusted root>/<run>/` instead (§5) |
 | cache | `~/Library/Caches/com.w-devs.detached/` | `$XDG_CACHE_HOME/com.w-devs.detached/` | `%LOCALAPPDATA%\com.w-devs.detached\cache\` | per-session plugin folders, logs |
-| repo, local | `<git common dir>/detached/` | same | same | panel runs, local assets |
+| repo, local | `<git common dir>/detached/` | same | same | council runs, local assets |
 | repo, shared | `<repo>/.detached/` | same | same | shared assets, committed by the owner |
 
 - **Config stays where `paths::config_dir()` puts it today.** Under `DETACHED_CONFIG_DIR`, config is
@@ -835,7 +835,7 @@ Later steps add to the SDL:
 - **Ignored by the watcher.** `core::watch` drops events under `<git dir>/detached/`.
 - **Transcripts stay with the agents.** The host keeps an index, not copies.
 - **Secrets live only in `core::secrets`.**
-- **Kinds with scopes:** skills, panel roles and modes, the project profile, the worktree recipe,
+- **Kinds with scopes:** skills, council roles and modes, the project profile, the worktree recipe,
   process definitions.
   - Each item lives in one scope:
     - built in;
@@ -949,31 +949,31 @@ days.
 | H5 | Host tools and the owner socket | H4c | — |
 | H8 | Skills | H5 | a Skills page |
 | H11 | The chat on `kernel::Session`; the sidecar goes at its end condition | H5, H8 | the chat on the session |
-| P2 | Panels, live: review and gate | P1, H11 | live panels |
+| P2 | Council, live: review and gate | P1, H11 | live councils |
 | P3 | Dispositions, rounds, the loop | P2 | Fix/Dismiss/Defer |
 | H6 | Managed worktrees and recipes | H2 | worktrees from the client |
 | P4 | Fix in a worktree | P3, H6 | fixes as diffs |
-| P5 | Triage and plan review | P3, P4 | panels over MRs, issues, plans |
+| P5 | Triage and plan review | P3, P4 | councils over MRs, issues, plans |
 | P6 | Dialectic and brainstorm | P5 | two modes |
 | P7 | Corpus, calibration, stats | P3 | numbers per lens and model |
 | H7 | Docs | H11 | the Docs app |
 | H9 | Processes and the env store | H11 | the Processes app |
 | H10 | Messages, groups, `watch` | H9 | agents talk |
 | H13a | Codex live rows as headless tests, when the owner enables Codex | H5 | — |
-| H13b | Codex in the chat and in panels | H13a, H11, P2 | Codex chats and participants |
+| H13b | Codex in the chat and in councils | H13a, H11, P2 | Codex chats and participants |
 | H12 | Release | all but H13a and H13b | 0.6.0 |
 
 The owner's choices, settled on 2026-11-12
 ([decision](docs/decisions/2026-11-12-chat-first-and-spike-0b.md)):
 1. **Claude's login in public builds**: the user's own `claude` on any login (§2, H12).
 2. **The chat moves to ACP right after H5**, with H8 (skills) before it. The owner lives on ACP
-   while panels are built, so parity gaps show early, and every later check uses the real chat. The
+   while councils are built, so parity gaps show early, and every later check uses the real chat. The
    sidecar still goes only at H11's end condition.
 3. **Spike 0b runs before H1**, and H1 waits for its answers.
 
-4. **Windows panels**: isolation by trust, an untrusted subject through WSL2 (PLAN-PANELS §3).
+4. **Windows councils**: isolation by trust, an untrusted subject through WSL2 (PLAN-COUNCIL §3).
 5. **Orchestrator mode and trust by workspace or repo**: trusted work runs free on its own branch;
-   an untrusted subject gets a sandboxed, read-only review and no Fix (§5, PLAN-PANELS §3, §12).
+   an untrusted subject gets a sandboxed, read-only review and no Fix (§5, PLAN-COUNCIL §3, §12).
 
 Settled on 2026-11-16 ([decision](docs/decisions/2026-11-16-claude-direct-connection.md)):
 
@@ -1040,8 +1040,8 @@ settings, ops and invalidation findings.
 ### The gate every step passes
 
 PLAN-FOUNDATION §12's gate, with these changes:
-- Branches are `agent-host/<step>-<name>` and `panels/<step>-<name>`.
-- **revmux stays.** From P3 on, a step also runs through the panels' gate for comparison.
+- Branches are `agent-host/<step>-<name>` and `council/<step>-<name>`.
+- **revmux stays.** From P3 on, a step also runs through the Council's gate for comparison.
 - **Real-agent tests need no credentials.** The owner's rule is no model calls and no model
   credentials in CI; the release and catalog signing keys are secrets of the `release` and
   `adapters` environments.
@@ -1056,7 +1056,7 @@ PLAN-FOUNDATION §12's gate, with these changes:
     From H4c the Windows job also runs the product's WSL shape: a Windows host, `wsl.exe`, the CLI
     in the distro, through part b's WSL place.
   - Codex runs on a placeholder API-key login; its live rows are H13a's.
-  - The rows that cannot hold on an OS are in PLAN-PANELS §4.
+  - The rows that cannot hold on an OS are in PLAN-COUNCIL §4.
 
 ### Step H0. The adapter spike
 
@@ -1070,12 +1070,12 @@ PLAN-FOUNDATION §12's gate, with these changes:
 
 | # | Question | Answer | Changed |
 | --- | --- | --- | --- |
-| 1 | Usage and limits | tokens, context fill, Claude's cost per turn; limits only as `_claude/rateLimit` warnings and `/usage` markdown; Codex *(source)* forwards none | §13: limits from `/usage`; PLAN-PANELS §8 |
+| 1 | Usage and limits | tokens, context fill, Claude's cost per turn; limits only as `_claude/rateLimit` warnings and `/usage` markdown; Codex *(source)* forwards none | §13: limits from `/usage`; PLAN-COUNCIL §8 |
 | 2 | Resume | `session/load` after SIGKILL in 395 ms, history replayed, cache cold; the model fell back to the settings' Opus | §2, §6 |
-| 3 | Host tools | Claude takes stdio and HTTP; Codex *(source)* HTTP, not SSE, skips same-named servers; a refused tool ends in prose; `end_turn` without `done` is visible; claude.ai connectors leak without `strictMcpConfig` | §7; PLAN-PANELS §5 |
-| 4 | Permissions, read-only | `Read`, `git diff`, `rg` do not ask; plan mode and a command-prefix policy let writes through; Claude's tool list plus sandbox wrote nothing (macOS); Codex `read-only` is an OS sandbox *(source)*; no Claude sandbox on native Windows | §5; PLAN-PANELS §3, §4 |
+| 3 | Host tools | Claude takes stdio and HTTP; Codex *(source)* HTTP, not SSE, skips same-named servers; a refused tool ends in prose; `end_turn` without `done` is visible; claude.ai connectors leak without `strictMcpConfig` | §7; PLAN-COUNCIL §5 |
+| 4 | Permissions, read-only | `Read`, `git diff`, `rg` do not ask; plan mode and a command-prefix policy let writes through; Claude's tool list plus sandbox wrote nothing (macOS); Codex `read-only` is an OS sandbox *(source)*; no Claude sandbox on native Windows | §5; PLAN-COUNCIL §3, §4 |
 | 5 | Cancel | `session/cancel` killed the foreground command; stdin EOF left no orphan; a process-group kill orphaned the command | §1, §2 |
-| 6 | Parallelism | five Claude sessions on one adapter, 1.53–1.71 GB, no error, no rate limit hit | §1, §6; PLAN-PANELS §8 |
+| 6 | Parallelism | five Claude sessions on one adapter, 1.53–1.71 GB, no error, no rate limit hit | §1, §6; PLAN-COUNCIL §8 |
 | 7 | Chat parity | all but archive, the context breakdown and structured limits; steering lost 2 of 2 times when sent as a tool call was announced | §9, §13 |
 | 8 | Distribution, settings trust | Claude: npm with Node ≥ 22 and a 321 MB CLI, or a Node-free release archive of 177–209 MB; Codex: npm only; logins reused; `settingSources: []` blocked project CLAUDE.md, hook and skill; the adapter still reads `~/.claude/settings.json`; skills as a local plugin | §2, §3, §4, §11 |
 | 9 | Cross-OS, the crate | `initialize` and Claude's `session/new` on Linux and Windows; exit 1 on `EPIPE`; the crate runs on `block_on`, drops disabled `unstable_*` fields | §1 |
@@ -1098,7 +1098,7 @@ Answered on `agent-host/0-spikes` at 93e0f36 (`spikes/acp/ANSWERS-0b.md`), 2026-
 | # | Question | If | Then |
 | --- | --- | --- | --- |
 | 1 | A real turn, a cancel mid-command, a stdin-close shutdown and a job-object kill leave no process, on each OS | a row fails on an OS | that provider is off there, with a TECHDEBT row |
-| 2 | The Linux sandbox: what `bubblewrap`, `socat` and user namespaces it needs on 22.04 and 24.04; the error without them | 24.04 refuses by default | PLAN-PANELS §3 names the fix the user runs |
+| 2 | The Linux sandbox: what `bubblewrap`, `socat` and user namespaces it needs on 22.04 and 24.04; the error without them | 24.04 refuses by default | PLAN-COUNCIL §3 names the fix the user runs |
 | 3 | `denyWrite`, `denyRead` (git-dir store, transcripts, `~/.ssh`), `Read(..)` deny rules and network deny hold, on macOS and Linux | a read or a `curl` gets through | §5's list changes; the threat-model line says it does not hold |
 | 4 | `autoAllowBashIfSandboxed` on and off: what still asks | on lets an escaping command run | it is off, and the policy answers |
 | 5 | Pre-allow through `allowedTools` for `mcp__detached-host-<id>__*` | it still asks | the policy allows exactly those tool names |
@@ -1106,7 +1106,7 @@ Answered on `agent-host/0-spikes` at 93e0f36 (`spikes/acp/ANSWERS-0b.md`), 2026-
 | 7 | Codex live: the `read-only` sandbox (write, egress, cross-read), `turn/interrupt`, HTTP MCP, a same-named server skipped, whether force-trusting pinned trees adds entries to `~/.codex/config.toml` | entries pile up | Codex participants run with a host-owned `CODEX_HOME` beside a copy of the login |
 | 8 | `_session/async_task/stop`; `session/close` returns the CLI's memory; the `.env` deny through `disallowedTools` | one fails | §2's and §5's rows change |
 | 9 | `claude-agent-acp` built with `bun build --compile` runs a session, a turn, cancel and load as under Node, against the user's `claude` through `CLAUDE_CODE_EXECUTABLE` | it fails under bun | Claude's adapter ships upstream's archive with its CLI unused, or Node becomes a stated requirement; the owner decides |
-| 10 | Windows: Claude Code's sandbox inside WSL2 enforces `denyWrite`, `denyRead` and network deny | it does not | an untrusted subject on Windows runs only after the consent of PLAN-PANELS §3 |
+| 10 | Windows: Claude Code's sandbox inside WSL2 enforces `denyWrite`, `denyRead` and network deny | it does not | an untrusted subject on Windows runs only after the consent of PLAN-COUNCIL §3 |
 | 11 | Windows: a review's speed with the pinned tree in WSL's filesystem, against the Windows filesystem | WSL's is not faster | the tree stays on the Windows side, reached as `/mnt/<drive>` |
 | 12 | Windows: the adapter and `claude` started inside WSL over stdio, and the host's HTTP tool reached from WSL (NAT and mirrored networking) | unreachable in NAT mode | the host listens on the WSL interface too, with the same secret binding, or requires mirrored networking |
 
@@ -1124,7 +1124,7 @@ Answers:
 3. **Deny rules.** Writes and denied reads failed everywhere. `curl` got through until
    `strictAllowlist: true`, and `/tmp/claude-<uid>` was a shared read and write channel until each
    session got its own `CLAUDE_CODE_TMPDIR` with that path denied. **Then fired:** §5 and
-   PLAN-PANELS §4 changed.
+   PLAN-COUNCIL §4 changed.
 4. **`autoAllowBashIfSandboxed`.** On, no Bash command asks and nothing escaped; off, every command
    asks. It stays on.
 5. **Pre-allow.** `allowedTools: ["mcp__detached-host-<id>__*"]` pre-allowed every call. It stands.
@@ -1321,7 +1321,7 @@ Work:
    - **The catalog's CI vetting** (§3) runs on this harness, on each bump and weekly against the
      latest `claude`; a weekly failure opens an issue, tested against a locally signed catalog.
    - **What the adapter sends during a long command** is recorded: a scripted 3-minute Bash call
-     must produce a `tool_call` with status `in_progress` before it ends. PLAN-PANELS §7's stall
+     must produce a `tool_call` with status `in_progress` before it ends. PLAN-COUNCIL §7's stall
      rule rests on this test.
 7. A docs/TECHDEBT.md row: on Windows, Stop leaves the foreground command running until the
    session's adapter goes.
@@ -1460,8 +1460,8 @@ runner's distro has no bubblewrap, so its CLI refuses, and "WSL ready" stays P2'
 | 3 | §1's close, with a command in front of a turn and behind one, the leash in the group | a command outlives it | the order changes until none does |
 | 4 | A killed host: the leash as fixed `sh` lines on macOS and Linux; the job on Windows; in the product's WSL shape, what a killed host and a killed `wsl.exe` leave in the distro | `sh` cannot do it | the leash is the `detached` binary re-run and, in the distro, a static helper shipped in the Windows package |
 | 5 | The `ConfigChange` block mid-turn: an agent's own write adds a `PreToolUse` hook to `.claude/settings.json`, then a tool call at once; the same for `settings.local.json` and a skill; what the CLI reloads of commands, agents and `.mcp.json` | the hook runs before the block, for a source | that source ends the session, as a command does (§4, §13) |
-| 6 | A 3-minute foreground Bash call inside a turn: every frame between its `tool_use` and its result, kept in `out/` | no frame for 2 minutes | nothing: the stall rule rests on the tool call without its result (PLAN-PANELS §7) |
-| 7 | Five sessions at once: memory and errors | an error, or more than under ACP's 1.7 GB | PLAN-PANELS §8's cap changes |
+| 6 | A 3-minute foreground Bash call inside a turn: every frame between its `tool_use` and its result, kept in `out/` | no frame for 2 minutes | nothing: the stall rule rests on the tool call without its result (PLAN-COUNCIL §7) |
+| 7 | Five sessions at once: memory and errors | an error, or more than under ACP's 1.7 GB | PLAN-COUNCIL §8's cap changes |
 | 8 | Transcripts kept as fixtures: a subagent, a compaction, a title, a tag, a cwd past 200 characters, a session started in a worktree | they differ from §6's rules | §6 follows what was seen, or the owner takes the host's log |
 | 9 | On the owner's machine, never CI: real turns on a subscription login: `get_usage`'s limits, `rate_limit_event`, `account`, the `auto` classifier | the limits are absent or unusable | the bar shows them as unknown, and §13 says so |
 | 10 | What spike 0c did not show: a subagent's frames, compaction, `--plugin-dir`, `--add-dir`, an image in a prompt, an MCP elicitation | one cannot be done on this interface | §13 states the loss before the client is written |
@@ -1954,7 +1954,7 @@ is empty, so Stop still reaches what outlived the leader; Stop ends the group or
 after 5 s, and wins over any start or restart under way. `kernel::proc` holds
 the definitions as a `Resource` and a `Proc` per run: state, exit code, readiness and the last 2000
 lines. The SDL has `Repo.processes` and `Process`, whose `log` is null below `read` and the last 100
-lines by default; `proc` start, stop and restart is the chat's alone (panel participants have no
+lines by default; `proc` start, stop and restart is the chat's alone (council participants have no
 such capability) and needs `start`, and a start by an agent shows in its chat and in Events. The
 Processes app (bottom zone, `panel.processes`) lists the current repo's definitions, starts, stops,
 restarts, edits and deletes them, shows the log and the agents level, whose `start` says it runs
@@ -1988,7 +1988,7 @@ The owner checks: the same, and one with `off` cannot.
 **Status (2026-11-17): built, with every test below; waiting for the owner's check.**
 `kernel::inbox` keeps each session's `Inbox` by its conversation id (a resume reads the same one),
 the owner's groups and the sessions with wake on, none by default; groups and wake live for the
-run, and a chat that ends leaves both. The chat's identity gains `send` and `watch` (panel
+run, and a chat that ends leaves both. The chat's identity gains `send` and `watch` (council
 participants have neither). `send { to, text, reply_to? }` reaches only another session of the
 sender's group and shows in the sender's feed. The SDL has `inbox(all: Boolean)`, which returns the
 unread messages and marks what it returned read, `Message { id from replyTo text read }` (`from` is
@@ -2105,7 +2105,7 @@ Codex account is out of usage until 2026-11-19, so no live turn ran.**
     modes, efforts, the header, the alerts, the past list and the trust card follow the chat's
     provider. The Chats app lists each place's past conversations per provider. Codex's delete
     confirm says Codex keeps it archived.
-  - Panels: a model names its provider (`codex:<model>`, or `codex` for Codex's default); a seat's
+  - Council: a model names its provider (`codex:<model>`, or `codex` for Codex's default); a seat's
     `provider` reaches its session; trusted Codex work runs in `agent-full-access`; a family drops
     the provider, so Codex and Opus corroborate twice. The start form has "Codex verifies" once
     Codex is on, which puts Codex first among the verifiers. On a subject whose trust files are not
@@ -2130,7 +2130,7 @@ Codex account is out of usage until 2026-11-19, so no live turn ran.**
   chat; a review with Codex verifying on a trusted subject.
 
 When the owner enables Codex. Until H13a passes, Codex rows stay off: no Codex chat, no Codex
-participant, and line 4 of PLAN-PANELS §4 does not hold for Codex.
+participant, and line 4 of PLAN-COUNCIL §4 does not hold for Codex.
 
 **H13a** (needs H5): the ACP backend's first live provider. It builds §7's HTTP transport for
 H5's handler, with its tests:
@@ -2148,7 +2148,7 @@ Then `spikes/acp/0b/codex-live.sh`'s rows as headless tests on the owner's login
 Done when every row passes on macOS and in the owner's Linux or WSL check.
 
 **H13b** (needs H13a, H11, P2): Codex's install, login and session list in the Agents page and the
-chat; Codex in panel rosters.
+chat; Codex in council rosters.
 
 The owner checks: a Codex chat and a review with a Codex verifier on a trusted subject.
 
@@ -2157,7 +2157,7 @@ The owner checks: a Codex chat and a review with a Codex verifier on a trusted s
 **Status (2026-11-17): ready for `make release`.** 0.6.0 ships as a regular release with Codex,
 without waiting for the letter's answer ([decision](docs/decisions/2026-11-17-release-0.6.0.md)).
 - **Done since:** `CATALOG_KEY` and the catalog signed in CI (serial 1); CLAUDE.md's first line
-  names the panels' writes; the notes and README name Codex and drop what the cleanup removed.
+  names the Council's writes; the notes and README name Codex and drop what the cleanup removed.
 - **The owner's:** the `adapters-codex-acp-2.6.0` tag, since the catalog has no Codex entry yet
   and Codex cannot install without one; daily use on this build; `make release`; after 2026-11-19
   `make codex-live`; the letter's answer, the Commercial Terms and the label.
@@ -2171,7 +2171,7 @@ without waiting for the letter's answer ([decision](docs/decisions/2026-11-17-re
   passed.
 - **The owner's:** the letter's answer and the Commercial Terms; the label (`CLAUDE.name` is still
   "Claude Agent"); daily use on this build; `CATALOG_KEY` and the signed catalog (H3), without which Codex cannot
-  install, so the README says Codex stays off; CLAUDE.md's first line, which lacks the panels'
+  install, so the README says Codex stays off; CLAUDE.md's first line, which lacks the Council's
   writes of §16; `make release`.
 
 Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with everything.
@@ -2183,7 +2183,7 @@ Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with eve
   the letter on 2026-11-16; the answer is awaited. The Commercial Terms stay open.
   - Recommended: the letter goes now, not here. It asks three things: whether a desktop client
     running the user's own unmodified `claude` on the user's own login is covered; whether
-    panels' parallel sessions are "ordinary, individual usage"; and the label.
+    Council's parallel sessions are "ordinary, individual usage"; and the label.
   - Recommended: the owner accepts the Commercial Terms before the public release, which the
     terms page asks of a product that runs Claude Code, unless the answer says they do not apply.
 - **Before the public release:**
@@ -2194,7 +2194,7 @@ Version 0.6.0; README; `make e2e-app`; the owner's daily use on a build with eve
   the same `claude`, with no code change: the CLI owns the login.
 - **If the interface is refused,** Claude moves behind the seam to ACP, with option B's patch: a
   manifest line, the adapter's build back from git, and H4's tests.
-- **If panels' parallel sessions are refused on a subscription,** panels ask for an API key or a
+- **If Council's parallel sessions are refused on a subscription,** councils ask for an API key or a
   cloud login, and the chat keeps the subscription.
 
 ### The agent host is done when

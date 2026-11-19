@@ -8,7 +8,7 @@ A native multi-repo git client for macOS, Windows and Linux, with AI agents besi
   included.
 - **Agent chats** with Claude Code and Codex: per-repo trust, turn snapshots you can restore,
   skills, and a read-only view of the client.
-- **Panels of agents:** review a branch, gate a merge, triage an MR or issue, review a plan, argue
+- **Council of agents:** review a branch, gate a merge, triage an MR or issue, review a plan, argue
   a question. Each finding can be fixed in its own worktree and reaches your branch on your click.
 - **Docs, processes, terminals:** a repo's plans and decisions, dev servers with encrypted env
   profiles, terminal tabs in the current repo.
@@ -18,12 +18,12 @@ Default shortcuts: [docs/KEYMAP.md](docs/KEYMAP.md); Settings › Keymap lists t
 `keymap.json` in the config folder overrides them.
 
 Detached itself does not commit, stage or push your code. It changes a repo only when you ask:
-switch, stash and pull; worktrees it creates and removes for you; restoring a chat's turn; and a
-panel's fixes, which are committed on a branch of their own in their own worktree and reach your
+switch, stash and pull; worktrees it creates and removes for you; restoring a chat's turn; and
+Council's fixes, which are committed on a branch of their own in their own worktree and reach your
 branch only when you click Merge. Agents in a chat edit files with your permission.
 
 The window is three zones around the open documents, Fleet-style: every app (Repositories, Chats,
-Panels, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
+Council, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
 tab you can drag to any zone; drag a zone's edge to resize it, double-click to reset it, drag it
 nearly shut to close it. Errors and warnings from everywhere collect in Events. Themes: Fleet,
 Classic and Catppuccin, or your own JSON in the config folder's `themes`, reloaded as you edit.
@@ -57,13 +57,13 @@ Agents installs from Detached's signed adapter catalog.
   Claude Code's Read tool and a plain `cat`, `head`, `tail` or `less` of a `.env` file are refused;
   other commands and scripts are not, so a `.env` is not safe from an agent that runs commands
   without asking. Codex chats have no such refusal.
-- **No third-party MCP servers.** Detached's chats and panels load no MCP server but Detached's
+- **No third-party MCP servers.** Detached's chats and Council runs load no MCP server but Detached's
   own: not yours, not a repo's `.mcp.json`, not a plugin's, not claude.ai connectors. Codex's are
   turned off by name, as listed in your `~/.codex/config.toml` (or `$CODEX_HOME`'s) and the repo's
   `.codex/config.toml`; a server Codex finds anywhere else still loads. They run outside every
   permission rule and cost context on every turn; extend the agents with skills that run scripts
   instead.
-- **Panels** put several agents on one subject: a review or a pre-merge gate of a branch, triage of
+- **Council** puts several agents on one subject: a review or a pre-merge gate of a branch, triage of
   a merge request or an issue, a review of a plan or any document. On a question, a dialectic has
   two agents argue opposite sides and rebut each other, and a judge weighs them; a brainstorm
   collects ideas, groups them and ranks them by value and cost. Each finding is checked by another
@@ -71,7 +71,7 @@ Agents installs from Detached's signed adapter catalog.
   and is checked again. A subject you have not marked trusted, such as a merge request from a fork,
   gets a sandboxed, read-only review and no Fix. Stats shows how each role, lens and model did, and
   past revmux rounds can be imported. With Codex on, Codex can verify the findings. On Windows a
-  panel reviews only subjects you trusted; the sandboxed review needs WSL, not built yet.
+  Council reviews only subjects you trusted; the sandboxed review needs WSL, not built yet.
 - **Agents read the client, not pasted text:** branches, merge requests, pipelines, docs and
   processes come to them through a read-only tool. Chats you put in one group can message each
   other.
@@ -84,7 +84,7 @@ Agents installs from Detached's signed adapter catalog.
   env profile whose values are encrypted under a key in the system's credential store and blanked
   out of the log. Each definition says whether agents can see its log or also start it.
 - **Worktrees** from Settings › Worktrees, with a recipe of files to copy and an install command.
-- **Sharing.** Skills, panel modes, recipes and process definitions are kept in the repo's git
+- **Sharing.** Skills, Council modes, recipes and process definitions are kept in the repo's git
   directory, or shared with your team in `.detached/` (Settings › Sharing).
 - **`detached-cli`** (Settings › Command line installs it on PATH) lets a script in a Detached
   terminal tab ask the client what it knows, and run a command with an env profile after you
@@ -115,7 +115,7 @@ Windows 10+ and Linux (x86-64, with a Vulkan or GL driver) packages are on the
 `Detached-linux-amd64.deb`. They are built but not yet tested by hand. Tokens go to the Windows
 Credential Manager or the Secret Service (GNOME Keyring, KWallet).
 
-Chats and panels need Claude Code, which Settings › Agents installs and logs in to; Codex is
+Chats and Council need Claude Code, which Settings › Agents installs and logs in to; Codex is
 optional, and everything else works without either. The agents have been used by hand on macOS only; on Windows and Linux they have
 passed the automated tests alone.
 
@@ -204,6 +204,6 @@ Enterprise for the UI tests in `crates/app/tests`, which drive real views headle
 repos. The agent tests run scripted fakes of Claude Code and of an ACP agent.
 
 Design and history: [PLAN-NATIVE.md](PLAN-NATIVE.md) (the native client), [PLAN-FOUNDATION.md](PLAN-FOUNDATION.md)
-(the kernel), [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md) and [PLAN-PANELS.md](PLAN-PANELS.md) (the
+(the kernel), [PLAN-AGENT-HOST.md](PLAN-AGENT-HOST.md) and [PLAN-COUNCIL.md](PLAN-COUNCIL.md) (the
 agents), [docs/decisions/](docs/decisions/), [docs/BACKLOG.md](docs/BACKLOG.md),
 [docs/TECHDEBT.md](docs/TECHDEBT.md). Release notes: [docs/releases/](docs/releases/).
