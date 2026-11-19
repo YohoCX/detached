@@ -68,28 +68,47 @@ const LEASH: &str = "trap gone=1 HUP; exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; \
 const WSL_LEASH: &str = r#"trap gone=1 HUP
 exec 3<&0; setsid "$@" <&3 3<&- & exec 3<&-
 pid=$!
-while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 1
-done
-if [ -n "$gone" ] || ! kill -0 "$PPID" 2>/dev/null; then
-    pids=$(ps -A -o pid=,ppid= | awk -v root="$pid" '
-        { children[$2] = children[$2] " " $1 }
+walk() {
+    rows=$(ps -A -o pid=,ppid=,pgid= 2>/dev/null) || return
+    printf '%s\n' "$rows" | awk -v root="$pid" '
+        NF == 3 {
+            children[$2] = children[$2] " " $1
+            if ($3 == root) group[$1] = 1
+        }
         function tree(pid, list, n, i) {
-            print pid
+            if (seen[pid]++) return
+            if (pid != root && !(pid in group)) print pid
             n = split(children[pid], list)
             for (i = 1; i <= n; i++) tree(list[i])
         }
-        END { tree(root) }')
-    kill -TERM $pids 2>/dev/null
-    for remaining in 5 4 3 2 1 0; do
-        pids=$(ps -o pid=,stat= -p "$(printf '%s\n' $pids | paste -sd , -)" |
-            awk '$2 !~ /^Z/ { print $1 }')
-        [ -n "$pids" ] || break
-        [ "$remaining" -gt 0 ] || { kill -KILL $pids 2>/dev/null; break; }
-        sleep 1
+        END { tree(root); for (pid in group) tree(pid) }'
+}
+snapshot=
+while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
+    kill -0 "$pid" 2>/dev/null || break
+    if current=$(walk); then
+        kill -0 "$pid" 2>/dev/null || { snapshot="$snapshot $current"; break; }
+        snapshot=$current
+    fi
+    sleep 1
+done
+pids=$(printf '%s\n' $snapshot $(walk) | awk 'NF && !seen[$0]++')
+kill -TERM "-$pid" 2>/dev/null || pids="$pid $pids"
+[ -z "$pids" ] || kill -TERM $pids 2>/dev/null
+pids="-$pid $pids"
+for remaining in 5 4 3 2 1 0; do
+    survivors=
+    for child in $pids; do
+        kill -0 "$child" 2>/dev/null && survivors="$survivors $child"
     done
-fi
+    pids=$survivors
+    [ -n "$pids" ] || break
+    if [ "$remaining" -eq 0 ]; then
+        kill -KILL $pids 2>/dev/null
+        break
+    fi
+    sleep 1
+done
 wait "$pid""#;
 const WAIT: Duration = Duration::from_secs(60);
 /// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
@@ -851,10 +870,16 @@ impl Client {
                 break s;
             }
         };
-        let stderr = self.proc.stderr_after_exit();
         let mut st = self.state.lock().unwrap();
         st.gone = true;
-        if let Some(mut sink) = st.sink.take() {
+        let sink = st.sink.take();
+        drop(st);
+        if let Some(mut sink) = sink {
+            let stderr = if self.closing.load(Ordering::SeqCst) {
+                String::new()
+            } else {
+                self.proc.stderr_after_exit()
+            };
             sink(match self.closing.load(Ordering::SeqCst) {
                 true => Event::Closed,
                 false => Event::Exited(Exit {

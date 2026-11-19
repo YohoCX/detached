@@ -305,38 +305,81 @@ fn a_hang_up_on_the_leash_ends_the_session() {
 #[cfg(unix)]
 #[test]
 fn the_wsl_leash_kills_a_detached_descendant_when_its_parent_dies() {
+    check_wsl_leash("parent");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_wsl_leash_kills_a_detached_descendant_on_hup() {
+    check_wsl_leash("hup");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_wsl_leash_cleans_up_the_cli_s_group_on_normal_exit() {
+    check_wsl_leash("exit");
+}
+
+#[cfg(unix)]
+fn check_wsl_leash(end: &str) {
+    // Hold the next walk until EOF has let the CLI exit and its child has been reparented.
     let leash = format!(
         r#"setsid() {{ exec perl -MPOSIX=setsid -e 'setsid() >= 0 or die $!; exec @ARGV' -- "$@"; }}
+sleep() {{
+    if [ -n "$snapshot" ] && [ -z "$sampled" ]; then
+        sampled=1
+        echo sampled
+        while kill -0 "$pid" 2>/dev/null; do command sleep 0.02; done
+    else
+        command sleep "$@"
+    fi
+}}
 {WSL_LEASH}"#
     );
-    let cli = r#"trap 'echo term; exit 37' TERM
-sh -c '"$@" & wait' worker perl -MPOSIX=setsid -e '
-    setsid() >= 0 or die $!;
-    $SIG{TERM} = "IGNORE";
+    let cli = r#"sh -c '"$@" & wait' worker perl -MPOSIX=setsid -e '
+    my ($end, $timeout) = @ARGV;
     $| = 1;
-    print "ready\n";
     $SIG{ALRM} = sub { print "survived\n"; exit 1; };
-    alarm 20;
-    sleep 21;
-' &
-wait"#;
-    let mut host = Command::new("/bin/sh")
-        .args([
+    alarm $timeout;
+    if ($end eq "exit") {
+        print "ready\n";
+    } else {
+        $SIG{TERM} = "IGNORE";
+        setsid() >= 0 or die $!;
+    }
+    sleep $timeout + 1;
+' "$@" &
+cat >/dev/null
+echo eof
+exit 37"#;
+    let timeout = crate::testutil::scaled(Duration::from_secs(15));
+    let deadline = Instant::now() + timeout;
+    let mut command = Command::new("/bin/sh");
+    if end == "parent" {
+        command.args([
             "-c",
-            "\"$@\" & wait",
+            "exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; wait \"$!\"",
             "host",
             "/bin/sh",
+        ]);
+    }
+    let mut host = command
+        .args([
             "-c",
             &leash,
             "leash",
             "/bin/sh",
             "-c",
             cli,
+            "cli",
+            end,
+            &(timeout.as_secs() + 5).to_string(),
         ])
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdin = host.stdin.take().unwrap();
     let stdout = BufReader::new(host.stdout.take().unwrap());
     let (send, lines) = mpsc::channel();
     thread::spawn(move || {
@@ -346,22 +389,30 @@ wait"#;
             }
         }
     });
-    let deadline = crate::testutil::scaled(Duration::from_secs(10));
-    let ready = lines.recv_timeout(deadline);
-    host.kill().unwrap();
-    host.wait().unwrap();
-    assert_eq!(ready.unwrap(), "ready");
-    assert_eq!(lines.recv_timeout(deadline).unwrap(), "term");
+    let next = || lines.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    let ready = next();
+    if end == "parent" {
+        host.kill().unwrap();
+        host.wait().unwrap();
+    } else if end == "hup" {
+        // SAFETY: a signal to the leash this test started.
+        assert_eq!(unsafe { libc::kill(host.id() as i32, libc::SIGHUP) }, 0);
+    }
+    drop(stdin);
     assert_eq!(
-        lines.recv_timeout(deadline),
-        Err(mpsc::RecvTimeoutError::Disconnected),
-        "the detached process still holds stdout"
+        ready.unwrap_or_else(|e| panic!("waiting for the leash fixture ({end}): {e}")),
+        if end == "exit" { "ready" } else { "sampled" }
     );
-    let status = Command::new("/bin/sh")
-        .args(["-c", &leash, "leash", "/bin/sh", "-c", "exit 37"])
-        .status()
-        .unwrap();
-    assert_eq!(status.code(), Some(37));
+    assert_eq!(next().unwrap(), "eof");
+    assert_eq!(
+        next(),
+        Err(mpsc::RecvTimeoutError::Disconnected),
+        "a child still holds stdout after {end}"
+    );
+    let status = host.wait().unwrap();
+    if end != "parent" {
+        assert_eq!(status.code(), Some(37));
+    }
 }
 
 #[test]

@@ -366,11 +366,10 @@ pub(crate) fn is_doc_view_shown(view: EntityId, cx: &App) -> bool {
         let tab = tab.read(cx);
         tab.view.as_ref().is_some_and(|v| v.entity_id() == view)
             && &tab.doc == doc
-            && tabs::mine(tab, cx)
             && (if p == DockPlacement::Center {
                 tabs::in_view(tab, cx)
             } else {
-                area.is_dock_open(p)
+                tabs::mine(tab, cx) && area.is_dock_open(p)
             })
             && tabs_shown(area, p).contains(&id)
     })
