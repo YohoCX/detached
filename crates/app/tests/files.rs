@@ -1,6 +1,6 @@
 mod common;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -415,6 +415,43 @@ fn open_shows_the_file_its_header_and_the_cursor_on_its_line(cx: &mut TestAppCon
     assert_eq!(label(cx, "viewer.dir").as_deref(), Some("src/notes"));
     assert_eq!(label(cx, "viewer.repo").as_deref(), Some("app"));
     assert_eq!(rest_of_line(cx), "todo 30");
+}
+
+#[gpui_kit::test]
+fn a_late_read_of_the_same_file_in_another_workspace_leaves_focus_in_the_shown_tab(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        layout(sb);
+        detached_core::api::save_workspace(&sb.state, "Other".into(), None).unwrap();
+    });
+    let repo = cx.sb.repo("app");
+    let (started, release) =
+        detached_core::testutil::hold_file_read(&repo.display().to_string(), "README.md");
+    open(cx, &repo, None, "README.md", None);
+    wait_until(cx, |_| started.try_recv().is_ok());
+    assert!(cx.find("viewer.md").is_none());
+
+    let other = cx.settings(|s| {
+        s.workspaces
+            .iter()
+            .find(|w| w.name == "Other")
+            .unwrap()
+            .id
+            .clone()
+    });
+    cx.workspace(|w, cx| w.switch(other.clone(), cx));
+    wait_until(cx, |cx| cx.workspace(|w, _| w.id() == Some(other.as_str())));
+    open(cx, &repo, None, "README.md", None);
+    wait_until(cx, |cx| cx.find("markdown").is_some());
+    let focus = cx.update(|w, cx| w.focused(cx).unwrap());
+
+    let loaded = Rc::new(Cell::new(false));
+    let done = loaded.clone();
+    let _preview = cx.update(|_, cx| cx.observe_new::<Markdown>(move |_, _, _| done.set(true)));
+    release.send(()).unwrap();
+    wait_until(cx, |_| loaded.get());
+    assert!(cx.update(|w, _| focus.is_focused(w)));
 }
 
 #[gpui_kit::test]

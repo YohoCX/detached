@@ -6,7 +6,48 @@ pub mod claude;
 use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(feature = "testutil")]
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
+
+#[cfg(feature = "testutil")]
+struct FileRead {
+    repo: String,
+    path: String,
+    started: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+#[cfg(feature = "testutil")]
+static FILE_READS: Mutex<Vec<FileRead>> = Mutex::new(vec![]);
+
+#[cfg(feature = "testutil")]
+pub fn hold_file_read(repo: &str, path: &str) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (started, wait) = mpsc::channel();
+    let (resume, release) = mpsc::channel();
+    FILE_READS.lock().unwrap().push(FileRead {
+        repo: repo.into(),
+        path: path.into(),
+        started,
+        release,
+    });
+    (wait, resume)
+}
+
+#[cfg(feature = "testutil")]
+pub(crate) fn wait_file_read(repo: &str, path: &str) {
+    let read = {
+        let mut reads = FILE_READS.lock().unwrap();
+        reads
+            .iter()
+            .position(|r| r.repo == repo && r.path == path)
+            .map(|i| reads.remove(i))
+    };
+    if let Some(read) = read {
+        let _ = read.started.send(());
+        let _ = read.release.recv();
+    }
+}
 
 /// Builds the binary `name` of `package` with the cargo that builds this crate, and returns a copy
 /// of its executable that no later build rewrites; other crates' tests cannot name a binary of

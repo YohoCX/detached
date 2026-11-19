@@ -4,8 +4,8 @@ use detached_core::api;
 use detached_core::types::Content;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    App, AppContext, Context, Entity, EntityId, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
     prelude::FluentBuilder,
 };
 
@@ -18,7 +18,7 @@ use super::viewer;
 use crate::actions::{self, Group, Registration};
 use crate::ui;
 use kernel::blocking;
-use kernel::doc::{Doc, Location};
+use kernel::doc::Location;
 use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
 
@@ -29,6 +29,7 @@ enum Body {
 }
 
 pub(super) struct FileView {
+    viewer: EntityId,
     loc: Location,
     code: Entity<Code>,
     body: Body,
@@ -47,7 +48,12 @@ impl FileView {
         actions::raise(&self._actions, cx);
     }
 
-    pub(super) fn new(loc: Location, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        viewer: EntityId,
+        loc: Location,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let this = cx.weak_entity();
         let goto = move |window: &mut Window, cx: &mut App| {
             this.update(cx, |v, cx| v.open_goto(window, cx)).ok();
@@ -78,6 +84,7 @@ impl FileView {
             }
         });
         let mut view = FileView {
+            viewer,
             loc,
             code: cx.new(|cx| Code::new(window, cx)),
             body: Body::Loading,
@@ -128,8 +135,7 @@ impl FileView {
             Err(e) => return self.placeholder(e, cx),
         };
         let (path, line) = (&self.loc.path, self.loc.line.unwrap_or(1));
-        let shown = reveal
-            && matches!(Workspace::get(cx).shown(), Some(Doc::File(loc)) if loc == &self.loc);
+        let shown = reveal && crate::dock::is_doc_view_shown(self.viewer, cx);
         self.code.update(cx, |c, cx| {
             c.set(path, &text, !reveal, window, cx);
             if reveal {

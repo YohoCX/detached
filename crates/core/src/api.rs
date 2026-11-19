@@ -214,6 +214,8 @@ pub fn file_patch(
 }
 
 pub fn read_file(s: &AppState, repo: &str, rev: Option<&str>, path: &str) -> Result<Content> {
+    #[cfg(feature = "testutil")]
+    crate::testutil::wait_file_read(repo, path);
     let side = rev.map_or(Side::Worktree, |rev| Side::Rev { rev: rev.into() });
     diff::content(s, Path::new(repo), &side, path)
 }

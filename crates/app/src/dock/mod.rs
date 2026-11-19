@@ -15,8 +15,8 @@ use gpui_kit::base::dock::{
     Panel, PanelEvent, PanelId, PanelState, PanelView, register_panel,
 };
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Global,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    AnyView, App, AppContext, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
@@ -355,6 +355,25 @@ pub fn close(name: &str, window: &mut Window, cx: &mut App) {
 /// Whether the app is the tab on screen in an open zone.
 pub fn is_shown(name: &str, cx: &App) -> bool {
     zones(cx).is_some_and(|a| shown(a.read(cx), cx).contains(&name))
+}
+
+pub(crate) fn is_doc_view_shown(view: EntityId, cx: &App) -> bool {
+    let (Some(area), Some(doc)) = (zones(cx), Workspace::get(cx).shown()) else {
+        return false;
+    };
+    let area = area.read(cx);
+    docs(area).into_iter().any(|(p, id, tab)| {
+        let tab = tab.read(cx);
+        tab.view.as_ref().is_some_and(|v| v.entity_id() == view)
+            && &tab.doc == doc
+            && tabs::mine(tab, cx)
+            && (if p == DockPlacement::Center {
+                tabs::in_view(tab, cx)
+            } else {
+                area.is_dock_open(p)
+            })
+            && tabs_shown(area, p).contains(&id)
+    })
 }
 
 pub fn is_open(p: DockPlacement, cx: &App) -> bool {
