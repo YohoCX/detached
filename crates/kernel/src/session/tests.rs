@@ -337,7 +337,8 @@ fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_the
         .unwrap_err();
     assert!(!e.to_string().contains("has no repo"), "{e}");
     drop(s);
-    cx.run_until_parked();
+    // Its release, and so the workspace's, runs on the next flush of effects.
+    cx.update(|_| {});
     assert!(cx.read(|cx| Workspace::get(cx).repo(&f.repo).is_none()));
 }
 
