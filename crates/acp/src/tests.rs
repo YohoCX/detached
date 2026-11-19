@@ -566,6 +566,12 @@ fn a_sandboxed_codex_session_runs_read_only_under_a_profile_that_denies_its_read
     assert_eq!(config[0].value, "read-only");
     open.prompt("model").unwrap();
     assert_eq!(said(&rx), "gpt-5.5 read-only");
+    open.prompt("codex-config").unwrap();
+    assert_eq!(
+        said(&rx),
+        "",
+        "its home and layer are the host's, with no server"
+    );
     let layer = std::fs::read_to_string(repo.join(".codex/config.toml")).unwrap();
     let want = "default_permissions = \"detached-reviewer\"\n\
         [permissions.detached-reviewer]\nextends = \":read-only\"\n\
@@ -768,6 +774,29 @@ fn a_codex_session_without_the_host_s_tools_gets_no_mcp_server() {
     open.prompt("params").unwrap();
     let params: Value = serde_json::from_str(&said(&rx)).unwrap();
     assert_eq!(params["mcpServers"], json!([]));
+    open.prompt("codex-config").unwrap();
+    assert_eq!(said(&rx), "", "no server to turn off");
+}
+
+#[test]
+fn a_codex_chat_turns_off_each_server_of_the_user_s_config_and_the_project_layer_by_name() {
+    let (acp, sb) = (Acp::default(), codex());
+    let user = "model = \"x\"\n[mcp_servers.mine]\ncommand = \"srv\"\n\
+        [mcp_servers.mine.env]\nTOKEN = \"secret\"\n[mcp_servers.both]\nurl = \"https://x.test\"\n";
+    std::fs::write(sb.path("codex-home/config.toml"), user).unwrap();
+    let layer = sb.dir.path().join(".codex");
+    std::fs::create_dir_all(&layer).unwrap();
+    let project = "[mcp_servers.repo]\ncommand = \"r\"\n[mcp_servers.both]\nenabled = true\n";
+    std::fs::write(layer.join("config.toml"), project).unwrap();
+    let (open, rx, _, _) = with_tools(&acp, &sb);
+    open.prompt("codex-config").unwrap();
+    let config: Value = serde_json::from_str(&said(&rx)).unwrap();
+    let off = json!({"enabled": false});
+    let want = json!({"mcp_servers": {"mine": off, "both": off, "repo": off}});
+    assert_eq!(
+        config, want,
+        "every name of both layers, never the host's own server"
+    );
 }
 
 #[test]

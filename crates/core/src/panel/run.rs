@@ -465,13 +465,11 @@ pub fn prepare(
     }
     let mut limits = vec![];
     // Codex loads a tree's own settings whatever it is told: on one not accepted, Claude stands in.
-    // A trusted run's Codex would load the owner's MCP servers, which no per-session override drops.
     let why = match &pv.refused {
         Some(r) => r.clone(),
-        None if !pv.accepted => "the subject's agent settings are not accepted".into(),
-        None => "Codex cannot turn off its MCP servers per session".into(),
+        None => "the subject's agent settings are not accepted".into(),
     };
-    if (pv.trust.trusted || !pv.accepted || pv.refused.is_some()) && claude_only(&mut mode) {
+    if (!pv.accepted || pv.refused.is_some()) && claude_only(&mut mode) {
         limits.push(format!(
             "cross-provider verification unavailable: {why}, so Codex does not run"
         ));

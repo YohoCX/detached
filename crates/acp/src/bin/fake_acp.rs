@@ -496,6 +496,7 @@ impl Turn<'_> {
                 self.say(&names.join(","));
             }
             "params" => self.say(&self.session(|s| s.params.to_string())),
+            "codex-config" => self.say(&std::env::var("CODEX_CONFIG").unwrap_or_default()),
             "hold-close" => {
                 let mut all = self.sessions.lock().unwrap();
                 all.get_mut(self.sid).unwrap().hold_close = true;
