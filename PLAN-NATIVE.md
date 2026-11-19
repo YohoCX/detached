@@ -315,15 +315,15 @@ provider then fills it in.
   registers to toggle it, `home` its zone and size when a layout does not place it, and a zone
   lists its apps in the list's order. It gives each `Doc::kind()` it shows (`file`, `diff`, `mr`,
   `job`, `chat`, `terminal`; `Doc` stays a closed enum) an object of `dock::DocKind` with
-  `dock::register_doc`: the tab's view, id, title and badge, what it does when it comes forward or
-  closes, which docs share a tab, the preview tab, and how it takes a dropped doc (`adopt`); a doc
-  dragged out of an app's own list is a `dock::DragDoc` carrying the `Doc`. It adds title-bar views
-  with `shell::top_bar(cx, slot, order, view)`: `TopBar::Left` (V1: workspaces, repo switcher,
-  branch widget), `TopBar::Center` (V5: MR chip, pipeline badge), `TopBar::Right` (V3: search pill;
-  V1: Fetch All, Pull All); and `shell::overlay(cx, view)`, modals drawn over the window and under
-  the notices, inside the shell's key context so chords still reach the app while one is open
-  (Settings, which draws its own layer over the top bar's popups; V3: palette, find). `dock/` and
-  `shell.rs` name no feature.
+  `dock::register_doc`: the tab's view, id, title, tooltip (`tip`) and badge, what it does when it
+  comes forward or closes, which docs share a tab, the preview tab, and how it takes a dropped doc
+  (`adopt`); a doc dragged out of an app's own list is a `dock::DragDoc` carrying the `Doc`. It
+  adds title-bar views with `shell::top_bar(cx, slot, order, view)`: `TopBar::Left` (V1:
+  workspaces, repo switcher, branch widget), `TopBar::Center` (V5: MR chip, pipeline badge),
+  `TopBar::Right` (V3: search pill; V1: Fetch All, Pull All); and `shell::overlay(cx, view)`,
+  modals drawn over the window and under the notices, inside the shell's key context so chords
+  still reach the app while one is open (Settings, which draws its own layer over the top bar's
+  popups; V3: palette, find). `dock/` and `shell.rs` name no feature.
 - **Cross-vertical calls** live in an `api.rs` in the providing vertical's directory. F writes the
   first version with the types and stub bodies; the provider implements the bodies without changing
   signatures; callers build against the stubs from day one.

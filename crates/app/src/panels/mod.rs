@@ -154,13 +154,12 @@ impl Render for List {
                     } else {
                         (t.success, "No critical or major findings")
                     };
-                    let time = if run.started_at == 0 {
-                        String::new()
-                    } else {
-                        crate::util::ago_text(run.started_at / 1000, now)
+                    let ago = match run.started_at {
+                        0 => String::new(),
+                        t => format!(" · {}", crate::util::ago_text(t / 1000, now)),
                     };
                     let n = runs.len();
-                    let label = format!("{task} · {n} rounds · {time}");
+                    let label = format!("{task} · {n} rounds{ago}");
                     let count = format!("{n} round{}", if n == 1 { "" } else { "s" });
                     let group = day(run.started_at, now);
                     if group != shown_day {
@@ -201,7 +200,7 @@ impl Render for List {
                                 .flex_none()
                                 .text_size(text::SMALL)
                                 .text_color(t.muted)
-                                .child(format!("{count} · {time}")),
+                                .child(format!("{count}{ago}")),
                         )
                         .on_click(move |_, _, cx| {
                             Workspace::global(cx).update(cx, |w, cx| w.show(doc.clone(), cx));

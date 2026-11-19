@@ -14,7 +14,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
     IntoElement, KeyDownEvent, ParentElement, Render, Role, ScrollStrategy, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle, Window, div,
+    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
 
@@ -101,8 +101,9 @@ pub struct Tree {
     scroll: UniformListScrollHandle,
     field: Entity<Suggest>,
     sel: Option<String>,
-    /// The folder expanded last, whose rows fade in.
+    /// The folder expanded last, whose rows fade in until `fade` ends.
     opened: Option<String>,
+    fade: Option<Task<()>>,
     /// The current repo and the ref its tree browses.
     key: Option<(String, Option<String>)>,
     files: Option<Interest<Dir>>,
@@ -143,6 +144,7 @@ impl Tree {
             field,
             sel: None,
             opened: None,
+            fade: None,
             key: None,
             files: None,
             children: HashMap::new(),
@@ -227,6 +229,10 @@ impl Tree {
         if on {
             set.insert(path.into());
             self.opened = Some(path.into());
+            self.fade = Some(cx.spawn(async |this, cx| {
+                cx.background_executor().timer(ui::motion::FAST).await;
+                _ = this.update(cx, |t, _| t.opened = None);
+            }));
         } else {
             set.remove(path);
         }

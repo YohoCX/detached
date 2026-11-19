@@ -569,6 +569,8 @@ pub(super) fn participants(panel: &Entity<Panel>, cx: &App) -> AnyElement {
             .aria_label(label.clone())
             .flex()
             .flex_col()
+            .min_w_0()
+            .overflow_hidden()
             .p(GAP)
             .bg(t.panel)
             .rounded(theme::radius::ITEM)
@@ -579,20 +581,22 @@ pub(super) fn participants(panel: &Entity<Panel>, cx: &App) -> AnyElement {
             .child(
                 div()
                     .flex()
+                    .min_w_0()
                     .gap(px(6.))
                     .items_center()
                     .child(ui::dot(color))
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(64.))
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .child(l.name.clone()),
                     )
                     .child(
                         div()
-                            .flex_none()
+                            .min_w_0()
+                            .truncate()
                             .text_size(text::SMALL)
                             .text_color(color)
                             .child(state),

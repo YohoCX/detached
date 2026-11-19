@@ -16,8 +16,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, ClickEvent, ClipboardItem, Context, Div, Entity,
     FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window,
-    div, prelude::FluentBuilder, px, relative, uniform_list,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity,
+    Window, div, prelude::FluentBuilder, px, relative, uniform_list,
 };
 
 use super::branches::{self, Intent};
@@ -268,8 +268,10 @@ pub fn sidebar(window: &mut Window, cx: &mut App) -> AnyView {
 
 struct Sidebar {
     collapsed: BTreeSet<String>,
-    /// The rows shown before the last unfold, by `key`; the ones it added fade in.
+    /// The rows shown before the last unfold, by `key`; the ones it added fade in until `fade`
+    /// ends.
     before: Option<HashSet<String>>,
+    fade: Option<Task<()>>,
     filter: Entity<InputState>,
     _subs: [Subscription; 3],
 }
@@ -280,6 +282,7 @@ impl Sidebar {
         Sidebar {
             collapsed: ui_state::get(COLLAPSED, cx).unwrap_or_default(),
             before: None,
+            fade: None,
             _subs: [
                 Workspace::observe(cx, |_, cx| cx.notify()),
                 cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
@@ -299,6 +302,10 @@ impl Sidebar {
         let shown = self.shown(cx).iter().map(self::key).collect();
         if self.collapsed.remove(&key) {
             self.before = Some(shown);
+            self.fade = Some(cx.spawn(async |this, cx| {
+                cx.background_executor().timer(ui::motion::FAST).await;
+                _ = this.update(cx, |s, _| s.before = None);
+            }));
         } else {
             self.collapsed.insert(key);
         }

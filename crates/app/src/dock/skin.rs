@@ -454,6 +454,8 @@ impl TabGroupRenderer for Group {
         if group.is_collapsed() {
             return Empty.into_any_element();
         }
+        // Keyed by the view, so reordering or closing other tabs keeps its state.
+        let id = ("panel.in", panel.entity_id().as_u64() as usize);
         div()
             .flex()
             .flex_col()
@@ -461,11 +463,9 @@ impl TabGroupRenderer for Group {
             .min_h_0()
             .size_full()
             .child(panel)
-            .with_animation(
-                ("panel.in", group.active_ix()),
-                Animation::new(ui::motion::FAST),
-                |d, t| d.opacity(0.3 + 0.7 * t),
-            )
+            .with_animation(id, Animation::new(ui::motion::FAST), |d, t| {
+                d.opacity(0.3 + 0.7 * t)
+            })
             .into_any_element()
     }
 
