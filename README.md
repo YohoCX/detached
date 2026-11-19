@@ -25,8 +25,8 @@ branch only when you click Merge. Agents in a chat edit files with your permissi
 The window is three zones around the open documents, Fleet-style: every app (Repositories, Chats,
 Panels, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
 tab you can drag to any zone; drag a zone's edge to resize it, double-click to reset it, drag it
-nearly shut to close it. Errors and warnings from everywhere collect in Events. Themes: Fleet and
-Classic, or your own JSON in the config folder's `themes`, reloaded as you edit.
+nearly shut to close it. Errors and warnings from everywhere collect in Events. Themes: Fleet,
+Classic and Catppuccin, or your own JSON in the config folder's `themes`, reloaded as you edit.
 
 Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
 bar, and everything (sidebar, fetch and pull all, quick open, search) covers their repos. The
