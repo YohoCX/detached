@@ -25,7 +25,7 @@ cli() {
 }
 real() {
   cargo test -p detached-kernel --lib session::tests::real -- --ignored
-  cargo test -p detached-kernel --lib panel::tests::real -- --ignored
+  cargo test -p detached-kernel --lib council::tests::real -- --ignored
 }
 # Claude's floor: the manifest's, or the signed catalog's when that is higher.
 floor() {

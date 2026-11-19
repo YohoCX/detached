@@ -123,7 +123,7 @@ fn over() -> String {
 /// What `repo`'s trust files at `sha` would bring in, read as raw blobs: a link among them or more
 /// than 1 MiB of them refuses the scan.
 pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
-    use crate::panel::tree;
+    use crate::council::tree;
     let roots = [".claude", ".mcp.json", ".codex", ".agents"];
     let all = tree::entries(env, repo, sha, &roots)?;
     let wanted = |p: &str| {

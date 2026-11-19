@@ -113,8 +113,8 @@ impl Kind {
     pub fn title(self) -> &'static str {
         match self {
             Self::Skills => "Skills",
-            Self::Roles => "Panel roles",
-            Self::Modes => "Panel modes",
+            Self::Roles => "Council roles",
+            Self::Modes => "Council modes",
             Self::Profiles => "Project profiles",
             Self::Recipes => "Worktree recipes",
             Self::Processes => "Process definitions",

@@ -165,14 +165,14 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
     let added = left.split_off(left.len() - 2);
     let tab =
         |name| serde_json::json!({"panel_name": name, "children": [], "info": {"panel": null}});
-    assert_eq!(added, [tab("panels"), tab("docs")]);
+    assert_eq!(added, [tab("council"), tab("docs")]);
     let bottom = saved["bottom_dock"]["panel"]["children"]
         .as_array_mut()
         .unwrap();
     assert_eq!(bottom.pop(), Some(tab("processes")));
     assert_eq!(
         saved, old,
-        "existing layout preserved, Panels, Docs and Processes appended"
+        "existing layout preserved, Council, Docs and Processes appended"
     );
 }
 
@@ -695,16 +695,16 @@ fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
             id: 1,
             cwd: "/r".into(),
         },
-        Doc::Panel {
+        Doc::Council {
             repo: "/r".into(),
             task: "t".into(),
             round: "01".into(),
         },
-        Doc::PanelTask {
+        Doc::CouncilTask {
             repo: "/r".into(),
             task: "t".into(),
         },
-        Doc::PanelStats { repo: "/r".into() },
+        Doc::CouncilStats { repo: "/r".into() },
     ];
     cx.update(|_, cx| {
         let known: Vec<_> = dock::categories(cx).into_iter().map(|c| c.id).collect();

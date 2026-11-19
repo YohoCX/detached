@@ -392,7 +392,7 @@ fn tools() -> Value {
         {"name": ACT, "inputSchema": act, "description": "Reports to Detached: a finding, a \
             verdict on a finding, a group of duplicate findings or ideas, a triage's outcome, a \
             dialectic's synthesis, an idea, an idea's rank, or `done` at the end of the work, which \
-            every turn of a panel ends with; `proc` starts, stops or restarts a defined process where its definition \
+            every turn of a council ends with; `proc` starts, stops or restarts a defined process where its definition \
             lets agents; `send` messages a session of this one's group; `watch` puts one message \
             into this session's inbox when a process is ready or a pipeline ends."},
     ]})

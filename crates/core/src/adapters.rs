@@ -79,7 +79,7 @@ pub struct Provider {
     pub ask: &'static str,
     /// The mode a chat starts in.
     pub chat: &'static str,
-    /// The mode of trusted panel work: no prompts, full access.
+    /// The mode of trusted council work: no prompts, full access.
     pub full: &'static str,
 }
 

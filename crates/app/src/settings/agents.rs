@@ -142,7 +142,7 @@ impl Page {
                         ""
                     };
                     let s = format!(
-                        "{c} {v} is blocked{of}: update {c}. The chat warns; isolated panels refuse it."
+                        "{c} {v} is blocked{of}: update {c}. The chat warns; isolated councils refuse it."
                     );
                     (s.clone(), s)
                 }
