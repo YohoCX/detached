@@ -25,12 +25,14 @@ branch only when you click Merge. Agents in a chat edit files with your permissi
 The window is three zones around the open documents, Fleet-style: every app (Repositories, Chats,
 Council, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
 tab you can drag to any zone; drag a zone's edge to resize it, double-click to reset it, drag it
-nearly shut to close it. Errors and warnings from everywhere collect in Events. Themes: Fleet,
-Classic and Catppuccin, or your own JSON in the config folder's `themes`, reloaded as you edit.
+nearly shut to close it. The center's tabs sort into Docs, Chats and Code. Errors and warnings
+from everywhere collect in Events. Themes: Fleet, Classic and Catppuccin, in System, Light or Dark
+mode, or your own JSON in the config folder's `themes`, reloaded as you edit.
 
-Folders belong to workspaces, e.g. "Office" and "Personal"; tick any number of them on in the top
-bar, and everything (sidebar, fetch and pull all, quick open, search) covers their repos. The
-project tree nests related files under their main file (`a.spec.ts` under `a.ts`, `bun.lock` under
+Folders belong to workspaces, e.g. "Office" and "Personal". The top bar switches between them, and
+the current one is the context for everything: the sidebar, fetch and pull all, quick open, search,
+the Chats list and its own tabs. A switch stops nothing; the other workspace's terminals and chats
+keep running. The project tree nests related files under their main file (`a.spec.ts` under `a.ts`, `bun.lock` under
 `package.json`); `fileNesting` in `settings.json` adds or replaces rules by main suffix, e.g.
 `{".vue": [".spec.ts"]}`, and an empty list drops one.
 
