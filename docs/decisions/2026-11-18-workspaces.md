@@ -2,7 +2,8 @@
 
 **Decided by the owner on 2026-11-18**: six decisions, then his answers to the draft plan's nine
 questions and to the four each of its first two reviews raised; read-only's boundary on
-2026-11-19.
+2026-11-19, and the same day, after the W0 spike, Codex back and read-only kept out of the way
+(last section).
 
 ## What was decided
 
@@ -15,35 +16,27 @@ questions and to the four each of its first two reviews raised; read-only's boun
 - **A project can be attached to several workspaces.**
 - **A project can be attached read-only**, as a knowledge base: agents and the owner read and
   search it, Docs indexes it, and Detached keeps it fresh with fetch and pull every 15 minutes, at
-  a switch to the workspace and in Fetch/Pull All. Nothing else writes to it: no switch, stash,
-  worktree, Fix or commit. This is enforced for agents (permission rules, the sandbox's
-  `denyWrite`), not only hidden in the UI.
+  a switch to the workspace and in Fetch/Pull All. Detached writes nothing else to it: no switch,
+  stash, worktree, Fix or commit, refused in core, not only hidden in the UI. Agents' file tools
+  are denied there; Bash is not confined (2026-11-19, below).
   - It ships only together with its enforcement for chats and Council, never before it.
   - **Its boundary (2026-11-19):** it protects against a cooperative agent's accidental writes,
     not against an agent deliberately escaping: planting git config or hooks (`core.hooksPath`,
     submodule git dirs, `~/.gitconfig`), settings that widen the sandbox, edits to code a process
     Detached runs. Untrusted code goes through Council's untrusted path (sandboxed, an export, no
-    Fix), which is the real isolation. So the plan keeps the file-tool denies on read-only paths,
-    Bash's sandbox denying writes there, and core refusing Detached's own writes, and drops
-    hardening that only served against a deliberate escape.
+    Fix), which is the real isolation. So the plan keeps the file-tool denies on read-only paths
+    and core refusing Detached's own writes, and drops hardening that only served against a
+    deliberate escape.
   - Its MRs can be Council subjects: the head is fetched into `refs/detached/subjects/`; review
     yes, Fix no.
-  - On native Windows, where Claude has no sandbox, Bash in such a chat is not enforced; the limit
-    is accepted and goes to docs/TECHDEBT.md. A trusted Council run beside a read-only project is
-    refused there.
-  - Codex chats with a read-only project run only in `read-only` and `workspace-write`, and are
-    never pinned to a read-only project.
+  - A Codex chat is never pinned to a read-only project.
   - Hooks from the owner's settings, accepted repos and the plugins they enable can still write
     it: the owner's own code, a stated limit.
-  - On macOS and Linux, where Claude's sandbox does not run (bubblewrap or socat missing, a
-    user-namespace limit), a chat or trusted run beside a read-only project refuses and shows the
-    fix. Settings that name `sandbox.excludedCommands` make such a chat refuse and name the file.
 - **Third-party MCP servers are off in every Detached chat and Council run**, the user's and the
   projects'; Detached's own server stays (the read tool, Council's report tools). Agents are
   extended through skills with scripts. Hooks load only from the user's own settings and repos the
   owner accepted, never from untrusted ones, as today. This changes today's chat and ships early,
-  with a release-notes line. Codex runs in Detached only if it can drop the user's and the
-  project's MCP servers per session; otherwise it is off.
+  with a release-notes line. Codex's servers are turned off by name (2026-11-19, below).
 - **A chat `--add-dir`s the workspace's trusted read-write projects**, so edits there work under
   `acceptEdits` and their skills, agents and commands load as the owner accepted them; the trust
   check covers them as it covers the cwd. Read-only and untrusted projects are files only: read
@@ -65,7 +58,7 @@ questions and to the four each of its first two reviews raised; read-only's boun
 The center's single strip mixed a chat tab next to a file tab, and a chat or run tied to one repo
 did not match work that spans several repos and a shared knowledge base. MCP servers run outside
 the sandbox and the deny rules, so read-only could not hold with them, and they cost context
-tokens on every turn; skills with scripts cover the same use under Bash's sandbox, denies and
+tokens on every turn; skills with scripts cover the same use under the permission rules and
 asks.
 
 ## Rejected
@@ -79,9 +72,40 @@ asks.
 - Deleting a workspace's chats and runs with it.
 - Third-party MCP servers only off beside a read-only project: they stay outside the sandbox
   everywhere.
-- Codex's `agent` mode beside a read-only project: its auto-reviewer approves escalations unseen.
 
 ## Plan
 
 [PLAN-WORKSPACES.md](../../PLAN-WORKSPACES.md) builds this; its choices marked *Proposal* wait for
 the plan review.
+
+## 2026-11-19: Codex back, read-only out of the way
+
+Decided by the owner after the W0 spike and W2.
+
+- **Codex comes back.** Codex chats and Codex seats in trusted Council runs are on again. W0 found
+  that Codex's config layers merge, so no override empties `mcp_servers`, while
+  `mcp_servers.<name>.enabled = false` turns a server off by name. So at each Codex start and
+  resume Detached reads the server names (the table names under `mcp_servers`, nothing else) of
+  the user's Codex config (`$CODEX_HOME/config.toml`, else `~/.codex/config.toml`) and of the
+  session cwd's `.codex/config.toml`, and turns each off through the adapter's `CODEX_CONFIG`.
+  Detached's own server stays. A server Codex learns from somewhere Detached does not read (a
+  project layer above the cwd, a profile, the system or managed config) is not turned off: a
+  stated limit.
+- **Read-only projects must not get in the way of the normal flow.** No Bash sandbox fence, no
+  permission-mode limit, no refusal tied to the sandbox probe or `sandbox.excludedCommands`: ssh
+  pushes, docker and everything else work as in any chat. What stays: `Edit`, `Write` and
+  `NotebookEdit` denies on read-only project paths; core refusing Detached's own writes (git ops,
+  the repo store, worktrees, processes); keep-fresh fetch and pull; Council review-only for a
+  read-only subject; one line in the agent's workspace instructions naming the read-only projects
+  as read-only. Bash, hooks and processes can still write there: the accidental-write boundary,
+  accepted.
+
+Why: Codex was off only because no override emptied its servers, and per-name covers what Codex
+loads from the two files a user and a repo keep. The fence broke ssh remotes (W0 row 3) and
+brought refusals and mode limits into every chat beside a knowledge base, for writes the owner
+expects a cooperative agent not to make.
+
+Rejected: Codex off in chats and trusted runs (W2 as first built); the Bash fence for read-only
+projects, with `failIfUnavailable`, its probe and `excludedCommands` refusals; Codex limited to
+`read-only` and `workspace-write` beside a read-only project; `default` and `plan` only on native
+Windows.
