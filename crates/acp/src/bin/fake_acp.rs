@@ -77,6 +77,7 @@ fn main() {
             println!("2.1.400 (Claude Code)");
             return;
         }
+        Some("login") if args.next().as_deref() == Some("status") => return,
         // A background child: lives until its stdin, the agent's, closes.
         Some("--child") => {
             let _ = std::io::stdin().read_to_end(&mut vec![]);

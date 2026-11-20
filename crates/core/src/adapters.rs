@@ -7,9 +7,11 @@ use std::env::consts::EXE_SUFFIX;
 use std::fs::{self, File};
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, NaiveDate};
 pub use semver::Version;
@@ -564,8 +566,78 @@ pub fn cli_version(exe: &Path, env: &Env) -> Result<Version> {
         .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
 }
 
+fn cli_probe(exe: &Path, env: &Env, args: &[&str]) -> Result<Output> {
+    let child = crate::os::group(&mut Command::new(exe))
+        .args(args)
+        .env("PATH", &env.path)
+        .envs(env.vars.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    Ok(rx.recv_timeout(Duration::from_secs(5)).map_err(|err| {
+        if err == mpsc::RecvTimeoutError::Timeout {
+            thread::spawn(move || crate::os::kill(pid, false));
+        }
+        Error::Other(err.to_string())
+    })??)
+}
+
 fn parse_version(text: &str) -> Option<Version> {
     text.split_whitespace().find_map(|w| Version::parse(w).ok())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginStatus {
+    LoggedIn,
+    LoggedOut,
+    Unknown,
+}
+
+pub fn login_status(provider: &Provider, cli: &Path, env: &Env) -> LoginStatus {
+    let args: &[&str] = match provider.id {
+        "claude" => &["auth", "status", "--json"],
+        "codex" => &["login", "status"],
+        _ => return LoginStatus::Unknown,
+    };
+    match cli_probe(cli, env, args) {
+        Ok(out) => parse_login_status(provider, out.status.code(), &out.stdout, &out.stderr),
+        Err(_) => LoginStatus::Unknown,
+    }
+}
+
+fn parse_login_status(
+    provider: &Provider,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> LoginStatus {
+    use LoginStatus::{LoggedIn, LoggedOut, Unknown};
+
+    match (provider.id, code) {
+        ("claude", Some(_)) => match serde_json::from_slice::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|value| value["loggedIn"].as_bool())
+        {
+            Some(true) => LoggedIn,
+            Some(false) => LoggedOut,
+            None => Unknown,
+        },
+        ("codex", Some(0)) => LoggedIn,
+        ("codex", _)
+            if [stdout, stderr]
+                .iter()
+                .any(|bytes| String::from_utf8_lossy(bytes).contains("Not logged in")) =>
+        {
+            LoggedOut
+        }
+        _ => Unknown,
+    }
 }
 
 /// The login as a line to type into the terminal's shell, with the CLI found in place of its name.
@@ -863,6 +935,40 @@ mod tests {
         );
         assert_eq!(parse_version("codex-cli 0.166.0"), Some(v("0.166.0")));
         assert_eq!(parse_version("command not found"), None);
+    }
+
+    #[test]
+    fn login_status_uses_claudes_json_and_codexs_exit_code_and_output() {
+        use LoginStatus::{LoggedIn, LoggedOut, Unknown};
+
+        assert_eq!(
+            parse_login_status(&CLAUDE, Some(0), br#"{"loggedIn":true}"#, b""),
+            LoggedIn
+        );
+        assert_eq!(
+            parse_login_status(&CLAUDE, Some(1), br#"{"loggedIn":false}"#, b""),
+            LoggedOut
+        );
+        for stdout in ["invalid JSON", "{}", r#"{"loggedIn":"false"}"#] {
+            assert_eq!(
+                parse_login_status(&CLAUDE, Some(0), stdout.as_bytes(), b""),
+                Unknown
+            );
+        }
+        assert_eq!(parse_login_status(&CODEX, Some(0), b"", b""), LoggedIn);
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"", b"Not logged in\n"),
+            LoggedOut
+        );
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"Not logged in\n", b""),
+            LoggedOut
+        );
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"", b"Error loading configuration"),
+            Unknown
+        );
+        assert_eq!(parse_login_status(&CODEX, None, b"", b""), Unknown);
     }
 
     #[test]

@@ -47,6 +47,7 @@ made or endorsed by Anthropic or OpenAI.
 Codex is optional and off until `settings.json` has `"agents": {"codex": true}`. It runs on your
 `codex`, 0.166.0 or later, and its login, through its ACP adapter `codex-acp`, which Settings ›
 Agents installs from Detached's signed adapter catalog.
+Settings › Agents shows the CLI version and whether it is logged in when the CLI reports its status.
 
 - **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. Each
   tool call that needs permission asks you; "Always" is kept by Detached for that exact call, never
