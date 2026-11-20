@@ -7,11 +7,11 @@ use std::env::consts::EXE_SUFFIX;
 use std::fs::{self, File};
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, NaiveDate};
 pub use semver::Version;
@@ -556,62 +556,36 @@ pub fn find_cli(provider: &Provider, setting: Option<&str>, env: &Env) -> Option
 
 /// The version `exe --version` prints.
 pub fn cli_version(exe: &Path, env: &Env) -> Result<Version> {
-    let (_, stdout) = cli_probe(exe, env, &["--version"], true)?;
-    parse_version(&String::from_utf8_lossy(&stdout))
+    let out = crate::os::group(&mut Command::new(exe))
+        .arg("--version")
+        .env("PATH", &env.path)
+        .envs(env.vars.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .output()?;
+    parse_version(&String::from_utf8_lossy(&out.stdout))
         .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
 }
 
-fn cli_probe(exe: &Path, env: &Env, args: &[&str], capture: bool) -> Result<(ExitStatus, Vec<u8>)> {
-    const OUTPUT_LIMIT: usize = 64 * 1024;
-    let mut child = crate::os::group(&mut Command::new(exe))
+fn cli_probe(exe: &Path, env: &Env, args: &[&str]) -> Result<Output> {
+    let child = crate::os::group(&mut Command::new(exe))
         .args(args)
         .env("PATH", &env.path)
         .envs(env.vars.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
-        .stdout(if capture {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let timed_out = || Error::Other(format!("{} probe timed out", exe.display()));
-    let result = (|| {
-        let mut stdout = Vec::new();
-        if let Some(pipe) = child.stdout.take() {
-            let (tx, rx) = mpsc::channel();
-            thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let read = pipe.take(OUTPUT_LIMIT as u64 + 1).read_to_end(&mut bytes);
-                let _ = tx.send(read.map(|_| bytes));
-            });
-            stdout = rx
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| timed_out())??;
-            if stdout.len() > OUTPUT_LIMIT {
-                return Err(Error::Other(format!(
-                    "{} probe printed too much",
-                    exe.display()
-                )));
-            }
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    Ok(rx.recv_timeout(Duration::from_secs(5)).map_err(|err| {
+        if err == mpsc::RecvTimeoutError::Timeout {
+            thread::spawn(move || crate::os::kill(pid, false));
         }
-        loop {
-            if let Some(status) = child.try_wait()? {
-                return Ok((status, stdout));
-            }
-            if Instant::now() >= deadline {
-                return Err(timed_out());
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    })();
-    if result.is_err() {
-        crate::os::kill(child.id(), false);
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    result
+        Error::Other(err.to_string())
+    })??)
 }
 
 fn parse_version(text: &str) -> Option<Version> {
@@ -626,32 +600,43 @@ pub enum LoginStatus {
 }
 
 pub fn login_status(provider: &Provider, cli: &Path, env: &Env) -> LoginStatus {
-    let (args, capture): (&[&str], _) = match provider.id {
-        "claude" => (&["auth", "status", "--json"], true),
-        "codex" => (&["login", "status"], false),
+    let args: &[&str] = match provider.id {
+        "claude" => &["auth", "status", "--json"],
+        "codex" => &["login", "status"],
         _ => return LoginStatus::Unknown,
     };
-    match cli_probe(cli, env, args, capture) {
-        Ok((status, stdout)) => parse_login_status(provider, status.code(), &stdout),
+    match cli_probe(cli, env, args) {
+        Ok(out) => parse_login_status(provider, out.status.code(), &out.stdout, &out.stderr),
         Err(_) => LoginStatus::Unknown,
     }
 }
 
-fn parse_login_status(provider: &Provider, code: Option<i32>, stdout: &[u8]) -> LoginStatus {
-    let Some(code) = code else {
-        return LoginStatus::Unknown;
-    };
-    let logged_in = match provider.id {
-        "claude" => serde_json::from_slice::<serde_json::Value>(stdout)
+fn parse_login_status(
+    provider: &Provider,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> LoginStatus {
+    use LoginStatus::{LoggedIn, LoggedOut, Unknown};
+
+    match (provider.id, code) {
+        ("claude", Some(_)) => match serde_json::from_slice::<serde_json::Value>(stdout)
             .ok()
-            .and_then(|value| value["loggedIn"].as_bool()),
-        "codex" => Some(code == 0),
-        _ => None,
-    };
-    match logged_in {
-        Some(true) => LoginStatus::LoggedIn,
-        Some(false) => LoginStatus::LoggedOut,
-        None => LoginStatus::Unknown,
+            .and_then(|value| value["loggedIn"].as_bool())
+        {
+            Some(true) => LoggedIn,
+            Some(false) => LoggedOut,
+            None => Unknown,
+        },
+        ("codex", Some(0)) => LoggedIn,
+        ("codex", _)
+            if [stdout, stderr]
+                .iter()
+                .any(|bytes| String::from_utf8_lossy(bytes).contains("Not logged in")) =>
+        {
+            LoggedOut
+        }
+        _ => Unknown,
     }
 }
 
@@ -953,26 +938,37 @@ mod tests {
     }
 
     #[test]
-    fn login_status_uses_claudes_json_and_codexs_exit_code() {
+    fn login_status_uses_claudes_json_and_codexs_exit_code_and_output() {
         use LoginStatus::{LoggedIn, LoggedOut, Unknown};
 
         assert_eq!(
-            parse_login_status(&CLAUDE, Some(0), br#"{"loggedIn":true}"#),
+            parse_login_status(&CLAUDE, Some(0), br#"{"loggedIn":true}"#, b""),
             LoggedIn
         );
         assert_eq!(
-            parse_login_status(&CLAUDE, Some(1), br#"{"loggedIn":false}"#),
+            parse_login_status(&CLAUDE, Some(1), br#"{"loggedIn":false}"#, b""),
             LoggedOut
         );
         for stdout in ["invalid JSON", "{}", r#"{"loggedIn":"false"}"#] {
             assert_eq!(
-                parse_login_status(&CLAUDE, Some(0), stdout.as_bytes()),
+                parse_login_status(&CLAUDE, Some(0), stdout.as_bytes(), b""),
                 Unknown
             );
         }
-        assert_eq!(parse_login_status(&CODEX, Some(0), b""), LoggedIn);
-        assert_eq!(parse_login_status(&CODEX, Some(1), b""), LoggedOut);
-        assert_eq!(parse_login_status(&CODEX, None, b""), Unknown);
+        assert_eq!(parse_login_status(&CODEX, Some(0), b"", b""), LoggedIn);
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"", b"Not logged in\n"),
+            LoggedOut
+        );
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"Not logged in\n", b""),
+            LoggedOut
+        );
+        assert_eq!(
+            parse_login_status(&CODEX, Some(1), b"", b"Error loading configuration"),
+            Unknown
+        );
+        assert_eq!(parse_login_status(&CODEX, None, b"", b""), Unknown);
     }
 
     #[test]

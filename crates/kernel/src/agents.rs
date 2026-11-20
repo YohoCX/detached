@@ -123,10 +123,16 @@ fn scan(core: &AppState) -> Scan {
         let cli = config
             .shows(p)
             .then(|| adapters::find_cli(p, setting, &env));
-        let cli = cli.flatten().map(|path| CliInfo {
-            version: adapters::cli_version(&path, &env).ok(),
-            login: adapters::login_status(p, &path, &env),
-            path,
+        let cli = cli.flatten().map(|path| {
+            let version = adapters::cli_version(&path, &env).ok();
+            let login = version.as_ref().map_or(LoginStatus::Unknown, |_| {
+                adapters::login_status(p, &path, &env)
+            });
+            CliInfo {
+                path,
+                version,
+                login,
+            }
         });
         (adapters::installed(&core.data_dir, p.adapter), cli)
     });

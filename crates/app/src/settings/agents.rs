@@ -10,7 +10,7 @@ use gpui_kit::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
     div, prelude::FluentBuilder, px,
 };
-use kernel::agents::{Agents, CliInfo, Row, State};
+use kernel::agents::{Agents, Row, State};
 
 use crate::terminal;
 use crate::ui::page::{button, card, item, labeled, layout, path};
@@ -125,21 +125,13 @@ impl Page {
         }
         let verdict = r.verdict(a.catalog.as_ref());
         let c = p.cli;
-        let (cli, said) = match &r.cli {
+        let (cli, said) = match r.cli.as_ref().map(|c| (&c.path, &c.version)) {
             None => (format!("{c} was not found."), "Not found".to_string()),
-            Some(CliInfo {
-                path,
-                version: None,
-                ..
-            }) => (
+            Some((path, None)) => (
                 format!("{} printed no version.", path.display()),
                 "Printed no version".into(),
             ),
-            Some(CliInfo {
-                path,
-                version: Some(v),
-                ..
-            }) => match &verdict {
+            Some((path, Some(v))) => match &verdict {
                 Some(Cli::Old(need)) => {
                     let s = format!("{c} {v} is older than {need}: update {c}.");
                     (s.clone(), s)
