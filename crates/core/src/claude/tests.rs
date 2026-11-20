@@ -322,7 +322,7 @@ fn the_wsl_leash_cleans_up_the_cli_s_group_and_detached_child_on_normal_exit() {
 
 #[cfg(unix)]
 fn check_wsl_leash(end: &str) {
-    // Hold the next walk until EOF has let the CLI exit and its child has been reparented.
+    // At the first sample; on `exit`, hold the next walk until EOF has let the CLI exit and its child is reparented.
     let leash = format!(
         r#"setsid() {{ exec perl -MPOSIX=setsid -e 'setsid() >= 0 or die $!; exec @ARGV' -- "$@"; }}
 sleep() {{
