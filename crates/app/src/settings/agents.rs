@@ -1,7 +1,7 @@
 //! The Agents page: each provider's own CLI, found, checked and logged in from a terminal tab, and an
 //! ACP provider's adapter, installed from the catalog, updated and rolled back.
 
-use detached_core::adapters::{self, Cli, PROVIDERS};
+use detached_core::adapters::{self, Cli, LoginStatus, PROVIDERS};
 use detached_core::backend::Name;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
@@ -10,10 +10,11 @@ use gpui_kit::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
     div, prelude::FluentBuilder, px,
 };
-use kernel::agents::{Agents, Row, State};
+use kernel::agents::{Agents, CliInfo, Row, State};
 
 use crate::terminal;
 use crate::ui::page::{button, card, item, labeled, layout, path};
+use crate::ui::theme::GAP;
 use crate::ui::{self, text, theme};
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
@@ -126,11 +127,19 @@ impl Page {
         let c = p.cli;
         let (cli, said) = match &r.cli {
             None => (format!("{c} was not found."), "Not found".to_string()),
-            Some((path, None)) => (
+            Some(CliInfo {
+                path,
+                version: None,
+                ..
+            }) => (
                 format!("{} printed no version.", path.display()),
                 "Printed no version".into(),
             ),
-            Some((path, Some(v))) => match &verdict {
+            Some(CliInfo {
+                path,
+                version: Some(v),
+                ..
+            }) => match &verdict {
                 Some(Cli::Old(need)) => {
                     let s = format!("{c} {v} is older than {need}: update {c}.");
                     (s.clone(), s)
@@ -150,9 +159,17 @@ impl Page {
             },
         };
         let warn = !matches!(verdict, None | Some(Cli::Ok)) || r.cli.is_none();
-        let found = r.cli.as_ref().map(|c| c.0.clone());
+        let found = r.cli.as_ref();
         let input = self.paths[i].clone();
-        let login = found.clone().map(|cli| adapters::login(p, &cli));
+        let status = found.map_or(LoginStatus::Unknown, |c| c.login);
+        let login = found
+            .filter(|_| status != LoginStatus::LoggedIn)
+            .map(|c| adapters::login(p, &c.path));
+        let status = match status {
+            LoginStatus::LoggedIn => Some(("Logged in", t.muted)),
+            LoginStatus::LoggedOut => Some(("Not logged in", t.warning)),
+            LoginStatus::Unknown => None,
+        };
         let cli = div()
             .id(el("cli"))
             .test_support()
@@ -160,8 +177,18 @@ impl Page {
             .text_size(text::SMALL)
             .text_color(if warn { t.warning } else { t.muted })
             .child(said);
-        let cli_row = item(div().child("CLI").child(cli), None, cx)
-            .children(found.map(|f| path(el("found"), f.display().to_string(), cx)))
+        let details = div()
+            .flex()
+            .flex_wrap()
+            .gap(GAP)
+            .child(cli)
+            .children(status.map(|(label, color)| {
+                labeled(el("login-status"), label)
+                    .text_size(text::SMALL)
+                    .text_color(color)
+            }));
+        let cli_row = item(div().child("CLI").child(details), None, cx)
+            .children(found.map(|c| path(el("found"), c.path.display().to_string(), cx)))
             .when_some(login, |row, line| {
                 row.child(button(el("login"), "Log in", true, cx, move |_, w, cx| {
                     terminal::run(&line, w, cx);

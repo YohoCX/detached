@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use detached_core::adapters::{self, Catalog, Cli, Config, Entry, Installed, PROVIDERS, Provider};
-use detached_core::adapters::{BLOCK, Version};
+use detached_core::adapters::{BLOCK, LoginStatus, Version};
 use detached_core::backend::Name;
 use detached_core::error::{Error, Result};
 use detached_core::state::{AppState, Cancel};
@@ -35,10 +35,16 @@ pub struct Agents {
 pub struct Row {
     pub provider: &'static Provider,
     pub installed: Installed,
-    /// The CLI found and the version it printed.
-    pub cli: Option<(PathBuf, Option<Version>)>,
+    pub cli: Option<CliInfo>,
     pub state: State,
     cancel: Option<Cancel>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct CliInfo {
+    pub path: PathBuf,
+    pub version: Option<Version>,
+    pub login: LoginStatus,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,7 +67,7 @@ impl Row {
 
     /// What the CLI's version allows, once one is found.
     pub fn verdict(&self, catalog: Option<&Catalog>) -> Option<Cli> {
-        let version = self.cli.as_ref()?.1.as_ref()?;
+        let version = self.cli.as_ref()?.version.as_ref()?;
         Some(match self.provider.backend {
             Name::Direct => adapters::check_own_cli(self.provider, catalog, version),
             Name::Acp => adapters::check_cli(self.provider, self.entry(catalog), version),
@@ -106,7 +112,7 @@ pub fn start(cx: &mut App) {
     .detach();
 }
 
-type Scan = (Config, Vec<(Installed, Option<(PathBuf, Option<Version>)>)>);
+type Scan = (Config, Vec<(Installed, Option<CliInfo>)>);
 
 /// What is installed and which CLI each listed provider has.
 fn scan(core: &AppState) -> Scan {
@@ -117,9 +123,10 @@ fn scan(core: &AppState) -> Scan {
         let cli = config
             .shows(p)
             .then(|| adapters::find_cli(p, setting, &env));
-        let cli = cli.flatten().map(|c| {
-            let version = adapters::cli_version(&c, &env).ok();
-            (c, version)
+        let cli = cli.flatten().map(|path| CliInfo {
+            version: adapters::cli_version(&path, &env).ok(),
+            login: adapters::login_status(p, &path, &env),
+            path,
         });
         (adapters::installed(&core.data_dir, p.adapter), cli)
     });

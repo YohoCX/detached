@@ -7,9 +7,11 @@ use std::env::consts::EXE_SUFFIX;
 use std::fs::{self, File};
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, NaiveDate};
 pub use semver::Version;
@@ -554,18 +556,103 @@ pub fn find_cli(provider: &Provider, setting: Option<&str>, env: &Env) -> Option
 
 /// The version `exe --version` prints.
 pub fn cli_version(exe: &Path, env: &Env) -> Result<Version> {
-    let out = crate::os::group(&mut Command::new(exe))
-        .arg("--version")
+    let (_, stdout) = cli_probe(exe, env, &["--version"], true)?;
+    parse_version(&String::from_utf8_lossy(&stdout))
+        .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
+}
+
+fn cli_probe(exe: &Path, env: &Env, args: &[&str], capture: bool) -> Result<(ExitStatus, Vec<u8>)> {
+    const OUTPUT_LIMIT: usize = 64 * 1024;
+    let mut child = crate::os::group(&mut Command::new(exe))
+        .args(args)
         .env("PATH", &env.path)
         .envs(env.vars.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
-        .output()?;
-    parse_version(&String::from_utf8_lossy(&out.stdout))
-        .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
+        .stdout(if capture {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stderr(Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let timed_out = || Error::Other(format!("{} probe timed out", exe.display()));
+    let result = (|| {
+        let mut stdout = Vec::new();
+        if let Some(pipe) = child.stdout.take() {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let read = pipe.take(OUTPUT_LIMIT as u64 + 1).read_to_end(&mut bytes);
+                let _ = tx.send(read.map(|_| bytes));
+            });
+            stdout = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| timed_out())??;
+            if stdout.len() > OUTPUT_LIMIT {
+                return Err(Error::Other(format!(
+                    "{} probe printed too much",
+                    exe.display()
+                )));
+            }
+        }
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok((status, stdout));
+            }
+            if Instant::now() >= deadline {
+                return Err(timed_out());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    if result.is_err() {
+        crate::os::kill(child.id(), false);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
 }
 
 fn parse_version(text: &str) -> Option<Version> {
     text.split_whitespace().find_map(|w| Version::parse(w).ok())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginStatus {
+    LoggedIn,
+    LoggedOut,
+    Unknown,
+}
+
+pub fn login_status(provider: &Provider, cli: &Path, env: &Env) -> LoginStatus {
+    let (args, capture): (&[&str], _) = match provider.id {
+        "claude" => (&["auth", "status", "--json"], true),
+        "codex" => (&["login", "status"], false),
+        _ => return LoginStatus::Unknown,
+    };
+    match cli_probe(cli, env, args, capture) {
+        Ok((status, stdout)) => parse_login_status(provider, status.code(), &stdout),
+        Err(_) => LoginStatus::Unknown,
+    }
+}
+
+fn parse_login_status(provider: &Provider, code: Option<i32>, stdout: &[u8]) -> LoginStatus {
+    let Some(code) = code else {
+        return LoginStatus::Unknown;
+    };
+    let logged_in = match provider.id {
+        "claude" => serde_json::from_slice::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|value| value["loggedIn"].as_bool()),
+        "codex" => Some(code == 0),
+        _ => None,
+    };
+    match logged_in {
+        Some(true) => LoginStatus::LoggedIn,
+        Some(false) => LoginStatus::LoggedOut,
+        None => LoginStatus::Unknown,
+    }
 }
 
 /// The login as a line to type into the terminal's shell, with the CLI found in place of its name.
@@ -863,6 +950,29 @@ mod tests {
         );
         assert_eq!(parse_version("codex-cli 0.166.0"), Some(v("0.166.0")));
         assert_eq!(parse_version("command not found"), None);
+    }
+
+    #[test]
+    fn login_status_uses_claudes_json_and_codexs_exit_code() {
+        use LoginStatus::{LoggedIn, LoggedOut, Unknown};
+
+        assert_eq!(
+            parse_login_status(&CLAUDE, Some(0), br#"{"loggedIn":true}"#),
+            LoggedIn
+        );
+        assert_eq!(
+            parse_login_status(&CLAUDE, Some(1), br#"{"loggedIn":false}"#),
+            LoggedOut
+        );
+        for stdout in ["invalid JSON", "{}", r#"{"loggedIn":"false"}"#] {
+            assert_eq!(
+                parse_login_status(&CLAUDE, Some(0), stdout.as_bytes()),
+                Unknown
+            );
+        }
+        assert_eq!(parse_login_status(&CODEX, Some(0), b""), LoggedIn);
+        assert_eq!(parse_login_status(&CODEX, Some(1), b""), LoggedOut);
+        assert_eq!(parse_login_status(&CODEX, None, b""), Unknown);
     }
 
     #[test]

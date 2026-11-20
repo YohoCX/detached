@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -76,6 +77,12 @@ fn main() {
         Some("--version") => {
             println!("2.1.400 (Claude Code)");
             return;
+        }
+        Some("login") if args.next().as_deref() == Some("status") && args.next().is_none() => {
+            let logged_out = std::env::var_os("CODEX_HOME")
+                .filter(|home| !home.is_empty())
+                .is_some_and(|home| PathBuf::from(home).join("fake-logged-out").is_file());
+            std::process::exit(i32::from(logged_out));
         }
         // A background child: lives until its stdin, the agent's, closes.
         Some("--child") => {

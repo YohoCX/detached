@@ -137,6 +137,21 @@ fn the_keychain_login_is_named_only_in_tests() {
 }
 
 #[gpui_kit::test]
+fn the_agents_page_offers_login_after_the_cli_logs_out(cx: &mut TestAppContext) {
+    let cli = detached_core::testutil::claude::fake();
+    let mut config_dir = None;
+    let cx = &mut open_app_with(cx, |sb| config_dir = Some(claude(sb, &cli)));
+    cx.update(|_, cx| settings::open(cx, "agents"));
+    wait_for(cx, "agents.claude.login-status", "Logged in");
+    assert!(cx.find("agents.claude.login").is_none());
+
+    fs::write(config_dir.unwrap().join("fake-logged-out"), "").unwrap();
+    cx.click("agents.claude.rescan");
+    wait_for(cx, "agents.claude.login-status", "Not logged in");
+    assert_eq!(label(cx, "agents.claude.login").as_deref(), Some("Log in"));
+}
+
+#[gpui_kit::test]
 fn the_login_runs_the_found_cli_in_a_terminal_tab(cx: &mut TestAppContext) {
     let bin = tempfile::tempdir().unwrap();
     let cli = testutil::fake_cli(bin.path(), "2.1.400");

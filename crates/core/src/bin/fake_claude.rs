@@ -118,6 +118,11 @@ fn main() {
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
         Some("--version") => return println!(concat!("{} (Claude", " Code)"), VERSION),
+        Some("auth") if args[1..] == ["status", "--json"] => {
+            let logged_out = config_dir().join("fake-logged-out").is_file();
+            println!("{}", json!({"loggedIn": !logged_out}));
+            std::process::exit(i32::from(logged_out));
+        }
         Some("--sleep" | "--child" | "--deaf") => {
             #[cfg(unix)]
             if args[0] == "--deaf" {
