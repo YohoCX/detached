@@ -74,6 +74,11 @@ pub(crate) fn set_reach(cx: &mut App, reach: impl Fn() -> bool + Send + Sync + '
 }
 
 #[cfg(test)]
+pub(super) fn set_probe(cx: &mut App, probe: Probe) {
+    cx.global_mut::<Councils>().probe = Some(probe);
+}
+
+#[cfg(test)]
 pub(crate) fn set_wall(cx: &mut App, wall: impl Fn() -> i64 + Send + Sync + 'static) {
     cx.global_mut::<Councils>().wall = Arc::new(wall);
 }

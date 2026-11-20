@@ -10,7 +10,7 @@ use detached_core::adapters::{BLOCK, CLAUDE, Config};
 use detached_core::chat_settings::{self, Preset};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    AppContext, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext,
+    AppContext, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext, px,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -232,6 +232,17 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     });
     wait_until(cx, |cx| label(cx, "chat.limit.5h").is_some());
     assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
+    let fill = cx.update(|w, _| {
+        w.within("chat.limit.5h")
+            .find("chat.meter.fill")
+            .bounds()
+            .size
+            .width
+    });
+    assert!(
+        (fill - px(36. * 0.66)).abs() < px(1.),
+        "fill width: {fill:?}"
+    );
     assert_eq!(
         label(cx, "chat.limit.Week").as_deref(),
         Some("Week 83% left")
@@ -335,13 +346,32 @@ fn a_crash_says_why_and_the_next_message_resumes(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_model_without_auto_is_marked_and_the_mode_drop_reported(cx: &mut TestAppContext) {
-    let cx = &mut open(cx);
-    say(cx, "hello");
-    wait_for_item(cx, "said hello");
+    let cx = &mut open_seeded(cx, |sb| {
+        sb.state
+            .set_block(
+                chat_settings::BLOCK,
+                json!({"providers": {"claude": {"effort": "high"}}}),
+            )
+            .unwrap();
+    });
+    say(cx, "effort");
+    wait_for_item(cx, "sonnet · High · Done in ");
     idle(cx);
     cx.click("chat.model");
     cx.update(|w, cx| assert!(menu::pick("old (no auto)", w, cx)));
     wait_for_item(cx, "Asked for auto, the session runs in default.");
+    wait_until(cx, |cx| cx.find("chat.effort").is_none());
+    say(cx, "say switched");
+    wait_for_item(cx, "old · Done in ");
+    idle(cx);
+    cx.click("chat.save-default");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            let preset = Preset::read(s);
+            preset.providers["claude"].model.as_deref() == Some("old")
+                && preset.providers["claude"].effort.is_none()
+        })
+    });
 }
 
 #[gpui_kit::test]
@@ -712,12 +742,14 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
     let cx = &mut open(cx);
     let first = id(cx, 0);
     cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
-    cx.click("chat.defaults.claude.model");
-    cx.update(|w, cx| assert!(menu::pick("opus", w, cx)));
-    cx.click("chat.defaults.claude.effort");
-    cx.update(|w, cx| assert!(menu::pick("high", w, cx)));
-    cx.click("chat.defaults.claude.mode");
-    cx.update(|w, cx| assert!(menu::pick("Plan", w, cx)));
+    for (field, value) in [
+        ("chat.defaults.claude.model", "opus"),
+        ("chat.defaults.claude.effort", "high"),
+        ("chat.defaults.claude.mode", "plan"),
+    ] {
+        cx.click(field);
+        cx.input(value);
+    }
     cx.click("chat.defaults.save");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -737,6 +769,24 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "effort high");
+}
+
+#[gpui_kit::test]
+fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        sb.state
+            .set_block(
+                chat_settings::BLOCK,
+                json!({"providers": {"claude": {"model": "old"}}}),
+            )
+            .unwrap();
+    });
+    id(cx, 0);
+    assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
+    cx.click("chat.save-default");
+    wait_until(cx, |cx| {
+        cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("default"))
+    });
 }
 
 #[gpui_kit::test]

@@ -4,8 +4,7 @@
 use std::ops::Deref;
 
 use detached_core::{api, settings};
-use futures::channel::oneshot;
-use gpui::{App, AppContext, Entity, Global, Task};
+use gpui::{App, AppContext, Entity, Global};
 
 use crate::blocking;
 
@@ -36,28 +35,6 @@ impl Settings {
     /// Core's settings as last loaded.
     pub fn get(cx: &App) -> &settings::Settings {
         cx.global::<Snapshot>().0.read(cx)
-    }
-
-    /// Waits for a completed save to reach the read-only snapshot.
-    pub fn after_reload(cx: &mut App, revision: u64) -> Task<()> {
-        let settings = Self::global(cx);
-        let loaded = move |s: &Settings| s.revision.is_some_and(|r| r >= revision);
-        if loaded(settings.read(cx)) {
-            return Task::ready(());
-        }
-        let (send, wait) = oneshot::channel();
-        let mut send = Some(send);
-        let watch = cx.observe(&settings, move |s, cx| {
-            if loaded(s.read(cx))
-                && let Some(send) = send.take()
-            {
-                _ = send.send(());
-            }
-        });
-        cx.spawn(async move |_| {
-            let _watch = watch;
-            _ = wait.await;
-        })
     }
 }
 

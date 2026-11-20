@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,7 +50,11 @@ impl Preset {
     }
 
     pub fn save(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
-        core.set_block_with(BLOCK, edit)
+        static SAVE: Mutex<()> = Mutex::new(());
+        let _guard = SAVE.lock().unwrap();
+        let mut preset = Self::read(&core.get_settings());
+        edit(&mut preset);
+        core.set_block(BLOCK, preset)
     }
 }
 

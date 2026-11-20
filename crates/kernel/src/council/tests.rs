@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config};
+use detached_core::backend::Probe;
 use detached_core::council::marks::{self, Mark};
 use detached_core::council::mode::Stage;
 use detached_core::council::record::{self, End, Gate, State, Status};
@@ -415,11 +416,12 @@ fn a_turn_without_done_fails_its_attempt_and_the_third_degrades_without_going_of
 fn a_crashed_participant_resumes_on_its_own_model_and_finishes(cx: &mut TestAppContext) {
     let f = boot(cx);
     trust(&f);
+    cx.update(|cx| live::set_probe(cx, Probe::Failed("Fixture has no sandbox".into())));
     mode(&f, "review", &["find"], &["f1"]);
     role(
         &f,
         "f1",
-        &format!("fake: first died die\nfake-resume: model;{}", done()),
+        &format!("fake: say before crash;die\nfake-resume: model;{}", done()),
     );
     let p = start(&f, "review", cx);
     let s = ended(&p, cx);
@@ -432,7 +434,11 @@ fn a_crashed_participant_resumes_on_its_own_model_and_finishes(cx: &mut TestAppC
         .map(|p| std::fs::read_to_string(p).unwrap())
         .collect();
     assert!(
-        said.contains("opus bypassPermissions") && !said.contains("fallback"),
+        said.lines()
+            .any(|l| l.contains(r#""text":"before crash""#)
+                && l.contains(r#""model":"claude-opus-9""#))
+            && said.contains("opus bypassPermissions")
+            && !said.contains("fallback"),
         "{said}"
     );
     let said = p.read_with(cx, |p, _| {

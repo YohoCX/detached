@@ -431,17 +431,13 @@ fn start_in(
             .as_str()
             .unwrap_or_default()
             .into(),
-        config: config.clone(),
+        config,
         note,
-        models: models.clone(),
+        models,
         commands: commands(&init["commands"]),
         account: init.get("account").map(account),
         unread: history.as_ref().is_some_and(Option::is_none),
     };
-    {
-        let mut st = live.0.state.lock().unwrap();
-        (st.models, st.config) = (models, config);
-    }
     live.0
         .open(opened, history.flatten().unwrap_or_default(), events)?;
     live.0.limits();
@@ -655,6 +651,8 @@ struct State {
     denied: Vec<String>,
     models: Vec<Model>,
     config: Vec<Config>,
+    opening_mode: Option<String>,
+    pending_effort: Option<Arc<str>>,
     turn_config: TurnConfig,
     lacks: Vec<Piece>,
 }
@@ -707,11 +705,17 @@ impl backend::Session for Live {
             effort: st
                 .config
                 .iter()
-                .find(|c| c.id == "effort" && !c.value.is_empty())
-                .map(|c| c.value.clone()),
+                .find(|c| c.id == "effort")
+                .map(|c| {
+                    st.pending_effort
+                        .as_deref()
+                        .filter(|want| c.values.iter().any(|e| e == want))
+                        .unwrap_or(&c.value)
+                })
+                .filter(|e| !e.is_empty())
+                .map(String::from),
             ..TurnConfig::default()
         };
-        drop(st);
         let message = json!({"role": "user", "content": text});
         let sent = self
             .0
@@ -733,17 +737,10 @@ impl backend::Session for Live {
     }
 
     fn set(&self, setting: Setting) -> Result<()> {
+        let mut st = self.0.state.lock().unwrap();
         let (id, value, body) = match setting {
             Setting::Model(m) => {
-                if !self
-                    .0
-                    .state
-                    .lock()
-                    .unwrap()
-                    .models
-                    .iter()
-                    .any(|x| x.matches(&m))
-                {
+                if Model::find(&st.models, &m).is_none() {
                     return Err(Error::Other(format!("This claude offers no model {m}")));
                 }
                 let body = json!({"subtype": "set_model", "model": m});
@@ -758,10 +755,28 @@ impl backend::Session for Live {
                 ("mode", m, body)
             }
         };
-        self.0.request(body, move |c, r| match r {
-            Ok(_) => c.configure(id, value),
-            Err(e) if id == "effort" => c.lost(&e, Piece::Effort),
-            Err(_) => {}
+        let effort = (id == "effort").then(|| Arc::<str>::from(value.as_str()));
+        if effort.is_some() {
+            st.pending_effort = effort.clone();
+        }
+        self.0.request(body, move |c, r| {
+            if r.is_ok() {
+                c.configure(id, value);
+            }
+            if let Some(effort) = effort {
+                let mut st = c.state.lock().unwrap();
+                if st
+                    .pending_effort
+                    .as_ref()
+                    .is_some_and(|e| Arc::ptr_eq(e, &effort))
+                {
+                    st.pending_effort = None;
+                }
+                drop(st);
+                if let Err(e) = r {
+                    c.lost(&e, Piece::Effort);
+                }
+            }
         });
         Ok(())
     }
@@ -830,7 +845,7 @@ impl Client {
     }
 
     /// Hands the stream over with `Opened` and the history first, unless the CLI is gone already.
-    fn open(&self, opened: Opened, history: Vec<Update>, mut events: Events) -> Result<()> {
+    fn open(&self, mut opened: Opened, history: Vec<Update>, mut events: Events) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.gone {
             drop(st);
@@ -839,6 +854,12 @@ impl Client {
                 last(&self.proc.stderr_after_exit())
             )));
         }
+        if let Some(mode) = st.opening_mode.take()
+            && let Some(c) = opened.config.iter_mut().find(|c| c.id == "mode")
+        {
+            c.value = mode;
+        }
+        (st.models, st.config) = (opened.models.clone(), opened.config.clone());
         events(Event::Opened(opened));
         history.into_iter().for_each(|u| events(Event::Update(u)));
         st.sink = Some(events);
@@ -876,12 +897,19 @@ impl Client {
                 .map(|m| m.efforts.clone())
                 .unwrap_or_default();
             if let Some(c) = st.config.iter_mut().find(|c| c.id == "effort") {
+                if !efforts.contains(&c.value) {
+                    c.value.clear();
+                }
                 c.values = efforts;
             } else if !efforts.is_empty() {
                 st.config.push(select("effort", "", efforts));
             }
         }
-        if let Some(c) = st.config.iter_mut().find(|c| c.id == id) {
+        if let Some(c) = st
+            .config
+            .iter_mut()
+            .find(|c| c.id == id && (id != "effort" || c.values.contains(&value)))
+        {
             c.value = value;
         }
         let config = st.config.clone();
@@ -1012,6 +1040,8 @@ impl Client {
                     let mut st = self.state.lock().unwrap();
                     if let Some(c) = st.config.iter_mut().find(|c| c.id == "mode") {
                         c.value = m.into();
+                    } else {
+                        st.opening_mode = Some(m.into());
                     }
                     drop(st);
                     self.update(Update::Mode(m.into()));
@@ -1062,7 +1092,14 @@ impl Client {
         let mut st = self.state.lock().unwrap();
         st.busy = false;
         let cancelled = std::mem::take(&mut st.cancelled);
-        let config = std::mem::take(&mut st.turn_config);
+        let mut config = std::mem::take(&mut st.turn_config);
+        let model = config
+            .model
+            .as_deref()
+            .and_then(|id| Model::find(&st.models, id));
+        if model.is_some_and(|m| m.efforts.is_empty()) {
+            config.effort = None;
+        }
         drop(st);
         let usage = &v["usage"];
         let tokens = (usage["input_tokens"].as_u64()).zip(usage["output_tokens"].as_u64());

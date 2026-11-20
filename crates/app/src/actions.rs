@@ -59,7 +59,7 @@ pub const ACTIONS: &[Action] = &[
     a("pipeline.run", "Run Pipeline…", Group::Vcs),
     a("markdown.preview", "Toggle Markdown Preview", Group::View),
     a("panel.terminal", "Terminal", Group::View),
-    a("agent.chat", "New Chat", Group::View),
+    a("agent.chat", "New chat", Group::View),
     a("panel.council", "Council", Group::View),
     a("zone.left", "Left Zone", Group::View),
     a("zone.bottom", "Bottom Zone", Group::View),

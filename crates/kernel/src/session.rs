@@ -126,9 +126,10 @@ pub enum Item {
     /// A turn ended: how and after how long.
     End {
         stop: Option<StopReason>,
-        ms: Option<u64>,
+        ms: u64,
         config: TurnConfig,
     },
+    PastTurn(TurnConfig),
     Note(String),
     /// Reported through the host's tools.
     Act(Act),
@@ -922,11 +923,6 @@ impl Session {
                 self.id = Some(o.id);
                 self.version = Some(o.version);
                 self.config = o.config;
-                if self.spec.keep_resume_mode
-                    && let Some(mode) = self.option("mode")
-                {
-                    self.spec.mode = mode.into();
-                }
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
@@ -993,11 +989,7 @@ impl Session {
             (Update::Text(t), _) => items.push(Item::Text(t)),
             (Update::Thought(t), _) => items.push(Item::Thought(t)),
             (Update::Break, _) => self.whole = items.len(),
-            (Update::PastTurn(config), _) => items.push(Item::End {
-                stop: None,
-                ms: None,
-                config,
-            }),
+            (Update::PastTurn(config), _) => items.push(Item::PastTurn(config)),
             (Update::Tool(t), _) => {
                 let known = items.iter_mut().rev().find_map(|i| match i {
                     Item::Tool(was) if was.id == t.id => Some(was),
@@ -1088,11 +1080,7 @@ impl Session {
         if self.who.can.contains(&"done") && !self.done {
             self.note(NO_DONE.into());
         }
-        self.items.push(Item::End {
-            stop,
-            ms: Some(ms),
-            config,
-        });
+        self.items.push(Item::End { stop, ms, config });
         let core = crate::core(cx).clone();
         let repo = self.spec.repo.clone();
         let checked = self.seat.as_ref().is_none_or(|s| s.accept.is_some());

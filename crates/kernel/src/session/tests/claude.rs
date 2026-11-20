@@ -374,15 +374,22 @@ fn a_resumed_session_shows_its_past_as_its_turns_did(cx: &mut TestAppContext) {
     let (at, _) = cx.read(|cx| asked(&s, 0, cx)).unwrap();
     s.update(cx, |s, cx| s.answer(at, Answer::Once, cx));
     wait_until(cx, |cx| s.read(cx).state == State::Idle);
-    let past = |s: &Session| {
-        let said = |i: &&Item| matches!(i, Item::User(_) | Item::Text(_) | Item::Tool(_));
-        s.items.iter().filter(said).cloned().collect::<Vec<_>>()
-    };
-    let (id, live) = s.read_with(cx, |s, _| (s.id.clone(), past(s)));
+    let (id, live) = s.read_with(cx, |s, _| {
+        let past: Vec<_> = s
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::User(_) | Item::Text(_) | Item::Tool(_) => Some(i.clone()),
+                Item::End { config, .. } => Some(Item::PastTurn(config.clone())),
+                _ => None,
+            })
+            .collect();
+        (s.id.clone(), past)
+    });
     s.update(cx, |s, cx| s.end(cx));
     let resumed = open_spec(f.spec(Kind::Chat), id, cx);
     resumed.read_with(cx, |s, _| assert_eq!(s.items, live));
-    assert_eq!(lines(&live)[3], "Bash echo hi completed");
+    assert_eq!(lines(&live)[4], "Bash echo hi completed");
     assert_eq!(turn(&resumed, "say again", cx), "again");
 }
 

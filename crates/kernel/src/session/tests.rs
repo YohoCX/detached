@@ -55,6 +55,13 @@ both!(
 
 fn a_turn_keeps_the_model_and_effort_that_ran(fake: Fake, cx: &mut TestAppContext) {
     let f = boot_fake(cx, fake);
+    if fake == Fake::Claude {
+        std::fs::write(
+            f.dir.path().join("claude-config/fake.json"),
+            r#"{"effort_ack_after_prompt":true}"#,
+        )
+        .unwrap();
+    }
     let mut spec = f.spec(Kind::Chat);
     let (picked, ran) = match fake {
         Fake::Claude => ("opus", "claude-opus-9"),
@@ -65,8 +72,13 @@ fn a_turn_keeps_the_model_and_effort_that_ran(fake: Fake, cx: &mut TestAppContex
     let s = open_spec(spec, None, cx);
     assert_eq!(turn(&s, "say first", cx), "first");
     s.update(cx, |s, _| s.set(Setting::Effort("low".into())).unwrap());
-    wait_until(cx, |cx| s.read(cx).option("effort") == Some("low"));
-    assert_eq!(turn(&s, "say second", cx), "second");
+    match fake {
+        Fake::Claude => assert_eq!(turn(&s, "effort", cx), "effort low"),
+        Fake::Acp => {
+            wait_until(cx, |cx| s.read(cx).option("effort") == Some("low"));
+            assert_eq!(turn(&s, "say second", cx), "second");
+        }
+    }
     s.read_with(cx, |s, _| {
         let got: Vec<_> = s
             .items
@@ -134,6 +146,7 @@ fn lines(items: &[Item]) -> Vec<String> {
     let line = |i: &Item| match i {
         Item::User(t) => format!("> {t}"),
         Item::Text(t) | Item::Note(t) => t.clone(),
+        Item::PastTurn(config) => config.model.clone().unwrap(),
         Item::Tool(t) => [&t.kind, &t.title, &t.status]
             .map(|f| f.as_deref().unwrap_or("-"))
             .join(" "),
@@ -553,8 +566,13 @@ fn a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone(
     let tool: fn(&Item) -> bool = |i| matches!(i, Item::Tool(_));
     let ask = |i: &Item| matches!(i, Item::Ask { .. });
     let past = [
-        &["> stall", "Bash sleep failed"][..],
-        &["> ask", "Write notes.txt failed", "picked deny"],
+        &["> stall", "Bash sleep failed", "claude-sonnet-9"][..],
+        &[
+            "> ask",
+            "Write notes.txt failed",
+            "picked deny",
+            "claude-sonnet-9",
+        ],
     ];
     for ((step, at, dropped), past) in [("stall", tool, false), ("ask", ask, true)]
         .into_iter()

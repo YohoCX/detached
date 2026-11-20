@@ -373,7 +373,9 @@ impl ChatView {
             Some(s) if s.version.is_some() => s.option("model"),
             _ => chat.model.as_deref(),
         };
-        let model = current.map_or("Default model".into(), |m| model_name(m, models));
+        let model = current.map_or("Default model".into(), |m| {
+            model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
+        });
         let picker = menu("chat.model", "Model", model, entries);
         let efforts = current.and_then(|id| Model::find(models, id));
         let efforts = efforts.map_or(&[][..], |m| &m.efforts);
@@ -410,7 +412,7 @@ impl ChatView {
             )
             .aria_label(SharedString::from(label))
             .aria_description(SharedString::from(parts.join(", ")))
-            .child(meter(pct as f32, cx))
+            .child(meter(pct as f32, pct as f32, cx))
         });
         let account = s.and_then(|s| s.account.as_ref());
         let plan = account.map(|a| SharedString::from(a.plan.clone()));
@@ -598,7 +600,8 @@ impl ChatView {
         ) {
             (None, _) => 0.,
             (_, Some(Item::User(_)) | None) => 24.,
-            (Some(Item::Tool(_)), Some(Item::Tool(_))) | (_, Some(Item::End { .. })) => 8.,
+            (Some(Item::Tool(_)), Some(Item::Tool(_)))
+            | (_, Some(Item::End { .. } | Item::PastTurn(_))) => 8.,
             _ => 16.,
         };
         let cut = chat.cleared(&feed, cx);
@@ -933,7 +936,10 @@ impl ChatView {
                     .children(out)
                     .into_any_element()
             }
-            Item::End { stop, ms, config } => self.end(i, at, super::done(*stop), *ms, config, cx),
+            Item::End { stop, ms, config } => {
+                self.end(i, at, super::done(*stop), Some(*ms), config, cx)
+            }
+            Item::PastTurn(config) => self.end(i, at, true, None, config, cx),
             Item::Ask {
                 tool,
                 answer,
@@ -1024,9 +1030,7 @@ impl ChatView {
             .count();
         let mut details = vec![];
         if let Some(model) = &config.model {
-            details.push(
-                Model::find(&s.models, model).map_or_else(|| model.clone(), |m| m.label.clone()),
-            );
+            details.push(model_name(model, &s.models).unwrap_or(model).into());
         }
         if let Some(effort) = &config.effort {
             let mut chars = effort.chars();
@@ -1695,12 +1699,11 @@ impl ChatView {
     }
 }
 
-/// A model by name: the label the session listed for it, else "Opus 4.5" from
-/// "claude-opus-4-5-20251101".
-fn model_name(id: &str, models: &[Model]) -> String {
-    if let Some(m) = Model::find(models, id) {
-        return m.label.clone();
-    }
+fn model_name<'a>(id: &str, models: &'a [Model]) -> Option<&'a str> {
+    Model::find(models, id).map(|m| m.label.as_str())
+}
+
+fn friendly_model_id(id: &str) -> String {
     let (id, wide) = match id.strip_suffix("[1m]") {
         Some(id) => (id, " (1M)"),
         None => (id, ""),
@@ -1895,16 +1898,11 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .child(l.name.clone())
-        .child(fill_meter(remaining as f32, used as f32, cx))
+        .child(meter(remaining as f32, used as f32, cx))
         .child(left)
 }
 
-/// A short bar `used` percent full, warning from 70 and error from 90.
-fn meter(used: f32, cx: &App) -> Div {
-    fill_meter(used, used, cx)
-}
-
-fn fill_meter(fill: f32, used: f32, cx: &App) -> Div {
+fn meter(fill: f32, used: f32, cx: &App) -> Div {
     let t = theme(cx);
     let color = match used {
         u if u >= 90. => t.error,
@@ -1919,6 +1917,8 @@ fn fill_meter(fill: f32, used: f32, cx: &App) -> Div {
         .bg(t.line)
         .child(
             div()
+                .id("chat.meter.fill")
+                .test_support()
                 .h_full()
                 .rounded_full()
                 .bg(color)
@@ -1928,16 +1928,16 @@ fn fill_meter(fill: f32, used: f32, cx: &App) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::model_name;
+    use super::friendly_model_id;
 
     #[test]
     fn a_model_id_reads_as_its_family_and_version() {
-        assert_eq!(model_name("claude-opus-4-5-20251101", &[]), "Opus 4.5");
+        assert_eq!(friendly_model_id("claude-opus-4-5-20251101"), "Opus 4.5");
         assert_eq!(
-            model_name("claude-sonnet-4-5-20250929[1m]", &[]),
+            friendly_model_id("claude-sonnet-4-5-20250929[1m]"),
             "Sonnet 4.5 (1M)"
         );
-        assert_eq!(model_name("claude-fable-5-1", &[]), "Fable 5.1");
-        assert_eq!(model_name("good", &[]), "Good");
+        assert_eq!(friendly_model_id("claude-fable-5-1"), "Fable 5.1");
+        assert_eq!(friendly_model_id("good"), "Good");
     }
 }

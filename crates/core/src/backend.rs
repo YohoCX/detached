@@ -138,8 +138,6 @@ pub struct Spec {
     pub effort: Option<String>,
     /// Ignore unavailable choices in a new chat's preset.
     pub validate_choices: bool,
-    /// A past conversation opened without a host override for its mode.
-    pub keep_resume_mode: bool,
     pub tools: Option<Tools>,
     /// The folder list's skills, of which a backend passes those that load and its agent does not
     /// read itself.
@@ -162,7 +160,6 @@ impl Spec {
             model: None,
             effort: None,
             validate_choices: false,
-            keep_resume_mode: false,
             tools: None,
             skills: vec![],
             wsl: None,

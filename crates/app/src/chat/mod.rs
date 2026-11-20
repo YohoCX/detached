@@ -90,7 +90,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     vec![actions::register(
         cx,
         "agent.chat",
-        "New Chat",
+        "New chat",
         actions::Group::View,
         |_, cx| match Workspace::get(cx).current().map(String::from) {
             Some(repo) => new_chat(repo, cx),

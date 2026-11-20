@@ -296,7 +296,7 @@ fn config_of(spec: &Spec) -> Vec<(String, String)> {
         false => &spec.mode,
     };
     let set = [
-        ("mode", (!spec.keep_resume_mode).then(|| mode.to_string())),
+        ("mode", Some(mode.to_string())),
         ("model", spec.model.clone()),
         ("effort", spec.effort.clone()),
     ];
@@ -824,10 +824,7 @@ impl Adapter {
             let id = wire(k, want.codex);
             let set = SetSessionConfigOptionRequest::new(o.id.clone(), id, value);
             match self.call(set) {
-                Ok(r) => {
-                    o.models = models(&r.config_options);
-                    o.config = configs(r.config_options);
-                }
+                Ok(r) => o.config = configs(r.config_options),
                 Err(_) if fallback => {}
                 Err(e) => {
                     self.close_session(&o.id);

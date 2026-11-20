@@ -185,8 +185,10 @@ fn main() {
     on_term(&live);
 
     let out: Out = Arc::new(Mutex::new(std::io::stdout()));
+    let effort_ack_after_prompt = s.fake["effort_ack_after_prompt"] == true;
     let shared = Arc::new(Mutex::new(s));
     let mut turn: Option<(Sender<()>, Sender<Value>, std::thread::JoinHandle<()>)> = None;
+    let mut effort_ack = None;
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
@@ -195,6 +197,9 @@ fn main() {
         };
         match v["type"].as_str().unwrap_or_default() {
             "user" => {
+                if let Some(ack) = effort_ack.take() {
+                    send(&out, ack);
+                }
                 let text = v["message"]["content"]
                     .as_str()
                     .unwrap_or_default()
@@ -209,7 +214,6 @@ fn main() {
                         cancelled,
                         answers,
                         said: Mutex::new(String::new()),
-                        messages: Mutex::new(vec![]),
                     };
                     t.run(&text);
                 });
@@ -269,8 +273,14 @@ fn main() {
                         // A model without `auto` drops the session to `default`, as the CLI does.
                         if s.mode == "auto" && s.model == "old" {
                             s.mode = "default".into();
-                            then.push(json!({"type": "system", "subtype": "status",
-                                "permissionMode": "default"}));
+                            send(
+                                &out,
+                                json!({"type": "system", "subtype": "status",
+                                "permissionMode": "default"}),
+                            );
+                        }
+                        if s.model == "old" {
+                            s.effort.clear();
                         }
                         Some(json!({"model": s.model}))
                     }
@@ -287,10 +297,12 @@ fn main() {
                     None => json!({"subtype": "error", "request_id": id,
                         "error": format!("unsupported_request: {subtype}")}),
                 };
-                send(
-                    &out,
-                    json!({"type": "control_response", "response": response}),
-                );
+                let ack = json!({"type": "control_response", "response": response});
+                if effort_ack_after_prompt && subtype == "apply_flag_settings" {
+                    effort_ack = Some(ack);
+                } else {
+                    send(&out, ack);
+                }
                 then.into_iter().for_each(|v| send(&out, v));
             }
             _ => {}
@@ -315,8 +327,9 @@ fn initialize(s: &Shared) -> Value {
     }
     let model = |v: &str| {
         let auto = v != "old";
+        let efforts = if auto { &["low", "high"][..] } else { &[] };
         json!({"value": v, "resolvedModel": format!("claude-{v}-9"),
-        "displayName": v, "supportedEffortLevels": ["low", "high"], "supportsAutoMode": auto})
+        "displayName": v, "supportedEffortLevels": efforts, "supportsAutoMode": auto})
     };
     let models = ["default", "haiku", "sonnet", "opus", "old"].map(model);
     let account = match &s.fake["account"] {
@@ -449,8 +462,6 @@ struct Turn<'a> {
     cancelled: Receiver<()>,
     answers: Receiver<Value>,
     said: Mutex<String>,
-    /// The turn's messages, for its transcript.
-    messages: Mutex<Vec<(&'static str, Value)>>,
 }
 
 impl Turn<'_> {
@@ -473,15 +484,13 @@ impl Turn<'_> {
             })
             .or_else(|| script("fake-resume: ", &first()))
             .unwrap_or_else(|| text.to_string());
-        // The prompt goes in first, as the CLI writes it: a turn that dies still has it.
-        self.transcript(Some(text));
+        self.transcript("user", &json!({"role": "user", "content": text}));
         let s = self.shared.lock().unwrap();
         let init = json!({"type": "system", "subtype": "init", "session_id": s.id,
             "model": s.model, "permissionMode": s.mode});
         drop(s);
         self.send(init);
         let result = steps.split(';').try_for_each(|step| self.step(step.trim()));
-        self.transcript(None);
         let said = self.said.lock().unwrap().clone();
         let id = self.shared.lock().unwrap().id.clone();
         let (subtype, error, result) = match result {
@@ -508,7 +517,6 @@ impl Turn<'_> {
     }
 
     fn message(&self, role: &'static str, content: Value) {
-        self.messages.lock().unwrap().push((role, content.clone()));
         let mut message = json!({"role": role, "content": content});
         if role == "assistant" {
             let s = self.shared.lock().unwrap();
@@ -519,6 +527,7 @@ impl Turn<'_> {
             };
             message["model"] = json!(format!("claude-{model}-9"));
         }
+        self.transcript(role, &message);
         self.send(json!({"type": role, "message": message, "parent_tool_use_id": null}));
     }
 
@@ -930,9 +939,7 @@ impl Turn<'_> {
         self.message("user", json!([result]));
     }
 
-    /// The turn's prompt or its messages so far, appended to `projects/<cwd>/<id>.jsonl` as the CLI
-    /// writes them.
-    fn transcript(&self, prompt: Option<&str>) {
+    fn transcript(&self, role: &str, message: &Value) {
         // Resolved as getcwd is on Unix: Windows keeps 8.3 names such as RUNNER~1.
         let Ok(cwd) = std::env::current_dir().and_then(std::fs::canonicalize) else {
             return;
@@ -949,29 +956,19 @@ impl Turn<'_> {
         };
         let dir = config_dir().join("projects").join(name);
         let _ = std::fs::create_dir_all(&dir);
-        let mut lines = String::new();
-        let messages = std::mem::take(&mut *self.messages.lock().unwrap());
-        for (role, content) in prompt
-            .map(|p| ("user", json!(p)))
-            .into_iter()
-            .chain(messages)
-        {
-            s.lines += 1;
-            let uuid = format!("{}-{}", s.id, s.lines);
-            let line = json!({"parentUuid": s.leaf, "isSidechain": false, "type": role,
-                "uuid": uuid, "sessionId": s.id, "cwd": cwd,
-                "timestamp": "2026-11-16T12:00:00.000Z",
-                "message": {"role": role, "content": content}});
-            lines.push_str(&format!("{line}\n"));
-            s.leaf = Some(uuid);
-        }
+        s.lines += 1;
+        let uuid = format!("{}-{}", s.id, s.lines);
+        let line = json!({"parentUuid": s.leaf, "isSidechain": false, "type": role,
+            "uuid": uuid, "sessionId": s.id, "cwd": cwd,
+            "timestamp": "2026-11-16T12:00:00.000Z", "message": message});
+        s.leaf = Some(uuid);
         let file = dir.join(format!("{}.jsonl", s.id));
         if let Ok(mut f) = std::fs::File::options()
             .create(true)
             .append(true)
             .open(file)
         {
-            let _ = f.write_all(lines.as_bytes());
+            let _ = writeln!(f, "{line}");
         }
     }
 }

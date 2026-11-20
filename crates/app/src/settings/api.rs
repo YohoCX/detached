@@ -49,13 +49,12 @@ pub fn register_page_after(
     view: View,
 ) {
     let pages = &mut cx.default_global::<Pages>().0;
-    let at = pages
+    let (at, group) = pages
         .iter()
         .position(|p| p.id == after)
-        .expect("anchor page registered");
-    let group = pages[at].group;
+        .map_or((pages.len(), Group::App), |at| (at + 1, pages[at].group));
     pages.insert(
-        at + 1,
+        at,
         Page {
             id,
             title,

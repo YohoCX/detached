@@ -109,7 +109,6 @@ impl Chat {
         spec.model = self.model.clone();
         spec.effort = self.effort.clone();
         spec.validate_choices = !self.resumed;
-        spec.keep_resume_mode = self.resumed && self.mode.is_none();
         let s = Session::open(spec, past, cx);
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
@@ -471,9 +470,7 @@ impl Chat {
         }
         let mut all = (self.sessions.iter().rev()).flat_map(|s| s.read(cx).items.iter().rev());
         match all.find_map(|i| match i {
-            Item::End {
-                stop, ms: Some(_), ..
-            } => Some(super::done(*stop)),
+            Item::End { stop, .. } => Some(super::done(*stop)),
             _ => None,
         }) {
             Some(true) => State::Done,
