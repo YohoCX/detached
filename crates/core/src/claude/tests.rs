@@ -73,7 +73,7 @@ fn until(rx: &Receiver<Event>, end: impl Fn(&str, &Event) -> bool) -> (String, V
 
 fn turn(s: &Open, prompt: &str) -> (String, Vec<Event>) {
     s.0.prompt(prompt).unwrap();
-    until(&s.1, |_, e| matches!(e, Event::Ended(_)))
+    until(&s.1, |_, e| matches!(e, Event::Ended(..)))
 }
 
 #[test]
@@ -84,11 +84,30 @@ fn an_unknown_frame_and_an_unsupported_request_leave_the_session_running() {
     assert_eq!(said, "noise error still here");
     let lacks = |e: &Event| matches!(e, Event::Update(Update::Lacks(Piece::Context)));
     assert!(events.iter().any(lacks));
-    assert!(matches!(events.last(), Some(Event::Ended(Ok(_)))));
+    assert!(matches!(events.last(), Some(Event::Ended(Ok(_), _))));
     let (said, events) = turn(&s, "say again");
     assert_eq!(said, "again");
     let usage = |e: &Event| matches!(e, Event::Update(Update::Usage { .. }));
     assert!(!events.iter().any(usage));
+}
+
+#[test]
+fn a_refused_effort_switch_keeps_the_effort_the_turn_used() {
+    let run = boot();
+    std::fs::write(
+        run.sb.dir.path().join("claude-config/fake.json"),
+        r#"{"effort_ack_after_prompt":true}"#,
+    )
+    .unwrap();
+    let mut spec = chat(&run);
+    spec.effort = Some("low".into());
+    let s = open(&run, &spec).unwrap();
+    turn(&s, "lack apply_flag_settings");
+    s.0.set(Setting::Effort("high".into())).unwrap();
+    let (said, events) = turn(&s, "effort");
+    assert_eq!(said, "effort low");
+    assert!(matches!(events.last(), Some(Event::Ended(Ok(_), config))
+        if config.effort.as_deref() == Some("low")));
 }
 
 #[test]

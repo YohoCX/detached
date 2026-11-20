@@ -326,14 +326,31 @@ pub(crate) fn history(bytes: &[u8]) -> Option<Vec<Update>> {
         .filter(kept)
         .filter(message)
         .filter(|l| l["isMeta"] != true && l["isCompactSummary"] != true);
+    let mut model = None;
     for l in shown {
         let from = out.len();
         updates(l, &mut names, &mut out);
+        if out[from..].iter().any(|u| matches!(u, Update::User(_)))
+            && let Some(model) = model.take()
+        {
+            out.insert(from, past_turn(model));
+        }
+        if l["type"] == "assistant" {
+            model = super::assistant_model(l).map(String::from).or(model);
+        }
         if out.len() > from {
             out.push(Update::Break);
         }
     }
+    out.extend(model.map(past_turn));
     Some(out)
+}
+
+fn past_turn(model: String) -> Update {
+    Update::PastTurn(crate::backend::TurnConfig {
+        model: Some(model),
+        effort: None,
+    })
 }
 
 fn lines(bytes: &[u8]) -> impl Iterator<Item = Value> + '_ {

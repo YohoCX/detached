@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 
 use detached_core::adapters::{CLAUDE, Provider};
 use detached_core::backend::{Kind, Setting, SlashCommand, Spec, StopReason};
+use detached_core::chat_settings::{Choices, Preset};
 use detached_core::trust::{self, Project};
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 use kernel::blocking;
 use kernel::session::{Answer, End, Item, Session, State as Run};
+use kernel::settings::Settings;
 use kernel::ui_state;
 
 /// The last commands each repo's Claude session listed, for `/` before this one's lists them.
@@ -37,7 +39,7 @@ pub struct Chat {
     /// The first thing the user said here.
     pub topic: Option<String>,
     /// What the next session opens with.
-    pub mode: String,
+    mode: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     /// The repo's own settings, for the user to trust.
@@ -50,6 +52,7 @@ pub struct Chat {
     seen: u64,
     /// The commands this repo's last session listed.
     cached: Vec<SlashCommand>,
+    configured: bool,
     /// It shows a past conversation.
     resumed: bool,
     /// Where it stood at the last change, for the alert and the turn's end.
@@ -62,20 +65,25 @@ impl Chat {
     pub fn new(repo: String, cx: &mut Context<Self>) -> Self {
         let mut all: BTreeMap<String, Vec<SlashCommand>> =
             ui_state::get(COMMANDS, cx).unwrap_or_default();
+        let (provider, choices) = defaults(cx);
         Chat {
-            cached: all.remove(&repo).unwrap_or_default(),
+            cached: all
+                .remove(&repo)
+                .filter(|_| provider.id == CLAUDE.id)
+                .unwrap_or_default(),
             repo,
-            provider: &CLAUDE,
+            provider,
             sessions: vec![],
             topic: None,
-            mode: CLAUDE.chat.into(),
-            model: None,
-            effort: None,
+            mode: choices.mode,
+            model: choices.model,
+            effort: choices.effort,
             review: None,
             dismissed: None,
             accepted: None,
             checks: 0,
             seen: 0,
+            configured: false,
             resumed: false,
             was: (State::Idle, false),
             _watch: vec![],
@@ -97,8 +105,10 @@ impl Chat {
     /// Opens a session after the ones there, resuming `past` when given.
     fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
         let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
-        (spec.mode, spec.model, spec.effort) =
-            (self.mode.clone(), self.model.clone(), self.effort.clone());
+        spec.mode = self.mode().into();
+        spec.model = self.model.clone();
+        spec.effort = self.effort.clone();
+        spec.validate_choices = !self.resumed;
         let s = Session::open(spec, past, cx);
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
@@ -135,7 +145,7 @@ impl Chat {
                 (s.commands.clone(), s.unsent.take(), ended, kept)
             });
             if let Some([mode, model, effort]) = kept {
-                self.mode = mode.unwrap_or(self.mode.clone());
+                self.mode = mode.or(self.mode.take());
                 (self.model, self.effort) =
                     (model.or(self.model.take()), effort.or(self.effort.take()));
             }
@@ -192,29 +202,76 @@ impl Chat {
         }
     }
 
-    /// Hands a chat with nothing in it to `p`, in `p`'s chat mode.
+    /// Hands a chat with nothing in it to `p` with its preset.
     pub fn set_provider(&mut self, p: &'static Provider, cx: &mut Context<Self>) {
         if self.provider.id == p.id || !self.is_new(cx) {
             return;
         }
         self.end(cx);
-        self.switch(p);
+        self.apply(p, choices(&Preset::read(Settings::get(cx)), p));
+        self.configured = true;
         self.open(None, cx);
         self.check_trust(cx);
     }
 
-    /// Takes `p` in `p`'s chat mode, without the other provider's `/` commands.
-    pub fn switch(&mut self, p: &'static Provider) {
+    fn apply(&mut self, p: &'static Provider, choices: Choices) {
         if self.provider.id != p.id {
-            (self.provider, self.mode, self.model, self.effort) = (p, p.chat.into(), None, None);
             self.cached.clear();
+        }
+        (self.provider, self.mode, self.model, self.effort) =
+            (p, choices.mode, choices.model, choices.effort);
+    }
+
+    pub fn mode(&self) -> &str {
+        self.mode.as_deref().unwrap_or(self.provider.chat)
+    }
+
+    pub fn save_defaults(&self, cx: &mut Context<Self>) {
+        let p = self.provider.id;
+        let session = self.current().map(|s| s.read(cx));
+        let choice = |key, fallback: &Option<String>| {
+            match session {
+                Some(s) if s.version.is_some() => s.option(key).map(String::from),
+                _ => fallback.clone(),
+            }
+            .filter(|v| !v.is_empty())
+        };
+        let mode = session
+            .and_then(Session::configured_mode)
+            .map_or_else(|| self.mode().to_string(), String::from);
+        let model = choice("model", &self.model).filter(|m| m != "default");
+        let effort = choice("effort", &self.effort);
+        super::settings::save(cx, move |preset| {
+            preset.provider = p.into();
+            let choices = preset.choices(p);
+            (choices.model, choices.effort, choices.mode) = (model, effort, Some(mode));
+        })
+        .detach();
+    }
+
+    pub fn refresh_defaults(&mut self, cx: &mut Context<Self>) {
+        let (p, choices) = defaults(cx);
+        if p.id == self.provider.id
+            && choices.mode == self.mode
+            && choices.model == self.model
+            && choices.effort == self.effort
+        {
+            return;
+        }
+        let reopen = self.current().is_some();
+        self.end(cx);
+        self.apply(p, choices);
+        if reopen {
+            self.ensure(cx);
+            self.check_trust(cx);
         }
     }
 
     /// Switches the mode, model or effort, for this session and the next.
     pub fn set(&mut self, setting: Setting, cx: &mut Context<Self>) {
+        self.configured = true;
         match &setting {
-            Setting::Mode(m) => self.mode = m.clone(),
+            Setting::Mode(m) => self.mode = Some(m.clone()),
             Setting::Model(m) => self.model = Some(m.clone()),
             Setting::Effort(e) => self.effort = Some(e.clone()),
         }
@@ -386,7 +443,7 @@ impl Chat {
     /// Shows `p`'s past conversation `id` in place of this one; the next message goes on with it.
     pub fn open_past(&mut self, p: &'static Provider, id: String, cx: &mut Context<Self>) {
         self.end(cx);
-        self.switch(p);
+        self.apply(p, Choices::default());
         self.resumed = true;
         self.open(Some(id), cx);
     }
@@ -443,7 +500,14 @@ impl Chat {
 
     /// Nothing said and nothing loaded yet.
     pub fn is_new(&self, cx: &App) -> bool {
-        self.topic(cx).is_none() && !self.busy(cx) && self.conversation(cx).is_none()
+        !self.resumed
+            && self.topic(cx).is_none()
+            && !self.busy(cx)
+            && self.conversation(cx).is_none()
+    }
+
+    pub fn untouched(&self, cx: &App) -> bool {
+        !self.configured && self.is_new(cx)
     }
 
     /// The first thing the user said, to tell chats apart.
@@ -469,6 +533,7 @@ impl Chat {
         }
         self._watch.clear();
         (self.topic, self.resumed) = (None, false);
+        self.configured = false;
         self.was = (State::Idle, false);
         cx.notify();
     }
@@ -476,7 +541,26 @@ impl Chat {
     /// Forgets the conversation: a new session takes its place.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.end(cx);
+        let (p, choices) = defaults(cx);
+        self.apply(p, choices);
         self.open(None, cx);
         self.check_trust(cx);
     }
+}
+
+fn defaults(cx: &App) -> (&'static Provider, Choices) {
+    let preset = Preset::read(Settings::get(cx));
+    let p = super::providers(cx)
+        .into_iter()
+        .find(|p| p.id == preset.provider)
+        .unwrap_or(&CLAUDE);
+    (p, choices(&preset, p))
+}
+
+fn choices(preset: &Preset, p: &Provider) -> Choices {
+    let mut choices = preset.providers.get(p.id).cloned().unwrap_or_default();
+    choices.mode = choices
+        .mode
+        .filter(|m| p.modes.iter().any(|(id, ..)| *id == m));
+    choices
 }

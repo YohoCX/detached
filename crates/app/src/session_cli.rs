@@ -351,7 +351,10 @@ fn line(item: &Item) -> String {
                 .collect();
             format!("[docs may need] {}", docs.join(", "))
         }
-        Item::End { stop, ms } => format!("[end] {stop:?} in {ms} ms"),
+        Item::End { stop, ms, .. } => format!("[end] {stop:?} in {ms} ms"),
+        Item::PastTurn(config) => {
+            format!("[model] {}", config.model.as_deref().unwrap_or_default())
+        }
         Item::Note(t) => format!("[note] {t}"),
         Item::Act(a) => format!("[act] {a:?}"),
         Item::Woken => "[woken] new messages".into(),

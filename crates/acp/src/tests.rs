@@ -62,7 +62,7 @@ fn text(rx: &Receiver<Event>) -> (String, std::result::Result<Turn, Failure>) {
             said.push_str(&t);
             None
         }
-        Event::Ended(_, end) => Some(end),
+        Event::Ended(_, end, _) => Some(end),
         _ => None,
     });
     (said, end)
@@ -91,7 +91,9 @@ fn pid_in(text: &str) -> u32 {
 fn a_turn_streams_its_text_and_ends_after_its_updates() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "say one two three four").unwrap();
+    adapter
+        .prompt(&id, "say one two three four", TurnConfig::default())
+        .unwrap();
     let mut usage = None;
     let mut said = String::new();
     let end = until(&rx, |e| match e {
@@ -103,7 +105,7 @@ fn a_turn_streams_its_text_and_ends_after_its_updates() {
             usage = Some((used, cost));
             None
         }
-        Event::Ended(sid, end) => Some((sid, end.unwrap())),
+        Event::Ended(sid, end, _) => Some((sid, end.unwrap())),
         _ => None,
     });
     assert_eq!(said, "one two three four");
@@ -117,7 +119,7 @@ fn a_turn_streams_its_text_and_ends_after_its_updates() {
 fn cancel_ends_the_turn_and_its_foreground_command() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "stall").unwrap();
+    adapter.prompt(&id, "stall", TurnConfig::default()).unwrap();
     let pid = until(&rx, |e| match e {
         Event::Update(_, Update::Tool(t)) => t.input?["pid"].as_u64(),
         _ => None,
@@ -133,7 +135,7 @@ fn cancel_ends_the_turn_and_its_foreground_command() {
 fn the_adapter_hears_allow_once_whatever_the_options() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "ask").unwrap();
+    adapter.prompt(&id, "ask", TurnConfig::default()).unwrap();
     let (ask, reply) = until(&rx, |e| match e {
         Event::Ask(_, ask, reply) => Some((ask, reply)),
         _ => None,
@@ -148,7 +150,9 @@ fn the_adapter_hears_allow_once_whatever_the_options() {
 fn malformed_updates_leave_the_session_running() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "malformed").unwrap();
+    adapter
+        .prompt(&id, "malformed", TurnConfig::default())
+        .unwrap();
     let (said, end) = text(&rx);
     assert_eq!(said, "still here");
     assert_eq!(end.unwrap().stop, StopReason::EndTurn);
@@ -158,7 +162,7 @@ fn malformed_updates_leave_the_session_running() {
 fn a_crash_reports_its_code_and_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "die").unwrap();
+    adapter.prompt(&id, "die", TurnConfig::default()).unwrap();
     let (x, asked) = exit(&rx);
     assert_eq!((x.code, asked), (Some(3), false));
     assert!(x.stderr.contains("died mid-turn"), "{}", x.stderr);
@@ -169,7 +173,7 @@ fn a_crash_reports_its_code_and_stderr() {
 fn closing_stdin_ends_the_adapter_quietly_and_its_own_group_child() {
     let dir = tempfile::tempdir().unwrap();
     let (adapter, rx, id) = start(dir.path());
-    adapter.prompt(&id, "spawn").unwrap();
+    adapter.prompt(&id, "spawn", TurnConfig::default()).unwrap();
     let child = pid_in(&text(&rx).0);
     let pid = adapter.pid;
     assert!(alive(child));
@@ -188,7 +192,7 @@ fn host() {
         return;
     };
     let (adapter, rx, id) = start(&std::env::temp_dir());
-    adapter.prompt(&id, "spawn").unwrap();
+    adapter.prompt(&id, "spawn", TurnConfig::default()).unwrap();
     let child = pid_in(&text(&rx).0);
     let tmp = PathBuf::from(&file).with_extension("tmp");
     std::fs::write(&tmp, format!("{} {child}", adapter.pid)).unwrap();
@@ -261,7 +265,7 @@ fn said(rx: &Receiver<backend::Event>) -> String {
             said.push_str(&t);
             None
         }
-        backend::Event::Ended(_) => Some(()),
+        backend::Event::Ended(..) => Some(()),
         backend::Event::Closed | backend::Event::Exited(_) => panic!("the stream ended"),
         _ => None,
     });
@@ -477,7 +481,7 @@ fn a_second_initialize_ends_the_session_and_refuses_its_tools_after() {
     let id = post(&url, "POST", &[], &rpc("initialize")).session.unwrap();
     assert_eq!(post(&url, "POST", &[], &rpc("initialize")).status, 404);
     let failed = until(&rx, |e| match e {
-        backend::Event::Ended(Err(f)) => Some(f.text),
+        backend::Event::Ended(Err(f), _) => Some(f.text),
         _ => None,
     });
     assert!(failed.contains("host tools"), "{failed}");
@@ -739,6 +743,33 @@ fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_opt
 }
 
 #[test]
+fn a_codex_prompt_uses_a_model_switch_still_waiting_for_its_ack() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, _) = codex_chat(&acp, &sb);
+    std::fs::write(sb.path("hold-config"), "").unwrap();
+    open.set(Setting::Model("gpt-5.5-mini".into())).unwrap();
+    open.set(Setting::Effort("high".into())).unwrap();
+    open.prompt("model; effort").unwrap();
+    open.live.adapter.call(ListSessionsRequest::new()).unwrap();
+
+    let mut said = String::new();
+    let config = until(&rx, |e| match e {
+        backend::Event::Update(Update::Text(t)) => {
+            said.push_str(&t);
+            None
+        }
+        backend::Event::Ended(Ok(_), config) => Some(config),
+        _ => None,
+    });
+    assert!(
+        said.contains("gpt-5.5-mini agent") && said.ends_with("high"),
+        "{said}"
+    );
+    assert_eq!(config.model.as_deref(), Some("gpt-5.5-mini"));
+    assert_eq!(config.effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, _) = codex_chat(&acp, &sb);
@@ -750,7 +781,7 @@ fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
             seen.status = t.status.or(seen.status.take());
             None
         }
-        backend::Event::Ended(_) => Some(()),
+        backend::Event::Ended(..) => Some(()),
         _ => None,
     });
     assert_eq!(seen.output, Some(json!("hi\nhi\n")));

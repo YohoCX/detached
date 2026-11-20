@@ -84,7 +84,10 @@ fn a_session_runs_a_turn_answers_its_ask_from_stdin_resumes_with_its_history_lis
     assert_eq!(code, 0, "{out}");
     let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s:?} in {out}"));
     assert!(at(&format!("[session] {id}")) < at("> ask; say done"));
-    assert!(at("[tool] Write notes.txt (completed)") < at("picked allow\ndone\n> say again"));
+    assert!(
+        at("[tool] Write notes.txt (completed)")
+            < at("picked allow\ndone\n[model] claude-sonnet-9\n> say again")
+    );
     assert!(out[at("> say again")..].contains("\nagain\n[end]"), "{out}");
 
     let (out, code) = session(&sb, &["--past"], "");

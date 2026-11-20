@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use detached_core::api;
-use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool};
+use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
@@ -303,7 +303,7 @@ impl ChatView {
                     .test_support()
                     .on_click(move |_, _, cx| {
                         let repo = session.read(cx).repo.clone();
-                        super::new_chat(repo, Some(&session), cx)
+                        super::new_chat(repo, cx)
                     }),
             )
     }
@@ -346,10 +346,12 @@ impl ChatView {
         };
         let p = chat.provider;
         // The session's own mode once it says one: a refused switch leaves it as it was.
-        let now = s.and_then(|s| s.option("mode")).unwrap_or(&chat.mode);
+        let now = s
+            .and_then(|s| s.option("mode"))
+            .unwrap_or_else(|| chat.mode());
         let mode = (p.modes.iter())
             .find(|(m, ..)| *m == now)
-            .or(p.modes.iter().find(|(m, ..)| *m == chat.mode))
+            .or(p.modes.iter().find(|(m, ..)| *m == chat.mode()))
             .unwrap_or(&p.modes[0]);
         let modes = (p.modes.iter())
             .map(|(m, label, _)| (label.to_string(), Some(Setting::Mode(m.to_string()))))
@@ -367,10 +369,15 @@ impl ChatView {
                 (label, Some(Setting::Model(m.value.clone())))
             })
             .collect();
-        let current = s.and_then(|s| s.option("model")).or(chat.model.as_deref());
-        let model = current.map_or("Default model".into(), |m| model_name(m, models));
+        let current = match s {
+            Some(s) if s.version.is_some() => s.option("model"),
+            _ => chat.model.as_deref(),
+        };
+        let model = current.map_or("Default model".into(), |m| {
+            model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
+        });
         let picker = menu("chat.model", "Model", model, entries);
-        let efforts = models.iter().find(|m| Some(m.value.as_str()) == current);
+        let efforts = current.and_then(|id| Model::find(models, id));
         let efforts = efforts.map_or(&[][..], |m| &m.efforts);
         // An agent that lists efforts as an option of the session, not per model.
         let listed = s.and_then(|s| s.config.iter().find(|c| c.id == "effort"));
@@ -382,8 +389,11 @@ impl ChatView {
             .map(|e| (e.clone(), Some(Setting::Effort(e.clone()))))
             .collect();
         let effort = (!efforts.is_empty()).then(|| {
-            let now = s.and_then(|s| s.option("effort")).filter(|e| !e.is_empty());
-            let label = now.or(chat.effort.as_deref()).unwrap_or("Effort");
+            let now = match s {
+                Some(s) if s.version.is_some() => s.option("effort").filter(|e| !e.is_empty()),
+                _ => chat.effort.as_deref(),
+            };
+            let label = now.unwrap_or("Effort");
             menu("chat.effort", "Effort", label.to_string(), efforts)
         });
         let usage = s.and_then(|s| s.usage.filter(|(_, max)| *max > 0).map(|u| (u, &s.parts)));
@@ -402,7 +412,7 @@ impl ChatView {
             )
             .aria_label(SharedString::from(label))
             .aria_description(SharedString::from(parts.join(", ")))
-            .child(meter(pct as f32, cx))
+            .child(meter(pct as f32, pct as f32, cx))
         });
         let account = s.and_then(|s| s.account.as_ref());
         let plan = account.map(|a| SharedString::from(a.plan.clone()));
@@ -470,6 +480,7 @@ impl ChatView {
                     .text_color(t.muted)
                     .child(text)
             });
+        let session = self.session.clone();
         div()
             .flex()
             .flex_wrap()
@@ -481,6 +492,14 @@ impl ChatView {
             .child(picker)
             .children(effort)
             .child(self.messages(cx))
+            .child(
+                ui::icon_button("chat.save-default", "Save as default", cx)
+                    .aria_label("Save as default")
+                    .test_support()
+                    .on_click(move |_, _, cx| {
+                        session.update(cx, |s, cx| s.save_defaults(cx));
+                    }),
+            )
             .child(div().flex_1())
             .children(usage)
             .children(limits)
@@ -581,7 +600,8 @@ impl ChatView {
         ) {
             (None, _) => 0.,
             (_, Some(Item::User(_)) | None) => 24.,
-            (Some(Item::Tool(_)), Some(Item::Tool(_))) | (_, Some(Item::End { .. })) => 8.,
+            (Some(Item::Tool(_)), Some(Item::Tool(_)))
+            | (_, Some(Item::End { .. } | Item::PastTurn(_))) => 8.,
             _ => 16.,
         };
         let cut = chat.cleared(&feed, cx);
@@ -916,7 +936,10 @@ impl ChatView {
                     .children(out)
                     .into_any_element()
             }
-            Item::End { stop, ms } => self.end(i, at, super::done(*stop), *ms, cx),
+            Item::End { stop, ms, config } => {
+                self.end(i, at, super::done(*stop), Some(*ms), config, cx)
+            }
+            Item::PastTurn(config) => self.end(i, at, true, None, config, cx),
             Item::Ask {
                 tool,
                 answer,
@@ -977,7 +1000,15 @@ impl ChatView {
     }
 
     /// How the turn went and how long it took, and a button that copies its answer.
-    fn end(&self, i: usize, at: At, ok: bool, ms: u64, cx: &App) -> AnyElement {
+    fn end(
+        &self,
+        i: usize,
+        at: At,
+        ok: bool,
+        ms: Option<u64>,
+        config: &TurnConfig,
+        cx: &App,
+    ) -> AnyElement {
         let t = theme(cx);
         let s = self.session.read(cx).sessions[at.0].read(cx);
         let items = &s.items[..at.1];
@@ -997,13 +1028,28 @@ impl ChatView {
             .iter()
             .filter(|it| matches!(it, Item::Tool(_)))
             .count();
-        let mut label = match ok {
-            true => format!("Done in {}", seconds(ms)),
-            false => format!("Stopped after {}", seconds(ms)),
-        };
-        if tools > 0 {
-            label += &format!(" · {tools} actions");
+        let mut details = vec![];
+        if let Some(model) = &config.model {
+            details.push(
+                model_name(model, &s.models).map_or_else(|| friendly_model_id(model), String::from),
+            );
         }
+        if let Some(effort) = &config.effort {
+            let mut chars = effort.chars();
+            details.push(chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().to_string() + chars.as_str()
+            }));
+        }
+        if let Some(ms) = ms {
+            details.push(match ok {
+                true => format!("Done in {}", seconds(ms)),
+                false => format!("Stopped after {}", seconds(ms)),
+            });
+        }
+        if tools > 0 {
+            details.push(format!("{tools} actions"));
+        }
+        let label = details.join(" · ");
         let copy = (!answer.is_empty()).then(|| {
             ui::titled(
                 ui::icon_button(("chat.copy", i), Icon::Copy.size(px(12.)), cx),
@@ -1655,22 +1701,25 @@ impl ChatView {
     }
 }
 
-/// A model by name: the label the session listed for it, else "Opus 4.5" from
-/// "claude-opus-4-5-20251101".
-fn model_name(id: &str, models: &[Model]) -> String {
-    if let Some(m) = models.iter().find(|m| m.value == id) {
-        return m.label.clone();
+fn model_name<'a>(id: &str, models: &'a [Model]) -> Option<&'a str> {
+    Model::find(models, id).map(|m| m.label.as_str())
+}
+
+fn friendly_model_id(id: &str) -> String {
+    if id.contains('-') && !id.starts_with("claude-") {
+        return id.to_string();
     }
     let (id, wide) = match id.strip_suffix("[1m]") {
         Some(id) => (id, " (1M)"),
         None => (id, ""),
     };
     let mut parts = id.trim_start_matches("claude-").split('-');
-    let Some(name) = parts.next().filter(|n| !n.is_empty()) else {
+    let mut name = parts.next().unwrap_or_default().chars();
+    let Some(first) = name.next() else {
         return id.to_string();
     };
     let version: Vec<_> = parts.take_while(|p| p.len() <= 2).collect();
-    let mut name: String = name[..1].to_uppercase() + &name[1..];
+    let mut name = first.to_uppercase().to_string() + name.as_str();
     if !version.is_empty() {
         name = format!("{name} {}", version.join("."));
     }
@@ -1825,7 +1874,7 @@ fn seconds(ms: u64) -> String {
     }
 }
 
-/// A plan limit as a short bar of what is used, with what is left and when it resets.
+/// A plan limit as a short bar of what is left and when it resets.
 fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let used = l.used.clamp(0., 100.);
@@ -1839,7 +1888,8 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
     if let Some(r) = l.resets {
         tip += &format!(", resets in {}", span(r as i64 / 1000 - now));
     }
-    let left = format!("{:.0}% left", 100. - used);
+    let remaining = 100. - used;
+    let left = format!("{remaining:.0}% left");
     div()
         .id(SharedString::from(format!("chat.limit.{}", l.name)))
         .test_support()
@@ -1854,12 +1904,11 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .child(l.name.clone())
-        .child(meter(used as f32, cx))
+        .child(meter(remaining as f32, used as f32, cx))
         .child(left)
 }
 
-/// A short bar `used` percent full, warning from 70 and error from 90.
-fn meter(used: f32, cx: &App) -> Div {
+fn meter(fill: f32, used: f32, cx: &App) -> Div {
     let t = theme(cx);
     let color = match used {
         u if u >= 90. => t.error,
@@ -1874,25 +1923,27 @@ fn meter(used: f32, cx: &App) -> Div {
         .bg(t.line)
         .child(
             div()
+                .id("chat.meter.fill")
+                .test_support()
                 .h_full()
                 .rounded_full()
                 .bg(color)
-                .w(relative(used.clamp(0., 100.) / 100.)),
+                .w(relative(fill.clamp(0., 100.) / 100.)),
         )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::model_name;
+    use super::friendly_model_id;
 
     #[test]
     fn a_model_id_reads_as_its_family_and_version() {
-        assert_eq!(model_name("claude-opus-4-5-20251101", &[]), "Opus 4.5");
+        assert_eq!(friendly_model_id("claude-opus-4-5-20251101"), "Opus 4.5");
         assert_eq!(
-            model_name("claude-sonnet-4-5-20250929[1m]", &[]),
+            friendly_model_id("claude-sonnet-4-5-20250929[1m]"),
             "Sonnet 4.5 (1M)"
         );
-        assert_eq!(model_name("claude-fable-5-1", &[]), "Fable 5.1");
-        assert_eq!(model_name("good", &[]), "Good");
+        assert_eq!(friendly_model_id("claude-fable-5-1"), "Fable 5.1");
+        assert_eq!(friendly_model_id("good"), "Good");
     }
 }

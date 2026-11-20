@@ -111,7 +111,7 @@ fn turn(
                 seen.asks.push(*ask);
                 reply.send(answer.clone());
             }
-            backend::Event::Ended(end) => seen.end = Some(end),
+            backend::Event::Ended(end, _) => seen.end = Some(end),
             backend::Event::Closed | backend::Event::Exited(_) => panic!("the stream ended"),
             _ => {}
         }

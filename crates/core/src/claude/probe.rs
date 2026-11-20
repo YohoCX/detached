@@ -59,8 +59,8 @@ pub(super) fn run(core: &AppState, wsl: Option<&str>) -> Result<Probe> {
     let until = Instant::now() + LIMIT;
     let said = loop {
         match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
-            Ok(Event::Ended(Ok(_))) => break None,
-            Ok(Event::Ended(Err(f))) => break Some(f.text),
+            Ok(Event::Ended(Ok(_), _)) => break None,
+            Ok(Event::Ended(Err(f), _)) => break Some(f.text),
             Ok(Event::Exited(x)) => break Some(super::last(&x.stderr)),
             // An ask goes unanswered: dropped, its reply denies it.
             Ok(_) => continue,

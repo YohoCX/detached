@@ -419,7 +419,7 @@ fn a_crashed_participant_resumes_on_its_own_model_and_finishes(cx: &mut TestAppC
     role(
         &f,
         "f1",
-        &format!("fake: first died die\nfake-resume: model;{}", done()),
+        &format!("fake: say before crash;die\nfake-resume: model;{}", done()),
     );
     let p = start(&f, "review", cx);
     let s = ended(&p, cx);
@@ -432,7 +432,11 @@ fn a_crashed_participant_resumes_on_its_own_model_and_finishes(cx: &mut TestAppC
         .map(|p| std::fs::read_to_string(p).unwrap())
         .collect();
     assert!(
-        said.contains("opus bypassPermissions") && !said.contains("fallback"),
+        said.lines()
+            .any(|l| l.contains(r#""text":"before crash""#)
+                && l.contains(r#""model":"claude-opus-9""#))
+            && said.contains("opus bypassPermissions")
+            && !said.contains("fallback"),
         "{said}"
     );
     let said = p.read_with(cx, |p, _| {

@@ -3,6 +3,7 @@
 
 mod list;
 mod session;
+mod settings;
 mod view;
 
 use std::collections::BTreeMap;
@@ -63,6 +64,7 @@ pub fn label(path: &str, cx: &App) -> String {
 }
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
+    crate::settings::register_page_after(cx, "agents", "chat", "Chat", settings::page);
     let chats = AppSpec {
         name: "chats",
         id: "tab.chats",
@@ -88,10 +90,10 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     vec![actions::register(
         cx,
         "agent.chat",
-        "Claude",
+        "New chat",
         actions::Group::View,
         |_, cx| match Workspace::get(cx).current().map(String::from) {
-            Some(repo) => new_chat(repo, None, cx),
+            Some(repo) => new_chat(repo, cx),
             None => Activity::global(cx).update(cx, |a, cx| {
                 a.say("Select a repository to chat about", false, cx)
             }),
@@ -108,17 +110,20 @@ pub fn show(repo: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-/// Shows a chat on `repo` with nothing in it: an untouched open one, else a new one with `from`'s
-/// mode, model and effort.
-pub fn new_chat(repo: String, from: Option<&Entity<Chat>>, cx: &mut App) {
-    let n = fresh(&repo, from, cx);
+/// Shows a new chat on `repo`, reusing an untouched blank tab when possible.
+pub fn new_chat(repo: String, cx: &mut App) {
+    let n = fresh(&repo, cx);
+    session(&repo, n, cx).update(cx, |s, cx| s.refresh_defaults(cx));
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
 /// Sends `prompt` in a chat on `repo` with nothing in it, and shows it.
 pub fn ask(repo: String, prompt: String, cx: &mut App) {
-    let n = fresh(&repo, None, cx);
-    session(&repo, n, cx).update(cx, |s, cx| s.send(prompt, cx));
+    let n = fresh(&repo, cx);
+    session(&repo, n, cx).update(cx, |s, cx| {
+        s.refresh_defaults(cx);
+        s.send(prompt, cx);
+    });
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
@@ -147,7 +152,7 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
     {
         Some((repo, n, _)) => (repo, n),
         None => {
-            let n = fresh(&cwd, None, cx);
+            let n = fresh(&cwd, cx);
             session(&cwd, n, cx).update(cx, |s, cx| s.open_past(p, id, cx));
             (cwd, n)
         }
@@ -155,26 +160,12 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-fn fresh(repo: &str, from: Option<&Entity<Chat>>, cx: &mut App) -> u32 {
+fn fresh(repo: &str, cx: &mut App) -> u32 {
     let mine: Vec<_> = open(cx).into_iter().filter(|(r, ..)| r == repo).collect();
-    if let Some((_, n, _)) = mine.iter().find(|(.., s)| s.read(cx).is_new(cx)) {
+    if let Some((_, n, _)) = mine.iter().find(|(.., s)| s.read(cx).untouched(cx)) {
         return *n;
     }
-    let n = mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0);
-    let s = session(repo, n, cx);
-    if let Some(f) = from.map(|f| f.read(cx)) {
-        let (p, mode, model, effort) = (
-            f.provider,
-            f.mode.clone(),
-            f.model.clone(),
-            f.effort.clone(),
-        );
-        s.update(cx, |s, _| {
-            s.switch(p);
-            (s.mode, s.model, s.effort) = (mode, model, effort)
-        });
-    }
-    n
+    mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0)
 }
 
 /// Ends chat `n` on `repo`: its sessions end and its tab closes.

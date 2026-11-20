@@ -195,7 +195,7 @@ impl Shell {
                     .child(run(
                         "top.chat",
                         Icon::Chat,
-                        titled("Claude", "agent.chat"),
+                        titled("New chat", "agent.chat"),
                         chat_on,
                         "agent.chat",
                     ))

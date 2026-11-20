@@ -136,6 +136,8 @@ pub struct Spec {
     pub mode: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Ignore unavailable choices in a new chat's preset.
+    pub validate_choices: bool,
     pub tools: Option<Tools>,
     /// The folder list's skills, of which a backend passes those that load and its agent does not
     /// read itself.
@@ -157,6 +159,7 @@ impl Spec {
             mode: provider.ask.into(),
             model: None,
             effort: None,
+            validate_choices: false,
             tools: None,
             skills: vec![],
             wsl: None,
@@ -170,7 +173,7 @@ pub enum Event {
     Update(Update),
     Ask(Box<Ask>, Reply),
     /// A prompt's answer: the turn ended.
-    Ended(std::result::Result<Turn, Failure>),
+    Ended(std::result::Result<Turn, Failure>, TurnConfig),
     /// Closed, also by an exit the backend asked for: nothing more comes.
     Closed,
     /// The agent's process exited on its own: nothing more comes.
@@ -215,6 +218,7 @@ pub enum Update {
     Thought(String),
     /// A message ended: the next chunk starts a new item.
     Break,
+    PastTurn(TurnConfig),
     /// A tool call, or what changed of one, by `id`.
     Tool(Box<Tool>),
     /// Context fill by part, and the turn's cost in USD when known.
@@ -309,9 +313,23 @@ impl Drop for Reply {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     pub value: String,
+    pub resolved: Option<String>,
     pub label: String,
     pub auto: bool,
     pub efforts: Vec<String>,
+}
+
+impl Model {
+    pub fn matches(&self, id: &str) -> bool {
+        self.value == id || self.resolved.as_deref() == Some(id)
+    }
+
+    pub fn find<'a>(models: &'a [Self], id: &str) -> Option<&'a Self> {
+        models
+            .iter()
+            .filter(|m| m.matches(id))
+            .min_by_key(|m| (m.value != id, m.value == "default"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -392,6 +410,12 @@ pub struct Turn {
     pub stop: StopReason,
     /// Input and output tokens, when the agent says.
     pub tokens: Option<(u64, u64)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TurnConfig {
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// A turn that failed: what the agent said, and the cause where the host acts on it.
