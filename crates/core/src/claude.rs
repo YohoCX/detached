@@ -64,6 +64,57 @@ const PLUGIN: &str = "detached";
 const LEASH: &str = "trap gone=1 HUP; exec 3<&0; \"$@\" <&3 3<&- & exec 3<&-; \
     while kill -0 $! 2>/dev/null; do [ -z \"$gone\" ] && kill -0 $PPID 2>/dev/null \
     || { kill -TERM $!; sleep 5; kill -KILL $! 2>/dev/null; }; sleep 1; done; wait $!";
+// setsid keeps WSL's hang-up from killing the CLI before the leash can see its children.
+const WSL_LEASH: &str = r#"trap gone=1 HUP
+exec 3<&0; setsid "$@" <&3 3<&- & exec 3<&-
+pid=$!
+walk() {
+    rows=$(ps -A -o pid=,ppid=,pgid= 2>/dev/null) || return
+    printf '%s\n' "$rows" | SNAPSHOT="$1" awk -v root="$pid" '
+        NF == 3 {
+            children[$2] = children[$2] " " $1
+            if ($3 == root) group[$1] = 1
+        }
+        function tree(pid, list, n, i) {
+            if (seen[pid]++) return
+            if (pid != root && !(pid in group)) print pid
+            n = split(children[pid], list)
+            for (i = 1; i <= n; i++) tree(list[i])
+        }
+        END {
+            tree(root)
+            for (pid in group) tree(pid)
+            n = split(ENVIRON["SNAPSHOT"], seeds)
+            for (i = 1; i <= n; i++) tree(seeds[i])
+        }'
+}
+snapshot=
+while [ -z "$gone" ] && kill -0 "$PPID" 2>/dev/null; do
+    kill -0 "$pid" 2>/dev/null || break
+    if current=$(walk); then
+        kill -0 "$pid" 2>/dev/null || { snapshot="$snapshot $current"; break; }
+        snapshot=$current
+    fi
+    sleep 1
+done
+pids=$(printf '%s\n' $snapshot $(walk "$snapshot") | awk 'NF && !seen[$0]++')
+kill -TERM "-$pid" 2>/dev/null || pids="$pid $pids"
+[ -z "$pids" ] || kill -TERM $pids 2>/dev/null
+pids="-$pid $pids"
+for remaining in 5 4 3 2 1 0; do
+    survivors=
+    for child in $pids; do
+        kill -0 "$child" 2>/dev/null && survivors="$survivors $child"
+    done
+    pids=$survivors
+    [ -n "$pids" ] || break
+    if [ "$remaining" -eq 0 ]; then
+        kill -KILL $pids 2>/dev/null
+        break
+    fi
+    sleep 1
+done
+wait "$pid""#;
 const WAIT: Duration = Duration::from_secs(60);
 /// The manifest's names that hold a Windows path, which `WSLENV` translates for the distro.
 const PATHS: &[&str] = &[
@@ -226,14 +277,22 @@ fn distro_cli(distro: &str, env: &[(String, OsString)]) -> Result<(OsString, ada
 /// Windows, where the session's job holds it.
 fn command(spec: &Spec, cli: OsString, flags: Vec<String>) -> (PathBuf, Vec<OsString>) {
     let flags = flags.into_iter().map(OsString::from);
-    let leash = ["-c", LEASH, "leash"].map(OsString::from).into_iter();
-    let leashed = leash.chain([cli.clone()]).chain(flags.clone());
+    let leashed = |script| {
+        ["-c", script, "leash"]
+            .map(OsString::from)
+            .into_iter()
+            .chain([cli.clone()])
+            .chain(flags.clone())
+    };
     match &spec.wsl {
         Some(d) => {
             let front = ["-d", d, "--cd", &spec.repo, "-e", "sh"].map(OsString::from);
-            ("wsl.exe".into(), front.into_iter().chain(leashed).collect())
+            (
+                "wsl.exe".into(),
+                front.into_iter().chain(leashed(WSL_LEASH)).collect(),
+            )
         }
-        None if cfg!(unix) => ("/bin/sh".into(), leashed.collect()),
+        None if cfg!(unix) => ("/bin/sh".into(), leashed(LEASH).collect()),
         None => (cli.into(), flags.collect()),
     }
 }
@@ -735,9 +794,10 @@ impl Client {
     fn open(&self, opened: Opened, history: Vec<Update>, mut events: Events) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         if st.gone {
+            drop(st);
             return Err(Error::Other(format!(
                 "claude exited: {}",
-                last(&self.proc.stderr())
+                last(&self.proc.stderr_after_exit())
             )));
         }
         events(Event::Opened(opened));
@@ -818,13 +878,16 @@ impl Client {
         };
         let mut st = self.state.lock().unwrap();
         st.gone = true;
-        if let Some(mut sink) = st.sink.take() {
-            sink(match self.closing.load(Ordering::SeqCst) {
-                true => Event::Closed,
-                false => Event::Exited(Exit {
+        let sink = st.sink.take();
+        drop(st);
+        if let Some(mut sink) = sink {
+            sink(if self.closing.load(Ordering::SeqCst) {
+                Event::Closed
+            } else {
+                Event::Exited(Exit {
                     code: status.code(),
-                    stderr: self.proc.stderr(),
-                }),
+                    stderr: self.proc.stderr_after_exit(),
+                })
             });
         }
     }

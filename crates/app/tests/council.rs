@@ -280,24 +280,30 @@ fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppCon
     });
     open_tab(&mut app, "tab.council");
     open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
+    let repo = app.sb.path("repos/reviewed").display().to_string();
+    let rounds = app.update(|_, cx| kernel::council::rounds(cx, &repo));
     wait_until(&mut app, |cx| {
         cx.find("council.finding.bugs+impl-2").is_some()
+            && cx.update(|_, cx| {
+                let rounds = rounds.read(cx);
+                !rounds.loading()
+                    && rounds.value.as_ref().is_some_and(|r| {
+                        r.runs.iter().any(|run| {
+                            run.task == "foundation-8-watcher"
+                                && run.round == "03-after-fix-retry"
+                                && run.findings.iter().any(|f| f.id == "bugs+impl-2")
+                        })
+                    })
+            })
     });
     let tasks = app.sb.path("repos/reviewed/.revmux/tasks");
-    fs::remove_dir_all(&tasks).unwrap();
+    fs::rename(&tasks, tasks.with_file_name("tasks-backup")).unwrap();
     fs::write(&tasks, "not a directory").unwrap();
     app.click("council.refresh");
     wait_until(&mut app, |cx| {
         cx.find("council.list.stale").is_some() && cx.find("council.stale").is_some()
     });
-    let repo = app.sb.path("repos/reviewed").display().to_string();
-    let error = app.update(|_, cx| {
-        kernel::council::rounds(cx, &repo)
-            .read(cx)
-            .error
-            .clone()
-            .unwrap()
-    });
+    let error = app.update(|_, cx| rounds.read(cx).error.clone().unwrap());
     for id in ["council.list.stale", "council.stale"] {
         assert_eq!(app.find(id).unwrap().label(), Some(error.as_str()));
     }

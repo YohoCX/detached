@@ -74,7 +74,8 @@ impl Viewer {
                 if let Some(Shown::File(view)) = &self.shown {
                     view.update(cx, |v, cx| v.show(loc, window, cx));
                 } else {
-                    let view = cx.new(|cx| FileView::new(loc, window, cx));
+                    let viewer = cx.entity_id();
+                    let view = cx.new(|cx| FileView::new(viewer, loc, window, cx));
                     self.shown = Some(Shown::File(view));
                 }
             }

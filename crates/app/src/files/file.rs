@@ -4,8 +4,8 @@ use detached_core::api;
 use detached_core::types::Content;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    App, AppContext, Context, Entity, EntityId, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
     prelude::FluentBuilder,
 };
 
@@ -29,6 +29,7 @@ enum Body {
 }
 
 pub(super) struct FileView {
+    viewer: EntityId,
     loc: Location,
     code: Entity<Code>,
     body: Body,
@@ -47,7 +48,12 @@ impl FileView {
         actions::raise(&self._actions, cx);
     }
 
-    pub(super) fn new(loc: Location, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(
+        viewer: EntityId,
+        loc: Location,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let this = cx.weak_entity();
         let goto = move |window: &mut Window, cx: &mut App| {
             this.update(cx, |v, cx| v.open_goto(window, cx)).ok();
@@ -78,6 +84,7 @@ impl FileView {
             }
         });
         let mut view = FileView {
+            viewer,
             loc,
             code: cx.new(|cx| Code::new(window, cx)),
             body: Body::Loading,
@@ -128,10 +135,11 @@ impl FileView {
             Err(e) => return self.placeholder(e, cx),
         };
         let (path, line) = (&self.loc.path, self.loc.line.unwrap_or(1));
+        let shown = reveal && crate::dock::is_doc_view_shown(self.viewer, cx);
         self.code.update(cx, |c, cx| {
             c.set(path, &text, !reveal, window, cx);
             if reveal {
-                c.reveal(line, 1, window, cx);
+                c.reveal(line, 1, shown, window, cx);
             }
         });
         self.body = Body::Text { conflicted };
@@ -142,7 +150,7 @@ impl FileView {
             p.update(cx, |m, cx| m.set_text(text.into(), cx));
         } else if reveal && self.is_markdown() && self.loc.line.is_none() {
             let on = ui_state::get("viewer.mdPreview", cx).unwrap_or(true);
-            self.set_preview(on, window, cx);
+            self.set_preview(on, shown, window, cx);
         }
         cx.notify();
     }
@@ -153,14 +161,15 @@ impl FileView {
 
     fn toggle(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         ui_state::set("viewer.mdPreview", on, cx);
-        self.set_preview(on, window, cx);
+        self.set_preview(on, true, window, cx);
     }
 
-    /// Shows the preview or the source, and focuses it.
-    fn set_preview(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_preview(&mut self, on: bool, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !on {
             self.preview = None;
-            self.code.update(cx, |c, cx| c.focus(window, cx));
+            if focus {
+                self.code.update(cx, |c, cx| c.focus(window, cx));
+            }
         } else if self.preview.is_none() {
             let l = &self.loc;
             let links = Links::Repo {
@@ -170,7 +179,9 @@ impl FileView {
             };
             let text = self.code.read(cx).text(cx);
             let preview = cx.new(|cx| Markdown::new(text, links, false, cx));
-            preview.update(cx, |m, cx| m.focus(window, cx));
+            if focus {
+                preview.update(cx, |m, cx| m.focus(window, cx));
+            }
             self.preview = Some(preview);
         }
         cx.notify();
@@ -195,7 +206,7 @@ impl FileView {
             match *e {
                 Goto::To(line, col) => {
                     this.code
-                        .update(cx, |c, cx| c.reveal(line, col, window, cx));
+                        .update(cx, |c, cx| c.reveal(line, col, true, window, cx));
                     let at = Location {
                         line: Some(line),
                         ..this.loc.clone()

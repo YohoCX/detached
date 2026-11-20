@@ -77,7 +77,7 @@ pub struct DocTab {
     pub keep: bool,
     kind: Rc<dyn DocKind>,
     /// Built when first on screen, so a restored tab loads nothing until it is looked at.
-    view: Option<AnyView>,
+    pub(super) view: Option<AnyView>,
     focus: FocusHandle,
 }
 

@@ -14,6 +14,7 @@ use detached_core::store::{Kind as StoreKind, RepoStore};
 use detached_core::testutil::api::Api;
 
 use super::*;
+use crate::wait_on;
 
 const SECRET: &str = "SECRET=fixture-not-for-agents";
 
@@ -167,13 +168,13 @@ fn running(marker: &str) -> bool {
     !commands(marker).is_empty()
 }
 
-/// The command lines that hold `marker`.
+/// Process rows whose command line holds `marker`.
 fn commands(marker: &str) -> Vec<String> {
     let ps = ["ps", "-ww", "-A", "-o", "command="];
     let out = match wsl() {
         Some(d) => Command::new("wsl.exe")
             .args(["-d", &d, "-e"])
-            .args(ps)
+            .args(["ps", "-ww", "-A", "-o", "pid=,ppid=,pgid=,sid=,command="])
             .output(),
         None if cfg!(windows) => Command::new("powershell")
             .args(["-NoProfile", "-Command"])
@@ -685,8 +686,10 @@ fn a_killed_host_leaves_no_process(cx: &mut TestAppContext) {
     let (marker, id) = line.split_once(' ').unwrap();
     host.kill().unwrap();
     host.wait().unwrap();
-    // The leash's SIGTERM, then its 5 s before a SIGKILL.
-    wait_for(cx, Duration::from_secs(30), |_| {
-        !running(marker) && !running(id)
-    });
+    wait_on(
+        cx,
+        Duration::from_secs(30),
+        |_| (commands(marker), commands(id)),
+        |(marked, session)| marked.is_empty() && session.is_empty(),
+    );
 }
