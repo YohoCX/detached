@@ -1030,7 +1030,9 @@ impl ChatView {
             .count();
         let mut details = vec![];
         if let Some(model) = &config.model {
-            details.push(model_name(model, &s.models).unwrap_or(model).into());
+            details.push(
+                model_name(model, &s.models).map_or_else(|| friendly_model_id(model), String::from),
+            );
         }
         if let Some(effort) = &config.effort {
             let mut chars = effort.chars();
@@ -1704,16 +1706,20 @@ fn model_name<'a>(id: &str, models: &'a [Model]) -> Option<&'a str> {
 }
 
 fn friendly_model_id(id: &str) -> String {
+    if id.contains('-') && !id.starts_with("claude-") {
+        return id.to_string();
+    }
     let (id, wide) = match id.strip_suffix("[1m]") {
         Some(id) => (id, " (1M)"),
         None => (id, ""),
     };
     let mut parts = id.trim_start_matches("claude-").split('-');
-    let Some(name) = parts.next().filter(|n| !n.is_empty()) else {
+    let mut name = parts.next().unwrap_or_default().chars();
+    let Some(first) = name.next() else {
         return id.to_string();
     };
     let version: Vec<_> = parts.take_while(|p| p.len() <= 2).collect();
-    let mut name: String = name[..1].to_uppercase() + &name[1..];
+    let mut name = first.to_uppercase().to_string() + name.as_str();
     if !version.is_empty() {
         name = format!("{name} {}", version.join("."));
     }

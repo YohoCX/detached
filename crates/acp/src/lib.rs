@@ -2,7 +2,7 @@
 //! blocking API over `agent-client-protocol`. Each connection runs on a thread of its own under
 //! `block_on`; no async type and no protocol name leaves this crate, only `backend()`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -411,8 +411,10 @@ impl Drop for Live {
 impl Live {
     /// Ends the session `id` whose host tools a second client initialized: its tools are gone.
     fn end(&self, id: &str) {
+        let mut demux = self.demux.lock().unwrap();
+        demux.configs.remove(id);
         self.adapter.cancel(id);
-        if let Some(mut sink) = self.demux.lock().unwrap().sinks.remove(id) {
+        if let Some(mut sink) = demux.sinks.remove(id) {
             let text =
                 "A second client connected to this session's host tools, so it was ended".into();
             sink(backend::Event::Ended(
@@ -423,6 +425,76 @@ impl Live {
         }
         self.adapter.close_session(id);
     }
+
+    // Changes ahead of a prompt must settle before its config is captured and it goes out.
+    fn dispatch(self: &Arc<Self>, id: &str, demux: &mut Demux) -> Result<()> {
+        while let Some(state) = demux.configs.get_mut(id).filter(|s| s.setting.is_none()) {
+            match state.queue.pop_front() {
+                Some(Request::Set(key, value)) => {
+                    let live = Arc::downgrade(self);
+                    let session = id.to_string();
+                    let setting = Arc::new(());
+                    let pending = Arc::downgrade(&setting);
+                    let sent = self.adapter.set(id, key, value, move |update| {
+                        let Some(live) = live.upgrade() else { return };
+                        let mut demux = live.demux.lock().unwrap();
+                        let Some(state) = demux
+                            .configs
+                            .get_mut(&session)
+                            .filter(|_| pending.strong_count() != 0)
+                        else {
+                            return;
+                        };
+                        state.setting = None;
+                        demux.got(Event::Update(session.clone(), update));
+                        if let Err(e) = live.dispatch(&session, &mut demux) {
+                            let failure = Failure {
+                                text: e.to_string(),
+                                cause: None,
+                            };
+                            demux.got(Event::Ended(session, Err(failure), TurnConfig::default()));
+                        }
+                    });
+                    if let Err(e) = sent {
+                        demux.got(Event::Update(id.into(), Update::Refused(e.to_string())));
+                    } else {
+                        state.setting = Some(setting);
+                        break;
+                    }
+                }
+                Some(Request::Prompt(text)) => self.adapter.prompt(id, &text, state.snapshot())?,
+                None => break,
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct SessionConfig {
+    options: Vec<Config>,
+    setting: Option<Arc<()>>,
+    queue: VecDeque<Request>,
+}
+
+impl SessionConfig {
+    fn snapshot(&self) -> TurnConfig {
+        let value = |key| {
+            self.options
+                .iter()
+                .find(|c| c.id == key && !c.value.is_empty())
+                .map(|c| c.value.clone())
+        };
+        TurnConfig {
+            model: value("model"),
+            effort: value("effort"),
+        }
+    }
+}
+
+enum Request {
+    Set(String, String),
+    Prompt(String),
 }
 
 /// The adapter's events, each to its session's stream.
@@ -440,7 +512,7 @@ struct Demux {
     /// a command's output in pieces.
     calls: HashMap<String, HashMap<String, Tool>>,
     /// Each session's config options as last reported, which a switch is checked against.
-    configs: HashMap<String, Vec<Config>>,
+    configs: HashMap<String, SessionConfig>,
     /// The adapter's exit, and whether the host asked for it.
     exit: Option<(Exit, bool)>,
 }
@@ -480,7 +552,9 @@ impl Demux {
                 (id, backend::Event::Update(Update::Tool(Box::new(t))))
             }
             Event::Update(id, Update::Config(c)) => {
-                self.configs.insert(id.clone(), c.clone());
+                if let Some(state) = self.configs.get_mut(&id) {
+                    state.options = c.clone();
+                }
                 (id, backend::Event::Update(Update::Config(c)))
             }
             Event::Update(id, u) => (id, backend::Event::Update(u)),
@@ -541,7 +615,13 @@ impl Demux {
         if let Some(h) = host {
             self.hosts.insert(id.clone(), h);
         }
-        self.configs.insert(id.clone(), o.config.clone());
+        self.configs.insert(
+            id.clone(),
+            SessionConfig {
+                options: o.config.clone(),
+                ..Default::default()
+            },
+        );
         sink(backend::Event::Opened(o));
         self.early
             .remove(&id)
@@ -575,23 +655,35 @@ struct Open {
 
 impl backend::Session for Open {
     fn prompt(&self, text: &str) -> Result<()> {
-        let demux = self.live.demux.lock().unwrap();
-        let config = |key| {
-            demux
-                .configs
-                .get(&self.id)?
-                .iter()
-                .find(|c| c.id == key && !c.value.is_empty())
-                .map(|c| c.value.clone())
-        };
-        let config = TurnConfig {
-            model: config("model"),
-            effort: config("effort"),
-        };
-        self.live.adapter.prompt(&self.id, text, config)
+        let mut demux = self.live.demux.lock().unwrap();
+        let state = demux
+            .configs
+            .get_mut(&self.id)
+            .ok_or_else(|| Error::Other("The session is closing".into()))?;
+        state.queue.push_back(Request::Prompt(text.into()));
+        self.live.dispatch(&self.id, &mut demux)
     }
 
     fn cancel(&self) {
+        let mut demux = self.live.demux.lock().unwrap();
+        if let Some(state) = demux.configs.get_mut(&self.id)
+            && let Some(at) = state
+                .queue
+                .iter()
+                .position(|r| matches!(r, Request::Prompt(_)))
+        {
+            state.queue.remove(at);
+            let turn = Turn {
+                stop: StopReason::Cancelled,
+                tokens: None,
+            };
+            demux.got(Event::Ended(
+                self.id.clone(),
+                Ok(turn),
+                TurnConfig::default(),
+            ));
+            return;
+        }
         self.live.adapter.cancel(&self.id);
     }
 
@@ -603,14 +695,20 @@ impl backend::Session for Open {
             Setting::Effort(v) => ("effort", v),
             Setting::Mode(v) => ("mode", v),
         };
-        let demux = self.live.demux.lock().unwrap();
-        let listed = demux.configs.get(&self.id).into_iter().flatten();
-        if !listed.filter(|c| c.id == k).any(|c| c.values.contains(&v)) {
+        let mut demux = self.live.demux.lock().unwrap();
+        let state = demux
+            .configs
+            .get_mut(&self.id)
+            .ok_or_else(|| Error::Other("The session is closing".into()))?;
+        if !state
+            .options
+            .iter()
+            .any(|c| c.id == k && c.values.contains(&v))
+        {
             return Err(Error::Other(format!("This agent offers no {k} {v}")));
         }
-        drop(demux);
-        self.live.adapter.set(&self.id, &wire(k, self.codex), &v);
-        Ok(())
+        state.queue.push_back(Request::Set(wire(k, self.codex), v));
+        self.live.dispatch(&self.id, &mut demux)
     }
 
     fn stop_task(&self, _: &str) {}
@@ -618,6 +716,7 @@ impl backend::Session for Open {
 
 impl Drop for Open {
     fn drop(&mut self) {
+        self.live.demux.lock().unwrap().configs.remove(&self.id);
         self.live.adapter.close_session(&self.id);
     }
 }
@@ -847,21 +946,25 @@ impl Adapter {
     }
 
     /// Sets a config option; the answer's options come as a config update.
-    fn set(&self, session: &str, k: &str, v: &str) {
-        let (id, sent) = (session.to_string(), self.on_event.clone());
-        let value = SessionConfigOptionValue::value_id(v.to_string());
-        let req = SetSessionConfigOptionRequest::new(session.to_string(), k.to_string(), value);
-        let _ = self
-            .cx
+    fn set(
+        &self,
+        session: &str,
+        key: String,
+        value: String,
+        then: impl FnOnce(Update) + Send + 'static,
+    ) -> Result<()> {
+        let value = SessionConfigOptionValue::value_id(value);
+        let req = SetSessionConfigOptionRequest::new(session.to_string(), key, value);
+        self.cx
             .send_request(req)
             .on_receiving_result(async move |r| {
-                let u = match r {
+                then(match r {
                     Ok(r) => Update::Config(configs(r.config_options)),
                     Err(e) => Update::Refused(e.to_string()),
-                };
-                sent(Event::Update(id, u));
+                });
                 Ok(())
-            });
+            })
+            .map_err(|e| Error::Other(e.to_string()))
     }
 
     /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.

@@ -743,6 +743,33 @@ fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_opt
 }
 
 #[test]
+fn a_codex_prompt_uses_a_model_switch_still_waiting_for_its_ack() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (open, rx, _) = codex_chat(&acp, &sb);
+    std::fs::write(sb.path("hold-config"), "").unwrap();
+    open.set(Setting::Model("gpt-5.5-mini".into())).unwrap();
+    open.set(Setting::Effort("high".into())).unwrap();
+    open.prompt("model; effort").unwrap();
+    open.live.adapter.call(ListSessionsRequest::new()).unwrap();
+
+    let mut said = String::new();
+    let config = until(&rx, |e| match e {
+        backend::Event::Update(Update::Text(t)) => {
+            said.push_str(&t);
+            None
+        }
+        backend::Event::Ended(Ok(_), config) => Some(config),
+        _ => None,
+    });
+    assert!(
+        said.contains("gpt-5.5-mini agent") && said.ends_with("high"),
+        "{said}"
+    );
+    assert_eq!(config.model.as_deref(), Some("gpt-5.5-mini"));
+    assert_eq!(config.effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, _) = codex_chat(&acp, &sb);

@@ -652,7 +652,8 @@ struct State {
     models: Vec<Model>,
     config: Vec<Config>,
     opening_mode: Option<String>,
-    pending_effort: Option<Arc<str>>,
+    setting_seq: u64,
+    prompt_seq: u64,
     turn_config: TurnConfig,
     lacks: Vec<Piece>,
 }
@@ -701,19 +702,9 @@ impl backend::Session for Live {
         let mut st = self.0.state.lock().unwrap();
         (st.busy, st.cancelled) = (true, false);
         st.turn.clear();
+        st.prompt_seq = st.setting_seq;
         st.turn_config = TurnConfig {
-            effort: st
-                .config
-                .iter()
-                .find(|c| c.id == "effort")
-                .map(|c| {
-                    st.pending_effort
-                        .as_deref()
-                        .filter(|want| c.values.iter().any(|e| e == want))
-                        .unwrap_or(&c.value)
-                })
-                .filter(|e| !e.is_empty())
-                .map(String::from),
+            effort: st.effort(),
             ..TurnConfig::default()
         };
         let message = json!({"role": "user", "content": text});
@@ -755,34 +746,27 @@ impl backend::Session for Live {
                 ("mode", m, body)
             }
         };
-        let effort = (id == "effort").then(|| Arc::<str>::from(value.as_str()));
-        if effort.is_some() {
-            st.pending_effort = effort.clone();
-        }
-        self.0.request(body, move |c, r| {
-            if r.is_ok() {
-                c.configure(id, value);
-            }
-            if let Some(effort) = effort {
-                let mut st = c.state.lock().unwrap();
-                if st
-                    .pending_effort
-                    .as_ref()
-                    .is_some_and(|e| Arc::ptr_eq(e, &effort))
-                {
-                    st.pending_effort = None;
-                }
-                drop(st);
-                if let Err(e) = r {
-                    c.lost(&e, Piece::Effort);
-                }
-            }
+        st.setting_seq += 1;
+        let seq = st.setting_seq;
+        self.0.request(body, move |c, r| match r {
+            Ok(_) => c.configure(id, value, seq),
+            Err(e) if id == "effort" => c.lost(&e, Piece::Effort),
+            Err(_) => {}
         });
         Ok(())
     }
 
     fn stop_task(&self, id: &str) {
         self.0.stop(id);
+    }
+}
+
+impl State {
+    fn effort(&self) -> Option<String> {
+        self.config
+            .iter()
+            .find(|c| c.id == "effort" && !c.value.is_empty())
+            .map(|c| c.value.clone())
     }
 }
 
@@ -890,7 +874,7 @@ impl Client {
         self.state.lock().unwrap().lacks.contains(&piece)
     }
 
-    fn configure(&self, id: &str, value: String) {
+    fn configure(&self, id: &str, value: String, seq: u64) {
         let mut st = self.state.lock().unwrap();
         if id == "model" {
             let efforts = Model::find(&st.models, &value)
@@ -911,6 +895,10 @@ impl Client {
             .find(|c| c.id == id && (id != "effort" || c.values.contains(&value)))
         {
             c.value = value;
+        }
+        // The CLI can acknowledge a setting sent before the prompt after we dispatch it.
+        if st.busy && seq <= st.prompt_seq && matches!(id, "model" | "effort") {
+            st.turn_config.effort = st.effort();
         }
         let config = st.config.clone();
         drop(st);

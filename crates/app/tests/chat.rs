@@ -745,11 +745,12 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
     for (field, value) in [
         ("chat.defaults.claude.model", "opus"),
         ("chat.defaults.claude.effort", "high"),
-        ("chat.defaults.claude.mode", "plan"),
     ] {
         cx.click(field);
         cx.input(value);
     }
+    cx.click("chat.defaults.claude.mode");
+    cx.click("option:Plan");
     cx.click("chat.defaults.save");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -769,6 +770,34 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "effort high");
+}
+
+#[gpui_kit::test]
+fn settings_chat_only_saves_the_fields_edited_on_the_page(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
+    Preset::save(&cx.sb.state, |preset| {
+        let choices = preset.choices("claude");
+        choices.model = Some("opus".into());
+        choices.effort = Some("high".into());
+        choices.mode = Some("auto".into());
+    })
+    .unwrap();
+    cx.click("chat.defaults.claude.mode");
+    cx.click("option:Plan");
+    cx.click("chat.defaults.save");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            Preset::read(s)
+                .providers
+                .get("claude")
+                .is_some_and(|choices| choices.mode.as_deref() == Some("plan"))
+        })
+    });
+    let preset = Preset::read(&cx.sb.state.get_settings());
+    let choices = &preset.providers["claude"];
+    assert_eq!(choices.model.as_deref(), Some("opus"));
+    assert_eq!(choices.effort.as_deref(), Some("high"));
 }
 
 #[gpui_kit::test]
@@ -839,7 +868,7 @@ fn replay_uses_the_model_from_each_turn_and_leaves_unknown_fields_blank(cx: &mut
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
-        lines[1]["message"]["model"] = json!("claude-opus-9");
+        lines[1]["message"]["model"] = json!("claude-opus-4-5-20251101");
         lines.extend([
             json!({"type": "user", "uuid": "old1-3", "parentUuid": "old1-2",
                 "message": {"role": "user", "content": "check it"}}),
@@ -872,7 +901,7 @@ fn replay_uses_the_model_from_each_turn_and_leaves_unknown_fields_blank(cx: &mut
         [
             "You: fix it",
             "fixed",
-            "opus",
+            "Opus 4.5",
             "You: check it",
             "checked",
             "vendor-model-x",

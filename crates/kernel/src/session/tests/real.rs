@@ -598,10 +598,15 @@ fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a
     let s = open_spec(spec.clone(), None, cx);
     run(&s, "go", cx);
     let said = |i: &&Item| matches!(i, Item::User(_) | Item::Text(_) | Item::Tool(_));
-    let (id, live) = s.read_with(cx, |s, _| {
+    let (id, live, model) = s.read_with(cx, |s, _| {
+        let model = s.items.iter().find_map(|i| match i {
+            Item::End { config, .. } => config.model.clone(),
+            _ => None,
+        });
         (
             s.id.clone().unwrap(),
             s.items.iter().filter(said).cloned().collect::<Vec<_>>(),
+            model.expect("live turn's model"),
         )
     });
     assert_eq!(
@@ -613,7 +618,11 @@ fn a_real_session_s_history_shows_as_its_turn_did_and_its_list_entry_goes_with_a
     let listed = past.iter().find(|p| p.id == id).expect("listed");
     assert_eq!(listed.title, "go");
     let resumed = open_spec(spec.clone(), Some(id.clone()), cx);
-    resumed.read_with(cx, |s, _| assert_eq!(s.items, live));
+    resumed.read_with(cx, |s, _| {
+        assert!(s.items.iter().filter(said).eq(&live));
+        assert!(matches!(s.items.last(), Some(Item::PastTurn(config))
+            if config.model.as_deref() == Some(&model) && config.effort.is_none()));
+    });
     resumed.update(cx, |s, cx| s.end(cx));
     wait_for(cx, START, |cx| !cx.global::<Sessions>().open.contains(&id));
     backend::direct().delete(&f.core, &spec, &id).unwrap();

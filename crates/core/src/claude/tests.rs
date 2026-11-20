@@ -92,6 +92,25 @@ fn an_unknown_frame_and_an_unsupported_request_leave_the_session_running() {
 }
 
 #[test]
+fn a_refused_effort_switch_keeps_the_effort_the_turn_used() {
+    let run = boot();
+    std::fs::write(
+        run.sb.dir.path().join("claude-config/fake.json"),
+        r#"{"effort_ack_after_prompt":true}"#,
+    )
+    .unwrap();
+    let mut spec = chat(&run);
+    spec.effort = Some("low".into());
+    let s = open(&run, &spec).unwrap();
+    turn(&s, "lack apply_flag_settings");
+    s.0.set(Setting::Effort("high".into())).unwrap();
+    let (said, events) = turn(&s, "effort");
+    assert_eq!(said, "effort low");
+    assert!(matches!(events.last(), Some(Event::Ended(Ok(_), config))
+        if config.effort.as_deref() == Some("low")));
+}
+
+#[test]
 fn a_cli_gone_mid_turn_ends_its_own_session_and_no_other() {
     let run = boot();
     let (a, b) = (

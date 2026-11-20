@@ -97,6 +97,7 @@ fn main() {
         .unwrap_or_default();
     let mut next = 0;
     let mut held = None;
+    let mut held_config = None;
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
@@ -169,6 +170,9 @@ fn main() {
                 }
             }
             "session/list" => {
+                if let Some(response) = held_config.take() {
+                    send(&out, response);
+                }
                 let cwd = params["cwd"].clone();
                 let mut all = vec![];
                 listed(|l| all = l.clone());
@@ -210,7 +214,12 @@ fn main() {
                         continue;
                     }
                 }
-                reply(json!({"configOptions": config(s)}));
+                let result = json!({"configOptions": config(s)});
+                if std::fs::remove_file(std::path::Path::new(&s.cwd).join("hold-config")).is_ok() {
+                    held_config = Some(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+                } else {
+                    reply(result);
+                }
             }
             "session/cancel" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();

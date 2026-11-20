@@ -5,7 +5,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::*;
-use crate::backend::Tool;
+use crate::backend::{Tool, TurnConfig};
 
 const SUBAGENT: &str = "36022712-0b82-4d34-ae53-41a19e20f5e9";
 const COMPACTION: &str = "479bb84f-197d-4dc6-a6f8-6777d8a2bb05";
@@ -114,7 +114,11 @@ fn a_compacted_session_starts_at_its_boundary() {
             Update::User("after".into()),
             Update::Break,
             Update::Text("one".into()),
-            Update::Break
+            Update::Break,
+            Update::PastTurn(TurnConfig {
+                model: Some("claude-opus-5-5".into()),
+                effort: None,
+            }),
         ]
     );
 }
