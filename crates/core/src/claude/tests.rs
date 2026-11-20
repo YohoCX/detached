@@ -73,7 +73,7 @@ fn until(rx: &Receiver<Event>, end: impl Fn(&str, &Event) -> bool) -> (String, V
 
 fn turn(s: &Open, prompt: &str) -> (String, Vec<Event>) {
     s.0.prompt(prompt).unwrap();
-    until(&s.1, |_, e| matches!(e, Event::Ended(_)))
+    until(&s.1, |_, e| matches!(e, Event::Ended(..)))
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn an_unknown_frame_and_an_unsupported_request_leave_the_session_running() {
     assert_eq!(said, "noise error still here");
     let lacks = |e: &Event| matches!(e, Event::Update(Update::Lacks(Piece::Context)));
     assert!(events.iter().any(lacks));
-    assert!(matches!(events.last(), Some(Event::Ended(Ok(_)))));
+    assert!(matches!(events.last(), Some(Event::Ended(Ok(_), _))));
     let (said, events) = turn(&s, "say again");
     assert_eq!(said, "again");
     let usage = |e: &Event| matches!(e, Event::Update(Update::Usage { .. }));

@@ -43,6 +43,7 @@ macro_rules! both {
 
 both!(
     a_turn_streams_lists_what_it_changed_and_goes_back,
+    a_turn_keeps_the_model_and_effort_that_ran,
     cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks,
     a_load_runs_on_the_session_s_model,
     a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone,
@@ -51,6 +52,35 @@ both!(
     always_allow_stays_a_host_rule,
     a_trust_change_before_the_prompt_went_out_ends_the_session_unsent,
 );
+
+fn a_turn_keeps_the_model_and_effort_that_ran(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
+    let mut spec = f.spec(Kind::Chat);
+    let (picked, ran) = match fake {
+        Fake::Claude => ("opus", "claude-opus-9"),
+        Fake::Acp => ("gpt-5.5-mini", "gpt-5.5-mini"),
+    };
+    spec.model = Some(picked.into());
+    spec.effort = Some("high".into());
+    let s = open_spec(spec, None, cx);
+    assert_eq!(turn(&s, "say first", cx), "first");
+    s.update(cx, |s, _| s.set(Setting::Effort("low".into())).unwrap());
+    wait_until(cx, |cx| s.read(cx).option("effort") == Some("low"));
+    assert_eq!(turn(&s, "say second", cx), "second");
+    s.read_with(cx, |s, _| {
+        let got: Vec<_> = s
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::End { config, .. } => {
+                    Some((config.model.as_deref(), config.effort.as_deref()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(got, [(Some(ran), Some("high")), (Some(ran), Some("low"))]);
+    });
+}
 
 /// A real adapter and `claude` may take this long to start or answer.
 const START: Duration = Duration::from_secs(60);

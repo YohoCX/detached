@@ -509,7 +509,16 @@ impl Turn<'_> {
 
     fn message(&self, role: &'static str, content: Value) {
         self.messages.lock().unwrap().push((role, content.clone()));
-        let message = json!({"role": role, "content": content});
+        let mut message = json!({"role": role, "content": content});
+        if role == "assistant" {
+            let s = self.shared.lock().unwrap();
+            let model = if s.model == "default" {
+                "sonnet"
+            } else {
+                &s.model
+            };
+            message["model"] = json!(format!("claude-{model}-9"));
+        }
         self.send(json!({"type": role, "message": message, "parent_tool_use_id": null}));
     }
 

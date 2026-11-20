@@ -41,6 +41,30 @@ pub fn register_page(
     cx.default_global::<Pages>().0.push(page);
 }
 
+pub fn register_page_after(
+    cx: &mut App,
+    after: &'static str,
+    id: &'static str,
+    title: &'static str,
+    view: View,
+) {
+    let pages = &mut cx.default_global::<Pages>().0;
+    let at = pages
+        .iter()
+        .position(|p| p.id == after)
+        .expect("anchor page registered");
+    let group = pages[at].group;
+    pages.insert(
+        at + 1,
+        Page {
+            id,
+            title,
+            group,
+            view,
+        },
+    );
+}
+
 /// Opens Settings at page `id`, or shows that page when it is open.
 pub fn open(cx: &mut App, id: &'static str) {
     if let Some(o) = cx.try_global::<GlobalOpener>() {

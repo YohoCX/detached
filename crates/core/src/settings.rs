@@ -108,9 +108,16 @@ impl AppState {
 
     /// Memory keeps the old settings when the save fails.
     pub(crate) fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+        self.try_update(|s| {
+            f(s);
+            Ok(())
+        })
+    }
+
+    fn try_update(&self, f: impl FnOnce(&mut Settings) -> Result<()>) -> Result<Settings> {
         let mut s = self.settings.lock().unwrap();
         let mut next = s.clone();
-        f(&mut next);
+        f(&mut next)?;
         next.save(&self.config_dir)?;
         *s = next.clone();
         self.revision.fetch_add(1, Ordering::SeqCst);
@@ -124,13 +131,35 @@ impl AppState {
 
     /// Writes a module's block; a key this build knows is not one.
     pub fn set_block(&self, name: &str, value: impl Serialize) -> Result<Settings> {
+        let value = serde_json::to_value(value)?;
+        self.write_block(name, |_| Ok(value))
+    }
+
+    pub(crate) fn set_block_with<T: Default + DeserializeOwned + Serialize>(
+        &self,
+        name: &str,
+        edit: impl FnOnce(&mut T),
+    ) -> Result<Settings> {
+        self.write_block(name, |s| {
+            let mut value = s.block(name).unwrap_or_default();
+            edit(&mut value);
+            Ok(serde_json::to_value(value)?)
+        })
+    }
+
+    fn write_block(
+        &self,
+        name: &str,
+        value: impl FnOnce(&Settings) -> Result<Value>,
+    ) -> Result<Settings> {
         let known = serde_json::to_value(Settings::default())?;
         if known.get(name).is_some() {
             return Err(Error::Other(format!("{name} is not a block")));
         }
-        let value = serde_json::to_value(value)?;
-        self.update(|s| {
+        self.try_update(|s| {
+            let value = value(s)?;
             s.other.insert(name.into(), value);
+            Ok(())
         })
     }
 

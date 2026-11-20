@@ -944,7 +944,7 @@ impl Render for ChatList {
                         .test_support()
                         .on_click(|_, _, cx| {
                             match Workspace::get(cx).current().map(String::from) {
-                                Some(repo) => super::new_chat(repo, None, cx),
+                                Some(repo) => super::new_chat(repo, cx),
                                 None => Activity::global(cx).update(cx, |a, cx| {
                                     a.say("Select a repository to chat about", false, cx)
                                 }),

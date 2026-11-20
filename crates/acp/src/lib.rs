@@ -17,7 +17,7 @@ use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_re
 use detached_core::adapters::{self, BLOCK, CODEX, Cli};
 use detached_core::backend::{
     self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
-    Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
@@ -169,6 +169,7 @@ impl Acp {
             config: config_of(spec),
             server,
             codex,
+            validate_choices: spec.validate_choices,
         };
         let opened = match resume {
             Some(id) => live.adapter.load_session(id, &options),
@@ -295,7 +296,7 @@ fn config_of(spec: &Spec) -> Vec<(String, String)> {
         false => &spec.mode,
     };
     let set = [
-        ("mode", Some(mode.to_string())),
+        ("mode", (!spec.keep_resume_mode).then(|| mode.to_string())),
         ("model", spec.model.clone()),
         ("effort", spec.effort.clone()),
     ];
@@ -414,7 +415,10 @@ impl Live {
         if let Some(mut sink) = self.demux.lock().unwrap().sinks.remove(id) {
             let text =
                 "A second client connected to this session's host tools, so it was ended".into();
-            sink(backend::Event::Ended(Err(Failure { text, cause: None })));
+            sink(backend::Event::Ended(
+                Err(Failure { text, cause: None }),
+                TurnConfig::default(),
+            ));
             sink(backend::Event::Closed);
         }
         self.adapter.close_session(id);
@@ -493,9 +497,9 @@ impl Demux {
                 ask.key = key(&ask.tool);
                 (id, backend::Event::Ask(ask, reply))
             }
-            Event::Ended(id, r) => {
+            Event::Ended(id, r, config) => {
                 self.calls.remove(&id);
-                (id, backend::Event::Ended(r))
+                (id, backend::Event::Ended(r, config))
             }
             Event::Closed(id) => {
                 self.early.remove(&id);
@@ -571,7 +575,20 @@ struct Open {
 
 impl backend::Session for Open {
     fn prompt(&self, text: &str) -> Result<()> {
-        self.live.adapter.prompt(&self.id, text)
+        let demux = self.live.demux.lock().unwrap();
+        let config = |key| {
+            demux
+                .configs
+                .get(&self.id)?
+                .iter()
+                .find(|c| c.id == key && !c.value.is_empty())
+                .map(|c| c.value.clone())
+        };
+        let config = TurnConfig {
+            model: config("model"),
+            effort: config("effort"),
+        };
+        self.live.adapter.prompt(&self.id, text, config)
     }
 
     fn cancel(&self) {
@@ -617,6 +634,7 @@ struct Options {
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
     codex: bool,
+    validate_choices: bool,
 }
 
 /// What the adapter sends, by session id, in the order it sent it.
@@ -626,7 +644,7 @@ enum Event {
     Output(String, String, String),
     Ask(String, Box<Ask>, Reply),
     /// A prompt's answer: the turn ended.
-    Ended(String, std::result::Result<Turn, Failure>),
+    Ended(String, std::result::Result<Turn, Failure>, TurnConfig),
     /// The session's close was answered: nothing more comes for it.
     Closed(String),
     /// The adapter exited, every session on it with it; `true` when the host closed it, so its code
@@ -791,18 +809,26 @@ impl Adapter {
         Ok(self.opened(id.into(), r.config_options))
     }
 
-    /// Sets the session's mode, model and effort. An option the agent does not list is left out;
-    /// one it refuses closes the session.
+    /// Sets the session's mode, model and effort, leaving unavailable preset models and efforts at default.
     fn configure(&self, mut o: Opened, want: &Options) -> Result<Opened> {
         for (k, v) in &want.config {
-            if !o.config.iter().any(|c| c.id == *k && c.value != *v) {
+            let fallback = want.validate_choices && k != "mode";
+            if !o
+                .config
+                .iter()
+                .any(|c| c.id == *k && c.value != *v && (!fallback || c.values.contains(v)))
+            {
                 continue;
             }
             let value = SessionConfigOptionValue::value_id(v.clone());
             let id = wire(k, want.codex);
             let set = SetSessionConfigOptionRequest::new(o.id.clone(), id, value);
             match self.call(set) {
-                Ok(r) => o.config = configs(r.config_options),
+                Ok(r) => {
+                    o.models = models(&r.config_options);
+                    o.config = configs(r.config_options);
+                }
+                Err(_) if fallback => {}
                 Err(e) => {
                     self.close_session(&o.id);
                     return Err(e);
@@ -842,7 +868,7 @@ impl Adapter {
     }
 
     /// Sends a prompt; its end comes as `Event::Ended`, after the turn's updates.
-    fn prompt(&self, session: &str, text: &str) -> Result<()> {
+    fn prompt(&self, session: &str, text: &str, config: TurnConfig) -> Result<()> {
         let id = session.to_string();
         let blocks = vec![ContentBlock::Text(TextContent::new(text))];
         let ended = self.on_event.clone();
@@ -857,7 +883,7 @@ impl Adapter {
                     text: e.to_string(),
                     cause: None,
                 });
-                ended(Event::Ended(id, turn));
+                ended(Event::Ended(id, turn, config));
                 Ok(())
             })
             .map_err(|e| Error::Other(e.to_string()))
@@ -910,6 +936,7 @@ fn models(options: &[SessionConfigOption]) -> Vec<Model> {
     };
     let model = |o: &&SessionConfigSelectOption| Model {
         value: o.value.to_string(),
+        resolved: None,
         label: o.name.clone(),
         auto: false,
         efforts: vec![],

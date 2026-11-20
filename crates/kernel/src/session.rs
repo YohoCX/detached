@@ -10,7 +10,7 @@ use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
     self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
-    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, Update,
+    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
 use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
@@ -126,7 +126,8 @@ pub enum Item {
     /// A turn ended: how and after how long.
     End {
         stop: Option<StopReason>,
-        ms: u64,
+        ms: Option<u64>,
+        config: TurnConfig,
     },
     Note(String),
     /// Reported through the host's tools.
@@ -561,6 +562,14 @@ impl Session {
         Some(&c.value)
     }
 
+    pub fn configured_mode(&self) -> Option<&str> {
+        if self.woken {
+            Some(&self.spec.mode)
+        } else {
+            self.option("mode")
+        }
+    }
+
     /// Whether the plan's limits are known, or will not be.
     pub fn limits_settled(&self) -> bool {
         let has = backend(self.spec.provider).caps().limits;
@@ -818,7 +827,7 @@ impl Session {
         o.set(setting.clone())?;
         match setting {
             Setting::Model(m) => {
-                let auto = self.models.iter().any(|x| x.value == m && x.auto);
+                let auto = Model::find(&self.models, &m).is_some_and(|m| m.auto);
                 if self.spec.mode == AUTO && auto {
                     o.set(Setting::Mode(AUTO.into()))?;
                 }
@@ -913,6 +922,11 @@ impl Session {
                 self.id = Some(o.id);
                 self.version = Some(o.version);
                 self.config = o.config;
+                if self.spec.keep_resume_mode
+                    && let Some(mode) = self.option("mode")
+                {
+                    self.spec.mode = mode.into();
+                }
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
@@ -943,7 +957,7 @@ impl Session {
                     questions,
                 });
             }
-            Event::Ended(r) => self.turn_ended(r, cx),
+            Event::Ended(r, config) => self.turn_ended(r, config, cx),
             Event::Closed => self.close(End::Closed, cx),
             Event::Exited(x) => {
                 let said = crashed(&x);
@@ -979,6 +993,11 @@ impl Session {
             (Update::Text(t), _) => items.push(Item::Text(t)),
             (Update::Thought(t), _) => items.push(Item::Thought(t)),
             (Update::Break, _) => self.whole = items.len(),
+            (Update::PastTurn(config), _) => items.push(Item::End {
+                stop: None,
+                ms: None,
+                config,
+            }),
             (Update::Tool(t), _) => {
                 let known = items.iter_mut().rev().find_map(|i| match i {
                     Item::Tool(was) if was.id == t.id => Some(was),
@@ -1042,7 +1061,12 @@ impl Session {
     }
 
     /// The turn's end: its snapshots, what it changed and the trust re-hash, then idle again.
-    fn turn_ended(&mut self, r: std::result::Result<Turn, Failure>, cx: &mut Context<Self>) {
+    fn turn_ended(
+        &mut self,
+        r: std::result::Result<Turn, Failure>,
+        config: TurnConfig,
+        cx: &mut Context<Self>,
+    ) {
         self.drop_replies();
         let (began, starts) = self.turn.take().unwrap_or((Instant::now(), vec![]));
         self.failure = r.as_ref().err().cloned();
@@ -1064,7 +1088,11 @@ impl Session {
         if self.who.can.contains(&"done") && !self.done {
             self.note(NO_DONE.into());
         }
-        self.items.push(Item::End { stop, ms });
+        self.items.push(Item::End {
+            stop,
+            ms: Some(ms),
+            config,
+        });
         let core = crate::core(cx).clone();
         let repo = self.spec.repo.clone();
         let checked = self.seat.as_ref().is_none_or(|s| s.accept.is_some());
