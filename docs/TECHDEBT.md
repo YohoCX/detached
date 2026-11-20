@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| A Codex setting with no answer holds the session's prompts | `crates/acp` `dispatch` | A prompt waits for the acks of settings sent before it; an adapter that stays up but never answers a `set_session_config_option` keeps every later prompt queued (Cancel releases only the one). codex-acp answers every request, so only a misbehaving adapter hits it; a timeout that turns a missing ack into a refusal would close it. |
 | The test of an empty chat switching to the other provider's preset runs on Unix only (`#[cfg(unix)]`) | `crates/app` `tests/chat.rs` (`an_empty_chat_switch_uses_the_new_provider_s_preset`) | Uses the shared Unix Codex chat fixture. |
 | A timed-out login probe is killed by pid | `adapters::cli_probe` | The group kill runs off the scan thread after the 5 s timeout; a CLI reaped in that instant leaves a freed pid to signal, and where policy blocks `taskkill.exe` a hung CLI and its waiter thread stay until it exits. |
 | WSL leash samples descendants once a second | `core::claude` | A detached command started in the last second before host loss can survive, and a sampled PID reused before the cleanup (the last snapshot is kept while `ps` fails) or during its 5 s grace can be signalled, with its descendants. A PID namespace (`unshare --kill-child`) would close both gaps but needs privileges or a user namespace, and Claude refuses to run as root. |
