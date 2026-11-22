@@ -40,6 +40,9 @@ pub enum Icon {
     Archive,
     Trash,
     Question,
+    More,
+    Warning,
+    Error,
 }
 
 macro_rules! svg16 {
@@ -96,6 +99,13 @@ impl Icon {
                 "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11M6.5 6.5a1.5 1.5 0 1 1 2 1.4c-.4.2-.5.5-.5.9v.4M8 11h.01"
             ),
             Icon::Trash => svg16!("M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 9h6l.5-9"),
+            Icon::More => svg16!(
+                "M2.8 8a.9.9 0 1 0 1.8 0 .9.9 0 1 0-1.8 0M7.1 8a.9.9 0 1 0 1.8 0 .9.9 0 1 0-1.8 0M11.4 8a.9.9 0 1 0 1.8 0 .9.9 0 1 0-1.8 0"
+            ),
+            Icon::Warning => svg16!("M8 2.5 14 13H2zM8 6.5v3M8 11.5h.01"),
+            Icon::Error => {
+                svg16!("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11M8 5.5v3M8 10.5h.01")
+            }
         }
     }
 
