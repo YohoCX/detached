@@ -202,13 +202,15 @@ impl DrawnMenu {
             .track_focus(&focus)
             .aria_expanded(open)
             .on_click({
-                let (set, pick) = (set.clone(), pick.clone());
+                let (set, pick, runs) = (set.clone(), pick.clone(), runs.clone());
                 move |e, window, cx| match (open, at, e) {
                     (true, Some(i), ClickEvent::Keyboard(_)) => pick(i, window, cx),
                     (true, ..) => set(false, None, cx),
                     (false, ..) => {
                         focus.focus(window, cx);
-                        set(true, None, cx);
+                        // Opened from the keyboard, Enter again takes the first item.
+                        let first = runs.iter().position(Option::is_some);
+                        set(true, first.filter(|_| e.is_keyboard()), cx);
                     }
                 }
             })
@@ -417,10 +419,13 @@ mod tests {
         assert!(item(cx, 1).is_some(), "Down opens it");
         act(cx, &|w, cx| w.press("escape", cx));
         assert!(item(cx, 1).is_none());
+        act(cx, &|w, cx| w.press("enter", cx));
+        act(cx, &|w, cx| w.press("enter", cx));
+        assert_eq!(*ran.borrow(), [2, 0], "Enter twice takes the first item");
         act(cx, &|w, cx| w.click("trigger", cx));
         act(cx, &|w, cx| w.click(("menu.item", 3usize), cx));
         act(cx, &|w, cx| w.click(("menu.item", 1usize), cx));
-        assert_eq!(*ran.borrow(), [2, 0]);
+        assert_eq!(*ran.borrow(), [2, 0, 0]);
         assert!(item(cx, 1).is_none());
     }
 }
