@@ -6,7 +6,7 @@ use detached_core::api;
 use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig};
 use gpui_kit::base::{Button, TestSupportExt};
 use gpui_kit::component::input::{
-    Enter, Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
+    Enter, Escape, IndentInline, InputEvent, InputState, MoveDown, MoveUp, Textarea, TextareaState,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -61,6 +61,14 @@ enum ComposerMenu {
     More,
 }
 
+type AskKey = (EntityId, usize);
+
+#[derive(Default)]
+struct Choice {
+    options: Vec<usize>,
+    other: Option<(Entity<InputState>, Subscription)>,
+}
+
 pub struct ChatView {
     session: Entity<Chat>,
     input: Entity<TextareaState>,
@@ -77,8 +85,7 @@ pub struct ChatView {
     outputs: HashSet<String>,
     /// Each whole text laid out, with the text it was laid out from.
     texts: HashMap<(EntityId, usize), (String, Entity<Markdown>)>,
-    /// Per question of a waiting ask, the options picked.
-    picked: HashMap<(EntityId, usize), Vec<Vec<usize>>>,
+    picked: HashMap<AskKey, Vec<Choice>>,
     changed_files: HashSet<At>,
     /// The past conversations of the provider it names.
     past: (&'static str, Interest<Vec<Past>>),
@@ -1468,8 +1475,7 @@ impl ChatView {
         let detail = title_of(tool, asking);
         let open = answer == Answer::Waiting;
         let key = (self.session.read(cx).sessions[at.0].entity_id(), at.1);
-        let picked = self.picked.get(&key).cloned().unwrap_or_default();
-        let picked = |q: usize| picked.get(q).cloned().unwrap_or_default();
+        let choices = self.picked.get(&key);
         let button = |id: &'static str, label: &'static str, primary: bool, answer: Answer| {
             let session = self.session.clone();
             let b = match primary {
@@ -1479,18 +1485,14 @@ impl ChatView {
             b.test_support()
                 .on_click(move |_, _, cx| session.update(cx, |s, cx| s.answer(at, answer, cx)))
         };
-        let complete = (0..questions.len()).all(|q| !picked(q).is_empty());
-        let answers: BTreeMap<String, String> = (questions.iter().enumerate())
-            .map(|(q, question)| {
-                let labels: Vec<&str> = (picked(q).iter())
-                    .map(|o| question.options[*o].label.as_str())
-                    .collect();
-                (question.question.clone(), labels.join(", "))
-            })
-            .collect();
+        let complete = open && self.answers(key, questions, cx).is_some();
         let rows = questions.iter().enumerate().map(|(q, question)| {
+            let choice = choices.and_then(|choices| choices.get(q));
+            let input = choice
+                .and_then(|c| c.other.as_ref())
+                .map(|(input, _)| input);
             let options = question.options.iter().enumerate().map(|(o, c)| {
-                let on = picked(q).contains(&o);
+                let on = choice.is_some_and(|c| c.options.contains(&o));
                 let (me, multi) = (self.me.clone(), question.multi);
                 ui::row(
                     SharedString::from(format!("chat.option.{i}.{q}.{o}")),
@@ -1518,6 +1520,47 @@ impl ChatView {
                         .child(c.description.clone()),
                 )
             });
+            let me = self.me.clone();
+            let other = open.then(|| {
+                let multi = question.multi;
+                Button::new(SharedString::from(format!("chat.other.{i}.{q}")))
+                    .accessibility_label("Other…")
+                    .aria_expanded(input.is_some())
+                    .justify_start()
+                    .h(size::CONTROL)
+                    .px(theme::GAP)
+                    .rounded(radius::ITEM)
+                    .when(input.is_some(), |d| d.bg(t.selected))
+                    .hover(|s| s.bg(t.hover))
+                    .child("Other…")
+                    .on_click(move |_, window, cx| {
+                        me.update(cx, |this, cx| this.edit_other(key, q, multi, window, cx))
+                            .ok();
+                    })
+            });
+            let field = input.filter(|_| open).map(|input| {
+                let (me, input_state) = (self.me.clone(), input.clone());
+                div()
+                    .id(SharedString::from(format!("chat.other.input.{i}.{q}")))
+                    .test_support()
+                    .capture_action(move |_: &Enter, window, cx| {
+                        cx.stop_propagation();
+                        if !input_state.read(cx).value().trim().is_empty() {
+                            me.update(cx, |this, cx| this.submit_questions(at, window, cx))
+                                .ok();
+                        }
+                    })
+                    .child(ui::input(input, cx).aria_label("Your answer"))
+            });
+            let answered = input
+                .filter(|_| answer == Answer::Once)
+                .map(|input| input.read(cx).value())
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    div()
+                        .text_color(t.muted)
+                        .child(format!("Other: {}", value.trim()))
+                });
             div()
                 .flex()
                 .flex_col()
@@ -1530,6 +1573,9 @@ impl ChatView {
                 )
                 .child(div().child(question.question.clone()))
                 .children(options)
+                .children(other)
+                .children(field)
+                .children(answered)
         });
         let buttons = open.then(|| {
             let b = div().flex().gap(px(8.));
@@ -1539,14 +1585,14 @@ impl ChatView {
                     .child(button("chat.always", "Always allow", false, Answer::Always))
                     .child(button("chat.deny", "Deny", false, Answer::Rejected)),
                 false => {
-                    let session = self.session.clone();
+                    let me = self.me.clone();
                     b.when(complete, |b| {
                         b.child(
                             ui::primary_button(("chat.allow", i), "Answer", cx)
                                 .test_support()
-                                .on_click(move |_, _, cx| {
-                                    let answers = answers.clone();
-                                    session.update(cx, |s, cx| s.answer_questions(at, answers, cx))
+                                .on_click(move |_, window, cx| {
+                                    me.update(cx, |this, cx| this.submit_questions(at, window, cx))
+                                        .ok();
                                 }),
                         )
                     })
@@ -1593,25 +1639,99 @@ impl ChatView {
             .into_any_element()
     }
 
-    fn pick(
-        &mut self,
-        key: (EntityId, usize),
-        q: usize,
-        o: usize,
-        multi: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let all = self.picked.entry(key).or_default();
-        if all.len() <= q {
-            all.resize(q + 1, vec![]);
+    fn choice(&mut self, key: AskKey, q: usize) -> &mut Choice {
+        let choices = self.picked.entry(key).or_default();
+        if choices.len() <= q {
+            choices.resize_with(q + 1, Choice::default);
         }
-        let p = &mut all[q];
-        match p.iter().position(|x| *x == o) {
-            Some(at) if multi => _ = p.remove(at),
-            _ if multi => p.push(o),
-            _ => *p = vec![o],
+        &mut choices[q]
+    }
+
+    fn pick(&mut self, key: AskKey, q: usize, o: usize, multi: bool, cx: &mut Context<Self>) {
+        let choice = self.choice(key, q);
+        match choice.options.iter().position(|x| *x == o) {
+            Some(at) if multi => _ = choice.options.remove(at),
+            _ if multi => choice.options.push(o),
+            _ => {
+                choice.options = vec![o];
+                choice.other = None;
+            }
         }
         cx.notify();
+    }
+
+    fn edit_other(
+        &mut self,
+        key: AskKey,
+        q: usize,
+        multi: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let choice = self.choice(key, q);
+        if !multi {
+            choice.options.clear();
+        }
+        let (input, _) = choice.other.get_or_insert_with(|| {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Type your answer…"));
+            let changed = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+            (input, changed)
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn answers(
+        &self,
+        key: AskKey,
+        questions: &[Question],
+        cx: &App,
+    ) -> Option<BTreeMap<String, String>> {
+        let choices = self.picked.get(&key)?;
+        questions
+            .iter()
+            .enumerate()
+            .map(|(q, question)| {
+                let choice = choices.get(q)?;
+                let typed = choice
+                    .other
+                    .as_ref()
+                    .map(|(input, _)| input.read(cx).value());
+                let labels: Vec<_> = choice
+                    .options
+                    .iter()
+                    .map(|&o| question.options[o].label.as_str())
+                    .chain(
+                        typed
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty()),
+                    )
+                    .collect();
+                (!labels.is_empty()).then(|| (question.question.clone(), labels.join(", ")))
+            })
+            .collect()
+    }
+
+    fn submit_questions(&mut self, at: At, window: &mut Window, cx: &mut Context<Self>) {
+        let s = &self.session.read(cx).sessions[at.0];
+        let Some(Item::Ask {
+            questions,
+            answer: Answer::Waiting,
+            ..
+        }) = s.read(cx).items.get(at.1)
+        else {
+            return;
+        };
+        if let Some(answers) = self.answers((s.entity_id(), at.1), questions, cx) {
+            self.session
+                .update(cx, |s, cx| s.answer_questions(at, answers, cx));
+            self.focus(window, cx);
+        }
     }
 
     /// The docs whose covered files the turn changed, each opening on a click, and a button that

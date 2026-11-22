@@ -663,6 +663,46 @@ fn claude_s_questions_take_a_pick_each(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_own_answer_replaces_a_single_pick_and_joins_multiple_picks(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    for (prompt, answer) in [
+        ("question", "In the middle"),
+        ("question multi", "Right, Left, In the middle"),
+    ] {
+        let from = items(cx).len();
+        say(cx, prompt);
+        wait_until(cx, |cx| {
+            items(cx)[from..]
+                .iter()
+                .any(|item| item.ends_with("waiting"))
+        });
+        let i = from
+            + items(cx)[from..]
+                .iter()
+                .position(|item| item.ends_with("waiting"))
+                .unwrap();
+        cx.click(SharedString::from(format!("chat.option.{i}.0.1")));
+        if prompt == "question multi" {
+            cx.click(SharedString::from(format!("chat.option.{i}.0.0")));
+        }
+        cx.click(SharedString::from(format!("chat.other.{i}.0")));
+        assert!(
+            cx.find(SharedString::from(format!("chat.other.input.{i}.0")))
+                .is_some()
+        );
+        cx.press("enter");
+        assert!(
+            items(cx)[i].ends_with("waiting"),
+            "blank Other stayed unsent"
+        );
+        cx.input("In the middle");
+        cx.press("enter");
+        wait_for_item(cx, &format!(r#"answered {{"Which one?":"{answer}"}}"#));
+        idle(cx);
+    }
+}
+
+#[gpui_kit::test]
 fn a_question_skipped_goes_back_unanswered(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "question");

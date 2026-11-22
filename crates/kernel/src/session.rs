@@ -797,7 +797,7 @@ impl Session {
         cx.notify();
     }
 
-    /// Answers the questions of the ask at `item`, each with its picked labels.
+    /// Answers the ask at `item` with one string per question.
     pub fn answer_questions(
         &mut self,
         item: usize,
