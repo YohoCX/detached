@@ -8,7 +8,6 @@ use gpui_kit::{
 
 use super::mr::is_gitlab;
 use super::mr_page::MrPage;
-use crate::ui::page::button;
 use crate::ui::{self, radius, theme};
 use kernel::forge::active;
 
@@ -118,17 +117,16 @@ impl MergeWidget {
                 ))
             })
             .child(div().flex_1())
-            .child(
-                button(
+            .child({
+                let label = if auto { "Set auto-merge" } else { "Merge" };
+                ui::page::primary(
                     "merge.submit",
-                    if auto { "Set auto-merge" } else { "Merge" },
+                    label,
                     !busy && (mr.blocking.is_none() || auto),
                     cx,
                     move |p, _, cx| p.act(action.clone(), cx).detach(),
                 )
-                .bg(t.primary)
-                .text_color(t.primary_fg),
-            );
+            });
         div()
             .flex()
             .flex_col()
@@ -138,7 +136,7 @@ impl MergeWidget {
             .border_1()
             .border_color(t.line)
             .rounded(radius::FIELD)
-            .bg(t.panel)
+            .bg(t.header_bg)
             .child(
                 div()
                     .id("merge.status")
@@ -148,7 +146,7 @@ impl MergeWidget {
                     .items_center()
                     .gap(px(8.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(div().size(px(8.)).rounded_full().bg(dot))
+                    .child(ui::dot(dot))
                     .child(status),
             )
             .when(!mr.auto_merge, |d| d.child(controls))

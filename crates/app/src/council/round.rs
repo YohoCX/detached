@@ -1,7 +1,7 @@
 use super::*;
 use crate::files::{Links, Markdown};
 use crate::ui::Edge;
-use detached_core::council::record::{Disposition, State};
+use detached_core::council::record::{Disposition, End, Gate, Of, State};
 use detached_core::council::track::{self, Fate, Track};
 use detached_core::council::{Finding, Run};
 use gpui_kit::component::input::InputState;
@@ -77,8 +77,8 @@ pub(super) struct RunView {
     confirm: Option<String>,
     /// The finding being dismissed, and its reason's field.
     reason: Option<(String, Entity<InputState>)>,
-    /// The selected finding's Fix, on a live run's card.
-    fix: Option<Entity<super::fix::FixCard>>,
+    /// The selected finding's Fix, on a live run's card, observed for the action bar.
+    fix: Option<(Entity<super::fix::FixCard>, Subscription)>,
     pub repo: String,
     task: String,
     round: String,
@@ -158,22 +158,53 @@ impl RunView {
         super::live::report(t, cx);
     }
 
-    /// Dismiss with its reason, Defer, or Reopen, for a finding of a live run.
-    fn dispositions(&self, f: &Finding, cx: &Context<Self>) -> Option<AnyElement> {
+    /// Whether `id` takes a Fix now, and its card, when selected, is not already on its way.
+    fn can_fix(&self, id: &str, cx: &App) -> bool {
+        let idle = self.selected.as_deref() != Some(id)
+            || self.fix.as_ref().is_some_and(|(c, _)| c.read(cx).idle());
+        let task = (self.rounds.read(cx).value.as_ref()).and_then(|r| r.tasks.get(&self.task));
+        let ids = [&*self.repo, &self.task, &self.round, id];
+        idle && (self.record(cx)).is_some_and(|s| super::fix::fixable(ids, s, task, cx))
+    }
+
+    fn open_fix(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((c, _)) = &self.fix {
+            c.update(cx, |c, cx| c.open(window, cx));
+        }
+    }
+
+    fn ask_reason(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Why dismiss it?"));
+        input.update(cx, |s, cx| s.focus(window, cx));
+        self.reason = Some((id, input));
+        cx.notify();
+    }
+
+    /// The detail's action bar for a finding of a live run: its mark, then Fix…, Dismiss… with
+    /// its reason and Defer, or Reopen.
+    fn actions(&self, f: &Finding, cx: &Context<Self>) -> Option<AnyElement> {
         let (text, fate) = self.mark(&f.id, cx)?;
         let verified = self.record(cx)?.found(&f.id)?.verdict.is_some();
         let id = f.id.clone();
-        let mut row = div().flex().flex_wrap().gap(GAP).items_center().child(
+        let mut row = div().flex().flex_wrap().gap(px(6.)).items_center().child(
             div()
                 .id("council.disposition")
                 .test_support()
                 .aria_label(text.clone())
-                .flex_1()
                 .min_w_0()
+                .mr(px(4.))
                 .truncate()
+                .text_size(text::SMALL)
                 .text_color(theme(cx).muted)
                 .child(text),
         );
+        if self.can_fix(&f.id, cx) {
+            row = row.child(
+                ui::primary_button("council.fix", "Fix…", cx)
+                    .test_support()
+                    .on_click(cx.listener(|v, _, window, cx| v.open_fix(window, cx))),
+            );
+        }
         match fate {
             Fate::Open | Fate::FixReady => {
                 let reason = (self.reason.as_ref()).filter(|(r, _)| *r == f.id);
@@ -195,12 +226,7 @@ impl RunView {
                         ui::button("council.dismiss", "Dismiss…", cx)
                             .test_support()
                             .on_click(cx.listener(move |v, _, window, cx| {
-                                let input = cx.new(|cx| {
-                                    InputState::new(window, cx).placeholder("Why dismiss it?")
-                                });
-                                input.update(cx, |s, cx| s.focus(window, cx));
-                                v.reason = Some((id.clone(), input));
-                                cx.notify();
+                                v.ask_reason(id.clone(), window, cx)
                             })),
                     ),
                 };
@@ -209,6 +235,9 @@ impl RunView {
                     row = row.child(
                         ui::button("council.defer", "Defer", cx)
                             .test_support()
+                            .tooltip(|window, cx| {
+                                Tooltip::new("Copies a docs/TECHDEBT.md row").build(window, cx)
+                            })
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(row_text.clone()));
                                 let a = kernel::activity::Activity::global(cx);
@@ -280,7 +309,9 @@ impl RunView {
         if self.selected.as_ref() != Some(&f.id) {
             self.fix = self.record(cx).is_some().then(|| {
                 let ids = [&*self.repo, &self.task, &self.round, &f.id];
-                cx.new(|cx| super::fix::FixCard::new(ids, cx))
+                let card = cx.new(|cx| super::fix::FixCard::new(ids, cx));
+                let watch = cx.observe(&card, |_, _, cx| cx.notify());
+                (card, watch)
             });
         }
         self.selected = Some(f.id.clone());
@@ -328,73 +359,130 @@ impl RunView {
             || "Archive has no pinned revisions. Diff: HEAD → working tree.".into(),
             |(a, b)| format!("Reviewed range: {a}..{b}"),
         );
+        let t = theme(cx);
         let row = |f: &Finding| {
+            let on = self.selected.as_ref() == Some(&f.id);
+            let fate = self.mark(&f.id, cx).map(|(_, fate)| fate);
+            let ids = [&*self.repo, &self.task, &self.round, &f.id];
+            let running = kernel::council::fixes::find(cx, ids).is_some_and(|x| {
+                use kernel::council::fixes::Phase;
+                matches!(
+                    x.read(cx).phase,
+                    Phase::Making | Phase::Working | Phase::Checking
+                )
+            });
+            let verdict = f.verdict.as_deref().unwrap_or("unverified");
+            let said = match &fate {
+                Some(fate) => format!("{verdict} · {}", fate.text()),
+                None => verdict.to_string(),
+            };
+            let small =
+                |b: gpui_kit::Stateful<gpui_kit::Div>| b.h(px(20.)).px(px(8.)).test_support();
+            let mut actions = div().flex().gap(px(4.));
+            if self.can_fix(&f.id, cx) {
+                let finding = f.clone();
+                let id = SharedString::from(format!("council.row.fix.{}", f.id));
+                actions = actions.child(small(ui::button(id, "Fix…", cx)).on_click(cx.listener(
+                    move |v, _, window, cx| {
+                        cx.stop_propagation();
+                        v.select(&finding, cx);
+                        v.open_fix(window, cx);
+                    },
+                )));
+            }
+            if matches!(fate, Some(Fate::Open | Fate::FixReady)) {
+                let finding = f.clone();
+                let id = SharedString::from(format!("council.row.dismiss.{}", f.id));
+                actions = actions.child(small(ui::button(id, "Dismiss…", cx)).on_click(
+                    cx.listener(move |v, _, window, cx| {
+                        cx.stop_propagation();
+                        v.select(&finding, cx);
+                        v.ask_reason(finding.id.clone(), window, cx);
+                    }),
+                ));
+            }
+            let ground = if on {
+                t.active_bg
+            } else {
+                t.panel_bg.blend(t.hover)
+            };
             let finding = f.clone();
             let title = f.title.clone();
             ui::row(
                 SharedString::from(format!("council.finding.{}", f.id)),
-                self.selected.as_ref() == Some(&f.id),
+                on,
                 cx,
             )
             .test_support()
-            .aria_label(format!(
-                "{} · {} · {}",
-                f.severity,
-                f.verdict.as_deref().unwrap_or("unverified"),
-                f.title
-            ))
+            .aria_label(format!("{} · {verdict} · {}", f.severity, f.title))
+            .group(ui::HOVER)
             .min_w_0()
             .w_full()
             .flex_none()
             .overflow_hidden()
-            .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
             .flex_col()
             .items_start()
-            .p(GAP)
+            .gap(px(2.))
+            .px(GAP)
+            .py(px(6.))
+            .when(
+                matches!(fate, Some(Fate::Dismissed(_) | Fate::Deferred)),
+                |r| r.opacity(0.55),
+            )
             .child(
                 div()
                     .flex()
+                    .items_center()
                     .w_full()
                     .min_w_0()
-                    .overflow_hidden()
-                    .gap(GAP)
-                    .child(div().flex_none().child(ui::badge(
-                        f.severity.clone(),
-                        severity(&f.severity, cx),
-                        cx,
-                    )))
-                    .child(div().flex_1().min_w_0().truncate().child(f.title.clone())),
+                    .gap(px(8.))
+                    .child(ui::badge(f.severity.clone(), severity(&f.severity, cx), cx))
+                    .child(
+                        div()
+                            .id("title")
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(title.clone()).build(window, cx)
+                            })
+                            .child(f.title.clone()),
+                    ),
             )
             .child(
-                ui::row(
-                    SharedString::from(format!("council.location.{}", f.id)),
-                    false,
-                    cx,
-                )
-                .test_support()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .text_color(theme(cx).muted)
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("{}:{}", f.file, f.line)),
-                ),
-            )
-            .children(self.mark(&f.id, cx).map(|(m, _)| {
                 div()
-                    .id(SharedString::from(format!("council.mark.{}", f.id)))
-                    .test_support()
-                    .aria_label(m.clone())
+                    .flex()
+                    .items_center()
                     .w_full()
                     .min_w_0()
-                    .truncate()
+                    .h(px(20.))
+                    .gap(px(6.))
                     .text_size(text::SMALL)
-                    .text_color(theme(cx).muted)
-                    .child(m)
-            }))
+                    .text_color(t.muted)
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("council.location.{}", f.id)))
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::mono(cx))
+                            .child(format!("{}:{}", f.file, f.line)),
+                    )
+                    .when(running, |d| d.child(ui::spinner(t.accent)))
+                    .child(div().flex_1())
+                    .child(ui::hover_slot(
+                        div()
+                            .id(SharedString::from(format!("council.mark.{}", f.id)))
+                            .test_support()
+                            .aria_label(said.clone())
+                            .max_w(px(180.))
+                            .truncate()
+                            .child(said),
+                        actions,
+                        ground,
+                    )),
+            )
             .on_click(cx.listener(move |v, _, _, cx| v.select(&finding, cx)))
         };
         let list = div()
@@ -453,34 +541,39 @@ impl RunView {
             .overflow_y_scroll()
             .gap(GAP)
             .when_some(selected, |d, f| {
+                let verdict = f.verdict.as_deref().unwrap_or("unverified");
                 d.child(
                     div()
                         .flex_none()
                         .min_w_0()
+                        .text_size(text::HEADING)
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(f.title.clone()),
                 )
                 .child(
                     div()
+                        .flex()
                         .flex_none()
-                        .text_size(text::SMALL)
-                        .text_color(theme(cx).muted)
-                        .child(format!(
-                            "{} · {}",
-                            f.severity,
-                            f.verdict.as_deref().unwrap_or("unverified")
-                        )),
-                )
-                .child(
-                    div()
-                        .flex_none()
+                        .items_center()
+                        .gap(px(4.))
                         .min_w_0()
-                        .truncate()
-                        .text_color(theme(cx).muted)
-                        .child(format!("Sources: {}", f.sources.join(", "))),
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(text::SMALL)
+                        .text_color(t.muted)
+                        .child(format!("{} · {verdict} ·", f.severity))
+                        .child(
+                            div()
+                                .font_family(theme::mono(cx))
+                                .child(format!("{}:{}", f.file, f.line)),
+                        )
+                        .when(!f.sources.is_empty(), |d| {
+                            let from = format!("· {}", f.sources.join(", "));
+                            d.child(div().min_w_0().truncate().child(from))
+                        }),
                 )
-                .children(self.dispositions(f, cx))
-                .children(self.fix.clone())
+                .children(self.actions(f, cx))
+                .children(self.fix.as_ref().map(|(c, _)| c.clone()))
             })
             .when_some(self.markdown.clone(), |d, m| {
                 d.child(
@@ -555,6 +648,161 @@ impl RunView {
     }
 }
 
+impl RunView {
+    /// The round's band: its mode, subject, state, counts and the view switch, then its facts.
+    fn band(&self, run: &Run, record: Option<&State>, cx: &Context<Self>) -> AnyElement {
+        let t = theme(cx);
+        let live = self.live.as_ref().map(|(p, ..)| p.read(cx));
+        let started = record.and_then(|s| s.started.as_ref());
+        let title = started.map_or(run.task.clone(), |s| {
+            let mut mode = s.mode.replace('-', " ");
+            if let Some(c) = mode.get_mut(..1) {
+                c.make_ascii_uppercase();
+            }
+            mode
+        });
+        let subject = started.map(|s| &s.subject);
+        let chips = subject.filter(|s| matches!(s.of, Of::Branch | Of::Mr { .. }));
+        let (state, ink) = match (live.map(|p| &p.phase), record) {
+            (Some(live::Phase::Failed(_)), _) => ("Failed", t.error),
+            (Some(live::Phase::Preparing | live::Phase::Running | live::Phase::Ending), _) => {
+                ("Running", t.accent)
+            }
+            (_, Some(s)) => match &s.ended {
+                None => ("Interrupted", t.warning),
+                Some(End::Done {
+                    gate: Some(Gate::Ship),
+                }) => ("Ship", t.success),
+                Some(End::Done {
+                    gate: Some(Gate::Block),
+                }) => ("Do not ship", t.error),
+                Some(End::Done {
+                    gate: Some(Gate::Incomplete),
+                }) => ("Incomplete", t.warning),
+                Some(End::Done { gate: None }) => ("Done", t.success),
+                Some(End::Cancelled) => ("Cancelled", t.muted),
+                Some(End::Failed { .. }) => ("Failed", t.error),
+                Some(End::Interrupted) => ("Interrupted", t.warning),
+            },
+            (_, None) => ("Done", t.success),
+        };
+        let ms = match record {
+            Some(s) if s.at > 0 => {
+                let to = match s.ended {
+                    Some(_) => s.last,
+                    None => detached_core::council::record::now(),
+                };
+                (to - s.at).max(0) as u64
+            }
+            _ => run.duration_ms,
+        };
+        let duration = (ms > 0).then(|| format!("{}m {:02}s", ms / 60_000, ms / 1000 % 60));
+        let tokens = live.map_or(run.tokens, |p| p.tokens(cx));
+        let at = subject.map(|s| format!("at {}", &s.head_sha[..s.head_sha.len().min(8)]));
+        let all = run.participants.len();
+        let reported = run.participants.iter().filter(|p| !p.degraded).count();
+        let facts: Vec<String> = [
+            Some(run.round.clone()),
+            at,
+            (!run.profile.is_empty()).then(|| run.profile.clone()),
+            duration,
+            Some(format!("{} tokens", super::live::tokens(tokens))),
+            (all > 0).then(|| format!("{reported}/{all} reported")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let chip = |b: &str| {
+            div()
+                .min_w_0()
+                .truncate()
+                .px(px(6.))
+                .rounded(theme::radius::KBD)
+                .bg(t.selected_inactive)
+                .font_family(theme::mono(cx))
+                .text_size(text::SMALL)
+                .child(b.to_string())
+        };
+        let view = cx.entity().downgrade();
+        let modes = ui::segmented(
+            "council.modes",
+            &[(0usize, "Flow"), (1, "Timeline"), (2, "Findings")],
+            self.mode,
+            move |mode, _, cx| {
+                let _ = view.update(cx, |v, cx| {
+                    v.mode = mode;
+                    kernel::ui_state::set("council.mode", mode, cx);
+                    cx.notify();
+                });
+            },
+            cx,
+        );
+        ui::band(div(), cx)
+            .id("council.header")
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .justify_center()
+            .gap(px(2.))
+            .min_h(px(44.))
+            .px(px(12.))
+            .py(px(8.))
+            .min_w_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(text::TITLE)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(title),
+                    )
+                    .children(chips.map(|s| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .min_w_0()
+                            .child(chip(&s.branch))
+                            .child(div().text_color(t.muted).child("→"))
+                            .child(chip(&s.base))
+                    }))
+                    .child(
+                        div()
+                            .id("council.state")
+                            .test_support()
+                            .aria_label(state)
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(text::SMALL)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(ink)
+                            .child(ui::dot(ink))
+                            .child(state),
+                    )
+                    .child(div().flex_none().child(count_badges(run.counts(), cx)))
+                    .child(div().flex_1())
+                    .child(modes),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(facts.join(" · ")),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for RunView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_selection(cx);
@@ -563,6 +811,7 @@ impl Render for RunView {
         let resource = self.rounds.read(cx);
         let error = resource.error.clone();
         let record = self.record(cx).cloned();
+        let mut band = None;
         let mut content = div()
             .id("council.content")
             .test_support()
@@ -581,18 +830,7 @@ impl Render for RunView {
             {
                 self.select(f, cx);
             }
-            let duration = (run.duration_ms > 0).then(|| {
-                format!(
-                    "{}m {}s",
-                    run.duration_ms / 60_000,
-                    run.duration_ms / 1000 % 60
-                )
-            });
-            let tokens = match run.tokens {
-                1_000_000.. => format!("{:.1}M", run.tokens as f64 / 1_000_000.),
-                1000.. => format!("{:.1}K", run.tokens as f64 / 1000.),
-                n => n.to_string(),
-            };
+            band = Some(self.band(&run, record.as_ref(), cx));
             content = content
                 .when_some(error, |d, e| {
                     d.child(
@@ -604,45 +842,6 @@ impl Render for RunView {
                             .child(e),
                     )
                 })
-                .child(
-                    div()
-                        .id("council.header")
-                        .test_support()
-                        .flex()
-                        .flex_none()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .gap(GAP)
-                        .items_center()
-                        .child(
-                            div()
-                                .flex_none()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("{} / {}", run.task, run.round)),
-                        )
-                        .child({
-                            let all = run.participants.len();
-                            let reported = run.participants.iter().filter(|p| !p.degraded).count();
-                            let profile = (!run.profile.is_empty()).then(|| run.profile.clone());
-                            let facts: Vec<String> =
-                                [profile, duration, Some(format!("{tokens} tokens"))]
-                                    .into_iter()
-                                    .flatten()
-                                    .chain(
-                                        (reported < all)
-                                            .then(|| format!("{reported}/{all} reported")),
-                                    )
-                                    .collect();
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(text::SMALL)
-                                .text_color(theme(cx).muted)
-                                .child(facts.join(" · "))
-                        })
-                        .child(div().flex_none().child(count_badges(run.counts(), cx))),
-                )
                 .when_some(compare, |d, c| {
                     d.child(
                         div()
@@ -746,23 +945,7 @@ impl Render for RunView {
                         .truncate()
                         .text_color(theme(cx).warning)
                         .child(w.clone())
-                }))
-                .child(ui::segmented(
-                    "council.modes",
-                    &[(0usize, "Flow"), (1, "Timeline"), (2, "Findings")],
-                    self.mode,
-                    {
-                        let view = cx.entity().downgrade();
-                        move |mode, _, cx| {
-                            let _ = view.update(cx, |v, cx| {
-                                v.mode = mode;
-                                kernel::ui_state::set("council.mode", mode, cx);
-                                cx.notify();
-                            });
-                        }
-                    },
-                    cx,
-                ));
+                }));
             content = content.child(match self.mode {
                 0 | 1 => div()
                     .id("council.scroll")
@@ -796,14 +979,24 @@ impl Render for RunView {
             .id("council.run")
             .test_support()
             .flex()
-            .gap(GAP)
+            .flex_col()
             .size_full()
-            .p(GAP)
             .min_w_0()
             .overflow_hidden()
-            .when_some(self.live.as_ref(), |d, (p, ..)| {
-                d.child(super::live::participants(p, cx))
-            })
-            .child(content)
+            .children(band)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap(GAP)
+                    .p(GAP)
+                    .min_w_0()
+                    .overflow_hidden()
+                    .when_some(self.live.as_ref(), |d, (p, ..)| {
+                        d.child(super::live::participants(p, cx))
+                    })
+                    .child(content),
+            )
     }
 }

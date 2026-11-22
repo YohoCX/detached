@@ -1009,9 +1009,20 @@ fn a_live_finding_defers_reopens_and_is_dismissed_and_the_loop_runs_its_next_rou
     app.click("council.form.start");
     wait_watched(&mut app, |cx| cx.find("council.ended").is_some());
     wait_until(&mut app, |cx| {
-        label(cx, "council.mark.f1-1").as_deref() == Some("new · open")
+        label(cx, "council.mark.f1-1").as_deref() == Some("confirmed · open")
     });
-    app.click("council.finding.f1-1");
+    // A row's hover offers Fix… and Dismiss…, which opens the reason in the detail.
+    let shown = |app: &mut VisualTestContext, id: &str| {
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            w.try_find(id.to_string()).is_some_and(|e| e.visible())
+        })
+    };
+    assert!(!shown(&mut app, "council.row.fix.f1-1"));
+    app.update(|w, cx| w.hover("council.finding.f1-1", cx));
+    assert!(shown(&mut app, "council.row.fix.f1-1") && !shown(&mut app, "council.mark.f1-1"));
+    app.click("council.row.dismiss.f1-1");
+    wait_until(&mut app, |cx| cx.find("council.dismiss.confirm").is_some());
     app.click("council.defer");
     wait_until(&mut app, |cx| {
         label(cx, "council.disposition").as_deref() == Some("new · deferred")
@@ -1251,6 +1262,9 @@ fn a_fix_from_its_card_asks_first_shows_its_commits_merges_and_an_untrusted_subj
 
     // Discard after a confirm; a head that changes its agent settings asks before a new Fix.
     fix_click(&mut app, "council.fix.discard");
+    fix_click(&mut app, "council.confirm.cancel");
+    assert!(app.find("council.fix.merge").is_none() && app.find("council.fix.discard").is_some());
+    fix_click(&mut app, "council.fix.discard");
     fix_click(&mut app, "council.fix.discard");
     wait_until(&mut app, |cx| cx.find("council.fix").is_some());
     fs::create_dir_all(repo.join(".claude")).unwrap();
@@ -1375,6 +1389,51 @@ fn a_recheck_that_cannot_start_shows_why_and_offers_re_check(cx: &mut TestAppCon
     wait_watched(&mut app, |cx| {
         label(cx, "council.fix.state").is_some_and(|l| l.ends_with("re-check passed: fix ready"))
     });
+}
+
+#[gpui_kit::test]
+fn a_fix_whose_re_check_fails_merges_only_anyway_after_a_confirm(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        let r = repo(sb, "reviewed");
+        sb.git(&r, &["switch", "-qc", "feat"]);
+        sb.commit(&r, "a.txt", "let x = 1\n", "feat");
+        mark_trusted(sb, &r);
+        fix_mode(sb);
+    });
+    let repo = app.sb.path("repos/reviewed");
+    open_tab(&mut app, "tab.council");
+    app.click("council.new");
+    wait_until(&mut app, |cx| cx.find("council.form.trust").is_some());
+    app.click("council.form.start");
+    wait_watched(&mut app, |cx| cx.find("council.ended").is_some());
+    wait_until(&mut app, |cx| cx.find("council.finding.f1-1").is_some());
+    app.click("council.finding.f1-1");
+    wait_until(&mut app, |cx| cx.find("council.fix").is_some());
+    // The finder raises x again in the re-check: the Fix leaves it.
+    fix_click(&mut app, "council.fix");
+    wait_until(&mut app, |cx| cx.find("council.fix.brief").is_some());
+    fix_click(&mut app, "council.fix.brief");
+    app.input("\nfake: write b.txt y;commit fix b\n");
+    fix_click(&mut app, "council.fix.start");
+    wait_watched(&mut app, |cx| {
+        label(cx, "council.fix.state").is_some_and(|l| l.contains("re-check failed: 1 finding"))
+    });
+    assert!(app.find("council.fix.merge").is_none());
+    assert!(app.find("council.fix.recheck").is_some() && app.find("council.fix.open").is_some());
+
+    let before = app.sb.git(&repo, &["rev-parse", "feat"]);
+    fix_click(&mut app, "council.fix.force");
+    assert_eq!(
+        app.sb.git(&repo, &["rev-parse", "feat"]),
+        before,
+        "asks first"
+    );
+    fix_click(&mut app, "council.fix.force");
+    wait_until(&mut app, |cx| {
+        label(cx, "council.fix.state").is_some_and(|l| l.ends_with(" · merged"))
+    });
+    assert_ne!(app.sb.git(&repo, &["rev-parse", "feat"]), before);
 }
 
 /// `repos/reviewed` on the forge fake as `group/app`, its origin a bare clone the fake serves with

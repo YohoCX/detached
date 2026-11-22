@@ -9,9 +9,9 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::council::Rounds;
 use kernel::council::live::{self, Council, Phase, Status};
@@ -436,24 +436,10 @@ pub fn line(p: &Council, cx: &App) -> String {
     format!("{}: {stage}, {}", p.title(), tokens(p.tokens(cx)))
 }
 
-/// A live run's header: its subject, mode, time and tokens, the stage rail, its limits, and
-/// Cancel, Resume or how it ended.
+/// A live run's stage rail with Cancel, its limits, and Resume or how it ended.
 pub(super) fn header(council: &Entity<Council>, cx: &App) -> AnyElement {
     let t = theme(cx);
     let p = council.read(cx);
-    let subject = p.state.started.as_ref().map(|s| &s.subject);
-    let at = subject.map_or(String::new(), |s| {
-        format!(" at {}", &s.head_sha[..s.head_sha.len().min(8)])
-    });
-    let to = match p.state.ended {
-        Some(_) => p.state.last,
-        None => detached_core::council::record::now(),
-    };
-    let elapsed = if p.state.at == 0 {
-        0
-    } else {
-        (to - p.state.at).max(0) / 1000
-    };
     let mut head = div()
         .id("council.live")
         .test_support()
@@ -465,13 +451,17 @@ pub(super) fn header(council: &Entity<Council>, cx: &App) -> AnyElement {
                 .flex()
                 .gap(GAP)
                 .items_center()
-                .child(div().flex_1().min_w_0().truncate().child(format!(
-                    "{}{at} · {}:{:02} · {} tokens",
-                    p.title(),
-                    elapsed / 60,
-                    elapsed % 60,
-                    tokens(p.tokens(cx))
-                )))
+                .child(
+                    div()
+                        .id("council.rail")
+                        .test_support()
+                        .aria_label(rail(p))
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(t.muted)
+                        .child(rail(p)),
+                )
                 .when(p.phase == Phase::Running, |d| {
                     let council = council.clone();
                     d.child(
@@ -481,14 +471,6 @@ pub(super) fn header(council: &Entity<Council>, cx: &App) -> AnyElement {
                     )
                 }),
         );
-    head = head.child(
-        div()
-            .id("council.rail")
-            .test_support()
-            .aria_label(rail(p))
-            .text_color(t.muted)
-            .child(rail(p)),
-    );
     if let Phase::Failed(e) = &p.phase {
         head = head.child(
             div()
@@ -580,7 +562,7 @@ pub(super) fn participants(council: &Entity<Council>, cx: &App) -> AnyElement {
             .min_w_0()
             .overflow_hidden()
             .p(GAP)
-            .bg(t.panel)
+            .bg(t.header_bg)
             .rounded(theme::radius::ITEM)
             .tooltip({
                 let tip = SharedString::from(label);
@@ -700,33 +682,35 @@ pub(super) fn record_actions<V: 'static>(
             }
             None => line = line.child(div().text_color(t.muted).child("Kept for you to push")),
         }
-        let sure = confirm == Some(branch.as_str());
         let view = view.clone();
-        line = line.child(
-            ui::button(
+        let set = move |c: Option<String>| {
+            let view = view.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                view.update(cx, |v, cx| {
+                    set_confirm(v, c.clone());
+                    cx.notify();
+                })
+                .ok();
+            }
+        };
+        line = match confirm == Some(branch.as_str()) {
+            true => line.child(super::confirm(
                 ("council.discard", i),
-                if sure { "Discard: sure?" } else { "Discard" },
-                cx,
-            )
-            .test_support()
-            .on_click(move |_, _, cx| {
-                let (r, t, n, b) = ids.clone();
-                if sure {
+                "Discard",
+                set(None),
+                move |e, w, cx| {
+                    let (r, t, n, b) = ids.clone();
                     report(live::discard(&r, &t, &n, &b, cx), cx);
-                    view.update(cx, |v, cx| {
-                        set_confirm(v, None);
-                        cx.notify();
-                    })
-                    .ok();
-                } else {
-                    view.update(cx, |v, cx| {
-                        set_confirm(v, Some(b));
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }),
-        );
+                    set(None)(e, w, cx);
+                },
+                cx,
+            )),
+            false => line.child(
+                ui::button(("council.discard", i), "Discard", cx)
+                    .test_support()
+                    .on_click(set(Some(branch.clone()))),
+            ),
+        };
         out = out.child(line);
     }
     if state.ended.is_none() && !live && state.started.is_some() {

@@ -108,7 +108,7 @@ fn rail(first: bool, last: bool, degraded: bool, major: bool) -> impl IntoElemen
                 t.success
             };
             if degraded {
-                window.paint_quad(fill(dot, t.panel).corner_radii(theme::graph::DOT / 2.));
+                window.paint_quad(fill(dot, t.header_bg).corner_radii(theme::graph::DOT / 2.));
             }
             let mask = degraded.then_some(ContentMask {
                 bounds: Bounds::new(dot.origin, size(dot.size.width / 2., dot.size.height)),

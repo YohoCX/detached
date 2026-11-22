@@ -10,9 +10,9 @@ pub mod timeline;
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::council::Rounds;
 use kernel::doc::{DiffDoc, Doc};
@@ -132,6 +132,10 @@ impl Render for List {
                     )
                 });
                 let now = crate::util::now();
+                let shown = match Workspace::get(cx).shown() {
+                    Some(Doc::CouncilTask { task, .. } | Doc::Council { task, .. }) => Some(task),
+                    _ => None,
+                };
                 let mut shown_day = "";
                 for task in tasks {
                     let mut runs: Vec<_> = rounds.runs.iter().filter(|r| r.task == task).collect();
@@ -175,7 +179,7 @@ impl Render for List {
                     }
                     let row = ui::row(
                         SharedString::from(format!("council.task.{task}")),
-                        false,
+                        shown == Some(&task),
                         cx,
                     )
                     .test_support()
@@ -226,11 +230,14 @@ impl Render for List {
             .flex_col()
             .size_full()
             .child(
-                div()
+                ui::band(div(), cx)
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(6.))
-                    .p(GAP)
+                    .h(px(44.))
+                    .px(px(12.))
+                    .mb(px(4.))
                     .child(
                         div()
                             .flex_1()
@@ -325,6 +332,29 @@ fn count_badges(c: detached_core::council::Counts, cx: &App) -> impl IntoElement
         .filter(|(n, _, _)| *n > 0)
         .map(|(n, label, color)| ui::badge(format!("{n}{label}"), color, cx)),
     )
+}
+
+/// The second click of a confirm in place: `Cancel`, then `label` as the danger button `id`.
+fn confirm(
+    id: impl Into<gpui_kit::ElementId>,
+    label: &'static str,
+    cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    sure: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> gpui_kit::Div {
+    div()
+        .flex()
+        .gap(px(6.))
+        .child(
+            ui::button("council.confirm.cancel", "Cancel", cx)
+                .test_support()
+                .on_click(cancel),
+        )
+        .child(
+            ui::danger_button(id, label, cx)
+                .test_support()
+                .on_click(sure),
+        )
 }
 
 fn severity(s: &str, cx: &App) -> gpui_kit::Hsla {

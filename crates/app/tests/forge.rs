@@ -926,7 +926,12 @@ fn draft_close_and_reopen(cx: &mut TestAppContext) {
     let status = label(cx, "merge.status");
     assert_eq!(status.as_deref(), Some("Cannot merge: draft status"));
 
+    // Close asks first; Cancel keeps it open.
     cx.click("mr.close");
+    cx.click("mr.close.cancel");
+    assert!(cx.find("mr.close.confirm").is_none() && cx.find("mr.close").is_some());
+    cx.click("mr.close");
+    cx.click("mr.close.confirm");
     wait_until(cx, |cx| label(cx, "mr.state").as_deref() == Some("closed"));
     assert!(sent(
         &forge,
@@ -978,8 +983,10 @@ fn the_pipelines_tab_lists_the_mr_heads_pipelines(cx: &mut TestAppContext) {
     });
     forge.reset(seed);
     open_mr(cx, "gitlab");
-    click_in(cx, "mr.tabs", 3usize);
+    // The header's pipeline opens the tab, and the header stays on it.
+    cx.click("mr.pipeline");
     wait_until(cx, |cx| label(cx, ("pipeline", 100u64)).is_some());
+    assert!(label(cx, "mr.meta").is_some_and(|m| m.contains(" wants to merge ")));
     assert!(
         cx.find(("pipeline", 150u64)).is_none(),
         "main's pipeline is not the MR's"

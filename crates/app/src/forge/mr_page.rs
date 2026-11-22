@@ -21,9 +21,9 @@ use gpui_kit::{
 };
 
 use super::merge::MergeWidget;
-use super::mr::{bare_title, is_gitlab, links, tone};
+use super::mr::{bare_title, is_gitlab, links};
 use super::thread::Thread;
-use super::{Pipelines, core, labeled, labelled, name, note, now};
+use super::{Pipelines, color, core, glyph, labeled, labelled, name, note, now};
 use crate::files::{Annotation, DiffDoc, DiffOptions, DiffSide, DiffView, Links, Markdown};
 use crate::history::CommitDetails;
 use crate::ui::page::{self, button};
@@ -76,6 +76,8 @@ pub struct MrPage {
     /// The last action's error.
     failure: Option<String>,
     busy: bool,
+    /// Close waits for its confirm.
+    closing: bool,
     description: Option<Entity<Markdown>>,
     threads: Vec<Entity<Thread>>,
     comment: Entity<Thread>,
@@ -122,6 +124,7 @@ impl MrPage {
             error: None,
             failure: None,
             busy: false,
+            closing: false,
             description: None,
             threads: vec![],
             comment,
@@ -419,6 +422,7 @@ impl MrPage {
         self.resolve(cx);
     }
 
+    /// Two rows on every tab: the MR, its state and pipeline, the tabs; then who wants what.
     fn header(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let m = self.mr.as_ref();
@@ -427,26 +431,19 @@ impl MrPage {
         let pick = move |tab, window: &mut Window, cx: &mut App| {
             page.update(cx, |p, cx| p.set_tab(tab, window, cx)).ok();
         };
-        div()
+        let top = div()
             .flex()
-            .flex_none()
             .items_center()
             .gap(px(8.))
-            .h(px(44.))
-            .pl(px(16.))
-            .pr(px(8.))
             .min_w_0()
-            .border_b_1()
-            .border_color(t.line)
             .text_size(text::TITLE)
-            .whitespace_nowrap()
             .child(
                 labeled("mr.number", format!("{sign}{}", self.number))
-                    .font_weight(FontWeight::BOLD),
+                    .font_weight(FontWeight::SEMIBOLD),
             )
             .when_some(m, |d, m| {
                 let (title, tip) = (bare_title(m).to_string(), m.title.clone());
-                let (state, shown, color) = match m.state {
+                let (state, shown, ink) = match m.state {
                     MrState::Open => ("open", "Open", t.success),
                     MrState::Merged => ("merged", "Merged", t.accent),
                     MrState::Closed => ("closed", "Closed", t.muted),
@@ -459,9 +456,30 @@ impl MrPage {
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)),
                 )
                 .when(m.draft, |d| {
-                    d.child(pill("mr.draft_pill", "Draft", "Draft", t.muted, cx))
+                    d.child(pill("mr.draft_pill", "Draft", "Draft", t.muted, t.line))
                 })
-                .child(pill("mr.state", state, shown, color, cx))
+                .child(pill("mr.state", state, shown, ink, ink.opacity(0.5)))
+                .when_some(m.pipeline.clone(), |d, s| {
+                    let page = cx.weak_entity();
+                    d.child(
+                        ui::pressable("mr.pipeline")
+                            .test_support()
+                            .aria_label(format!("Pipeline {}", name(&s)))
+                            .gap(px(4.))
+                            .h(px(24.))
+                            .px(px(6.))
+                            .rounded(radius::ICON_BUTTON)
+                            .text_size(text::SMALL)
+                            .hover(|d| d.bg(t.hover))
+                            .tooltip(|window, cx| Tooltip::new("Pipelines").build(window, cx))
+                            .on_click(move |_, window, cx| {
+                                page.update(cx, |p, cx| p.set_tab(Tab::Pipelines, window, cx))
+                                    .ok();
+                            })
+                            .child(div().text_color(color(&s, cx)).child(glyph(&s)))
+                            .child(name(&s)),
+                    )
+                })
             })
             .child(div().flex_1())
             .child(ui::segmented("mr.tabs", &TABS, self.tab, pick, cx))
@@ -470,7 +488,21 @@ impl MrPage {
                     .test_support()
                     .tooltip(|window, cx| Tooltip::new("Refresh").build(window, cx))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-            )
+            );
+        ui::band(div(), cx)
+            .flex()
+            .flex_col()
+            .flex_none()
+            .justify_center()
+            .gap(px(2.))
+            .min_h(px(44.))
+            .pl(px(16.))
+            .pr(px(8.))
+            .py(px(6.))
+            .min_w_0()
+            .whitespace_nowrap()
+            .child(top)
+            .children(m.map(|m| self.meta(m, cx)))
     }
 
     fn meta(&self, m: &MergeRequest, cx: &Context<Self>) -> impl IntoElement + use<> {
@@ -487,38 +519,41 @@ impl MrPage {
         );
         let branch = |b: String| {
             div()
+                .min_w_0()
+                .truncate()
                 .px(px(6.))
                 .rounded(radius::KBD)
-                .bg(t.selected)
+                .bg(t.selected_inactive)
                 .font_family(theme::mono(cx))
                 .child(b)
         };
         let url = m.web_url.clone();
         labelled("mr.meta", said)
             .flex()
-            .flex_wrap()
             .items_center()
             .gap(px(6.))
-            .child(div().font_weight(FontWeight::BOLD).child(m.author.clone()))
-            .child("wants to merge")
+            .min_w_0()
+            .text_size(text::SMALL)
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(m.author.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(t.muted)
+                    .child("wants to merge"),
+            )
             .child(branch(source))
-            .child(div().text_color(t.muted).child("into"))
+            .child(div().flex_none().text_color(t.muted).child("into"))
             .child(branch(m.target_branch.clone()))
-            .child(div().text_color(t.muted).child(updated))
-            .when_some(m.pipeline.clone(), |d, s| {
-                let tip = format!("Pipeline {}", name(&s));
-                d.child(
-                    div()
-                        .id("mr.pipeline")
-                        .size(px(8.))
-                        .rounded_full()
-                        .bg(tone(&s, cx))
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)),
-                )
-            })
+            .child(div().flex_none().text_color(t.muted).child(updated))
             .child(
                 ui::pressable("mr.open")
                     .ml_auto()
+                    .pl(px(8.))
                     .text_color(t.accent)
                     .font_weight(FontWeight::SEMIBOLD)
                     .on_click(move |_, _, cx| cx.open_url(&url))
@@ -599,9 +634,32 @@ impl MrPage {
                 cx,
                 act(MrAction::SetDraft { draft: !m.draft }),
             ))
-            .child(
-                button("mr.close", "Close", !busy, cx, act(MrAction::Close)).text_color(t.error),
-            );
+            .map(|d| match self.closing {
+                false => d.child(button("mr.close", "Close", !busy, cx, |this, _, cx| {
+                    this.closing = true;
+                    cx.notify();
+                })),
+                true => d
+                    .child(button(
+                        "mr.close.cancel",
+                        "Cancel",
+                        true,
+                        cx,
+                        |this, _, cx| {
+                            this.closing = false;
+                            cx.notify();
+                        },
+                    ))
+                    .child(ui::page::danger(
+                        "mr.close.confirm",
+                        "Close MR",
+                        cx,
+                        |this, _, cx| {
+                            this.closing = false;
+                            this.act(MrAction::Close, cx).detach()
+                        },
+                    )),
+            });
         let blank = self.review.read(cx).value().trim().is_empty();
         let review = div()
             .flex()
@@ -653,7 +711,6 @@ impl MrPage {
                     .px(px(20.))
                     .pt(px(16.))
                     .pb(px(24.))
-                    .child(self.meta(m, cx))
                     .children(self.facts(m, cx))
                     .child(
                         labelled("mr.description", m.description.clone())
@@ -1060,18 +1117,20 @@ fn line_comment(
 }
 
 /// The Draft and state pills, labelled `label`.
+/// A state in `color`, outlined in `edge`.
 fn pill(
     id: &'static str,
     label: &'static str,
     shown: &'static str,
     color: Hsla,
-    cx: &App,
+    edge: Hsla,
 ) -> impl IntoElement {
     labelled(id, label)
         .flex_none()
-        .px(px(9.))
+        .px(px(8.))
+        .border_1()
+        .border_color(edge)
         .rounded(radius::PILL)
-        .bg(theme(cx).hover)
         .text_size(text::LABEL)
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(color)

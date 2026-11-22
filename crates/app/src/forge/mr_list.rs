@@ -6,13 +6,13 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{IndexPath, Sizable};
 use gpui_kit::{
-    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    App, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div,
     prelude::FluentBuilder, px, relative, transparent_black,
 };
 
-use super::mr::{bare_title, number, show_mr, tone};
-use super::{name, note, now, setup_note};
+use super::mr::{bare_title, number, show_mr};
+use super::{color, name, note, now, setup_note};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{ago, fuzzy};
 use kernel::doc::Doc;
@@ -85,7 +85,7 @@ impl MrList {
     }
 
     fn header(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
-        div()
+        ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()
@@ -97,7 +97,7 @@ impl MrList {
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
-                    .font_weight(FontWeight::BOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Merge Requests"),
             )
             .child(
@@ -115,7 +115,11 @@ impl MrList {
     fn row(&self, m: &MergeRequest, shown: bool, cx: &App) -> impl IntoElement + use<> {
         let t = theme(cx);
         let (num, title) = (number(m), bare_title(m).to_string());
-        let state = (m.state != MrState::Open).then(|| format!("{:?}", m.state));
+        let state = match m.state {
+            MrState::Open => None,
+            MrState::Merged => Some(("Merged", t.accent, t.accent.opacity(0.5))),
+            MrState::Closed => Some(("Closed", t.muted, t.muted.opacity(0.5))),
+        };
         let branch = format!("{} → {}", m.source_branch, m.target_branch);
         let approvals = (!m.approved_by.is_empty()).then(|| format!("✓{}", m.approved_by.len()));
         let when = ago(m.updated, now());
@@ -124,7 +128,7 @@ impl MrList {
         let label = format!(
             "{num} {title}{}{} {branch} {}{} {when}",
             opt(draft),
-            opt(state.as_deref()),
+            opt(state.map(|s| s.0)),
             m.author,
             opt(approvals.as_deref())
         );
@@ -141,16 +145,17 @@ impl MrList {
                 .flex_none()
                 .size(px(8.))
                 .rounded_full()
-                .bg(tone(s, cx))
+                .bg(color(s, cx))
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         });
-        let tag = |text: String| {
+        let tag = |(text, ink, edge): (&'static str, Hsla, Hsla)| {
             div()
                 .flex_none()
                 .px(px(5.))
+                .border_1()
+                .border_color(edge)
                 .rounded(radius::BADGE)
-                .bg(t.hover)
-                .text_color(t.muted)
+                .text_color(ink)
                 .text_size(text::LABEL)
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(text)
@@ -186,7 +191,7 @@ impl MrList {
                             .child(num),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(title))
-                    .children(draft.map(|d| tag(d.into())))
+                    .children(draft.map(|d| tag((d, t.muted, t.line))))
                     .children(state.map(tag))
                     .children(pipeline),
             )
@@ -285,7 +290,7 @@ impl Render for MrList {
                         .flex_none()
                         .gap(px(6.))
                         .px(px(10.))
-                        .pb(px(8.))
+                        .py(px(8.))
                         .text_size(text::SMALL)
                         .child(Input::new(&self.query).id("mrs.search").small().flex_1())
                         // The kit's Select fills its parent whatever its own width.

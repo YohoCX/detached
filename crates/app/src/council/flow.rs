@@ -262,7 +262,7 @@ fn cards(run: &Run, layout: Layout, cx: &Context<round::RunView>) -> AnyElement 
                 .pl(px(18.))
                 .pr(GAP)
                 .rounded(theme::radius::ITEM)
-                .bg(theme(cx).popup)
+                .bg(theme(cx).header_bg)
                 .border_1()
                 .border_color(theme(cx).line)
                 .text_size(text::SMALL)
