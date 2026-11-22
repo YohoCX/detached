@@ -1,4 +1,4 @@
-.PHONY: check app ui-test agent-test codex-live agent-login warm ramdisk smoke e2e-app fmt build sign-setup release adapters-sign
+.PHONY: check app ui-test agent-test codex-live agent-login warm ramdisk smoke drive e2e-app fmt build sign-setup release adapters-sign
 
 # The tests' sandboxes go on the RAM disk when `make ramdisk` made one: a quarter faster. The build
 # runs first without it, so the linker's temp files stay off it.
@@ -52,6 +52,13 @@ ramdisk:
 # Boots, draws one frame and exits, on a throwaway config directory.
 smoke:
 	DETACHED_CONFIG_DIR="$$(mktemp -d)" cargo run -p detached-app -- --smoke
+
+# macOS: the app for an agent to drive, on a sandbox and a temp config directory; commands on
+# $(DRIVE)/sock, shots in $(DRIVE); repos=<n> seeds n repos (3), each with a diff.
+DRIVE = $(patsubst %/,%,$(or $(TMPDIR),/tmp))/detached-drive
+drive:
+	DETACHED_CONFIG_DIR="$$(mktemp -d)" DRIVE="$(DRIVE)" REPOS="$(or $(repos),3)" \
+		cargo test -p detached-app --test drive
 
 fmt:
 	cargo fmt --all

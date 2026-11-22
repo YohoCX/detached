@@ -9,23 +9,18 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use detached_app::files::{self, DiffDoc, Side};
-use detached_app::{actions, keymap, settings, shell};
+use detached_app::settings;
 use detached_core::api;
 use detached_core::git::files::TreeSettings;
 use detached_core::git::testutil::Sandbox;
 use detached_core::git::worktree::RECIPE;
-use detached_core::settings::Settings;
-use detached_core::state::AppState;
 use detached_core::store::{Files, Kind, RepoStore};
 use detached_core::types::{AccountInput, Provider};
-use gpui_kit::platform::{current_headless_renderer, current_platform};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, ElementId, HeadlessAppContext, ScrollDelta, point, px};
-use kernel::repo::Repo;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
@@ -116,13 +111,11 @@ fn seed(sb: &Sandbox) -> String {
 
 /// Runs the app until `done` holds; panics after 30 s.
 fn wait_until(cx: &mut HeadlessAppContext, mut done: impl FnMut(&mut HeadlessAppContext) -> bool) {
-    cx.allow_parking();
     let start = cx.background_executor().now();
     while !done(cx) {
         let waited = cx.background_executor().now() - start;
         assert!(waited < Duration::from_secs(30), "wait_until timed out");
-        let tick = cx.background_executor().timer(Duration::from_millis(10));
-        cx.foreground_executor().block_test(tick);
+        common::tick(cx);
     }
 }
 
@@ -152,39 +145,13 @@ fn main() {
     std::fs::create_dir(&folder).unwrap();
     api::add_folder(&sb.state, None, folder.display().to_string()).unwrap();
     let repo = seed(&sb);
-    let s = &sb.state;
-    let dir = s.config_dir.clone();
-    let core = AppState::new(dir.clone(), Settings::load(&dir), s.env(), s.tokens.clone());
-    let core = Arc::new(core);
-    let text = current_platform(true).text_system();
-    let assets = Arc::new(gpui_kit::assets::Assets);
-    let mut cx = HeadlessAppContext::with_platform(text, assets, current_headless_renderer);
-    let keys = cx.update(|cx| {
-        gpui_kit::init(cx);
-        cx.set_reduce_motion(true);
-        actions::init(cx);
-        ui_state::init(&dir, cx);
+    let (mut cx, window) = common::headless(&sb, |cx| {
         if let Ok(mode) = std::env::var("MODE") {
             ui_state::set("theme.mode", mode, cx);
         }
         if let Ok(name) = std::env::var("THEME") {
             ui_state::set("theme.name", name, cx);
         }
-        let keys = keymap::load(core.clone(), cx);
-        kernel::init(core, cx);
-        detached_app::register(cx);
-        keys
-    });
-    cx.allow_parking();
-    cx.foreground_executor().block_test(keys);
-    let window: AnyWindowHandle = cx.update(shell::open).unwrap();
-    wait_until(&mut cx, |cx| {
-        cx.update(|cx| {
-            let w = Workspace::get(cx);
-            let loaded = (w.repos().iter())
-                .all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status.is_some()));
-            loaded && w.repos().iter().any(|r| r.path == repo)
-        })
     });
     let r = repo.clone();
     cx.update(|cx| Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(r), cx)));
@@ -215,6 +182,8 @@ fn main() {
             wait_until(cx, |cx| {
                 (0usize..20).any(|i| shows(cx, window, ("chat.item", i).into(), done))
             });
+            // A busy chat drops the next Enter.
+            wait_until(cx, |cx| !shows(cx, window, "chat.stop".into(), ""));
         };
         cx.update_window(window, |_, w, cx| w.click("top.chat", cx))
             .unwrap();

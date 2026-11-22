@@ -14,8 +14,12 @@ use detached_core::settings::Settings;
 use detached_core::state::AppState;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed, Status};
+use gpui_kit::platform::{current_headless_renderer, current_platform};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
-use gpui_kit::{Context, ElementId, TestAppContext, VisualTestContext, px};
+use gpui_kit::{
+    AnyWindowHandle, App, Context, ElementId, HeadlessAppContext, TestAppContext,
+    VisualTestContext, px,
+};
 use kernel::activity::Activity;
 use kernel::repo::Repo;
 use kernel::ui_state;
@@ -426,6 +430,55 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
         })
     });
     TestApp { cx, sb }
+}
+
+/// The app over `sb` in a headless window that draws, for pictures (macOS); `ui` runs once the UI
+/// state is in. Returns once the workspace has listed the repos and loaded their statuses.
+pub fn headless(sb: &Sandbox, ui: impl FnOnce(&mut App)) -> (HeadlessAppContext, AnyWindowHandle) {
+    let dir = sb.state.config_dir.clone();
+    let s = &sb.state;
+    let core = AppState::new(dir.clone(), Settings::load(&dir), s.env(), s.tokens.clone());
+    let core = Arc::new(core);
+    api::assign_ids(&core).unwrap();
+    let workspaces = api::get_settings(&core).workspaces;
+    let first = workspaces.iter().find(|w| w.active).or(workspaces.first());
+    let repos = first.map_or(vec![], |w| api::list_repos(&core, &w.id));
+    let text = current_platform(true).text_system();
+    let assets = Arc::new(gpui_kit::assets::Assets);
+    let mut cx = HeadlessAppContext::with_platform(text, assets, current_headless_renderer);
+    cx.allow_parking();
+    let keys = cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+        cx.set_app_identity("com.w-devs.detached", "Detached");
+        actions::init(cx);
+        ui_state::init(&dir, cx);
+        ui(cx);
+        kernel::init(core.clone(), cx);
+        let keys = keymap::load(core, cx);
+        detached_app::register(cx);
+        keys
+    });
+    cx.foreground_executor().block_test(keys);
+    let window = cx.update(shell::open).expect("the window opens");
+    let start = cx.background_executor().now();
+    while !cx.update(|cx| {
+        let w = Workspace::get(cx);
+        let loaded =
+            (w.repos().iter()).all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status.is_some()));
+        loaded && w.repos() == repos
+    }) {
+        let waited = cx.background_executor().now() - start;
+        assert!(waited < Duration::from_secs(30), "the repos did not load");
+        tick(&mut cx);
+    }
+    (cx, window)
+}
+
+/// Lets the headless app and core's threads run for 10 ms.
+pub fn tick(cx: &mut HeadlessAppContext) {
+    let tick = cx.background_executor().timer(Duration::from_millis(10));
+    cx.foreground_executor().block_test(tick);
 }
 
 /// Sets a zone's size, as dragging its grip would.
