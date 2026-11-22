@@ -37,6 +37,7 @@ pub struct Notice {
     pub repo: Option<String>,
     pub files: Vec<String>,
     pub open: Option<PathBuf>,
+    pub reveal: Option<PathBuf>,
 }
 
 /// An error or a warning, kept for the Events app.
@@ -168,6 +169,40 @@ impl Activity {
         self.notices.push(n);
         cx.notify();
         id
+    }
+
+    pub fn config_problem(problem: &detached_core::settings::FileProblem, cx: &mut App) {
+        let file = problem
+            .file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let (title, body, reveal) = match &problem.backup {
+            Some(backup) => (
+                format!("{file} could not be read and was moved aside"),
+                format!("Saved as {}. {}", backup.display(), problem.error),
+                backup,
+            ),
+            None => (
+                format!("{file} could not be read"),
+                problem.error.clone(),
+                &problem.file,
+            ),
+        };
+        if let Some(activity) = cx.try_global::<GlobalActivity>() {
+            activity.0.clone().update(cx, |a, cx| {
+                a.notify(
+                    Notice {
+                        level: Level::Warn,
+                        title,
+                        body: Some(body),
+                        reveal: Some(reveal.clone()),
+                        ..Notice::default()
+                    },
+                    cx,
+                );
+            });
+        }
     }
 
     pub fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {

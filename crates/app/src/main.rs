@@ -35,14 +35,18 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--session") {
         session_cli::run(core, &args[i + 1..]);
     }
+    let (ui, ui_problem) = ui_state::load(&core.config_dir);
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
         cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
-        ui_state::init(&core.config_dir, cx);
-        let keys = keymap::load(core.clone(), cx);
-        kernel::init(core, cx);
+        ui_state::install(ui, cx);
+        kernel::init(core.clone(), cx);
+        if let Some(problem) = ui_problem {
+            kernel::activity::Activity::config_problem(&problem, cx);
+        }
+        let keys = keymap::load(core, cx);
         kernel::invalidate::watch(cx);
         detached_app::register(cx);
         #[cfg(target_os = "macos")]

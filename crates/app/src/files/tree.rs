@@ -955,6 +955,7 @@ mod tests {
         ]);
         let settings = TreeSettings {
             hidden: vec!["a.ts".into(), ".claude".into()],
+            ..TreeSettings::default()
         };
         let rows = flatten(
             &tree,

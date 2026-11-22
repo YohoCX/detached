@@ -520,6 +520,7 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     f.core.set_block(BLOCK, config).unwrap();
     let (a, x) = open(&f, "default", "say here", cx);

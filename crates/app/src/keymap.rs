@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use detached_core::{api, state::AppState};
+use detached_core::state::AppState;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Global, InteractiveElement, IntoElement, KeyBinding,
@@ -253,10 +253,16 @@ pub fn chord_for(id: &str, cx: &App) -> String {
 
 /// Reads `keymap.json` on the pool, then binds; menus showing chords are built once it resolves.
 pub fn load(core: Arc<AppState>, cx: &mut App) -> Task<()> {
-    let overrides = blocking::run(cx, move || api::keymap_overrides(&core));
+    let overrides = blocking::run(cx, move || core.read_keymap());
     cx.spawn(async move |cx| {
         let overrides = overrides.await;
-        cx.update(|cx| bind(&overrides, cx));
+        cx.update(|cx| match overrides {
+            Ok(overrides) => bind(&overrides, cx),
+            Err(problem) => {
+                kernel::activity::Activity::config_problem(&problem, cx);
+                bind(&BTreeMap::new(), cx);
+            }
+        });
     })
 }
 

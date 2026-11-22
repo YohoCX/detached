@@ -34,6 +34,7 @@ use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
 use kernel::session::{AUTO, Answer, Back, Item, Session};
+use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 /// How close to the end still counts as following it.
@@ -127,6 +128,20 @@ impl ChatView {
             cx.observe(&agents, |_, _, cx| cx.notify()),
             cx.on_focus_in(&composer_focus, window, |_, _, cx| cx.notify()),
             cx.on_focus_out(&composer_focus, window, |_, _, _, cx| cx.notify()),
+            cx.observe(&Settings::global(cx), |this: &mut ChatView, _, cx| {
+                if this.session.read(cx).current().is_none() {
+                    this.session.update(cx, |s, cx| {
+                        if s.untouched(cx) {
+                            s.refresh_defaults(cx);
+                        }
+                        s.ensure(cx);
+                        if s.current().is_some() {
+                            s.check_trust(cx);
+                        }
+                    });
+                }
+                cx.notify();
+            }),
             cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     this.suggest(cx);
@@ -190,6 +205,9 @@ impl ChatView {
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.input.read(cx).value().trim().to_string();
         if text.is_empty() || self.session.read(cx).busy(cx) {
+            return;
+        }
+        if self.session.read(cx).current().is_none() && !super::can_start(cx) {
             return;
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
@@ -2010,8 +2028,16 @@ impl ChatView {
     fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let s = self.session.read(cx);
+        let enabled = super::provider_config(cx).shows(s.provider);
+        if !enabled && s.current().is_none() {
+            return div()
+                .id("chat.empty")
+                .test_support()
+                .child("Enable a provider in Settings › Agents to start a chat.")
+                .into_any_element();
+        }
         let past = self.past.1.read(cx).value.iter().flatten();
-        let mut past: Vec<&Past> = past.filter(|p| !p.archived()).collect();
+        let mut past: Vec<&Past> = past.filter(|p| enabled && !p.archived()).collect();
         past.sort_by_key(|p| std::cmp::Reverse(p.modified));
         let rows: Vec<_> = past
             .into_iter()
@@ -2028,12 +2054,13 @@ impl ChatView {
                         let open = super::open(cx);
                         match open.iter().any(|(.., s)| s.read(cx).shows(&id, cx)) {
                             true => super::resume(cwd.clone(), provider, id.clone(), cx),
-                            false => {
+                            false if super::provider_config(cx).shows(provider) => {
                                 let id = id.clone();
                                 this.session
                                     .update(cx, |s, cx| s.open_past(provider, id, cx));
                                 this.focus(window, cx);
                             }
+                            false => (),
                         }
                     }))
                     .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
@@ -2387,13 +2414,14 @@ fn picker(
 fn provider_rows(cx: &App) -> Vec<(&'static Provider, &'static str, bool)> {
     let agents = Agents::global(cx);
     let a = agents.read(cx);
+    let config = super::provider_config(cx);
     a.rows
         .iter()
         .map(|r| {
             let p = r.provider;
             let login = r.cli.as_ref().map(|c| c.login);
             let (status, enabled) = match login {
-                _ if !a.config.shows(p) => ("Off", false),
+                _ if !config.shows(p) => ("Off", false),
                 _ if !a.loaded() => ("Checking…", false),
                 None => ("CLI not found", false),
                 _ if p.backend == Name::Acp && r.installed.current.is_none() => {

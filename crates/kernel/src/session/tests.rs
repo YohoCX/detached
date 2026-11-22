@@ -225,6 +225,7 @@ pub(crate) fn boot_on(
     let config = Config {
         cli: [(provider.id.into(), cli.display().to_string())].into(),
         codex: true,
+        ..Config::default()
     };
     state.set_block(BLOCK, config).unwrap();
     let core = Arc::new(state);

@@ -27,7 +27,6 @@ pub struct Agents {
     /// The last check's error; the catalog stays.
     pub error: Option<String>,
     pub checking: bool,
-    pub config: Config,
     /// One per provider, in `PROVIDERS`' order.
     pub rows: Vec<Row>,
     loading: bool,
@@ -89,9 +88,6 @@ pub(crate) fn init(cx: &mut App) {
         state: State::Idle,
         cancel: None,
     });
-    let config = crate::settings::Settings::get(cx)
-        .block(BLOCK)
-        .unwrap_or_default();
     let agents = cx.new(|_| Agents {
         url: adapters::CATALOG_URL.into(),
         key: adapters::CATALOG_KEY.into(),
@@ -99,7 +95,6 @@ pub(crate) fn init(cx: &mut App) {
         catalog: None,
         error: None,
         checking: false,
-        config,
         rows: rows.collect(),
         loading: false,
         loaded: false,
@@ -119,32 +114,33 @@ pub fn start(cx: &mut App) {
     .detach();
 }
 
-type Scan = (Config, Vec<(Installed, Option<CliInfo>)>);
+type Scan = Vec<(Installed, Option<CliInfo>)>;
 
 /// What is installed and which CLI each listed provider has.
 fn scan(core: &AppState) -> Scan {
     let config: Config = core.get_settings().block(BLOCK).unwrap_or_default();
     let env = core.env();
-    let rows = PROVIDERS.iter().map(|p| {
-        let setting = config.cli.get(p.id).map(String::as_str);
-        let cli = config
-            .shows(p)
-            .then(|| adapters::find_cli(p, setting, &env));
-        let cli = cli.flatten().map(|path| {
-            let version = adapters::cli_version(&path, &env).ok();
-            let login = version.as_ref().map_or(LoginStatus::Unknown, |_| {
-                adapters::login_status(p, &path, &env)
+    PROVIDERS
+        .iter()
+        .map(|p| {
+            let setting = config.cli.get(p.id).map(String::as_str);
+            let cli = config
+                .shows(p)
+                .then(|| adapters::find_cli(p, setting, &env));
+            let cli = cli.flatten().map(|path| {
+                let version = adapters::cli_version(&path, &env).ok();
+                let login = version.as_ref().map_or(LoginStatus::Unknown, |_| {
+                    adapters::login_status(p, &path, &env)
+                });
+                CliInfo {
+                    path,
+                    version,
+                    login,
+                }
             });
-            CliInfo {
-                path,
-                version,
-                login,
-            }
-        });
-        (adapters::installed(&core.data_dir, p.adapter), cli)
-    });
-    let rows = rows.collect();
-    (config, rows)
+            (adapters::installed(&core.data_dir, p.adapter), cli)
+        })
+        .collect()
 }
 
 impl Agents {
@@ -170,9 +166,8 @@ impl Agents {
         newest.into_iter().next()
     }
 
-    fn apply(&mut self, (config, rows): Scan) {
+    fn apply(&mut self, rows: Scan) {
         self.loaded = true;
-        self.config = config;
         for (row, (installed, cli)) in self.rows.iter_mut().zip(rows) {
             (row.installed, row.cli) = (installed, cli);
         }
@@ -238,14 +233,13 @@ impl Agents {
                 a.checking = false;
                 a.error = error.map(|e| e.to_string());
                 a.catalog = catalog.or(a.catalog.take());
-                a.config = config;
                 for (row, installed) in a.rows.iter_mut().zip(installed) {
                     row.installed = installed;
                 }
                 let today = adapters::today();
                 let due: Vec<_> = (a.rows.iter())
                     .filter(|r| r.provider.backend == Name::Acp && !r.busy())
-                    .filter(|r| a.config.shows(r.provider))
+                    .filter(|r| config.shows(r.provider))
                     .filter_map(|r| {
                         let catalog = a.catalog.as_ref()?;
                         let e = catalog.auto(r.provider.adapter, &a.app, &r.installed, today)?;
@@ -353,14 +347,27 @@ impl Agents {
 
     /// Uses the CLI at `path` for the provider, or the one on PATH when it is empty.
     pub fn set_cli(&mut self, id: &'static str, path: String, cx: &mut Context<Self>) {
-        let core = crate::core(cx).clone();
-        let done = blocking::run(cx, move || {
-            let mut config: Config = core.get_settings().block(BLOCK).unwrap_or_default();
+        self.save(cx, move |config| {
             match path.trim() {
                 "" => config.cli.remove(id),
                 path => config.cli.insert(id.into(), path.into()),
             };
-            core.set_block(BLOCK, config)?;
+        });
+    }
+
+    pub fn set_enabled(
+        &mut self,
+        provider: &'static Provider,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.save(cx, move |config| config.set_enabled(provider, enabled));
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Config) + Send + 'static) {
+        let core = crate::core(cx).clone();
+        let done = blocking::run(cx, move || {
+            core.change_block(BLOCK, edit)?;
             Ok(scan(&core))
         });
         cx.spawn(async move |this, cx| {
@@ -416,6 +423,7 @@ mod tests {
             let config = Config {
                 cli: [(CODEX.id.into(), cli.to_string_lossy().into())].into(),
                 codex,
+                ..Config::default()
             };
             cx.read(|cx| crate::core(cx).set_block(BLOCK, config))
                 .unwrap();

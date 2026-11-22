@@ -103,6 +103,7 @@ fn seed(sb: &Sandbox) -> String {
     api::save_account(&sb.state, input).unwrap();
     let files = TreeSettings {
         hidden: vec![".claude".into(), "*.log".into()],
+        ..TreeSettings::default()
     };
     sb.state.set_block("files", files).unwrap();
     let env: BTreeMap<String, Vec<String>> =

@@ -31,7 +31,13 @@ pub fn claude(sb: &Sandbox, cli: &Path) -> PathBuf {
     use detached_core::adapters::{BLOCK, CLAUDE, Config};
     let cli = [(CLAUDE.id.into(), cli.display().to_string())].into();
     sb.state
-        .set_block(BLOCK, Config { cli, codex: false })
+        .set_block(
+            BLOCK,
+            Config {
+                cli,
+                ..Config::default()
+            },
+        )
         .unwrap();
     let dir = sb.path("claude");
     fs::create_dir_all(&dir).unwrap();
@@ -389,15 +395,19 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     let first = workspaces.iter().find(|w| w.active).or(workspaces.first());
     let repos = first.map_or(vec![], |w| api::list_repos(&core, &w.id));
     cx.executor().allow_parking();
+    let (ui, ui_problem) = ui_state::load(&dir);
     let keys = cx.update(|cx| {
         gpui_kit::init(cx);
         // The test clock stands still, so an animation would stay on its first frame.
         cx.set_reduce_motion(true);
         cx.set_app_identity("com.w-devs.detached", "Detached");
         actions::init(cx);
-        ui_state::init(&dir, cx);
-        let keys = keymap::load(core.clone(), cx);
-        kernel::init(core, cx);
+        ui_state::install(ui, cx);
+        kernel::init(core.clone(), cx);
+        if let Some(problem) = ui_problem {
+            kernel::activity::Activity::config_problem(&problem, cx);
+        }
+        let keys = keymap::load(core, cx);
         detached_app::register(cx);
         keys
     });

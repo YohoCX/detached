@@ -14,6 +14,10 @@ use kernel::{blocking, settings::Settings};
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| Page {
         input: cx.new(|cx| InputState::new(window, cx).placeholder("Name or glob")),
+        pattern: cx.new(|cx| InputState::new(window, cx).placeholder("Parent suffix, e.g. .js")),
+        children: cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Child suffixes, e.g. .js.map, .min.js")
+        }),
         settings: Settings::get(cx).block("files").unwrap_or_default(),
         busy: false,
         error: None,
@@ -43,6 +47,8 @@ pub fn hide(name: String, cx: &mut App) {
 
 struct Page {
     input: Entity<InputState>,
+    pattern: Entity<InputState>,
+    children: Entity<InputState>,
     settings: TreeSettings,
     busy: bool,
     error: Option<String>,
@@ -51,22 +57,28 @@ struct Page {
 
 impl Page {
     fn save(&mut self, settings: TreeSettings, cx: &mut Context<Self>) {
+        self.write(cx, move |core| core.set_block("files", settings));
+    }
+
+    fn write(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(
+            &detached_core::state::AppState,
+        ) -> detached_core::error::Result<detached_core::settings::Settings>
+        + Send
+        + 'static,
+    ) {
         let core = kernel::core(cx).clone();
         self.busy = true;
-        let done = blocking::run(cx, move || {
-            core.set_block("files", settings)?;
-            Ok(core
-                .get_settings()
-                .block::<TreeSettings>("files")
-                .unwrap_or_default())
-        });
+        let done = blocking::run(cx, move || f(&core));
         cx.spawn(async move |this, cx| {
-            let result: detached_core::error::Result<TreeSettings> = done.await;
+            let result = done.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
                 match result {
                     Ok(s) => {
-                        this.settings = s;
+                        this.settings = s.block("files").unwrap_or_default();
                         this.error = None;
                     }
                     Err(e) => this.error = Some(e.to_string()),
@@ -77,6 +89,91 @@ impl Page {
         })
         .detach();
         cx.notify();
+    }
+}
+
+impl Page {
+    fn nesting(&self, cx: &Context<Self>) -> impl IntoElement {
+        let rules = &Settings::get(cx).file_nesting;
+        let add = item(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(ui::GAP)
+                .child(
+                    div()
+                        .w(ui::TAB_TITLE)
+                        .child(ui::input(&self.pattern, cx).id("files.nesting.pattern")),
+                )
+                .child(
+                    div()
+                        .w(ui::TAB_TITLE)
+                        .child(ui::input(&self.children, cx).id("files.nesting.children")),
+                ),
+            None,
+            cx,
+        )
+        .child(button(
+            "files.nesting.save",
+            "Save rule",
+            !self.busy,
+            cx,
+            |this, _, cx| {
+                let pattern = this.pattern.read(cx).value().trim().to_string();
+                let value = this.children.read(cx).value();
+                let children: Vec<_> = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect();
+                if pattern.is_empty()
+                    || std::iter::once(&pattern)
+                        .chain(&children)
+                        .any(|suffix| suffix.contains(['/', '\\']))
+                {
+                    this.error = Some("Enter file suffixes with no folder separators.".into());
+                    cx.notify();
+                    return;
+                }
+                this.write(cx, move |core| {
+                    core.set_file_nesting(pattern, Some(children))
+                });
+            },
+        ));
+        let rows = rules.iter().enumerate().map(|(i, (pattern, children))| {
+            let (edit, remove, children) = (pattern.clone(), pattern.clone(), children.join(", "));
+            let detail = if children.is_empty() {
+                "No nested files".into()
+            } else {
+                children.clone().into()
+            };
+            item(pattern.clone(), Some(detail), cx)
+                .child(button(
+                    ("files.nesting.edit", i),
+                    "Edit",
+                    !self.busy,
+                    cx,
+                    move |this, window, cx| {
+                        this.pattern
+                            .update(cx, |input, cx| input.set_value(&edit, window, cx));
+                        this.children
+                            .update(cx, |input, cx| input.set_value(&children, window, cx));
+                    },
+                ))
+                .child(button(
+                    ("files.nesting.remove", i),
+                    "Remove",
+                    !self.busy,
+                    cx,
+                    move |this, _, cx| {
+                        let pattern = remove.clone();
+                        this.write(cx, move |core| core.set_file_nesting(pattern, None));
+                    },
+                ))
+        });
+        card(Some("File nesting rules"), Some("Match file suffixes. Leave the child suffixes blank to disable nesting for a parent suffix.".into()),
+            rows.chain(std::iter::once(add)), cx)
     }
 }
 
@@ -130,7 +227,7 @@ impl Render for Page {
         layout(
             "settings.files",
             "Files",
-            "What the file tree leaves out.",
+            "What the file tree hides and groups.",
             None,
             cx,
         )
@@ -140,6 +237,7 @@ impl Render for Page {
             rows,
             cx,
         ))
+        .child(self.nesting(cx))
         .children(
             self.error
                 .as_ref()
