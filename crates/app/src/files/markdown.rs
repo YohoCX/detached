@@ -397,7 +397,7 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
     let t = theme::theme(cx);
     let (h1, h2, h3, code) = match file {
         true => (doc::H1, doc::H2, doc::H3, doc::CODE),
-        false if chat => (text::TITLE, text::TITLE, text::TITLE, doc::CODE),
+        false if chat => (doc::H3, text::HEADING, text::TITLE, doc::CODE),
         false => (text::TITLE, text::TITLE, text::TITLE, text::SMALL),
     };
     let block = StyleRefinement::default().rounded(radius::ITEM);
@@ -428,7 +428,11 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
             let size = [h1, h2, h3].get(level as usize - 1).copied();
             let s = StyleRefinement::default()
                 .text_size(size.unwrap_or(text::TITLE))
-                .font_weight(FontWeight::BOLD);
+                .font_weight(if chat {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::BOLD
+                });
             match file && level <= 2 {
                 true => s.pb(px(6.)).border_b_1().border_color(rule),
                 false => s,

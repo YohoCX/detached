@@ -24,10 +24,11 @@ use detached_core::types::Side;
 use super::session::Chat;
 use crate::files::{Links, Markdown};
 use crate::ui::theme::chat as size;
-use crate::ui::{self, Icon, Menu, radius, text, theme};
-use crate::util::{age, now, span};
+use crate::ui::{self, DrawnMenu, Icon, radius, text, theme};
+use crate::util::{age, folder_name, now, span, status_of};
 use detached_core::adapters::{CLAUDE, LoginStatus, Provider};
 use detached_core::backend::Name;
+use detached_core::chat_settings::Preset;
 use kernel::agents::Agents;
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
@@ -56,12 +57,6 @@ struct Suggest {
 /// An item by its session's place in the chat and its own in the session.
 type At = (usize, usize);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ComposerMenu {
-    Provider(usize),
-    More,
-}
-
 type AskKey = (EntityId, usize);
 
 #[derive(Default)]
@@ -75,8 +70,8 @@ pub struct ChatView {
     input: Entity<TextareaState>,
     composer_focus: FocusHandle,
     provider_focus: FocusHandle,
-    more_focus: FocusHandle,
-    menu: Option<ComposerMenu>,
+    /// The agent's row the keys are on while its menu is open.
+    menu: Option<usize>,
     narrow: bool,
     scroll: ScrollHandle,
     suggest: Option<Suggest>,
@@ -108,7 +103,7 @@ impl ChatView {
         let p = session.read(cx).provider;
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .rows(3)
+                .auto_grow(1, 8)
                 .placeholder(placeholder(p.name))
         });
         input.update(cx, |s, cx| s.focus(window, cx));
@@ -161,7 +156,6 @@ impl ChatView {
             input,
             composer_focus,
             provider_focus: cx.focus_handle(),
-            more_focus: cx.focus_handle(),
             menu: None,
             narrow: true,
             scroll,
@@ -316,12 +310,15 @@ impl ChatView {
         let t = theme(cx);
         let s = self.session.read(cx);
         let name = super::label(&s.repo, cx);
+        let icon = match Workspace::get(cx).repos().iter().any(|r| r.path == s.repo) {
+            true => Icon::Repo,
+            false => Icon::Folder,
+        };
         let topic = s
             .topic(cx)
             .and_then(|t| t.lines().next())
             .unwrap_or("New chat")
             .to_string();
-        let session = self.session.clone();
         ui::band(div(), cx)
             .id("chat.header")
             .test_support()
@@ -330,31 +327,26 @@ impl ChatView {
             .flex_none()
             .items_center()
             .gap(px(8.))
+            .h(px(44.))
             .px(px(12.))
-            .py(px(6.))
-            .child(div().text_color(t.accent).child(Icon::Chat))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
+                    .text_size(text::TITLE)
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(topic),
             )
             .child(
                 div()
+                    .flex()
                     .flex_none()
+                    .items_center()
+                    .gap(px(4.))
                     .text_size(text::SMALL)
                     .text_color(t.muted)
+                    .child(icon.size(px(12.)))
                     .child(name),
-            )
-            .child(div().flex_1())
-            .child(
-                ui::titled(ui::icon_button("chat.new", Icon::Plus, cx), "New chat")
-                    .test_support()
-                    .on_click(move |_, _, cx| {
-                        let repo = session.read(cx).repo.clone();
-                        super::new_chat(repo, cx)
-                    }),
             )
     }
 
@@ -391,41 +383,20 @@ impl ChatView {
             )
     }
 
-    fn bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// One row under the text: Agent, Model, Effort, Permissions, More, then the week's limit and
+    /// Send or Stop. Narrow, Model and Effort go into More.
+    fn bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let chat = self.session.read(cx);
         let s = chat.current().map(|s| s.read(cx));
-        let menu = |id, title, value: String, tip: &str, entries: Vec<(String, Setting)>| {
-            let session = self.session.clone();
-            let me = self.me.clone();
-            ui::titled(
-                picker(id, title, &value, !entries.is_empty(), cx),
-                tip.to_string(),
-            )
-            .aria_description(SharedString::from(value))
-            .test_support()
-            .when(!entries.is_empty(), |b| {
-                b.on_click(move |e, window, cx| {
-                    entries
-                        .iter()
-                        .fold(Menu::default(), |menu, (label, setting)| {
-                            let (session, setting, me) =
-                                (session.clone(), setting.clone(), me.clone());
-                            menu.item(label.clone(), move |window, cx| {
-                                session.update(cx, |s, cx| s.set(setting.clone(), cx));
-                                me.update(cx, |this, cx| {
-                                    if this.menu == Some(ComposerMenu::More) {
-                                        this.finish_more(window, cx);
-                                    }
-                                })
-                                .ok();
-                            })
-                        })
-                        .show(e.position(), window, cx);
-                })
-            })
-        };
         let p = chat.provider;
+        let pick = |setting: Setting| {
+            let (session, me) = (self.session.clone(), self.me.clone());
+            move |window: &mut Window, cx: &mut App| {
+                session.update(cx, |s, cx| s.set(setting.clone(), cx));
+                me.update(cx, |this, cx| this.focus(window, cx)).ok();
+            }
+        };
         // The session's own mode once it says one: a refused switch leaves it as it was.
         let mode_id = s
             .and_then(|s| s.option("mode"))
@@ -434,28 +405,18 @@ impl ChatView {
             .find(|(m, ..)| *m == mode_id)
             .or(p.modes.iter().find(|(m, ..)| *m == chat.mode()))
             .unwrap_or(&p.modes[0]);
-        let modes = (p.modes.iter())
-            .map(|(m, label, _)| (label.to_string(), Setting::Mode(m.to_string())))
-            .collect();
-        let modes = menu(
-            "chat.mode",
-            "Permissions",
-            mode.1.to_string(),
-            mode.2,
-            modes,
-        );
-        let models: &[Model] = s.map_or(&[], |s| &s.models);
+        let modes = (p.modes.iter()).fold(DrawnMenu::default(), |menu, &(id, label, about)| {
+            (menu.item(label, pick(Setting::Mode(id.into()))))
+                .checked(id == mode.0)
+                .detail(about)
+        });
+        // Before the session lists its models, the ones it listed last time.
+        let preset = Preset::read(Settings::get(cx));
+        let models = match s.map(|s| &s.models[..]) {
+            Some(m) if !m.is_empty() => m,
+            _ => preset.models(p.id),
+        };
         let has_auto = p.modes.iter().any(|(m, ..)| *m == AUTO);
-        let entries = models
-            .iter()
-            .map(|m| {
-                let label = match m.auto || !has_auto {
-                    true => m.label.clone(),
-                    false => format!("{} (no auto)", m.label),
-                };
-                (label, Setting::Model(m.value.clone()))
-            })
-            .collect();
         let current = match s {
             Some(s) if s.version.is_some() => s.option("model"),
             _ => chat.model.as_deref(),
@@ -463,166 +424,143 @@ impl ChatView {
         let model = current.map_or("Default".into(), |m| {
             model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
         });
-        let model = menu("chat.model", "Model", model, "Model", entries);
-        let efforts = current.and_then(|id| Model::find(models, id));
-        let efforts = efforts.map_or(&[][..], |m| &m.efforts);
+        let chosen = Model::find(models, current.unwrap_or("default"));
+        let add_models = |menu: DrawnMenu| {
+            models.iter().fold(menu, |menu, m| {
+                let label = match m.auto || !has_auto {
+                    true => m.label.clone(),
+                    false => format!("{} (no auto)", m.label),
+                };
+                let setting = Setting::Model(m.value.clone());
+                menu.item(label, pick(setting)).checked(chosen == Some(m))
+            })
+        };
         // An agent that lists efforts as an option of the session, not per model.
         let listed = s.and_then(|s| s.config.iter().find(|c| c.id == "effort"));
-        let efforts = match (efforts.is_empty(), listed) {
-            (true, Some(c)) => &c.values[..],
-            _ => efforts,
+        let efforts = match (chosen.map_or(&[][..], |m| &m.efforts), listed) {
+            ([], Some(c)) => &c.values[..],
+            (e, _) => e,
         };
-        let efforts: Vec<_> = (efforts.iter())
-            .map(|e| (e.clone(), Setting::Effort(e.clone())))
-            .collect();
-        let effort = (!efforts.is_empty()).then(|| {
-            let now = match s {
-                Some(s) if s.version.is_some() => s.option("effort").filter(|e| !e.is_empty()),
-                _ => chat.effort.as_deref(),
-            };
-            let label = now.unwrap_or("Default");
-            menu(
-                "chat.effort",
-                "Effort",
-                label.to_string(),
-                "Effort",
-                efforts,
-            )
-        });
+        let effort = match s {
+            Some(s) if s.version.is_some() => s.option("effort").filter(|e| !e.is_empty()),
+            _ => chat.effort.as_deref(),
+        };
+        let add_efforts = |menu: DrawnMenu| {
+            efforts.iter().fold(menu, |menu, e| {
+                let setting = Setting::Effort(e.clone());
+                menu.item(e.clone(), pick(setting))
+                    .checked(effort == Some(e.as_str()))
+            })
+        };
+        let mut more = DrawnMenu::default();
+        let mut inline = vec![];
+        if self.narrow {
+            more = add_models(more.section("Model"));
+            if !efforts.is_empty() {
+                more = add_efforts(more.section("Effort"));
+            }
+        } else {
+            let menu = (!models.is_empty()).then(|| add_models(DrawnMenu::default()));
+            inline.push(("chat.model", model, "Model", menu));
+            if !efforts.is_empty() {
+                let label = effort.unwrap_or("Default").to_string();
+                let menu = Some(add_efforts(DrawnMenu::default()));
+                inline.push(("chat.effort", label, "Effort", menu));
+            }
+        }
+        let modes = ("chat.mode", mode.1.into(), mode.2, Some(modes));
         let usage = s.and_then(|s| {
             let (used, max) = s.usage.filter(|(_, max)| *max > 0)?;
             let pct = (used * 100 / max) as f32;
             let label = format!("Context {pct:.0}%");
-            let parts: Vec<_> = s
-                .parts
-                .iter()
+            let parts: Vec<_> = (s.parts.iter())
                 .map(|p| format!("{} {}", p.name, tokens(p.tokens)))
                 .collect();
+            let row = div()
+                .id("chat.usage")
+                .test_support()
+                .aria_label(label)
+                .aria_description(SharedString::from(parts.join(", ")))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child("Context")
+                .child(number(format!("{pct:.0}%"), pct >= 90., cx))
+                .child(meter(pct, pct >= 90., cx).ml(px(2.)))
+                .child(
+                    div()
+                        .ml_auto()
+                        .child(format!("{} of {}", tokens(used), tokens(max))),
+                );
             Some(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(size::GAP)
-                    .child(
-                        div()
-                            .id("chat.usage")
-                            .test_support()
-                            .aria_label(label.clone())
-                            .aria_description(SharedString::from(parts.join(", ")))
-                            .flex()
-                            .items_center()
-                            .gap(size::GAP)
-                            .child(label)
-                            .child(meter(pct, pct, cx))
-                            .child(div().ml_auto().text_color(t.muted).child(format!(
-                                "{} of {}",
-                                tokens(used),
-                                tokens(max)
-                            ))),
-                    )
-                    .children(
-                        parts
-                            .into_iter()
-                            .map(|part| div().text_color(t.muted).child(part)),
-                    ),
+                    .gap(px(2.))
+                    .child(row)
+                    .children(parts),
             )
         });
         let limits = s.and_then(|s| s.limits.as_deref()).unwrap_or_default();
-        let week = limits.iter().find(|l| l.name == "Week");
-        let unknown = limits.is_empty() && s.is_some_and(|s| s.limits_settled());
-        let choices: Vec<_> = std::iter::once(model.into_any_element())
-            .chain(effort.map(IntoElement::into_any_element))
-            .collect();
-        let (inline, extra) = if self.narrow {
-            (vec![], choices)
-        } else {
-            (choices, vec![])
-        };
-        let more_open = self.menu == Some(ComposerMenu::More);
-        let session = self.session.clone();
-        let more = ui::icon_button("chat.more", "More", cx)
-            .role(Role::Button)
-            .aria_label("More")
-            .aria_expanded(more_open)
-            .test_support()
-            .track_focus(&self.more_focus.clone().tab_stop(true))
-            .child(Icon::Down.size(size::CHEVRON))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.more_focus.focus(window, cx);
-                this.menu = Some(ComposerMenu::More);
-                cx.notify();
-            }));
-        let more = ui::popup(
-            "chat.more.menu",
-            more,
-            more_open.then(|| {
+        let week = limits
+            .iter()
+            .find(|l| l.name == "Week")
+            .map(|l| limit(l, cx));
+        let unknown = (limits.is_empty() && s.is_some_and(|s| s.limits_settled())).then(|| {
+            let said = "No plan limits reported";
+            div()
+                .id("chat.limits")
+                .test_support()
+                .aria_label(said)
+                .child(said)
+        });
+        // The week's meter is in the bar already.
+        let limits = (limits.iter())
+            .filter(|l| l.name != "Week" || l.resets.is_some())
+            .map(|l| {
+                let resets = l.resets.map(|r| {
+                    let left = span(r as i64 / 1000 - now());
+                    div().ml_auto().child(format!("Resets in {left}"))
+                });
                 div()
-                    .id("chat.more.content")
-                    .test_support()
                     .flex()
-                    .flex_col()
-                    .gap(size::GAP)
-                    .px(theme::GAP)
-                    .min_w(size::MENU)
-                    .max_h(window.viewport_size().height * 0.65)
-                    .overflow_y_scroll()
-                    .children(extra)
-                    .child(self.messages(cx))
-                    .children(usage)
-                    .children(
-                        limits
-                            .iter()
-                            .filter(|l| l.name != "Week" || l.resets.is_some())
-                            .map(|l| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(size::GAP)
-                                    .when(l.name == "Week", |d| d.child("Week"))
-                                    .when(l.name != "Week", |d| d.child(limit(l, cx)))
-                                    .children(l.resets.map(|r| {
-                                        div().ml_auto().text_color(t.muted).child(format!(
-                                            "Resets in {}",
-                                            span(r as i64 / 1000 - now())
-                                        ))
-                                    }))
-                            }),
-                    )
-                    .when(unknown, |d| {
-                        d.child(
-                            div()
-                                .id("chat.limits")
-                                .test_support()
-                                .aria_label("No plan limits reported")
-                                .text_color(t.muted)
-                                .child("No plan limits reported"),
-                        )
+                    .items_center()
+                    .gap(px(8.))
+                    .map(|d| match l.name == "Week" {
+                        true => d.child("Week"),
+                        false => d.child(limit(l, cx)),
                     })
-                    .child(div().h(size::LINE).bg(t.line))
-                    .child(
-                        ui::icon_button("chat.save-default", "Save as default", cx)
-                            .aria_label("Save as default")
-                            .test_support()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                session.update(cx, |s, cx| s.save_defaults(cx));
-                                this.finish_more(window, cx);
-                            })),
-                    )
-                    .into_any_element()
-            }),
-            self.close_menu(),
-            window,
-            cx,
-        )
-        .anchor(Anchor::BottomLeft)
-        .flex_none();
+                    .children(resets)
+            });
+        let meters = div()
+            .flex()
+            .flex_col()
+            .gap(size::GAP)
+            .text_size(text::SMALL)
+            .text_color(t.muted)
+            .children(usage)
+            .children(limits)
+            .children(unknown);
+        let session = self.session.clone();
+        let me = self.me.clone();
+        let more = (self.messages(more, cx)).child(meters).separator().item(
+            "Save as default",
+            move |window, cx| {
+                session.update(cx, |s, cx| s.save_defaults(cx));
+                me.update(cx, |this, cx| this.focus(window, cx)).ok();
+            },
+        );
         let busy = chat.busy(cx);
         let empty = self.input.read(cx).value().trim().is_empty();
+        // A pill puts its label first.
         let send = if busy {
-            ui::quiet_button("chat.stop", "Stop", cx)
+            ui::button("chat.stop", "Stop", cx)
                 .role(Role::Button)
                 .aria_label("Stop")
                 .test_support()
+                .flex_row_reverse()
+                .gap(px(6.))
+                .child(Icon::Stop.size(px(12.)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.session.update(cx, |s, cx| s.stop(cx));
                     this.focus(window, cx);
@@ -630,46 +568,54 @@ impl ChatView {
                 .into_any_element()
         } else {
             let send = match empty {
-                true => ui::pill("chat.send", "↑ Send")
+                true => ui::pill("chat.send", "Send")
                     .bg(t.header_bg)
                     .border_color(t.panel_edge)
                     .text_color(t.muted),
-                false => ui::primary_button("chat.send", "↑ Send", cx),
+                false => ui::primary_button("chat.send", "Send", cx),
             };
             let send = send
                 .role(Role::Button)
                 .aria_label("Send")
+                .flex_row_reverse()
+                .gap(px(4.))
+                .child(Icon::Up.size(px(12.)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.send(window, cx);
                     this.focus(window, cx);
                 }));
             ui::disabled(send, empty).test_support().into_any_element()
         };
-
+        let more_button = ui::icon_button("chat.more", "More", cx)
+            .role(Role::Button)
+            .aria_label("More")
+            .test_support()
+            .child(Icon::Down.size(size::CHEVRON));
+        let provider = self.provider(window, cx);
+        let pickers: Vec<_> = (inline.into_iter().chain([modes]))
+            .map(|(id, value, tip, menu)| picker(id, value, tip, menu, window, cx))
+            .collect();
+        let more = (more.button("chat.more.menu", more_button, window, cx))
+            .anchor(Anchor::BottomLeft)
+            .flex_none();
+        let pickers = div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_center()
+            .gap(size::GAP)
+            .overflow_hidden()
+            .child(provider)
+            .children(pickers)
+            .child(more);
         div()
             .flex()
-            .flex_col()
+            .items_center()
             .gap(size::GAP)
             .text_size(text::SMALL)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(size::GAP)
-                    .child(self.provider(window, cx))
-                    .children(inline)
-                    .child(modes),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(size::GAP)
-                    .child(more)
-                    .child(div().flex_1())
-                    .children(week.map(|l| limit(l, cx)))
-                    .child(send),
-            )
+            .child(pickers)
+            .children(week)
+            .child(send)
     }
 
     fn provider(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
@@ -683,12 +629,6 @@ impl ChatView {
             .aria_label(p.name)
             .child(p.name);
         let label = div()
-            .flex()
-            .items_center()
-            .gap(size::GAP)
-            .child(div().text_color(t.muted).child("Agent"))
-            .child(name);
-        let label = div()
             .id("chat.provider")
             .test_support()
             .flex()
@@ -701,7 +641,7 @@ impl ChatView {
                 d.aria_label(SharedString::from(a.plan.clone()))
                     .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             })
-            .child(label);
+            .child(name);
         if !chat.is_new(cx) {
             return label.px(size::CONTROL_PAD).into_any_element();
         }
@@ -709,10 +649,7 @@ impl ChatView {
         let manage = rows.len();
         let current = rows.iter().position(|(o, ..)| o.id == p.id);
         let initial = current.filter(|&i| rows[i].2).unwrap_or(manage);
-        let selected = match self.menu {
-            Some(ComposerMenu::Provider(i)) => Some(i),
-            _ => None,
-        };
+        let selected = self.menu;
         let trigger = ui::icon_button("chat.provider.pick", label, cx)
             .role(Role::Button)
             .aria_label(SharedString::from(format!("Agent {}", p.name)))
@@ -726,12 +663,12 @@ impl ChatView {
                     this.choose_provider(i, window, cx);
                 } else {
                     this.provider_focus.focus(window, cx);
-                    this.menu = Some(ComposerMenu::Provider(initial));
+                    this.menu = Some(initial);
                     cx.notify();
                 }
             }))
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
-                let Some(ComposerMenu::Provider(i)) = this.menu else {
+                let Some(i) = this.menu else {
                     return;
                 };
                 let down = match e.keystroke.key.as_str() {
@@ -751,7 +688,7 @@ impl ChatView {
                     })
                     .find(|&i| rows.get(i).is_none_or(|r| r.2))
                 {
-                    this.menu = Some(ComposerMenu::Provider(next));
+                    this.menu = Some(next);
                 }
                 cx.stop_propagation();
                 cx.notify();
@@ -816,12 +753,6 @@ impl ChatView {
         .into_any_element()
     }
 
-    fn finish_more(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
-        self.focus(window, cx);
-        cx.notify();
-    }
-
     fn close_menu(&self) -> impl Fn(&mut Window, &mut App) + use<> {
         let me = self.me.clone();
         move |_, cx| {
@@ -847,69 +778,40 @@ impl ChatView {
         cx.notify();
     }
 
-    /// The group whose sessions this chat's agent messages, and whether new messages wake it.
-    fn messages(&self, cx: &App) -> AnyElement {
+    /// The groups this chat's agent can message, and whether new messages wake it, in `menu`.
+    fn messages(&self, menu: DrawnMenu, cx: &App) -> DrawnMenu {
         let chat = self.session.read(cx);
         let id = chat.current().and_then(|s| s.read(cx).id.clone());
         let m = Messages::get(cx);
-        let mine = id
-            .as_deref()
+        let mine = (id.as_deref())
             .and_then(|id| m.group(id))
             .map(|g| g.name.clone());
         let wake = id.as_deref().is_some_and(|id| m.wake.contains(id));
-        let label = match (&mine, wake) {
-            (Some(g), true) => format!("{g} · wakes"),
-            (Some(g), false) => g.clone(),
-            (None, true) => "Wakes".into(),
-            (None, false) => "No group".into(),
-        };
-        let groups: Vec<(String, usize)> = (m.groups.iter())
-            .filter(|g| Some(&g.name) != mine.as_ref())
-            .map(|g| (g.name.clone(), g.members.len()))
-            .collect();
-        let fresh = m.fresh_name();
-        let me = self.me.clone();
-        ui::titled(
-            ui::icon_button("chat.group", div().child(label.clone()), cx)
-                .h(px(24.))
-                .px(px(8.))
-                .child(Icon::Down.size(px(10.))),
-            "Messages between agents",
-        )
-        .aria_description(SharedString::from(label))
-        .test_support()
-        .on_click(move |e, window, cx| {
-            let on = id.is_some();
-            let id = id.clone().unwrap_or_default();
-            let join = |name: Option<String>| {
-                let id = id.clone();
-                let me = me.clone();
-                move |window: &mut Window, cx: &mut App| {
-                    inbox::join(cx, &id, name.clone());
-                    me.update(cx, |this, cx| this.finish_more(window, cx)).ok();
-                }
-            };
-            let mut menu = Menu::default();
-            for (name, n) in &groups {
-                let label = format!("Join {name} ({n})");
-                menu = menu.item_if(on, label, join(Some(name.clone())));
+        let on = id.is_some();
+        let id = id.unwrap_or_default();
+        let join = |name: Option<String>| {
+            let (id, me) = (id.clone(), self.me.clone());
+            move |window: &mut Window, cx: &mut App| {
+                inbox::join(cx, &id, name.clone());
+                me.update(cx, |this, cx| this.focus(window, cx)).ok();
             }
-            let wakes = match wake {
-                true => "Stop waking on messages",
-                false => "Wake on messages",
-            };
-            let id = id.clone();
-            let me = me.clone();
-            menu.item_if(on, format!("New group: {fresh}"), join(Some(fresh.clone())))
-                .item_if(mine.is_some(), "Leave the group", join(None))
-                .separator()
-                .item_if(on, wakes, move |window, cx| {
-                    inbox::set_wake(cx, &id, !wake);
-                    me.update(cx, |this, cx| this.finish_more(window, cx)).ok();
-                })
-                .show(e.position(), window, cx);
+        };
+        let mut menu = menu.section("Messages between agents");
+        for g in m.groups.iter().filter(|g| Some(&g.name) != mine.as_ref()) {
+            let label = format!("Join {} ({})", g.name, g.members.len());
+            menu = menu.item_if(on, label, join(Some(g.name.clone())));
+        }
+        let fresh = m.fresh_name();
+        menu = menu.item_if(on, format!("New group: {fresh}"), join(Some(fresh.clone())));
+        if let Some(g) = &mine {
+            menu = menu.item(format!("Leave {g}"), join(None));
+        }
+        let me = self.me.clone();
+        menu.item_if(on, "Wake on messages", move |window, cx| {
+            inbox::set_wake(cx, &id, !wake);
+            me.update(cx, |this, cx| this.focus(window, cx)).ok();
         })
-        .into_any_element()
+        .checked(wake)
     }
 
     /// Lays out each whole text once, and drops what is gone.
@@ -1132,7 +1034,7 @@ impl ChatView {
                 }
             })
             .child(icon)
-            .child(div().flex_1().min_w_0().truncate().child(summary))
+            .child(div().min_w_0().truncate().child(summary))
             .child(match open {
                 true => Icon::Down.size(px(12.)).into_any_element(),
                 false => Icon::Chevron.size(px(12.)).into_any_element(),
@@ -1427,10 +1329,6 @@ impl ChatView {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let tools = items[from..]
-            .iter()
-            .filter(|it| matches!(it, Item::Tool(_)))
-            .count();
         let mut details = vec![];
         if let Some(model) = &config.model {
             details.push(
@@ -1448,9 +1346,6 @@ impl ChatView {
                 true => format!("Done in {}", seconds(ms)),
                 false => format!("Stopped after {}", seconds(ms)),
             });
-        }
-        if tools > 0 {
-            details.push(format!("{tools} actions"));
         }
         let label = details.join(" · ");
         let copy = (!answer.is_empty()).then(|| {
@@ -1474,7 +1369,7 @@ impl ChatView {
             .flex()
             .items_center()
             .gap(px(4.))
-            .text_size(text::LABEL)
+            .text_size(text::SMALL)
             .text_color(t.muted)
             .child(label)
             .children(copy)
@@ -1831,6 +1726,7 @@ impl ChatView {
             title += &format!(" in {}", Workspace::get(cx).name_of(repo));
         }
         let expanded = self.changed_files.contains(&at);
+        let mono = theme::mono(cx);
         let rows = || {
             files.iter().enumerate().map(|(j, f)| {
                 let doc = Doc::Diff(DiffDoc {
@@ -1840,27 +1736,25 @@ impl ChatView {
                     left: Side::Rev { rev: start.into() },
                     right: Side::Rev { rev: end.into() },
                 });
+                let dir = f.path.rsplit_once('/').map(|(dir, _)| dir.to_string());
                 ui::row(SharedString::from(format!("chat.file.{i}.{j}")), false, cx)
                     .test_support()
                     .aria_label(SharedString::from(f.path.clone()))
+                    .h(px(24.))
                     .gap(px(6.))
                     .on_click(move |_, _, cx| {
                         let doc = doc.clone();
                         Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx))
                     })
+                    .child(ui::status(status_of(f), cx))
                     .child(
                         div()
-                            .w(px(12.))
-                            .text_color(t.muted)
-                            .child(f.index.to_string()),
+                            .flex_none()
+                            .font_family(mono.clone())
+                            .text_color(t.fg)
+                            .child(folder_name(&f.path).to_string()),
                     )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme::mono(cx))
-                            .child(f.path.clone()),
-                    )
+                    .children(dir.map(|d| div().min_w_0().truncate().child(d)))
             })
         };
         let session = self.session.clone();
@@ -1870,16 +1764,15 @@ impl ChatView {
                   run: fn(&mut Session, usize, &mut Context<Session>)| {
                 let session = session.clone();
                 let button = match id {
-                    "chat.back.confirm" => ui::primary_button((id, i), label, cx),
-                    "chat.back.cancel" => ui::button((id, i), label, cx),
-                    _ => ui::icon_button((id, i), label, cx).h(size::CONTROL),
+                    "chat.back.confirm" => ui::primary_button((id, i), label, cx).h(px(24.)),
+                    "chat.back.cancel" => ui::button((id, i), label, cx).h(px(24.)),
+                    _ => ui::icon_button((id, i), label, cx).h(px(24.)),
                 };
                 button
                     .role(Role::Button)
                     .test_support()
                     .on_click(move |_, _, cx| session.update(cx, |s, cx| s.back(at, run, cx)))
             };
-        let small = |text: String| div().text_size(text::SMALL).text_color(t.muted).child(text);
         let restore = |label: &'static str| {
             (!busy)
                 .then(|| button("chat.back", label.into(), Session::plan_back).into_any_element())
@@ -1889,7 +1782,7 @@ impl ChatView {
             Back::Failed(e) => (
                 "failed",
                 restore("Restore…"),
-                Some(small(format!("Cannot go back: {e}")).into_any_element()),
+                Some(format!("Cannot go back: {e}").into_any_element()),
             ),
             Back::Working => (
                 "working",
@@ -1897,49 +1790,60 @@ impl ChatView {
                 None,
             ),
             Back::Planned(plan) => {
-                let todo = plan.changes.iter().filter(|c| c.skip.is_none()).count();
-                let lines = plan.changes.iter().map(|c| {
-                    let what = match (c.skip, c.remove) {
-                        (Some(Skip::Edited), _) => "kept: changed since the turn",
-                        (Some(Skip::Ignored), _) => "kept: ignored now, no copy to undo with",
-                        (Some(Skip::Submodule), _) => "kept: a submodule",
-                        (None, true) => "removed",
-                        (None, false) if c.edited => "restored, over changes made since the turn",
-                        (None, false) => "restored",
+                let todo: Vec<&str> = (plan.changes.iter())
+                    .filter(|c| c.skip.is_none())
+                    .map(|c| c.path.as_str())
+                    .collect();
+                let mut said = todo[..todo.len().min(3)].join(", ");
+                if todo.len() > 3 {
+                    said += &format!(" +{} more", todo.len() - 3);
+                }
+                let kept = plan.changes.iter().filter_map(|c| {
+                    let why = match c.skip {
+                        Some(Skip::Edited) => "kept: changed since the turn",
+                        Some(Skip::Ignored) => "kept: ignored now, no copy to undo with",
+                        Some(Skip::Submodule) => "kept: a submodule",
+                        None if c.edited && !c.remove => {
+                            "restored, over changes made since the turn"
+                        }
+                        None => return None,
                     };
-                    small(format!("{}: {what}", c.path))
+                    Some(div().child(format!("{}: {why}", c.path)))
                 });
-                let confirm = (todo > 0 && !busy).then(|| {
-                    let label = match todo {
+                let confirm = (!todo.is_empty() && !busy).then(|| {
+                    let label = match todo.len() {
                         1 => "Restore 1 file".to_string(),
-                        _ => format!("Restore {todo} files"),
+                        n => format!("Restore {n} files"),
                     };
                     button("chat.back.confirm", label, Session::confirm_back)
                 });
-                let el = ui::panel(div(), cx)
+                let ask = div()
+                    .flex()
+                    .items_center()
+                    .gap(size::GAP)
+                    .child(div().pl(px(4.)).text_color(t.fg).child("Restore files?"))
+                    .child(button(
+                        "chat.back.cancel",
+                        "Cancel".into(),
+                        Session::cancel_back,
+                    ))
+                    .children(confirm);
+                let plan = div()
                     .id(("chat.back.plan", i))
                     .test_support()
                     .role(Role::Group)
                     .aria_label("Confirm restore")
                     .flex()
                     .flex_col()
-                    .gap(size::GAP)
-                    .p(size::PAD)
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Restore files?"),
-                    )
-                    .children(lines)
-                    .child(small(
-                        "Ignored files and submodules are not covered. You can undo this.".into(),
-                    ))
-                    .child(div().flex().gap(size::GAP).children(confirm).child(button(
-                        "chat.back.cancel",
-                        "Cancel".into(),
-                        Session::cancel_back,
-                    )));
-                ("planned", None, Some(el.into_any_element()))
+                    .gap(px(2.))
+                    .when(!said.is_empty(), |d| d.child(said))
+                    .children(kept)
+                    .child("Ignored files and submodules are not covered. You can undo this.");
+                (
+                    "planned",
+                    Some(ask.into_any_element()),
+                    Some(plan.into_any_element()),
+                )
             }
             Back::Done { .. } => ("restored", restore("Undo restore…"), None),
         };
@@ -1968,7 +1872,7 @@ impl ChatView {
             ))
             .flex()
             .items_center()
-            .text_size(text::LABEL)
+            .text_size(text::SMALL)
             .text_color(t.muted)
             .child(count)
             .when(matches!(back, Back::Done { .. }), |d| d.child("· Restored"))
@@ -1979,6 +1883,8 @@ impl ChatView {
                 .flex()
                 .flex_col()
                 .gap(size::GAP)
+                .text_size(text::SMALL)
+                .text_color(t.muted)
                 .when(expanded, |b| b.children(rows()))
                 .children(detail)
                 .into_any_element()
@@ -2195,8 +2101,11 @@ impl ChatView {
                 .flex()
                 .items_center()
                 .gap(px(8.))
+                .h(px(24.))
+                .text_size(text::SMALL)
+                .text_color(t.muted)
                 .child(ui::spinner(t.accent))
-                .child(div().text_color(t.muted).child("Working"))
+                .child("Working")
         });
         (s.busy() || !s.tasks.is_empty()).then(|| {
             div()
@@ -2310,8 +2219,7 @@ impl Render for ChatView {
         let review = self.review(cx);
         let footer = self.footer(cx);
         let suggestions = self.suggestions(cx);
-        if !self.session.read(cx).is_new(cx) && matches!(self.menu, Some(ComposerMenu::Provider(_)))
-        {
+        if !self.session.read(cx).is_new(cx) {
             self.menu = None;
         }
         let bar = self.bar(window, cx);
@@ -2361,76 +2269,89 @@ impl Render for ChatView {
                     ),
             )
             .child(
-                div()
-                    .flex_none()
-                    .px(px(20.))
-                    .pt(px(12.))
-                    .pb(px(10.))
-                    .border_t_1()
-                    .border_color(t.line)
-                    .child(
-                        column()
-                            .id("chat.input")
-                            .test_support()
-                            .gap(px(8.))
-                            .children(review)
-                            .children(footer)
-                            .children(suggestions)
-                            .child(
-                                ui::panel(div(), cx)
-                                    .id("chat.composer")
-                                    .test_support()
-                                    .relative()
-                                    .track_focus(&self.composer_focus)
-                                    // A click beside the text puts the caret in it.
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            if !window.default_prevented() {
-                                                window.prevent_default();
-                                                this.focus(window, cx);
-                                            }
-                                        }),
-                                    )
-                                    .bg(t.header_bg)
-                                    .when(self.composer_focus.contains_focused(window, cx), |d| {
-                                        d.border_color(t.selected_ring)
-                                    })
-                                    .flex()
-                                    .flex_col()
-                                    .p(size::PAD)
-                                    .gap(size::GAP)
-                                    .child(measure)
-                                    .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                                        if e.keystroke.key == "escape" && this.menu.take().is_some()
-                                        {
-                                            cx.stop_propagation();
-                                            cx.notify();
+                div().flex_none().px(px(20.)).pt(px(8.)).pb(px(10.)).child(
+                    column()
+                        .id("chat.input")
+                        .test_support()
+                        .gap(px(8.))
+                        .children(review)
+                        .children(footer)
+                        .children(suggestions)
+                        .child(
+                            div()
+                                .id("chat.composer")
+                                .test_support()
+                                .relative()
+                                .track_focus(&self.composer_focus)
+                                // A click beside the text puts the caret in it.
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        if !window.default_prevented() {
+                                            window.prevent_default();
+                                            this.focus(window, cx);
                                         }
-                                    }))
-                                    .child(self.textarea(cx))
-                                    .child(bar),
-                            ),
-                    ),
+                                    }),
+                                )
+                                .bg(t.header_bg)
+                                .rounded(radius::FIELD)
+                                .border_1()
+                                .border_color(
+                                    match self.composer_focus.contains_focused(window, cx) {
+                                        true => t.selected_ring,
+                                        false => t.line,
+                                    },
+                                )
+                                .flex()
+                                .flex_col()
+                                .p(size::PAD)
+                                .gap(size::GAP)
+                                .child(measure)
+                                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                                    if e.keystroke.key == "escape" && this.menu.take().is_some() {
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                }))
+                                .child(self.textarea(cx))
+                                .child(bar),
+                        ),
+                ),
             )
     }
 }
 
+/// A picker in the bar: its value, opening `menu` upward.
 fn picker(
     id: &'static str,
-    title: &'static str,
-    value: &str,
-    opens: bool,
-    cx: &App,
-) -> gpui_kit::Stateful<Div> {
+    value: String,
+    tip: &str,
+    menu: Option<DrawnMenu>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let t = theme(cx);
-    ui::icon_button(id, div().text_color(t.muted).child(title), cx)
+    let trigger = ui::icon_button(id, value.clone(), cx)
         .h(size::CONTROL)
         .px(size::CONTROL_PAD)
         .text_color(t.fg)
         .whitespace_nowrap()
-        .child(value.to_owned())
-        .children(opens.then(|| Icon::Down.size(size::CHEVRON)))
+        .children(menu.is_some().then(|| Icon::Down.size(size::CHEVRON)));
+    let trigger = ui::titled(trigger, tip.to_string())
+        .aria_description(SharedString::from(value))
+        .test_support();
+    match menu {
+        Some(menu) => (menu.button(
+            SharedString::from(format!("{id}.menu")),
+            trigger,
+            window,
+            cx,
+        ))
+        .anchor(Anchor::BottomLeft)
+        .flex_none()
+        .into_any_element(),
+        None => trigger.into_any_element(),
+    }
 }
 
 fn provider_rows(cx: &App) -> Vec<(&'static Provider, &'static str, bool)> {
@@ -2469,49 +2390,53 @@ fn seconds(ms: u64) -> String {
     }
 }
 
-/// A plan limit as a short bar of what is left and when it resets.
+/// A plan limit, "Week 11% left", with a bar of what is left.
 fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let used = l.used.clamp(0., 100.);
+    let left = 100. - used;
+    let low = left <= 10.;
     let name = match l.name.as_str() {
         "5h" => "5-hour",
-        "Week" => "Weekly",
         n => n,
     };
-    let now = now();
-    let mut tip = format!("{name} limit: {used:.0}% used");
+    let window = if l.name == "Week" { "Weekly" } else { name };
+    let mut tip = format!("{window} limit: {used:.0}% used");
     if let Some(r) = l.resets {
-        tip += &format!(", resets in {}", span(r as i64 / 1000 - now));
+        tip += &format!(", resets in {}", span(r as i64 / 1000 - now()));
     }
-    let remaining = 100. - used;
-    let left = format!("{remaining:.0}% left");
     div()
         .id(SharedString::from(format!("chat.limit.{}", l.name)))
         .test_support()
-        .aria_label(SharedString::from(format!("{} {left}", l.name)))
+        .aria_label(SharedString::from(format!("{} {left:.0}% left", l.name)))
         .flex()
+        .flex_none()
         .items_center()
-        .gap(px(5.))
-        .px(px(6.))
-        .py(px(2.))
-        .rounded(radius::WIDGET)
+        .gap(px(4.))
+        .text_size(text::SMALL)
         .text_color(t.muted)
-        .hover(|s| s.bg(t.hover).text_color(t.fg))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
         .whitespace_nowrap()
-        .child(format!("{} {left}", l.name))
-        .child(meter(remaining as f32, used as f32, cx))
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .child(name.to_string())
+        .child(number(format!("{left:.0}%"), low, cx))
+        .child("left")
+        .child(meter(left as f32, low, cx).ml(px(2.)))
 }
 
-fn meter(fill: f32, used: f32, cx: &App) -> Div {
+/// A meter's number: `fg`, or `warning` when it runs low.
+fn number(n: String, low: bool, cx: &App) -> Div {
     let t = theme(cx);
-    let color = match used {
-        u if u >= 90. => t.error,
-        _ => t.accent,
-    };
+    div()
+        .text_color(if low { t.warning } else { t.fg })
+        .child(n)
+}
+
+/// A 48px bar `fill` percent full, in `warning` when it runs low: low is a caution, not a failure.
+fn meter(fill: f32, low: bool, cx: &App) -> Div {
+    let t = theme(cx);
     div()
         .flex_none()
-        .w(px(36.))
+        .w(px(48.))
         .h(px(4.))
         .rounded_full()
         .bg(t.line)
@@ -2521,7 +2446,7 @@ fn meter(fill: f32, used: f32, cx: &App) -> Div {
                 .test_support()
                 .h_full()
                 .rounded_full()
-                .bg(color)
+                .bg(if low { t.warning } else { t.accent })
                 .w(relative(fill.clamp(0., 100.) / 100.)),
         )
 }
