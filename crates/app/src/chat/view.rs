@@ -79,6 +79,7 @@ pub struct ChatView {
     texts: HashMap<(EntityId, usize), (String, Entity<Markdown>)>,
     /// Per question of a waiting ask, the options picked.
     picked: HashMap<(EntityId, usize), Vec<Vec<usize>>>,
+    changed_files: HashSet<At>,
     /// The past conversations of the provider it names.
     past: (&'static str, Interest<Vec<Past>>),
     /// The provider the box's placeholder names.
@@ -147,6 +148,7 @@ impl ChatView {
             outputs: HashSet::new(),
             texts: HashMap::new(),
             picked: HashMap::new(),
+            changed_files: HashSet::new(),
             past: (p.id, past),
             named: p.id,
             me: cx.weak_entity(),
@@ -912,6 +914,7 @@ impl ChatView {
         let tool = |it: &Item| matches!(it, Item::Tool(t) if t.status.as_deref() != Some("denied"));
         // Widest before a turn (None past the end is the queued message), tight between actions
         // and above a turn's end.
+        let muted = theme(cx).muted;
         let gap = |i: usize| match (
             i.checked_sub(1).map(|p| feed[p].1),
             feed.get(i).map(|f| f.1),
@@ -919,7 +922,7 @@ impl ChatView {
             (None, _) => 0.,
             (_, Some(Item::User(_)) | None) => 24.,
             (Some(Item::Tool(_)), Some(Item::Tool(_)))
-            | (_, Some(Item::End { .. } | Item::PastTurn(_))) => 8.,
+            | (_, Some(Item::End { .. } | Item::PastTurn(_) | Item::Changes { .. })) => 8.,
             _ => 16.,
         };
         let cut = chat.cleared(&feed, cx);
@@ -938,6 +941,49 @@ impl ChatView {
         };
         let mut i = cut.filter(|_| !open).unwrap_or(0);
         while i < feed.len() {
+            if matches!(feed[i].1, Item::Changes { .. } | Item::Docs { .. }) {
+                let from = i;
+                let session = feed[i].0.0;
+                let mut changes = Vec::new();
+                while let Some(&(at, item)) = feed.get(i).filter(|(at, _)| at.0 == session) {
+                    match item {
+                        Item::Changes { .. } => changes.push(self.changes(i, at, item, cx)),
+                        Item::Docs { repo, needs } => push(i, self.docs(i, repo, needs, cx)),
+                        _ => break,
+                    }
+                    i += 1;
+                }
+                let mut row = div().flex().flex_wrap().items_center().gap(size::GAP);
+                let mut separator = false;
+                if let Some(&(at, item @ Item::End { .. })) =
+                    feed.get(i).filter(|(at, _)| at.0 == session)
+                {
+                    row = row.child(self.item(i, (at, item), cx));
+                    i += 1;
+                    separator = true;
+                }
+                let mut details = Vec::new();
+                for (summary, detail) in changes {
+                    row = row
+                        .when(separator, |row| {
+                            row.child(div().text_color(muted).child("·"))
+                        })
+                        .child(summary);
+                    separator = true;
+                    details.extend(detail);
+                }
+                push(
+                    from,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(size::GAP)
+                        .child(row)
+                        .children(details)
+                        .into_any_element(),
+                );
+                continue;
+            }
             match feed[i..].iter().take_while(|(_, it)| tool(it)).count() {
                 0 | 1 => {
                     push(i, self.item(i, feed[i], cx));
@@ -1263,8 +1309,7 @@ impl ChatView {
                 answer,
                 questions,
             } => self.ask(i, at, tool, *answer, questions, cx),
-            Item::Changes { .. } => self.changes(i, at, item, cx),
-            Item::Docs { repo, needs } => self.docs(i, repo, needs, cx),
+            Item::Changes { .. } | Item::Docs { .. } => unreachable!(),
             Item::Note(text) => self
                 .row(i, text.clone())
                 .text_size(text::SMALL)
@@ -1611,8 +1656,7 @@ impl ChatView {
             .into_any_element()
     }
 
-    /// What a turn changed, each file opening its diff, and going back to before it.
-    fn changes(&self, i: usize, at: At, item: &Item, cx: &App) -> AnyElement {
+    fn changes(&self, i: usize, at: At, item: &Item, cx: &App) -> (AnyElement, Option<AnyElement>) {
         let Item::Changes {
             repo,
             start,
@@ -1627,77 +1671,78 @@ impl ChatView {
         let busy = self.session.read(cx).busy(cx);
         let n = files.len();
         let mut title = match n {
-            1 => "1 file changed in this turn".to_string(),
-            _ => format!("{n} files changed in this turn"),
+            1 => "1 file changed".to_string(),
+            _ => format!("{n} files changed"),
         };
-        // A folder's chat says which of its repos.
         if self.session.read(cx).repo != *repo {
             title += &format!(" in {}", Workspace::get(cx).name_of(repo));
         }
-        let rows = files.iter().enumerate().map(|(j, f)| {
-            let doc = Doc::Diff(DiffDoc {
-                repo: repo.to_string(),
-                path: f.path.clone(),
-                orig_path: f.orig_path.clone(),
-                left: Side::Rev { rev: start.into() },
-                right: Side::Rev { rev: end.into() },
-            });
-            ui::row(SharedString::from(format!("chat.file.{i}.{j}")), false, cx)
-                .test_support()
-                .aria_label(SharedString::from(f.path.clone()))
-                .gap(px(6.))
-                .on_click(move |_, _, cx| {
-                    let doc = doc.clone();
-                    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx))
-                })
-                .child(
-                    div()
-                        .w(px(12.))
-                        .text_color(t.muted)
-                        .child(f.index.to_string()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(theme::mono(cx))
-                        .child(f.path.clone()),
-                )
-        });
+        let expanded = self.changed_files.contains(&at);
+        let rows = || {
+            files.iter().enumerate().map(|(j, f)| {
+                let doc = Doc::Diff(DiffDoc {
+                    repo: repo.to_string(),
+                    path: f.path.clone(),
+                    orig_path: f.orig_path.clone(),
+                    left: Side::Rev { rev: start.into() },
+                    right: Side::Rev { rev: end.into() },
+                });
+                ui::row(SharedString::from(format!("chat.file.{i}.{j}")), false, cx)
+                    .test_support()
+                    .aria_label(SharedString::from(f.path.clone()))
+                    .gap(px(6.))
+                    .on_click(move |_, _, cx| {
+                        let doc = doc.clone();
+                        Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx))
+                    })
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .text_color(t.muted)
+                            .child(f.index.to_string()),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::mono(cx))
+                            .child(f.path.clone()),
+                    )
+            })
+        };
         let session = self.session.clone();
         let button =
             move |id: &'static str,
                   label: String,
                   run: fn(&mut Session, usize, &mut Context<Session>)| {
                 let session = session.clone();
-                ui::button((id, i), label, cx)
+                let button = match id {
+                    "chat.back.confirm" => ui::primary_button((id, i), label, cx),
+                    "chat.back.cancel" => ui::button((id, i), label, cx),
+                    _ => ui::icon_button((id, i), label, cx).h(size::CONTROL),
+                };
+                button
+                    .role(Role::Button)
                     .test_support()
                     .on_click(move |_, _, cx| session.update(cx, |s, cx| s.back(at, run, cx)))
             };
         let small = |text: String| div().text_size(text::SMALL).text_color(t.muted).child(text);
-        let restore = || {
-            button(
-                "chat.back",
-                "Restore the files to before this turn".into(),
-                Session::plan_back,
-            )
-            .into_any_element()
+        let restore = |label: &'static str| {
+            (!busy)
+                .then(|| button("chat.back", label.into(), Session::plan_back).into_any_element())
         };
-        let (state, below) = match back {
-            Back::Idle => ("", (!busy).then(restore)),
+        let (state, action, detail) = match back {
+            Back::Idle => ("", restore("Restore…"), None),
             Back::Failed(e) => (
                 "failed",
-                Some(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(small(format!("Cannot go back: {e}")))
-                        .children((!busy).then(restore))
-                        .into_any_element(),
-                ),
+                restore("Restore…"),
+                Some(small(format!("Cannot go back: {e}")).into_any_element()),
             ),
-            Back::Working => ("working", Some(ui::spinner(t.accent).into_any_element())),
+            Back::Working => (
+                "working",
+                Some(ui::spinner(t.accent).into_any_element()),
+                None,
+            ),
             Back::Planned(plan) => {
                 let todo = plan.changes.iter().filter(|c| c.skip.is_none()).count();
                 let lines = plan.changes.iter().map(|c| {
@@ -1718,60 +1763,74 @@ impl ChatView {
                     };
                     button("chat.back.confirm", label, Session::confirm_back)
                 });
-                let el = div()
+                let el = ui::panel(div(), cx)
+                    .id(("chat.back.plan", i))
+                    .test_support()
+                    .role(Role::Group)
+                    .aria_label("Confirm restore")
                     .flex()
                     .flex_col()
-                    .gap(px(6.))
+                    .gap(size::GAP)
+                    .p(size::PAD)
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Restore files?"),
+                    )
                     .children(lines)
                     .child(small(
                         "Ignored files and submodules are not covered. You can undo this.".into(),
                     ))
-                    .child(div().flex().gap(px(8.)).children(confirm).child(button(
+                    .child(div().flex().gap(size::GAP).children(confirm).child(button(
                         "chat.back.cancel",
                         "Cancel".into(),
                         Session::cancel_back,
                     )));
-                ("planned", Some(el.into_any_element()))
+                ("planned", None, Some(el.into_any_element()))
             }
-            Back::Done { .. } => {
-                let el = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(small("Restored.".into()))
-                    .when(!busy, |b| {
-                        b.child(button(
-                            "chat.back",
-                            "Undo the restore".into(),
-                            Session::plan_back,
-                        ))
-                    });
-                ("restored", Some(el.into_any_element()))
-            }
+            Back::Done { .. } => ("restored", restore("Undo restore…"), None),
         };
-        let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
-        div()
+        let me = self.me.clone();
+        let count = ui::titled(
+            ui::icon_button(("chat.files", i), title.clone(), cx).h(size::CONTROL),
+            "Edits anyone made in this folder during the turn show here too.",
+        )
+        .aria_label(SharedString::from(title.clone()))
+        .aria_expanded(expanded)
+        .test_support()
+        .on_click(move |_, _, cx| {
+            me.update(cx, |this, cx| {
+                if !this.changed_files.remove(&at) {
+                    this.changed_files.insert(at);
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        let summary = div()
             .id(("chat.item", i))
             .test_support()
             .aria_label(SharedString::from(
-                format!("{title}: {} {state}", paths.join(", "))
-                    .trim()
-                    .to_string(),
+                format!("{title} {state}").trim_end().to_string(),
             ))
             .flex()
-            .flex_col()
-            .gap(px(6.))
-            .p(px(12.))
-            .rounded(radius::FIELD)
-            .border_1()
-            .border_color(t.line)
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-            .children(rows)
-            .child(small(
-                "Edits anyone made in this folder during the turn show here too.".into(),
-            ))
-            .children(below)
-            .into_any_element()
+            .items_center()
+            .text_size(text::LABEL)
+            .text_color(t.muted)
+            .child(count)
+            .when(matches!(back, Back::Done { .. }), |d| d.child("· Restored"))
+            .when(action.is_some(), |d| d.child("·"))
+            .children(action);
+        let below = (expanded || detail.is_some()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(size::GAP)
+                .when(expanded, |b| b.children(rows()))
+                .children(detail)
+                .into_any_element()
+        });
+        (summary.into_any_element(), below)
     }
 
     /// The repo's own settings, until the user trusts them or puts it off.

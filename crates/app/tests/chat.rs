@@ -1147,7 +1147,7 @@ fn a_clear_folds_what_came_before_and_its_restore_stays_reachable(cx: &mut TestA
     let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"commands": ["clear"]})));
     let made = cx.sb.solo().join("made-by-agent.txt");
     say(cx, EDIT);
-    let i = index_of(cx, "2 files changed in this turn");
+    let i = index_of(cx, "2 files changed");
     idle(cx);
     // Enter takes the suggested command first, then sends it.
     say(cx, "/clear");
@@ -1192,16 +1192,30 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
     let read = |p: &str| std::fs::read_to_string(solo.join(p)).ok();
     let before = read("README.md");
     say(cx, EDIT);
-    let i = index_of(
-        cx,
-        "2 files changed in this turn: README.md, made-by-agent.txt",
-    );
-    cx.click(SharedString::from(format!("chat.file.{i}.0")));
+    let i = index_of(cx, "2 files changed");
+    let end = index_of(cx, "Done in");
+    let summary = cx.find(("chat.item", i)).unwrap().bounds();
+    let timing = cx.find(("chat.item", end)).unwrap().bounds();
+    assert!((summary.center().y - timing.center().y).abs() < px(1.));
+    let file = SharedString::from(format!("chat.file.{i}.0"));
+    assert!(cx.find(file.clone()).is_none());
+    cx.click(("chat.files", i));
+    assert!(cx.find(file.clone()).is_some());
+    cx.click(("chat.files", i));
+    assert!(cx.find(file.clone()).is_none());
+    cx.click(("chat.files", i));
+    cx.click(file);
     let shown = cx.workspace(|w, _| w.shown().cloned());
     assert!(
         matches!(shown, Some(Doc::Diff(d)) if d.path == "README.md" && matches!(d.right, detached_core::types::Side::Rev { .. }))
     );
     back_to_chat(cx);
+    cx.click(("chat.back", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
+    assert_eq!(read("README.md").as_deref(), Some("agent"));
+    cx.click(("chat.back.cancel", i));
+    wait_until(cx, |cx| cx.find(("chat.back.plan", i)).is_none());
+    assert_eq!(read("README.md").as_deref(), Some("agent"));
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
     cx.click(("chat.back.confirm", i));
@@ -1223,7 +1237,7 @@ fn a_restore_the_files_moved_on_from_restores_nothing_and_plans_again(cx: &mut T
     let read = |p: &str| std::fs::read_to_string(solo.join(p)).ok();
     let before = read("README.md");
     say(cx, EDIT);
-    let i = index_of(cx, "changed in this turn");
+    let i = index_of(cx, "2 files changed");
     idle(cx);
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
@@ -1343,9 +1357,14 @@ fn trusting_during_a_turn_ends_it_and_keeps_its_changes(cx: &mut TestAppContext)
     cx.click("chat.trust.accept");
     wait_for_item(cx, "load from the next message");
     idle(cx);
-    wait_for_item(cx, "changed in this turn: during.txt");
+    let i = index_of(cx, "1 file changed");
     say(cx, "settings");
     wait_for_item(cx, "project settings on");
+    cx.click(("chat.files", i));
+    assert_eq!(
+        label(cx, SharedString::from(format!("chat.file.{i}.0"))).as_deref(),
+        Some("during.txt")
+    );
 }
 
 #[gpui_kit::test]
@@ -1492,8 +1511,8 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     say(cx, "write api/README.md agent; write web/by-agent.txt x");
     // Nested repo names hold `\` on Windows (docs/TECHDEBT.md).
     let sep = std::path::MAIN_SEPARATOR;
-    let api = index_of(cx, &format!("in this turn in group{sep}api"));
-    index_of(cx, &format!("in this turn in group{sep}web"));
+    let api = index_of(cx, &format!("changed in group{sep}api"));
+    index_of(cx, &format!("changed in group{sep}web"));
     cx.click(("chat.back", api));
     wait_until(cx, |cx| items(cx)[api].ends_with("planned"));
     cx.click(("chat.back.confirm", api));
