@@ -30,6 +30,8 @@ make agent-login # the owner's, never an agent's: `detached --session` on his ow
 make warm     # macOS, in a new worktree: clones target/debug of the worktree that built last
 make ramdisk  # macOS, once per boot: the tests' sandboxes go on a RAM disk, a quarter faster
 make smoke    # build and run `--smoke` on a temp config directory
+make drive    # macOS: the app for an agent to drive, headless over temp repos and the fake Claude;
+              # repos=<n>, DRIVE=<dir> (default $TMPDIR/detached-drive); usage below
 make fmt      # cargo fmt over the workspace
 make build    # the packages for this OS under target/package (scripts/package.sh)
 make e2e-app  # macOS: packages Detached.app and runs its --self-test through LaunchServices
@@ -40,6 +42,14 @@ make adapters-sign  # the owner's fallback to adapters.yml, which signs in CI: s
 ```
 
 Keep this list in sync with the Makefile.
+
+Driving the app: run `make drive` in the background; once it prints `ready <dir>/sock`, each
+`echo '<command>' | nc -U <dir>/sock` answers one JSON line, `{"ok": …}` or `{"error": "…"}`:
+`shot <name>` (the PNG's path), `tree` (visible elements: id, role, label, value, bounds),
+`click <id>`, `type <text>`, `key <chord> [<chord>…]`, `scroll <id> <dy>` (dy > 0 goes down),
+`wait <id|text>` (30 s), `resize <w> <h>`, `mode light|dark`, `quit`. An id is `name` or `name:3`;
+`scope/id` picks one of several. The chat runs `fake_claude` (crates/core/src/bin): `pong` answers
+`said pong`; `wait chat.send` before the next prompt, as a busy chat drops Enter.
 
 ## Code style
 
