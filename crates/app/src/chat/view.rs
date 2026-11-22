@@ -11,9 +11,9 @@ use gpui_kit::component::input::{
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId,
-    FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
-    Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    WeakEntity, Window, canvas, div, prelude::FluentBuilder, px, relative,
+    FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    ParentElement, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, WeakEntity, Window, canvas, div, prelude::FluentBuilder, px, relative,
 };
 
 use detached_core::docs::Need;
@@ -2382,6 +2382,16 @@ impl Render for ChatView {
                                     .test_support()
                                     .relative()
                                     .track_focus(&self.composer_focus)
+                                    // A click beside the text puts the caret in it.
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            if !window.default_prevented() {
+                                                window.prevent_default();
+                                                this.focus(window, cx);
+                                            }
+                                        }),
+                                    )
                                     .bg(t.header_bg)
                                     .when(self.composer_focus.contains_focused(window, cx), |d| {
                                         d.border_color(t.selected_ring)
