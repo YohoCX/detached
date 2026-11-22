@@ -146,8 +146,34 @@ fn description(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) -
 
 fn set_cli(cx: &mut VisualTestContext, cli: &Path) {
     let cli = [(CLAUDE.id.into(), cli.display().to_string())].into();
-    let config = Config { cli, codex: false };
+    let config = Config {
+        cli,
+        ..Config::default()
+    };
     cx.update(|_, cx| kernel::core(cx).set_block(BLOCK, config).unwrap());
+}
+
+#[gpui_kit::test]
+fn turning_off_a_provider_keeps_its_open_chat_and_blocks_new_ones(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "say Before disabling");
+    wait_for_item(cx, "Before disabling");
+    idle(cx);
+    let original = cx.workspace(|w, _| w.shown().cloned());
+    cx.update(|_, cx| detached_app::settings::open(cx, "agents"));
+    cx.click("agents.claude.enabled");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Config>(BLOCK)
+                .is_some_and(|config| !config.shows(&CLAUDE))
+        })
+    });
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    cx.click("chat.new");
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), original);
+    cx.click("chat.input");
+    say(cx, "say After disabling");
+    wait_for_item(cx, "After disabling");
 }
 
 /// A catalog whose floor for `claude` is `min`, as the last fetch stored it.
@@ -1839,6 +1865,7 @@ fn codex(sb: &Sandbox) {
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     sb.state.set_block(BLOCK, config).unwrap();
     let home = sb.path("codex-home");

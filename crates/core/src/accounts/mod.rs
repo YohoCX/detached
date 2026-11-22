@@ -94,6 +94,7 @@ pub fn remove(state: &AppState, id: &str) -> Result<()> {
                 hosts.retain(|_, a| a != id);
                 !hosts.is_empty()
             });
+            Ok(())
         })
         .map(drop)
 }

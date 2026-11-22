@@ -88,6 +88,26 @@ pub fn open_path(path: &Path) -> Result<()> {
     Ok(open::that_detached(path)?)
 }
 
+pub fn reveal_path(path: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if Command::new("open").arg("-R").arg(path).status()?.success() {
+            return Ok(());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let path = canonical(path)?;
+        Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    open_path(path.parent().unwrap_or(path))
+}
+
 /// `script` for the system's shell: `sh -c`, or `cmd /C` on Windows.
 pub fn shell(script: &str) -> Command {
     #[cfg(unix)]

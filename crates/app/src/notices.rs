@@ -110,6 +110,15 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
             .text_size(text::SMALL)
             .on_click(move |_, _, cx| open_file(file.clone(), cx))
     });
+    let reveal = n.reveal.map(|file| {
+        ui::button("reveal", "Open file", cx)
+            .test_support()
+            .mt(ui::GAP)
+            .on_click(move |_, _, cx| {
+                let file = file.clone();
+                say_error(blocking::run(cx, move || os::reveal_path(&file)), cx);
+            })
+    });
     ui::glass(div(), cx)
         .id(("notice", id as usize))
         .test_support()
@@ -122,6 +131,7 @@ fn notice(n: Notice, cx: &App) -> impl IntoElement {
         .children(body)
         .children(files)
         .children(open)
+        .children(reveal)
         .with_animation(
             ("notice.in", id as usize),
             Animation::new(ui::motion::SLOW).with_easing(ease_out_quint()),

@@ -1,7 +1,7 @@
 //! The Agents page: each provider's own CLI, found, checked and logged in from a terminal tab, and an
 //! ACP provider's adapter, installed from the catalog, updated and rolled back.
 
-use detached_core::adapters::{self, Cli, LoginStatus, PROVIDERS};
+use detached_core::adapters::{self, Cli, Config, LoginStatus, PROVIDERS};
 use detached_core::backend::Name;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
@@ -11,9 +11,10 @@ use gpui_kit::{
     div, prelude::FluentBuilder, px,
 };
 use kernel::agents::{Agents, Row, State};
+use kernel::settings::Settings;
 
 use crate::terminal;
-use crate::ui::page::{button, card, item, labeled, layout, path};
+use crate::ui::page::{button, card, item, labeled, layout, path, toggle};
 use crate::ui::theme::GAP;
 use crate::ui::{self, text, theme};
 
@@ -26,7 +27,10 @@ pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
         Page {
             paths,
             loaded: false,
-            _agents: cx.observe(&Agents::global(cx), |_, _, cx| cx.notify()),
+            _watch: [
+                cx.observe(&Agents::global(cx), |_, _, cx| cx.notify()),
+                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+            ],
         }
     })
     .into()
@@ -36,7 +40,7 @@ struct Page {
     /// By `PROVIDERS`' order.
     paths: [Entity<InputState>; 2],
     loaded: bool,
-    _agents: Subscription,
+    _watch: [Subscription; 2],
 }
 
 fn act(
@@ -237,7 +241,7 @@ impl Page {
 }
 
 impl Render for Page {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Here, not when Settings opens: finding a CLI runs it.
         if !self.loaded {
             self.loaded = true;
@@ -259,8 +263,21 @@ impl Render for Page {
         if let Some(e) = &a.error {
             page = page.child(labeled("agents.error", e.clone()).text_color(theme(cx).error));
         }
+        let config: Config = Settings::get(cx).block(adapters::BLOCK).unwrap_or_default();
+        let enabled = PROVIDERS.map(|p| {
+            let on = config.shows(p);
+            let id = SharedString::from(format!("agents.{}.enabled", p.id));
+            let label = format!("Enable {}", p.name);
+            item(p.name, None, cx).child(toggle(id, on, label, window, cx).on_click(cx.listener(
+                move |_, _, _, cx| {
+                    Agents::global(cx).update(cx, |a, cx| a.set_enabled(p, !on, cx));
+                },
+            )))
+        });
+        page = page.child(card(Some("Providers"), None, enabled, cx));
+        let a = agents.read(cx);
         for (i, r) in a.rows.iter().enumerate() {
-            if a.config.shows(r.provider) {
+            if config.shows(r.provider) {
                 page = page.child(self.provider(i, r, a, cx));
             }
         }

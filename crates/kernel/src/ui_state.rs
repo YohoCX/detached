@@ -3,33 +3,59 @@
 
 use std::path::{Path, PathBuf};
 
+use detached_core::settings::{FileProblem, read_json};
 use gpui::{App, Global};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 #[derive(Default)]
-struct UiState {
+pub struct UiState {
     file: Option<PathBuf>,
     values: Map<String, Value>,
 }
 
 impl Global for UiState {}
 
-/// Reads `<dir>/ui.json`; a missing or broken file starts from defaults.
-pub fn init(dir: &Path, cx: &mut App) {
+pub fn load(dir: &Path) -> (UiState, Option<FileProblem>) {
     let file = dir.join("ui.json");
-    let mut values = std::fs::read(&file)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    if council(&mut values) {
-        let _ = write(&file, &values);
+    match read_json(&file, true) {
+        Ok(values) => {
+            let mut values = values.unwrap_or_default();
+            if council(&mut values) {
+                let _ = write(&file, &values);
+            }
+            (
+                UiState {
+                    file: Some(file),
+                    values,
+                },
+                None,
+            )
+        }
+        Err(problem) => {
+            let file = problem.backup.as_ref().map(|_| file);
+            (
+                UiState {
+                    file,
+                    ..UiState::default()
+                },
+                Some(problem),
+            )
+        }
     }
-    cx.set_global(UiState {
-        file: Some(file),
-        values,
-    });
+}
+
+pub fn install(state: UiState, cx: &mut App) {
+    cx.set_global(state);
+}
+
+pub fn init(dir: &Path, cx: &mut App) {
+    let (state, problem) = load(dir);
+    install(state, cx);
+    if let Some(problem) = problem {
+        crate::activity::Activity::config_problem(&problem, cx);
+    }
 }
 
 /// None when unset or of another type.
@@ -186,11 +212,17 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_broken_file_starts_from_defaults(cx: &mut TestAppContext) {
+    fn a_broken_file_is_backed_up_and_the_defaults_can_be_saved(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ui.json"), "{not json").unwrap();
+        let bad = "{not json";
+        std::fs::write(dir.path().join("ui.json"), bad).unwrap();
         cx.update(|cx| {
+            crate::activity::init(cx);
             init(dir.path(), cx);
+            let activity = crate::activity::Activity::global(cx);
+            let backup = dir.path().join("ui.json.bad");
+            assert_eq!(activity.read(cx).notices[0].reveal.as_ref(), Some(&backup));
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), bad);
             assert_eq!(get::<bool>("tree.nesting", cx), None);
             set("tree.nesting", false, cx);
             init(dir.path(), cx);

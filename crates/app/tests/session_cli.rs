@@ -16,7 +16,13 @@ fn sandbox() -> Sandbox {
     let fake = detached_core::testutil::claude::fake();
     let cli = [(CLAUDE.id.into(), fake.display().to_string())].into();
     sb.state
-        .set_block(BLOCK, Config { cli, codex: false })
+        .set_block(
+            BLOCK,
+            Config {
+                cli,
+                ..Config::default()
+            },
+        )
         .unwrap();
     let repo = sb.path("repo");
     std::fs::create_dir(&repo).unwrap();

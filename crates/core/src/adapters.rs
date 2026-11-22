@@ -39,19 +39,39 @@ pub const COOL_DOWN: u64 = 3;
 /// Settings' block for the agents.
 pub const BLOCK: &str = "agents";
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Config {
     /// A CLI's path by provider id, in place of the one on PATH.
-    #[serde(default)]
     pub cli: BTreeMap<String, String>,
-    /// Codex is listed, and its adapter installs, only once this is on.
-    #[serde(default)]
+    pub claude: bool,
     pub codex: bool,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, serde_json::Value>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cli: BTreeMap::new(),
+            claude: true,
+            codex: false,
+            other: BTreeMap::new(),
+        }
+    }
 }
 
 impl Config {
     pub fn shows(&self, provider: &Provider) -> bool {
-        provider.id != CODEX.id || self.codex
+        (provider.id != CLAUDE.id || self.claude) && (provider.id != CODEX.id || self.codex)
+    }
+
+    pub fn set_enabled(&mut self, provider: &Provider, enabled: bool) {
+        if provider.id == CLAUDE.id {
+            self.claude = enabled;
+        } else if provider.id == CODEX.id {
+            self.codex = enabled;
+        }
     }
 }
 

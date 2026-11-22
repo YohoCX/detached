@@ -1,7 +1,7 @@
 //! Live runs: the start form in the Council app, a run's header, participants and kept branches in
 //! its tab, and a line per run in the status bar.
 
-use detached_core::adapters::CODEX;
+use detached_core::adapters::{CLAUDE, CODEX};
 use detached_core::council::mode::Stage;
 use detached_core::council::record::State;
 use detached_core::council::run::{Over, Preview, Start};
@@ -10,13 +10,14 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity,
-    Window, div, prelude::FluentBuilder, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::council::Rounds;
 use kernel::council::live::{self, Council, Phase, Status};
 use kernel::doc::Doc;
 use kernel::resource::Interest;
+use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 use crate::ui::theme::{GAP, text};
@@ -56,6 +57,7 @@ pub(super) struct Form {
     busy: bool,
     checking: Option<Task<()>>,
     pub done: bool,
+    _settings: Subscription,
     _tasks: Vec<Task<()>>,
 }
 
@@ -89,6 +91,9 @@ impl Form {
             busy: false,
             checking: None,
             done: false,
+            _settings: cx.observe(&Settings::global(cx), |this: &mut Form, _, cx| {
+                this.check(cx)
+            }),
             _tasks: vec![],
         };
         f.check(cx);
@@ -108,6 +113,7 @@ impl Form {
             _ if item.is_empty() => return Err("Enter your question".into()),
             _ => Over::Question(item),
         };
+        let providers = crate::chat::provider_config(cx);
         Ok(Start {
             repo: self.repo.clone(),
             base: match self.kind {
@@ -119,7 +125,7 @@ impl Form {
             mode: self.mode.into(),
             untrusted: self.untrusted,
             budget: text(&self.budget).parse().ok(),
-            codex: self.codex,
+            codex: providers.shows(&CODEX) && (self.codex || !providers.shows(&CLAUDE)),
             roles: vec![],
             over,
             head: None,
@@ -171,6 +177,7 @@ impl Form {
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
+        let providers = crate::chat::provider_config(cx);
         let mut body = div()
             .id("council.form")
             .test_support()
@@ -221,25 +228,25 @@ impl Render for Form {
                 },
                 cx,
             ))
-            .when(
-                crate::chat::providers(cx).iter().any(|p| p.id == CODEX.id),
-                |b| {
-                    let me = cx.entity().downgrade();
-                    b.child(ui::segmented(
-                        "council.form.verifier",
-                        &[(false, "Claude verifies"), (true, "Codex verifies")],
-                        self.codex,
-                        move |codex, _, cx| {
-                            me.update(cx, |f, cx| {
-                                f.codex = codex;
-                                cx.notify();
-                            })
-                            .ok();
-                        },
-                        cx,
-                    ))
-                },
-            )
+            .when(providers.shows(&CLAUDE) && providers.shows(&CODEX), |b| {
+                let me = cx.entity().downgrade();
+                b.child(ui::segmented(
+                    "council.form.verifier",
+                    &[(false, "Claude verifies"), (true, "Codex verifies")],
+                    self.codex,
+                    move |codex, _, cx| {
+                        me.update(cx, |f, cx| {
+                            f.codex = codex;
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                    cx,
+                ))
+            })
+            .when(providers.shows(&CODEX) && !providers.shows(&CLAUDE), |b| {
+                b.child(crate::ui::page::muted("Codex verifies", cx))
+            })
             .child(ui::input(&self.budget, cx))
             .child(
                 div().flex().gap(GAP).child(
@@ -332,6 +339,7 @@ impl Render for Form {
                                     repo: repo.clone(),
                                     branch: branch.clone(),
                                     head: head.clone(),
+                                    ..Default::default()
                                 };
                                 let t = live::change(cx, move |p| {
                                     p.branches

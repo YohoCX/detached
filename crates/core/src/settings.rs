@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use serde::de::DeserializeOwned;
@@ -34,6 +35,9 @@ pub struct Settings {
     /// Top-level keys this build does not know: modules' blocks, kept as they are.
     #[serde(flatten)]
     pub other: BTreeMap<String, Value>,
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub recovery: Recovery,
 }
 
 /// Named folders, the window's context: the window shows one workspace's repos at a time.
@@ -46,9 +50,6 @@ pub struct Workspace {
     pub name: String,
     pub folders: Vec<String>,
     pub excluded_repos: Vec<String>,
-    /// Repos and folders attached read-only.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub read_only: Vec<String>,
     /// Unused since one workspace shows at a time; kept so an older build still lists repos.
     pub active: bool,
     /// Fields a later build added, kept as they are.
@@ -73,31 +74,147 @@ impl Workspace {
 
 const FILE: &str = "settings.json";
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Recovery {
+    invalid: BTreeMap<String, Value>,
+    file: Option<FileProblem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileProblem {
+    pub file: PathBuf,
+    pub backup: Option<PathBuf>,
+    pub error: String,
+}
+
+pub fn read_json<T: DeserializeOwned>(
+    file: &Path,
+    move_aside: bool,
+) -> std::result::Result<Option<T>, FileProblem> {
+    let (error, backup) = match std::fs::read(file) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(value) => return Ok(Some(value)),
+            Err(e) if move_aside => match backup_bad(file) {
+                Ok(backup) => (e.to_string(), Some(backup)),
+                Err(backup) => (
+                    format!("{e}. Could not move the file aside: {backup}"),
+                    None,
+                ),
+            },
+            Err(e) => (e.to_string(), None),
+        },
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => (e.to_string(), None),
+    };
+    Err(FileProblem {
+        file: file.into(),
+        backup,
+        error,
+    })
+}
+
+fn backup_bad(file: &Path) -> std::io::Result<PathBuf> {
+    for i in 0.. {
+        let backup = file.with_extension(if i == 0 {
+            "json.bad".into()
+        } else {
+            format!("json.bad.{i}")
+        });
+        // Creating the link fails if the backup name already exists.
+        match std::fs::hard_link(file, &backup) {
+            Ok(()) => {
+                std::fs::remove_file(file)?;
+                return Ok(backup);
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
 impl Settings {
-    /// A file that doesn't parse is moved to `settings.json.bad`, so the next save can't destroy it.
     pub fn load(dir: &Path) -> Settings {
-        let path = dir.join(FILE);
-        let Ok(bytes) = std::fs::read(&path) else {
-            return Settings::default();
+        let mut settings = Settings::default();
+        let mut raw: BTreeMap<String, Value> = match read_json(&dir.join(FILE), true) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => return settings,
+            Err(problem) => {
+                settings.recovery.file = Some(problem);
+                return settings;
+            }
         };
-        serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            eprintln!("settings.json is invalid ({e}); moved to settings.json.bad");
-            let _ = std::fs::rename(&path, dir.join(format!("{FILE}.bad")));
-            Settings::default()
-        })
+        macro_rules! field {
+            ($name:literal, $field:ident) => {
+                if let Some(value) = raw.remove($name) {
+                    match Deserialize::deserialize(&value) {
+                        Ok(parsed) => settings.$field = parsed,
+                        Err(_) => {
+                            settings.recovery.invalid.insert($name.into(), value);
+                        }
+                    }
+                }
+            };
+        }
+        field!("workspaces", workspaces);
+        field!("repoAccounts", repo_accounts);
+        field!("forgeAccounts", forge_accounts);
+        field!("mrRemotes", mr_remotes);
+        field!("gitPath", git_path);
+        field!("fileNesting", file_nesting);
+        settings.other = raw;
+        settings
+    }
+
+    pub fn file_problem(&self) -> Option<&FileProblem> {
+        self.recovery.file.as_ref()
+    }
+
+    pub fn invalid_blocks(&self) -> Vec<&str> {
+        use crate::{adapters, chat_settings, council::marks, git::files, secrets, skills};
+
+        let mut names: Vec<_> = self.recovery.invalid.keys().map(String::as_str).collect();
+        macro_rules! check {
+            ($name:expr, $ty:ty) => {
+                if self.other.contains_key($name) && self.block::<$ty>($name).is_none() {
+                    names.push($name);
+                }
+            };
+        }
+        check!(adapters::BLOCK, adapters::Config);
+        check!(chat_settings::BLOCK, chat_settings::Preset);
+        check!(marks::BLOCK, marks::Council);
+        check!("panels", marks::Council);
+        check!("files", files::TreeSettings);
+        check!(secrets::BLOCK, BTreeMap<String, Vec<String>>);
+        check!(skills::BLOCK, skills::Config);
+        check!(crate::store::TRUST, BTreeMap<String, String>);
+        names
     }
 
     /// The block a module keeps under its own top-level key; None when absent or not a `T`.
     pub fn block<T: DeserializeOwned>(&self, name: &str) -> Option<T> {
-        serde_json::from_value(self.other.get(name)?.clone()).ok()
+        T::deserialize(self.other.get(name)?).ok()
     }
 
     fn save(&self, dir: &Path) -> Result<()> {
+        if let Some(problem) = self.file_problem().filter(|p| p.backup.is_none()) {
+            return Err(Error::Other(format!(
+                "Cannot save settings.json: {}",
+                problem.error
+            )));
+        }
+        let bytes = if self.recovery.invalid.is_empty() {
+            serde_json::to_vec_pretty(self)?
+        } else {
+            let mut value = serde_json::to_value(self)?;
+            if let Value::Object(fields) = &mut value {
+                fields.extend(self.recovery.invalid.clone());
+            }
+            serde_json::to_vec_pretty(&value)?
+        };
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!("{FILE}.tmp"));
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(tmp, dir.join(FILE))?;
-        Ok(())
+        crate::store::atomic(&dir.join(FILE), &bytes)
     }
 }
 
@@ -107,10 +224,10 @@ impl AppState {
     }
 
     /// Memory keeps the old settings when the save fails.
-    pub(crate) fn update(&self, f: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    pub(crate) fn update(&self, f: impl FnOnce(&mut Settings) -> Result<()>) -> Result<Settings> {
         let mut s = self.settings.lock().unwrap();
         let mut next = s.clone();
-        f(&mut next);
+        f(&mut next)?;
         next.save(&self.config_dir)?;
         *s = next.clone();
         self.revision.fetch_add(1, Ordering::SeqCst);
@@ -124,13 +241,43 @@ impl AppState {
 
     /// Writes a module's block; a key this build knows is not one.
     pub fn set_block(&self, name: &str, value: impl Serialize) -> Result<Settings> {
-        let known = serde_json::to_value(Settings::default())?;
-        if known.get(name).is_some() {
-            return Err(Error::Other(format!("{name} is not a block")));
-        }
+        check_block_name(name)?;
         let value = serde_json::to_value(value)?;
         self.update(|s| {
             s.other.insert(name.into(), value);
+            Ok(())
+        })
+    }
+
+    pub fn change_block<T: Default + DeserializeOwned + Serialize>(
+        &self,
+        name: &str,
+        edit: impl FnOnce(&mut T),
+    ) -> Result<Settings> {
+        check_block_name(name)?;
+        self.update(|s| {
+            let mut block = s.block::<T>(name).unwrap_or_default();
+            edit(&mut block);
+            s.other.insert(name.into(), serde_json::to_value(block)?);
+            Ok(())
+        })
+    }
+
+    fn update_field(&self, name: &str, edit: impl FnOnce(&mut Settings)) -> Result<Settings> {
+        self.update(|s| {
+            s.recovery.invalid.remove(name);
+            edit(s);
+            Ok(())
+        })
+    }
+
+    pub fn set_file_nesting(
+        &self,
+        pattern: String,
+        children: Option<Vec<String>>,
+    ) -> Result<Settings> {
+        self.update_field("fileNesting", |s| {
+            put(&mut s.file_nesting, pattern, children)
         })
     }
 
@@ -171,20 +318,22 @@ impl AppState {
             for w in s.workspaces.iter_mut().filter(|w| w.id.is_empty()) {
                 w.id = new_id();
             }
+            Ok(())
         })
         .map(drop)
     }
 
     /// Changes workspace `id` and lists its repos again.
     fn in_workspace(&self, id: &str, f: impl FnOnce(&mut Workspace)) -> Result<Vec<RepoInfo>> {
-        let mut found = true;
-        self.update(|s| match s.workspaces.iter_mut().find(|w| w.id == id) {
-            Some(w) => f(w),
-            None => found = false,
+        self.update(|s| {
+            let w = s
+                .workspaces
+                .iter_mut()
+                .find(|w| w.id == id)
+                .ok_or_else(|| Error::Other(format!("No workspace {id}")))?;
+            f(w);
+            Ok(())
         })?;
-        if !found {
-            return Err(Error::Other(format!("No workspace {id}")));
-        }
         Ok(self.list_repos(id))
     }
 
@@ -192,7 +341,7 @@ impl AppState {
     /// first folder needs no setup.
     pub fn add_folder(&self, id: Option<String>, path: String) -> Result<Vec<RepoInfo>> {
         let mut first = String::new();
-        self.update(|s| {
+        self.update_field("workspaces", |s| {
             if s.workspaces.is_empty() {
                 s.workspaces.push(Workspace::new("Default".into()));
             }
@@ -236,7 +385,7 @@ impl AppState {
             None => {
                 let w = Workspace::new(name);
                 let id = w.id.clone();
-                self.update(|s| s.workspaces.push(w))?;
+                self.update_field("workspaces", |s| s.workspaces.push(w))?;
                 Ok(id)
             }
         }
@@ -244,12 +393,14 @@ impl AppState {
 
     /// Drops workspace `id` from the settings; its folders and repos stay where they are.
     pub fn remove_workspace(&self, id: String) -> Result<()> {
-        self.update(|s| s.workspaces.retain(|w| w.id != id))
+        self.update_field("workspaces", |s| s.workspaces.retain(|w| w.id != id))
             .map(drop)
     }
 
     pub fn set_repo_account(&self, repo: String, account_id: Option<String>) -> Result<Settings> {
-        self.update(|s| put(&mut s.repo_accounts, repo, account_id))
+        self.update_field("repoAccounts", |s| {
+            put(&mut s.repo_accounts, repo, account_id)
+        })
     }
 
     pub fn set_forge_account(
@@ -258,7 +409,7 @@ impl AppState {
         host: String,
         account_id: Option<String>,
     ) -> Result<Settings> {
-        self.update(|s| {
+        self.update_field("forgeAccounts", |s| {
             let hosts = s.forge_accounts.entry(repo.clone()).or_default();
             put(hosts, host, account_id);
             if hosts.is_empty() {
@@ -268,11 +419,11 @@ impl AppState {
     }
 
     pub fn set_mr_remote(&self, repo: String, remote: Option<String>) -> Result<Settings> {
-        self.update(|s| put(&mut s.mr_remotes, repo, remote))
+        self.update_field("mrRemotes", |s| put(&mut s.mr_remotes, repo, remote))
     }
 
     pub fn set_git_path(&self, path: Option<String>) -> Result<EnvInfo> {
-        let s = self.update(|s| s.git_path = path)?;
+        let s = self.update_field("gitPath", |s| s.git_path = path)?;
         let (env, _) = Env::detect(s.git_path.as_deref());
         let info = env.info();
         *self.env.write().unwrap() = env;
@@ -281,14 +432,25 @@ impl AppState {
 
     /// User overrides from `keymap.json`: action id -> chord, e.g. `"file.goto": "Cmd+Shift+N"`.
     pub fn keymap_overrides(&self) -> BTreeMap<String, String> {
-        std::fs::read(self.config_dir.join("keymap.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        self.read_keymap().unwrap_or_default()
+    }
+
+    pub fn read_keymap(&self) -> std::result::Result<BTreeMap<String, String>, FileProblem> {
+        read_json(&self.config_dir.join("keymap.json"), false).map(Option::unwrap_or_default)
     }
 }
 
-fn put(map: &mut BTreeMap<String, String>, key: String, value: Option<String>) {
+fn check_block_name(name: &str) -> Result<()> {
+    if serde_json::to_value(Settings::default())?
+        .get(name)
+        .is_some()
+    {
+        return Err(Error::Other(format!("{name} is not a block")));
+    }
+    Ok(())
+}
+
+fn put<T>(map: &mut BTreeMap<String, T>, key: String, value: Option<T>) {
     match value {
         Some(v) => map.insert(key, v),
         None => map.remove(&key),
@@ -307,7 +469,6 @@ mod tests {
             workspaces: vec![Workspace {
                 id: "1234abcd".into(),
                 name: "Office".into(),
-                read_only: vec!["/kb".into()],
                 folders: vec!["/a".into()],
                 ..Default::default()
             }],
@@ -377,7 +538,7 @@ mod tests {
         assert_eq!(a.len(), 8);
         assert_eq!(ws[1].id, "0000beef");
         assert_eq!((ws[0].active, ws[1].active), (false, true));
-        assert_eq!(ws[1].read_only, ["/kb"]);
+        assert_eq!(ws[1].other["readOnly"], serde_json::json!(["/kb"]));
         let rev = state.revision();
         state.assign_ids().unwrap();
         assert_eq!(
@@ -407,12 +568,51 @@ mod tests {
     #[test]
     fn invalid_file_is_kept_aside_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();
-        let bad = r#"{"folders":["/keep"],"gitPath":5}"#;
+        let bad = r#"{"folders":["/keep"],"gitPath":5"#;
         std::fs::write(dir.path().join(FILE), bad).unwrap();
-        assert_eq!(Settings::load(dir.path()), Settings::default());
-        Settings::default().save(dir.path()).unwrap();
+        let first = Settings::load(dir.path());
+        assert!(first.file_problem().unwrap().backup.is_some());
+        std::fs::write(dir.path().join(FILE), "42").unwrap();
+        let second = Settings::load(dir.path());
+        assert_eq!(
+            second.file_problem().unwrap().backup.as_deref(),
+            Some(dir.path().join("settings.json.bad.1").as_path())
+        );
+        second.save(dir.path()).unwrap();
         let kept = std::fs::read_to_string(dir.path().join(format!("{FILE}.bad"))).unwrap();
         assert_eq!(kept, bad);
+    }
+
+    #[test]
+    fn malformed_blocks_are_reported_and_kept_until_edited() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(FILE);
+        let original = serde_json::json!({
+            "council": {"cap": "6", "future": true},
+            "fileNesting": false,
+            "workspaces": [{"name": "Keep", "later": 42}],
+        });
+        std::fs::write(&file, original.to_string()).unwrap();
+        let state = memory_state(dir.path().into());
+        assert_eq!(
+            state.get_settings().invalid_blocks(),
+            ["fileNesting", "council"]
+        );
+        state.assign_ids().unwrap();
+        state
+            .set_mr_remote("/r".into(), Some("origin".into()))
+            .unwrap();
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(read()["council"], original["council"]);
+        assert_eq!(read()["fileNesting"], original["fileNesting"]);
+        assert_eq!(read()["workspaces"][0]["later"], 42);
+        crate::council::marks::change(&state, |p| p.cap = 6).unwrap();
+        state
+            .set_file_nesting(".js".into(), Some(vec![".js.map".into()]))
+            .unwrap();
+        assert_eq!(read()["council"]["cap"], 6);
+        assert_eq!(read()["fileNesting"][".js"], serde_json::json!([".js.map"]));
+        assert!(state.get_settings().invalid_blocks().is_empty());
     }
 
     #[test]
@@ -423,7 +623,7 @@ mod tests {
         let state = memory_state(not_a_dir);
         let saved = state.set_mr_remote("/r".into(), Some("origin".into()));
         assert!(saved.is_err());
-        assert_eq!(state.get_settings(), Settings::default());
+        assert!(state.get_settings().mr_remotes.is_empty());
         assert_eq!(state.revision(), 0);
     }
 

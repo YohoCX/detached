@@ -1,9 +1,10 @@
 //! Trust marks for councils, personal and per machine in settings.json, and what they make of a
 //! subject: trusted runs in orchestrator mode, anything else gets the read-only sandbox.
 
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::record::{Of, Subject};
 use crate::env::Env;
@@ -29,6 +30,8 @@ pub struct Council {
     /// Seconds without an update that make a participant stalled, and a tool call's own limit.
     pub stall: u64,
     pub tool: u64,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
 }
 
 impl Default for Council {
@@ -41,6 +44,7 @@ impl Default for Council {
             cap: 4,
             stall: 120,
             tool: 1200,
+            other: BTreeMap::new(),
         }
     }
 }
@@ -53,14 +57,18 @@ pub struct Mark {
     pub remote: Option<String>,
     /// MRs from forks count as trusted too.
     pub forks: bool,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
 }
 
 /// A local branch the owner marked trusted at `head`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Branch {
     pub repo: String,
     pub branch: String,
     pub head: String,
+    #[serde(flatten)]
+    pub other: BTreeMap<String, Value>,
 }
 
 pub fn load(core: &AppState) -> Council {
@@ -69,9 +77,7 @@ pub fn load(core: &AppState) -> Council {
 
 /// Changes the marks and limits in settings.json.
 pub fn change(core: &AppState, f: impl FnOnce(&mut Council)) -> Result<()> {
-    let mut p = load(core);
-    f(&mut p);
-    core.set_block(BLOCK, p).map(drop)
+    core.change_block(BLOCK, f).map(drop)
 }
 
 /// Marks `repo` trusted as a whole unless a repo or workspace mark already covers it, whose remote
@@ -377,6 +383,7 @@ mod tests {
             name: repo.clone(),
             remote: Some("upstream".into()),
             forks: true,
+            ..Mark::default()
         };
         change(core, |p| p.repos.push(own.clone())).unwrap();
         mark_repo(core, &repo).unwrap();
@@ -470,6 +477,39 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_uses_its_chosen_remote_and_forks_setting() {
+        let t = T::new();
+        let core = &t.sb.state;
+        let id = core.save_workspace("Work".into(), None).unwrap();
+        core.add_folder(Some(id), t.sb.dir.path().display().to_string())
+            .unwrap();
+        core.set_block(
+            BLOCK,
+            serde_json::json!({
+                "workspaces": [{"name": "Work", "remote": "upstream", "future": 7}],
+                "future": true,
+            }),
+        )
+        .unwrap();
+        let mut subject = t.subject("feature", true);
+        subject.of = Of::Mr {
+            number: 7,
+            title: "Feature".into(),
+            author: "author".into(),
+            url: String::new(),
+            remote: "upstream".into(),
+            head_ref: "refs/merge-requests/7/head".into(),
+            fork: true,
+        };
+        assert!(!classify(core, &load(core), &subject).unwrap().trusted);
+        change(core, |p| p.workspaces[0].forks = true).unwrap();
+        assert!(classify(core, &load(core), &subject).unwrap().trusted);
+        let saved = &core.get_settings().other[BLOCK];
+        assert_eq!(saved["workspaces"][0]["future"], 7);
+        assert_eq!(saved["future"], true);
+    }
+
+    #[test]
     fn in_a_trusted_repo_a_local_branch_is_trusted_unless_its_upstream_is_a_fork_s() {
         let t = T::new();
         let p = t.whole();
@@ -501,6 +541,7 @@ mod tests {
                 repo: repo.display().to_string(),
                 branch: "feat".into(),
                 head: head.clone(),
+                ..Branch::default()
             }],
             ..Council::default()
         };
@@ -520,6 +561,9 @@ mod tests {
             "theirs",
         ]);
         assert!(!t.trusted(&p, "feat", false), "a commit by someone else");
+        let mut aliases = p.clone();
+        aliases.identities.push("other@example.com".into());
+        assert!(t.trusted(&aliases, "feat", false));
         t.git(&["reset", "-q", "--hard", "HEAD~1"]);
         assert!(!t.trusted(&p, "feat", false), "a reset");
         let mut moved = p.clone();
