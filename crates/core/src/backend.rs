@@ -310,7 +310,8 @@ impl Drop for Reply {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Model {
     pub value: String,
     pub resolved: Option<String>,

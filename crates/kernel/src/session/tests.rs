@@ -44,6 +44,7 @@ macro_rules! both {
 both!(
     a_turn_streams_lists_what_it_changed_and_goes_back,
     a_turn_keeps_the_model_and_effort_that_ran,
+    an_opened_session_remembers_its_provider_s_models_when_they_differ,
     cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks,
     a_load_runs_on_the_session_s_model,
     a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone,
@@ -92,6 +93,32 @@ fn a_turn_keeps_the_model_and_effort_that_ran(fake: Fake, cx: &mut TestAppContex
             .collect();
         assert_eq!(got, [(Some(ran), Some("high")), (Some(ran), Some("low"))]);
     });
+}
+
+fn an_opened_session_remembers_its_provider_s_models_when_they_differ(
+    fake: Fake,
+    cx: &mut TestAppContext,
+) {
+    use crate::settings::{Settings, loaded};
+    let f = boot_fake(cx, fake);
+    let id = f.provider.id;
+    let remembered = |cx: &App| Preset::read(Settings::get(cx)).models(id).to_vec();
+    let models = open(&f, Kind::Chat, cx).read_with(cx, |s, _| s.models.clone());
+    assert!(!models.is_empty());
+    wait_until(cx, |cx| loaded(cx) && remembered(cx) == models);
+    let revision = f.core.revision();
+    assert_eq!(turn(&open(&f, Kind::Chat, cx), "say same", cx), "same");
+    assert_eq!(f.core.revision(), revision);
+    let core = f.core.clone();
+    let task = cx.update(|cx| {
+        blocking::run(cx, move || {
+            Preset::save(&core, |p| p.choices(id).models.truncate(1))
+        })
+    });
+    cx.foreground_executor().block_test(task).unwrap();
+    wait_until(cx, |cx| loaded(cx) && remembered(cx) == models[..1]);
+    open(&f, Kind::Chat, cx);
+    wait_until(cx, |cx| loaded(cx) && remembered(cx) == models);
 }
 
 /// A real adapter and `claude` may take this long to start or answer.

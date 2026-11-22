@@ -12,6 +12,7 @@ use detached_core::backend::{
     self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
     Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
+use detached_core::chat_settings::Preset;
 use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
@@ -926,6 +927,12 @@ impl Session {
                 self.version = Some(o.version);
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
+                let (core, id, models) = (
+                    crate::core(cx).clone(),
+                    self.spec.provider.id,
+                    self.models.clone(),
+                );
+                blocking::run(cx, move || _ = Preset::remember(&core, id, &models)).detach();
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
                     self.note(HISTORY_UNAVAILABLE.into());
