@@ -1,0 +1,5 @@
+{
+  "name": "Dusk",
+  "extends": "Fleet",
+  "dark": { "accent": "#c08552" }
+}

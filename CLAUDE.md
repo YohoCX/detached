@@ -5,7 +5,7 @@ worktrees (`git worktree add`/`remove`), Council's pinned trees and finder branc
 and Discard, a Fix's branch and worktree, an MR subject's ref under `refs/detached/subjects/`, and
 the chat's turn snapshots (private refs) and restores:
 - `crates/core`: the backend (git, forge, accounts, search, settings, store, the agents' processes
-  and PTYs in `proc`, defined processes in `processes`, the env store in `secrets`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
+  and PTYs in `proc`, defined processes in `processes`, plugins from a folder in `plugins`, the env store in `secrets`, the agent backend seam in `backend`, Claude's direct client in the private `claude`
   with `fake_claude`, the scripted CLI the tests run, and trust), blocking
   Rust, no UI types.
 - `crates/acp`: the ACP client on `agent-client-protocol`, a blocking API whose async deps stay
