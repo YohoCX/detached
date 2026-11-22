@@ -210,7 +210,7 @@ pub fn quiet_button(
 }
 
 // GPUI takes one hover style per element, so each button sets its own.
-fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     pressable(id)
         .h(px(28.))
         .px(px(14.))

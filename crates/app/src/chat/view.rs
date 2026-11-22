@@ -629,15 +629,16 @@ impl ChatView {
                 }))
                 .into_any_element()
         } else {
-            let send = ui::primary_button("chat.send", "↑ Send", cx)
+            let send = match empty {
+                true => ui::pill("chat.send", "↑ Send")
+                    .bg(t.header_bg)
+                    .border_color(t.panel_edge)
+                    .text_color(t.muted),
+                false => ui::primary_button("chat.send", "↑ Send", cx),
+            };
+            let send = send
                 .role(Role::Button)
                 .aria_label("Send")
-                .when(empty, |b| {
-                    b.bg(t.header_bg)
-                        .border_color(t.panel_edge)
-                        .text_color(t.muted)
-                        .hover(|s| s)
-                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.send(window, cx);
                     this.focus(window, cx);
