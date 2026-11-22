@@ -23,7 +23,7 @@ use gpui_kit::{
     Animation, AnimationElement, AnimationExt, App, BoxShadow, Div, ElementId, Entity, FontWeight,
     HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
     Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div,
-    ease_out_quint, prelude::FluentBuilder, px, relative,
+    ease_out_quint, prelude::FluentBuilder, px, relative, transparent_black,
 };
 
 pub use disabled::disabled;
@@ -155,9 +155,10 @@ pub fn pressable(id: impl Into<ElementId>) -> Stateful<Div> {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-/// A borderless icon, muted until hovered; 28px high.
+/// A borderless icon, muted until hovered and ringed on keyboard focus; 28px high.
 pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
+    let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
     pressable(id)
         .justify_center()
         .gap(px(4.))
@@ -168,6 +169,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .active(|s| s.bg(t.selected_inactive).opacity(0.8))
+        .focus_visible(|s| s.shadow(vec![ring.inset()]))
         .child(icon)
 }
 
@@ -192,6 +194,19 @@ pub fn primary_button(
         .border_color(t.primary)
         .text_color(t.primary_fg)
         .hover(|s| s.bg(t.primary.opacity(0.88)))
+}
+
+/// A `button` without a fill until hovered.
+pub fn quiet_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = theme(cx);
+    pill(id, label)
+        .border_color(transparent_black())
+        .text_color(t.muted)
+        .hover(|s| s.bg(t.hover).text_color(t.fg))
 }
 
 // GPUI takes one hover style per element, so each button sets its own.
