@@ -6,6 +6,7 @@ use std::ops::Deref;
 use detached_core::{api, settings};
 use gpui::{App, AppContext, Entity, Global};
 
+use crate::activity::{Activity, Level, Notice};
 use crate::blocking;
 
 pub struct Settings {
@@ -30,6 +31,10 @@ impl Deref for Settings {
 impl Settings {
     pub fn global(cx: &App) -> Entity<Settings> {
         cx.global::<Snapshot>().0.clone()
+    }
+
+    pub fn ready(cx: &App) -> bool {
+        cx.global::<Snapshot>().0.read(cx).revision.is_some()
     }
 
     /// Core's settings as last loaded.
@@ -58,12 +63,43 @@ pub(crate) fn refresh(cx: &mut App) {
     if s.loading || s.revision == Some(core.revision()) {
         return;
     }
+    let initial = s.revision.is_none();
     snapshot.update(cx, |s, _| s.loading = true);
     // The revision first: a save in between only reloads once more.
-    let load = blocking::run(cx, move || (core.revision(), api::get_settings(&core)));
+    let load = blocking::run(cx, move || {
+        let revision = core.revision();
+        let value = api::get_settings(&core);
+        let issues = if initial {
+            value
+                .invalid_blocks()
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (revision, value, issues)
+    });
     cx.spawn(async move |cx| {
-        let (revision, value) = load.await;
+        let (revision, value, issues) = load.await;
         cx.update(|cx| {
+            if snapshot.read(cx).revision.is_none() {
+                if let Some(problem) = value.file_problem() {
+                    Activity::config_problem(problem, cx);
+                }
+                let file = crate::core(cx).config_dir.join("settings.json");
+                for name in issues {
+                    Activity::global(cx).update(cx, |a, cx| {
+                        a.notify(Notice {
+                            level: Level::Warn,
+                            title: format!("Could not read \"{name}\" in settings.json"),
+                            body: Some("Using defaults for this block. Its saved value is kept until the block is edited.".into()),
+                            reveal: Some(file.clone()),
+                            ..Notice::default()
+                        }, cx);
+                    });
+                }
+            }
             snapshot.update(cx, |s, cx| {
                 *s = Settings {
                     value,

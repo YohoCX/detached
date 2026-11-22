@@ -34,6 +34,7 @@ fn boot() -> Run {
     let agents = adapters::Config {
         cli: [(CLAUDE.id.into(), fake)].into(),
         codex: false,
+        ..adapters::Config::default()
     };
     state.set_block(BLOCK, agents).unwrap();
     let repo = repo.display().to_string();
@@ -521,6 +522,7 @@ fn a_claude_that_cannot_talk_says_it_is_not_supported_and_names_the_terminal_and
     let agents = adapters::Config {
         cli: [(CLAUDE.id.into(), cli.display().to_string())].into(),
         codex: false,
+        ..adapters::Config::default()
     };
     run.sb.state.set_block(BLOCK, agents).unwrap();
     let e = open(&run, &chat(&run)).err().unwrap().to_string();

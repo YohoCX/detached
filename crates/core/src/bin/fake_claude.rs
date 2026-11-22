@@ -675,8 +675,8 @@ impl Turn<'_> {
             "question" => {
                 let options = json!([{"label": "Left", "description": "l"},
                     {"label": "Right", "description": "r"}]);
-                let q = json!({"question": "Which one?", "header": "Pick", "multiSelect": false,
-                    "options": options});
+                let q = json!({"question": "Which one?", "header": "Pick",
+                    "multiSelect": rest == "multi", "options": options});
                 let r = self.ask(
                     json!({"subtype": "can_use_tool", "tool_name": "AskUserQuestion",
                     "input": {"questions": [q]}, "tool_use_id": "t-question"}),

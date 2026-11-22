@@ -1018,7 +1018,8 @@ impl Council {
         );
         // A wall-clock gap longer than a stall is a sleep: the clocks start again.
         let wall = (cx.global::<Councils>().wall)();
-        if wall - self.walled > (stall + TICK).as_millis() as i64 {
+        let gap = i64::try_from(stall.saturating_add(TICK).as_millis()).unwrap_or(i64::MAX);
+        if wall.saturating_sub(self.walled) > gap {
             self.live.iter_mut().for_each(|l| l.last = now);
         }
         self.walled = wall;

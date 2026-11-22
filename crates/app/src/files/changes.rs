@@ -260,7 +260,7 @@ impl Changes {
                 invalidate::status(cx, &repo).detach();
             }
         };
-        div()
+        ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()

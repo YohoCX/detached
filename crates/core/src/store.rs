@@ -278,7 +278,7 @@ impl RepoStore {
 
     pub fn accept(&self, state: &AppState, item: &Item) -> Result<()> {
         self.check(state, item)?;
-        remember(state, &item.path, &item.hash)
+        accept_hash(state, &item.path, &item.hash)
     }
 
     fn check(&self, state: &AppState, item: &Item) -> Result<(Files, Links)> {
@@ -559,21 +559,42 @@ fn create(path: &Path, files: &Files) -> Result<()> {
     Ok(())
 }
 
+pub(crate) const TRUST: &str = "storeTrust";
+
+pub fn accepted_items(settings: &crate::settings::Settings) -> BTreeMap<String, String> {
+    settings.block(TRUST).unwrap_or_default()
+}
+
 fn accepted(state: &AppState, path: &Path, hash: &str) -> bool {
-    let all: BTreeMap<String, String> =
-        state.get_settings().block("storeTrust").unwrap_or_default();
-    all.get(&path.to_string_lossy().to_string())
+    accepted_items(&state.get_settings())
+        .get(path.to_string_lossy().as_ref())
         .is_some_and(|h| h == hash)
 }
 
 pub(crate) fn remember(state: &AppState, path: &Path, hash: &str) -> Result<()> {
-    state.update(|s| {
-        let mut all: BTreeMap<String, String> = s.block("storeTrust").unwrap_or_default();
-        all.insert(path.to_string_lossy().into(), hash.into());
-        s.other
-            .insert("storeTrust".into(), serde_json::to_value(all).unwrap());
-    })?;
-    Ok(())
+    let settings = state.get_settings();
+    if settings.other.contains_key(TRUST)
+        && settings.block::<BTreeMap<String, String>>(TRUST).is_none()
+    {
+        return Ok(());
+    }
+    accept_hash(state, path, hash)
+}
+
+fn accept_hash(state: &AppState, path: &Path, hash: &str) -> Result<()> {
+    state
+        .change_block(TRUST, |all: &mut BTreeMap<String, String>| {
+            all.insert(path.to_string_lossy().into(), hash.into());
+        })
+        .map(drop)
+}
+
+pub fn revoke(state: &AppState, path: &str) -> Result<()> {
+    state
+        .change_block(TRUST, |all: &mut BTreeMap<String, String>| {
+            all.remove(path);
+        })
+        .map(drop)
 }
 
 pub(crate) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -1137,6 +1158,50 @@ mod tests {
                 .iter()
                 .all(|i| i.trusted)
         );
+    }
+
+    #[test]
+    fn revoking_an_acceptance_keeps_the_item_and_other_acceptances() {
+        let (sb, store) = setup();
+        let state = &sb.state;
+        store
+            .set_default(state, Kind::Modes, Scope::Shared)
+            .unwrap();
+        for name in ["first.md", "second.md"] {
+            store.write(state, Kind::Modes, name, &file(name)).unwrap();
+        }
+        let entries = store.list(state, Kind::Modes).unwrap();
+        for item in &entries {
+            store.accept(state, item).unwrap();
+        }
+        let revoked = entries.iter().find(|i| i.name == "first.md").unwrap();
+        revoke(state, revoked.path.to_string_lossy().as_ref()).unwrap();
+        assert!(revoked.path.exists());
+        assert_eq!(
+            store.load(state, Kind::Modes, "first.md", None).unwrap(),
+            None
+        );
+        assert_eq!(
+            store.load(state, Kind::Modes, "second.md", None).unwrap(),
+            Some(file("second.md"))
+        );
+    }
+
+    #[test]
+    fn creating_a_local_item_preserves_unreadable_acceptances() {
+        let (sb, store) = setup();
+        let state = &sb.state;
+        let raw = serde_json::json!({"later": 42});
+        state.set_block(TRUST, &raw).unwrap();
+        store
+            .write(state, Kind::Modes, "one.md", &file("test"))
+            .unwrap();
+        assert_eq!(state.get_settings().other[TRUST], raw);
+        let items = store.list(state, Kind::Modes).unwrap();
+        let item = items.iter().find(|i| i.name == "one.md").unwrap();
+        assert!(!item.trusted);
+        store.accept(state, item).unwrap();
+        assert_eq!(accepted_items(&state.get_settings()).len(), 1);
     }
 
     #[test]

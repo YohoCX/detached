@@ -32,6 +32,7 @@ fn the_agents_page_installs_updates_and_rolls_back_codexs_adapter(cx: &mut TestA
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     let cx = &mut open_app_with(cx, |sb| {
         sb.state.set_block(adapters::BLOCK, missing).unwrap();
@@ -158,6 +159,7 @@ fn the_login_runs_the_found_cli_in_a_terminal_tab(cx: &mut TestAppContext) {
     let config = Config {
         cli: [(CLAUDE.id.into(), cli.display().to_string())].into(),
         codex: false,
+        ..Config::default()
     };
     let cx = &mut open_app_with(cx, |sb| {
         sb.state.set_block(adapters::BLOCK, config).unwrap();
@@ -172,4 +174,33 @@ fn the_login_runs_the_found_cli_in_a_terminal_tab(cx: &mut TestAppContext) {
         let shells = cx.update(|_, cx| Terminals::global(cx).read(cx).sessions.len());
         cx.find("settings").is_none() && shells == 1
     });
+}
+
+#[gpui_kit::test]
+fn the_provider_switches_update_the_chat_picker_in_the_open_settings_dialog(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        sb.state
+            .set_block(
+                adapters::BLOCK,
+                serde_json::json!({
+                    "cli": {"claude": "/nowhere/claude", "codex": "/nowhere/codex"},
+                    "future": 7
+                }),
+            )
+            .unwrap();
+    });
+    cx.update(|_, cx| settings::open(cx, "agents"));
+    cx.click("agents.codex.enabled");
+    wait_for(cx, "agents.codex.cli", "codex was not found.");
+    cx.click("agents.claude.enabled");
+    wait_until(cx, |cx| cx.find("agents.claude.cli").is_none());
+    cx.click("settings.nav.chat");
+    assert!(cx.find("chat.defaults.codex.model").is_some());
+    assert!(cx.find("chat.defaults.claude.model").is_none());
+    assert_eq!(
+        cx.settings(|s| s.other[adapters::BLOCK]["future"].clone()),
+        7
+    );
 }

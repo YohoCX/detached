@@ -131,6 +131,8 @@ pub enum Item {
     },
     PastTurn(TurnConfig),
     Note(String),
+    /// An operation that failed: a start, a prompt, a turn, a snapshot, a setting.
+    Error(String),
     /// Reported through the host's tools.
     Act(Act),
     /// A turn the host started on new messages, with `inbox::WAKE` as its prompt.
@@ -525,7 +527,7 @@ impl Session {
             Err(e) => {
                 self.state = State::Ended(End::Failed(e.to_string()));
                 self.items.extend(self.queued.take().map(Item::User));
-                self.items.push(Item::Note(e.to_string()));
+                self.items.push(Item::Error(e.to_string()));
                 return cx.notify();
             }
         };
@@ -583,7 +585,7 @@ impl Session {
         (self.state, self.history) = (State::Idle, self.items.len());
         for setting in std::mem::take(&mut self.picked) {
             if let Err(e) = self.set(setting) {
-                self.note(e.to_string());
+                self.fail(e.to_string());
             }
         }
         if let Some(text) = self.queued.take() {
@@ -650,7 +652,7 @@ impl Session {
         }
         // Sent before every woken prompt: the kernel's copy of the mode may lag the agent's.
         if let Err(e) = o.set(Setting::Mode(self.spec.provider.ask.into())) {
-            self.note(format!(
+            self.fail(format!(
                 "Not woken: the agent cannot switch to asking first: {e}"
             ));
             self.unwake();
@@ -672,7 +674,7 @@ impl Session {
             .then(|| Setting::Mode(self.spec.mode.clone()));
         for setting in back.into_iter().chain(picked) {
             if let Err(e) = self.set(setting) {
-                self.note(format!("Not set after the woken turns: {e}"));
+                self.fail(format!("Not set after the woken turns: {e}"));
             }
         }
     }
@@ -744,7 +746,7 @@ impl Session {
                     match tree {
                         Ok(t) => starts.push((repo, t)),
                         Err(e) => {
-                            self.note(format!("No snapshot of {} for this turn: {e}", name(&repo)))
+                            self.fail(format!("No snapshot of {} for this turn: {e}", name(&repo)))
                         }
                     }
                 }
@@ -752,7 +754,7 @@ impl Session {
             }
             Err(e) => {
                 self.state = State::Idle;
-                self.note(format!("The prompt did not reach the agent: {e}"));
+                self.fail(format!("The prompt did not reach the agent: {e}"));
                 self.unwake();
             }
         }
@@ -797,7 +799,7 @@ impl Session {
         cx.notify();
     }
 
-    /// Answers the questions of the ask at `item`, each with its picked labels.
+    /// Answers the ask at `item` with one string per question.
     pub fn answer_questions(
         &mut self,
         item: usize,
@@ -957,7 +959,7 @@ impl Session {
             Event::Closed => self.close(End::Closed, cx),
             Event::Exited(x) => {
                 let said = crashed(&x);
-                self.note(said.clone());
+                self.fail(said.clone());
                 self.close(End::Crashed(said), cx);
             }
         }
@@ -1072,7 +1074,7 @@ impl Session {
                 None
             }
             Err(f) => {
-                self.note(format!("The turn failed: {}", f.text));
+                self.fail(format!("The turn failed: {}", f.text));
                 None
             }
         };
@@ -1131,7 +1133,7 @@ impl Session {
                             };
                             s.items.insert(at, changes);
                         }
-                        Err(e) => s.note(format!(
+                        Err(e) => s.fail(format!(
                             "No snapshot of {} after the turn: {e}",
                             name(&repo)
                         )),
@@ -1248,6 +1250,10 @@ impl Session {
     /// Adds a note to the feed.
     pub fn note(&mut self, text: String) {
         self.items.push(Item::Note(text));
+    }
+
+    pub fn fail(&mut self, text: String) {
+        self.items.push(Item::Error(text));
     }
 
     fn task(

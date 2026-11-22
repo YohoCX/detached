@@ -100,6 +100,8 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
 #[serde(default, rename_all = "camelCase")]
 pub struct TreeSettings {
     pub hidden: Vec<String>,
+    #[serde(flatten)]
+    pub other: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl TreeSettings {
@@ -137,12 +139,10 @@ pub fn hide(state: &crate::state::AppState, name: &str) -> Result<()> {
         }
         pattern.push(c);
     }
-    state.update(|s| {
-        let mut settings = s.block::<TreeSettings>("files").unwrap_or_default();
+    state.change_block("files", |settings: &mut TreeSettings| {
         if !settings.hidden.contains(&pattern) {
             settings.hidden.push(pattern);
         }
-        s.other.insert("files".into(), serde_json::json!(settings));
     })?;
     Ok(())
 }
@@ -336,6 +336,7 @@ mod tests {
         assert!(kids[0].lazy && kids[0].ignored);
         let hidden = TreeSettings {
             hidden: vec![".claude".into(), "*.log".into()],
+            ..TreeSettings::default()
         };
         assert!(
             tree(&env, &work, None, &hidden)

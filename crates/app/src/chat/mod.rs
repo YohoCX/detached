@@ -26,6 +26,7 @@ use detached_core::adapters::{CLAUDE, Config, PROVIDERS, Provider};
 use detached_core::backend::StopReason;
 use kernel::activity::Activity;
 use kernel::doc::Doc;
+use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 /// Chats outlive their page, which goes when another document is shown.
@@ -103,15 +104,18 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 
 /// Shows `repo`'s first open chat, or a new one.
 pub fn show(repo: String, cx: &mut App) {
-    let n = open(cx)
-        .into_iter()
-        .find(|(r, ..)| *r == repo)
-        .map_or(0, |(_, n, _)| n);
-    Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
+    if let Some((_, n, _)) = open(cx).into_iter().find(|(r, ..)| *r == repo) {
+        Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
+    } else {
+        new_chat(repo, cx);
+    }
 }
 
 /// Shows a new chat on `repo`, reusing an untouched blank tab when possible.
 pub fn new_chat(repo: String, cx: &mut App) {
+    if !can_start(cx) {
+        return;
+    }
     let n = fresh(&repo, cx);
     session(&repo, n, cx).update(cx, |s, cx| s.refresh_defaults(cx));
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
@@ -119,6 +123,9 @@ pub fn new_chat(repo: String, cx: &mut App) {
 
 /// Sends `prompt` in a chat on `repo` with nothing in it, and shows it.
 pub fn ask(repo: String, prompt: String, cx: &mut App) {
+    if !can_start(cx) {
+        return;
+    }
     let n = fresh(&repo, cx);
     session(&repo, n, cx).update(cx, |s, cx| {
         s.refresh_defaults(cx);
@@ -127,11 +134,27 @@ pub fn ask(repo: String, prompt: String, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
 }
 
-/// The providers a chat may pick: Claude, and Codex once it is on.
-pub fn providers(cx: &App) -> Vec<&'static Provider> {
-    let config: Config = (kernel::settings::Settings::get(cx))
+fn can_start(cx: &mut App) -> bool {
+    if Settings::ready(cx) && !providers(cx).is_empty() {
+        return true;
+    }
+    let message = if Settings::ready(cx) {
+        "Enable a provider in Settings › Agents to start a chat"
+    } else {
+        "Agent settings are loading"
+    };
+    Activity::global(cx).update(cx, |a, cx| a.say(message, false, cx));
+    false
+}
+
+pub(crate) fn provider_config(cx: &App) -> Config {
+    Settings::get(cx)
         .block(detached_core::adapters::BLOCK)
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+pub fn providers(cx: &App) -> Vec<&'static Provider> {
+    let config = provider_config(cx);
     PROVIDERS.into_iter().filter(|p| config.shows(p)).collect()
 }
 
@@ -152,6 +175,9 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
     {
         Some((repo, n, _)) => (repo, n),
         None => {
+            if !provider_config(cx).shows(p) {
+                return;
+            }
             let n = fresh(&cwd, cx);
             session(&cwd, n, cx).update(cx, |s, cx| s.open_past(p, id, cx));
             (cwd, n)

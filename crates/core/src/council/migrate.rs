@@ -4,28 +4,30 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
-
 use crate::error::Result;
 use crate::state::AppState;
 
 /// The settings block `panels` and the chord of `panel.panels` in `keymap.json`.
 pub fn run(core: &AppState) -> Result<()> {
-    if core.get_settings().other.contains_key("panels") {
+    let settings = core.get_settings();
+    if settings.block::<super::marks::Council>("panels").is_some()
+        && (!settings.other.contains_key(super::marks::BLOCK)
+            || settings
+                .block::<super::marks::Council>(super::marks::BLOCK)
+                .is_some())
+    {
         core.update(|s| {
             if let Some(old) = s.other.remove("panels") {
                 s.other.entry(super::marks::BLOCK.into()).or_insert(old);
             }
+            Ok(())
         })?;
     }
     let file = core.config_dir.join("keymap.json");
-    let keys = fs::read(&file)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Map<String, Value>>(&b).ok());
-    if let Some(mut keys) = keys
+    if let Ok(mut keys) = core.read_keymap()
         && let Some(chord) = keys.remove("panel.panels")
     {
-        keys.entry("panel.council").or_insert(chord);
+        keys.entry("panel.council".into()).or_insert(chord);
         crate::store::atomic(&file, &serde_json::to_vec_pretty(&keys)?)?;
     }
     Ok(())
@@ -96,6 +98,18 @@ mod tests {
         run(&sb.state).unwrap();
         assert_eq!(fs::read_to_string(&keymap).unwrap(), unrelated);
         assert_eq!(sb.state.revision(), revision, "settings.json not rewritten");
+    }
+
+    #[test]
+    fn a_broken_keymap_is_left_alone() {
+        let sb = Sandbox::new();
+        let file = sb.state.config_dir.join("keymap.json");
+        let bad = r#"{"panel.panels": "Cmd+7", "panel.log": 9}"#;
+        fs::create_dir_all(&sb.state.config_dir).unwrap();
+        fs::write(&file, bad).unwrap();
+        run(&sb.state).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), bad);
+        assert_eq!(sb.state.read_keymap().unwrap_err().file, file);
     }
 
     #[test]

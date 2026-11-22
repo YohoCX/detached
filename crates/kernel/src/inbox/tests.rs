@@ -267,7 +267,10 @@ fn a_receiver_in_auto_is_woken_asking_and_auto_is_back_after_the_turn(cx: &mut T
     wait_until(cx, |cx| mode(cx).as_deref() == Some("auto"));
     assert_eq!(turn(&b, "fake: model", cx), "default auto");
     b.read_with(cx, |s, _| {
-        let notes = s.items.iter().filter(|i| matches!(i, Item::Note(_)));
+        let notes = s
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Note(_) | Item::Error(_)));
         assert_eq!(notes.count(), 0, "{:?}", s.items);
     });
 }
@@ -520,6 +523,7 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     f.core.set_block(BLOCK, config).unwrap();
     let (a, x) = open(&f, "default", "say here", cx);
@@ -539,7 +543,10 @@ fn a_codex_receiver_is_woken_read_only_and_its_mode_is_back_after_the_turn(
     let mode = |cx: &App| b.read(cx).option("mode").map(String::from);
     wait_until(cx, |cx| mode(cx).as_deref() == Some("agent"));
     b.read_with(cx, |s, _| {
-        let notes = s.items.iter().filter(|i| matches!(i, Item::Note(_)));
+        let notes = s
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Note(_) | Item::Error(_)));
         assert_eq!(notes.count(), 0, "{:?}", s.items);
     });
 }

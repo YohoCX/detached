@@ -23,7 +23,7 @@ use gpui_kit::{
     Animation, AnimationElement, AnimationExt, App, BoxShadow, Div, ElementId, Entity, FontWeight,
     HighlightStyle, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
     Role, SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, Window, div,
-    ease_out_quint, prelude::FluentBuilder, px, relative,
+    ease_out_quint, prelude::FluentBuilder, px, relative, transparent_black,
 };
 
 pub use disabled::disabled;
@@ -62,9 +62,9 @@ pub fn appear<E: Styled + IntoElement + 'static>(
 /// Top bar, strip, sidebar, tool pane and bottom panel.
 pub fn panel<E: Styled>(e: E, cx: &App) -> E {
     let t = theme(cx);
-    e.bg(t.panel)
+    e.bg(t.panel_bg)
         .border_1()
-        .border_color(t.panel_line)
+        .border_color(t.panel_edge)
         .shadow(t.panel_shadow.clone())
         .rounded(radius::PANEL)
 }
@@ -72,11 +72,22 @@ pub fn panel<E: Styled>(e: E, cx: &App) -> E {
 /// Popups, notices, the palette and dialogs.
 pub fn glass<E: Styled>(e: E, cx: &App) -> E {
     let t = theme(cx);
-    e.bg(t.popup)
+    e.bg(t.popover_bg)
         .border_1()
-        .border_color(t.panel_line)
+        .border_color(t.panel_edge)
         .shadow(t.shadow.clone())
         .rounded(radius::GLASS)
+}
+
+/// A toolbar across the top of a pane's content.
+pub fn band<E: Styled>(e: E, cx: &App) -> E {
+    let t = theme(cx);
+    e.bg(t.header_bg).border_b_1().border_color(t.panel_edge)
+}
+
+/// The bar on a selected row's leading edge, painted inside so it takes no width.
+pub fn marker(cx: &App) -> BoxShadow {
+    BoxShadow::new(px(2.), px(0.), theme(cx).selected_ring).inset()
 }
 
 /// `content` in a glass box `width` wide over a scrim that tints the window: `top` down as a
@@ -144,9 +155,10 @@ pub fn pressable(id: impl Into<ElementId>) -> Stateful<Div> {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-/// A borderless icon, muted until hovered; 28px high.
+/// A borderless icon, muted until hovered and ringed on keyboard focus; 28px high.
 pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
+    let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
     pressable(id)
         .justify_center()
         .gap(px(4.))
@@ -157,6 +169,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .active(|s| s.bg(t.selected_inactive).opacity(0.8))
+        .focus_visible(|s| s.shadow(vec![ring.inset()]))
         .child(icon)
 }
 
@@ -183,8 +196,21 @@ pub fn primary_button(
         .hover(|s| s.bg(t.primary.opacity(0.88)))
 }
 
+/// A `button` without a fill until hovered.
+pub fn quiet_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = theme(cx);
+    pill(id, label)
+        .border_color(transparent_black())
+        .text_color(t.muted)
+        .hover(|s| s.bg(t.hover).text_color(t.fg))
+}
+
 // GPUI takes one hover style per element, so each button sets its own.
-fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     pressable(id)
         .h(px(28.))
         .px(px(14.))
@@ -258,7 +284,7 @@ pub fn row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> 
         .px(px(10.))
         .rounded(radius::ITEM)
         .map(|r| match selected {
-            true => r.bg(t.selected),
+            true => r.bg(t.active_bg).shadow(vec![marker(cx)]),
             false => r
                 .hover(|s| s.bg(t.hover))
                 .active(|s| s.bg(t.selected_inactive)),
@@ -276,8 +302,8 @@ pub fn list_row(
     let t = theme(cx);
     let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
     row(id, selected, cx).when(selected, |r| match focused {
-        true => r.shadow(vec![ring.inset()]),
-        false => r.bg(t.selected_inactive),
+        true => r.shadow(vec![marker(cx), ring.inset()]),
+        false => r.bg(t.selected_inactive).shadow(vec![marker(cx)]),
     })
 }
 
@@ -322,7 +348,7 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if on { t.fg } else { t.muted })
                 .map(|b| match on {
-                    true => b.bg(t.popup).shadow(vec![chip]),
+                    true => b.bg(t.popover_bg).shadow(vec![chip]),
                     false => b.hover(|s| s.text_color(t.fg)),
                 })
                 .role(Role::Button)
@@ -342,7 +368,7 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
         }))
 }
 
-/// A change's status letter on a tint of its color.
+/// A change's status letter in a ring of its color; a fill behind it would cost the letter contrast.
 pub fn status(s: Status, cx: &App) -> Div {
     let c = theme(cx).status(s);
     div()
@@ -352,7 +378,8 @@ pub fn status(s: Status, cx: &App) -> Div {
         .justify_center()
         .size(px(18.))
         .rounded(radius::LETTER)
-        .bg(c.opacity(0.18))
+        .border_1()
+        .border_color(c.opacity(0.4))
         .text_color(c)
         .font_family(theme::mono(cx))
         .text_size(text::LETTER)

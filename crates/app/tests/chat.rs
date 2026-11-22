@@ -11,6 +11,7 @@ use detached_core::chat_settings::{self, Preset};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AppContext, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext, px,
+    size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -146,8 +147,34 @@ fn description(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) -
 
 fn set_cli(cx: &mut VisualTestContext, cli: &Path) {
     let cli = [(CLAUDE.id.into(), cli.display().to_string())].into();
-    let config = Config { cli, codex: false };
+    let config = Config {
+        cli,
+        ..Config::default()
+    };
     cx.update(|_, cx| kernel::core(cx).set_block(BLOCK, config).unwrap());
+}
+
+#[gpui_kit::test]
+fn turning_off_a_provider_keeps_its_open_chat_and_blocks_new_ones(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "say Before disabling");
+    wait_for_item(cx, "Before disabling");
+    idle(cx);
+    let original = cx.workspace(|w, _| w.shown().cloned());
+    cx.update(|_, cx| detached_app::settings::open(cx, "agents"));
+    cx.click("agents.claude.enabled");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Config>(BLOCK)
+                .is_some_and(|config| !config.shows(&CLAUDE))
+        })
+    });
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    cx.click("chat.new");
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), original);
+    cx.click("chat.input");
+    say(cx, "say After disabling");
+    wait_for_item(cx, "After disabling");
 }
 
 /// A catalog whose floor for `claude` is `min`, as the last fetch stored it.
@@ -199,6 +226,7 @@ fn a_message_is_answered_and_the_turn_ends(cx: &mut TestAppContext) {
     );
     assert_eq!(got.len(), 3);
     // Usage comes after the turn's end.
+    cx.click("chat.more");
     wait_until(cx, |cx| {
         cx.find("chat.usage")
             .and_then(|e| e.label().map(String::from))
@@ -230,7 +258,9 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     wait_until(cx, |cx| {
         label(cx, "chat.provider").as_deref() == Some("Claude Max")
     });
-    wait_until(cx, |cx| label(cx, "chat.limit.5h").is_some());
+    wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
+    assert!(cx.find("chat.limit.5h").is_none());
+    cx.click("chat.more");
     assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
     let fill = cx.update(|w, _| {
         w.within("chat.limit.5h")
@@ -249,6 +279,8 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     );
     assert!(cx.find("chat.limits").is_none());
     assert!(items(cx).is_empty(), "no message was needed");
+    cx.press("escape");
+    cx.click("chat.send");
 
     // No limits in the answer, then no answer at all, each in a new chat: unknown, never a zero.
     for fake_json in [
@@ -259,11 +291,71 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         wait_for_item(cx, "said hello");
         fake(&cx.sb, fake_json);
         cx.click("chat.new");
+        cx.click("chat.more");
         wait_until(cx, |cx| {
             label(cx, "chat.limits").as_deref() == Some("No plan limits reported")
         });
         assert!(cx.find("chat.limit.5h").is_none());
+        cx.press("escape");
+        cx.click("chat.send");
     }
+}
+
+#[gpui_kit::test]
+fn the_provider_menu_is_anchored_lists_disabled_agents_and_locks_after_send(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    cx.click("chat.provider.pick");
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 0usize)).as_deref() == Some("Logged in")
+    });
+    let menu = cx.find("chat.provider.options").unwrap().bounds();
+    let trigger = cx.find("chat.provider.pick").unwrap().bounds();
+    assert!(menu.bottom() <= trigger.top());
+    assert_eq!(
+        cx.find(("chat.agent", 0usize)).unwrap().selected(),
+        Some(true)
+    );
+    assert_eq!(
+        description(cx, ("chat.agent", 1usize)).as_deref(),
+        Some("Off")
+    );
+    assert_eq!(
+        cx.find(("chat.agent", 1usize)).unwrap().disabled(),
+        Some(true)
+    );
+    cx.press("escape");
+    assert!(cx.find("chat.provider.options").is_none());
+    cx.press("enter");
+    cx.press("down");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("settings.agents").is_some());
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    cx.click("chat.provider.pick");
+    cx.press("enter");
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    assert!(cx.find("chat.provider.pick").is_none());
+    assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+}
+
+#[gpui_kit::test]
+fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_some());
+    // The side zones keep their widths: the chat gets 548px, its composer 508px.
+    cx.simulate_resize(size(px(1150.), px(800.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_none());
+    for id in ["chat.provider.pick", "chat.mode", "chat.send"] {
+        assert!(cx.find(id).unwrap().visible(), "{id}");
+    }
+    cx.click("chat.more");
+    assert!(cx.find("chat.model").is_some());
+    cx.press("escape");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_some());
 }
 
 #[gpui_kit::test]
@@ -320,12 +412,22 @@ fn tools_and_blocks_show_in_the_feed(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn stop_ends_the_turn(cx: &mut TestAppContext) {
+fn stop_ends_the_turn_and_its_text_keeps_its_lines(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    say(cx, HANG);
+    assert_eq!(cx.find("chat.send").unwrap().disabled(), Some(true));
+    cx.input(HANG);
+    assert_eq!(cx.find("chat.send").unwrap().disabled(), None);
+    cx.click("chat.send");
     working(cx);
+    let at = items(cx).iter().position(|i| i == "Working").unwrap();
+    let height =
+        |cx: &mut VisualTestContext| cx.find(("chat.item", at)).unwrap().bounds().size.height;
+    // One line at 14px and a line height of 1.6, plain while streaming and markdown after.
+    let line = px(14. * 1.6);
+    assert!((height(cx) - line).abs() < px(0.5), "{:?}", height(cx));
     cx.click("chat.stop");
     idle(cx);
+    wait_until(cx, |cx| (height(cx) - line).abs() < px(0.5));
 }
 
 #[gpui_kit::test]
@@ -364,6 +466,7 @@ fn a_model_without_auto_is_marked_and_the_mode_drop_reported(cx: &mut TestAppCon
     say(cx, "say switched");
     wait_for_item(cx, "old · Done in ");
     idle(cx);
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -596,6 +699,46 @@ fn claude_s_questions_take_a_pick_each(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn an_own_answer_replaces_a_single_pick_and_joins_multiple_picks(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    for (prompt, answer) in [
+        ("question", "In the middle"),
+        ("question multi", "Right, Left, In the middle"),
+    ] {
+        let from = items(cx).len();
+        say(cx, prompt);
+        wait_until(cx, |cx| {
+            items(cx)[from..]
+                .iter()
+                .any(|item| item.ends_with("waiting"))
+        });
+        let i = from
+            + items(cx)[from..]
+                .iter()
+                .position(|item| item.ends_with("waiting"))
+                .unwrap();
+        cx.click(SharedString::from(format!("chat.option.{i}.0.1")));
+        if prompt == "question multi" {
+            cx.click(SharedString::from(format!("chat.option.{i}.0.0")));
+        }
+        cx.click(SharedString::from(format!("chat.other.{i}.0")));
+        assert!(
+            cx.find(SharedString::from(format!("chat.other.input.{i}.0")))
+                .is_some()
+        );
+        cx.press("enter");
+        assert!(
+            items(cx)[i].ends_with("waiting"),
+            "blank Other stayed unsent"
+        );
+        cx.input("In the middle");
+        cx.press("enter");
+        wait_for_item(cx, &format!(r#"answered {{"Which one?":"{answer}"}}"#));
+        idle(cx);
+    }
+}
+
+#[gpui_kit::test]
 fn a_question_skipped_goes_back_unanswered(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "question");
@@ -657,6 +800,7 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
     wait_until(cx, |cx| {
         description(cx, "chat.mode").as_deref() == Some("Plan")
     });
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -812,6 +956,7 @@ fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut Test
     });
     id(cx, 0);
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("default"))
@@ -838,7 +983,7 @@ fn a_new_chat_falls_back_silently_when_the_preset_is_unavailable(cx: &mut TestAp
             .iter()
             .all(|i| !i.contains("not-offered") && !i.contains("not-supported"))
     );
-    assert_eq!(description(cx, "chat.effort").as_deref(), Some("Effort"));
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("Default"));
 }
 
 #[gpui_kit::test]
@@ -1019,7 +1164,12 @@ fn the_chats_search_keeps_the_rows_that_match_and_escape_clears_it(cx: &mut Test
 
 #[gpui_kit::test]
 fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut TestAppContext) {
-    let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go"}));
+        sb.state
+            .change_block::<Config>(BLOCK, |c| c.codex = true)
+            .unwrap();
+    });
     cx.input("/");
     assert!(
         cx.find("chat.unlisted").is_some(),
@@ -1043,6 +1193,7 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
     cx.update(|_, cx| {
         let chat = chat::find(&solo, 1, cx).unwrap();
         chat.update(cx, |c, cx| c.set_provider(codex, cx));
+        assert_eq!(chat.read(cx).provider.id, codex.id);
         assert!(chat.read(cx).commands(cx).is_empty());
     });
 }
@@ -1078,7 +1229,7 @@ fn a_clear_folds_what_came_before_and_its_restore_stays_reachable(cx: &mut TestA
     let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"commands": ["clear"]})));
     let made = cx.sb.solo().join("made-by-agent.txt");
     say(cx, EDIT);
-    let i = index_of(cx, "2 files changed in this turn");
+    let i = index_of(cx, "2 files changed");
     idle(cx);
     // Enter takes the suggested command first, then sends it.
     say(cx, "/clear");
@@ -1123,16 +1274,30 @@ fn a_turn_s_changes_open_their_diff_and_the_files_go_back_and_forth(cx: &mut Tes
     let read = |p: &str| std::fs::read_to_string(solo.join(p)).ok();
     let before = read("README.md");
     say(cx, EDIT);
-    let i = index_of(
-        cx,
-        "2 files changed in this turn: README.md, made-by-agent.txt",
-    );
-    cx.click(SharedString::from(format!("chat.file.{i}.0")));
+    let i = index_of(cx, "2 files changed");
+    let end = index_of(cx, "Done in");
+    let summary = cx.find(("chat.item", i)).unwrap().bounds();
+    let timing = cx.find(("chat.item", end)).unwrap().bounds();
+    assert!((summary.center().y - timing.center().y).abs() < px(1.));
+    let file = SharedString::from(format!("chat.file.{i}.0"));
+    assert!(cx.find(file.clone()).is_none());
+    cx.click(("chat.files", i));
+    assert!(cx.find(file.clone()).is_some());
+    cx.click(("chat.files", i));
+    assert!(cx.find(file.clone()).is_none());
+    cx.click(("chat.files", i));
+    cx.click(file);
     let shown = cx.workspace(|w, _| w.shown().cloned());
     assert!(
         matches!(shown, Some(Doc::Diff(d)) if d.path == "README.md" && matches!(d.right, detached_core::types::Side::Rev { .. }))
     );
     back_to_chat(cx);
+    cx.click(("chat.back", i));
+    wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
+    assert_eq!(read("README.md").as_deref(), Some("agent"));
+    cx.click(("chat.back.cancel", i));
+    wait_until(cx, |cx| cx.find(("chat.back.plan", i)).is_none());
+    assert_eq!(read("README.md").as_deref(), Some("agent"));
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
     cx.click(("chat.back.confirm", i));
@@ -1154,7 +1319,7 @@ fn a_restore_the_files_moved_on_from_restores_nothing_and_plans_again(cx: &mut T
     let read = |p: &str| std::fs::read_to_string(solo.join(p)).ok();
     let before = read("README.md");
     say(cx, EDIT);
-    let i = index_of(cx, "changed in this turn");
+    let i = index_of(cx, "2 files changed");
     idle(cx);
     cx.click(("chat.back", i));
     wait_until(cx, |cx| items(cx)[i].ends_with("planned"));
@@ -1274,9 +1439,14 @@ fn trusting_during_a_turn_ends_it_and_keeps_its_changes(cx: &mut TestAppContext)
     cx.click("chat.trust.accept");
     wait_for_item(cx, "load from the next message");
     idle(cx);
-    wait_for_item(cx, "changed in this turn: during.txt");
+    let i = index_of(cx, "1 file changed");
     say(cx, "settings");
     wait_for_item(cx, "project settings on");
+    cx.click(("chat.files", i));
+    assert_eq!(
+        label(cx, SharedString::from(format!("chat.file.{i}.0"))).as_deref(),
+        Some("during.txt")
+    );
 }
 
 #[gpui_kit::test]
@@ -1334,6 +1504,7 @@ fn the_context_shows_by_part(cx: &mut TestAppContext) {
     });
     say(cx, "hello");
     wait_for_item(cx, "said hello");
+    cx.click("chat.more");
     wait_until(cx, |cx| cx.find("chat.usage").is_some());
     let usage = cx.find("chat.usage").unwrap();
     assert_eq!(usage.label(), Some("Context 26%"));
@@ -1395,12 +1566,24 @@ fn the_chats_app_lists_open_chats_and_past_ones_in_the_workspace(cx: &mut TestAp
         cx.find(("chats.past", 1usize)).is_none(),
         "outside the current workspace"
     );
-    assert_eq!(label(cx, ("chats.open", 0usize)).as_deref(), Some("solo"));
-    // On its title: the hover buttons sit right of it.
+    assert_eq!(
+        label(cx, ("chats.open", 0usize)).as_deref(),
+        Some("New chat")
+    );
+    assert_eq!(
+        description(cx, ("chats.open", 0usize)).as_deref(),
+        Some("Idle · solo")
+    );
     let at = gpui_kit::point(gpui_kit::px(12.), gpui_kit::px(9.));
     cx.update(|w, cx| w.click_at(("chats.past", 0usize), at, cx));
     settle(cx);
     wait_for_item(cx, "fixed");
+    open_tab(cx, "tab.chats");
+    cx.click("chats.refresh");
+    wait_until(cx, |cx| {
+        label(cx, ("chats.open", 0usize)).as_deref() == Some("Fix the build")
+    });
+    assert!(cx.find(("chats.past", 0usize)).is_none(), "shown once");
 
     let all = cx.settings(|s| s.workspaces.clone());
     let other = all.into_iter().find(|w| w.name == "Other").unwrap().id;
@@ -1422,8 +1605,8 @@ fn a_folder_s_chat_snapshots_each_repo_in_it_and_goes_back_in_each(cx: &mut Test
     say(cx, "write api/README.md agent; write web/by-agent.txt x");
     // Nested repo names hold `\` on Windows (docs/TECHDEBT.md).
     let sep = std::path::MAIN_SEPARATOR;
-    let api = index_of(cx, &format!("in this turn in group{sep}api"));
-    index_of(cx, &format!("in this turn in group{sep}web"));
+    let api = index_of(cx, &format!("changed in group{sep}api"));
+    index_of(cx, &format!("changed in group{sep}web"));
     cx.click(("chat.back", api));
     wait_until(cx, |cx| items(cx)[api].ends_with("planned"));
     cx.click(("chat.back.confirm", api));
@@ -1472,14 +1655,14 @@ fn a_past_chat_archives_unarchives_and_deletes_after_a_confirm(cx: &mut TestAppC
     wait_until(cx, |_| keep.exists() && !drop.exists());
 }
 
-fn node(cx: &mut VisualTestContext, i: usize) -> (Option<String>, Option<bool>) {
-    let e = cx.find(("chats.node", i));
+fn group(cx: &mut VisualTestContext, i: usize) -> (Option<String>, Option<bool>) {
+    let e = cx.find(("chats.group", i));
     let label = e.as_ref().and_then(|e| e.label().map(String::from));
     (label, e.and_then(|e| e.expanded()))
 }
 
-/// Chats node `i`'s open state once the window is closed and another opened, as after a restart.
-fn node_after_restart(cx: &mut VisualTestContext, i: usize) -> Option<bool> {
+/// Chats group `i`'s open state once the window is closed and another opened, as after a restart.
+fn group_after_restart(cx: &mut VisualTestContext, i: usize) -> Option<bool> {
     let apps = cx.update(|_, cx| detached_app::dock::apps(cx));
     let chats = apps.into_iter().find(|a| a.id == "tab.chats").unwrap().name;
     cx.update(|w, _| w.remove_window());
@@ -1491,13 +1674,15 @@ fn node_after_restart(cx: &mut VisualTestContext, i: usize) -> Option<bool> {
     settle(cx);
     cx.update_window(w, |_, w, cx| {
         w.render_frame(cx);
-        w.try_find(("chats.node", i)).and_then(|e| e.expanded())
+        w.try_find(("chats.group", i)).and_then(|e| e.expanded())
     })
     .unwrap()
 }
 
 #[gpui_kit::test]
-fn a_folder_s_repos_nest_under_it_and_the_newest_nodes_start_open(cx: &mut TestAppContext) {
+fn the_chats_group_by_place_open_ones_first_and_the_newest_groups_start_open(
+    cx: &mut TestAppContext,
+) {
     let cx = &mut open_seeded(cx, |sb| {
         past(sb, &sb.solo(), "s", "In solo", 30);
         past(sb, &sb.repo("app"), "a", "In app", 60);
@@ -1506,57 +1691,118 @@ fn a_folder_s_repos_nest_under_it_and_the_newest_nodes_start_open(cx: &mut TestA
         past(sb, &sb.repo("group/api"), "g", "In api", 240);
     });
     open_tab(cx, "tab.chats");
-    wait_until(cx, |cx| node(cx, 5).0.is_some());
-    // The workspace's folders in order, each over its repos newest first, then its own chats.
-    assert_eq!(node(cx, 0), (Some("ws/".into()), Some(true)));
-    assert_eq!(node(cx, 1), (Some("app".into()), Some(true)));
+    wait_until(cx, |cx| group(cx, 4).0.is_some());
+    // Solo has the open chat; then newest first, a folder's own chats as a group of their own.
+    assert_eq!(group(cx, 0), (Some("solo".into()), Some(true)));
+    assert_eq!(group(cx, 1), (Some("app".into()), Some(true)));
+    assert_eq!(group(cx, 2), (Some("ws/".into()), Some(true)));
     assert_eq!(
-        node(cx, 2),
+        group(cx, 3),
         (Some("lib".into()), Some(false)),
         "not in the 3 newest"
     );
-    assert_eq!(node(cx, 3).1, Some(false));
-    assert_eq!(node(cx, 4), (Some("ws/ · here".into()), Some(true)));
-    assert_eq!(node(cx, 5), (Some("solo".into()), Some(true)));
+    assert_eq!(group(cx, 4).1, Some(false));
     let titles: Vec<_> = (0usize..3).map(|i| label(cx, ("chats.past", i))).collect();
-    let want = ["In app", "In ws", "In solo"].map(|t| Some(t.to_string()));
+    let want = ["In solo", "In app", "In ws"].map(|t| Some(t.to_string()));
     assert_eq!(titles, want);
     assert_eq!(
-        description(cx, ("chats.node", 2usize)).as_deref(),
-        Some("1")
+        description(cx, ("chats.group", 3usize)).as_deref(),
+        Some("1 chat")
     );
 
-    cx.click(("chats.node", 4usize));
+    cx.click(("chats.group", 2usize));
     assert_eq!(
-        node(cx, 4).1,
+        group(cx, 2).1,
         Some(false),
-        "the folder's own chats close alone"
+        "the folder's chats close alone"
     );
-    assert_eq!(node(cx, 0).1, Some(true));
+    assert_eq!(group(cx, 1).1, Some(true));
+    cx.click(("chats.group", 0usize));
     assert_eq!(
-        label(cx, ("chats.past", 1usize)).as_deref(),
-        Some("In solo")
+        description(cx, ("chats.group", 0usize)).as_deref(),
+        Some("2 chats")
     );
-
-    cx.click(("chats.node", 0usize));
-    assert_eq!(node(cx, 0).1, Some(false));
-    assert_eq!(
-        description(cx, ("chats.node", 0usize)).as_deref(),
-        Some("4")
-    );
-    assert_eq!(
-        node(cx, 1).0.as_deref(),
-        Some("solo"),
-        "the folder's nodes go with it"
-    );
-    assert_eq!(
-        label(cx, ("chats.past", 0usize)).as_deref(),
-        Some("In solo")
-    );
+    assert_eq!(label(cx, ("chats.past", 0usize)).as_deref(), Some("In app"));
 }
 
 #[gpui_kit::test]
-fn a_node_closes_and_opens_by_click_and_arrows_and_stays_so_after_a_restart(
+fn places_of_the_same_name_are_told_apart_by_their_parent(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let mut folders = vec![];
+        for (side, age) in [("a", 30), ("b", 60)] {
+            let dir = sb.path(side).join("shared");
+            std::fs::create_dir_all(&dir).unwrap();
+            past(sb, &dir, side, side, age);
+            folders.push(dir.display().to_string());
+        }
+        let ws = detached_core::api::save_workspace(&sb.state, "Twins".into(), None).unwrap();
+        for f in folders {
+            detached_core::api::add_folder(&sb.state, Some(ws.clone()), f).unwrap();
+        }
+    });
+    let all = cx.settings(|s| s.workspaces.clone());
+    let twins = all.into_iter().find(|w| w.name == "Twins").unwrap().id;
+    cx.workspace(|w, cx| w.switch(twins, cx));
+    open_tab(cx, "tab.chats");
+    let names = |cx: &mut VisualTestContext| -> Vec<String> {
+        (0..3usize).filter_map(|i| group(cx, i).0).collect()
+    };
+    wait_until(cx, |cx| {
+        let names = names(cx);
+        names.contains(&"a/shared/".into()) && names.contains(&"b/shared/".into())
+    });
+    assert!(!names(cx).contains(&"shared/".into()));
+}
+
+#[gpui_kit::test]
+fn a_chat_s_title_takes_the_row_s_width_and_keeps_it_on_hover(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let long = "A title long enough to want the whole width of the row and more";
+        past(sb, &sb.solo(), "a", long, 60);
+    });
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| cx.find(("chats.past", 0usize)).is_some());
+    let title =
+        |cx: &mut VisualTestContext| cx.find(("chats.past.title", 0usize)).unwrap().bounds();
+    let row = cx.find(("chats.past", 0usize)).unwrap().bounds();
+    let rest = title(cx);
+    let inset = f32::from(row.size.width - rest.size.width);
+    assert!((inset - 20.).abs() < 1., "only the row's padding: {inset}");
+    cx.update(|w, cx| w.hover(("chats.past", 0usize), cx));
+    assert_eq!(title(cx), rest);
+}
+
+#[gpui_kit::test]
+fn a_group_starts_as_the_old_tree_left_its_place(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        past(sb, &sb.solo(), "s", "In solo", 30);
+        past(sb, &sb.ws(), "w", "In ws", 60);
+        past(sb, &sb.repo("app"), "a", "In app", 90);
+    });
+    let (solo, ws) = (cx.sb.solo(), cx.sb.ws());
+    let (solo, ws) = (solo.display().to_string(), ws.display().to_string());
+    cx.update(|_, cx| {
+        kernel::ui_state::set(&format!("chats.tree.{solo}"), false, cx);
+        // The folder's node held app: it says nothing of the folder's own chats.
+        kernel::ui_state::set(&format!("chats.tree.{ws}"), false, cx);
+    });
+    open_tab(cx, "tab.chats");
+    wait_until(cx, |cx| group(cx, 2).0.is_some());
+    assert_eq!(group(cx, 0), (Some("solo".into()), Some(false)));
+    assert_eq!(group(cx, 1), (Some("ws/".into()), Some(true)));
+    assert_eq!(group(cx, 2), (Some("app".into()), Some(true)));
+
+    let here = format!("chats.tree.{ws}#here");
+    cx.update(|_, cx| kernel::ui_state::set(&here, false, cx));
+    settle(cx);
+    assert_eq!(group(cx, 1).1, Some(false), "its own chats were under here");
+    cx.click(("chats.group", 1usize));
+    assert_eq!(group(cx, 1).1, Some(true), "a click outranks the old tree");
+    assert_eq!(group_after_restart(cx, 1), Some(true));
+}
+
+#[gpui_kit::test]
+fn a_group_closes_and_opens_by_click_and_arrows_and_stays_so_after_a_restart(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_seeded(cx, |sb| {
@@ -1565,53 +1811,53 @@ fn a_node_closes_and_opens_by_click_and_arrows_and_stays_so_after_a_restart(
     });
     open_tab(cx, "tab.chats");
     wait_until(cx, |cx| cx.find(("chats.past", 1usize)).is_some());
-    assert_eq!(node(cx, 0), (Some("solo".into()), Some(true)));
+    assert_eq!(group(cx, 0), (Some("solo".into()), Some(true)));
 
-    cx.click(("chats.node", 0usize));
-    assert_eq!(node(cx, 0).1, Some(false));
+    cx.click(("chats.group", 0usize));
+    assert_eq!(group(cx, 0).1, Some(false));
     assert!(cx.find(("chats.past", 0usize)).is_none());
     cx.press("right");
-    assert_eq!(node(cx, 0).1, Some(true));
+    assert_eq!(group(cx, 0).1, Some(true));
     cx.press("down");
     cx.press("left");
     assert_eq!(
-        node(cx, 0).1,
+        group(cx, 0).1,
         Some(true),
-        "left on a chat goes up to its node"
+        "left on a chat goes up to its group"
     );
     cx.press("left");
-    assert_eq!(node(cx, 0).1, Some(false));
-    assert_eq!(node_after_restart(cx, 0), Some(false));
+    assert_eq!(group(cx, 0).1, Some(false));
+    assert_eq!(group_after_restart(cx, 0), Some(false));
 }
 
 #[gpui_kit::test]
-fn the_chats_search_opens_the_nodes_it_matches_in_and_hides_the_rest(cx: &mut TestAppContext) {
+fn the_chats_search_opens_the_groups_it_matches_in_and_hides_the_rest(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
         past(sb, &sb.solo(), "s", "Fix the build", 60);
         past(sb, &sb.repo("app"), "a", "In app", 120);
     });
     open_tab(cx, "tab.chats");
-    wait_until(cx, |cx| node(cx, 2).0.is_some());
-    cx.click(("chats.node", 2usize));
-    assert_eq!(node(cx, 2), (Some("solo".into()), Some(false)));
+    wait_until(cx, |cx| group(cx, 1).0.is_some());
+    cx.click(("chats.group", 0usize));
+    assert_eq!(group(cx, 0), (Some("solo".into()), Some(false)));
     cx.click("chats.search");
     cx.input("build");
-    assert_eq!(node(cx, 0), (Some("solo".into()), Some(true)));
-    assert!(node(cx, 1).0.is_none(), "ws/ and app match nothing");
+    assert_eq!(group(cx, 0), (Some("solo".into()), Some(true)));
+    assert!(group(cx, 1).0.is_none(), "app matches nothing");
     assert_eq!(
         label(cx, ("chats.past", 0usize)).as_deref(),
         Some("Fix the build")
     );
     cx.press("escape");
     assert_eq!(
-        node(cx, 2),
+        group(cx, 0),
         (Some("solo".into()), Some(false)),
         "closed again"
     );
 }
 
 #[gpui_kit::test]
-fn a_node_s_chats_past_five_wait_behind_show_more(cx: &mut TestAppContext) {
+fn a_group_s_chats_past_five_wait_behind_show_more(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
         for i in 0..7u64 {
             past(
@@ -1649,11 +1895,10 @@ fn the_keys_walk_the_chats_archive_and_delete_and_the_filter_splits_active_from_
     open_tab(cx, "tab.chats");
     wait_until(cx, |cx| title(cx, 1).is_some());
     let open = cx.find(("chats.open", 0usize)).unwrap();
-    assert_eq!(open.description(), Some("Idle"), "no turn yet");
+    assert_eq!(open.description(), Some("Idle · solo"), "no turn yet");
 
-    // A click on the open chat puts the keys in the list; below it, solo's node, then First.
+    // A click on the open chat puts the keys in the list; below it, First.
     cx.click(("chats.open", 0usize));
-    cx.press("down");
     cx.press("down");
     cx.press("e");
     wait_until(cx, |cx| {
@@ -1692,12 +1937,12 @@ fn an_open_chat_shows_whether_it_waits_for_you_or_is_done(cx: &mut TestAppContex
     say(cx, ASK);
     wait_for_item(cx, "waiting");
     open_tab(cx, "tab.chats");
-    assert_eq!(state(cx).as_deref(), Some("Waiting"));
+    assert_eq!(state(cx).as_deref(), Some("Waiting · solo"));
     back_to_chat(cx);
     let i = index_of(cx, "waiting");
     cx.click(("chat.allow", i));
     idle(cx);
-    assert_eq!(state(cx).as_deref(), Some("Done"));
+    assert_eq!(state(cx).as_deref(), Some("Done · solo"));
 }
 
 #[gpui_kit::test]
@@ -1784,15 +2029,19 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
         cx.find("chat.group")
             .and_then(|e| e.description().map(String::from))
     };
+    cx.click("chat.more");
     assert_eq!(group(cx).as_deref(), Some("No group"));
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("New group: Group 1", w, cx)));
+    cx.click("chat.more");
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("Wake on messages", w, cx)));
+    cx.click("chat.more");
     wait_until(cx, |cx| group(cx).as_deref() == Some("Group 1 · wakes"));
 
     let repo = solo.clone();
     cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
+    cx.click("chat.more");
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("Join Group 1 (1)", w, cx)));
     let args = json!({"action": "send", "args": {"to": second, "text": "hello there"}});
@@ -1839,6 +2088,7 @@ fn codex(sb: &Sandbox) {
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     sb.state.set_block(BLOCK, config).unwrap();
     let home = sb.path("codex-home");
@@ -1881,7 +2131,10 @@ fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) 
     assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Read-only"));
     cx.click("chat.provider.pick");
-    cx.update(|w, cx| assert!(menu::pick(CLAUDE.name, w, cx)));
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 0usize)).as_deref() == Some("Logged in")
+    });
+    cx.click(("chat.agent", 0usize));
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "opus · Low · Done in ");
@@ -1900,7 +2153,13 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
 ) {
     let cx = &mut open_seeded(cx, codex);
     cx.click("chat.provider.pick");
-    cx.update(|w, cx| assert!(menu::pick("Codex", w, cx)));
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 1usize)).as_deref() == Some("Logged in")
+    });
+    cx.press("escape");
+    cx.press("space");
+    cx.press("down");
+    cx.press("enter");
     wait_until(cx, |cx| label(cx, "chat.name").as_deref() == Some("Codex"));
     let mode = cx
         .find("chat.mode")

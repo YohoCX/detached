@@ -1,23 +1,23 @@
-//! The Chats app: the chats open now, then past conversations in a tree of the workspace's folders
-//! and repos, each a row the keys walk, open, archive and delete.
+//! The Chats app: the conversations of the workspace's places, a group per place with its open
+//! chats first, each a row the keys walk, open, archive and delete.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
-use std::iter::once;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, ElementId, Entity, FocusHandle, FontWeight,
+    AnyElement, App, AppContext, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
     prelude::FluentBuilder, px,
 };
 
-use super::{Chat, label, open, state_icon};
-use crate::ui::tree::{chevron, nest, slot};
+use super::{Chat, State, label, open};
+use crate::ui::tree::{chevron, slot};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{age, in_folder, now};
 use kernel::activity::Activity;
@@ -28,14 +28,12 @@ use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-/// Past conversations shown per repo or folder before its Show more.
+/// Past conversations shown per place before its Show more.
 const PER_PLACE: usize = 5;
-/// The nodes with the newest conversations, open until toggled.
+/// The groups with the newest past conversations, open until toggled.
 const RECENT: usize = 3;
-const ROW: f32 = 32.;
-const NODE: f32 = 28.;
-/// Ends the path of a folder's node of its own chats, beside its repos'.
-const HERE: &str = "#here";
+const ROW: f32 = 48.;
+const HEADER: f32 = 28.;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Filter {
@@ -49,86 +47,120 @@ enum Filter {
 enum Key {
     Open(String, u32),
     Past(String),
-    /// A folder's or a repo's node, in the archived tree or not.
-    Node(String, bool),
-    /// The node's conversations past `PER_PLACE`.
+    /// A place's group, among the archived ones or not.
+    Group(String, bool),
+    /// The group's past conversations beyond `PER_PLACE`.
     More(String, bool),
     Archived,
 }
 
 enum Line {
-    Heading(&'static str),
-    Open(String, u32, Entity<Chat>),
-    Node {
+    Group {
         path: String,
+        name: String,
         archived: bool,
-        depth: usize,
         open: bool,
         count: usize,
     },
-    Past(Past, usize),
+    Open {
+        repo: String,
+        n: u32,
+        chat: Entity<Chat>,
+        title: String,
+        /// When its conversation was last written, from the history.
+        at: Option<u64>,
+    },
+    /// A past conversation and its place's label.
+    Past(Past, String),
     More {
         path: String,
         archived: bool,
-        depth: usize,
         left: usize,
     },
     Archived(usize),
 }
 
 impl Line {
-    fn key(&self) -> Option<Key> {
+    fn key(&self) -> Key {
         match self {
-            Line::Heading(_) => None,
-            Line::Open(repo, n, _) => Some(Key::Open(repo.clone(), *n)),
-            Line::Node { path, archived, .. } => Some(Key::Node(path.clone(), *archived)),
-            Line::Past(p, _) => Some(Key::Past(p.id.clone())),
-            Line::More { path, archived, .. } => Some(Key::More(path.clone(), *archived)),
-            Line::Archived(_) => Some(Key::Archived),
+            Line::Group { path, archived, .. } => Key::Group(path.clone(), *archived),
+            Line::Open { repo, n, .. } => Key::Open(repo.clone(), *n),
+            Line::Past(p, _) => Key::Past(p.id.clone()),
+            Line::More { path, archived, .. } => Key::More(path.clone(), *archived),
+            Line::Archived(_) => Key::Archived,
         }
     }
 
+    /// How far in the row sits, for Left to go up.
     fn depth(&self) -> usize {
         match self {
-            Line::Node { depth, .. } | Line::Past(_, depth) | Line::More { depth, .. } => *depth,
-            _ => 0,
+            Line::Archived(_) => 0,
+            Line::Group { archived, .. } => *archived as usize,
+            Line::Open { .. } => 1,
+            Line::Past(p, _) => 1 + p.archived() as usize,
+            Line::More { archived, .. } => 1 + *archived as usize,
         }
     }
 
     /// Whether a row that opens is open.
     fn open(&self, show_archived: bool) -> Option<bool> {
         match self {
-            Line::Node { open, .. } => Some(*open),
+            Line::Group { open, .. } => Some(*open),
             Line::Archived(_) => Some(show_archived),
             _ => None,
         }
     }
 }
 
-/// A folder or a repo with its conversations, newest first, and a folder's repos.
-struct Node {
-    path: String,
+/// A place's open chats and its past conversations.
+#[derive(Default)]
+struct Group {
+    open: Vec<Line>,
     past: Vec<Past>,
-    kids: Vec<Node>,
+    newest: u64,
 }
 
-impl Node {
-    fn count(&self) -> usize {
-        self.past.len() + self.kids.iter().map(Node::count).sum::<usize>()
-    }
-
-    fn newest(&self) -> u64 {
-        let own = self.past.first().map_or(0, |p| p.modified);
-        self.kids.iter().map(Node::newest).fold(own, u64::max)
-    }
-}
-
-/// The ui_state key of a node's open state.
-fn state_key(path: &str, archived: bool) -> String {
+/// The ui_state prefixes of a group's open state: its own, then the old tree's.
+fn prefixes(archived: bool) -> (&'static str, &'static str) {
     match archived {
-        true => format!("chats.archived.{path}"),
-        false => format!("chats.tree.{path}"),
+        true => ("chats.group.archived", "chats.archived"),
+        false => ("chats.group", "chats.tree"),
     }
+}
+
+/// A group's open state as toggled, else as the old tree left it: a folder's own chats were its
+/// `#here` node, and a folder's node that held repos says nothing of its own chats.
+fn stored(path: &str, archived: bool, cx: &App) -> Option<bool> {
+    let (new, old) = prefixes(archived);
+    let dir = path.trim_end_matches(['/', '\\']);
+    let repos = Workspace::get(cx).repos();
+    let held = folders(cx).iter().any(|f| f == path)
+        && repos
+            .iter()
+            .any(|r| r.path != path && in_folder(&r.path, dir));
+    let mut keys = vec![format!("{new}.{path}"), format!("{old}.{path}#here")];
+    if !held {
+        keys.push(format!("{old}.{path}"));
+    }
+    keys.iter().find_map(|k| ui_state::get(k, cx))
+}
+
+/// Each place's label, with its parent folder's name before one another place shares.
+fn names(paths: &[&str], cx: &App) -> Vec<String> {
+    let base: Vec<String> = paths.iter().map(|p| label(p, cx)).collect();
+    let parts = |p: &str| -> Vec<String> {
+        let all = p.split(['/', '\\']).filter(|s| !s.is_empty());
+        all.map(String::from).collect()
+    };
+    let named = paths.iter().zip(&base).map(|(p, b)| {
+        let (p, k) = (parts(p), parts(b).len());
+        let shared = base.iter().filter(|x| *x == b).count() > 1;
+        match p.len().checked_sub(k + 1) {
+            Some(i) if shared => format!("{}/{b}", p[i]),
+            _ => b.clone(),
+        }
+    });
+    named.collect()
 }
 
 /// The current workspace's folders.
@@ -137,50 +169,6 @@ fn folders(cx: &App) -> Vec<String> {
     let all = Settings::get(cx).workspaces.iter();
     let current = all.filter(|w| Some(w.id.as_str()) == id);
     current.flat_map(|w| w.folders.clone()).collect()
-}
-
-/// `nodes` as rows at `depth`: each node, then while it is open its conversations, up to
-/// `PER_PLACE` unless `more` holds it, and its repos.
-fn walk(
-    out: &mut Vec<Line>,
-    nodes: Vec<Node>,
-    archived: bool,
-    depth: usize,
-    open: &dyn Fn(&Node) -> bool,
-    more: &HashSet<Key>,
-) {
-    for n in nodes {
-        let (on, count) = (open(&n), n.count());
-        out.push(Line::Node {
-            path: n.path.clone(),
-            archived,
-            depth,
-            open: on,
-            count,
-        });
-        if !on {
-            continue;
-        }
-        let all = more.contains(&Key::More(n.path.clone(), archived));
-        let left = n.past.len().saturating_sub(PER_PLACE);
-        let shown = if all { n.past.len() } else { PER_PLACE };
-        out.extend(
-            n.past
-                .into_iter()
-                .take(shown)
-                .map(|p| Line::Past(p, depth + 1)),
-        );
-        if left > 0 && !all {
-            let (path, depth) = (n.path, depth + 1);
-            out.push(Line::More {
-                path,
-                archived,
-                depth,
-                left,
-            });
-        }
-        walk(out, n.kids, archived, depth + 1, open, more);
-    }
 }
 
 fn tick(n: &mut usize) -> usize {
@@ -197,7 +185,7 @@ pub struct ChatList {
     filter: Filter,
     query: Entity<InputState>,
     show_archived: bool,
-    /// The nodes shown past `PER_PLACE`.
+    /// The groups shown beyond `PER_PLACE`.
     more: HashSet<Key>,
     selected: Option<Key>,
     /// The row whose delete waits for a confirm.
@@ -212,7 +200,7 @@ impl ChatList {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search")
+                .placeholder("Search chats")
                 .clean_on_escape()
         });
         let mut list = ChatList {
@@ -302,7 +290,7 @@ impl ChatList {
     }
 
     fn keys(&self, cx: &App) -> Vec<Key> {
-        self.lines(cx).iter().filter_map(Line::key).collect()
+        self.lines(cx).iter().map(Line::key).collect()
     }
 
     /// The row after `key`'s, or the one before at the end, to take the selection when it goes.
@@ -387,104 +375,136 @@ impl ChatList {
         self.then(cwd, done, cx);
     }
 
-    /// The workspace's folders over their repos', then the repos in no folder: the nodes with a
-    /// conversation that is `archived` or not and matches the search. A folder's own conversations
-    /// sit under it, or in a node of their own after its repos when it has any.
-    fn tree(&self, archived: bool, cx: &App) -> Vec<Node> {
+    /// The conversations `archived` or not that the filter and the search keep, by place: its
+    /// open chats, then the past ones no open chat goes on with, newest first. Places with an
+    /// open chat lead, then the newest.
+    fn groups(&self, archived: bool, cx: &App) -> Vec<(String, Group)> {
         let q = self.query(cx);
-        let mut chats: HashMap<&str, Vec<Past>> = HashMap::new();
-        for ((place, _), past) in &self.past {
+        let open = open(cx);
+        let ids: Vec<(&str, String)> = (open.iter())
+            .filter_map(|(.., s)| {
+                let s = s.read(cx);
+                Some((s.provider.id, s.conversation(cx)?.to_string()))
+            })
+            .collect();
+        let mut seen: HashMap<String, Past> = HashMap::new();
+        let mut groups: BTreeMap<String, Group> = BTreeMap::new();
+        for ((place, provider), past) in &self.past {
             let name = label(place, cx);
-            let hit = |p: &&Past| p.archived() == archived && (has(&q, &p.title) || has(&q, &name));
-            let past = past.read(cx).value.iter().flatten().filter(hit).cloned();
-            chats.entry(place).or_default().extend(past);
-        }
-        let mut node = |path: &str| {
-            let mut past = chats.remove(path).unwrap_or_default();
-            past.sort_by_key(|p| Reverse(p.modified));
-            let (path, kids) = (path.to_string(), vec![]);
-            Node { path, past, kids }
-        };
-        let w = Workspace::get(cx);
-        let folders = folders(cx);
-        let mut taken: HashSet<&str> = folders.iter().map(String::as_str).collect();
-        let mut seen = HashSet::new();
-        let mut out = vec![];
-        for f in folders.iter().filter(|f| seen.insert(*f)) {
-            let mut n = node(f);
-            let dir = f.trim_end_matches(['/', '\\']);
-            for r in w.repos() {
-                if in_folder(&r.path, dir) && taken.insert(&r.path) {
-                    n.kids.push(node(&r.path));
+            for p in past.read(cx).value.iter().flatten() {
+                if ids.iter().any(|(x, id)| x == provider && *id == p.id) {
+                    seen.insert(p.id.clone(), p.clone());
+                } else if p.archived() == archived
+                    && self.filter != Filter::Active
+                    && (has(&q, &p.title) || has(&q, &name))
+                {
+                    let g = groups.entry(place.clone()).or_default();
+                    g.newest = g.newest.max(p.modified);
+                    g.past.push(p.clone());
                 }
             }
-            n.kids.retain(|k| !k.past.is_empty());
-            n.kids.sort_by_key(|k| Reverse(k.newest()));
-            if !n.kids.is_empty() && !n.past.is_empty() {
-                let (path, past) = (format!("{f}{HERE}"), std::mem::take(&mut n.past));
-                n.kids.push(Node {
-                    path,
-                    past,
-                    kids: vec![],
-                });
-            }
-            out.push(n);
         }
-        for r in w.repos() {
-            if taken.insert(&r.path) {
-                out.push(node(&r.path));
+        if !archived && self.filter != Filter::Inactive {
+            for (repo, n, chat) in open {
+                let (title, at, hit) = {
+                    let s = chat.read(cx);
+                    let past = s.conversation(cx).and_then(|id| seen.get(id));
+                    let topic = (s.topic(cx).into_iter())
+                        .find_map(|t| t.lines().map(str::trim).find(|l| !l.is_empty()));
+                    // As the past row it stands for, which a resume would rename otherwise.
+                    let title = past
+                        .map(|p| p.title.trim())
+                        .filter(|t| !t.is_empty())
+                        .or(topic);
+                    let title = title.unwrap_or("New chat").to_string();
+                    let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
+                    let hit = has(&q, &title)
+                        || has(&q, &label(&repo, cx))
+                        || s.feed(cx).iter().any(|(_, i)| said(i));
+                    (title, past.map(|p| p.modified), hit)
+                };
+                if hit {
+                    let g = groups.entry(repo.clone()).or_default();
+                    g.newest = g.newest.max(at.unwrap_or(0));
+                    g.open.push(Line::Open {
+                        repo,
+                        n,
+                        chat,
+                        title,
+                        at,
+                    });
+                }
             }
         }
-        out.retain(|n| n.count() > 0);
+        let mut out: Vec<_> = groups.into_iter().collect();
+        for (_, g) in &mut out {
+            g.past.sort_by(|a, b| {
+                let tie = || (&a.provider, &a.id).cmp(&(&b.provider, &b.id));
+                b.modified.cmp(&a.modified).then_with(tie)
+            });
+        }
+        out.sort_by_key(|(_, g)| (g.open.is_empty(), Reverse(g.newest)));
         out
     }
 
-    /// The tree's rows from `depth`. A node opens and closes at a click, and stays so; untouched,
-    /// it is open when it or one of its repos has one of the `RECENT` newest conversations.
-    fn grow(&self, out: &mut Vec<Line>, nodes: Vec<Node>, archived: bool, depth: usize, cx: &App) {
+    /// `groups` as rows: each group, then while it is open its chats, up to `PER_PLACE` past
+    /// ones unless `more` holds it. A group opens and closes at a click, and stays so; untouched,
+    /// it is open when it has an open chat or one of the `RECENT` newest past ones. A search opens
+    /// every group it matches in and shows all its rows.
+    fn push(&self, out: &mut Vec<Line>, groups: Vec<(String, Group)>, archived: bool, cx: &App) {
         let searching = !self.query(cx).is_empty();
-        let mut ranked: Vec<&Node> = nodes.iter().flat_map(|n| once(n).chain(&n.kids)).collect();
-        ranked.retain(|n| !n.past.is_empty());
-        ranked.sort_by_key(|n| Reverse(n.past[0].modified));
-        let recent: Vec<String> = ranked.iter().take(RECENT).map(|n| n.path.clone()).collect();
-        let open = |n: &Node| {
-            let stored = ui_state::get(&state_key(&n.path, archived), cx);
-            let recent = || once(n).chain(&n.kids).any(|n| recent.contains(&n.path));
-            searching || stored.unwrap_or_else(recent)
-        };
-        walk(out, nodes, archived, depth, &open, &self.more);
+        let mut ranked: Vec<_> = groups.iter().filter(|(_, g)| !g.past.is_empty()).collect();
+        ranked.sort_by_key(|(_, g)| Reverse(g.past[0].modified));
+        let recent: HashSet<String> = ranked.iter().take(RECENT).map(|(p, _)| p.clone()).collect();
+        let paths: Vec<&str> = groups.iter().map(|(p, _)| p.as_str()).collect();
+        let names = names(&paths, cx);
+        for ((path, g), name) in groups.into_iter().zip(names) {
+            let fresh = !g.open.is_empty() || recent.contains(&path);
+            let open = searching || stored(&path, archived, cx).unwrap_or(fresh);
+            let all = searching || self.more.contains(&Key::More(path.clone(), archived));
+            let left = match all {
+                true => 0,
+                false => g.past.len().saturating_sub(PER_PLACE),
+            };
+            let count = g.open.len() + g.past.len();
+            let shown = g.past.len() - left;
+            out.push(Line::Group {
+                path: path.clone(),
+                name,
+                archived,
+                open,
+                count,
+            });
+            if open {
+                out.extend(g.open);
+                let place = label(&path, cx);
+                let past = g.past.into_iter().take(shown);
+                out.extend(past.map(|p| Line::Past(p, place.clone())));
+                if left > 0 {
+                    out.push(Line::More {
+                        path,
+                        archived,
+                        left,
+                    });
+                }
+            }
+        }
     }
 
     fn query(&self, cx: &App) -> String {
         self.query.read(cx).value().trim().to_lowercase()
     }
 
-    /// The rows in order, headings included.
+    /// The rows in order: the groups, then behind Archived the archived ones.
     fn lines(&self, cx: &App) -> Vec<Line> {
         let mut out = vec![];
-        if self.filter != Filter::Inactive {
-            let q = self.query(cx);
-            let mut open = open(cx);
-            open.retain(|(r, _, s)| {
-                let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
-                let feed = s.read(cx).feed(cx);
-                has(&q, &label(r, cx)) || feed.iter().any(|(_, i)| said(i))
-            });
-            if !open.is_empty() {
-                out.push(Line::Heading("Active"));
-                out.extend(open.into_iter().map(|(r, n, s)| Line::Open(r, n, s)));
-            }
-        }
-        if self.filter == Filter::Active {
-            return out;
-        }
-        self.grow(&mut out, self.tree(false, cx), false, 0, cx);
-        let archived = self.tree(true, cx);
-        let n: usize = archived.iter().map(Node::count).sum();
+        self.push(&mut out, self.groups(false, cx), false, cx);
+        let archived = self.groups(true, cx);
+        let n: usize = archived.iter().map(|(_, g)| g.past.len()).sum();
         if n > 0 {
             out.push(Line::Archived(n));
             if self.show_archived {
-                self.grow(&mut out, archived, true, 1, cx);
+                self.push(&mut out, archived, true, cx);
             }
         }
         out
@@ -506,13 +526,14 @@ impl ChatList {
                 };
                 super::resume(cwd, p, id.clone(), cx);
             }
-            // A search holds open every node it matches in.
-            Key::Node(..) if !self.query(cx).is_empty() => {}
-            Key::Node(path, archived) => {
+            // A search holds open every group it matches in.
+            Key::Group(..) if !self.query(cx).is_empty() => {}
+            Key::Group(path, archived) => {
                 let lines = self.lines(cx);
-                let line = lines.iter().find(|l| l.key().as_ref() == Some(key));
+                let line = lines.iter().find(|l| l.key() == *key);
                 if let Some(open) = line.and_then(|l| l.open(false)) {
-                    ui_state::set(&state_key(path, *archived), !open, cx);
+                    let key = format!("{}.{path}", prefixes(*archived).0);
+                    ui_state::set(&key, !open, cx);
                 }
             }
             // The first row it brings takes its place and the selection.
@@ -531,45 +552,38 @@ impl ChatList {
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let lines = self.lines(cx);
-        let keys: Vec<(usize, Key)> = (lines.iter().enumerate())
-            .filter_map(|(i, l)| Some((i, l.key()?)))
-            .collect();
-        let at = keys
-            .iter()
-            .position(|(_, k)| Some(k) == self.selected.as_ref());
+        let at = lines.iter().position(|l| Some(l.key()) == self.selected);
         let said = self
             .selected
             .clone()
             .filter(|k| self.conversation(k, cx).is_some());
         let k = &e.keystroke;
         let go = |l: &mut Self, i: usize| {
-            let (row, key) = keys[i].clone();
-            l.selected = Some(key);
-            l.scroll.scroll_to_item(row);
+            l.selected = Some(lines[i].key());
+            l.scroll.scroll_to_item(i);
         };
         match (k.key.as_str(), self.deleting.clone()) {
             ("enter", Some(key)) => self.delete(&key, window, cx),
             ("escape", Some(_)) => self.deleting = None,
             (_, Some(_)) => {}
-            ("down" | "up", None) if !keys.is_empty() => {
+            ("down" | "up", None) if !lines.is_empty() => {
                 let step = if k.key == "down" { 1 } else { -1 };
-                let last = keys.len() as isize - 1;
+                let last = lines.len() as isize - 1;
                 go(
                     self,
                     at.map_or(0, |i| (i as isize + step).clamp(0, last)) as usize,
                 );
             }
-            // As in a tree: right opens, left closes or goes up to the node the row is in.
+            // As in a tree: right opens, left closes or goes up to the group the row is in.
             ("right" | "left", None) => {
                 let Some(at) = at else { return };
-                let (row, key) = keys[at].clone();
-                let line = &lines[row];
-                let up = keys[..at].iter().rposition(|(r, k)| {
-                    matches!(k, Key::Node(..) | Key::Archived) && lines[*r].depth() < line.depth()
+                let line = &lines[at];
+                let up = lines[..at].iter().rposition(|l| {
+                    matches!(l, Line::Group { .. } | Line::Archived(_)) && l.depth() < line.depth()
                 });
                 match (k.key == "right", line.open(self.show_archived), up) {
                     (true, Some(false), _) | (false, Some(true), _) => {
-                        self.activate(&key, window, cx)
+                        self.activate(&line.key(), window, cx)
                     }
                     (false, _, Some(up)) => go(self, up),
                     _ => return,
@@ -590,226 +604,177 @@ impl ChatList {
         cx.notify();
     }
 
-    /// One row of the list; `n` counts the open, past, node and more rows for their ids.
+    /// One row of the list; `n` counts the group, open, past and more rows for their ids.
     fn line(
         &self,
         line: &Line,
-        n: &mut (usize, usize, usize, usize),
+        n: &mut [usize; 4],
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = theme(cx);
         let focused = self.focus.contains_focused(window, cx);
         let key = line.key();
-        let on = key.is_some() && key == self.selected;
-        let depth = line.depth();
+        let on = self.selected.as_ref() == Some(&key);
         let row = |id: ElementId, label: String, cx: &mut Context<Self>| {
             let key = key.clone();
-            let row = ui::list_row(id, on, focused, cx)
+            ui::list_row(id, on, focused, cx)
                 .test_support()
                 .aria_label(SharedString::from(label))
                 .group(ui::HOVER)
-                .h(px(ROW))
+                .h(px(HEADER))
                 .flex_none()
                 .on_click(cx.listener(move |l, _, window, cx| {
-                    if let Some(k) = &key {
-                        l.selected = Some(k.clone());
-                        l.deleting = None;
-                        l.activate(k, window, cx);
-                    }
-                }));
-            nest(row, depth, cx)
+                    l.selected = Some(key.clone());
+                    l.deleting = None;
+                    l.activate(&key, window, cx);
+                }))
         };
         match line {
-            Line::Heading(name) => div()
-                .flex()
-                .flex_none()
-                .items_end()
-                .h(px(28.))
-                .px(px(16.))
-                .pb(px(4.))
-                .text_size(text::LABEL)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.muted)
-                .child(name.to_uppercase())
-                .into_any_element(),
-            Line::Node {
-                path, open, count, ..
+            Line::Group {
+                name, open, count, ..
             } => {
-                let i = tick(&mut n.2);
-                let here = path.strip_suffix(HERE);
-                let name = label(here.unwrap_or(path), cx);
-                let icon = match name.ends_with('/') {
-                    true => Icon::Folder,
-                    false => Icon::Repo,
+                let said = match count {
+                    1 => "1 chat".to_string(),
+                    n => format!("{n} chats"),
                 };
-                let said = match here {
-                    Some(_) => format!("{name} · here"),
-                    None => name.clone(),
-                };
-                row(("chats.node", i).into(), said, cx)
-                    .h(px(NODE))
-                    .gap(px(4.))
+                row(("chats.group", tick(&mut n[0])).into(), name.clone(), cx)
+                    .mt(px(4.))
+                    .gap(px(6.))
+                    .text_size(text::SMALL)
                     .aria_expanded(*open)
-                    .aria_description(SharedString::from(count.to_string()))
-                    .child(slot().text_color(t.muted).child(chevron(*open)))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(t.muted)
-                            .child(icon.size(px(14.))),
-                    )
+                    .aria_description(SharedString::from(said.clone()))
+                    .child(div().flex_none().text_color(t.muted).child(chevron(*open)))
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(name),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name.clone()),
                     )
-                    .when(here.is_some(), |r| {
-                        r.child(div().flex_none().text_color(t.muted).child("· here"))
-                    })
-                    .child(div().flex_1())
                     .when(!open, |r| {
-                        r.child(
-                            div()
-                                .text_size(text::SMALL)
-                                .text_color(t.muted)
-                                .child(count.to_string()),
-                        )
+                        r.child(div().flex_none().text_color(t.muted).child(said))
                     })
                     .into_any_element()
             }
-            Line::More { left, .. } => {
-                let said = format!("Show {left} more");
-                row(("chats.more", tick(&mut n.3)).into(), said.clone(), cx)
-                    .text_color(t.muted)
-                    .child(slot())
-                    .child(said)
-                    .into_any_element()
-            }
-            Line::Open(repo, chat, session) => {
-                let i = tick(&mut n.0);
-                let key = Key::Open(repo.clone(), *chat);
+            Line::Open {
+                repo,
+                chat,
+                title,
+                at,
+                ..
+            } => {
+                let i = tick(&mut n[1]);
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(i, key, depth, cx);
+                    return self.confirm(i, key, cx);
                 }
-                let s = session.read(cx);
-                let state = s.state(cx);
-                let said = s.conversation(cx).is_some();
-                let last = s.feed(cx).iter().rev().find_map(|(_, it)| match it {
-                    Item::User(text) => Some(text.clone()),
-                    _ => None,
-                });
-                let name = label(repo, cx);
-                let mut buttons =
-                    vec![self.button(("chats.open.end", i), Icon::Close, "End chat", &key, cx)];
+                let (state, said) = {
+                    let s = chat.read(cx);
+                    (s.state(cx), s.conversation(cx).is_some())
+                };
+                let b = |id: &'static str, icon, title, cx: &mut Context<Self>| {
+                    self.button((id, i), icon, title, &key, on, cx)
+                };
+                let mut buttons = vec![b("chats.open.end", Icon::Close, "End chat", cx)];
                 if said {
-                    buttons.push(self.button(
-                        ("chats.open.archive", i),
-                        Icon::Archive,
-                        "Archive  E",
-                        &key,
-                        cx,
-                    ));
-                    buttons.push(self.button(
-                        ("chats.open.delete", i),
-                        Icon::Trash,
-                        "Delete  ⌫",
-                        &key,
-                        cx,
-                    ));
+                    buttons.push(b("chats.open.archive", Icon::Archive, "Archive  E", cx));
+                    buttons.push(b("chats.open.delete", Icon::Trash, "Delete  ⌫", cx));
                 }
-                let side = div()
-                    .flex()
+                let color = match state {
+                    State::Working => t.accent,
+                    State::Waiting => t.warning,
+                    State::Done => t.success,
+                    State::Idle | State::Stopped => t.muted,
+                };
+                let meta = format!("{state:?} · {}", label(repo, cx));
+                let dot = div()
                     .flex_none()
-                    .justify_end()
-                    .gap(px(2.))
-                    .w(px(58.))
-                    .children(buttons);
-                row(("chats.open", i).into(), name.clone(), cx)
-                    .aria_description(SharedString::from(format!("{state:?}")))
-                    .child(state_icon(state, cx))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(t.muted)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(last.unwrap_or("New chat".into())),
-                    )
-                    .child(side)
-                    .into_any_element()
+                    .size(px(6.))
+                    .rounded(radius::PILL)
+                    .bg(color);
+                let row = row(("chats.open", i).into(), title.clone(), cx)
+                    .aria_description(SharedString::from(meta.clone()));
+                let meta = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(dot)
+                    .child(div().min_w_0().truncate().child(meta));
+                two_lines(
+                    row,
+                    ("chats.open.title", i),
+                    title,
+                    meta,
+                    side(*at, buttons, on),
+                    cx,
+                )
             }
-            Line::Past(p, _) => {
-                let k = tick(&mut n.1);
-                let key = Key::Past(p.id.clone());
+            Line::Past(p, place) => {
+                let k = tick(&mut n[2]);
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(k, key, depth, cx);
+                    return self.confirm(k, key, cx);
                 }
                 let archive = match p.archived() {
                     true => "Unarchive  E",
                     false => "Archive  E",
                 };
-                let archive = self.button(("chats.archive", k), Icon::Archive, archive, &key, cx);
-                let delete = self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, cx);
-                // The age gives way to the buttons, so the title keeps its width.
-                let age = div()
+                let buttons = vec![
+                    self.button(("chats.archive", k), Icon::Archive, archive, &key, on, cx),
+                    self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, on, cx),
+                ];
+                let title = match p.title.trim() {
+                    "" => "Untitled".to_string(),
+                    t => t.to_string(),
+                };
+                let row = row(("chats.past", k).into(), title.clone(), cx);
+                let meta = div().truncate().child(place.clone());
+                let at = (p.modified > 0).then_some(p.modified);
+                two_lines(
+                    row,
+                    ("chats.past.title", k),
+                    &title,
+                    meta,
+                    side(at, buttons, on),
+                    cx,
+                )
+            }
+            Line::More { left, .. } => {
+                let said = format!("Show {left} more");
+                row(("chats.more", tick(&mut n[3])).into(), said.clone(), cx)
                     .text_size(text::SMALL)
                     .text_color(t.muted)
-                    .group_hover(ui::HOVER, |s| s.invisible())
-                    .child(age(now() - p.modified as i64 / 1000));
-                let side = div()
-                    .relative()
-                    .flex()
-                    .flex_none()
-                    .justify_end()
-                    .w(px(40.))
-                    .child(age)
-                    .child(
-                        div()
-                            .absolute()
-                            .right_0()
-                            .flex()
-                            .gap(px(2.))
-                            .child(archive)
-                            .child(delete),
-                    );
-                row(("chats.past", k).into(), p.title.clone(), cx)
-                    .child(slot().text_color(t.muted).child(Icon::Chat.size(px(12.))))
-                    .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))
-                    .child(side)
+                    .child(said)
                     .into_any_element()
             }
             Line::Archived(count) => {
-                row("chats.archived".into(), format!("Archived ({count})"), cx)
+                let said = format!("Archived ({count})");
+                row("chats.archived".into(), said.clone(), cx)
+                    .mt(px(8.))
+                    .gap(px(6.))
+                    .text_size(text::SMALL)
                     .text_color(t.muted)
                     .aria_expanded(self.show_archived)
-                    .child(slot().child(chevron(self.show_archived)))
-                    .child(format!("Archived ({count})"))
+                    .child(chevron(self.show_archived))
+                    .child(said)
                     .into_any_element()
             }
         }
     }
 
-    /// A row's hover button: end, archive or delete, by its icon.
+    /// A row's button, shown on hover or selection: end, archive or delete, by its icon.
     fn button(
         &self,
         id: (&'static str, usize),
         icon: Icon,
         title: &'static str,
         key: &Key,
+        on: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = key.clone();
         ui::hover_button(id, icon.size(px(12.)), title, cx)
             .test_support()
+            .when(on, |b| b.visible())
             .on_click(cx.listener(move |l, _, window, cx| {
                 cx.stop_propagation();
                 match icon {
@@ -823,7 +788,7 @@ impl ChatList {
     }
 
     /// A delete waiting for its confirm, in the row's own place and height.
-    fn confirm(&self, ix: usize, key: Key, depth: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn confirm(&self, ix: usize, key: Key, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         // Codex's delete archives the conversation in Codex's own history.
         let keeps = (self.conversation(&key, cx)).is_some_and(|(.., p)| p.id == CODEX.id);
@@ -854,7 +819,7 @@ impl ChatList {
                 .hover(|s| s.bg(t.hover))
                 .child(label)
         };
-        let row = div()
+        div()
             .id((row, ix))
             .test_support()
             .flex()
@@ -879,9 +844,82 @@ impl ChatList {
                 small(yes, "Delete")
                     .text_color(t.error)
                     .on_click(cx.listener(move |l, _, window, cx| l.delete(&key, window, cx))),
-            );
-        nest(row, depth, cx).into_any_element()
+            )
+            .into_any_element()
     }
+}
+
+/// A chat row's age, which its buttons take the place of on hover or selection.
+fn side(at: Option<u64>, buttons: Vec<AnyElement>, on: bool) -> Div {
+    let wide = px(20. * buttons.len() as f32 - 2.);
+    let ago = at.map(|ms| age((now() - ms as i64 / 1000).max(0)));
+    div()
+        .relative()
+        .flex()
+        .flex_none()
+        .justify_end()
+        .min_w(wide)
+        .child(
+            div()
+                .when(on, |a| a.invisible())
+                .group_hover(ui::HOVER, |s| s.invisible())
+                .children(ago),
+        )
+        .child(
+            div()
+                .absolute()
+                .right_0()
+                .top(px(-1.))
+                .flex()
+                .gap(px(2.))
+                .children(buttons),
+        )
+}
+
+/// A chat row's title over `meta` and `side`, so the title keeps its bounds on hover.
+fn two_lines(
+    row: impl Styled + ParentElement + IntoElement,
+    id: (&'static str, usize),
+    title: &str,
+    meta: Div,
+    side: Div,
+    cx: &App,
+) -> AnyElement {
+    let t = theme(cx);
+    let (tip, title) = (SharedString::from(title.to_string()), title.to_string());
+    let title = div()
+        .id(id)
+        .test_support()
+        .w_full()
+        .min_w_0()
+        .truncate()
+        .text_size(text::BODY)
+        .line_height(px(18.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(t.fg)
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .child(title);
+    let meta = div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .h(px(16.))
+        .text_size(text::LABEL)
+        .text_color(t.muted)
+        .child(div().flex_1().min_w_0().child(meta))
+        .child(side);
+    row.h(px(ROW))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .child(title)
+                .child(meta),
+        )
+        .into_any_element()
 }
 
 fn has(q: &str, text: &str) -> bool {
@@ -892,7 +930,7 @@ impl Render for ChatList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let lines = self.lines(cx);
-        let mut n = (0, 0, 0, 0);
+        let mut n = [0; 4];
         let rows: Vec<_> = lines
             .iter()
             .map(|l| self.line(l, &mut n, window, cx))
@@ -920,6 +958,41 @@ impl Render for ChatList {
             },
             cx,
         );
+        let search = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .child(
+                div()
+                    .id("chats.search")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .child(ui::input(&self.query, cx)),
+            )
+            .child(
+                ui::titled(
+                    ui::icon_button("chats.new", Icon::Plus, cx),
+                    "New chat in the current repo",
+                )
+                .test_support()
+                .on_click(|_, _, cx| {
+                    match Workspace::get(cx).current().map(String::from) {
+                        Some(repo) => super::new_chat(repo, cx),
+                        None => Activity::global(cx).update(cx, |a, cx| {
+                            a.say("Select a repository to chat about", false, cx)
+                        }),
+                    }
+                }),
+            )
+            .child(
+                ui::titled(
+                    ui::icon_button("chats.refresh", Icon::Refresh, cx),
+                    "Refresh",
+                )
+                .test_support()
+                .on_click(cx.listener(|l, _, _, cx| l.refresh(cx))),
+            );
         div()
             .id("chats")
             .test_support()
@@ -927,48 +1000,15 @@ impl Render for ChatList {
             .flex_col()
             .size_full()
             .child(
-                div()
+                ui::band(div(), cx)
                     .flex()
+                    .flex_col()
                     .flex_none()
-                    .items_center()
-                    .gap(px(2.))
+                    .gap(px(4.))
                     .px(px(8.))
-                    .py(px(4.))
-                    .child(filter)
-                    .child(div().flex_1())
-                    .child(
-                        ui::titled(
-                            ui::icon_button("chats.new", Icon::Plus, cx),
-                            "New chat in the current repo",
-                        )
-                        .test_support()
-                        .on_click(|_, _, cx| {
-                            match Workspace::get(cx).current().map(String::from) {
-                                Some(repo) => super::new_chat(repo, cx),
-                                None => Activity::global(cx).update(cx, |a, cx| {
-                                    a.say("Select a repository to chat about", false, cx)
-                                }),
-                            }
-                        }),
-                    )
-                    .child(
-                        ui::titled(
-                            ui::icon_button("chats.refresh", Icon::Refresh, cx),
-                            "Refresh",
-                        )
-                        .test_support()
-                        .on_click(cx.listener(|l, _, _, cx| l.refresh(cx))),
-                    ),
-            )
-            // Its own row: beside the filter it would have no room in a side zone.
-            .child(
-                div()
-                    .id("chats.search")
-                    .test_support()
-                    .flex_none()
-                    .px(px(8.))
-                    .pb(px(6.))
-                    .child(ui::input(&self.query, cx)),
+                    .py(px(6.))
+                    .child(search)
+                    .child(div().flex().child(filter)),
             )
             .child(
                 div()

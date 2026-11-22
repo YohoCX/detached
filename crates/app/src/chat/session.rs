@@ -65,7 +65,7 @@ impl Chat {
     pub fn new(repo: String, cx: &mut Context<Self>) -> Self {
         let mut all: BTreeMap<String, Vec<SlashCommand>> =
             ui_state::get(COMMANDS, cx).unwrap_or_default();
-        let (provider, choices) = defaults(cx);
+        let (provider, choices) = defaults(cx).unwrap_or((&CLAUDE, Choices::default()));
         Chat {
             cached: all
                 .remove(&repo)
@@ -97,9 +97,16 @@ impl Chat {
 
     /// Opens the first session, unless one is there.
     pub fn ensure(&mut self, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
-            self.open(None, cx);
+        if !self.sessions.is_empty() || !Settings::ready(cx) {
+            return;
         }
+        if !super::provider_config(cx).shows(self.provider) {
+            let Some((p, choices)) = defaults(cx) else {
+                return;
+            };
+            self.apply(p, choices);
+        }
+        self.open(None, cx);
     }
 
     /// Opens a session after the ones there, resuming `past` when given.
@@ -123,6 +130,12 @@ impl Chat {
 
     /// Sends `text` to the session, or to a new one that resumes the conversation.
     pub fn send(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.sessions.is_empty() {
+            self.ensure(cx);
+            if self.sessions.is_empty() {
+                return;
+            }
+        }
         self.topic.get_or_insert_with(|| text.clone());
         let s = match self.live(cx) {
             Some(s) => s,
@@ -204,7 +217,7 @@ impl Chat {
 
     /// Hands a chat with nothing in it to `p` with its preset.
     pub fn set_provider(&mut self, p: &'static Provider, cx: &mut Context<Self>) {
-        if self.provider.id == p.id || !self.is_new(cx) {
+        if self.provider.id == p.id || !self.is_new(cx) || !super::provider_config(cx).shows(p) {
             return;
         }
         self.end(cx);
@@ -250,7 +263,9 @@ impl Chat {
     }
 
     pub fn refresh_defaults(&mut self, cx: &mut Context<Self>) {
-        let (p, choices) = defaults(cx);
+        let Some((p, choices)) = defaults(cx) else {
+            return;
+        };
         if p.id == self.provider.id
             && choices.mode == self.mode
             && choices.model == self.model
@@ -278,7 +293,7 @@ impl Chat {
         if let Some(s) = self.live(cx) {
             s.update(cx, |s, cx| {
                 if let Err(e) = s.set(setting) {
-                    s.note(e.to_string());
+                    s.fail(e.to_string());
                     cx.notify();
                 }
             });
@@ -322,7 +337,7 @@ impl Chat {
         for (k, s) in self.sessions.iter().enumerate() {
             let s = s.read(cx);
             let shown = s.items.iter().enumerate().filter(|(i, it)| {
-                (k == 0 || *i >= s.history || matches!(it, Item::Note(_)))
+                (k == 0 || *i >= s.history || matches!(it, Item::Note(_) | Item::Error(_)))
                     && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
             });
             out.extend(shown.map(|(i, it)| ((k, i), it)));
@@ -415,7 +430,7 @@ impl Chat {
                     Err(e) => {
                         c.accepted = None;
                         if let Some(s) = live {
-                            s.update(cx, |s, _| s.note(format!("Cannot save the trust: {e}")));
+                            s.update(cx, |s, _| s.fail(format!("Cannot save the trust: {e}")));
                         }
                     }
                 }
@@ -541,20 +556,24 @@ impl Chat {
     /// Forgets the conversation: a new session takes its place.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.end(cx);
-        let (p, choices) = defaults(cx);
-        self.apply(p, choices);
-        self.open(None, cx);
-        self.check_trust(cx);
+        if let Some((p, choices)) = defaults(cx) {
+            self.apply(p, choices);
+            self.open(None, cx);
+            self.check_trust(cx);
+        }
+        cx.notify();
     }
 }
 
-fn defaults(cx: &App) -> (&'static Provider, Choices) {
+fn defaults(cx: &App) -> Option<(&'static Provider, Choices)> {
     let preset = Preset::read(Settings::get(cx));
-    let p = super::providers(cx)
-        .into_iter()
+    let providers = super::providers(cx);
+    let p = providers
+        .iter()
+        .copied()
         .find(|p| p.id == preset.provider)
-        .unwrap_or(&CLAUDE);
-    (p, choices(&preset, p))
+        .or_else(|| providers.first().copied())?;
+    Some((p, choices(&preset, p)))
 }
 
 fn choices(preset: &Preset, p: &Provider) -> Choices {

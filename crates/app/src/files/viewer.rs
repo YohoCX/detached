@@ -12,7 +12,7 @@ use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
 use crate::dock::DocKind;
-use crate::ui::{text, theme};
+use crate::ui::{self, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -149,7 +149,7 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
             .child(s)
     };
     let name: SharedString = base_name(path).to_string().into();
-    div()
+    ui::band(div(), cx)
         .flex()
         .flex_none()
         .items_center()
@@ -157,8 +157,6 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
         .h(px(44.))
         .pl(px(16.))
         .pr(px(8.))
-        .border_b_1()
-        .border_color(t.line)
         .child(
             div()
                 .id("viewer.name")

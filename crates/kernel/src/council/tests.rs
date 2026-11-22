@@ -146,6 +146,7 @@ fn codex(f: &Fixture) {
         ]
         .into(),
         codex: true,
+        ..Config::default()
     };
     f.core.set_block(BLOCK, config).unwrap();
 }

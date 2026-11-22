@@ -127,3 +127,112 @@ fn hidden_names_round_trip_through_the_files_page(cx: &mut TestAppContext) {
     wait_until(cx, |cx| cx.find("files.hidden.remove.0").is_none());
     assert!(hidden().is_empty());
 }
+
+#[gpui_kit::test]
+fn file_nesting_rules_can_be_added_edited_and_removed(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    cx.update(|_, cx| settings::open(cx, "files"));
+    cx.click("files.nesting.pattern");
+    cx.input(".bundle");
+    cx.click("files.nesting.children");
+    cx.input(".bundle.map, .min.bundle");
+    cx.click("files.nesting.save");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.file_nesting
+                .get(".bundle")
+                .is_some_and(|kids| kids == &[".bundle.map", ".min.bundle"])
+        })
+    });
+    cx.click(("files.nesting.edit", 0usize));
+    cx.click("files.nesting.children");
+    cx.press("secondary-a");
+    cx.input(".map");
+    cx.click("files.nesting.save");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.file_nesting
+                .get(".bundle")
+                .is_some_and(|kids| kids == &[".map"])
+        })
+    });
+    cx.click(("files.nesting.remove", 0usize));
+    wait_until(cx, |cx| cx.settings(|s| s.file_nesting.is_empty()));
+}
+
+#[gpui_kit::test]
+fn sharing_can_pick_a_workspaces_own_remote_and_include_forks(cx: &mut TestAppContext) {
+    use detached_core::council::marks::{self, Council, Mark};
+    use gpui_kit::{ScrollDelta, point, px};
+
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = sb.path("repos/r");
+        std::fs::create_dir(&repo).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        sb.git(&repo, &["remote", "add", "origin", "../origin"]);
+        sb.git(&repo, &["remote", "add", "upstream", "../upstream"]);
+        marks::change(&sb.state, |p| {
+            p.workspaces.push(Mark {
+                name: "Default".into(),
+                ..Mark::default()
+            });
+        })
+        .unwrap();
+    });
+    let repo = cx.sb.path("repos/r").display().to_string();
+    cx.workspace(|w, cx| w.set_current(Some(repo), cx));
+    cx.update(|_, cx| settings::open(cx, "sharing"));
+    wait_until(cx, |cx| cx.find("sharing.local").is_some());
+    cx.update(|w, cx| {
+        w.scroll(
+            "settings.body",
+            ScrollDelta::Pixels(point(px(0.), px(-200.))),
+            cx,
+        )
+    });
+    cx.click("sharing.marks.workspace.Default.remote");
+    cx.update(|w, cx| assert!(detached_app::ui::menu::pick("upstream", w, cx)));
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Council>(marks::BLOCK).unwrap().workspaces[0]
+                .remote
+                .as_deref()
+                == Some("upstream")
+        })
+    });
+    cx.click("sharing.marks.workspace.Default.forks");
+    wait_until(cx, |cx| {
+        cx.settings(|s| s.block::<Council>(marks::BLOCK).unwrap().workspaces[0].forks)
+    });
+}
+
+#[gpui_kit::test]
+fn bad_config_files_have_notices_and_bad_keymaps_stay_in_place(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let dir = &sb.state.config_dir;
+        std::fs::write(dir.join("settings.json"), "{bad settings").unwrap();
+        std::fs::write(dir.join("ui.json"), "{bad ui").unwrap();
+        std::fs::write(dir.join("keymap.json"), r#"{"panel.panels": 7}"#).unwrap();
+    });
+    let dir = cx.sb.state.config_dir.clone();
+    let files = ["settings.json.bad", "ui.json.bad", "keymap.json"];
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            let activity = kernel::activity::Activity::global(cx);
+            files.iter().all(|file| {
+                activity
+                    .read(cx)
+                    .notices
+                    .iter()
+                    .any(|n| n.reveal.as_deref() == Some(dir.join(file).as_path()))
+            })
+        })
+    });
+    for (file, contents) in
+        files
+            .into_iter()
+            .zip(["{bad settings", "{bad ui", r#"{"panel.panels": 7}"#])
+    {
+        assert_eq!(std::fs::read_to_string(dir.join(file)).unwrap(), contents);
+    }
+}

@@ -239,6 +239,7 @@ fn sandbox() -> Sandbox {
     let config = adapters::Config {
         cli: [(CODEX.id.into(), fake)].into(),
         codex: true,
+        ..adapters::Config::default()
     };
     sb.state.set_block(BLOCK, config).unwrap();
     testutil::install(&sb.state, "1.0.0");
