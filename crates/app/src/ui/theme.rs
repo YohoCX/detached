@@ -74,6 +74,21 @@ pub const GAP: Pixels = px(10.);
 /// A tab's title is cut past this, so a long one leaves its close button in the zone.
 pub const TAB_TITLE: Pixels = px(240.);
 
+pub mod chat {
+    use gpui_kit::{Pixels, px};
+
+    pub const INLINE: Pixels = px(580.);
+    pub const MENU: Pixels = px(280.);
+    pub const OPTION: Pixels = px(32.);
+    pub const CONTROL: Pixels = px(28.);
+    pub const PAD: Pixels = px(8.);
+    pub const CONTROL_PAD: Pixels = px(8.);
+    pub const GAP: Pixels = px(6.);
+    pub const CHECK: Pixels = px(14.);
+    pub const CHEVRON: Pixels = px(10.);
+    pub const LINE: Pixels = px(1.);
+}
+
 pub mod radius {
     use gpui_kit::{Pixels, px};
 

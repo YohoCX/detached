@@ -30,6 +30,8 @@ pub struct Agents {
     pub config: Config,
     /// One per provider, in `PROVIDERS`' order.
     pub rows: Vec<Row>,
+    loading: bool,
+    loaded: bool,
 }
 
 pub struct Row {
@@ -87,6 +89,9 @@ pub(crate) fn init(cx: &mut App) {
         state: State::Idle,
         cancel: None,
     });
+    let config = crate::settings::Settings::get(cx)
+        .block(BLOCK)
+        .unwrap_or_default();
     let agents = cx.new(|_| Agents {
         url: adapters::CATALOG_URL.into(),
         key: adapters::CATALOG_KEY.into(),
@@ -94,8 +99,10 @@ pub(crate) fn init(cx: &mut App) {
         catalog: None,
         error: None,
         checking: false,
-        config: Config::default(),
+        config,
         rows: rows.collect(),
+        loading: false,
+        loaded: false,
     });
     cx.set_global(GlobalAgents(agents));
 }
@@ -164,14 +171,29 @@ impl Agents {
     }
 
     fn apply(&mut self, (config, rows): Scan) {
+        self.loaded = true;
         self.config = config;
         for (row, (installed, cli)) in self.rows.iter_mut().zip(rows) {
             (row.installed, row.cli) = (installed, cli);
         }
     }
 
+    pub fn loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
+        if !self.loaded {
+            self.load(cx);
+        }
+    }
+
     /// Reads what is installed and finds the CLIs, without the network.
     pub fn load(&mut self, cx: &mut Context<Self>) {
+        if self.loading {
+            return;
+        }
+        self.loading = true;
         let core = crate::core(cx).clone();
         let done = blocking::run(cx, move || {
             let stored = adapters::stored(&core.data_dir);
@@ -180,6 +202,7 @@ impl Agents {
         cx.spawn(async move |this, cx| {
             let (scan, stored) = done.await;
             this.update(cx, |a, cx| {
+                a.loading = false;
                 a.apply(scan);
                 if a.catalog.is_none() {
                     a.catalog = stored;

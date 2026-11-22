@@ -11,6 +11,7 @@ use detached_core::chat_settings::{self, Preset};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AppContext, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext, px,
+    size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -199,6 +200,7 @@ fn a_message_is_answered_and_the_turn_ends(cx: &mut TestAppContext) {
     );
     assert_eq!(got.len(), 3);
     // Usage comes after the turn's end.
+    cx.click("chat.more");
     wait_until(cx, |cx| {
         cx.find("chat.usage")
             .and_then(|e| e.label().map(String::from))
@@ -230,7 +232,9 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     wait_until(cx, |cx| {
         label(cx, "chat.provider").as_deref() == Some("Claude Max")
     });
-    wait_until(cx, |cx| label(cx, "chat.limit.5h").is_some());
+    wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
+    assert!(cx.find("chat.limit.5h").is_none());
+    cx.click("chat.more");
     assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
     let fill = cx.update(|w, _| {
         w.within("chat.limit.5h")
@@ -249,6 +253,8 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     );
     assert!(cx.find("chat.limits").is_none());
     assert!(items(cx).is_empty(), "no message was needed");
+    cx.press("escape");
+    cx.click("chat.send");
 
     // No limits in the answer, then no answer at all, each in a new chat: unknown, never a zero.
     for fake_json in [
@@ -259,11 +265,70 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         wait_for_item(cx, "said hello");
         fake(&cx.sb, fake_json);
         cx.click("chat.new");
+        cx.click("chat.more");
         wait_until(cx, |cx| {
             label(cx, "chat.limits").as_deref() == Some("No plan limits reported")
         });
         assert!(cx.find("chat.limit.5h").is_none());
+        cx.press("escape");
+        cx.click("chat.send");
     }
+}
+
+#[gpui_kit::test]
+fn the_provider_menu_is_anchored_lists_disabled_agents_and_locks_after_send(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    cx.click("chat.provider.pick");
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 0usize)).as_deref() == Some("Logged in")
+    });
+    let menu = cx.find("chat.provider.options").unwrap().bounds();
+    let trigger = cx.find("chat.provider.pick").unwrap().bounds();
+    assert!(menu.bottom() <= trigger.top());
+    assert_eq!(
+        cx.find(("chat.agent", 0usize)).unwrap().selected(),
+        Some(true)
+    );
+    assert_eq!(
+        description(cx, ("chat.agent", 1usize)).as_deref(),
+        Some("Off")
+    );
+    assert_eq!(
+        cx.find(("chat.agent", 1usize)).unwrap().disabled(),
+        Some(true)
+    );
+    cx.press("escape");
+    assert!(cx.find("chat.provider.options").is_none());
+    cx.press("enter");
+    cx.press("down");
+    cx.press("enter");
+    wait_until(cx, |cx| cx.find("settings.agents").is_some());
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    cx.click("chat.provider.pick");
+    cx.press("enter");
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    assert!(cx.find("chat.provider.pick").is_none());
+    assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+}
+
+#[gpui_kit::test]
+fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_some());
+    cx.simulate_resize(size(px(540.), px(800.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_none());
+    assert!(cx.find("chat.provider.pick").is_some());
+    assert!(cx.find("chat.mode").is_some());
+    assert!(cx.find("chat.send").is_some());
+    cx.click("chat.more");
+    assert!(cx.find("chat.model").is_some());
+    cx.press("escape");
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    wait_until(cx, |cx| cx.find("chat.model").is_some());
 }
 
 #[gpui_kit::test]
@@ -322,7 +387,8 @@ fn tools_and_blocks_show_in_the_feed(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn stop_ends_the_turn(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    say(cx, HANG);
+    cx.input(HANG);
+    cx.click("chat.send");
     working(cx);
     cx.click("chat.stop");
     idle(cx);
@@ -364,6 +430,7 @@ fn a_model_without_auto_is_marked_and_the_mode_drop_reported(cx: &mut TestAppCon
     say(cx, "say switched");
     wait_for_item(cx, "old · Done in ");
     idle(cx);
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -657,6 +724,7 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
     wait_until(cx, |cx| {
         description(cx, "chat.mode").as_deref() == Some("Plan")
     });
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -812,6 +880,7 @@ fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut Test
     });
     id(cx, 0);
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
+    cx.click("chat.more");
     cx.click("chat.save-default");
     wait_until(cx, |cx| {
         cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("default"))
@@ -1334,6 +1403,7 @@ fn the_context_shows_by_part(cx: &mut TestAppContext) {
     });
     say(cx, "hello");
     wait_for_item(cx, "said hello");
+    cx.click("chat.more");
     wait_until(cx, |cx| cx.find("chat.usage").is_some());
     let usage = cx.find("chat.usage").unwrap();
     assert_eq!(usage.label(), Some("Context 26%"));
@@ -1784,15 +1854,19 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
         cx.find("chat.group")
             .and_then(|e| e.description().map(String::from))
     };
+    cx.click("chat.more");
     assert_eq!(group(cx).as_deref(), Some("No group"));
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("New group: Group 1", w, cx)));
+    cx.click("chat.more");
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("Wake on messages", w, cx)));
+    cx.click("chat.more");
     wait_until(cx, |cx| group(cx).as_deref() == Some("Group 1 · wakes"));
 
     let repo = solo.clone();
     cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
+    cx.click("chat.more");
     cx.click("chat.group");
     cx.update(|w, cx| assert!(menu::pick("Join Group 1 (1)", w, cx)));
     let args = json!({"action": "send", "args": {"to": second, "text": "hello there"}});
@@ -1881,7 +1955,10 @@ fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) 
     assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Read-only"));
     cx.click("chat.provider.pick");
-    cx.update(|w, cx| assert!(menu::pick(CLAUDE.name, w, cx)));
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 0usize)).as_deref() == Some("Logged in")
+    });
+    cx.click(("chat.agent", 0usize));
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "opus · Low · Done in ");
@@ -1900,7 +1977,13 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
 ) {
     let cx = &mut open_seeded(cx, codex);
     cx.click("chat.provider.pick");
-    cx.update(|w, cx| assert!(menu::pick("Codex", w, cx)));
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 1usize)).as_deref() == Some("Logged in")
+    });
+    cx.press("escape");
+    cx.press("space");
+    cx.press("down");
+    cx.press("enter");
     wait_until(cx, |cx| label(cx, "chat.name").as_deref() == Some("Codex"));
     let mode = cx
         .find("chat.mode")

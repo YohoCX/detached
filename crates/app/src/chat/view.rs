@@ -4,16 +4,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use detached_core::api;
 use detached_core::backend::{Limit, Model, Past, Piece, Question, Setting, Tool, TurnConfig};
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{Button, TestSupportExt};
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div,
-    prelude::FluentBuilder, px, relative,
+    Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EntityId,
+    FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
+    Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    WeakEntity, Window, canvas, div, prelude::FluentBuilder, px, relative,
 };
 
 use detached_core::docs::Need;
@@ -23,9 +23,12 @@ use detached_core::types::Side;
 
 use super::session::Chat;
 use crate::files::{Links, Markdown};
+use crate::ui::theme::chat as size;
 use crate::ui::{self, Icon, Menu, radius, text, theme};
 use crate::util::{age, now, span};
-use detached_core::adapters::CLAUDE;
+use detached_core::adapters::{CLAUDE, LoginStatus, Provider};
+use detached_core::backend::Name;
+use kernel::agents::Agents;
 use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
@@ -52,9 +55,20 @@ struct Suggest {
 /// An item by its session's place in the chat and its own in the session.
 type At = (usize, usize);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComposerMenu {
+    Provider(usize),
+    More,
+}
+
 pub struct ChatView {
     session: Entity<Chat>,
     input: Entity<TextareaState>,
+    composer_focus: FocusHandle,
+    provider_focus: FocusHandle,
+    more_focus: FocusHandle,
+    menu: Option<ComposerMenu>,
+    narrow: bool,
     scroll: ScrollHandle,
     suggest: Option<Suggest>,
     /// Groups of tool calls opened or closed against their default, by their first call's id.
@@ -89,6 +103,9 @@ impl ChatView {
                 .placeholder(placeholder(p.name))
         });
         input.update(cx, |s, cx| s.focus(window, cx));
+        let composer_focus = cx.focus_handle();
+        let agents = Agents::global(cx);
+        agents.update(cx, |a, cx| a.ensure_loaded(cx));
         let scroll = ScrollHandle::new();
         let follow = scroll.clone();
         let subscriptions = vec![
@@ -99,6 +116,9 @@ impl ChatView {
                 cx.notify();
             }),
             cx.observe(&Messages::global(cx), |_, _, cx| cx.notify()),
+            cx.observe(&agents, |_, _, cx| cx.notify()),
+            cx.on_focus_in(&composer_focus, window, |_, _, cx| cx.notify()),
+            cx.on_focus_out(&composer_focus, window, |_, _, _, cx| cx.notify()),
             cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     this.suggest(cx);
@@ -116,6 +136,11 @@ impl ChatView {
         ChatView {
             session,
             input,
+            composer_focus,
+            provider_focus: cx.focus_handle(),
+            more_focus: cx.focus_handle(),
+            menu: None,
+            narrow: true,
             scroll,
             suggest: None,
             toggled: HashSet::new(),
@@ -308,55 +333,92 @@ impl ChatView {
             )
     }
 
-    /// Under the box: who answers, the session's mode, model and effort; right, the context and
-    /// what is left of the plan.
-    fn bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn textarea(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .capture_action(cx.listener(|this, _: &Enter, window, cx| {
+                if this.suggest.is_some() {
+                    cx.stop_propagation();
+                    let hi = this.suggest.as_ref().map_or(0, |s| s.hi);
+                    this.accept(hi, window, cx);
+                } else if !window.modifiers().shift {
+                    cx.stop_propagation();
+                    this.send(window, cx);
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
+                if let Some(hi) = this.suggest.as_ref().map(|s| s.hi) {
+                    cx.stop_propagation();
+                    this.accept(hi, window, cx);
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Escape, _, cx| {
+                if this.suggest.take().is_some() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &MoveUp, _, cx| this.step(false, cx)))
+            .capture_action(cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)))
+            .child(
+                Textarea::new(&self.input)
+                    .appearance(false)
+                    .text_size(theme::doc::BODY),
+            )
+    }
+
+    fn bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let chat = self.session.read(cx);
         let s = chat.current().map(|s| s.read(cx));
-        let menu = |id: &'static str,
-                    title: &str,
-                    label: String,
-                    entries: Vec<(String, Option<Setting>)>| {
+        let menu = |id, title, value: String, tip: &str, entries: Vec<(String, Setting)>| {
             let session = self.session.clone();
-            let chevron =
-                (!entries.is_empty() && id != "chat.usage").then(|| Icon::Down.size(px(10.)));
+            let me = self.me.clone();
             ui::titled(
-                ui::icon_button(id, div().child(label.clone()), cx)
-                    .h(px(24.))
-                    .px(px(8.))
-                    .children(chevron),
-                title.to_string(),
+                picker(id, title, &value, !entries.is_empty(), cx),
+                tip.to_string(),
             )
-            .aria_description(SharedString::from(label))
+            .aria_description(SharedString::from(value))
             .test_support()
             .when(!entries.is_empty(), |b| {
                 b.on_click(move |e, window, cx| {
-                    let menu = entries.iter().fold(Menu::default(), |menu, (label, pick)| {
-                        let (session, pick) = (session.clone(), pick.clone());
-                        menu.item_if(pick.is_some(), label.clone(), move |_, cx| {
-                            if let Some(pick) = pick.clone() {
-                                session.update(cx, |s, cx| s.set(pick, cx));
-                            }
+                    entries
+                        .iter()
+                        .fold(Menu::default(), |menu, (label, setting)| {
+                            let (session, setting, me) =
+                                (session.clone(), setting.clone(), me.clone());
+                            menu.item(label.clone(), move |window, cx| {
+                                session.update(cx, |s, cx| s.set(setting.clone(), cx));
+                                me.update(cx, |this, cx| {
+                                    if this.menu == Some(ComposerMenu::More) {
+                                        this.finish_more(window, cx);
+                                    }
+                                })
+                                .ok();
+                            })
                         })
-                    });
-                    menu.show(e.position(), window, cx);
+                        .show(e.position(), window, cx);
                 })
             })
         };
         let p = chat.provider;
         // The session's own mode once it says one: a refused switch leaves it as it was.
-        let now = s
+        let mode_id = s
             .and_then(|s| s.option("mode"))
             .unwrap_or_else(|| chat.mode());
         let mode = (p.modes.iter())
-            .find(|(m, ..)| *m == now)
+            .find(|(m, ..)| *m == mode_id)
             .or(p.modes.iter().find(|(m, ..)| *m == chat.mode()))
             .unwrap_or(&p.modes[0]);
         let modes = (p.modes.iter())
-            .map(|(m, label, _)| (label.to_string(), Some(Setting::Mode(m.to_string()))))
+            .map(|(m, label, _)| (label.to_string(), Setting::Mode(m.to_string())))
             .collect();
-        let modes = menu("chat.mode", mode.2, mode.1.to_string(), modes);
+        let modes = menu(
+            "chat.mode",
+            "Permissions",
+            mode.1.to_string(),
+            mode.2,
+            modes,
+        );
         let models: &[Model] = s.map_or(&[], |s| &s.models);
         let has_auto = p.modes.iter().any(|(m, ..)| *m == AUTO);
         let entries = models
@@ -366,17 +428,17 @@ impl ChatView {
                     true => m.label.clone(),
                     false => format!("{} (no auto)", m.label),
                 };
-                (label, Some(Setting::Model(m.value.clone())))
+                (label, Setting::Model(m.value.clone()))
             })
             .collect();
         let current = match s {
             Some(s) if s.version.is_some() => s.option("model"),
             _ => chat.model.as_deref(),
         };
-        let model = current.map_or("Default model".into(), |m| {
+        let model = current.map_or("Default".into(), |m| {
             model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
         });
-        let picker = menu("chat.model", "Model", model, entries);
+        let model = menu("chat.model", "Model", model, "Model", entries);
         let efforts = current.and_then(|id| Model::find(models, id));
         let efforts = efforts.map_or(&[][..], |m| &m.efforts);
         // An agent that lists efforts as an option of the session, not per model.
@@ -386,124 +448,371 @@ impl ChatView {
             _ => efforts,
         };
         let efforts: Vec<_> = (efforts.iter())
-            .map(|e| (e.clone(), Some(Setting::Effort(e.clone()))))
+            .map(|e| (e.clone(), Setting::Effort(e.clone())))
             .collect();
         let effort = (!efforts.is_empty()).then(|| {
             let now = match s {
                 Some(s) if s.version.is_some() => s.option("effort").filter(|e| !e.is_empty()),
                 _ => chat.effort.as_deref(),
             };
-            let label = now.unwrap_or("Effort");
-            menu("chat.effort", "Effort", label.to_string(), efforts)
+            let label = now.unwrap_or("Default");
+            menu(
+                "chat.effort",
+                "Effort",
+                label.to_string(),
+                "Effort",
+                efforts,
+            )
         });
-        let usage = s.and_then(|s| s.usage.filter(|(_, max)| *max > 0).map(|u| (u, &s.parts)));
-        let usage = usage.map(|((used, max), parts)| {
-            let parts: Vec<String> = (parts.iter())
+        let usage = s.and_then(|s| {
+            let (used, max) = s.usage.filter(|(_, max)| *max > 0)?;
+            let pct = (used * 100 / max) as f32;
+            let label = format!("Context {pct:.0}%");
+            let parts: Vec<_> = s
+                .parts
+                .iter()
                 .map(|p| format!("{} {}", p.name, tokens(p.tokens)))
                 .collect();
-            let pct = used * 100 / max;
-            let label = format!("Context {pct}%");
-            let entries = parts.iter().map(|p| (p.clone(), None)).collect();
-            menu(
-                "chat.usage",
-                &format!("{} of {}", tokens(used), tokens(max)),
-                label.clone(),
-                entries,
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(size::GAP)
+                    .child(
+                        div()
+                            .id("chat.usage")
+                            .test_support()
+                            .aria_label(label.clone())
+                            .aria_description(SharedString::from(parts.join(", ")))
+                            .flex()
+                            .items_center()
+                            .gap(size::GAP)
+                            .child(label)
+                            .child(meter(pct, pct, cx))
+                            .child(div().ml_auto().text_color(t.muted).child(format!(
+                                "{} of {}",
+                                tokens(used),
+                                tokens(max)
+                            ))),
+                    )
+                    .children(
+                        parts
+                            .into_iter()
+                            .map(|part| div().text_color(t.muted).child(part)),
+                    ),
             )
-            .aria_label(SharedString::from(label))
-            .aria_description(SharedString::from(parts.join(", ")))
-            .child(meter(pct as f32, pct as f32, cx))
         });
-        let account = s.and_then(|s| s.account.as_ref());
-        let plan = account.map(|a| SharedString::from(a.plan.clone()));
-        let tip = account.map(|a| match &a.email {
-            Some(e) => SharedString::from(format!("{} · {e}", a.plan)),
-            None => SharedString::from(a.plan.clone()),
-        });
-        // Another provider is picked while nothing is said.
-        let others: Vec<_> = (super::providers(cx).into_iter())
-            .filter(|o| o.id != p.id && chat.is_new(cx))
+        let limits = s.and_then(|s| s.limits.as_deref()).unwrap_or_default();
+        let week = limits.iter().find(|l| l.name == "Week");
+        let unknown = limits.is_empty() && s.is_some_and(|s| s.limits_settled());
+        let choices: Vec<_> = std::iter::once(model.into_any_element())
+            .chain(effort.map(IntoElement::into_any_element))
             .collect();
-        let pick = (!others.is_empty()).then(|| {
-            let chat = self.session.clone();
-            move |e: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut App| {
-                let menu = others.iter().fold(Menu::default(), |menu, o| {
-                    let (chat, o) = (chat.clone(), *o);
-                    menu.item(o.name, move |_, cx| {
-                        chat.update(cx, |c, cx| c.set_provider(o, cx))
+        let (inline, extra) = if self.narrow {
+            (vec![], choices)
+        } else {
+            (choices, vec![])
+        };
+        let more_open = self.menu == Some(ComposerMenu::More);
+        let session = self.session.clone();
+        let more = ui::icon_button("chat.more", "More", cx)
+            .role(Role::Button)
+            .aria_label("More")
+            .aria_expanded(more_open)
+            .test_support()
+            .track_focus(&self.more_focus.clone().tab_stop(true))
+            .child(Icon::Down.size(size::CHEVRON))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.more_focus.focus(window, cx);
+                this.menu = Some(ComposerMenu::More);
+                cx.notify();
+            }));
+        let more = ui::popup(
+            "chat.more.menu",
+            more,
+            more_open.then(|| {
+                div()
+                    .id("chat.more.content")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .gap(size::GAP)
+                    .px(theme::GAP)
+                    .min_w(size::MENU)
+                    .max_h(window.viewport_size().height * 0.65)
+                    .overflow_y_scroll()
+                    .children(extra)
+                    .child(self.messages(cx))
+                    .children(usage)
+                    .children(
+                        limits
+                            .iter()
+                            .filter(|l| l.name != "Week" || l.resets.is_some())
+                            .map(|l| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(size::GAP)
+                                    .when(l.name == "Week", |d| d.child("Week"))
+                                    .when(l.name != "Week", |d| d.child(limit(l, cx)))
+                                    .children(l.resets.map(|r| {
+                                        div().ml_auto().text_color(t.muted).child(format!(
+                                            "Resets in {}",
+                                            span(r as i64 / 1000 - now())
+                                        ))
+                                    }))
+                            }),
+                    )
+                    .when(unknown, |d| {
+                        d.child(
+                            div()
+                                .id("chat.limits")
+                                .test_support()
+                                .aria_label("No plan limits reported")
+                                .text_color(t.muted)
+                                .child("No plan limits reported"),
+                        )
                     })
-                });
-                menu.show(e.position(), window, cx);
-            }
-        });
-        let provider = div()
+                    .child(div().h(size::LINE).bg(t.line))
+                    .child(
+                        ui::icon_button("chat.save-default", "Save as default", cx)
+                            .aria_label("Save as default")
+                            .test_support()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                session.update(cx, |s, cx| s.save_defaults(cx));
+                                this.finish_more(window, cx);
+                            })),
+                    )
+                    .into_any_element()
+            }),
+            self.close_menu(),
+            window,
+            cx,
+        )
+        .anchor(Anchor::BottomLeft)
+        .flex_none();
+        let busy = chat.busy(cx);
+        let empty = self.input.read(cx).value().trim().is_empty();
+        let send = if busy {
+            ui::primary_button("chat.stop", "Stop", cx)
+                .role(Role::Button)
+                .aria_label("Stop")
+                .test_support()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.session.update(cx, |s, cx| s.stop(cx));
+                    this.focus(window, cx);
+                }))
+        } else {
+            ui::primary_button("chat.send", "↑ Send", cx)
+                .role(Role::Button)
+                .aria_label("Send")
+                .test_support()
+                .when(empty, |b| b.opacity(0.55))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.send(window, cx);
+                    this.focus(window, cx);
+                }))
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(size::GAP)
+            .text_size(text::SMALL)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(size::GAP)
+                    .child(self.provider(window, cx))
+                    .children(inline)
+                    .child(modes),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(size::GAP)
+                    .child(more)
+                    .child(div().flex_1())
+                    .children(week.map(|l| limit(l, cx)))
+                    .child(send),
+            )
+    }
+
+    fn provider(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let t = theme(cx);
+        let chat = self.session.read(cx);
+        let p = chat.provider;
+        let account = chat.current().and_then(|s| s.read(cx).account.as_ref());
+        let name = div()
+            .id("chat.name")
+            .test_support()
+            .aria_label(p.name)
+            .child(p.name);
+        let label = div()
+            .flex()
+            .items_center()
+            .gap(size::GAP)
+            .child(div().text_color(t.muted).child("Agent"))
+            .child(name);
+        let label = div()
             .id("chat.provider")
             .test_support()
             .flex()
-            .items_center()
-            .gap(px(6.))
-            .pr(px(4.))
-            .child(div().text_color(t.accent).child(Icon::Chat.size(px(12.))))
-            .child(
-                div()
-                    .id("chat.name")
-                    .test_support()
-                    .aria_label(p.name)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(p.name),
-            )
-            .when_some(pick, |d, pick| {
-                let button = ui::icon_button("chat.provider.pick", Icon::Down.size(px(10.)), cx);
-                d.child(
-                    ui::titled(button, "Who answers")
-                        .test_support()
-                        .on_click(pick),
-                )
+            .flex_none()
+            .when_some(account, |d, a| {
+                let tip = match &a.email {
+                    Some(e) => format!("{} · {e}", a.plan),
+                    None => a.plan.clone(),
+                };
+                d.aria_label(SharedString::from(a.plan.clone()))
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             })
-            .when_some(plan, |d, plan| d.aria_label(plan))
-            .when_some(tip, |d, tip| {
-                d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            });
-        let limits = s.and_then(|s| s.limits.as_ref()).into_iter().flatten();
-        let limits: Vec<_> = limits
-            .filter(|l| l.name == "5h" || l.name == "Week")
-            .map(|l| limit(l, cx).into_any_element())
-            .collect();
-        let unknown = s
-            .filter(|s| limits.is_empty() && s.limits_settled())
-            .map(|_| {
-                let text = "No plan limits reported";
+            .child(label);
+        if !chat.is_new(cx) {
+            return label.px(size::CONTROL_PAD).into_any_element();
+        }
+        let rows = provider_rows(cx);
+        let manage = rows.len();
+        let current = rows.iter().position(|(o, ..)| o.id == p.id);
+        let initial = current.filter(|&i| rows[i].2).unwrap_or(manage);
+        let selected = match self.menu {
+            Some(ComposerMenu::Provider(i)) => Some(i),
+            _ => None,
+        };
+        let trigger = ui::icon_button("chat.provider.pick", label, cx)
+            .role(Role::Button)
+            .aria_label(SharedString::from(format!("Agent {}", p.name)))
+            .aria_expanded(selected.is_some())
+            .test_support()
+            .text_color(t.fg)
+            .track_focus(&self.provider_focus.clone().tab_stop(true))
+            .child(Icon::Down.size(size::CHEVRON))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(i) = selected {
+                    this.choose_provider(i, window, cx);
+                } else {
+                    this.provider_focus.focus(window, cx);
+                    this.menu = Some(ComposerMenu::Provider(initial));
+                    cx.notify();
+                }
+            }))
+            .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
+                let Some(ComposerMenu::Provider(i)) = this.menu else {
+                    return;
+                };
+                let down = match e.keystroke.key.as_str() {
+                    "up" => false,
+                    "down" => true,
+                    _ => return,
+                };
+                let rows = provider_rows(cx);
+                let n = rows.len() + 1;
+                if let Some(next) = (1..=n)
+                    .map(|step| {
+                        if down {
+                            (i + step) % n
+                        } else {
+                            (i + n - step) % n
+                        }
+                    })
+                    .find(|&i| rows.get(i).is_none_or(|r| r.2))
+                {
+                    this.menu = Some(ComposerMenu::Provider(next));
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        let row = |i, label: &'static str, status: &'static str, enabled: bool, checked: bool| {
+            Button::new(("chat.agent", i))
+                .role(Role::MenuItem)
+                .accessibility_label(label)
+                .aria_description(status)
+                .aria_selected(checked)
+                .focusable(false)
+                .disabled(!enabled)
+                .h(size::OPTION)
+                .px(theme::GAP)
+                .gap(size::GAP)
+                .justify_start()
+                .rounded(radius::ITEM)
+                .when(selected == Some(i) && enabled, |d| d.bg(t.selected))
+                .when(enabled, |d| d.hover(|s| s.bg(t.hover)))
+                .when(!enabled, |d| d.text_color(t.muted))
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.choose_provider(i, window, cx)),
+                )
+                .child(
+                    div()
+                        .w(size::CHECK)
+                        .children(checked.then(|| Icon::Check.size(size::CHECK))),
+                )
+                .child(label)
+                .child(div().flex_1())
+                .child(div().text_color(t.muted).child(status))
+        };
+        ui::popup(
+            "chat.provider.menu",
+            trigger,
+            selected.map(|_| {
                 div()
-                    .id("chat.limits")
+                    .id("chat.provider.options")
                     .test_support()
-                    .aria_label(text)
-                    .text_color(t.muted)
-                    .child(text)
-            });
-        let session = self.session.clone();
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(6.))
-            .text_size(text::SMALL)
-            .child(provider)
-            .child(modes)
-            .child(picker)
-            .children(effort)
-            .child(self.messages(cx))
-            .child(
-                ui::icon_button("chat.save-default", "Save as default", cx)
-                    .aria_label("Save as default")
-                    .test_support()
-                    .on_click(move |_, _, cx| {
-                        session.update(cx, |s, cx| s.save_defaults(cx));
-                    }),
-            )
-            .child(div().flex_1())
-            .children(usage)
-            .children(limits)
-            .children(unknown)
+                    .role(Role::Menu)
+                    .flex()
+                    .flex_col()
+                    .px(size::GAP)
+                    .min_w(size::MENU)
+                    .children(
+                        rows.into_iter()
+                            .enumerate()
+                            .map(|(i, (o, status, enabled))| {
+                                row(i, o.name, status, enabled, Some(i) == current)
+                            }),
+                    )
+                    .child(div().h(size::LINE).my(size::GAP).bg(t.line))
+                    .child(row(manage, "Manage agents…", "", true, false))
+                    .into_any_element()
+            }),
+            self.close_menu(),
+            window,
+            cx,
+        )
+        .anchor(Anchor::BottomLeft)
+        .flex_none()
+        .into_any_element()
+    }
+
+    fn finish_more(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.focus(window, cx);
+        cx.notify();
+    }
+
+    fn close_menu(&self) -> impl Fn(&mut Window, &mut App) + use<> {
+        let me = self.me.clone();
+        move |_, cx| {
+            me.update(cx, |this, cx| {
+                this.menu = None;
+                cx.notify();
+            })
+            .ok();
+        }
+    }
+
+    fn choose_provider(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = provider_rows(cx);
+        match rows.get(i) {
+            Some((p, _, true)) => {
+                self.session.update(cx, |s, cx| s.set_provider(p, cx));
+                self.focus(window, cx);
+            }
+            None => crate::settings::open(cx, "agents"),
+            _ => return,
+        }
+        self.menu = None;
+        cx.notify();
     }
 
     /// The group whose sessions this chat's agent messages, and whether new messages wake it.
@@ -527,6 +836,7 @@ impl ChatView {
             .map(|g| (g.name.clone(), g.members.len()))
             .collect();
         let fresh = m.fresh_name();
+        let me = self.me.clone();
         ui::titled(
             ui::icon_button("chat.group", div().child(label.clone()), cx)
                 .h(px(24.))
@@ -541,7 +851,11 @@ impl ChatView {
             let id = id.clone().unwrap_or_default();
             let join = |name: Option<String>| {
                 let id = id.clone();
-                move |_: &mut Window, cx: &mut App| inbox::join(cx, &id, name.clone())
+                let me = me.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    inbox::join(cx, &id, name.clone());
+                    me.update(cx, |this, cx| this.finish_more(window, cx)).ok();
+                }
             };
             let mut menu = Menu::default();
             for (name, n) in &groups {
@@ -553,10 +867,14 @@ impl ChatView {
                 false => "Wake on messages",
             };
             let id = id.clone();
+            let me = me.clone();
             menu.item_if(on, format!("New group: {fresh}"), join(Some(fresh.clone())))
                 .item_if(mine.is_some(), "Leave the group", join(None))
                 .separator()
-                .item_if(on, wakes, move |_, cx| inbox::set_wake(cx, &id, !wake))
+                .item_if(on, wakes, move |window, cx| {
+                    inbox::set_wake(cx, &id, !wake);
+                    me.update(cx, |this, cx| this.finish_more(window, cx)).ok();
+                })
                 .show(e.position(), window, cx);
         })
         .into_any_element()
@@ -1651,19 +1969,13 @@ impl ChatView {
                     )
                 })
         });
-        let stop = self.session.clone();
         let working = s.busy().then(|| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(8.))
                 .child(ui::spinner(t.accent))
-                .child(div().flex_1().text_color(t.muted).child("Working"))
-                .child(
-                    ui::button("chat.stop", "Stop", cx)
-                        .test_support()
-                        .on_click(move |_, _, cx| stop.update(cx, |s, cx| s.stop(cx))),
-                )
+                .child(div().text_color(t.muted).child("Working"))
         });
         (s.busy() || !s.tasks.is_empty()).then(|| {
             div()
@@ -1777,7 +2089,27 @@ impl Render for ChatView {
         let review = self.review(cx);
         let footer = self.footer(cx);
         let suggestions = self.suggestions(cx);
-        let bar = self.bar(cx);
+        if !self.session.read(cx).is_new(cx) && matches!(self.menu, Some(ComposerMenu::Provider(_)))
+        {
+            self.menu = None;
+        }
+        let bar = self.bar(window, cx);
+        let me = self.me.clone();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let narrow = bounds.size.width < size::INLINE;
+                me.update(cx, |this, cx| {
+                    if this.narrow != narrow {
+                        this.narrow = narrow;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         // A column to read in, as wide as a line of text should be.
         let column = || div().flex().flex_col().w_full().max_w(px(760.)).mx_auto();
         div()
@@ -1823,44 +2155,78 @@ impl Render for ChatView {
                             .children(review)
                             .children(footer)
                             .children(suggestions)
-                            // Taken before the textarea, which would act on them first.
-                            .capture_action(cx.listener(|this, _: &Enter, window, cx| {
-                                if this.suggest.is_some() {
-                                    cx.stop_propagation();
-                                    let hi = this.suggest.as_ref().map_or(0, |s| s.hi);
-                                    this.accept(hi, window, cx);
-                                } else if !window.modifiers().shift {
-                                    cx.stop_propagation();
-                                    this.send(window, cx);
-                                }
-                            }))
-                            .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
-                                if let Some(hi) = this.suggest.as_ref().map(|s| s.hi) {
-                                    cx.stop_propagation();
-                                    this.accept(hi, window, cx);
-                                }
-                            }))
-                            .capture_action(cx.listener(|this, _: &Escape, _, cx| {
-                                if this.suggest.take().is_some() {
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            }))
-                            .capture_action(
-                                cx.listener(|this, _: &MoveUp, _, cx| this.step(false, cx)),
-                            )
-                            .capture_action(
-                                cx.listener(|this, _: &MoveDown, _, cx| this.step(true, cx)),
-                            )
                             .child(
-                                Textarea::new(&self.input)
-                                    .rounded(radius::FIELD)
-                                    .text_size(theme::doc::BODY),
-                            )
-                            .child(bar),
+                                ui::panel(div(), cx)
+                                    .id("chat.composer")
+                                    .test_support()
+                                    .relative()
+                                    .track_focus(&self.composer_focus)
+                                    .border_color(
+                                        if self.composer_focus.contains_focused(window, cx) {
+                                            t.selected_ring
+                                        } else {
+                                            t.panel_line
+                                        },
+                                    )
+                                    .flex()
+                                    .flex_col()
+                                    .p(size::PAD)
+                                    .gap(size::GAP)
+                                    .child(measure)
+                                    .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                                        if e.keystroke.key == "escape" && this.menu.take().is_some()
+                                        {
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child(self.textarea(cx))
+                                    .child(bar),
+                            ),
                     ),
             )
     }
+}
+
+fn picker(
+    id: &'static str,
+    title: &'static str,
+    value: &str,
+    opens: bool,
+    cx: &App,
+) -> gpui_kit::Stateful<Div> {
+    let t = theme(cx);
+    ui::icon_button(id, div().text_color(t.muted).child(title), cx)
+        .h(size::CONTROL)
+        .px(size::CONTROL_PAD)
+        .text_color(t.fg)
+        .whitespace_nowrap()
+        .child(value.to_owned())
+        .children(opens.then(|| Icon::Down.size(size::CHEVRON)))
+}
+
+fn provider_rows(cx: &App) -> Vec<(&'static Provider, &'static str, bool)> {
+    let agents = Agents::global(cx);
+    let a = agents.read(cx);
+    a.rows
+        .iter()
+        .map(|r| {
+            let p = r.provider;
+            let login = r.cli.as_ref().map(|c| c.login);
+            let (status, enabled) = match login {
+                _ if !a.config.shows(p) => ("Off", false),
+                _ if !a.loaded() => ("Checking…", false),
+                None => ("CLI not found", false),
+                _ if p.backend == Name::Acp && r.installed.current.is_none() => {
+                    ("No adapter", false)
+                }
+                Some(LoginStatus::LoggedOut) => ("Not logged in", false),
+                Some(LoginStatus::LoggedIn) => ("Logged in", true),
+                Some(LoginStatus::Unknown) => ("Login status unknown", true),
+            };
+            (p, status, enabled)
+        })
+        .collect()
 }
 
 fn placeholder(name: &str) -> String {
@@ -1903,9 +2269,9 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-        .child(l.name.clone())
+        .whitespace_nowrap()
+        .child(format!("{} {left}", l.name))
         .child(meter(remaining as f32, used as f32, cx))
-        .child(left)
 }
 
 fn meter(fill: f32, used: f32, cx: &App) -> Div {
