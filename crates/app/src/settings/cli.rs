@@ -7,7 +7,7 @@ use gpui_kit::{
 };
 use kernel::blocking;
 
-use crate::ui::page::{button, card, item, labeled, layout};
+use crate::ui::page::{card, item, labeled, layout, primary};
 use crate::ui::{text, theme};
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
@@ -47,7 +47,7 @@ impl Render for Page {
         });
         let detail =
             "`detached-cli q` reads what Detached shows, from a Detached terminal tab only.";
-        let install = item("detached-cli", Some(detail.into()), cx).child(button(
+        let install = item("detached-cli", Some(detail.into()), cx).child(primary(
             "settings.cli.install",
             "Install to PATH",
             true,

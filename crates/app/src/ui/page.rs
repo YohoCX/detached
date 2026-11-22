@@ -1,13 +1,14 @@
 //! The parts a Settings page is made of.
 
 use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::component::Theme as Kit;
 use gpui_kit::component::select::{Select, SelectItem, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, App, BoxShadow, ClickEvent, ClipboardItem, Context, Div,
     ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, ease_out_quint,
-    prelude::FluentBuilder, px,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, StyledText, TextRun, Window, div,
+    ease_out_quint, font, prelude::FluentBuilder, px,
 };
 
 use super::{Icon, motion, radius, text, theme};
@@ -57,8 +58,44 @@ pub fn button<T: 'static>(
     cx: &Context<T>,
     click: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
 ) -> ObservedElement<Stateful<Div>> {
-    super::button(id, label, cx)
-        .test_support()
+    act(super::button(id, label, cx), label, enabled, cx, click)
+}
+
+/// A `button` for the page's main action.
+pub fn primary<T: 'static>(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    enabled: bool,
+    cx: &Context<T>,
+    click: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+) -> ObservedElement<Stateful<Div>> {
+    act(
+        super::primary_button(id, label, cx),
+        label,
+        enabled,
+        cx,
+        click,
+    )
+}
+
+/// A `button` that deletes, as a confirm's last step.
+pub fn danger<T: 'static>(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    cx: &Context<T>,
+    click: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+) -> ObservedElement<Stateful<Div>> {
+    act(super::danger_button(id, label, cx), label, true, cx, click)
+}
+
+fn act<T: 'static>(
+    b: Stateful<Div>,
+    label: &'static str,
+    enabled: bool,
+    cx: &Context<T>,
+    click: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+) -> ObservedElement<Stateful<Div>> {
+    b.test_support()
         .role(Role::Button)
         .aria_label(label)
         .map(|b| match enabled {
@@ -86,6 +123,37 @@ pub fn muted(text: impl Into<SharedString>, cx: &App) -> Div {
     div().text_color(theme(cx).muted).child(text.into())
 }
 
+/// `text` in `color`, its `backticked` spans in mono.
+pub fn prose(text: &str, color: Hsla, cx: &App) -> StyledText {
+    let k = Kit::global(cx);
+    let fonts = [
+        font(k.font_family.clone()),
+        font(k.mono_font_family.clone()),
+    ];
+    let parts = text.split('`').enumerate().filter(|(_, p)| !p.is_empty());
+    let runs = parts.clone().map(|(i, p)| TextRun {
+        len: p.len(),
+        font: fonts[i % 2].clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+    let runs = runs.collect();
+    StyledText::new(parts.map(|(_, p)| p).collect::<String>()).with_runs(runs)
+}
+
+/// An error under the field or at the foot of the card it belongs to.
+pub fn error(id: impl Into<ElementId>, text: impl Into<SharedString>, cx: &App) -> AnyElement {
+    labeled(id, text)
+        .role(Role::Alert)
+        .px(px(14.))
+        .py(px(8.))
+        .text_size(text::SMALL)
+        .text_color(theme(cx).error)
+        .into_any_element()
+}
+
 /// A Settings page: its title and one muted line over its cards, `action` at the title's right.
 pub fn layout(
     id: &'static str,
@@ -94,6 +162,7 @@ pub fn layout(
     action: Option<AnyElement>,
     cx: &App,
 ) -> ObservedElement<Stateful<Div>> {
+    let about: SharedString = about.into();
     let head = div()
         .flex()
         .items_start()
@@ -108,7 +177,7 @@ pub fn layout(
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(title.to_string()),
                 )
-                .child(muted(about, cx).mt(px(2.))),
+                .child(div().mt(px(2.)).child(prose(&about, theme(cx).muted, cx))),
         )
         .children(action);
     div()
@@ -116,7 +185,7 @@ pub fn layout(
         .test_support()
         .flex()
         .flex_col()
-        .gap(px(22.))
+        .gap(px(24.))
         .child(head)
 }
 
@@ -154,20 +223,25 @@ pub fn card<E: IntoElement>(
         .flex_col()
         .children(title.map(|title| {
             div()
-                .px(px(4.))
+                .px(px(2.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.to_string())
         }))
-        .children(about.map(|a| muted(a, cx).px(px(4.)).text_size(text::SMALL)))
+        .children(about.map(|a| {
+            let about = prose(&a, t.muted, cx);
+            div()
+                .px(px(2.))
+                .mt(px(2.))
+                .text_size(text::SMALL)
+                .child(about)
+        }))
         .child(
             div()
                 .mt(px(8.))
                 .flex()
                 .flex_col()
                 .rounded(radius::FIELD)
-                .border_1()
-                .border_color(t.line)
-                .bg(t.hover)
+                .bg(t.header_bg)
                 .children(rows),
         )
 }
@@ -189,11 +263,18 @@ pub fn item(label: impl IntoElement, detail: Option<SharedString>, cx: &App) -> 
                 .flex_1()
                 .min_w_0()
                 .child(label)
-                .children(detail.map(|d| muted(d, cx).text_size(text::SMALL).truncate())),
+                .children(detail.map(|d| {
+                    let d = prose(&d, theme(cx).muted, cx);
+                    div()
+                        .text_size(text::SMALL)
+                        .line_clamp(2)
+                        .text_ellipsis()
+                        .child(d)
+                })),
         )
 }
 
-/// What a `chip` says by its color.
+/// What a `state` says by its color.
 #[derive(Clone, Copy)]
 pub enum Tone {
     Muted,
@@ -202,24 +283,38 @@ pub enum Tone {
     Bad,
 }
 
-/// A small status word on a tint of its tone.
-pub fn chip(label: impl Into<SharedString>, tone: Tone, cx: &App) -> Div {
+/// A state: a dot and a word in its tone's ink.
+pub fn state(label: impl Into<SharedString>, tone: Tone, cx: &App) -> Div {
     let t = theme(cx);
-    let c: Hsla = match tone {
+    let c = match tone {
         Tone::Muted => t.muted,
         Tone::Good => t.success,
         Tone::Warn => t.warning,
         Tone::Bad => t.error,
     };
     div()
+        .flex()
         .flex_none()
-        .px(px(7.))
-        .py(px(1.))
-        .rounded(radius::PILL)
-        .bg(c.opacity(0.12))
-        .text_color(c)
-        .text_size(text::LABEL)
+        .items_center()
+        .gap(px(6.))
+        .text_size(text::SMALL)
         .font_weight(FontWeight::MEDIUM)
+        .text_color(c)
+        .child(super::dot(c))
+        .child(label.into())
+}
+
+/// A scope or a name, such as `shared` or a branch, in an outlined tag.
+pub fn tag(label: impl Into<SharedString>, cx: &App) -> Div {
+    let t = theme(cx);
+    div()
+        .flex_none()
+        .px(px(6.))
+        .border_1()
+        .border_color(t.line)
+        .rounded(radius::BADGE)
+        .text_size(text::LABEL)
+        .text_color(t.muted)
         .child(label.into())
 }
 
@@ -286,9 +381,9 @@ pub fn toggle(
         .top(px(2.))
         .size(px(14.))
         .rounded_full()
-        .bg(t.accent_fg)
+        .bg(if on { t.accent_fg } else { t.muted })
         .shadow(vec![
-            BoxShadow::new(px(0.), px(1.), t.ground.opacity(0.5)).blur_radius(px(2.)),
+            BoxShadow::new(px(0.), px(1.), t.scrim).blur_radius(px(2.)),
         ]);
     let knob = match n {
         0 => place(knob, on as u8 as f32).into_any_element(),
@@ -309,7 +404,7 @@ pub fn toggle(
         .w(px(32.))
         .h(px(18.))
         .rounded(radius::PILL)
-        .bg(if on { t.accent } else { t.muted.opacity(0.35) })
+        .bg(if on { t.accent } else { t.line })
         .active(|s| s.opacity(0.8))
         .child(knob)
 }
@@ -319,7 +414,7 @@ pub fn heading(title: &str, cx: &App) -> Div {
         .text_size(text::LABEL)
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme(cx).muted)
-        .child(title.to_uppercase())
+        .child(title.to_string())
 }
 
 pub fn row() -> Div {

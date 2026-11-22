@@ -26,7 +26,8 @@ use gpui_kit::{
 use super::{say, settings_call};
 use crate::settings::{Group, register_page};
 use crate::ui::page::{
-    Opt, Pick, Tone, button, card, chip, item, labeled, layout, muted, path, select,
+    Opt, Pick, Tone, button, card, danger, error, item, labeled, layout, muted, path, primary,
+    select, tag,
 };
 use crate::ui::{self, radius, text, theme, theme::mono};
 use kernel::blocking;
@@ -564,14 +565,9 @@ impl Model {
                         this.removing = None;
                         cx.notify();
                     }),
-                    button(
-                        "confirm",
-                        "Confirm remove",
-                        true,
-                        cx,
-                        move |this, window, cx| this.remove(rm.clone(), window, cx),
-                    )
-                    .text_color(t.error),
+                    danger("confirm", "Remove", cx, move |this, window, cx| {
+                        this.remove(rm.clone(), window, cx)
+                    }),
                 ],
                 false => vec![button("remove", "Remove", true, cx, move |this, _, cx| {
                     this.removing = Some(rm.clone());
@@ -589,7 +585,7 @@ impl Model {
                 .aria_description(about)
                 .children(state.map(|(full, word, tone)| {
                     let tip = SharedString::from(full.clone());
-                    chip(word, tone, cx)
+                    ui::page::state(word, tone, cx)
                         .id("state")
                         .test_support()
                         .aria_label(full)
@@ -629,16 +625,12 @@ impl Model {
             cx,
         )
         .track_focus(&self.accounts)
-        .children(
-            self.error
-                .clone()
-                .map(|e| labeled("accounts.error", e).text_color(t.error)),
-        )
         .when(!rows.is_empty(), |d| d.child(card(None, None, rows, cx)))
         .when(self.data.accounts.is_empty() && !editing, |d| {
             d.child(labeled("accounts.empty", empty).text_color(t.muted))
         })
         .children(self.form.as_ref().map(|f| form_view(f, cx)))
+        .children(self.error.clone().map(|e| error("accounts.error", e, cx)))
     }
 
     fn repo_view(&self, repo: &str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -694,7 +686,7 @@ impl Model {
                     .id(("settings.excluded", i))
                     .test_support()
                     .aria_label(path_)
-                    .when(several, |r| r.child(chip(ws, Tone::Muted, cx)))
+                    .when(several, |r| r.child(tag(ws, cx)))
                     .child(button(
                         "restore",
                         "Restore",
@@ -745,7 +737,7 @@ impl Model {
                 .w(px(280.))
                 .child(ui::input(&self.git, cx).id("settings.gitPath")),
         )
-        .child(button(
+        .child(primary(
             "settings.apply",
             "Apply",
             true,
@@ -798,9 +790,7 @@ fn form_view(f: &Form, cx: &mut Context<Model>) -> impl IntoElement + use<> {
         .gap(px(10.))
         .py(px(10.))
         .px(px(12.))
-        .bg(t.hover)
-        .border_1()
-        .border_color(t.line)
+        .bg(t.header_bg)
         .rounded(radius::FIELD)
         .capture_action(cx.listener(|this, _: &Enter, window, cx| {
             this.save(window, cx);

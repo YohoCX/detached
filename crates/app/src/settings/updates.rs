@@ -7,7 +7,7 @@ use gpui_kit::{
 };
 use kernel::update::{State, Update};
 
-use crate::ui::page::{button, card, item, labeled, layout};
+use crate::ui::page::{button, card, item, labeled, layout, primary};
 use crate::ui::{text, theme};
 use crate::{chat, terminal};
 
@@ -76,7 +76,7 @@ impl Render for Updates {
             );
         let main = item(label, None, cx)
             .when(offered && !deb, |r| {
-                r.child(button(
+                r.child(primary(
                     "settings.update.download",
                     "Download",
                     true,
@@ -94,7 +94,7 @@ impl Render for Updates {
                 ))
             })
             .when(*state == State::Ready, |r| {
-                r.child(button(
+                r.child(primary(
                     "settings.update.restart",
                     "Restart now",
                     self.warning.is_none(),

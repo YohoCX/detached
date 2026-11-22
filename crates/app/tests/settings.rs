@@ -191,7 +191,13 @@ fn sharing_can_pick_a_workspaces_own_remote_and_include_forks(cx: &mut TestAppCo
         )
     });
     cx.click("sharing.marks.workspace.Default.remote");
-    cx.update(|w, cx| assert!(detached_app::ui::menu::pick("upstream", w, cx)));
+    let upstream = (0usize..4)
+        .find(|&n| {
+            cx.find(("menu.item", n))
+                .is_some_and(|e| e.label() == Some("upstream"))
+        })
+        .unwrap();
+    cx.click(("menu.item", upstream));
     wait_until(cx, |cx| {
         cx.settings(|s| {
             s.block::<Council>(marks::BLOCK).unwrap().workspaces[0]
@@ -235,4 +241,28 @@ fn bad_config_files_have_notices_and_bad_keymaps_stay_in_place(cx: &mut TestAppC
     {
         assert_eq!(std::fs::read_to_string(dir.join(file)).unwrap(), contents);
     }
+}
+
+#[gpui_kit::test]
+fn removing_a_council_identity_asks_first(cx: &mut TestAppContext) {
+    use detached_core::council::marks::{self, Council};
+
+    let cx = &mut open_app_with(cx, |sb| {
+        marks::change(&sb.state, |p| p.identities.push("me@example.com".into())).unwrap();
+    });
+    cx.update(|_, cx| settings::open(cx, "sharing"));
+    settle(cx);
+    cx.click(("sharing.identities.remove", 0usize));
+    cx.click(("sharing.identities.cancel", 0usize));
+    assert!(cx.find(("sharing.identities.confirm", 0usize)).is_none());
+    cx.click(("sharing.identities.remove", 0usize));
+    cx.click(("sharing.identities.confirm", 0usize));
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Council>(marks::BLOCK)
+                .unwrap()
+                .identities
+                .is_empty()
+        })
+    });
 }

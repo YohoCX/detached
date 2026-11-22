@@ -451,6 +451,13 @@ pub fn names(cx: &App) -> (Vec<String>, String) {
     }
 }
 
+/// Every theme that loads, by name, with its light and dark tokens.
+pub fn previews(dir: &Path) -> Vec<(String, Theme, Theme)> {
+    let (names, _) = find(dir, DEFAULT, None);
+    let load = |n: String| find(dir, &n, None).1.ok().map(|l| (n, l.light, l.dark));
+    names.into_iter().filter_map(load).collect()
+}
+
 /// Switches to theme `name`, which the next look at the folder loads.
 pub fn choose(name: &str, cx: &mut App) {
     ui_state::set(KEY, name, cx);

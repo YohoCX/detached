@@ -6,16 +6,15 @@ use detached_core::backend::Name;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    div, prelude::FluentBuilder, px,
+    AnyElement, AnyView, App, AppContext, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::agents::{Agents, Row, State};
 use kernel::settings::Settings;
 
 use crate::terminal;
-use crate::ui::page::{button, card, item, labeled, layout, path, toggle};
-use crate::ui::theme::GAP;
+use crate::ui::page::{Tone, button, card, item, labeled, layout, path, primary, toggle};
 use crate::ui::{self, text, theme};
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
@@ -68,7 +67,15 @@ fn adapter(r: &Row) -> String {
 }
 
 impl Page {
-    fn provider(&self, i: usize, r: &Row, a: &Agents, cx: &Context<Self>) -> impl IntoElement {
+    fn provider(
+        &self,
+        i: usize,
+        r: &Row,
+        a: &Agents,
+        on: bool,
+        switch: AnyElement,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let t = theme(cx);
         let (p, id) = (r.provider, r.provider.id);
         let el = |what: &str| SharedString::from(format!("agents.{id}.{what}"));
@@ -101,10 +108,10 @@ impl Page {
             } else {
                 "Install"
             };
-            adapter_row = adapter_row.child(button(
+            adapter_row = adapter_row.child(primary(
                 el("install"),
                 label,
-                true,
+                on,
                 cx,
                 act(move |a, cx| a.install(id, cx)),
             ));
@@ -122,7 +129,7 @@ impl Page {
             adapter_row = adapter_row.child(button(
                 el("rollback"),
                 "Roll back",
-                true,
+                on,
                 cx,
                 act(move |a, cx| a.rollback(id, cx)),
             ));
@@ -130,6 +137,10 @@ impl Page {
         let verdict = r.verdict(a.catalog.as_ref());
         let c = p.cli;
         let (cli, said) = match r.cli.as_ref().map(|c| (&c.path, &c.version)) {
+            None if !on => (
+                "Not checked while off.".into(),
+                "Not checked while off".into(),
+            ),
             None => (format!("{c} was not found."), "Not found".to_string()),
             Some((path, None)) => (
                 format!("{} printed no version.", path.display()),
@@ -151,50 +162,72 @@ impl Page {
                     );
                     (s.clone(), s)
                 }
-                _ => (format!("{c} {v} at {}", path.display()), format!("{c} {v}")),
+                _ => (format!("{c} {v} at {}", path.display()), String::new()),
             },
         };
-        let warn = !matches!(verdict, None | Some(Cli::Ok)) || r.cli.is_none();
         let found = r.cli.as_ref();
+        let warn = on && (!matches!(verdict, None | Some(Cli::Ok)) || found.is_none());
         let input = self.paths[i].clone();
         let status = found.map_or(LoginStatus::Unknown, |c| c.login);
         let login = found
             .filter(|_| status != LoginStatus::LoggedIn)
             .map(|c| adapters::login(p, &c.path));
-        let status = match status {
-            LoginStatus::LoggedIn => Some(("Logged in", t.muted)),
-            LoginStatus::LoggedOut => Some(("Not logged in", t.warning)),
-            LoginStatus::Unknown => None,
+        let state = match (on, found, status) {
+            (false, ..) => Some(("Off", Tone::Muted)),
+            (_, None, _) => Some(("Not found", Tone::Warn)),
+            (_, _, LoginStatus::LoggedIn) => Some(("Logged in", Tone::Good)),
+            (_, _, LoginStatus::LoggedOut) => Some(("Not logged in", Tone::Warn)),
+            _ => None,
         };
+        let version = found
+            .and_then(|f| f.version.as_ref())
+            .filter(|_| on)
+            .map(|v| format!("{c} {v}"));
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .min_h(px(52.))
+            .px(px(14.))
+            .py(px(8.))
+            .child(labeled(el("name"), p.name).font_weight(FontWeight::SEMIBOLD))
+            .children(version.map(|v| {
+                div()
+                    .font_family(theme::mono(cx))
+                    .text_size(text::SMALL)
+                    .text_color(t.muted)
+                    .child(v)
+            }))
+            .children(state.map(|(label, tone)| {
+                div()
+                    .id(el("login-status"))
+                    .test_support()
+                    .aria_label(label)
+                    .child(ui::page::state(label, tone, cx))
+            }))
+            .child(div().flex_1())
+            .child(switch);
         let cli = div()
             .id(el("cli"))
             .test_support()
             .aria_label(cli)
             .text_size(text::SMALL)
             .text_color(if warn { t.warning } else { t.muted })
-            .child(said);
-        let details = div()
-            .flex()
-            .flex_wrap()
-            .gap(GAP)
-            .child(cli)
-            .children(status.map(|(label, color)| {
-                labeled(el("login-status"), label)
-                    .text_size(text::SMALL)
-                    .text_color(color)
-            }));
-        let cli_row = item(div().child("CLI").child(details), None, cx)
-            .children(found.map(|c| path(el("found"), c.path.display().to_string(), cx)))
-            .when_some(login, |row, line| {
-                row.child(button(el("login"), "Log in", true, cx, move |_, w, cx| {
+            .map(|d| match found.filter(|_| said.is_empty()) {
+                Some(c) => d.child(path(el("found"), c.path.display().to_string(), cx)),
+                None => d.child(said),
+            });
+        let cli_row = item(div().child("CLI").child(cli), None, cx)
+            .when_some(login.filter(|_| on), |row, line| {
+                row.child(primary(el("login"), "Log in", true, cx, move |_, w, cx| {
                     terminal::run(&line, w, cx);
                     crate::settings::close(cx);
                 }))
             })
             .when_some(
-                adapters::installer(p).filter(|_| r.cli.is_none()),
+                adapters::installer(p).filter(|_| on && r.cli.is_none()),
                 |row, line| {
-                    row.child(button(
+                    row.child(primary(
                         el("installer"),
                         "Run installer",
                         true,
@@ -209,7 +242,7 @@ impl Page {
             .child(button(
                 el("rescan"),
                 "Check again",
-                true,
+                on,
                 cx,
                 act(|a, cx| a.load(cx)),
             ));
@@ -217,9 +250,9 @@ impl Page {
             .child(
                 div()
                     .w(px(280.))
-                    .child(ui::input(&input, cx).id(el("path"))),
+                    .child(ui::input(&input, cx).disabled(!on).id(el("path"))),
             )
-            .child(button(el("save"), "Save", true, cx, move |_, _, cx| {
+            .child(button(el("save"), "Save", on, cx, move |_, _, cx| {
                 let path = input.read(cx).value().to_string();
                 Agents::global(cx).update(cx, |a, cx| a.set_cli(id, path, cx));
             }));
@@ -228,15 +261,8 @@ impl Page {
             rows.push(adapter_row);
         }
         rows.extend([cli_row, path_row]);
-        div()
-            .flex()
-            .flex_col()
-            .child(
-                labeled(el("name"), p.name)
-                    .px(px(4.))
-                    .font_weight(FontWeight::SEMIBOLD),
-            )
-            .child(card(None, None, rows, cx))
+        let rows = rows.into_iter().map(|r| r.when(!on, |r| r.opacity(0.45)));
+        card(None, None, std::iter::once(header).chain(rows), cx)
     }
 }
 
@@ -260,26 +286,23 @@ impl Render for Page {
         };
         let about = "Each provider's own CLI, and the adapter an ACP provider runs through.";
         let mut page = layout("settings.agents", "Agents", about, None, cx);
-        if let Some(e) = &a.error {
-            page = page.child(labeled("agents.error", e.clone()).text_color(theme(cx).error));
-        }
         let config: Config = Settings::get(cx).block(adapters::BLOCK).unwrap_or_default();
-        let enabled = PROVIDERS.map(|p| {
-            let on = config.shows(p);
-            let id = SharedString::from(format!("agents.{}.enabled", p.id));
-            let label = format!("Enable {}", p.name);
-            item(p.name, None, cx).child(toggle(id, on, label, window, cx).on_click(cx.listener(
-                move |_, _, _, cx| {
-                    Agents::global(cx).update(cx, |a, cx| a.set_enabled(p, !on, cx));
-                },
-            )))
-        });
-        page = page.child(card(Some("Providers"), None, enabled, cx));
+        let switches: Vec<_> = PROVIDERS
+            .iter()
+            .map(|&p| {
+                let (on, id) = (config.shows(p), format!("agents.{}.enabled", p.id));
+                let label = format!("Enable {}", p.name);
+                toggle(SharedString::from(id), on, label, window, cx)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        Agents::global(cx).update(cx, |a, cx| a.set_enabled(p, !on, cx));
+                    }))
+                    .into_any_element()
+            })
+            .collect();
         let a = agents.read(cx);
-        for (i, r) in a.rows.iter().enumerate() {
-            if config.shows(r.provider) {
-                page = page.child(self.provider(i, r, a, cx));
-            }
+        for ((i, r), switch) in a.rows.iter().enumerate().zip(switches) {
+            let on = config.shows(r.provider);
+            page = page.child(self.provider(i, r, a, on, switch, cx));
         }
         let catalog = item(
             labeled("agents.catalog", catalog),
@@ -293,6 +316,11 @@ impl Render for Page {
             cx,
             act(|a, cx| a.check(cx)),
         ));
-        page.child(card(Some("Adapters"), None, [catalog], cx))
+        let error = a
+            .error
+            .clone()
+            .map(|e| ui::page::error("agents.error", e, cx));
+        let rows = [catalog.into_any_element()].into_iter().chain(error);
+        page.child(card(Some("Adapters"), None, rows, cx))
     }
 }
