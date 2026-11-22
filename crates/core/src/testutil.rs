@@ -6,6 +6,7 @@ pub mod claude;
 use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 #[cfg(feature = "testutil")]
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
@@ -117,6 +118,12 @@ pub fn bin(package: &str, name: &str) -> PathBuf {
         fs::rename(&part, &copy).unwrap();
     }
     copy
+}
+
+/// Builds `fake_pg` once and returns its executable.
+pub fn fake_pg() -> PathBuf {
+    static FAKE: OnceLock<PathBuf> = OnceLock::new();
+    FAKE.get_or_init(|| bin("detached-core", "fake_pg")).clone()
 }
 
 /// Whether `pid` runs, a zombie counting as gone.

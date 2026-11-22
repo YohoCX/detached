@@ -1,0 +1,23 @@
+detached    = 1
+id          = "local-postgres"
+name        = "Local Postgres"
+description = "Databases of pg-dev."
+version     = "0.1.0"
+themes      = ["themes/dusk.json"]
+
+[[tabs]]
+id      = "databases"
+title   = "Databases"
+source  = ["pg-dev", "list", "--json"]
+columns = [["name", "Database"], ["owner", "User"], ["size", "Size"]]
+
+[[tabs.actions]]
+id      = "drop"
+title   = "Drop"
+run     = ["pg-dev", "drop", "--", "{name}"]
+confirm = "Drop {name}? Its data is gone."
+
+[[tabs]]
+id    = "psql"
+title = "psql"
+tui   = ["psql"]

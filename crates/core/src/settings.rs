@@ -189,6 +189,7 @@ impl Settings {
         check!(secrets::BLOCK, BTreeMap<String, Vec<String>>);
         check!(skills::BLOCK, skills::Config);
         check!(crate::store::TRUST, BTreeMap<String, String>);
+        check!(crate::plugins::BLOCK, crate::plugins::Block);
         names
     }
 

@@ -16,6 +16,7 @@ pub mod host;
 pub mod os;
 pub mod owner;
 pub mod paths;
+pub mod plugins;
 pub mod proc;
 pub mod processes;
 pub mod search;

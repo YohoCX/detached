@@ -344,6 +344,21 @@ fn trash_dir(root: &Path) -> Result<tempfile::TempDir> {
 
 fn copy_move(from: &Path, to: &Path, files: &Files, links: &Links, trash: &Path) -> Result<()> {
     let trash = trash_dir(trash)?;
+    copy(from, to, files, links)?;
+    // A copy would miss writes made after the snapshot, so a failed rename keeps the source.
+    fs::rename(from, trash.path().join(from.file_name().unwrap())).map_err(|e| {
+        Error::Other(format!(
+            "Copied to {}; the original stays at {} ({e})",
+            to.display(),
+            from.display()
+        ))
+    })?;
+    let _ = trash.keep();
+    Ok(())
+}
+
+/// `from`'s files and links, as read, published at `to` in whole with their modes.
+pub(crate) fn copy(from: &Path, to: &Path, files: &Files, links: &Links) -> Result<()> {
     let tmp = tempfile::tempdir_in(to.parent().unwrap())?;
     let stage = tmp.path().join("item");
     create(&stage, files)?;
@@ -358,17 +373,7 @@ fn copy_move(from: &Path, to: &Path, files: &Files, links: &Links, trash: &Path)
         };
         fs::set_permissions(dest, fs::metadata(source)?.permissions())?;
     }
-    publish(&stage, to)?;
-    // A copy would miss writes made after the snapshot, so a failed rename keeps the source.
-    fs::rename(from, trash.path().join(from.file_name().unwrap())).map_err(|e| {
-        Error::Other(format!(
-            "Copied to {}; the original stays at {} ({e})",
-            to.display(),
-            from.display()
-        ))
-    })?;
-    let _ = trash.keep();
-    Ok(())
+    publish(&stage, to)
 }
 
 fn publish(from: &Path, to: &Path) -> Result<()> {
@@ -416,7 +421,7 @@ fn component(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn real_root(path: &Path) -> Result<PathBuf> {
+pub(crate) fn real_root(path: &Path) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         return Ok(std::env::current_dir()?.canonicalize()?);
     }
@@ -441,14 +446,34 @@ fn no_links(path: &Path) -> Result<()> {
 
 /// The files and links under `path`; a link that leads out of it is refused unless `out`.
 pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
-    fn walk(root: &Path, path: &Path, out: bool, all: &mut (Files, Links)) -> Result<()> {
+    walk_all(path, out, None)
+}
+
+/// `read` of a folder without its root `.git`, refused past `max` bytes of files.
+pub(crate) fn read_capped(path: &Path, max: u64) -> Result<(Files, Links)> {
+    walk_all(path, false, Some(max))
+}
+
+fn walk_all(path: &Path, out: bool, cap: Option<u64>) -> Result<(Files, Links)> {
+    type All = (Files, Links, u64);
+    fn walk(root: &Path, path: &Path, out: bool, cap: Option<u64>, all: &mut All) -> Result<()> {
         let meta = fs::symlink_metadata(path)?;
         let rel = path.strip_prefix(root).unwrap().to_path_buf();
+        if cap.is_some() && rel == Path::new(".git") {
+            return Ok(());
+        }
         if meta.is_dir() {
             for entry in fs::read_dir(path)? {
-                walk(root, &entry?.path(), out, all)?;
+                walk(root, &entry?.path(), out, cap, all)?;
             }
         } else if meta.is_file() {
+            all.2 += meta.len();
+            if let Some(max) = cap.filter(|max| all.2 > *max) {
+                return Err(Error::Other(format!(
+                    "The folder holds more than {} MB",
+                    max >> 20
+                )));
+            }
             all.0.insert(rel, fs::read(path)?);
         } else if meta.is_symlink() {
             let target = fs::read_link(path)?;
@@ -473,7 +498,8 @@ pub(crate) fn read(path: &Path, out: bool) -> Result<(Files, Links)> {
     }
     no_links(path)?;
     let (root, mut all) = (path.canonicalize()?, Default::default());
-    walk(&root, &root, out, &mut all)?;
+    walk(&root, &root, out, cap, &mut all)?;
+    let all = (all.0, all.1);
     // A copy holds only the folders its files and links are in, so a link to another would dangle.
     let (files, links) = &all;
     let kept = |t: &Path| {
