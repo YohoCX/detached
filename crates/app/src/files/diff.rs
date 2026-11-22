@@ -346,12 +346,15 @@ impl DiffView {
                 cx,
             )
         });
+        let n = starts(&self.changes).len();
+        let count = format!("{n} change{}", if n == 1 { "" } else { "s" });
         let repo = Workspace::get(cx).name_of(&d.repo).to_string();
         viewer::header(&d.path, repo, cx)
             .min_w_0()
             .flex_wrap()
             .h_auto()
-            .py(theme::GAP)
+            .min_h(px(44.))
+            .py(px(6.))
             .child(
                 div()
                     .id("diff.pill")
@@ -371,6 +374,16 @@ impl DiffView {
             .child(div().flex_1())
             .when(matches!(self.body, Body::Diff), |h| {
                 h.child(
+                    div()
+                        .id("diff.count")
+                        .test_support()
+                        .aria_label(SharedString::from(count.clone()))
+                        .flex_none()
+                        .text_size(text::SMALL)
+                        .text_color(t.muted)
+                        .child(count),
+                )
+                .child(
                     button("diff.prev", Icon::Up, false)
                         .tooltip(tip("Previous change", "diff.prev")),
                 )

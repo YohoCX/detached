@@ -17,6 +17,7 @@ use std::path::Path;
 use detached_app::actions;
 use detached_core::api;
 use gpui_kit::SharedString;
+use gpui_kit::base::dock::DockPlacement;
 use kernel::doc::{Doc, Location};
 use kernel::ui_state;
 
@@ -65,6 +66,22 @@ fn reopen(cx: &mut VisualTestContext) -> AnyWindowHandle {
 /// The app, without a window: the test's own may be closed.
 fn app<R>(cx: &mut VisualTestContext, f: impl FnOnce(&mut gpui_kit::App) -> R) -> R {
     cx.cx.update(f)
+}
+
+/// A window and side zones wide enough for every tab, none in a `more` menu.
+fn widen(cx: &mut VisualTestContext, w: AnyWindowHandle) {
+    cx.cx
+        .simulate_window_resize(w, gpui_kit::size(px(2000.), px(900.)));
+    cx.update_window(w, |_, window, cx| {
+        let area = dock::zones(cx).unwrap();
+        area.update(cx, |a, cx| {
+            for p in [DockPlacement::Left, DockPlacement::Right] {
+                a.set_dock_size(p, px(450.), window, cx);
+            }
+        });
+    })
+    .unwrap();
+    settle(cx);
 }
 
 fn in_window<R>(
@@ -144,17 +161,6 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
     cx.update(|_, cx| ui_state::set("dock.layout", old.clone(), cx));
 
     let again = reopen(cx);
-    let apps = app(cx, |cx| dock::apps(cx));
-    in_window(cx, again, |w, _| {
-        assert!(w.try_find("dock.missing").is_none());
-        for a in apps {
-            assert!(w.try_find(a.id).is_some(), "{}", a.id);
-        }
-        assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
-        assert_eq!(w.find("tool.Project").checked(), Some(true));
-        assert_eq!(w.find("doc.chat").checked(), Some(true), "Chats shows it");
-        assert!(w.try_find("doc.diff.README.md").is_none(), "in Code");
-    });
     let (saved, id) = app(cx, |cx| {
         let id = kernel::workspace::Workspace::get(cx).id().map(String::from);
         (ui_state::get::<serde_json::Value>("dock.layout", cx), id)
@@ -182,6 +188,18 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
         saved, old,
         "existing layout preserved, Council, Docs and Processes appended"
     );
+    widen(cx, again);
+    let apps = app(cx, |cx| dock::apps(cx));
+    in_window(cx, again, |w, _| {
+        assert!(w.try_find("dock.missing").is_none());
+        for a in apps {
+            assert!(w.try_find(a.id).is_some(), "{}", a.id);
+        }
+        assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
+        assert_eq!(w.find("tool.Project").checked(), Some(true));
+        assert_eq!(w.find("doc.chat").checked(), Some(true), "Chats shows it");
+        assert!(w.try_find("doc.diff.README.md").is_none(), "in Code");
+    });
 }
 
 #[gpui_kit::test]
@@ -206,6 +224,7 @@ fn a_layout_saved_by_0_6_0_keeps_its_panels_tabs_as_council_s(cx: &mut TestAppCo
     });
 
     let again = reopen(cx);
+    widen(cx, again);
     in_window(cx, again, |w, _| {
         assert!(w.try_find("dock.missing").is_none(), "no placeholder");
         assert!(w.try_find("tab.council").is_some());
@@ -931,4 +950,22 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
         tabs.len()
     });
     assert_eq!(n, 0, "its tabs do not come back");
+}
+
+#[gpui_kit::test]
+fn tabs_that_do_not_fit_wait_in_the_more_menu_and_one_picked_there_takes_the_strip(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app(cx);
+    assert!(cx.find("tab.docs").is_none(), "not in a 280px strip");
+    cx.update(|w, cx| w.within("zone.left.pane").click("tabs.more", cx));
+    settle(cx);
+    let items = (0usize..).map_while(|i| cx.find(("menu.item", i)));
+    let labels: Vec<_> = items.map(|e| e.label().unwrap().to_string()).collect();
+    assert_eq!(labels.last().map(String::as_str), Some("Docs"), "in order");
+    cx.click(("menu.item", labels.len() - 1));
+    assert_eq!(cx.find("tab.docs").unwrap().checked(), Some(true));
+    assert!(cx.find("tab.repos").is_some(), "the first tabs stay");
+    cx.click("tab.repos");
+    assert!(cx.find("tab.docs").is_none(), "back to the menu");
 }

@@ -311,8 +311,7 @@ impl Tree {
             .items_center()
             .gap(px(6.))
             .h(px(44.))
-            .pl(px(16.))
-            .pr(px(8.))
+            .px(px(12.))
             .child(
                 div()
                     .flex_1()

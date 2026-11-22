@@ -9,14 +9,14 @@ use futures::{FutureExt, StreamExt, stream};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, FontFeatures, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Task, Window,
-    div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, FontFeatures, IntoElement, ParentElement, Render, Role,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    px,
 };
 
 use super::State;
 use crate::keymap;
-use crate::ui::{self, Icon, radius, theme};
+use crate::ui::{self, Icon, theme};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::repo::{Outcome, Repo};
 use kernel::workspace::Workspace;
@@ -263,57 +263,44 @@ impl Render for SyncButtons {
                 Some(b) if b.kind == kind => format!("{}/{}", b.done, b.total),
                 _ => label.to_string(),
             };
-            ui::pressable(id)
-                .test_support()
-                .gap(px(6.))
-                .h(px(28.))
-                .px(px(14.))
-                .rounded(radius::PILL)
-                .border_1()
-                .font_weight(FontWeight::SEMIBOLD)
-                .font_features(tnum.clone())
-                .map(|b| match kind {
-                    Kind::Pull => b
-                        .bg(t.primary)
-                        .border_color(t.primary)
-                        .text_color(t.primary_fg)
-                        .when(idle, |b| b.hover(|s| s.bg(t.primary.opacity(0.88)))),
-                    Kind::Fetch => b.bg(t.input).border_color(t.line).when(idle, |b| {
-                        b.hover(|s| s.bg(t.hover).border_color(t.selected_ring))
-                    }),
-                })
-                .role(Role::Button)
-                .aria_label(label.clone())
-                .aria_description(title.clone())
-                .tooltip(move |window, cx| {
-                    let id = match kind {
-                        Kind::Pull => "vcs.pullAll",
-                        Kind::Fetch => "vcs.fetchAll",
-                    };
-                    Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
-                })
-                .map(|b| match idle {
-                    true => b
-                        .active(|s| s.opacity(0.75))
-                        .on_click(move |_, _, cx| sync_repos(kind, None, cx)),
-                    false => b.when(!running, |b| b.opacity(0.5)),
-                })
-                .map(|b| match running {
-                    true => b.child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .size(px(14.))
-                            .items_center()
-                            .justify_center()
-                            .child(ui::spinner(match kind {
-                                Kind::Pull => t.primary_fg,
-                                Kind::Fetch => t.fg,
-                            })),
-                    ),
-                    false => b.child(icon.size(px(14.))),
-                })
-                .child(label)
+            match kind {
+                Kind::Pull => ui::primary_button(id, label.clone(), cx),
+                Kind::Fetch => ui::button(id, label.clone(), cx),
+            }
+            .test_support()
+            // The pill's label comes first; the icon goes before it.
+            .flex_row_reverse()
+            .gap(px(6.))
+            .font_features(tnum.clone())
+            .role(Role::Button)
+            .aria_label(label.clone())
+            .aria_description(title.clone())
+            .tooltip(move |window, cx| {
+                let id = match kind {
+                    Kind::Pull => "vcs.pullAll",
+                    Kind::Fetch => "vcs.fetchAll",
+                };
+                Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
+            })
+            .map(|b| match idle {
+                true => b.on_click(move |_, _, cx| sync_repos(kind, None, cx)),
+                false => b.when(!running, |b| b.opacity(0.5)),
+            })
+            .map(|b| match running {
+                true => b.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .size(px(14.))
+                        .items_center()
+                        .justify_center()
+                        .child(ui::spinner(match kind {
+                            Kind::Pull => t.primary_fg,
+                            Kind::Fetch => t.fg,
+                        })),
+                ),
+                false => b.child(icon.size(px(14.))),
+            })
         };
         div()
             .flex()

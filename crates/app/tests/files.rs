@@ -1104,6 +1104,25 @@ fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selectio
 }
 
 #[gpui_kit::test]
+fn the_change_of_a_diff_shown_from_elsewhere_is_selected_in_changes(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let app = cx.sb.repo("app");
+    make_current(cx, &app);
+    wait_until(cx, |cx| changes(cx).len() == 5);
+    let doc = readme(cx);
+    show(cx, doc, false);
+    let selected: Vec<_> = cx.update(|w, cx| {
+        w.render_frame(cx);
+        (0usize..5)
+            .filter_map(|i| w.try_find(("changes.row", i)))
+            .filter(|e| e.selected() == Some(true))
+            .filter_map(|e| e.label().map(String::from))
+            .collect()
+    });
+    assert_eq!(selected, ["README.md"]);
+}
+
+#[gpui_kit::test]
 fn changes_group_conflicts_changes_and_unversioned_files_and_collapse(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         let r = repo(sb, "c");

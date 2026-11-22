@@ -80,7 +80,7 @@ fn find(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| find::Find::new(window, cx)).into()
 }
 
-/// The top bar's "Search everywhere" pill.
+/// The top bar's "Search everywhere", drawn as the field it opens.
 struct Pill;
 
 impl Render for Pill {
@@ -93,14 +93,16 @@ impl Render for Pill {
             .aria_label("Search everywhere")
             .aria_description(chord.clone())
             .gap(px(8.))
-            .w(px(240.))
+            .w(px(320.))
             .h(px(28.))
             .pl(px(12.))
             .pr(px(10.))
             .rounded(radius::PILL)
-            .bg(t.hover)
+            .bg(t.input)
+            .border_1()
+            .border_color(t.line)
             .text_color(t.muted)
-            .hover(|s| s.bg(t.selected_inactive).text_color(t.fg))
+            .hover(|s| s.border_color(t.selected_ring))
             .active(|s| s.opacity(0.75))
             .on_click(|_, window, cx| actions::dispatch(window, cx, "search.everywhere"))
             .child(Icon::Search.size(px(14.)))

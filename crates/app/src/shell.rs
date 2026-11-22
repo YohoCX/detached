@@ -26,7 +26,7 @@ const MAC: bool = cfg!(target_os = "macos");
 pub enum TopBar {
     /// Workspaces, the repo switcher and the branch widget.
     Left,
-    /// The MR chip and the pipeline badge.
+    /// The MR chip and the pipeline badge, after the branch widget.
     Center,
     /// The search pill, Fetch All and Pull All.
     Right,
@@ -187,7 +187,6 @@ impl Shell {
                     .px(px(8.))
                     .when(MAC, |b| b.pl(px(80.)))
                     .children(self.left.iter().cloned())
-                    .child(div().flex_1())
                     .children(self.center.iter().cloned())
                     .child(div().flex_1())
                     .children(self.right.iter().cloned())

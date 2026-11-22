@@ -1,23 +1,12 @@
-//! A tree row's parts: its indent with guides, and the chevron of a node that opens.
+//! A tree row's parts: its indent, and the chevron of a node that opens.
 
-use gpui_kit::{App, Div, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{Div, IntoElement, Styled, div, px};
 
-use super::{Icon, theme};
+use super::Icon;
 
-/// Where a row's chevron slot starts at depth 0, and how far each level moves it.
-const BASE: f32 = 16.;
-const INDENT: f32 = 16.;
-
-/// Indents `row` to `depth`, with a guide down each level it is nested in.
-pub fn nest<E: Styled + ParentElement>(row: E, depth: usize, cx: &App) -> E {
-    let line = theme(cx).line;
-    let x = |level: usize| px(BASE + level as f32 * INDENT);
-    row.relative()
-        .pl(x(depth))
-        .children((0..depth).map(|level| {
-            let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(line);
-            guide.left(x(level) + px(8.))
-        }))
+/// Indents `row` to `depth`, 18px a level past the first 16.
+pub fn nest<E: Styled>(row: E, depth: usize) -> E {
+    row.pl(px(16. + depth as f32 * 18.))
 }
 
 /// The 16 px box a row's chevron or icon sits in.
