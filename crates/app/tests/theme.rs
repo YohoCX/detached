@@ -32,10 +32,13 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
         std::fs::write(config.join("ui.json"), r#"{"theme.name": "Mine"}"#).unwrap();
     });
     assert_eq!(accent(cx), red(), "only the accent is its own");
+    let user_bg = |cx: &mut VisualTestContext| cx.update(|_, cx| theme::theme(cx).user_bg);
+    let red_user = user_bg(cx);
     let file = cx.sb.state.config_dir.join(MINE);
     std::fs::write(&file, mine("#00ff00")).unwrap();
     let green: Hsla = rgb(0x00ff00).into();
     wait_until(cx, |cx| accent(cx) == green);
+    assert_ne!(user_bg(cx), red_user, "derived from the edited accent");
 
     std::fs::write(&file, "{ not json").unwrap();
     wait_until(cx, |cx| {
@@ -46,6 +49,7 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
         })
     });
     assert_eq!(accent(cx), green);
+    assert_ne!(user_bg(cx), red_user);
     let error = cx.update(|_, cx| theme::error(cx)).unwrap();
     assert!(error.contains("themes/mine.json"), "{error}");
 }
@@ -87,8 +91,14 @@ fn the_mode_forces_light_or_dark_and_system_follows_the_window(cx: &mut TestAppC
         cx.update(theme::sync);
         let expected = mode.unwrap_or(system);
         assert_eq!(dark(cx), expected, "option {option}");
-        let ground = cx.update(|_, cx| (theme::theme(cx).ground, Kit::global(cx).background));
-        assert_eq!(ground.0, ground.1, "the kit's widgets follow");
+        let (ours, kit) = cx.update(|_, cx| {
+            let (t, k) = (theme::theme(cx), Kit::global(cx));
+            (
+                [t.window_bg, t.popover_bg, t.active_bg],
+                [k.background, k.popover, k.list_active],
+            )
+        });
+        assert_eq!(ours, kit, "the kit's widgets follow");
     }
     let ui = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(ui.contains(r#""theme.mode": "system""#), "{ui}");

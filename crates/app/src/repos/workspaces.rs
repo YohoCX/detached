@@ -340,7 +340,7 @@ impl Workspaces {
                         ui::input(&open.new, cx)
                             .id("workspaces.new")
                             .flex_1()
-                            .bg(theme(cx).popup),
+                            .bg(theme(cx).popover_bg),
                     ),
             )
             .into_any_element()

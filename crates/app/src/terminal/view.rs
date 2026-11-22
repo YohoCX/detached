@@ -263,7 +263,7 @@ fn style(c: &Cell, focused: bool, t: &Theme) -> Style {
     let a = c.attrs;
     let (mut fg, mut bg) = (c.fg.map_or(t.fg, hsla), c.bg.map(hsla));
     if a.inverse {
-        (fg, bg) = (bg.unwrap_or(t.panel), Some(fg));
+        (fg, bg) = (bg.unwrap_or(t.panel_bg), Some(fg));
     }
     if a.dim {
         fg = fg.opacity(0.7);
@@ -275,7 +275,7 @@ fn style(c: &Cell, focused: bool, t: &Theme) -> Style {
         bg = Some(t.text_selection);
     }
     if c.cursor && focused {
-        (fg, bg) = (bg.unwrap_or(t.panel), Some(t.fg));
+        (fg, bg) = (bg.unwrap_or(t.panel_bg), Some(t.fg));
     }
     Style {
         fg,
@@ -289,7 +289,7 @@ fn style(c: &Cell, focused: bool, t: &Theme) -> Style {
 
 /// The screen's rows, wide characters at their columns.
 fn rows(term: &mut Term, focused: bool, t: &Theme) -> Vec<Vec<Piece>> {
-    term.set_colors(t.ansi.map(rgb_of), rgb_of(t.fg), rgb_of(t.panel));
+    term.set_colors(t.ansi.map(rgb_of), rgb_of(t.fg), rgb_of(t.panel_bg));
     let mut rows: Vec<Vec<Piece>> = Vec::new();
     term.screen(|c| {
         if rows.len() <= c.row {
