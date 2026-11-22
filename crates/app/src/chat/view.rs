@@ -72,7 +72,8 @@ pub struct ChatView {
     provider_focus: FocusHandle,
     /// The agent's row the keys are on while its menu is open.
     menu: Option<usize>,
-    narrow: bool,
+    /// How many of `size::INLINE` and `size::WEEK` the composer is as wide as.
+    room: usize,
     scroll: ScrollHandle,
     suggest: Option<Suggest>,
     /// Groups of tool calls opened or closed against their default, by their first call's id.
@@ -157,7 +158,7 @@ impl ChatView {
             composer_focus,
             provider_focus: cx.focus_handle(),
             menu: None,
-            narrow: true,
+            room: 0,
             scroll,
             suggest: None,
             toggled: HashSet::new(),
@@ -383,8 +384,8 @@ impl ChatView {
             )
     }
 
-    /// One row under the text: Agent, Model, Effort, Permissions, More, then the week's limit and
-    /// Send or Stop. Narrow, Model and Effort go into More.
+    /// One row under the text: Agent, titled Model, Effort and Permissions, More, then the week's limit
+    /// and Send or Stop. Narrower, Week goes into More, then Model and Effort.
     fn bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
         let chat = self.session.read(cx);
@@ -421,9 +422,11 @@ impl ChatView {
             Some(s) if s.version.is_some() => s.option("model"),
             _ => chat.model.as_deref(),
         };
-        let model = current.map_or("Default".into(), |m| {
-            model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
-        });
+        let model = current
+            .filter(|m| *m != "default")
+            .map_or("Default".into(), |m| {
+                model_name(m, models).map_or_else(|| friendly_model_id(m), String::from)
+            });
         let chosen = Model::find(models, current.unwrap_or("default"));
         let add_models = |menu: DrawnMenu| {
             models.iter().fold(menu, |menu, m| {
@@ -454,21 +457,27 @@ impl ChatView {
         };
         let mut more = DrawnMenu::default();
         let mut inline = vec![];
-        if self.narrow {
+        if self.room == 0 {
             more = add_models(more.section("Model"));
             if !efforts.is_empty() {
                 more = add_efforts(more.section("Effort"));
             }
         } else {
             let menu = (!models.is_empty()).then(|| add_models(DrawnMenu::default()));
-            inline.push(("chat.model", model, "Model", menu));
+            inline.push(("chat.model", "Model", model, None, menu));
             if !efforts.is_empty() {
                 let label = effort.unwrap_or("Default").to_string();
                 let menu = Some(add_efforts(DrawnMenu::default()));
-                inline.push(("chat.effort", label, "Effort", menu));
+                inline.push(("chat.effort", "Effort", label, None, menu));
             }
         }
-        let modes = ("chat.mode", mode.1.into(), mode.2, Some(modes));
+        let modes = (
+            "chat.mode",
+            "Permissions",
+            mode.1.into(),
+            Some(mode.2),
+            Some(modes),
+        );
         let usage = s.and_then(|s| {
             let (used, max) = s.usage.filter(|(_, max)| *max > 0)?;
             let pct = (used * 100 / max) as f32;
@@ -502,10 +511,9 @@ impl ChatView {
             )
         });
         let limits = s.and_then(|s| s.limits.as_deref()).unwrap_or_default();
-        let week = limits
-            .iter()
-            .find(|l| l.name == "Week")
-            .map(|l| limit(l, cx));
+        let week = (limits.iter())
+            .find(|l| l.name == "Week" && self.room == 2)
+            .map(|l| limit(l, false, cx));
         let unknown = (limits.is_empty() && s.is_some_and(|s| s.limits_settled())).then(|| {
             let said = "No plan limits reported";
             div()
@@ -514,9 +522,9 @@ impl ChatView {
                 .aria_label(said)
                 .child(said)
         });
-        // The week's meter is in the bar already.
+        // The week's number may be in the bar already.
         let limits = (limits.iter())
-            .filter(|l| l.name != "Week" || l.resets.is_some())
+            .filter(|l| l.name != "Week" || week.is_none() || l.resets.is_some())
             .map(|l| {
                 let resets = l.resets.map(|r| {
                     let left = span(r as i64 / 1000 - now());
@@ -526,9 +534,9 @@ impl ChatView {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .map(|d| match l.name == "Week" {
+                    .map(|d| match l.name == "Week" && week.is_some() {
                         true => d.child("Week"),
-                        false => d.child(limit(l, cx)),
+                        false => d.child(limit(l, true, cx)),
                     })
                     .children(resets)
             });
@@ -558,6 +566,7 @@ impl ChatView {
                 .role(Role::Button)
                 .aria_label("Stop")
                 .test_support()
+                .flex_none()
                 .flex_row_reverse()
                 .gap(px(6.))
                 .child(Icon::Stop.size(px(12.)))
@@ -575,6 +584,7 @@ impl ChatView {
                 false => ui::primary_button("chat.send", "Send", cx),
             };
             let send = send
+                .flex_none()
                 .role(Role::Button)
                 .aria_label("Send")
                 .flex_row_reverse()
@@ -586,14 +596,14 @@ impl ChatView {
                 }));
             ui::disabled(send, empty).test_support().into_any_element()
         };
-        let more_button = ui::icon_button("chat.more", "More", cx)
-            .role(Role::Button)
-            .aria_label("More")
-            .test_support()
-            .child(Icon::Down.size(size::CHEVRON));
+        let more_button = ui::titled(
+            ui::icon_button("chat.more", Icon::More.size(px(14.)), cx),
+            "More",
+        )
+        .test_support();
         let provider = self.provider(window, cx);
         let pickers: Vec<_> = (inline.into_iter().chain([modes]))
-            .map(|(id, value, tip, menu)| picker(id, value, tip, menu, window, cx))
+            .map(|(id, title, value, tip, menu)| picker(id, title, value, tip, menu, window, cx))
             .collect();
         let more = (more.button("chat.more.menu", more_button, window, cx))
             .anchor(Anchor::BottomLeft)
@@ -2226,10 +2236,14 @@ impl Render for ChatView {
         let me = self.me.clone();
         let measure = canvas(
             move |bounds, _, cx| {
-                let narrow = bounds.size.width < size::INLINE;
+                let w = bounds.size.width;
+                let room = [size::INLINE, size::WEEK]
+                    .iter()
+                    .filter(|&&t| w >= t)
+                    .count();
                 me.update(cx, |this, cx| {
-                    if this.narrow != narrow {
-                        this.narrow = narrow;
+                    if this.room != room {
+                        this.room = room;
                         cx.notify();
                     }
                 })
@@ -2321,25 +2335,33 @@ impl Render for ChatView {
     }
 }
 
-/// A picker in the bar: its value, opening `menu` upward.
+/// A picker in the bar: its muted title and its value, opening `menu` upward.
 fn picker(
     id: &'static str,
+    title: &'static str,
     value: String,
-    tip: &str,
+    tip: Option<&'static str>,
     menu: Option<DrawnMenu>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let t = theme(cx);
-    let trigger = ui::icon_button(id, value.clone(), cx)
+    // Only a model's name is long enough to need cutting.
+    let shrink = id == "chat.model";
+    let trigger = ui::icon_button(id, title, cx)
+        .role(Role::Button)
+        .aria_label(title)
+        .aria_description(SharedString::from(value.clone()))
+        .when_some(tip, |b, tip| {
+            b.tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+        })
+        .test_support()
         .h(size::CONTROL)
         .px(size::CONTROL_PAD)
-        .text_color(t.fg)
         .whitespace_nowrap()
+        .when(shrink, |b| b.min_w_0())
+        .child(div().min_w_0().truncate().text_color(t.fg).child(value))
         .children(menu.is_some().then(|| Icon::Down.size(size::CHEVRON)));
-    let trigger = ui::titled(trigger, tip.to_string())
-        .aria_description(SharedString::from(value))
-        .test_support();
     match menu {
         Some(menu) => (menu.button(
             SharedString::from(format!("{id}.menu")),
@@ -2348,9 +2370,12 @@ fn picker(
             cx,
         ))
         .anchor(Anchor::BottomLeft)
-        .flex_none()
+        .map(|m| match shrink {
+            true => m.min_w_0(),
+            false => m.flex_none(),
+        })
         .into_any_element(),
-        None => trigger.into_any_element(),
+        None => trigger.flex_none().into_any_element(),
     }
 }
 
@@ -2390,8 +2415,8 @@ fn seconds(ms: u64) -> String {
     }
 }
 
-/// A plan limit, "Week 11% left", with a bar of what is left.
-fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
+/// A plan limit, "Week 11% left", with a bar of what is left when `track`.
+fn limit(l: &Limit, track: bool, cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let used = l.used.clamp(0., 100.);
     let left = 100. - used;
@@ -2420,7 +2445,7 @@ fn limit(l: &Limit, cx: &App) -> impl IntoElement + use<> {
         .child(name.to_string())
         .child(number(format!("{left:.0}%"), low, cx))
         .child("left")
-        .child(meter(left as f32, low, cx).ml(px(2.)))
+        .when(track, |d| d.child(meter(left as f32, low, cx).ml(px(2.))))
 }
 
 /// A meter's number: `fg`, or `warning` when it runs low.
