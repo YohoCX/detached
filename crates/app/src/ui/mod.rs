@@ -30,7 +30,7 @@ pub use disabled::disabled;
 pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
 pub use menu::Menu;
-pub use popup::popup;
+pub use popup::{DrawnMenu, popup};
 pub use suggest::Suggest;
 pub use theme::{GAP, TAB_TITLE, radius, text, theme};
 
@@ -82,7 +82,7 @@ pub fn glass<E: Styled>(e: E, cx: &App) -> E {
 /// A toolbar across the top of a pane's content.
 pub fn band<E: Styled>(e: E, cx: &App) -> E {
     let t = theme(cx);
-    e.bg(t.header_bg).border_b_1().border_color(t.panel_edge)
+    e.bg(t.header_bg).border_b_1().border_color(t.line)
 }
 
 /// The bar on a selected row's leading edge, painted inside so it takes no width.
@@ -204,9 +204,24 @@ pub fn quiet_button(
 ) -> Stateful<Div> {
     let t = theme(cx);
     pill(id, label)
+        .px(px(8.))
+        .rounded(radius::ICON_BUTTON)
         .border_color(transparent_black())
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
+}
+
+/// A `button` that deletes or discards: an `error` outline, filled faintly on hover.
+pub fn danger_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> Stateful<Div> {
+    let t = theme(cx);
+    pill(id, label)
+        .border_color(t.error.opacity(0.5))
+        .text_color(t.error)
+        .hover(|s| s.bg(t.error.opacity(0.14)))
 }
 
 // GPUI takes one hover style per element, so each button sets its own.
@@ -233,7 +248,8 @@ pub fn titled(b: Stateful<Div>, title: impl Into<SharedString>) -> Stateful<Div>
         .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
 }
 
-/// An 18px titled icon button, shown only while its `HOVER` group is hovered.
+/// An 18px titled icon button, shown only while its `HOVER` group is hovered; in a `hover_slot` it
+/// takes no width until then.
 pub fn hover_button(
     id: impl Into<ElementId>,
     icon: impl IntoElement,
@@ -244,20 +260,36 @@ pub fn hover_button(
         .h(px(18.))
         .min_w(px(18.))
         .px(px(2.))
+        .rounded(radius::LETTER)
         .invisible()
         .group_hover(HOVER, |s| s.visible())
 }
 
-/// A 7px glowing dot, such as a repo's status.
+/// A row's trailing `marks`, covered by `actions` on `ground`, the hovered row's opaque fill, while
+/// its `HOVER` group is hovered.
+// Visibility, not display: a group hover that changes layout can flip between prepaint and paint.
+pub fn hover_slot(marks: impl IntoElement, actions: impl IntoElement, ground: Hsla) -> Div {
+    let group = || div().flex().flex_none().items_center().gap(px(4.));
+    group()
+        .relative()
+        .child(group().group_hover(HOVER, |s| s.invisible()).child(marks))
+        .child(
+            group()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .pl(px(4.))
+                .bg(ground)
+                .invisible()
+                .group_hover(HOVER, |s| s.visible())
+                .child(actions),
+        )
+}
+
+/// A 6px dot, such as a chat's state.
 pub fn dot(color: Hsla) -> Div {
-    div()
-        .flex_none()
-        .size(px(7.))
-        .rounded_full()
-        .bg(color)
-        .shadow(vec![
-            BoxShadow::new(px(0.), px(0.), color.opacity(0.45)).blur_radius(px(4.)),
-        ])
+    div().flex_none().size(px(6.)).rounded_full().bg(color)
 }
 
 /// A small filled label, such as MERGING.
@@ -338,7 +370,7 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
         .children(options.iter().enumerate().map(|(i, &(v, label, tip))| {
             let on = v == value;
             let on_change = on_change.clone();
-            let chip = BoxShadow::new(px(0.), px(1.), t.ground.opacity(0.5)).blur_radius(px(2.));
+            let chip = BoxShadow::new(px(0.), px(1.), t.scrim).blur_radius(px(2.));
             pressable(i)
                 .test_support()
                 .h(px(24.))
@@ -348,7 +380,7 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if on { t.fg } else { t.muted })
                 .map(|b| match on {
-                    true => b.bg(t.popover_bg).shadow(vec![chip]),
+                    true => b.bg(t.segment_bg).shadow(vec![chip]),
                     false => b.hover(|s| s.text_color(t.fg)),
                 })
                 .role(Role::Button)
@@ -426,4 +458,55 @@ pub fn placeholder(text: impl Into<SharedString>, cx: &App) -> Div {
         .justify_center()
         .text_color(theme(cx).muted)
         .child(text.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, Context, Render, TestAppContext, VisualTestContext, black};
+
+    use super::*;
+
+    struct Row;
+
+    impl Render for Row {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let marks = div().id("marks").test_support().w(px(30.)).h(px(10.));
+            let act = hover_button("act", "X", "Act", cx)
+                .test_support()
+                .w(px(60.));
+            let row = div()
+                .id("row")
+                .test_support()
+                .group(HOVER)
+                .flex()
+                .w(px(200.))
+                .h(px(28.))
+                .child(div().flex_1())
+                .child(hover_slot(marks, act, black()));
+            div().p(px(40.)).child(row)
+        }
+    }
+
+    #[gpui_kit::test]
+    fn hover_actions_take_no_width_and_cover_the_marks(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (window, _) = cx
+            .update(|cx| gpui_kit::open_window(Default::default(), cx, |_, cx| cx.new(|_| Row)))
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window, cx);
+        let look = |cx: &mut VisualTestContext| {
+            cx.update(|w, cx| {
+                w.render_frame(cx);
+                ["row", "marks", "act"].map(|id| w.find(id))
+            })
+        };
+        let [row, marks, act] = look(cx);
+        assert_eq!(marks.bounds().right(), row.bounds().right());
+        assert!(!act.visible());
+        cx.update(|w, cx| w.hover("row", cx));
+        let [row, marks, act] = look(cx);
+        assert!(act.visible() && !marks.visible());
+        assert_eq!(act.bounds().right(), row.bounds().right());
+    }
 }

@@ -69,7 +69,8 @@ tokens!(
     // The 16 terminal colors, for job logs and the terminal; the log graph's lanes.
     ansi: 16, lanes: 8;
     // Not in theme files: `derive` makes them from the colors above.
-    window_bg, panel_bg, header_bg, popover_bg, panel_edge, active_bg, user_bg, code_block_bg
+    window_bg, panel_bg, header_bg, popover_bg, segment_bg, panel_edge, active_bg, user_bg,
+    code_block_bg
 );
 
 /// The gap between panes and around the window.
@@ -100,6 +101,7 @@ pub mod radius {
     pub const DIALOG: Pixels = px(20.);
     pub const PALETTE: Pixels = px(18.);
     pub const GLASS: Pixels = px(16.);
+    pub const MENU: Pixels = px(12.);
     pub const PANEL: Pixels = px(14.);
     /// The palette's query field, account rows.
     pub const FIELD: Pixels = px(12.);
@@ -460,7 +462,7 @@ pub fn error(cx: &App) -> Option<String> {
 }
 
 impl Theme {
-    /// The opaque surfaces the shell paints, stepped apart from the authored ground and panel.
+    /// The surfaces the shell paints: the authored panel, the window and bands stepped away from it.
     fn derive(mut self, dark: bool) -> Self {
         let (black, white) = (gpui_kit::black(), gpui_kit::white());
         // `a` moved `w` of the way to opaque `b`.
@@ -468,16 +470,17 @@ impl Theme {
         let g = black.blend(self.ground);
         let p = g.blend(self.panel);
         let (f, a, u) = (p.blend(self.fg), p.blend(self.accent), g.blend(self.popup));
+        self.panel_bg = p;
         if dark {
-            self.window_bg = mix(g, black, 0.3);
-            self.panel_bg = mix(p, f, 0.025);
-            self.header_bg = mix(self.panel_bg, f, 0.06);
-            self.popover_bg = mix(mix(self.header_bg, u, 0.25), f, 0.055);
+            self.window_bg = mix(g, black, 0.6);
+            self.header_bg = mix(p, f, 0.10);
+            self.popover_bg = mix(mix(self.header_bg, u, 0.25), f, 0.04);
+            self.segment_bg = f.opacity(0.12);
         } else {
-            self.window_bg = g;
-            self.panel_bg = mix(p, g, 0.12);
-            self.header_bg = mix(self.panel_bg, g, 0.63);
+            self.window_bg = mix(g, f, 0.03);
+            self.header_bg = mix(p, self.window_bg, 0.7);
             self.popover_bg = mix(u, white, 0.5);
+            self.segment_bg = self.popover_bg;
         }
         let (edge, user, code) = if dark {
             (0.25, 0.15, 0.65)
@@ -665,9 +668,9 @@ mod tests {
             ]
             .map(hex_of)
         };
-        let fleet = ["#ebecf0", "#fdfdfd", "#f2f2f5", "#ffffff", "#83858b"];
+        let fleet = ["#e5e6ea", "#ffffff", "#ededf0", "#ffffff", "#83858b"];
         assert_eq!(surfaces(&light), fleet);
-        let fleet = ["#0c0d0e", "#1f2023", "#2a2c2f", "#323437", "#696b71"];
+        let fleet = ["#070708", "#1a1b1e", "#2e2f32", "#323337", "#696b71"];
         assert_eq!(surfaces(&dark), fleet);
     }
 
@@ -704,6 +707,13 @@ mod tests {
                 let mut pairs = vec![
                     ("primary_fg", t.primary_fg, "primary", t.primary),
                     ("accent_fg", t.accent_fg, "accent", t.accent),
+                    ("fg", t.fg, "active tab", t.header_bg.blend(t.selected)),
+                    (
+                        "fg",
+                        t.fg,
+                        "segment",
+                        t.header_bg.blend(t.hover).blend(t.segment_bg),
+                    ),
                 ];
                 for (g, bg) in grounds {
                     pairs.push(("fg", t.fg, g, bg));
