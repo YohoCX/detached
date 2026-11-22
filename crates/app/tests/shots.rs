@@ -1,8 +1,8 @@
 //! Pictures of the window over a seeded sandbox, for a look by eye:
 //! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `main.png` (a diff), `chat.png` and
-//! each Settings page as `<dir>/<page id>.png`, and `<id>-end.png` scrolled down when the page is
-//! taller; `PAGES=main,skills` draws only those ids, `MODE=light|dark` in that mode, `THEME=<name>`
-//! in that theme.
+//! each Settings page as `<dir>/<page id>.png` (Chat's as `chat-settings.png`), and `<id>-end.png`
+//! scrolled down when the page is taller; `PAGES=main,skills` draws only those ids,
+//! `MODE=light|dark` in that mode, `THEME=<name>` in that theme.
 //! macOS only, on the main thread its platform needs; without SHOTS it does nothing.
 
 mod common;
@@ -25,13 +25,14 @@ use kernel::ui_state;
 use kernel::workspace::Workspace;
 
 /// Each page's id, and what shows once it has loaded: an element, and a text its label holds.
-const PAGES: [(&str, &str, &str); 13] = [
+const PAGES: [(&str, &str, &str); 14] = [
     ("accounts", "accounts.row", ""),
     ("git", "settings.env", ""),
     ("appearance", "settings.theme", ""),
     ("keymap", "keymap.app.settings", ""),
     ("updates", "settings.update.state", ""),
     ("agents", "agents.claude.cli", "2.1.400"),
+    ("chat", "chat.defaults.save", ""),
     ("cli", "settings.cli.install", ""),
     ("env", "env.profile.dev", ""),
     ("files", "files.hidden.remove.0", ""),
@@ -203,6 +204,12 @@ fn main() {
         };
         wait_until(&mut cx, |cx| shows(cx, window, id.clone(), text));
         let img = cx.capture_screenshot(window).unwrap();
+        // The chat transcript's shot has the plain name.
+        let page = if page == "chat" {
+            "chat-settings"
+        } else {
+            page
+        };
         img.save(out.join(format!("{page}.png"))).unwrap();
         let down = ScrollDelta::Pixels(point(px(0.), px(-2000.)));
         cx.update_window(window, |_, w, cx| {

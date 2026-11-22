@@ -315,7 +315,7 @@ impl Render for Page {
         );
         let custom = item(
             "Custom chords",
-            Some("\"file.goto\": \"Cmd+P\" rebinds an action; an empty chord unbinds it".into()),
+            Some("`\"file.goto\": \"Cmd+P\"` rebinds an action; an empty chord unbinds it".into()),
             cx,
         )
         .id("settings.keymapNote")

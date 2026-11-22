@@ -12,7 +12,7 @@ use kernel::blocking;
 use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
-use crate::ui::page::{Tone, card, chip, item, labeled, layout, muted, refresh, toggle};
+use crate::ui::page::{Tone, card, item, labeled, layout, muted, refresh, state, tag, toggle};
 use crate::ui::{self, theme};
 
 pub fn page(_: &mut Window, cx: &mut App) -> AnyView {
@@ -92,7 +92,7 @@ impl Render for Page {
         };
         let resource = data.read(cx);
         let (error, value) = (resource.error.clone(), resource.value.clone());
-        if let Some(error) = self.error.clone().or(error) {
+        if let Some(error) = error {
             page = page.child(labeled("skills.error", error).text_color(theme(cx).error));
         }
         let Some(value) = &value else {
@@ -136,7 +136,7 @@ impl Render for Page {
                         .font_weight(FontWeight::MEDIUM)
                         .child(s.name.clone()),
                 )
-                .child(chip(source(s.source), Tone::Muted, cx));
+                .child(tag(source(s.source), cx));
             let first = description.lines().next().unwrap_or_default().to_string();
             item(
                 name,
@@ -152,7 +152,7 @@ impl Render for Page {
             .when(!tip.is_empty(), |r| {
                 r.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             })
-            .children(state.map(|(word, _, tone)| chip(word, tone, cx)))
+            .children(state.map(|(word, _, tone)| ui::page::state(word, tone, cx)))
         });
         let none = value
             .all
@@ -176,7 +176,18 @@ impl Render for Page {
             };
             let id = format!("skills.folder.{:?}", f.source);
             let path = f.path.display().to_string();
-            let mut row = item(f.source.title(), None, cx)
+            let label = div()
+                .flex()
+                .items_center()
+                .min_w_0()
+                .gap(px(8.))
+                .child(div().flex_none().w(px(136.)).child(f.source.title()))
+                .child(ui::page::path(
+                    SharedString::from(format!("{id}.path")),
+                    path.clone(),
+                    cx,
+                ));
+            let mut row = item(label, None, cx)
                 .id(SharedString::from(id.clone()))
                 .test_support()
                 .aria_label(format!(
@@ -188,12 +199,7 @@ impl Render for Page {
                         None => "",
                     }
                 ))
-                .child(ui::page::path(
-                    SharedString::from(format!("{id}.path")),
-                    path,
-                    cx,
-                ))
-                .children(word.map(|w| chip(w, Tone::Muted, cx)));
+                .children(word.map(|w| state(w, Tone::Muted, cx)));
             if f.source == Source::Agents {
                 let on = f.on;
                 let switch = toggle("skills.agents", on, "Read ~/.agents/skills", window, cx);
@@ -204,6 +210,16 @@ impl Render for Page {
             sources.push(row);
         }
         let about = "Where skills are read from, the first one winning a name.";
-        page.child(card(Some("Sources"), Some(about.into()), sources, cx))
+        let failed = self
+            .error
+            .clone()
+            .map(|e| ui::page::error("skills.sources.error", e, cx));
+        let sources = sources.into_iter().map(IntoElement::into_any_element);
+        page.child(card(
+            Some("Sources"),
+            Some(about.into()),
+            sources.chain(failed),
+            cx,
+        ))
     }
 }

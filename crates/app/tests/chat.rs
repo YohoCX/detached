@@ -885,16 +885,18 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
 ) {
     let cx = &mut open(cx);
     let first = id(cx, 0);
+    wait_until(cx, |cx| {
+        cx.settings(|s| !Preset::read(s).models("claude").is_empty())
+    });
     cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
-    for (field, value) in [
-        ("chat.defaults.claude.model", "opus"),
-        ("chat.defaults.claude.effort", "high"),
+    for (field, option) in [
+        ("chat.defaults.claude.model", "option:opus"),
+        ("chat.defaults.claude.effort", "option:high"),
+        ("chat.defaults.claude.mode", "option:Plan"),
     ] {
         cx.click(field);
-        cx.input(value);
+        cx.click(option);
     }
-    cx.click("chat.defaults.claude.mode");
-    cx.click("option:Plan");
     cx.click("chat.defaults.save");
     wait_until(cx, |cx| {
         cx.settings(|s| {
@@ -914,6 +916,21 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "effort high");
+}
+
+#[gpui_kit::test]
+fn settings_chat_lists_models_only_after_the_first_chat(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let saved = json!({"providers": {"claude": {"model": "mine"}}});
+        sb.state.set_block(chat_settings::BLOCK, saved).unwrap();
+    });
+    cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
+    settle(cx);
+    assert!(cx.find("chat.defaults.save").is_some());
+    cx.click("chat.defaults.claude.model");
+    assert!(cx.find("option:Provider default").is_some());
+    assert!(cx.find("option:mine").is_some(), "the saved model stays");
+    assert!(cx.find("option:opus").is_none());
 }
 
 #[gpui_kit::test]

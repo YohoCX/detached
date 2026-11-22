@@ -1,16 +1,18 @@
 use detached_core::adapters::Provider;
+use detached_core::backend::Model;
 use detached_core::chat_settings::Preset;
 use gpui_kit::component::IndexPath;
-use gpui_kit::component::input::InputState;
-use gpui_kit::component::select::SelectState;
+use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Role, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    px,
 };
 use kernel::activity::Activity;
 use kernel::{blocking, settings::Settings};
 
-use crate::ui::page::{Opt, Pick, button, card, item, layout, muted, select};
+use crate::ui::page::{Opt, Pick, card, item, labeled, layout, muted, primary, select};
+use crate::ui::{TAB_TITLE, text, theme};
 
 pub(super) fn save(cx: &App, edit: impl FnOnce(&mut Preset) + Send + 'static) -> Task<bool> {
     let core = kernel::core(cx).clone();
@@ -29,15 +31,130 @@ pub(super) fn page(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| Page::new(window, cx)).into()
 }
 
+struct Page {
+    provider: Pick<&'static str>,
+    saved_provider: Option<&'static str>,
+    fields: Vec<Fields>,
+    saving: bool,
+    error: Option<String>,
+    _subs: [Subscription; 2],
+}
+
+/// A provider's model, effort and mode; an empty value is the provider's default.
+struct Fields {
+    p: &'static Provider,
+    models: Vec<Model>,
+    picks: [Pick; 3],
+    saved: [String; 3],
+    _picks: Vec<Subscription>,
+}
+
+/// "Provider default", then `listed`, then `saved` when the list does not have it; and where
+/// `saved` is.
+fn options(
+    listed: impl IntoIterator<Item = (String, String)>,
+    saved: &str,
+) -> (Vec<Opt<String>>, usize) {
+    let mut opts = vec![Opt(String::new(), "Provider default".into())];
+    opts.extend(listed.into_iter().map(|(v, l)| Opt(v, l.into())));
+    let at = opts.iter().position(|o| o.0 == saved).unwrap_or_else(|| {
+        opts.push(Opt(saved.into(), saved.to_string().into()));
+        opts.len() - 1
+    });
+    (opts, at)
+}
+
+fn value(pick: &Pick, cx: &App) -> String {
+    pick.read(cx).selected_value().cloned().unwrap_or_default()
+}
+
+impl Fields {
+    fn new(
+        p: &'static Provider,
+        preset: &Preset,
+        window: &mut Window,
+        cx: &mut Context<Page>,
+    ) -> Self {
+        let choices = preset.providers.get(p.id).cloned().unwrap_or_default();
+        let saved = [choices.model, choices.effort, choices.mode].map(Option::unwrap_or_default);
+        let models = preset.models(p.id).to_vec();
+        let listed = models.iter().filter(|m| m.value != "default");
+        let modes = p
+            .modes
+            .iter()
+            .map(|(id, label, _)| (id.to_string(), label.to_string()));
+        let opts = [
+            options(
+                listed.map(|m| (m.value.clone(), m.label.clone())),
+                &saved[0],
+            ),
+            efforts(&models, &saved[0], &saved[1]),
+            options(modes, &saved[2]),
+        ];
+        let picks = opts.map(|(opts, at)| {
+            cx.new(|cx| SelectState::new(opts, Some(IndexPath::new(at)), window, cx))
+        });
+        let id = p.id;
+        let changed =
+            move |page: &mut Page, model: bool, window: &mut Window, cx: &mut Context<Page>| {
+                if let Some(f) = page.fields.iter().find(|f| f.p.id == id).filter(|_| model) {
+                    let (opts, _) = efforts(&f.models, &value(&f.picks[0], cx), &f.saved[1]);
+                    f.picks[1].update(cx, |s, cx| {
+                        s.set_items(opts, window, cx);
+                        if s.selected_value().is_none() {
+                            s.set_selected_index(Some(IndexPath::new(0)), window, cx);
+                        }
+                    });
+                }
+                cx.notify();
+            };
+        let _picks = picks
+            .iter()
+            .enumerate()
+            .map(|(k, pick)| {
+                cx.subscribe_in(
+                    pick,
+                    window,
+                    move |page, _, _: &SelectEvent<Vec<Opt<String>>>, window, cx| {
+                        changed(page, k == 0, window, cx)
+                    },
+                )
+            })
+            .collect();
+        Self {
+            p,
+            models,
+            picks,
+            saved,
+            _picks,
+        }
+    }
+
+    fn values(&self, cx: &App) -> [String; 3] {
+        self.picks.each_ref().map(|p| value(p, cx))
+    }
+}
+
+/// The efforts of `model`, or of the provider's default model when it is empty.
+fn efforts(models: &[Model], model: &str, saved: &str) -> (Vec<Opt<String>>, usize) {
+    let model = Model::find(models, if model.is_empty() { "default" } else { model });
+    let listed = model.map_or(&[][..], |m| &m.efforts);
+    options(listed.iter().map(|e| (e.clone(), e.clone())), saved)
+}
+
 impl Page {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let provider = cx.new(|cx| SelectState::new(vec![], None, window, cx));
         let mut page = Self {
+            _subs: [
+                cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+                cx.subscribe(&provider, |_, _, _: &SelectEvent<_>, cx| cx.notify()),
+            ],
             provider,
             saved_provider: None,
             fields: vec![],
             saving: false,
-            _settings: cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+            error: None,
         };
         page.sync(window, cx);
         page
@@ -81,133 +198,56 @@ impl Page {
             })
             .collect();
     }
-}
 
-struct Page {
-    provider: Pick<&'static str>,
-    saved_provider: Option<&'static str>,
-    fields: Vec<Fields>,
-    saving: bool,
-    _settings: Subscription,
-}
-
-struct Fields {
-    p: &'static Provider,
-    inputs: [Entity<InputState>; 2],
-    mode: Pick<&'static str>,
-    saved: [Option<String>; 2],
-    saved_mode: &'static str,
-}
-
-impl Fields {
-    fn new(
-        p: &'static Provider,
-        preset: &Preset,
-        window: &mut Window,
-        cx: &mut Context<Page>,
-    ) -> Self {
-        let choices = preset.providers.get(p.id).cloned().unwrap_or_default();
-        let saved = [choices.model, choices.effort]
-            .map(|value| text_choice(value.as_deref().unwrap_or_default()));
-        let inputs = saved.each_ref().map(|value| {
-            cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Provider default")
-                    .default_value(value.as_deref().unwrap_or_default())
-            })
-        });
-        let options: Vec<_> = std::iter::once(Opt("", "Provider default".into()))
-            .chain(p.modes.iter().map(|&(id, label, _)| Opt(id, label.into())))
-            .collect();
-        let selected = options
-            .iter()
-            .position(|o| Some(o.0) == choices.mode.as_deref())
-            .unwrap_or(0);
-        let saved_mode = options[selected].0;
-        let mode =
-            cx.new(|cx| SelectState::new(options, Some(IndexPath::new(selected)), window, cx));
-        Self {
-            p,
-            inputs,
-            mode,
-            saved,
-            saved_mode,
-        }
+    fn chosen(&self, cx: &App) -> Option<&'static str> {
+        self.provider.read(cx).selected_value().copied()
     }
-}
 
-fn text_choice(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
+    fn changed(&self, cx: &App) -> bool {
+        self.chosen(cx) != self.saved_provider
+            || self.fields.iter().any(|f| f.values(cx) != f.saved)
+    }
 
-impl Page {
     fn save(&mut self, cx: &mut Context<Self>) {
-        let provider = self.provider.read(cx).selected_value().copied();
-        let values: Vec<_> = self
-            .fields
-            .iter()
-            .map(|fields| {
-                let values = fields
-                    .inputs
-                    .each_ref()
-                    .map(|input| text_choice(&input.read(cx).value()));
-                let mode = fields
-                    .mode
-                    .read(cx)
-                    .selected_value()
-                    .copied()
-                    .unwrap_or_default();
-                (values, mode)
-            })
-            .collect();
-        let edits: Vec<_> = self
-            .fields
-            .iter()
-            .zip(&values)
-            .filter_map(|(fields, ([model, effort], mode))| {
-                let model = (model != &fields.saved[0]).then(|| model.clone());
-                let effort = (effort != &fields.saved[1]).then(|| effort.clone());
-                let mode = (*mode != fields.saved_mode).then_some(*mode);
-                (model.is_some() || effort.is_some() || mode.is_some()).then_some((
-                    fields.p.id,
-                    model,
-                    effort,
-                    mode,
-                ))
-            })
-            .collect();
+        let provider = self.chosen(cx);
         let changed_provider = provider.filter(|p| Some(*p) != self.saved_provider);
-        if changed_provider.is_none() && edits.is_empty() {
-            return;
-        }
-        let saved = save(cx, move |preset| {
-            if let Some(provider) = changed_provider {
-                preset.provider = provider.into();
-            }
-            for (id, model, effort, mode) in edits {
-                let choices = preset.choices(id);
-                if let Some(model) = model {
-                    choices.model = model;
+        let values: Vec<_> = self.fields.iter().map(|f| f.values(cx)).collect();
+        let edits: Vec<_> = (self.fields.iter().zip(&values))
+            .flat_map(|(f, v)| {
+                (0..3)
+                    .filter(|&k| v[k] != f.saved[k])
+                    .map(move |k| (f.p.id, k, Some(v[k].clone()).filter(|v| !v.is_empty())))
+            })
+            .collect();
+        let core = kernel::core(cx).clone();
+        let saved = blocking::run(cx, move || {
+            Preset::save(&core, |preset| {
+                if let Some(provider) = changed_provider {
+                    preset.provider = provider.into();
                 }
-                if let Some(effort) = effort {
-                    choices.effort = effort;
+                for (id, k, v) in edits {
+                    let c = preset.choices(id);
+                    match k {
+                        0 => c.model = v,
+                        1 => c.effort = v,
+                        _ => c.mode = v,
+                    }
                 }
-                if let Some(mode) = mode {
-                    choices.mode = (!mode.is_empty()).then(|| mode.into());
-                }
-            }
+            })
         });
-        self.saving = true;
+        (self.saving, self.error) = (true, None);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let saved = saved.await;
             _ = this.update(cx, |page, cx| {
-                if saved {
-                    page.saved_provider = provider;
-                    for (fields, (values, mode)) in page.fields.iter_mut().zip(values) {
-                        (fields.saved, fields.saved_mode) = (values, mode);
+                match saved {
+                    Ok(_) => {
+                        page.saved_provider = provider;
+                        for (f, v) in page.fields.iter_mut().zip(values) {
+                            f.saved = v;
+                        }
                     }
+                    Err(e) => page.error = Some(e.to_string()),
                 }
                 page.saving = false;
                 cx.notify();
@@ -215,23 +255,50 @@ impl Page {
         })
         .detach();
     }
+
+    fn choices(&self, f: &Fields, cx: &App) -> impl IntoElement + use<> {
+        let id = |key| SharedString::from(format!("chat.defaults.{}.{key}", f.p.id));
+        let mode = value(&f.picks[2], cx);
+        let mode = f.p.modes.iter().find(|m| m.0 == mode).map(|m| m.2.into());
+        let none = format!("Models are listed after the first chat with {}.", f.p.name);
+        let details = [f.models.is_empty().then(|| none.into()), None, mode];
+        let rows = [
+            ("model", "Model"),
+            ("effort", "Effort"),
+            ("mode", "Permission mode"),
+        ];
+        let rows = rows.into_iter().zip(&f.picks).zip(details);
+        let rows = rows.map(|(((key, label), pick), detail)| {
+            item(label, detail, cx).child(div().w(TAB_TITLE).child(select(pick, id(key), cx)))
+        });
+        card(Some(f.p.name), None, rows, cx)
+    }
 }
 
 impl Render for Page {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync(window, cx);
-        let save = button(
-            "chat.defaults.save",
-            "Save",
-            !self.saving && !self.fields.is_empty(),
-            cx,
-            |p, _, cx| p.save(cx),
-        );
+        let enabled = !self.saving && self.changed(cx);
+        let save = primary("chat.defaults.save", "Save", enabled, cx, |p, _, cx| {
+            p.save(cx)
+        });
+        let action = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .children(self.error.clone().map(|e| {
+                labeled("chat.defaults.error", e)
+                    .role(Role::Alert)
+                    .text_size(text::SMALL)
+                    .text_color(theme(cx).error)
+            }))
+            .child(save);
+        let fields: Vec<_> = self.fields.iter().map(|f| self.choices(f, cx)).collect();
         layout(
             "settings.chat",
             "Chat",
             "Defaults for new chats",
-            Some(save.into_any_element()),
+            Some(action.into_any_element()),
             cx,
         )
         .when(self.fields.is_empty(), |page| {
@@ -241,37 +308,10 @@ impl Render for Page {
             ))
         })
         .when(!self.fields.is_empty(), |page| {
-            page.child(card(
-                None,
-                None,
-                [
-                    item("Provider", None, cx).child(div().w(crate::ui::TAB_TITLE).child(select(
-                        &self.provider,
-                        "chat.defaults.provider",
-                        cx,
-                    ))),
-                ],
-                cx,
-            ))
+            let provider = select(&self.provider, "chat.defaults.provider", cx);
+            let row = item("Provider", None, cx).child(div().w(TAB_TITLE).child(provider));
+            page.child(card(None, None, [row], cx))
         })
-        .children(self.fields.iter().map(|fields| {
-            let id = |key| SharedString::from(format!("chat.defaults.{}.{key}", fields.p.id));
-            let rows = [("model", "Model"), ("effort", "Effort")]
-                .into_iter()
-                .zip(&fields.inputs)
-                .map(|((key, label), input)| {
-                    item(label, None, cx).child(
-                        div()
-                            .w(px(220.))
-                            .child(crate::ui::input(input, cx).id(id(key))),
-                    )
-                });
-            let mode = item("Permission mode", None, cx).child(div().w(px(220.)).child(select(
-                &fields.mode,
-                id("mode"),
-                cx,
-            )));
-            card(Some(fields.p.name), None, rows.chain([mode]), cx)
-        }))
+        .children(fields)
     }
 }

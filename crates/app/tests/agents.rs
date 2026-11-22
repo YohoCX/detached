@@ -167,7 +167,9 @@ fn the_login_runs_the_found_cli_in_a_terminal_tab(cx: &mut TestAppContext) {
     cx.update(|_, cx| settings::open(cx, "agents"));
     let text = format!("claude 2.1.400 at {}", cli.display());
     wait_for(cx, "agents.claude.cli", &text);
-    assert!(cx.find("agents.codex.name").is_none(), "Codex stays off");
+    let off = label(cx, "agents.codex.login-status");
+    assert_eq!(off.as_deref(), Some("Off"), "Codex stays listed, off");
+    assert!(cx.find("agents.codex.login").is_none());
     assert!(cx.find("agents.claude.installer").is_none());
     cx.click("agents.claude.login");
     wait_until(cx, |cx| {
@@ -195,7 +197,8 @@ fn the_provider_switches_update_the_chat_picker_in_the_open_settings_dialog(
     cx.click("agents.codex.enabled");
     wait_for(cx, "agents.codex.cli", "codex was not found.");
     cx.click("agents.claude.enabled");
-    wait_until(cx, |cx| cx.find("agents.claude.cli").is_none());
+    wait_for(cx, "agents.claude.login-status", "Off");
+    wait_for(cx, "agents.claude.cli", "Not checked while off.");
     cx.click("settings.nav.chat");
     assert!(cx.find("chat.defaults.codex.model").is_some());
     assert!(cx.find("chat.defaults.claude.model").is_none());

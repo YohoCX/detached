@@ -1,13 +1,13 @@
 use crate::ui::{
     self,
-    page::{button, card, item, labeled, layout},
+    page::{button, card, error, item, layout},
     text, theme,
 };
 use detached_core::git::files::{self, TreeSettings};
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window, div, px,
+    AnyElement, AnyView, App, AppContext, Context, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled, Subscription, Window, div, px,
 };
 use kernel::{blocking, settings::Settings};
 
@@ -51,17 +51,19 @@ struct Page {
     children: Entity<InputState>,
     settings: TreeSettings,
     busy: bool,
-    error: Option<String>,
+    /// The card whose action failed, and why.
+    error: Option<(&'static str, String)>,
     _settings: Subscription,
 }
 
 impl Page {
     fn save(&mut self, settings: TreeSettings, cx: &mut Context<Self>) {
-        self.write(cx, move |core| core.set_block("files", settings));
+        self.write(HIDDEN, cx, move |core| core.set_block("files", settings));
     }
 
     fn write(
         &mut self,
+        at: &'static str,
         cx: &mut Context<Self>,
         f: impl FnOnce(
             &detached_core::state::AppState,
@@ -81,7 +83,7 @@ impl Page {
                         this.settings = s.block("files").unwrap_or_default();
                         this.error = None;
                     }
-                    Err(e) => this.error = Some(e.to_string()),
+                    Err(e) => this.error = Some((at, e.to_string())),
                 }
                 cx.notify();
             })
@@ -132,11 +134,12 @@ impl Page {
                         .chain(&children)
                         .any(|suffix| suffix.contains(['/', '\\']))
                 {
-                    this.error = Some("Enter file suffixes with no folder separators.".into());
+                    let why = "Enter file suffixes with no folder separators.";
+                    this.error = Some((NESTING, why.into()));
                     cx.notify();
                     return;
                 }
-                this.write(cx, move |core| {
+                this.write(NESTING, cx, move |core| {
                     core.set_file_nesting(pattern, Some(children))
                 });
             },
@@ -168,18 +171,30 @@ impl Page {
                     cx,
                     move |this, _, cx| {
                         let pattern = remove.clone();
-                        this.write(cx, move |core| core.set_file_nesting(pattern, None));
+                        this.write(NESTING, cx, move |core| {
+                            core.set_file_nesting(pattern, None)
+                        });
                     },
                 ))
         });
-        card(Some("File nesting rules"), Some("Match file suffixes. Leave the child suffixes blank to disable nesting for a parent suffix.".into()),
-            rows.chain(std::iter::once(add)), cx)
+        let about = "Match file suffixes. Leave the child suffixes blank to disable nesting for a \
+                     parent suffix.";
+        let rows = rows.chain([add]).map(IntoElement::into_any_element);
+        let rows = rows.chain(self.error(NESTING, "files.nesting.error", cx));
+        card(Some("File nesting rules"), Some(about.into()), rows, cx)
+    }
+
+    fn error(&self, at: &str, id: &'static str, cx: &App) -> Option<AnyElement> {
+        let (_, e) = self.error.as_ref().filter(|e| e.0 == at)?;
+        Some(error(id, e.clone(), cx))
     }
 }
 
+const HIDDEN: &str = "hidden";
+const NESTING: &str = "nesting";
+
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
         let add = item(
             div()
                 .w(px(320.))
@@ -194,7 +209,7 @@ impl Render for Page {
             cx,
             |this, _, cx| {
                 let name = this.input.read(cx).value().trim().to_string();
-                this.error = files::rule(&name).err().map(|e| e.to_string());
+                this.error = files::rule(&name).err().map(|e| (HIDDEN, e.to_string()));
                 if this.error.is_none() && !name.is_empty() && !this.settings.hidden.contains(&name)
                 {
                     let mut settings = this.settings.clone();
@@ -222,7 +237,8 @@ impl Render for Page {
                 },
             ))
         });
-        let rows = hidden.chain(std::iter::once(add));
+        let rows = hidden.chain([add]).map(IntoElement::into_any_element);
+        let rows = rows.chain(self.error(HIDDEN, "files.hidden.error", cx));
         let about = "A name or a glob, such as .claude or *.log.";
         layout(
             "settings.files",
@@ -238,10 +254,5 @@ impl Render for Page {
             cx,
         ))
         .child(self.nesting(cx))
-        .children(
-            self.error
-                .as_ref()
-                .map(|e| labeled("files.hidden.error", e.clone()).text_color(t.error)),
-        )
     }
 }

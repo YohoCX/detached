@@ -16,7 +16,7 @@ use kernel::settings::Settings;
 
 use crate::ui::{
     self,
-    page::{button, card, item, labeled, layout, muted},
+    page::{button, card, error, item, labeled, layout, muted, primary},
     text,
 };
 
@@ -134,7 +134,7 @@ impl Page {
             let name = div()
                 .w(px(240.))
                 .child(ui::input(&f.name, cx).id("env.name"));
-            rows.push(item("Name", None, cx).child(name));
+            rows.push(item("Name", None, cx).child(name).into_any_element());
         }
         for (i, (name, value)) in f.vars.iter().enumerate() {
             let id = |what| SharedString::from(format!("env.var.{i}.{what}"));
@@ -145,7 +145,8 @@ impl Page {
                     .px(px(14.))
                     .py(px(8.))
                     .child(div().w_1_3().child(ui::input(name, cx).id(id("name"))))
-                    .child(div().flex_1().child(ui::input(value, cx).id(id("value")))),
+                    .child(div().flex_1().child(ui::input(value, cx).id(id("value"))))
+                    .into_any_element(),
             );
         }
         rows.push(
@@ -161,10 +162,12 @@ impl Page {
                 (p.form, p.error) = (None, None);
                 cx.notify();
             }))
-            .child(button("env.save", "Save", !self.busy, cx, |p, _, cx| {
+            .child(primary("env.save", "Save", !self.busy, cx, |p, _, cx| {
                 p.save(cx)
-            })),
+            }))
+            .into_any_element(),
         );
+        rows.extend(self.error.clone().map(|e| error("env.error", e, cx)));
         let title = match &f.profile {
             Some(p) => format!("Profile {p}"),
             None => "New profile".into(),
@@ -192,9 +195,6 @@ impl Render for Page {
             .into_any_element()
         });
         let mut page = layout("settings.env", "Env profiles", about, new, cx);
-        if let Some(e) = &self.error {
-            page = page.child(labeled("env.error", e.clone()).text_color(ui::theme(cx).error));
-        }
         let profiles = profiles(cx);
         let mut rows: Vec<_> = profiles
             .iter()
@@ -230,6 +230,9 @@ impl Render for Page {
             .collect();
         if rows.is_empty() {
             rows.push(item(muted("No profiles yet.", cx), None, cx).into_any_element());
+        }
+        if self.form.is_none() {
+            rows.extend(self.error.clone().map(|e| error("env.error", e, cx)));
         }
         let about = "Values are encrypted under a key in the system's credential store. A log shows \
                      each value of 4 characters or more as [redacted]; a shorter one shows as it \

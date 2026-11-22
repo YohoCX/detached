@@ -162,22 +162,34 @@ impl Dialog {
     }
 
     fn nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = theme(cx);
         let mut nav = div()
             .id("settings.nav")
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .flex_none()
             .gap(px(2.))
-            .w(px(150.))
-            .p(px(8.))
+            .w(px(200.))
+            .py(px(18.))
+            .px(px(10.))
+            .bg(t.header_bg)
             .border_r_1()
-            .border_color(theme(cx).line);
+            .border_color(t.line)
+            .child(
+                div()
+                    .px(px(10.))
+                    .pb(px(6.))
+                    .text_size(text::HEADING)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Settings"),
+            );
         let mut group = None;
         for (p, _) in &self.pages {
             if group != Some(p.group) {
                 let title = p.group.title();
                 let id = ("settings.group", p.group as usize);
-                let top = if group.is_some() { px(12.) } else { px(4.) };
+                let top = if group.is_some() { px(16.) } else { px(4.) };
                 group = Some(p.group);
                 nav = nav.child(
                     page::heading(title, cx)
@@ -186,13 +198,14 @@ impl Dialog {
                         .aria_label(title)
                         .pt(top)
                         .pb(px(4.))
-                        .px(px(8.)),
+                        .px(px(10.)),
                 );
             }
             let (id, title, on) = (p.id, p.title, self.page == p.id);
             nav = nav.child(
                 ui::row(format!("settings.nav.{id}"), on, cx)
                     .test_support()
+                    .flex_none()
                     .h(px(28.))
                     .role(Role::Tab)
                     .aria_label(title)
@@ -217,47 +230,32 @@ impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let vp = window.viewport_size();
-        let w = px(840.).min(vp.width * 0.92);
-        let head = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .pt(px(12.))
-            .pb(px(12.))
-            .pl(px(20.))
-            .pr(px(14.))
-            .border_b_1()
-            .border_color(t.line)
-            .child(
-                div()
-                    .text_size(text::HEADING)
-                    .font_weight(FontWeight::BOLD)
-                    .child("Settings"),
-            )
-            .child(
-                ui::titled(ui::icon_button("settings.close", Icon::Close, cx), "Close")
-                    .test_support()
-                    .on_click(dismiss(cx)),
-            );
+        let w = px(980.).min(vp.width * 0.92);
         let shown = self.pages.iter().find(|p| p.0.id == self.page);
         let page = div()
             .id("settings.body")
             .test_support()
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .px(px(20.))
-            .py(px(18.))
-            .children(shown.map(|p| p.1.clone()));
-        let body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .child(self.nav(cx))
-            .child(page);
+            .size_full()
+            .pt(px(28.))
+            .pr(px(56.))
+            .pb(px(40.))
+            .pl(px(32.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .max_w(px(660.))
+                    .children(shown.map(|p| p.1.clone())),
+            );
+        let close = ui::titled(ui::icon_button("settings.close", Icon::Close, cx), "Close")
+            .test_support()
+            .absolute()
+            .top(px(14.))
+            .right(px(14.))
+            .on_click(dismiss(cx));
+        let content = div().relative().flex_1().min_w_0().child(page).child(close);
         let scrim = div()
             .id("settings.scrim")
             .test_support()
@@ -277,8 +275,8 @@ impl Render for Dialog {
             .left((vp.width - w) / 2.)
             .w(w)
             .h(vp.height * 0.84)
+            .bg(t.panel_bg)
             .flex()
-            .flex_col()
             .overflow_hidden()
             .rounded(radius::DIALOG)
             .occlude()
@@ -287,8 +285,8 @@ impl Render for Dialog {
                     cx.emit(DismissEvent);
                 }
             }))
-            .child(head)
-            .child(body);
+            .child(self.nav(cx))
+            .child(content);
         let all = div().w(vp.width).h(vp.height).child(scrim).child(dialog);
         // After the top bar's popups at their priority; its own selects nest, so they draw over it.
         deferred(anchored().position(point(px(0.), px(0.))).child(all))

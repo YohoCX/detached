@@ -19,7 +19,7 @@ use kernel::workspace::Workspace;
 
 use crate::ui::{
     self,
-    page::{Tone, button, card, chip, item, labeled, layout, muted, path},
+    page::{Tone, button, card, danger, error, item, layout, muted, path, primary, state, tag},
 };
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
@@ -45,13 +45,17 @@ struct Page {
     sharing: Option<Interest<Sharing>>,
     branch: Entity<InputState>,
     busy: bool,
-    error: Option<String>,
+    /// What failed, by the op's label, and why.
+    error: Option<(&'static str, String)>,
     /// The worktree a plain Remove refused, which then offers Remove anyway.
     refused: Option<String>,
     /// The worktree whose Remove anyway waits for its confirm.
     confirm: Option<String>,
     _workspace: Subscription,
 }
+
+const CREATE: &str = "New worktree";
+const REMOVE: &str = "Remove worktree";
 
 type Progress<'a> = &'a (dyn Fn(&str) + Sync);
 
@@ -90,7 +94,7 @@ impl Page {
                 match result {
                     Ok(said) => Activity::global(cx).update(cx, |a, cx| a.say(said, false, cx)),
                     Err(e) if this.repo.as_ref() == Some(&repo) => {
-                        this.error = Some(e.to_string());
+                        this.error = Some((label, e.to_string()));
                         this.refused = refused;
                     }
                     Err(_) => {}
@@ -125,7 +129,7 @@ impl Page {
             return;
         }
         self.run(
-            "New worktree",
+            CREATE,
             None,
             move |core, id, p| {
                 let path = api::create_worktree(core, &repo, &main, &folder, &branch, id, p)?;
@@ -141,7 +145,7 @@ impl Page {
         };
         let refused = (!force).then(|| path.clone());
         self.run(
-            "Remove worktree",
+            REMOVE,
             refused,
             move |core, id, p| {
                 api::remove_worktree(core, &repo, &path, force, id, p)?;
@@ -154,7 +158,6 @@ impl Page {
 
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = ui::theme(cx);
         let about = "Extra checkouts of this repository, each on its own branch.";
         let mut page = layout("settings.worktrees", "Worktrees", about, None, cx);
         if self.repo.is_none() {
@@ -191,7 +194,7 @@ impl Render for Page {
                 recipe.map(|i| path("worktrees.recipe.path", i.path.display().to_string(), cx)),
             )
             .when(recipe.is_some_and(|i| !i.trusted), |r| {
-                r.child(chip("needs acceptance", Tone::Warn, cx))
+                r.child(state("needs acceptance", Tone::Warn, cx))
                     .child(button(
                         "worktrees.sharing",
                         "Open Sharing",
@@ -207,22 +210,20 @@ impl Render for Page {
             None,
             cx,
         )
-        .child(button(
+        .child(primary(
             "worktrees.create",
             "Create",
             !self.busy,
             cx,
             |this, _, cx| this.create(cx),
         ));
-        page = page.child(card(
-            Some("New worktree"),
-            None,
-            [recipe_row.into_any_element(), create.into_any_element()],
-            cx,
-        ));
-        if let Some(error) = &self.error {
-            page = page.child(labeled("worktrees.error", error.clone()).text_color(t.error));
-        }
+        let failed = |at: &str| {
+            let e = self.error.as_ref().filter(|e| e.0 == at);
+            e.map(|(_, e)| error("worktrees.error", e.clone(), cx))
+        };
+        let rows = [recipe_row.into_any_element(), create.into_any_element()];
+        let rows = rows.into_iter().chain(failed(CREATE));
+        page = page.child(card(Some("New worktree"), None, rows, cx));
         let main = self.main(cx).map(|m| m.0);
         let trees = Workspace::get(cx).repos().iter();
         let trees = trees.filter(|r| main.is_some() && r.worktree_of == main);
@@ -242,7 +243,7 @@ impl Render for Page {
                     .items_center()
                     .gap(px(6.))
                     .child(div().font_weight(FontWeight::MEDIUM).child(name))
-                    .child(chip(branch, Tone::Muted, cx));
+                    .child(tag(branch, cx));
                 let mut line = item(label, None, cx).child(path(id("path"), path_.clone(), cx));
                 if self.confirm.as_ref() == Some(&path_) {
                     let p = path_.clone();
@@ -251,16 +252,12 @@ impl Render for Page {
                             this.confirm = None;
                             cx.notify();
                         }))
-                        .child(
-                            button(
-                                id("confirm"),
-                                "Discard changes and remove",
-                                true,
-                                cx,
-                                move |this, _, cx| this.remove(p.clone(), true, cx),
-                            )
-                            .text_color(t.error),
-                        );
+                        .child(danger(
+                            id("confirm"),
+                            "Discard changes and remove",
+                            cx,
+                            move |this, _, cx| this.remove(p.clone(), true, cx),
+                        ));
                 } else {
                     if self.refused.as_ref() == Some(&path_) {
                         let p = path_.clone();
@@ -284,10 +281,11 @@ impl Render for Page {
                         move |this, _, cx| this.remove(p.clone(), false, cx),
                     ));
                 }
-                line
+                line.into_any_element()
             })
             .collect();
         if !rows.is_empty() {
+            let rows = rows.into_iter().chain(failed(REMOVE));
             page = page.child(card(Some("Worktrees"), None, rows, cx));
         }
         page

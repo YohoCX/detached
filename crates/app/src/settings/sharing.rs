@@ -6,9 +6,9 @@ use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px,
+    AnyElement, AnyView, App, AppContext, Context, Div, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::resource::Interest;
 use kernel::settings::Settings;
@@ -17,9 +17,10 @@ use kernel::workspace::Workspace;
 use kernel::{blocking, invalidate};
 
 use crate::ui::page::{
-    Tone, button, card, chip, item, labeled, layout, muted, path, refresh, toggle,
+    Tone, button, card, danger, error, item, labeled, layout, muted, path, primary, refresh, state,
+    tag, toggle,
 };
-use crate::ui::{self, Menu, theme};
+use crate::ui::{self, DrawnMenu, text, theme};
 
 pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| {
@@ -37,6 +38,7 @@ pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
             data: None,
             busy: false,
             error: None,
+            removing: None,
             _workspace: Workspace::observe(cx, |this: &mut Page, cx| this.follow(cx)),
             _settings: cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
         };
@@ -52,7 +54,10 @@ struct Page {
     repo: Option<String>,
     data: Option<Interest<Sharing>>,
     busy: bool,
-    error: Option<String>,
+    /// The card whose action failed, and why.
+    error: Option<(&'static str, String)>,
+    /// The identity whose Remove waits for its confirm.
+    removing: Option<String>,
     _workspace: Subscription,
     _settings: Subscription,
 }
@@ -70,19 +75,21 @@ impl Page {
 
     fn run(
         &mut self,
+        at: &'static str,
         cx: &mut Context<Self>,
         f: impl FnOnce(&RepoStore, &AppState) -> Result<()> + Send + 'static,
     ) {
         let Some(repo) = self.repo.clone() else {
             return;
         };
-        self.write(cx, move |core| {
+        self.write(at, cx, move |core| {
             f(&RepoStore::open(core, repo.as_ref())?, core)
         });
     }
 
     fn write(
         &mut self,
+        at: &'static str,
         cx: &mut Context<Self>,
         f: impl FnOnce(&AppState) -> Result<()> + Send + 'static,
     ) {
@@ -95,7 +102,7 @@ impl Page {
             let result = done.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
-                this.error = result.err().map(|e| e.to_string());
+                this.error = result.err().map(|e| (at, e.to_string()));
                 if let Some(data) = &this.data {
                     data.refresh(cx);
                 }
@@ -108,6 +115,21 @@ impl Page {
         })
         .detach();
         cx.notify();
+    }
+
+    fn fail(&mut self, at: &'static str, why: &str, cx: &mut Context<Self>) {
+        self.error = Some((at, why.into()));
+        cx.notify();
+    }
+
+    /// The error of card `at`, for its foot.
+    fn error(&self, at: &str, cx: &App) -> Option<AnyElement> {
+        let (_, e) = self.error.as_ref().filter(|e| e.0 == at)?;
+        Some(error(
+            SharedString::from(format!("sharing.{at}.error")),
+            e.clone(),
+            cx,
+        ))
     }
 }
 
@@ -136,9 +158,9 @@ impl Page {
         };
         let id = |suffix: &str| SharedString::from(format!("sharing.marks.{id}{suffix}"));
         let mut row = item(label, None, cx).child(if mark.is_some() {
-            chip("trusted", Tone::Good, cx)
+            state("trusted", Tone::Good, cx)
         } else {
-            chip("not trusted", Tone::Muted, cx)
+            state("not trusted", Tone::Muted, cx)
         });
         if let Some(mark) = mark {
             let forks = mark.forks;
@@ -146,57 +168,51 @@ impl Page {
             let remote_name = name.clone();
             let selected = mark.remote.as_deref().unwrap_or("origin");
             let label = format!("Own remote · {selected}");
-            let options: Vec<_> = std::iter::once(("Default (origin)".to_string(), None))
-                .chain(
-                    remotes
-                        .iter()
-                        .cloned()
-                        .map(|remote| (remote.clone(), Some(remote))),
-                )
-                .collect();
+            let options = std::iter::once(("Default (origin)".to_string(), None))
+                .chain(remotes.iter().map(|r| (r.clone(), Some(r.clone()))));
             let me = cx.weak_entity();
+            let menu = options.fold(DrawnMenu::default(), |menu, (label, remote)| {
+                let on = remote == mark.remote;
+                let (me, name) = (me.clone(), remote_name.clone());
+                menu.item(label, move |_, cx| {
+                    let (name, remote) = (name.clone(), remote.clone());
+                    _ = me.update(cx, |this, cx| {
+                        this.edit_mark(name, workspace, cx, |mark| mark.remote = remote)
+                    });
+                })
+                .checked(on)
+            });
+            let trigger = ui::button(id(".remote"), label, cx).test_support();
+            let forks = toggle(
+                if workspace {
+                    id(".forks")
+                } else {
+                    "sharing.marks.forks".into()
+                },
+                forks,
+                "Include forks",
+                window,
+                cx,
+            )
+            .when(!self.busy, |toggle| {
+                toggle.on_click(cx.listener(move |this, _, _, cx| {
+                    let name = forks_name.clone();
+                    this.edit_mark(name, workspace, cx, move |mark| mark.forks = !forks);
+                }))
+            });
             row = row
-                .child(ui::button(id(".remote"), label, cx).test_support().when(
-                    !self.busy && !remotes.is_empty(),
-                    |button| {
-                        button.on_click(move |e, window, cx| {
-                            let menu =
-                                options
-                                    .iter()
-                                    .fold(Menu::default(), |menu, (label, remote)| {
-                                        let (me, name, remote) =
-                                            (me.clone(), remote_name.clone(), remote.clone());
-                                        menu.item(label.clone(), move |_, cx| {
-                                            let (name, remote) = (name.clone(), remote.clone());
-                                            _ = me.update(cx, |this, cx| {
-                                                this.edit_mark(name, workspace, cx, |mark| {
-                                                    mark.remote = remote
-                                                })
-                                            });
-                                        })
-                                    });
-                            menu.show(e.position(), window, cx);
-                        })
-                    },
-                ))
+                .when(!self.busy && !remotes.is_empty(), |row| {
+                    row.child(menu.button(id(".remote.menu"), trigger, window, cx))
+                })
                 .child(
-                    toggle(
-                        if workspace {
-                            id(".forks")
-                        } else {
-                            "sharing.marks.forks".into()
-                        },
-                        forks,
-                        "Include forks",
-                        window,
-                        cx,
-                    )
-                    .when(!self.busy, |toggle| {
-                        toggle.on_click(cx.listener(move |this, _, _, cx| {
-                            let name = forks_name.clone();
-                            this.edit_mark(name, workspace, cx, move |mark| mark.forks = !forks);
-                        }))
-                    }),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(text::SMALL)
+                        .text_color(theme(cx).muted)
+                        .child("Include forks")
+                        .child(forks),
                 );
         }
         row.child(button(
@@ -210,7 +226,7 @@ impl Page {
             cx,
             move |this, _, cx| {
                 let name = name.clone();
-                this.write(cx, move |core| {
+                this.write("marks", cx, move |core| {
                     marks::change(core, |p| {
                         let marks = mark_list(p, workspace);
                         match marks.iter().position(|m| m.name == name) {
@@ -233,7 +249,7 @@ impl Page {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Mark) + Send + 'static,
     ) {
-        self.write(cx, move |core| {
+        self.write("marks", cx, move |core| {
             marks::change(core, |p| {
                 if let Some(mark) = mark_list(p, workspace).iter_mut().find(|m| m.name == name) {
                     edit(mark);
@@ -270,7 +286,7 @@ impl Page {
             let at = format!("Trusted by you at {}", &b.head[..b.head.len().min(8)]);
             rows.push(
                 item(format!("Branch {}", b.branch), Some(at.into()), cx)
-                    .child(chip("trusted", Tone::Good, cx))
+                    .child(state("trusted", Tone::Good, cx))
                     .child(button(
                         SharedString::from(format!("sharing.marks.branch.{}", b.branch)),
                         "Remove",
@@ -278,7 +294,7 @@ impl Page {
                         cx,
                         move |this, _, cx| {
                             let (r, branch) = (r.clone(), branch.clone());
-                            this.write(cx, move |core| {
+                            this.write("marks", cx, move |core| {
                                 marks::change(core, |p| {
                                     p.branches.retain(|b| !(b.repo == r && b.branch == branch))
                                 })
@@ -289,6 +305,8 @@ impl Page {
         }
         let about = "A trusted subject runs councils unsandboxed, anything else a sandboxed \
                      read-only review. Kept on this machine.";
+        let rows = rows.into_iter().map(IntoElement::into_any_element);
+        let rows = rows.chain(self.error("marks", cx));
         let trust = card(Some("Council trust"), Some(about.into()), rows, cx);
         Some(trust.id("sharing.marks").test_support())
     }
@@ -304,14 +322,27 @@ fn mark_list(p: &mut Council, workspace: bool) -> &mut Vec<Mark> {
 
 impl Page {
     fn identities(&self, p: &Council, cx: &Context<Self>) -> impl IntoElement {
-        let add = item(
-            div()
-                .w(ui::TAB_TITLE)
-                .child(ui::input(&self.email, cx).id("sharing.identities.email")),
-            None,
-            cx,
-        )
-        .child(button(
+        let field = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .w(ui::TAB_TITLE)
+                    .child(ui::input(&self.email, cx).id("sharing.identities.email")),
+            )
+            .children(
+                self.error
+                    .as_ref()
+                    .filter(|e| e.0 == "identities")
+                    .map(|(_, e)| {
+                        labeled("sharing.identities.error", e.clone())
+                            .role(Role::Alert)
+                            .text_size(text::SMALL)
+                            .text_color(theme(cx).error)
+                    }),
+            );
+        let add = item(field, None, cx).child(button(
             "sharing.identities.add",
             "Add",
             !self.busy,
@@ -323,11 +354,9 @@ impl Page {
                     .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('@'))
                     || email.chars().any(char::is_whitespace)
                 {
-                    this.error = Some("Enter a commit email address.".into());
-                    cx.notify();
-                    return;
+                    return this.fail("identities", "Enter a commit email address.", cx);
                 }
-                this.write(cx, move |core| {
+                this.write("identities", cx, move |core| {
                     marks::change(core, |p| {
                         if !p.identities.contains(&email) {
                             p.identities.push(email);
@@ -337,15 +366,38 @@ impl Page {
             },
         ));
         let rows = p.identities.iter().enumerate().map(|(i, email)| {
+            let row = item(email.clone(), None, cx);
             let email = email.clone();
-            item(email.clone(), None, cx).child(button(
-                ("sharing.identities.remove", i),
+            if self.removing.as_ref() != Some(&email) {
+                return row.child(button(
+                    ("sharing.identities.remove", i),
+                    "Remove",
+                    !self.busy,
+                    cx,
+                    move |this, _, cx| {
+                        this.removing = Some(email.clone());
+                        cx.notify();
+                    },
+                ));
+            }
+            row.child(button(
+                ("sharing.identities.cancel", i),
+                "Cancel",
+                true,
+                cx,
+                |this, _, cx| {
+                    this.removing = None;
+                    cx.notify();
+                },
+            ))
+            .child(danger(
+                ("sharing.identities.confirm", i),
                 "Remove",
-                !self.busy,
                 cx,
                 move |this, _, cx| {
                     let email = email.clone();
-                    this.write(cx, move |core| {
+                    this.removing = None;
+                    this.write("identities", cx, move |core| {
                         marks::change(core, |p| p.identities.retain(|e| *e != email))
                     });
                 },
@@ -365,12 +417,16 @@ impl Page {
             ("stall", "Idle timeout in seconds"),
             ("tool", "Tool timeout in seconds"),
         ];
-        let rows =
-            self.limits.iter().zip(fields).map(|(input, (id, label))| {
-                item(label, None, cx).child(div().w(ui::TAB_TITLE / 2.).child(
-                    ui::input(input, cx).id(SharedString::from(format!("sharing.limits.{id}"))),
-                ))
-            });
+        let rows = self.limits.iter().zip(fields).map(|(input, (id, label))| {
+            item(label, None, cx).child(
+                div().w(px(120.)).child(
+                    ui::input(input, cx)
+                        .font_family(theme::mono(cx))
+                        .text_right()
+                        .id(SharedString::from(format!("sharing.limits.{id}"))),
+                ),
+            )
+        });
         let save = item("Limits for Council runs", None, cx).child(button(
             "sharing.limits.save",
             "Save",
@@ -384,24 +440,25 @@ impl Page {
                     tool.trim().parse::<u64>(),
                 ) {
                     (Ok(cap), Ok(stall), Ok(tool)) => {
-                        this.write(cx, move |core| {
+                        this.write("limits", cx, move |core| {
                             marks::change(core, |p| {
                                 (p.cap, p.stall, p.tool) = (cap, stall, tool);
                             })
                         });
                     }
-                    _ => {
-                        this.error =
-                            Some("Enter whole numbers of zero or more for Council limits.".into());
-                        cx.notify();
-                    }
+                    _ => this.fail(
+                        "limits",
+                        "Enter whole numbers of zero or more for Council limits.",
+                        cx,
+                    ),
                 }
             },
         ));
+        let rows = rows.chain([save]).map(IntoElement::into_any_element);
         card(
             Some("Council limits"),
             None,
-            rows.chain(std::iter::once(save)),
+            rows.chain(self.error("limits", cx)),
             cx,
         )
     }
@@ -424,11 +481,17 @@ impl Page {
                 cx,
                 move |this, _, cx| {
                     let path = item_path.clone();
-                    this.write(cx, move |core| store::revoke(core, &path));
+                    this.write("accepted", cx, move |core| store::revoke(core, &path));
                 },
             ))
         });
-        card(Some("Accepted items"), None, rows.chain(empty), cx)
+        let rows = rows.chain(empty).map(IntoElement::into_any_element);
+        card(
+            Some("Accepted items"),
+            None,
+            rows.chain(self.error("accepted", cx)),
+            cx,
+        )
     }
 }
 
@@ -445,11 +508,7 @@ impl Render for Page {
         let p: Council = Settings::get(cx).block(marks::BLOCK).unwrap_or_default();
         let mut page = layout("settings.sharing", "Sharing", about, refresh, cx);
         let resource = self.data.as_ref().map(|d| d.read(cx));
-        if let Some(error) = self
-            .error
-            .clone()
-            .or_else(|| resource.and_then(|r| r.error.clone()))
-        {
+        if let Some(error) = resource.and_then(|r| r.error.clone()) {
             page = page.child(labeled("sharing.error", error).text_color(theme(cx).error));
         }
         let value = resource.and_then(|r| r.value.as_ref());
@@ -491,7 +550,7 @@ impl Render for Page {
                 !self.busy,
                 |t| {
                     t.on_click(cx.listener(move |this, _, _, cx| {
-                        this.run(cx, move |store, core| {
+                        this.run("defaults", cx, move |store, core| {
                             let to = if shared { Scope::Local } else { Scope::Shared };
                             store.set_default(core, kind, to)
                         })
@@ -500,10 +559,11 @@ impl Render for Page {
             ))
         });
         let about = "New items of a kind turned on here go to the shared folder, in git.";
+        let defaults = defaults.into_iter().map(IntoElement::into_any_element);
         page = page.child(card(
             Some("Share new items"),
             Some(about.into()),
-            defaults,
+            defaults.chain(self.error("defaults", cx)),
             cx,
         ));
         let items = items.iter().map(|entry| {
@@ -524,12 +584,8 @@ impl Render for Page {
                         .font_weight(FontWeight::MEDIUM)
                         .child(entry.name.clone()),
                 )
-                .child(chip(scope, Tone::Muted, cx))
-                .children(
-                    entry
-                        .overridden
-                        .then(|| chip("overridden", Tone::Muted, cx)),
-                );
+                .child(tag(scope, cx))
+                .children(entry.overridden.then(|| tag("overridden", cx)));
             let tip = SharedString::from(entry.path.display().to_string());
             let mut line = item(name, Some(entry.kind.title().into()), cx)
                 .id(SharedString::from(id.clone()))
@@ -539,20 +595,20 @@ impl Render for Page {
                 let hash = SharedString::from(format!("Its hash: {}", entry.hash));
                 line = line
                     .child(
-                        chip("needs acceptance", Tone::Warn, cx)
+                        state("needs acceptance", Tone::Warn, cx)
                             .id(SharedString::from(format!("{id}.hash")))
                             .tooltip(move |window, cx| {
                                 Tooltip::new(hash.clone()).build(window, cx)
                             }),
                     )
-                    .child(button(
+                    .child(primary(
                         SharedString::from(format!("{id}.accept")),
                         "Accept",
                         !self.busy,
                         cx,
                         move |this, _, cx| {
                             let item = accept.clone();
-                            this.run(cx, move |store, core| store.accept(core, &item));
+                            this.run("items", cx, move |store, core| store.accept(core, &item));
                         },
                     ));
             }
@@ -569,15 +625,16 @@ impl Render for Page {
                     cx,
                     move |this, _, cx| {
                         let item = it.clone();
-                        this.run(cx, move |store, core| store.move_item(core, &item));
+                        this.run("items", cx, move |store, core| store.move_item(core, &item));
                     },
                 ));
             }
             line
         });
-        let items: Vec<_> = items.collect();
+        let items: Vec<_> = items.map(IntoElement::into_any_element).collect();
         if !items.is_empty() {
-            page = page.child(card(Some("Items"), None, items, cx));
+            let rows = items.into_iter().chain(self.error("items", cx));
+            page = page.child(card(Some("Items"), None, rows, cx));
         }
         page.children(self.marks(&p, &remotes, window, cx))
             .children(global)
