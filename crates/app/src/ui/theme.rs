@@ -82,7 +82,8 @@ pub const TAB_TITLE: Pixels = px(240.);
 pub mod chat {
     use gpui_kit::{Pixels, px};
 
-    pub const INLINE: Pixels = px(580.);
+    pub const INLINE: Pixels = px(640.);
+    pub const WEEK: Pixels = px(720.);
     pub const MENU: Pixels = px(280.);
     pub const OPTION: Pixels = px(32.);
     pub const CONTROL: Pixels = px(28.);

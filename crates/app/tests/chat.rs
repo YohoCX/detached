@@ -275,6 +275,8 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         label(cx, "chat.provider").as_deref() == Some("Claude Max")
     });
     wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
+    let track = cx.update(|w, _| w.within("chat.limit.Week").try_find("chat.meter.fill"));
+    assert!(track.is_none(), "the bar's Week is text alone");
     assert!(cx.find("chat.limit.5h").is_none());
     cx.click("chat.more");
     assert_eq!(label(cx, "chat.limit.5h").as_deref(), Some("5h 66% left"));
@@ -295,6 +297,28 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     );
     assert!(cx.find("chat.limits").is_none());
     assert!(items(cx).is_empty(), "no message was needed");
+    cx.press("escape");
+
+    // Narrower, Week leaves the bar before Model does and shows in More with its track.
+    cx.simulate_resize(size(px(1330.), px(900.)));
+    wait_until(cx, |cx| cx.find("chat.limit.Week").is_none());
+    assert!(cx.find("chat.model").is_some());
+    cx.click("chat.more");
+    assert_eq!(
+        label(cx, "chat.limit.Week").as_deref(),
+        Some("Week 83% left")
+    );
+    let fill = cx.update(|w, _| {
+        w.within("chat.limit.Week")
+            .find("chat.meter.fill")
+            .bounds()
+            .size
+            .width
+    });
+    assert!(
+        (fill - px(48. * 0.83)).abs() < px(1.),
+        "fill width: {fill:?}"
+    );
     cx.press("escape");
     cx.click("chat.send");
 
@@ -354,6 +378,41 @@ fn the_provider_menu_is_anchored_lists_disabled_agents_and_locks_after_send(
     wait_for_item(cx, "said hello");
     assert!(cx.find("chat.provider.pick").is_none());
     assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+}
+
+#[gpui_kit::test]
+fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let limits = json!({"seven_day": {"utilization": 17}});
+        fake(sb, json!({"rate_limits": limits}));
+    });
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
+    for (id, title, value) in [
+        ("chat.model", "Model", "Default"),
+        ("chat.effort", "Effort", "Default"),
+        ("chat.mode", "Permissions", "Auto"),
+    ] {
+        assert_eq!(label(cx, id).as_deref(), Some(title));
+        assert_eq!(description(cx, id).as_deref(), Some(value), "{id}");
+    }
+    for (width, week, model) in [
+        (1400., true, true),
+        (1330., false, true),
+        (1150., false, false),
+    ] {
+        cx.simulate_resize(size(px(width), px(900.)));
+        wait_until(cx, |cx| {
+            cx.find("chat.limit.Week").is_some() == week && cx.find("chat.model").is_some() == model
+        });
+        let bounds = |cx: &mut VisualTestContext, id| cx.find(id).unwrap().bounds();
+        let (more, send) = (bounds(cx, "chat.more"), bounds(cx, "chat.send"));
+        assert!(more.right() <= send.left(), "{width}");
+        assert!(
+            send.right() <= bounds(cx, "chat.composer").right(),
+            "{width}"
+        );
+    }
 }
 
 #[gpui_kit::test]
