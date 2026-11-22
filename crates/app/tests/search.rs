@@ -459,8 +459,10 @@ fn the_empty_centers_hints_open_their_palettes_and_show_their_chords(cx: &mut Te
     search(cx, "readme", "README.md");
     cx.press("enter");
     wait_until(cx, |cx| cx.find("markdown").is_some());
-    cx.click(("dock.hint", 0usize));
-    assert_eq!(title(cx), None, "a document over the hints takes the click");
+    assert!(
+        cx.find(("dock.hint", 0usize)).is_none(),
+        "no hints under a document"
+    );
 }
 
 /// The sandbox layout, then `seed`, with `solo` current; returns its path.

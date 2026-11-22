@@ -300,7 +300,7 @@ impl Render for Switcher {
             div()
                 .min_w_0()
                 .truncate()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(label),
         )
         .child(caret(cx));

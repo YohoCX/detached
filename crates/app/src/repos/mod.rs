@@ -18,8 +18,8 @@ use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, Div, Entity, Global, InteractiveElement, ParentElement, PathPromptOptions,
-    Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, div,
+    App, AppContext, Div, Entity, FontWeight, Global, InteractiveElement, ParentElement,
+    PathPromptOptions, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Task, div,
     prelude::FluentBuilder, px,
 };
 
@@ -241,6 +241,7 @@ fn widget(
         .h(px(28.))
         .px(px(8.))
         .rounded(radius::WIDGET)
+        .font_weight(FontWeight::MEDIUM)
         .hover(|s| s.bg(t.hover))
         .active(|s| s.bg(t.selected_inactive))
         .role(Role::Button)

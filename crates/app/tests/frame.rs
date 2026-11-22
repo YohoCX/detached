@@ -227,16 +227,16 @@ fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_s
         cx.update(|w, cx| w.drag(from, point(x, from.y), cx));
         settle(cx);
     };
-    assert_eq!(width(cx), Some(px(280.)));
+    assert_eq!(width(cx), Some(px(290.)), "a 280 pane and its gap");
     drag(cx, None, 100.);
-    assert_eq!(width(cx), Some(px(380.)));
+    assert_eq!(width(cx), Some(px(390.)));
     cx.update(|w, cx| w.double_click("grip.repos", cx));
     settle(cx);
-    assert_eq!(width(cx), Some(px(280.)), "back to its default");
+    assert_eq!(width(cx), Some(px(290.)), "back to its default");
     drag(cx, Some(20.), 0.);
     assert_eq!(on(cx, "zone.left"), Some(false), "closed");
     cx.click("zone.left");
-    assert_eq!(width(cx), Some(px(280.)), "reopens at the width it had");
+    assert_eq!(width(cx), Some(px(290.)), "reopens at the width it had");
 }
 
 /// The panic hook's reports, in the config dir the app boots from.
@@ -296,7 +296,7 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_branches(
+fn the_status_bar_shows_the_current_repo_and_branch_beside_a_message_and_opens_branches(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
@@ -311,7 +311,12 @@ fn the_status_bar_shows_the_current_repo_and_branch_until_a_message_and_opens_br
     };
     assert_eq!(repo(cx), Some(format!("{name} main ↓1")));
     cx.activity(|s, cx| s.say("Fetched", false, cx));
-    assert_eq!(repo(cx), None, "the message takes its place");
+    assert!(cx.find("status.message").is_some());
+    assert_eq!(
+        repo(cx),
+        Some(format!("{name} main ↓1")),
+        "beside the message"
+    );
     cx.click("status.message");
     cx.click("status.repo");
     assert!(cx.find("branches.popup").is_some());

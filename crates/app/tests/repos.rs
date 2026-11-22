@@ -226,9 +226,7 @@ fn repos_nest_under_their_folders_and_a_folder_of_one_folder_shares_its_row(
 }
 
 #[gpui_kit::test]
-fn a_folded_folder_sums_its_changes_shows_its_worst_dot_and_stays_folded_after_a_reopen(
-    cx: &mut TestAppContext,
-) {
+fn a_folded_folder_sums_its_changes_and_stays_folded_after_a_reopen(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         layout(sb);
         write(&sb.repo("group/api"), [("a.txt", "a"), ("b.txt", "b")]);
@@ -247,7 +245,6 @@ fn a_folded_folder_sums_its_changes_shows_its_worst_dot_and_stays_folded_after_a
     cx.click(id.clone());
     assert!(!paths(cx).contains(&api));
     assert_eq!(inside(cx, "dirty").as_deref(), Some("3"));
-    assert_eq!(inside(cx, "dot").as_deref(), Some("Warning"));
     let saved = cx.update(|_, cx| ui_state::get::<Vec<String>>("sidebar.collapsed", cx));
     assert_eq!(saved, Some(vec![group]));
 
@@ -260,19 +257,30 @@ fn a_folded_folder_sums_its_changes_shows_its_worst_dot_and_stays_folded_after_a
 }
 
 #[gpui_kit::test]
-fn chat_here_on_a_folder_opens_a_chat_on_it(cx: &mut TestAppContext) {
+fn new_chat_here_on_a_folder_or_a_repo_and_a_folder_s_hover_button_open_a_chat_on_it(
+    cx: &mut TestAppContext,
+) {
     let cx = &mut open_app_with(cx, layout);
+    let lib = path(cx.sb.repo("lib"));
+    let shown = |cx: &mut VisualTestContext| match cx.workspace(|w, _| w.shown().cloned()) {
+        Some(Doc::Chat { repo, .. }) => Some(repo),
+        _ => None,
+    };
     for (label, folder) in [("group", cx.sb.repo("group")), ("ws", cx.sb.ws())] {
         let id = row_named(cx, label).id;
         cx.update(|w, cx| w.right_click(id, cx));
-        cx.update(|w, cx| assert!(menu::pick("Chat here", w, cx)));
+        cx.update(|w, cx| assert!(menu::pick("New chat here", w, cx)));
         settle(cx);
-        let repo = path(folder);
-        assert_eq!(
-            cx.workspace(|w, _| w.shown().cloned()),
-            Some(Doc::Chat { repo, n: 0 })
-        );
+        assert_eq!(shown(cx), Some(path(folder)));
     }
+    let id = row(cx, &lib).id;
+    cx.update(|w, cx| w.right_click(id, cx));
+    cx.update(|w, cx| assert!(menu::pick("New chat here", w, cx)));
+    settle(cx);
+    assert_eq!(shown(cx), Some(lib));
+    let ws = row_named(cx, "ws").id;
+    click_in(cx, &ws, "newChat");
+    assert_eq!(shown(cx), Some(path(cx.sb.ws())));
 }
 
 #[gpui_kit::test]

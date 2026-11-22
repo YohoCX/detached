@@ -1,7 +1,7 @@
 //! Pictures of the window over a seeded sandbox, for a look by eye:
-//! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `main.png` (a diff), `chat.png` and
-//! each Settings page as `<dir>/<page id>.png` (Chat's as `chat-settings.png`), and `<id>-end.png`
-//! scrolled down when the page is taller; `PAGES=main,skills` draws only those ids,
+//! `SHOTS=<dir> cargo test -p detached-app --test shots` writes `main.png` (a diff), `notices.png`,
+//! `chat.png` and each Settings page as `<dir>/<page id>.png` (Chat's as `chat-settings.png`), and
+//! `<id>-end.png` scrolled down when the page is taller; `PAGES=main,skills` draws only those ids,
 //! `MODE=light|dark` in that mode, `THEME=<name>` in that theme.
 //! macOS only, on the main thread its platform needs; without SHOTS it does nothing.
 
@@ -21,6 +21,7 @@ use detached_core::store::{Files, Kind, RepoStore};
 use detached_core::types::{AccountInput, Provider};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, ElementId, HeadlessAppContext, ScrollDelta, point, px};
+use kernel::activity::{Activity, Level, Notice};
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
@@ -172,6 +173,41 @@ fn main() {
         cx.update(|cx| files::show_diff(cx, doc, false));
         wait_until(&mut cx, |cx| shows(cx, window, "diff.current".into(), ""));
         save(&mut cx, window, &out, "main");
+    }
+    if wanted("notices") {
+        let notices = [
+            (Level::Info, "Fetched 3 of 3 repositories", None),
+            (
+                Level::Warn,
+                "Fetch all: 1 not updated",
+                Some("api: diverged"),
+            ),
+            (
+                Level::Error,
+                "Pull failed",
+                Some("fatal: couldn't find remote ref main"),
+            ),
+        ];
+        let ids: Vec<u64> = cx.update(|cx| {
+            let a = Activity::global(cx);
+            let notify = |(level, title, body): (Level, &str, Option<&str>)| {
+                let n = Notice {
+                    level,
+                    title: title.into(),
+                    body: body.map(Into::into),
+                    ..Notice::default()
+                };
+                a.update(cx, |a, cx| a.notify(n, cx))
+            };
+            notices.into_iter().map(notify).collect()
+        });
+        common::tick(&mut cx);
+        save(&mut cx, window, &out, "notices");
+        cx.update(|cx| {
+            let a = Activity::global(cx);
+            ids.into_iter()
+                .for_each(|id| a.update(cx, |a, cx| a.dismiss(id, cx)));
+        });
     }
     if wanted("chat") {
         let turn = |cx: &mut HeadlessAppContext, prompt: &str, done: &str| {

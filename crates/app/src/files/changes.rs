@@ -165,10 +165,17 @@ impl Changes {
             .collect()
     }
 
+    /// The shown diff's file when it is of the current repo, else the one last selected here.
     fn selected(&self, cx: &App) -> Option<String> {
-        let current = Workspace::get(cx).current();
+        let w = Workspace::get(cx);
+        let current = w.current()?;
+        if let Some(Doc::Diff(d)) = w.shown()
+            && d.repo == current
+        {
+            return Some(d.path.clone());
+        }
         let sel = cx.try_global::<Selected>()?;
-        (Some(sel.0.as_str()) == current).then(|| sel.1.path.clone())
+        (sel.0 == current).then(|| sel.1.path.clone())
     }
 
     /// Selects `c` and shows its diff against HEAD, or the merge base in Compare.
@@ -266,8 +273,7 @@ impl Changes {
             .items_center()
             .gap(px(4.))
             .h(px(44.))
-            .pl(px(16.))
-            .pr(px(8.))
+            .px(px(12.))
             .child(
                 div()
                     .flex_1()

@@ -17,7 +17,7 @@ use gpui_kit::{
     AnyElement, AnyView, App, AppContext, ClickEvent, ClipboardItem, Context, Div, Entity,
     FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role,
     SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity,
-    Window, div, prelude::FluentBuilder, px, relative, uniform_list,
+    Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 
 use super::branches::{self, Intent};
@@ -345,7 +345,16 @@ impl Sidebar {
             }
         };
         let t = theme(cx);
-        line(ix, 0, cx)
+        let chat = folder.to_string();
+        let actions = div().flex().gap(px(2.)).children([
+            ui::hover_button("newChat", Icon::Chat.size(px(12.)), "New chat here", cx)
+                .test_support()
+                .on_click(move |_, _, cx| crate::chat::new_chat(chat.clone(), cx)),
+            ui::hover_button("remove", Icon::Minus.size(px(12.)), "Remove folder", cx)
+                .test_support()
+                .on_click(click(in_workspace(api::remove_folder, workspace, folder))),
+        ]);
+        line(ix, 0)
             .group(ui::HOVER)
             .hover(|s| s.bg(t.hover))
             .role(Role::Button)
@@ -357,20 +366,14 @@ impl Sidebar {
             .on_aux_click(menu)
             .child(slot().text_color(t.muted).child(chevron(open)))
             .child(
-                div()
-                    .flex_none()
-                    .text_color(t.muted)
-                    .child(Icon::Folder.size(px(14.))),
+                name_of(format!("{}/", folder_name(folder)))
+                    .text_size(text::SMALL)
+                    .font_weight(FontWeight::SEMIBOLD),
             )
-            .child(name_of(folder_name(folder).to_string()).font_weight(FontWeight::MEDIUM))
-            .child(
-                ui::hover_button("remove", Icon::Minus, "Remove folder", cx)
-                    .test_support()
-                    .on_click(click(in_workspace(api::remove_folder, workspace, folder))),
-            )
+            .child(ui::hover_slot(div(), actions, ground(false, cx)))
     }
 
-    /// A folder in the tree; folded, it sums its repos' changes and shows the worst of their dots.
+    /// A folder in the tree; folded, it sums its repos' changes and marks a failed status.
     fn dir(
         &self,
         ix: usize,
@@ -391,10 +394,10 @@ impl Sidebar {
             .filter_map(|s| s.as_ref().ok())
             .map(|s| s.changes.len())
             .sum();
-        let tone = statuses.into_iter().filter_map(|s| tone_of(Some(s))).min();
+        let failed = statuses.iter().find_map(|s| s.as_ref().err().cloned());
         let this = cx.weak_entity();
         let (key, menu, tip) = (path.to_string(), path.to_string(), SharedString::from(path));
-        line(ix, depth, cx)
+        line(ix, depth)
             .hover(|s| s.bg(t.hover))
             .role(Role::Button)
             .aria_expanded(open)
@@ -410,7 +413,7 @@ impl Sidebar {
             .child(slot().text_color(t.muted).child(chevron(open)))
             .child(name_of(name.to_string()))
             .children((changes > 0).then(|| changed(changes, t)))
-            .children(tone.map(|tone| dot(tone, t)))
+            .children(failed.map(|e| failure(e, t)))
     }
 
     fn repo(&self, ix: usize, r: &RepoRow, cx: &mut Context<Self>) -> impl IntoElement {
@@ -447,10 +450,10 @@ impl Sidebar {
         // The branch, or an error or the last sync's outcome in its place; the tooltip says all.
         let outcome = repo.and_then(|r| r.outcome.as_ref());
         let (mut said, mut ab) = (vec![], vec![]);
-        let shown = match status {
+        let branch = match status {
             Some(Err(e)) => {
                 said.push(e.clone());
-                Some((e.clone(), t.error))
+                Some(failure(e.clone(), t).into_any_element())
             }
             Some(Ok(st)) => {
                 let head = st.head.as_deref().map_or("?", |h| &h[..h.len().min(8)]);
@@ -463,53 +466,66 @@ impl Sidebar {
                 said.push(branch.clone());
                 said.extend(ab.clone());
                 said.extend(outcome.map(|o| o.text.clone()));
-                Some(match outcome {
+                let (text, color) = match outcome {
                     Some(o) => (o.text.clone(), if o.ok { t.muted } else { t.error }),
                     None => (branch, t.muted),
-                })
+                };
+                let label = div().min_w_0().max_w(px(96.)).truncate().text_color(color);
+                Some(label.child(text).into_any_element())
             }
             None => None,
         };
         let said = SharedString::from(said.join(" "));
-        let tone = tone_of(status);
-        let status = div()
+        let marks = div()
             .id("status")
             .test_support()
             .role(Role::Label)
             .aria_label(said.clone())
             .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(4.))
             .min_w_0()
-            .max_w(relative(0.5))
+            .items_center()
+            .gap(px(6.))
             .text_size(text::SMALL)
             .text_color(t.muted)
             .when(!said.is_empty(), |d| {
                 d.tooltip(move |window, cx| Tooltip::new(said.clone()).build(window, cx))
             })
+            .children(branch)
             .children(
-                shown.map(|(text, color)| div().min_w_0().truncate().text_color(color).child(text)),
+                st.filter(|s| !s.changes.is_empty())
+                    .map(|s| changed(s.changes.len(), t)),
             )
-            .children(
-                ab.into_iter()
-                    .map(|ab| div().flex_none().text_color(t.fg).child(ab)),
-            );
+            .children((!ab.is_empty()).then(|| div().flex_none().child(ab.join(" "))));
+        let one = |kind| {
+            let r = path.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| sync_one(kind, r.clone(), cx)
+        };
+        let actions = div().flex().gap(px(2.)).children([
+            ui::hover_button("fetch", Icon::Fetch.size(px(12.)), "Fetch", cx)
+                .test_support()
+                .on_click(one(Kind::Fetch)),
+            ui::hover_button("pull", Icon::Pull.size(px(12.)), "Pull", cx)
+                .test_support()
+                .on_click(one(Kind::Pull)),
+            ui::hover_button("remove", Icon::Close.size(px(12.)), "Remove from list", cx)
+                .test_support()
+                .on_click(click(remove_repo(&r.workspace, &r.repo.path, r.solo))),
+        ]);
 
         let (ws, solo, select) = (r.workspace.clone(), r.solo, path.clone());
-        let weight = if r.worktree {
-            FontWeight::NORMAL
-        } else {
-            FontWeight::MEDIUM
+        let name = match (selected, r.worktree) {
+            (true, _) => name_of(name.clone()).font_weight(FontWeight::SEMIBOLD),
+            (false, true) => name_of(name.clone()).text_color(t.muted),
+            _ => name_of(name.clone()),
         };
-        line(ix, r.depth + r.nested as usize, cx)
+        line(ix, r.depth + r.nested as usize)
             .group(ui::HOVER)
             .map(|d| match selected {
                 true => d.bg(t.active_bg).shadow(vec![ui::marker(cx)]),
                 false => d.hover(|s| s.bg(t.hover)),
             })
             .role(Role::ListItem)
-            .aria_label(name.clone())
+            .aria_label(folder_name(&path).to_string())
             .aria_description(tip.clone())
             .aria_selected(selected)
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
@@ -521,22 +537,12 @@ impl Sidebar {
                 }
             })
             .child(slot().children(toggle))
-            .child(name_of(name).font_weight(weight))
+            .child(name)
             .children(
                 st.and_then(|s| s.in_progress.clone())
                     .map(|p| ui::badge(badge_text(p), t.warning, cx)),
             )
-            .children(
-                st.filter(|s| !s.changes.is_empty())
-                    .map(|s| changed(s.changes.len(), t)),
-            )
-            .child(status)
-            .child(
-                ui::hover_button("remove", Icon::Close.size(px(12.)), "Remove from list", cx)
-                    .test_support()
-                    .on_click(click(remove_repo(&r.workspace, &r.repo.path, r.solo))),
-            )
-            .children(tone.map(|tone| dot(tone, t)))
+            .child(ui::hover_slot(marks, actions, ground(selected, cx)))
     }
 }
 
@@ -551,8 +557,8 @@ impl Render for Sidebar {
             .flex_none()
             .items_center()
             .gap(px(4.))
-            .h(px(36.))
-            .px(px(8.))
+            .h(px(44.))
+            .px(px(12.))
             .child(
                 div()
                     .id("sidebar.filter")
@@ -615,8 +621,8 @@ impl Render for Sidebar {
     }
 }
 
-/// A tree row at `depth`, with a guide down each level it is nested in.
-fn line(ix: usize, depth: usize, cx: &App) -> ObservedElement<Stateful<Div>> {
+/// A tree row at `depth`.
+fn line(ix: usize, depth: usize) -> ObservedElement<Stateful<Div>> {
     let row = div()
         .id(("sidebar.row", ix))
         .test_support()
@@ -627,7 +633,7 @@ fn line(ix: usize, depth: usize, cx: &App) -> ObservedElement<Stateful<Div>> {
         .mx(px(6.))
         .pr(px(8.))
         .rounded(radius::WIDGET);
-    nest(row, depth, cx)
+    nest(row, depth)
 }
 
 fn name_of(name: String) -> ObservedElement<Stateful<Div>> {
@@ -669,11 +675,25 @@ fn key(row: &Row) -> String {
     }
 }
 
-fn dot(tone: Tone, t: &Theme) -> impl IntoElement {
-    ui::dot(tone.color(t))
-        .id("dot")
+/// An error icon in place of a branch, the message in its tooltip.
+fn failure(message: String, t: &Theme) -> impl IntoElement {
+    div()
+        .id("failed")
         .test_support()
-        .aria_label(format!("{tone:?}"))
+        .aria_label(SharedString::from(message.clone()))
+        .flex_none()
+        .text_color(t.error)
+        .tooltip(move |window, cx| Tooltip::new(message.clone()).build(window, cx))
+        .child(Icon::Error.size(px(14.)))
+}
+
+/// A hovered or selected row's opaque fill, for the hover actions to cover its marks with.
+fn ground(selected: bool, cx: &App) -> Hsla {
+    let t = theme(cx);
+    match selected {
+        true => t.active_bg,
+        false => t.panel_bg.blend(t.hover),
+    }
 }
 
 fn empty(text: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
@@ -706,8 +726,8 @@ fn folder_menu(this: WeakEntity<Sidebar>, path: &str, open: bool, cx: &mut App) 
     };
     let (chat, key) = (path.to_string(), path.to_string());
     Menu::default()
-        .item("Chat here", move |_, cx| {
-            crate::chat::show(chat.clone(), cx)
+        .item("New chat here", move |_, cx| {
+            crate::chat::new_chat(chat.clone(), cx)
         })
         .separator()
         .item_if(idle, "Fetch All in Folder", all(Kind::Fetch))
@@ -796,7 +816,12 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
             branches::open(Some(intent), cx);
         }
     };
+    let chat = repo.to_string();
     Menu::default()
+        .item("New chat here", move |_, cx| {
+            crate::chat::new_chat(chat.clone(), cx)
+        })
+        .separator()
         .item("Fetch", one(Kind::Fetch))
         .item("Pull", one(Kind::Pull))
         .separator()

@@ -155,8 +155,7 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
         .items_center()
         .gap(px(8.))
         .h(px(44.))
-        .pl(px(16.))
-        .pr(px(8.))
+        .px(px(12.))
         .child(
             div()
                 .id("viewer.name")
@@ -165,7 +164,7 @@ pub(super) fn header(path: &str, repo: impl Into<SharedString>, cx: &App) -> Div
                 .flex_none()
                 .whitespace_nowrap()
                 .text_size(text::TITLE)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(name),
         )
         .child(muted("viewer.dir", dir_name(path).to_string().into()))

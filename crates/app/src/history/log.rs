@@ -786,15 +786,13 @@ impl Render for Log {
             self.inputs.iter().zip(FIELDS).map(|(input, (id, _, w))| {
                 field(Input::new(input).id(id), cx).flex_none().w(px(w))
             });
-        let bar = div()
+        let bar = ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .px(px(10.))
-            .py(px(6.))
-            .border_b_1()
-            .border_color(t.line)
+            .h(px(44.))
+            .px(px(12.))
             .text_size(text::SMALL)
             .child(div().flex_none().w(px(180.)).child(refs))
             .children(inputs)

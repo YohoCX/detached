@@ -539,6 +539,11 @@ pub fn mono(cx: &App) -> SharedString {
     Kit::global(cx).mono_font_family.clone()
 }
 
+/// The family the window's text is set in.
+pub fn sans(cx: &App) -> SharedString {
+    Kit::global(cx).font_family.clone()
+}
+
 /// Light, dark, or the window's appearance.
 #[derive(Clone, Copy, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -309,12 +309,13 @@ fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<Doc
     area.toggle_dock(DockPlacement::Bottom, window, cx);
 }
 
-/// A zone's size until the user drags it.
+/// A zone's size until the user drags it: its pane's and the gap beside it.
 pub fn home_size(p: DockPlacement, cx: &App) -> f32 {
-    apps(cx)
+    let pane = apps(cx)
         .iter()
         .find(|a| a.home.0 == p)
-        .map_or(280., |a| a.home.1)
+        .map_or(280., |a| a.home.1);
+    pane + f32::from(crate::ui::GAP)
 }
 
 fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
