@@ -40,11 +40,12 @@ const MODE: &str = "theme.mode";
 const POLL: Duration = Duration::from_millis(500);
 
 macro_rules! tokens {
-    ($($color:ident),* ; $($shadow:ident),* ; $($list:ident: $n:literal),*) => {
+    ($($color:ident),* ; $($shadow:ident),* ; $($list:ident: $n:literal),* ; $($derived:ident),*) => {
         pub struct Theme {
             $(pub $color: Hsla,)*
             $(pub $shadow: Vec<BoxShadow>,)*
             $(pub $list: [Hsla; $n],)*
+            $(pub $derived: Hsla,)*
         }
 
         fn parse(m: &Map<String, Value>) -> Result<Theme, String> {
@@ -52,6 +53,7 @@ macro_rules! tokens {
                 $($color: color(m, stringify!($color))?,)*
                 $($shadow: shadows(m, stringify!($shadow))?,)*
                 $($list: colors(m, stringify!($list))?,)*
+                $($derived: Hsla::default(),)*
             })
         }
     };
@@ -65,7 +67,9 @@ tokens!(
     line_highlight, text_selection;
     panel_shadow, shadow;
     // The 16 terminal colors, for job logs and the terminal; the log graph's lanes.
-    ansi: 16, lanes: 8
+    ansi: 16, lanes: 8;
+    // Not in theme files: `derive` makes them from the colors above.
+    window_bg, panel_bg, header_bg, popover_bg, panel_edge, active_bg, user_bg, code_block_bg
 );
 
 /// The gap between panes and around the window.
@@ -192,7 +196,9 @@ fn pair(v: &Value, bases: &BTreeMap<String, Value>) -> Result<(Theme, Theme), St
         if let Some(own) = v[mode].as_object() {
             m.extend(own.clone());
         }
-        parse(&m).map_err(|e| format!("{mode}.{e}"))
+        parse(&m)
+            .map(|t| t.derive(mode == "dark"))
+            .map_err(|e| format!("{mode}.{e}"))
     };
     Ok((side("light")?, side("dark")?))
 }
@@ -439,6 +445,37 @@ pub fn error(cx: &App) -> Option<String> {
 }
 
 impl Theme {
+    /// The opaque surfaces the shell paints, stepped apart from the authored ground and panel.
+    fn derive(mut self, dark: bool) -> Self {
+        let (black, white) = (gpui_kit::black(), gpui_kit::white());
+        // `a` moved `w` of the way to opaque `b`.
+        let mix = |a: Hsla, b: Hsla, w: f32| a.blend(b.opacity(w));
+        let g = black.blend(self.ground);
+        let p = g.blend(self.panel);
+        let (f, a, u) = (p.blend(self.fg), p.blend(self.accent), g.blend(self.popup));
+        if dark {
+            self.window_bg = mix(g, black, 0.3);
+            self.panel_bg = mix(p, f, 0.025);
+            self.header_bg = mix(self.panel_bg, f, 0.06);
+            self.popover_bg = mix(mix(self.header_bg, u, 0.25), f, 0.055);
+        } else {
+            self.window_bg = g;
+            self.panel_bg = mix(p, g, 0.12);
+            self.header_bg = mix(self.panel_bg, g, 0.63);
+            self.popover_bg = mix(u, white, 0.5);
+        }
+        let (edge, user, code) = if dark {
+            (0.25, 0.15, 0.65)
+        } else {
+            (0.37, 0.09, 0.68)
+        };
+        self.panel_edge = mix(self.panel_bg.blend(self.panel_line), f, edge);
+        self.active_bg = p.blend(self.selected);
+        self.user_bg = mix(self.panel_bg, a, user);
+        self.code_block_bg = mix(self.panel_bg.blend(self.code), self.window_bg, code);
+        self
+    }
+
     pub fn status(&self, s: Status) -> Hsla {
         match s {
             Status::Modified | Status::Renamed => self.modified,
@@ -519,7 +556,7 @@ fn sync_kit(cx: &mut App) {
             (k.font_family, k.mono_font_family) = (font, mono);
         }
         k.font_size = text::BODY;
-        k.background = t.ground;
+        k.background = t.window_bg;
         k.foreground = t.fg;
         k.muted_foreground = t.muted;
         k.border = t.line;
@@ -528,10 +565,10 @@ fn sync_kit(cx: &mut App) {
         k.selection = t.text_selection;
         k.accent = t.hover;
         k.accent_foreground = t.fg;
-        k.popover = t.popup;
+        k.popover = t.popover_bg;
         k.popover_foreground = t.fg;
         k.list_hover = t.hover;
-        k.list_active = t.selected;
+        k.list_active = t.active_bg;
         k.primary = t.primary;
         k.primary_foreground = t.primary_fg;
         k.danger = t.error;
@@ -594,6 +631,31 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
+    fn hex_of(c: Hsla) -> String {
+        let c = gpui_kit::Rgba::from(c);
+        let b = |v: f32| (v * 255.).round() as u8;
+        format!("#{:02x}{:02x}{:02x}", b(c.r), b(c.g), b(c.b))
+    }
+
+    #[test]
+    fn the_surfaces_step_apart_from_the_authored_colors() {
+        let (light, dark) = pair(&bundled()[DEFAULT], &bundled()).unwrap();
+        let surfaces = |t: &Theme| {
+            [
+                t.window_bg,
+                t.panel_bg,
+                t.header_bg,
+                t.popover_bg,
+                t.panel_edge,
+            ]
+            .map(hex_of)
+        };
+        let fleet = ["#ebecf0", "#fdfdfd", "#f2f2f5", "#ffffff", "#83858b"];
+        assert_eq!(surfaces(&light), fleet);
+        let fleet = ["#0c0d0e", "#1f2023", "#2a2c2f", "#323437", "#696b71"];
+        assert_eq!(surfaces(&dark), fleet);
+    }
+
     #[test]
     fn text_keeps_4_5_to_1_on_every_ground_it_sits_on() {
         let black: Hsla = rgba(0x000000ff).into();
@@ -602,16 +664,28 @@ mod tests {
             for (mode, t) in [("light", light), ("dark", dark)] {
                 let ground = black.blend(t.ground);
                 let panel = ground.blend(t.panel);
+                let pb = t.panel_bg;
+                // fg and muted are checked on all of them, the colored inks from `inks` on.
                 let grounds = [
+                    ("window_bg", t.window_bg),
                     ("ground", ground),
-                    ("panel", panel),
+                    ("segment track", t.header_bg.blend(t.hover)),
+                    ("user_bg", t.user_bg),
+                    ("code_block_bg", t.code_block_bg),
                     ("popup", ground.blend(t.popup)),
-                    ("code", panel.blend(t.code)),
-                    ("card", panel.blend(t.hover)),
-                    ("input", panel.blend(t.input)),
+                    ("popover_bg", t.popover_bg),
+                    ("menu hover", t.popover_bg.blend(t.hover)),
+                    ("panel", panel),
+                    ("panel_bg", pb),
+                    ("header_bg", t.header_bg),
+                    ("code", pb.blend(t.code)),
+                    ("card", pb.blend(t.hover)),
+                    ("input", pb.blend(t.input)),
                     ("selected", panel.blend(t.selected)),
-                    ("selected_inactive", panel.blend(t.selected_inactive)),
+                    ("active_bg", t.active_bg),
+                    ("selected_inactive", pb.blend(t.selected_inactive)),
                 ];
+                let inks = 5;
                 let mut pairs = vec![
                     ("primary_fg", t.primary_fg, "primary", t.primary),
                     ("accent_fg", t.accent_fg, "accent", t.accent),
@@ -633,10 +707,9 @@ mod tests {
                     ("untracked", t.untracked),
                 ];
                 for (k, c) in colored {
-                    for (g, bg) in &grounds[1..6] {
+                    for (g, bg) in &grounds[inks..] {
                         pairs.push((k, c, g, *bg));
                     }
-                    pairs.push((k, c, "selected", grounds[6].1));
                 }
                 for (k, c, g, bg) in pairs {
                     let r = contrast(c, bg);

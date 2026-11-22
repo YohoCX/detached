@@ -305,7 +305,7 @@ impl Tree {
             .aria_label("Back to the working tree")
             .tooltip(tip("Back to the working tree"))
             .on_click(|_, _, cx| set_ref("", cx));
-        div()
+        ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()

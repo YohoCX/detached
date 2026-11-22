@@ -173,7 +173,7 @@ impl Shell {
         TitleBar::new()
             .h(px(40.))
             .pl_0()
-            .bg(t.ground)
+            .bg(t.window_bg)
             .border_b_1()
             .border_color(t.line)
             .child(
@@ -270,7 +270,7 @@ impl Render for Shell {
             .flex()
             .flex_col()
             .size_full()
-            .bg(t.ground)
+            .bg(t.window_bg)
             .text_color(t.fg)
             .text_size(text::BODY)
             .line_height(relative(1.4))

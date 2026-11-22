@@ -319,7 +319,7 @@ fn chips(labels: &[Label], cx: &App) -> Vec<AnyElement> {
                 .rounded(radius::ICON_BUTTON)
                 .font_weight(FontWeight::SEMIBOLD)
                 .map(|d| match on {
-                    true => d.bg(t.selected).text_color(t.fg),
+                    true => d.bg(t.active_bg).text_color(t.fg),
                     false => d
                         .text_color(t.muted)
                         .hover(|s| s.bg(t.hover).text_color(t.fg)),
@@ -378,14 +378,17 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
 
 impl TabGroupRenderer for Group {
     fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
-        let docs = labels(group, cx).iter().any(|l| l.doc.is_some());
-        let id = ("group", group.node().as_u64() as usize);
+        let (t, id) = (theme(cx), ("group", group.node().as_u64() as usize));
         if group.is_collapsed() {
-            return div().id(id).size_full();
+            return div()
+                .id(id)
+                .size_full()
+                .bg(t.header_bg)
+                .border_1()
+                .border_color(t.panel_edge)
+                .rounded(radius::ICON_BUTTON);
         }
-        ui::panel(div().id(id), cx)
-            .overflow_hidden()
-            .when(docs, |f| f.bg(theme(cx).code))
+        ui::panel(div().id(id), cx).overflow_hidden()
     }
 
     fn render_tab_bar(
@@ -470,7 +473,7 @@ impl TabGroupRenderer for Group {
                     .relative()
                     .font_weight(FontWeight::MEDIUM)
                     .map(|d| match on {
-                        true => d.bg(t.selected_inactive).text_color(t.fg),
+                        true => d.bg(t.active_bg).text_color(t.fg),
                         false => d
                             .text_color(t.muted)
                             .hover(|s| s.bg(t.hover).text_color(t.fg))
@@ -521,7 +524,14 @@ impl TabGroupRenderer for Group {
             .gap(px(4.))
             .map(|d| match collapsed {
                 true => d.h_full().px(px(2.)),
-                false => d.px(px(8.)).py(px(6.)).border_b_1().border_color(t.line),
+                // Square corners would show past the panel's.
+                false => d
+                    .px(px(8.))
+                    .py(px(6.))
+                    .bg(t.header_bg)
+                    .rounded_t(radius::PANEL - px(1.))
+                    .border_b_1()
+                    .border_color(t.panel_edge),
             })
             .children(chips)
             .when(center, |d| {

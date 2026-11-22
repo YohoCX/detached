@@ -505,7 +505,7 @@ impl Sidebar {
         line(ix, r.depth + r.nested as usize, cx)
             .group(ui::HOVER)
             .map(|d| match selected {
-                true => d.bg(t.selected),
+                true => d.bg(t.active_bg).shadow(vec![ui::marker(cx)]),
                 false => d.hover(|s| s.bg(t.hover)),
             })
             .role(Role::ListItem)
@@ -546,7 +546,7 @@ impl Render for Sidebar {
         let rows = Rc::new(self.shown(cx));
         let refresh = |_: &ClickEvent, _: &mut Window, cx: &mut App| invalidate::rescan(cx);
         let t = theme(cx);
-        let toolbar = div()
+        let toolbar = ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()
