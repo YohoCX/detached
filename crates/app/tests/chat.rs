@@ -345,11 +345,12 @@ fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     cx.simulate_resize(size(px(1400.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.model").is_some());
-    cx.simulate_resize(size(px(540.), px(800.)));
+    // The side zones keep their widths: the chat gets 548px, its composer 508px.
+    cx.simulate_resize(size(px(1150.), px(800.)));
     wait_until(cx, |cx| cx.find("chat.model").is_none());
-    assert!(cx.find("chat.provider.pick").is_some());
-    assert!(cx.find("chat.mode").is_some());
-    assert!(cx.find("chat.send").is_some());
+    for id in ["chat.provider.pick", "chat.mode", "chat.send"] {
+        assert!(cx.find(id).unwrap().visible(), "{id}");
+    }
     cx.click("chat.more");
     assert!(cx.find("chat.model").is_some());
     cx.press("escape");
@@ -982,7 +983,7 @@ fn a_new_chat_falls_back_silently_when_the_preset_is_unavailable(cx: &mut TestAp
             .iter()
             .all(|i| !i.contains("not-offered") && !i.contains("not-supported"))
     );
-    assert_eq!(description(cx, "chat.effort").as_deref(), Some("Effort"));
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("Default"));
 }
 
 #[gpui_kit::test]
@@ -1163,7 +1164,12 @@ fn the_chats_search_keeps_the_rows_that_match_and_escape_clears_it(cx: &mut Test
 
 #[gpui_kit::test]
 fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut TestAppContext) {
-    let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go"}));
+        sb.state
+            .change_block::<Config>(BLOCK, |c| c.codex = true)
+            .unwrap();
+    });
     cx.input("/");
     assert!(
         cx.find("chat.unlisted").is_some(),
@@ -1187,6 +1193,7 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
     cx.update(|_, cx| {
         let chat = chat::find(&solo, 1, cx).unwrap();
         chat.update(cx, |c, cx| c.set_provider(codex, cx));
+        assert_eq!(chat.read(cx).provider.id, codex.id);
         assert!(chat.read(cx).commands(cx).is_empty());
     });
 }
