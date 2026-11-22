@@ -461,13 +461,16 @@ impl Render for Page {
             self.accepted(cx).into_any_element(),
         ];
         let Some((local, defaults, items)) = value else {
-            let message = if self.data.is_some() {
-                "Loading repository sharing…"
+            let (id, message) = if self.data.is_some() {
+                ("sharing.loading", "Loading repository sharing…")
             } else {
-                "Select a repository to manage its sharing."
+                (
+                    "sharing.empty",
+                    "Select a repository to manage its sharing.",
+                )
             };
             return page
-                .child(muted(message, cx))
+                .child(muted(message, cx).id(id).test_support())
                 .children(self.marks(&p, &remotes, window, cx))
                 .children(global);
         };
