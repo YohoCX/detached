@@ -105,6 +105,7 @@ mod tests {
         let sb = Sandbox::new();
         let file = sb.state.config_dir.join("keymap.json");
         let bad = r#"{"panel.panels": "Cmd+7", "panel.log": 9}"#;
+        fs::create_dir_all(&sb.state.config_dir).unwrap();
         fs::write(&file, bad).unwrap();
         run(&sb.state).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), bad);
