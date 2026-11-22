@@ -210,6 +210,24 @@ pub fn passed(env: &Env, repo: &Path, head: &str, f: &host::Finding, recheck: &S
     }
 }
 
+/// Whether the Fix of `finding` in `task`'s `run` passed its latest re-check, as the records read
+/// now; None when a record is missing.
+pub fn checked(core: &AppState, repo: &Path, [task, run, finding]: [&str; 3]) -> Option<bool> {
+    let read = |task: &str, run: &str| {
+        let dir = run::dir(core, repo, task, run).ok()?;
+        Some(State::replay(&super::record::read(&dir).ok()?))
+    };
+    let s = read(task, run)?;
+    let (started, f, fix) = (
+        s.started.as_ref()?,
+        s.found(finding)?,
+        s.fixes.get(finding)?,
+    );
+    let check = read(&run::task(&fix.branch), fix.recheck.as_deref()?)?;
+    let head = &started.subject.head_sha;
+    Some(passed(&core.env(), repo, head, &f.finding, &check))
+}
+
 /// The findings in `all`, the records by task and run, whose Fix passed its re-check, as
 /// `<run>/<id>`.
 pub fn ready(

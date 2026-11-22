@@ -11,7 +11,7 @@ use super::mr_page::MrPage;
 use super::now;
 use crate::files::{Links, Markdown};
 use crate::ui::page::button;
-use crate::ui::{radius, text, theme};
+use crate::ui::{self, radius, text, theme};
 use crate::util::ago;
 
 /// An MR thread: its notes, Reply and Resolve. Without a thread, the box for a new comment.
@@ -188,7 +188,6 @@ impl Thread {
     }
 
     fn input(&self, text: &Entity<TextareaState>, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let t = theme(cx);
         let (reply, closes) = (self.thread.is_some(), self.closes());
         let blank = text.read(cx).value().trim().is_empty();
         div()
@@ -215,17 +214,16 @@ impl Thread {
                             |this, window, cx| this.cancel(window, cx),
                         ))
                     })
-                    .child(
-                        button(
+                    .child({
+                        let label = if reply { "Reply" } else { "Comment" };
+                        ui::page::primary(
                             "thread.send",
-                            if reply { "Reply" } else { "Comment" },
+                            label,
                             !self.busy && !blank,
                             cx,
                             |this, window, cx| this.send(window, cx),
                         )
-                        .bg(t.primary)
-                        .text_color(t.primary_fg),
-                    ),
+                    }),
             )
     }
 
@@ -328,7 +326,7 @@ impl Render for Thread {
             .border_1()
             .border_color(t.line)
             .rounded(radius::FIELD)
-            .bg(t.panel)
+            .bg(t.header_bg)
             .when(th.is_some_and(|x| x.resolved), |d| d.opacity(0.75))
             // Taken before the textarea, which would add a line for Cmd+Enter first.
             .capture_action(cx.listener(|this, e: &Enter, window, cx| {

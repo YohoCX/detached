@@ -562,10 +562,8 @@ impl Pipelines {
             )
             .child(div().flex_1())
             .child(
-                ui::button("run.start", "Run", cx)
+                ui::primary_button("run.start", "Run", cx)
                     .test_support()
-                    .bg(t.primary)
-                    .text_color(t.primary_fg)
                     .when(!can_run, |b| b.opacity(0.5))
                     .when(can_run, |b| {
                         b.on_click(cx.listener(|this, _, _, cx| this.start(cx)))

@@ -8,7 +8,7 @@ use detached_core::backend::{Kind, Spec};
 use detached_core::council::fix;
 use detached_core::council::record::{Event, Of, Subject};
 use detached_core::council::run::{Preview, Start};
-use detached_core::error::Result;
+use detached_core::error::{Error, Result};
 use detached_core::host;
 use detached_core::state::AppState;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
@@ -249,10 +249,20 @@ pub fn recheck(
     p
 }
 
-/// Fast-forwards the local subject to the Fix's branch, hooks off, and records it.
-pub fn merge(ids: [&str; 4], s: Subject, branch: String, cx: &mut App) -> Task<Result<()>> {
-    let finding = ids[3].to_string();
-    let done = live::append([ids[0], ids[1], ids[2]], cx, move |core, _| {
+/// Fast-forwards the local subject to the Fix's branch, hooks off, and records it; refused unless
+/// its re-check passed or `force`.
+pub fn merge(
+    ids: [&str; 4],
+    s: Subject,
+    branch: String,
+    force: bool,
+    cx: &mut App,
+) -> Task<Result<()>> {
+    let [task, run, finding] = [ids[1], ids[2], ids[3]].map(String::from);
+    let done = live::append([ids[0], ids[1], ids[2]], cx, move |core, repo| {
+        if !force && fix::checked(core, repo, [&task, &run, &finding]) != Some(true) {
+            return Err(Error::Other("The Fix has not passed its re-check".into()));
+        }
         fix::merge(core, &s, &branch)?;
         Ok(Event::FixMerged { finding })
     });

@@ -1,15 +1,52 @@
 //! A finding's Fix on its card: the brief to see and edit first, the Fix's commits and re-check,
-//! Merge and Discard; on an untrusted subject, the two offers instead.
+//! Merge once the re-check passed, and Discard; on an untrusted subject, the two offers instead.
 
 use detached_core::council::record::{self, State};
 use detached_core::council::run::Preview;
 use gpui_kit::component::input::{Textarea, TextareaState};
-use gpui_kit::{AnyElement, Task};
+use gpui_kit::{AnyElement, ClickEvent, Task};
 use kernel::council::fixes::{self, Phase};
 use kernel::council::live;
 use kernel::doc::Location;
 
 use super::*;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Sure {
+    Merge,
+    Discard,
+}
+
+/// Whether the finding takes a Fix now: verified, its subject trusted or not readable, and no Fix
+/// of it making, working or kept.
+pub(super) fn fixable(
+    ids: [&str; 4],
+    s: &State,
+    task: Option<&kernel::council::Task>,
+    cx: &App,
+) -> bool {
+    let phase = fixes::find(cx, ids).map(|f| f.read(cx).phase.clone());
+    let kept = s.fixes.get(ids[3]).is_some_and(|f| !f.discarded)
+        && !matches!(phase, Some(Phase::Failed(_)));
+    !kept
+        && !matches!(phase, Some(Phase::Making | Phase::Working))
+        && s.found(ids[3]).is_some_and(record::verified)
+        && task.is_some_and(|k| k.unread.is_some() || k.trusted)
+}
+
+/// A card on the detail: `success` ringed once `ready`.
+fn card(ready: bool, cx: &App) -> gpui_kit::Div {
+    let t = theme(cx);
+    div()
+        .flex()
+        .flex_col()
+        .gap(GAP)
+        .p(px(12.))
+        .rounded(theme::radius::FIELD)
+        .bg(t.header_bg)
+        .border_1()
+        .border_color(if ready { t.success } else { t.header_bg })
+}
 
 pub(super) struct FixCard {
     repo: String,
@@ -19,7 +56,8 @@ pub(super) struct FixCard {
     rounds: Interest<Rounds>,
     /// The brief and trust of a Fix about to start.
     form: Option<std::result::Result<(Preview, Entity<TextareaState>), String>>,
-    confirm: bool,
+    /// The action waiting for its confirm.
+    confirm: Option<Sure>,
     /// Its brief is loading.
     opening: bool,
     /// The live Fix it redraws with.
@@ -36,7 +74,7 @@ impl FixCard {
             round: round.into(),
             finding: finding.into(),
             form: None,
-            confirm: false,
+            confirm: None,
             opening: false,
             watched: None,
             _tasks: vec![],
@@ -58,7 +96,12 @@ impl FixCard {
             .cloned()
     }
 
-    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Neither its form nor its brief's load is up, so it can offer `Fix…`.
+    pub fn idle(&self) -> bool {
+        self.form.is_none() && !self.opening
+    }
+
+    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(s) = self.record(cx) else { return };
         let (Some(started), Some(f)) = (s.started.clone(), s.found(&self.finding)) else {
             return;
@@ -71,7 +114,7 @@ impl FixCard {
                 v.opening = false;
                 v.form = Some(match r {
                     Ok((pv, brief)) => {
-                        let text = cx.new(|cx| TextareaState::new(window, cx).rows(12));
+                        let text = cx.new(|cx| TextareaState::new(window, cx).rows(4));
                         text.update(cx, |t, cx| t.set_value(brief, window, cx));
                         Ok((pv, text))
                     }
@@ -164,12 +207,7 @@ impl FixCard {
     /// The brief to edit, the trust at the head, and Start once its settings are accepted.
     fn form(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let t = theme(cx);
-        let out = div()
-            .id("council.fix.form")
-            .test_support()
-            .flex()
-            .flex_col()
-            .gap(GAP);
+        let out = card(false, cx).id("council.fix.form").test_support();
         let (pv, text) = match self.form.as_ref()? {
             Err(e) => {
                 let out = out
@@ -180,16 +218,41 @@ impl FixCard {
             }
             Ok(f) => f,
         };
-        let mut out = out.child(
-            div()
-                .id("council.fix.brief")
-                .test_support()
-                .aria_label(text.read(cx).value())
-                .child(Textarea::new(text)),
-        );
+        let mut out = out
+            .child(
+                div()
+                    .text_size(text::SMALL)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("The Fix's brief"),
+            )
+            .child(
+                div()
+                    .id("council.fix.brief")
+                    .test_support()
+                    .aria_label(text.read(cx).value())
+                    .child(
+                        Textarea::new(text)
+                            .font_family(theme::mono(cx))
+                            .text_size(text::SMALL),
+                    ),
+            );
         if !pv.trust.trusted {
             return Some(out.child(self.untrusted(cx)).into_any_element());
         }
+        let branch = &pv.subject.branch;
+        let lands = match pv.subject.remote {
+            true => format!(
+                "It runs in its own worktree, on a branch kept for you to push to {branch}."
+            ),
+            false => format!("It runs in its own worktree and reaches {branch} only on Merge."),
+        };
+        out = out.child(
+            div()
+                .text_size(text::SMALL)
+                .text_color(t.muted)
+                .child(lands),
+        );
+        let mut row = div().flex().flex_wrap().gap(px(6.)).items_center();
         if !pv.accepted {
             let shown = pv.clone();
             out = out
@@ -202,43 +265,39 @@ impl FixCard {
                     pv.items
                         .iter()
                         .map(|i| div().text_size(text::SMALL).child(i.clone())),
-                )
-                .child(
-                    ui::button("council.fix.accept", "Accept these settings", cx)
-                        .test_support()
-                        .on_click(cx.listener(move |v, _, window, cx| {
-                            let accepted = live::accept(shown.clone(), cx);
-                            v.form = None;
-                            let repo = v.repo.clone();
-                            v._tasks.push(cx.spawn_in(window, async move |this, cx| {
-                                let r = accepted.await;
-                                this.update_in(cx, |v, window, cx| match r {
-                                    Ok(()) => v.open(window, cx),
-                                    Err(e) => v.form = Some(Err(e.to_string())),
-                                })
-                                .ok();
-                                cx.update(|_, cx| kernel::council::refresh(cx, &repo)).ok();
-                            }));
-                        })),
                 );
+            row = row.child(
+                ui::button("council.fix.accept", "Accept these settings", cx)
+                    .test_support()
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        let accepted = live::accept(shown.clone(), cx);
+                        v.form = None;
+                        let repo = v.repo.clone();
+                        v._tasks.push(cx.spawn_in(window, async move |this, cx| {
+                            let r = accepted.await;
+                            this.update_in(cx, |v, window, cx| match r {
+                                Ok(()) => v.open(window, cx),
+                                Err(e) => v.form = Some(Err(e.to_string())),
+                            })
+                            .ok();
+                            cx.update(|_, cx| kernel::council::refresh(cx, &repo)).ok();
+                        }));
+                    })),
+            );
         } else {
-            out = out.child(
+            row = row.child(
                 ui::primary_button("council.fix.start", "Start the Fix", cx)
                     .test_support()
                     .on_click(cx.listener(|v, _, _, cx| v.start(cx))),
             );
         }
-        Some(
-            out.child(
-                ui::button("council.fix.cancel", "Cancel", cx)
-                    .test_support()
-                    .on_click(cx.listener(|v, _, _, cx| {
-                        v.form = None;
-                        cx.notify();
-                    })),
-            )
-            .into_any_element(),
-        )
+        let cancel = ui::button("council.fix.cancel", "Cancel", cx)
+            .test_support()
+            .on_click(cx.listener(|v, _, _, cx| {
+                v.form = None;
+                cx.notify();
+            }));
+        Some(out.child(row.child(cancel)).into_any_element())
     }
 }
 
@@ -281,8 +340,10 @@ impl Render for FixCard {
             }
             if busy {
                 return out.child(
-                    div()
-                        .text_color(t.muted)
+                    card(false, cx)
+                        .flex_row()
+                        .items_center()
+                        .child(ui::spinner(t.accent))
                         .child("Making the Fix's worktree…"),
                 );
             }
@@ -292,15 +353,14 @@ impl Render for FixCard {
             if !s.found(&self.finding).is_some_and(record::verified) {
                 return out;
             }
-            let unread = task.and_then(|k| k.unread.clone());
-            if let Some(why) = &unread {
+            if let Some(why) = task.and_then(|k| k.unread.clone()) {
                 out = out.child(
                     div()
                         .id("council.fix.unread")
                         .test_support()
                         .aria_label(why.clone())
                         .text_color(t.warning)
-                        .child(why.clone()),
+                        .child(why),
                 );
             } else if !task.is_some_and(|k| k.trusted) {
                 return out.child(self.untrusted(cx));
@@ -308,11 +368,7 @@ impl Render for FixCard {
             if self.opening {
                 return out.child(div().text_color(t.muted).child("Loading the Fix's brief…"));
             }
-            return out.child(
-                ui::button("council.fix", "Fix…", cx)
-                    .test_support()
-                    .on_click(cx.listener(|v, _, window, cx| v.open(window, cx))),
-            );
+            return out;
         };
         let check = state.and_then(|s| s.check.as_ref());
         let council = check.and_then(|c| live::find(cx, &self.repo, &c.task, &c.run));
@@ -322,45 +378,75 @@ impl Render for FixCard {
         });
         let going =
             check.is_some_and(|c| c.passed.is_none() && failed.is_none() && council.is_some());
+        let checking = going || matches!((&phase, check), (Some(Phase::Checking), None));
+        let passed = check.is_some_and(|c| c.passed == Some(true));
         let commits = state.map_or(&[][..], |s| &s.commits[..]);
-        let said = match (&phase, check) {
-            (Some(Phase::Working), _) => "working".to_string(),
-            (Some(Phase::Making), _) => "making its worktree".into(),
-            _ if let Some(e) = &failed => format!("the re-check could not start: {e}"),
-            _ if going => "re-checking".into(),
-            (Some(Phase::Checking), None) => "re-checking".into(),
-            (_, Some(c)) if c.passed == Some(true) => "re-check passed: fix ready".into(),
-            (_, Some(c)) if c.passed == Some(false) => "the re-check did not pass".into(),
-            (_, Some(c)) if c.recorded => "the re-check was interrupted".into(),
-            (_, Some(_)) => "the re-check did not start".into(),
-            (Some(Phase::Ended(why)), None) => why.clone(),
-            _ if commits.is_empty() => "no commits".into(),
-            _ => "not re-checked".into(),
+        let found = check
+            .and_then(|c| {
+                let runs = &rounds?.runs;
+                runs.iter().find(|r| r.task == c.task && r.round == c.run)
+            })
+            .map_or(0, |r| r.findings.len());
+        let (said, ink) = match (&phase, check) {
+            (Some(Phase::Working), _) => ("working".to_string(), t.muted),
+            (Some(Phase::Making), _) => ("making its worktree".into(), t.muted),
+            _ if let Some(e) = &failed => (format!("the re-check could not start: {e}"), t.error),
+            _ if checking => ("re-check running…".into(), t.muted),
+            _ if passed => ("re-check passed: fix ready".into(), t.success),
+            (_, Some(c)) if c.passed == Some(false) => match found {
+                0 => ("the re-check did not pass".into(), t.error),
+                1 => ("re-check failed: 1 finding".into(), t.error),
+                n => (format!("re-check failed: {n} findings"), t.error),
+            },
+            (_, Some(c)) if c.recorded => ("the re-check was interrupted".into(), t.warning),
+            (_, Some(_)) => ("the re-check did not start".into(), t.warning),
+            (Some(Phase::Ended(why)), None) => (why.clone(), t.muted),
+            _ if commits.is_empty() => ("no commits".into(), t.muted),
+            _ => ("not re-checked".into(), t.muted),
         };
         let merged = if fixing.merged { " · merged" } else { "" };
         let label = format!("Fix on {}: {said}{merged}", fixing.branch);
-        let mut out = out.child(
-            div()
-                .id("council.fix.state")
-                .test_support()
-                .aria_label(label.clone())
-                .min_w_0()
-                .truncate()
-                .child(label),
-        );
-        out = out.children(commits.iter().enumerate().map(|(i, [sha, _, subject])| {
+        let head = div()
+            .id("council.fix.state")
+            .test_support()
+            .aria_label(label)
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.))
+            .when(busy || checking, |d| d.child(ui::spinner(t.accent)))
+            .when(!busy && !checking && (passed || fixing.merged), |d| {
+                d.child(
+                    div()
+                        .text_color(t.success)
+                        .child(ui::Icon::Check.size(px(14.))),
+                )
+            })
+            .child("Fix on")
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::mono(cx))
+                    .text_size(text::SMALL)
+                    .child(fixing.branch.clone()),
+            )
+            .child(div().text_color(ink).child(format!("· {said}{merged}")));
+        let mut out_card = card(passed, cx).child(head);
+        out_card = out_card.children(commits.iter().enumerate().map(|(i, [sha, _, subject])| {
             let line = format!("{} {subject}", &sha[..sha.len().min(8)]);
             div()
                 .id(("council.fix.commit", i))
                 .test_support()
                 .aria_label(line.clone())
                 .text_size(text::SMALL)
+                .text_color(t.muted)
                 .font_family(theme::mono(cx))
                 .truncate()
                 .child(line)
         }));
         if let Some(hooks) = state.map(|s| &s.hooks).filter(|h| !h.is_empty()) {
-            out = out
+            out_card = out_card
                 .child(
                     div()
                         .id("council.fix.hooks")
@@ -376,44 +462,45 @@ impl Render for FixCard {
                         .child(hooks.clone()),
                 );
         }
-        let mut row = div().flex().flex_wrap().gap(GAP).items_center();
+        let ask = |sure: Option<Sure>| {
+            cx.listener(move |v: &mut Self, _: &ClickEvent, _, cx| {
+                v.confirm = sure;
+                cx.notify();
+            })
+        };
+        let mut row = div().flex().flex_wrap().gap(px(6.)).items_center();
         let subject = s.started.as_ref().map(|s| s.subject.clone());
+        let subject = subject.filter(|_| !busy && !commits.is_empty());
         let ids = || self.ids().map(String::from);
-        if let Some(subject) = subject.filter(|_| !busy && !commits.is_empty()) {
-            if subject.remote {
-                row = row.child(
-                    div()
-                        .id("council.fix.kept")
-                        .test_support()
-                        .text_color(t.muted)
-                        .child(format!("{} is kept for you to push", fixing.branch)),
-                );
-            } else if !fixing.merged {
-                let (branch, ids) = (fixing.branch.clone(), ids());
-                row = row.child(
-                    ui::button("council.fix.merge", "Merge", cx)
-                        .test_support()
-                        .on_click(cx.listener(move |v, _, _, cx| {
-                            let ids = ids.each_ref().map(|s| s.as_str());
-                            let t = fixes::merge(ids, subject.clone(), branch.clone(), cx);
-                            v.after(t, cx);
-                        })),
-                );
+        let local = subject.as_ref().is_some_and(|s| !s.remote) && !fixing.merged;
+        let merge = {
+            let (branch, ids, subject) = (fixing.branch.clone(), ids(), subject.clone());
+            move |v: &mut Self, force: bool, cx: &mut Context<Self>| {
+                let Some(subject) = subject.clone() else {
+                    return;
+                };
+                v.confirm = None;
+                let ids = ids.each_ref().map(|s| s.as_str());
+                let t = fixes::merge(ids, subject, branch.clone(), force, cx);
+                v.after(t, cx);
             }
-            let passed = check.is_some_and(|c| c.passed == Some(true));
-            if !going && !passed && !matches!(phase, Some(Phase::Checking)) {
-                let (branch, base, ids) = (fixing.branch.clone(), fixing.base.clone(), ids());
-                let role = s.role_of(&self.finding);
-                row = row.child(
-                    ui::button("council.fix.recheck", "Re-check", cx)
-                        .test_support()
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            let ids = ids.each_ref().map(|s| s.as_str());
-                            fixes::recheck(ids, &branch, &base, &role, cx);
-                            cx.notify();
-                        })),
-                );
-            }
+        };
+        if local && passed {
+            let merge = merge.clone();
+            row = row.child(
+                ui::primary_button("council.fix.merge", "Merge", cx)
+                    .test_support()
+                    .on_click(cx.listener(move |v, _, _, cx| merge(v, false, cx))),
+            );
+        }
+        if subject.as_ref().is_some_and(|s| s.remote) {
+            row = row.child(
+                div()
+                    .id("council.fix.kept")
+                    .test_support()
+                    .text_color(t.muted)
+                    .child(format!("{} is kept for you to push", fixing.branch)),
+            );
         }
         if let Some(c) = check.filter(|c| c.recorded || council.is_some()) {
             let doc = Doc::Council {
@@ -429,25 +516,56 @@ impl Render for FixCard {
                     }),
             );
         }
-        let (sure, tree, ids) = (self.confirm, fixing.tree.clone(), ids());
-        row = row.child(
-            ui::button(
-                "council.fix.discard",
-                if sure { "Discard: sure?" } else { "Discard" },
-                cx,
-            )
-            .test_support()
-            .on_click(cx.listener(move |v, _, _, cx| {
-                if !v.confirm {
-                    v.confirm = true;
-                    return cx.notify();
-                }
-                v.confirm = false;
-                let ids = ids.each_ref().map(|s| s.as_str());
-                let t = fixes::discard(ids, tree.clone().into(), cx);
-                v.after(t, cx);
-            })),
-        );
-        out.child(row)
+        let settled = !checking && !passed && !matches!(phase, Some(Phase::Checking));
+        if subject.is_some() && settled {
+            let (branch, base, ids) = (fixing.branch.clone(), fixing.base.clone(), ids());
+            let role = s.role_of(&self.finding);
+            let again = if check.is_some() {
+                "Re-check again"
+            } else {
+                "Re-check"
+            };
+            row = row.child(
+                ui::button("council.fix.recheck", again, cx)
+                    .test_support()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        let ids = ids.each_ref().map(|s| s.as_str());
+                        fixes::recheck(ids, &branch, &base, &role, cx);
+                        cx.notify();
+                    })),
+            );
+        }
+        if local && settled && check.is_some() {
+            row = row.child(match self.confirm == Some(Sure::Merge) {
+                true => super::confirm(
+                    "council.fix.force",
+                    "Merge anyway",
+                    ask(None),
+                    cx.listener(move |v, _, _, cx| merge(v, true, cx)),
+                    cx,
+                )
+                .into_any_element(),
+                false => ui::quiet_button("council.fix.force", "Merge anyway…", cx)
+                    .test_support()
+                    .on_click(ask(Some(Sure::Merge)))
+                    .into_any_element(),
+            });
+        }
+        let (tree, ids) = (fixing.tree.clone(), ids());
+        let discard = cx.listener(move |v, _, _, cx| {
+            v.confirm = None;
+            let ids = ids.each_ref().map(|s| s.as_str());
+            let t = fixes::discard(ids, tree.clone().into(), cx);
+            v.after(t, cx);
+        });
+        row = row.child(match self.confirm == Some(Sure::Discard) {
+            true => super::confirm("council.fix.discard", "Discard", ask(None), discard, cx)
+                .into_any_element(),
+            false => ui::button("council.fix.discard", "Discard", cx)
+                .test_support()
+                .on_click(ask(Some(Sure::Discard)))
+                .into_any_element(),
+        });
+        out.child(out_card.child(row))
     }
 }

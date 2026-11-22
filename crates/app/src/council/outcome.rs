@@ -52,7 +52,7 @@ fn row(id: SharedString, label: String, body: String, strong: bool, cx: &App) ->
         .flex_col()
         .p(GAP)
         .rounded(theme::radius::ITEM)
-        .bg(t.panel)
+        .bg(t.header_bg)
         .child(
             div()
                 .text_color(if strong { t.accent } else { t.fg })

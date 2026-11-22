@@ -305,7 +305,10 @@ fn two_findings_are_fixed_in_parallel_and_one_is_merged(cx: &mut TestAppContext)
     let merge = |id: &str, cx: &mut TestAppContext| {
         let branch = fixes[id].branch.clone();
         let (subject, ids) = (subject.clone(), [&*repo, &task, &run, id]);
-        wait(cx.update(|cx| fixes::merge(ids, subject, branch, cx)), cx)
+        wait(
+            cx.update(|cx| fixes::merge(ids, subject, branch, false, cx)),
+            cx,
+        )
     };
     merge("f1-1", cx).unwrap();
     assert_eq!(
@@ -375,4 +378,22 @@ fn a_recheck_that_raises_the_finding_again_or_blocks_leaves_it_open(cx: &mut Tes
     );
     assert!(ready(&f).is_empty());
     assert_eq!(tracked(&f).threads[0].fate, Fate::Open);
+
+    // Merge refuses an unpassed Fix unless forced.
+    let subject = p.read_with(cx, |p, _| p.state.started.clone().unwrap().subject);
+    let merge = |force: bool, cx: &mut TestAppContext| {
+        let (subject, branch) = (subject.clone(), check.branch.clone());
+        wait(
+            cx.update(|cx| fixes::merge(ids, subject, branch, force, cx)),
+            cx,
+        )
+    };
+    let e = merge(false, cx).unwrap_err().to_string();
+    assert!(e.contains("not passed its re-check"), "{e}");
+    assert!(!p.read_with(cx, |p, _| p.state.fixes["f1-1"].merged));
+    merge(true, cx).unwrap();
+    assert_eq!(
+        git(&f, &["rev-parse", "feat"]),
+        git(&f, &["rev-parse", &check.branch])
+    );
 }

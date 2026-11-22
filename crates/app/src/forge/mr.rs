@@ -1,10 +1,9 @@
 //! What the MR list, chip and page share.
 
-use detached_core::types::{MergeRequest, PipelineStatus, Provider};
-use gpui_kit::{App, Hsla};
+use detached_core::types::{MergeRequest, Provider};
+use gpui_kit::App;
 
 use crate::files::Links;
-use crate::ui::theme;
 use kernel::doc::{DocRef, Location};
 use kernel::nav;
 
@@ -42,16 +41,6 @@ pub fn bare_title(mr: &MergeRequest) -> &str {
         .into_iter()
         .find(|d| mr.draft && lower.starts_with(d));
     prefix.map_or(&mr.title, |d| mr.title[d.len()..].trim_start())
-}
-
-pub fn tone(s: &PipelineStatus, cx: &App) -> Hsla {
-    let t = theme(cx);
-    match s {
-        PipelineStatus::Success => t.success,
-        PipelineStatus::Failed => t.error,
-        PipelineStatus::Running | PipelineStatus::Pending => t.accent,
-        _ => t.deleted,
-    }
 }
 
 /// Records and shows the MR page.
