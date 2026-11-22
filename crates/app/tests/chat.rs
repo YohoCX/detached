@@ -137,6 +137,22 @@ fn index_of(cx: &mut VisualTestContext, wanted: &str) -> usize {
     items(cx).iter().position(|i| i.contains(wanted)).unwrap()
 }
 
+/// The open drawn menu's item `label`, by its place among the menu's rows.
+fn menu_item(cx: &mut VisualTestContext, label: &str) -> Option<usize> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let item = |n: usize| w.try_find(("menu.item", n));
+        (0..64).find(|&n| item(n).is_some_and(|e| e.label() == Some(label)))
+    })
+}
+
+/// Opens `trigger`'s drawn menu and picks `label` in it.
+fn pick(cx: &mut VisualTestContext, trigger: &'static str, label: &str) {
+    cx.click(trigger);
+    let n = menu_item(cx, label).unwrap_or_else(|| panic!("{label} in {trigger}"));
+    cx.click(("menu.item", n));
+}
+
 fn label(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))
 }
@@ -170,7 +186,7 @@ fn turning_off_a_provider_keeps_its_open_chat_and_blocks_new_ones(cx: &mut TestA
         })
     });
     cx.update(|_, cx| detached_app::settings::close(cx));
-    cx.click("chat.new");
+    cx.click("top.chat");
     assert_eq!(cx.workspace(|w, _| w.shown().cloned()), original);
     cx.click("chat.input");
     say(cx, "say After disabling");
@@ -270,7 +286,7 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
             .width
     });
     assert!(
-        (fill - px(36. * 0.66)).abs() < px(1.),
+        (fill - px(48. * 0.66)).abs() < px(1.),
         "fill width: {fill:?}"
     );
     assert_eq!(
@@ -290,7 +306,7 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         say(cx, "hello");
         wait_for_item(cx, "said hello");
         fake(&cx.sb, fake_json);
-        cx.click("chat.new");
+        cx.click("top.chat");
         cx.click("chat.more");
         wait_until(cx, |cx| {
             label(cx, "chat.limits").as_deref() == Some("No plan limits reported")
@@ -352,7 +368,8 @@ fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
         assert!(cx.find(id).unwrap().visible(), "{id}");
     }
     cx.click("chat.more");
-    assert!(cx.find("chat.model").is_some());
+    wait_until(cx, |cx| menu_item(cx, "sonnet").is_some());
+    assert!(cx.find("chat.model").is_none(), "a section, not a picker");
     cx.press("escape");
     cx.simulate_resize(size(px(1400.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.model").is_some());
@@ -382,7 +399,7 @@ fn a_turn_s_tools_fold_into_one_line_and_a_command_s_output_opens_on_a_click(
     idle(cx);
     let end = label(cx, ("chat.item", 4usize)).unwrap();
     assert!(
-        end.contains("Done in ") && end.ends_with(" · 3 actions"),
+        end.contains("Done in ") && !end.contains("actions"),
         "{end}"
     );
 }
@@ -459,15 +476,13 @@ fn a_model_without_auto_is_marked_and_the_mode_drop_reported(cx: &mut TestAppCon
     say(cx, "effort");
     wait_for_item(cx, "sonnet · High · Done in ");
     idle(cx);
-    cx.click("chat.model");
-    cx.update(|w, cx| assert!(menu::pick("old (no auto)", w, cx)));
+    pick(cx, "chat.model", "old (no auto)");
     wait_for_item(cx, "Asked for auto, the session runs in default.");
     wait_until(cx, |cx| cx.find("chat.effort").is_none());
     say(cx, "say switched");
     wait_for_item(cx, "old · Done in ");
     idle(cx);
-    cx.click("chat.more");
-    cx.click("chat.save-default");
+    pick(cx, "chat.more", "Save as default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
             let preset = Preset::read(s);
@@ -483,11 +498,9 @@ fn auto_is_armed_again_after_a_model_switch(cx: &mut TestAppContext) {
     say(cx, "model");
     wait_for_item(cx, "default auto");
     idle(cx);
-    cx.click("chat.model");
-    cx.update(|w, cx| assert!(menu::pick("old (no auto)", w, cx)));
+    pick(cx, "chat.model", "old (no auto)");
     wait_for_item(cx, "Asked for auto, the session runs in default.");
-    cx.click("chat.model");
-    cx.update(|w, cx| assert!(menu::pick("haiku", w, cx)));
+    pick(cx, "chat.model", "haiku");
     let model = |cx: &mut VisualTestContext| {
         cx.find("chat.model")
             .and_then(|e| e.description().map(String::from))
@@ -500,8 +513,7 @@ fn auto_is_armed_again_after_a_model_switch(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_mode_picked_while_the_session_starts_is_the_one_it_runs_in(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
-    cx.click("chat.mode");
-    cx.update(|w, cx| assert!(menu::pick("Plan", w, cx)));
+    pick(cx, "chat.mode", "Plan");
     let mode = cx
         .find("chat.mode")
         .and_then(|e| e.description().map(String::from));
@@ -558,13 +570,16 @@ fn the_end_of_a_turn_refreshes_the_repo(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_session(cx: &mut TestAppContext) {
+fn the_chats_plus_opens_another_chat_beside_and_ending_one_stops_its_session(
+    cx: &mut TestAppContext,
+) {
     let cx = &mut open(cx);
     say(cx, "hello");
     wait_for_item(cx, "said hello");
     idle(cx);
     let first = id(cx, 0);
-    cx.click("chat.new");
+    open_tab(cx, "tab.chats");
+    pick(cx, "chats.new", "solo");
     settle(cx);
     assert!(items(cx).is_empty());
     assert!(cx.find("doc.chat.1").is_some() && cx.find("doc.chat").is_some());
@@ -599,6 +614,25 @@ fn the_plus_opens_another_chat_beside_and_ending_one_stops_its_session(cx: &mut 
 }
 
 #[gpui_kit::test]
+fn the_chats_plus_offers_the_current_repo_then_each_folder_above_it(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let api = cx.sb.repo("group/api").display().to_string();
+    cx.workspace(|w, cx| w.set_current(Some(api), cx));
+    open_tab(cx, "tab.chats");
+    cx.click("chats.new");
+    let labels: Vec<_> = (0..8usize)
+        .filter_map(|n| label(cx, ("menu.item", n)))
+        .collect();
+    assert_eq!(labels.len(), 3, "{labels:?}");
+    assert_eq!(labels[1..], ["group/", "ws/"]);
+    cx.press("escape");
+    pick(cx, "chats.new", "group/");
+    let repo = cx.sb.ws().join("group").display().to_string();
+    let shown = cx.workspace(|w, _| w.shown().cloned());
+    assert_eq!(shown, Some(Doc::Chat { repo, n: 0 }));
+}
+
+#[gpui_kit::test]
 fn an_active_chat_archives_or_deletes_its_conversation_and_ends(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     let index = cx.sb.state.data_dir.join("sessions.json");
@@ -609,7 +643,12 @@ fn an_active_chat_archives_or_deletes_its_conversation_and_ends(cx: &mut TestApp
     let first = id(cx, 0);
     open_tab(cx, "tab.chats");
     cx.update(|w, cx| w.hover(("chats.open", 0usize), cx));
-    cx.click(("chats.open.archive", 0usize));
+    assert!(
+        cx.find(("chats.open.archive", 0usize)).is_none(),
+        "End alone on hover"
+    );
+    cx.update(|w, cx| w.right_click(("chats.open", 0usize), cx));
+    cx.update(|w, cx| assert!(menu::pick("Archive", w, cx)));
     wait_until(cx, |_| {
         let index: serde_json::Value = serde_json::from_str(&read(&index)).unwrap_or_default();
         index[&first]["archived"] == true
@@ -779,8 +818,7 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
     say(cx, "hello");
     wait_for_item(cx, "said hello");
     idle(cx);
-    cx.click("chat.effort");
-    cx.update(|w, cx| assert!(menu::pick("low", w, cx)));
+    pick(cx, "chat.effort", "low");
     wait_until(cx, |cx| {
         cx.find("chat.effort")
             .and_then(|e| e.description().map(String::from))
@@ -790,18 +828,15 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
     wait_for_item(cx, "effort low");
     wait_for_item(cx, "sonnet · Low · Done in ");
     idle(cx);
-    cx.click("chat.model");
-    cx.update(|w, cx| assert!(menu::pick("opus", w, cx)));
+    pick(cx, "chat.model", "opus");
     wait_until(cx, |cx| {
         description(cx, "chat.model").as_deref() == Some("opus")
     });
-    cx.click("chat.mode");
-    cx.update(|w, cx| assert!(menu::pick("Plan", w, cx)));
+    pick(cx, "chat.mode", "Plan");
     wait_until(cx, |cx| {
         description(cx, "chat.mode").as_deref() == Some("Plan")
     });
-    cx.click("chat.more");
-    cx.click("chat.save-default");
+    pick(cx, "chat.more", "Save as default");
     wait_until(cx, |cx| {
         cx.settings(|s| {
             let preset = Preset::read(s);
@@ -826,7 +861,7 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
             .iter()
             .any(|i| i.starts_with("sonnet · Low · Done in "))
     );
-    cx.click("chat.new");
+    cx.click("top.chat");
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "effort low");
@@ -860,12 +895,11 @@ fn new_chat_entries_use_the_preset_without_copying_the_current_chat(cx: &mut Tes
     assert!(cx.find("doc.chat.1").is_none());
     say(cx, "model; effort");
     check(cx);
-    cx.click("chat.model");
-    cx.update(|w, cx| assert!(menu::pick("sonnet", w, cx)));
+    pick(cx, "chat.model", "sonnet");
     wait_until(cx, |cx| {
         description(cx, "chat.model").as_deref() == Some("sonnet")
     });
-    cx.click("chat.new");
+    cx.click("top.chat");
     say(cx, "model; effort");
     check(cx);
     new(cx);
@@ -905,7 +939,7 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
         })
     });
     cx.update(|_, cx| detached_app::settings::close(cx));
-    cx.click("chat.new");
+    cx.click("top.chat");
     wait_until(cx, |cx| {
         description(cx, "chat.model").as_deref() == Some("opus")
     });
@@ -956,8 +990,7 @@ fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut Test
     });
     id(cx, 0);
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
-    cx.click("chat.more");
-    cx.click("chat.save-default");
+    pick(cx, "chat.more", "Save as default");
     wait_until(cx, |cx| {
         cx.settings(|s| Preset::read(s).providers["claude"].mode.as_deref() == Some("default"))
     });
@@ -1073,7 +1106,7 @@ fn an_empty_chat_brings_forward_the_chat_that_already_shows_a_past_conversation(
     assert!(cx.find("chat.empty").is_none());
     assert_eq!(label(cx, "chat.header").as_deref(), Some("fix it solo"));
 
-    cx.click("chat.new");
+    cx.click("top.chat");
     wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
     cx.click(("chat.past", 0usize));
     let repo = cx.sb.solo().display().to_string();
@@ -1181,7 +1214,7 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
     wait_for_item(cx, "said hello");
     idle(cx);
     // A new conversation's session may not have listed its own yet; the last one's list stands in.
-    cx.click("chat.new");
+    cx.click("top.chat");
     cx.input("/rev");
     assert_eq!(
         label(cx, ("chat.suggest", 0usize)).as_deref(),
@@ -2015,7 +2048,7 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
     say(cx, "say here");
     wait_for_item(cx, "Done in");
     idle(cx);
-    cx.click("chat.new");
+    cx.click("top.chat");
     let solo = cx.sb.solo().display().to_string();
     cx.update(|_, cx| {
         let chat = chat::find(&solo, 1, cx).unwrap();
@@ -2025,25 +2058,24 @@ fn chats_in_one_group_message_each_other_and_a_message_wakes_the_one_with_wake_o
     wait_for_item(cx, "ready");
     idle(cx);
     let second = id(cx, 1);
-    let group = |cx: &mut VisualTestContext| {
-        cx.find("chat.group")
-            .and_then(|e| e.description().map(String::from))
+    let checked = |cx: &mut VisualTestContext, label: &str| {
+        let n = menu_item(cx, label)?;
+        cx.find(("menu.item", n)).map(|e| e.checked() == Some(true))
     };
     cx.click("chat.more");
-    assert_eq!(group(cx).as_deref(), Some("No group"));
-    cx.click("chat.group");
-    cx.update(|w, cx| assert!(menu::pick("New group: Group 1", w, cx)));
+    assert_eq!(checked(cx, "Wake on messages"), Some(false));
+    assert!(menu_item(cx, "Leave Group 1").is_none(), "in no group");
+    cx.press("escape");
+    pick(cx, "chat.more", "New group: Group 1");
+    pick(cx, "chat.more", "Wake on messages");
     cx.click("chat.more");
-    cx.click("chat.group");
-    cx.update(|w, cx| assert!(menu::pick("Wake on messages", w, cx)));
-    cx.click("chat.more");
-    wait_until(cx, |cx| group(cx).as_deref() == Some("Group 1 · wakes"));
+    wait_until(cx, |cx| checked(cx, "Wake on messages") == Some(true));
+    assert!(menu_item(cx, "Leave Group 1").is_some());
+    cx.press("escape");
 
     let repo = solo.clone();
     cx.workspace(|w, cx| w.show(Doc::Chat { repo, n: 0 }, cx));
-    cx.click("chat.more");
-    cx.click("chat.group");
-    cx.update(|w, cx| assert!(menu::pick("Join Group 1 (1)", w, cx)));
+    pick(cx, "chat.more", "Join Group 1 (1)");
     let args = json!({"action": "send", "args": {"to": second, "text": "hello there"}});
     say(cx, &format!("act {args}"));
     wait_for_item(cx, ": hello there");
@@ -2139,7 +2171,7 @@ fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) 
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "opus · Low · Done in ");
     idle(cx);
-    cx.click("chat.new");
+    cx.click("top.chat");
     assert_eq!(label(cx, "chat.name").as_deref(), Some("Codex"));
     say(cx, "model");
     wait_for_item(cx, "gpt-5.5-mini read-only");
@@ -2204,16 +2236,14 @@ fn codex_is_picked_in_a_new_chat_shows_a_command_s_output_and_stop_ends_its_back
         "the next message resumed the conversation"
     );
     idle(cx);
-    cx.click("chat.effort");
-    cx.update(|w, cx| assert!(menu::pick("high", w, cx)));
+    pick(cx, "chat.effort", "high");
     wait_until(cx, |cx| {
         cx.find("chat.effort")
             .and_then(|e| e.description().map(String::from))
             == Some("high".into())
     });
     // A switch the agent refuses is said, and the bar keeps what the session runs in.
-    cx.click("chat.mode");
-    cx.update(|w, cx| assert!(menu::pick("Workspace", w, cx)));
+    pick(cx, "chat.mode", "Workspace");
     wait_for_item(cx, "The agent kept its setting");
     let mode = cx
         .find("chat.mode")

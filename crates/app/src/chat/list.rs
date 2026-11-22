@@ -3,6 +3,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
@@ -10,18 +11,19 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Div, ElementId, Entity, FocusHandle, FontWeight,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
-    prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, ClickEvent, Context, Div, ElementId, Entity, FocusHandle,
+    FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    Window, div, prelude::FluentBuilder, px,
 };
 
 use super::{Chat, State, label, open};
-use crate::ui::tree::{chevron, slot};
-use crate::ui::{self, Icon, radius, text, theme};
+use crate::ui::tree::chevron;
+use crate::ui::{self, DrawnMenu, Icon, Menu, text, theme};
 use crate::util::{age, in_folder, now};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
+use kernel::repo::Repo;
 use kernel::resource::Interest;
 use kernel::session::Item;
 use kernel::settings::Settings;
@@ -169,6 +171,67 @@ fn folders(cx: &App) -> Vec<String> {
     let all = Settings::get(cx).workspaces.iter();
     let current = all.filter(|w| Some(w.id.as_str()) == id);
     current.flat_map(|w| w.folders.clone()).collect()
+}
+
+/// Where a new chat can go: the current repo, then each folder above it in the Repositories tree
+/// up to its top-level folder.
+fn places(cx: &App) -> Vec<String> {
+    let w = Workspace::get(cx);
+    let Some(repo) = w.current() else {
+        return vec![];
+    };
+    let repos: Vec<&str> = w.repos().iter().map(|r| r.path.as_str()).collect();
+    // The tree folds a folder that holds one subfolder and no repo into that subfolder's row.
+    let shown = |dir: &str| {
+        let sep = ['/', '\\'];
+        let rels: Vec<&str> = (repos.iter())
+            .filter_map(|r| r.strip_prefix(dir)?.strip_prefix(sep))
+            .collect();
+        let firsts: HashSet<&str> = rels.iter().filter_map(|r| r.split(sep).next()).collect();
+        firsts.len() > 1 || rels.iter().any(|r| !r.contains(sep))
+    };
+    let mut out = vec![repo.to_string()];
+    for top in folders(cx) {
+        let top = top.trim_end_matches(['/', '\\']);
+        if top == repo || !in_folder(repo, top) {
+            continue;
+        }
+        let mut dir = Path::new(repo).parent().and_then(Path::to_str);
+        while let Some(d) = dir.filter(|d| d.len() >= top.len()) {
+            if (d == top || shown(d)) && !out.iter().any(|o| o == d) {
+                out.push(d.to_string());
+            }
+            dir = Path::new(d).parent().and_then(Path::to_str);
+        }
+    }
+    out
+}
+
+/// The `+`'s menu: a new chat in the current repo or a folder above it.
+fn new_chat_menu(cx: &App) -> DrawnMenu {
+    let places = places(cx);
+    let menu = DrawnMenu::default().section("New chat in");
+    if places.is_empty() {
+        return menu.item_if(false, "No repository selected", |_, _| {});
+    }
+    let repos = Workspace::get(cx).repos();
+    places
+        .into_iter()
+        .enumerate()
+        .fold(menu, |menu, (i, path)| {
+            let hint = match i {
+                0 => (Repo::get(cx, &path).and_then(Repo::status))
+                    .and_then(|s| s.branch.clone())
+                    .unwrap_or_default(),
+                _ => match repos.iter().filter(|r| in_folder(&r.path, &path)).count() {
+                    1 => "1 repository".into(),
+                    n => format!("{n} repositories"),
+                },
+            };
+            let name = label(&path, cx);
+            menu.item(name, move |_, cx| super::new_chat(path.clone(), cx))
+                .hint(hint)
+        })
 }
 
 fn tick(n: &mut usize) -> usize {
@@ -616,8 +679,14 @@ impl ChatList {
         let focused = self.focus.contains_focused(window, cx);
         let key = line.key();
         let on = self.selected.as_ref() == Some(&key);
+        // The row's fill under its hover actions, which cover its age.
+        let ground = t.panel_bg.blend(match (on, focused) {
+            (true, true) => t.active_bg,
+            (true, false) => t.selected_inactive,
+            _ => t.hover,
+        });
         let row = |id: ElementId, label: String, cx: &mut Context<Self>| {
-            let key = key.clone();
+            let (key, menu) = (key.clone(), key.clone());
             ui::list_row(id, on, focused, cx)
                 .test_support()
                 .aria_label(SharedString::from(label))
@@ -629,6 +698,11 @@ impl ChatList {
                     l.deleting = None;
                     l.activate(&key, window, cx);
                 }))
+                .on_aux_click(cx.listener(move |l, e: &ClickEvent, window, cx| {
+                    if e.is_secondary() && matches!(menu, Key::Open(..) | Key::Past(_)) {
+                        l.context_menu(&menu, e.position(), window, cx);
+                    }
+                }))
         };
         match line {
             Line::Group {
@@ -638,8 +712,9 @@ impl ChatList {
                     1 => "1 chat".to_string(),
                     n => format!("{n} chats"),
                 };
+                let first = n[0] == 0;
                 row(("chats.group", tick(&mut n[0])).into(), name.clone(), cx)
-                    .mt(px(4.))
+                    .when(!first, |r| r.mt(px(6.)))
                     .gap(px(6.))
                     .text_size(text::SMALL)
                     .aria_expanded(*open)
@@ -650,6 +725,7 @@ impl ChatList {
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.fg)
                             .child(name.clone()),
                     )
                     .when(!open, |r| {
@@ -666,66 +742,57 @@ impl ChatList {
             } => {
                 let i = tick(&mut n[1]);
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(i, key, cx);
+                    return self.confirm(i, key, title, ground, cx);
                 }
-                let (state, said) = {
-                    let s = chat.read(cx);
-                    (s.state(cx), s.conversation(cx).is_some())
-                };
-                let b = |id: &'static str, icon, title, cx: &mut Context<Self>| {
-                    self.button((id, i), icon, title, &key, on, cx)
-                };
-                let mut buttons = vec![b("chats.open.end", Icon::Close, "End chat", cx)];
-                if said {
-                    buttons.push(b("chats.open.archive", Icon::Archive, "Archive  E", cx));
-                    buttons.push(b("chats.open.delete", Icon::Trash, "Delete  ⌫", cx));
-                }
-                let color = match state {
+                let state = chat.read(cx).state(cx);
+                let end = self.button(("chats.open.end", i), Icon::Close, "End chat", &key, cx);
+                let ink = match state {
                     State::Working => t.accent,
                     State::Waiting => t.warning,
                     State::Done => t.success,
                     State::Idle | State::Stopped => t.muted,
                 };
-                let meta = format!("{state:?} · {}", label(repo, cx));
-                let dot = div()
-                    .flex_none()
-                    .size(px(6.))
-                    .rounded(radius::PILL)
-                    .bg(color);
+                let place = label(repo, cx);
                 let row = row(("chats.open", i).into(), title.clone(), cx)
-                    .aria_description(SharedString::from(meta.clone()));
+                    .aria_description(SharedString::from(format!("{state:?} · {place}")));
                 let meta = div()
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(dot)
-                    .child(div().min_w_0().truncate().child(meta));
+                    .child(ui::dot(ink))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(ink)
+                            .child(format!("{state:?}")),
+                    )
+                    .child(div().min_w_0().truncate().child(format!("· {place}")));
                 two_lines(
                     row,
                     ("chats.open.title", i),
                     title,
                     meta,
-                    side(*at, buttons, on),
+                    side(*at, vec![end], ground),
                     cx,
                 )
             }
             Line::Past(p, place) => {
                 let k = tick(&mut n[2]);
+                let title = match p.title.trim() {
+                    "" => "Untitled".to_string(),
+                    t => t.to_string(),
+                };
                 if self.deleting.as_ref() == Some(&key) {
-                    return self.confirm(k, key, cx);
+                    return self.confirm(k, key, &title, ground, cx);
                 }
                 let archive = match p.archived() {
                     true => "Unarchive  E",
                     false => "Archive  E",
                 };
                 let buttons = vec![
-                    self.button(("chats.archive", k), Icon::Archive, archive, &key, on, cx),
-                    self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, on, cx),
+                    self.button(("chats.archive", k), Icon::Archive, archive, &key, cx),
+                    self.button(("chats.delete", k), Icon::Trash, "Delete  ⌫", &key, cx),
                 ];
-                let title = match p.title.trim() {
-                    "" => "Untitled".to_string(),
-                    t => t.to_string(),
-                };
                 let row = row(("chats.past", k).into(), title.clone(), cx);
                 let meta = div().truncate().child(place.clone());
                 let at = (p.modified > 0).then_some(p.modified);
@@ -734,7 +801,7 @@ impl ChatList {
                     ("chats.past.title", k),
                     &title,
                     meta,
-                    side(at, buttons, on),
+                    side(at, buttons, ground),
                     cx,
                 )
             }
@@ -751,30 +818,29 @@ impl ChatList {
                 row("chats.archived".into(), said.clone(), cx)
                     .mt(px(8.))
                     .gap(px(6.))
-                    .text_size(text::SMALL)
+                    .text_size(text::LABEL)
                     .text_color(t.muted)
                     .aria_expanded(self.show_archived)
                     .child(chevron(self.show_archived))
-                    .child(said)
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("ARCHIVED"))
+                    .child(count.to_string())
                     .into_any_element()
             }
         }
     }
 
-    /// A row's button, shown on hover or selection: end, archive or delete, by its icon.
+    /// A row's button, shown on hover: end, archive or delete, by its icon.
     fn button(
         &self,
         id: (&'static str, usize),
         icon: Icon,
         title: &'static str,
         key: &Key,
-        on: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let key = key.clone();
         ui::hover_button(id, icon.size(px(12.)), title, cx)
             .test_support()
-            .when(on, |b| b.visible())
             .on_click(cx.listener(move |l, _, window, cx| {
                 cx.stop_propagation();
                 match icon {
@@ -787,9 +853,50 @@ impl ChatList {
             .into_any_element()
     }
 
-    /// A delete waiting for its confirm, in the row's own place and height.
-    fn confirm(&self, ix: usize, key: Key, cx: &mut Context<Self>) -> AnyElement {
-        let t = theme(cx);
+    /// Every action of the row, whatever its buttons show.
+    fn context_menu(
+        &self,
+        key: &Key,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.weak_entity();
+        let act = |f: fn(&mut Self, &Key, &mut Window, &mut Context<Self>)| {
+            let (this, key) = (this.clone(), key.clone());
+            move |window: &mut Window, cx: &mut App| {
+                this.update(cx, |l, cx| f(l, &key, window, cx)).ok();
+            }
+        };
+        let said = self.conversation(key, cx).is_some();
+        let archived = matches!(key, Key::Past(id) if self.all(cx).iter().any(|p| p.id == *id && p.archived()));
+        let mut menu = Menu::default();
+        if matches!(key, Key::Open(..)) {
+            menu = menu.item("End Chat", act(Self::end));
+        }
+        let archive = if archived { "Unarchive" } else { "Archive" };
+        menu.item_if(said, archive, act(Self::archive))
+            .item_if(
+                said,
+                "Delete…",
+                act(|l, key, _, cx| {
+                    l.deleting = Some(key.clone());
+                    cx.notify();
+                }),
+            )
+            .show(at, window, cx);
+    }
+
+    /// A delete waiting for its confirm: the row keeps its title, its actions become Cancel and
+    /// Delete.
+    fn confirm(
+        &self,
+        ix: usize,
+        key: Key,
+        title: &str,
+        ground: Hsla,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         // Codex's delete archives the conversation in Codex's own history.
         let keeps = (self.conversation(&key, cx)).is_some_and(|(.., p)| p.id == CODEX.id);
         let ask = match keeps {
@@ -808,72 +915,45 @@ impl ChatList {
                 "chats.delete.cancel",
             ),
         };
-        let small = |id: &'static str, label: &'static str| {
-            ui::pressable((id, ix))
-                .test_support()
-                .h(px(20.))
-                .px(px(8.))
-                .rounded(radius::ICON_BUTTON)
-                .text_size(text::SMALL)
-                .font_weight(FontWeight::SEMIBOLD)
-                .hover(|s| s.bg(t.hover))
-                .child(label)
-        };
-        div()
+        let small = |b: gpui_kit::Stateful<Div>| b.test_support().h(px(20.)).px(px(8.));
+        let buttons = div()
+            .flex()
+            .flex_none()
+            .gap(px(4.))
+            .child(
+                small(ui::button((no, ix), "Cancel", cx)).on_click(cx.listener(|l, _, _, cx| {
+                    l.deleting = None;
+                    cx.notify();
+                })),
+            )
+            .child(
+                small(ui::danger_button((yes, ix), "Delete", cx))
+                    .on_click(cx.listener(move |l, _, window, cx| l.delete(&key, window, cx))),
+            );
+        let row = div()
             .id((row, ix))
             .test_support()
             .flex()
-            .flex_none()
             .items_center()
-            .gap(px(8.))
-            .h(px(ROW))
             .px(px(10.))
-            .rounded(radius::ITEM)
-            .bg(t.error.opacity(0.14))
-            .child(slot().text_color(t.error).child(Icon::Trash.size(px(12.))))
-            .child(div().flex_1().min_w_0().truncate().child(ask))
-            .child(
-                small(no, "Cancel")
-                    .text_color(t.muted)
-                    .on_click(cx.listener(|l, _, _, cx| {
-                        l.deleting = None;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                small(yes, "Delete")
-                    .text_color(t.error)
-                    .on_click(cx.listener(move |l, _, window, cx| l.delete(&key, window, cx))),
-            )
-            .into_any_element()
+            .rounded(ui::radius::ITEM)
+            .bg(ground);
+        two_lines(
+            row,
+            ("chats.confirm.title", ix),
+            title,
+            div().truncate().child(ask),
+            buttons,
+            cx,
+        )
     }
 }
 
-/// A chat row's age, which its buttons take the place of on hover or selection.
-fn side(at: Option<u64>, buttons: Vec<AnyElement>, on: bool) -> Div {
-    let wide = px(20. * buttons.len() as f32 - 2.);
+/// A chat row's age, covered by its actions on hover.
+fn side(at: Option<u64>, buttons: Vec<AnyElement>, ground: Hsla) -> Div {
     let ago = at.map(|ms| age((now() - ms as i64 / 1000).max(0)));
-    div()
-        .relative()
-        .flex()
-        .flex_none()
-        .justify_end()
-        .min_w(wide)
-        .child(
-            div()
-                .when(on, |a| a.invisible())
-                .group_hover(ui::HOVER, |s| s.invisible())
-                .children(ago),
-        )
-        .child(
-            div()
-                .absolute()
-                .right_0()
-                .top(px(-1.))
-                .flex()
-                .gap(px(2.))
-                .children(buttons),
-        )
+    let buttons = div().flex().gap(px(2.)).children(buttons);
+    ui::hover_slot(div().children(ago), buttons, ground)
 }
 
 /// A chat row's title over `meta` and `side`, so the title keeps its bounds on hover.
@@ -958,6 +1038,10 @@ impl Render for ChatList {
             },
             cx,
         );
+        let field = gpui_kit::Styled::h(ui::input(&self.query, cx), px(28.))
+            .prefix(div().text_color(t.muted).child(Icon::Search.size(px(12.))));
+        let plus =
+            ui::titled(ui::icon_button("chats.new", Icon::Plus, cx), "New chat in…").test_support();
         let search = div()
             .flex()
             .items_center()
@@ -968,23 +1052,9 @@ impl Render for ChatList {
                     .test_support()
                     .flex_1()
                     .min_w_0()
-                    .child(ui::input(&self.query, cx)),
+                    .child(field),
             )
-            .child(
-                ui::titled(
-                    ui::icon_button("chats.new", Icon::Plus, cx),
-                    "New chat in the current repo",
-                )
-                .test_support()
-                .on_click(|_, _, cx| {
-                    match Workspace::get(cx).current().map(String::from) {
-                        Some(repo) => super::new_chat(repo, cx),
-                        None => Activity::global(cx).update(cx, |a, cx| {
-                            a.say("Select a repository to chat about", false, cx)
-                        }),
-                    }
-                }),
-            )
+            .child(new_chat_menu(cx).button("chats.new.menu", plus, window, cx))
             .child(
                 ui::titled(
                     ui::icon_button("chats.refresh", Icon::Refresh, cx),
