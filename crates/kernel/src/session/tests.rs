@@ -145,7 +145,7 @@ fn boot_fake(cx: &mut TestAppContext, fake: Fake) -> Fixture {
 fn lines(items: &[Item]) -> Vec<String> {
     let line = |i: &Item| match i {
         Item::User(t) => format!("> {t}"),
-        Item::Text(t) | Item::Note(t) => t.clone(),
+        Item::Text(t) | Item::Note(t) | Item::Error(t) => t.clone(),
         Item::PastTurn(config) => config.model.clone().unwrap(),
         Item::Tool(t) => [&t.kind, &t.title, &t.status]
             .map(|f| f.as_deref().unwrap_or("-"))
@@ -525,6 +525,9 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut 
     s.update(cx, |s, cx| s.prompt("die".into(), cx));
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     assert!(matches!(state(&s, cx), State::Ended(End::Crashed(_))));
+    assert!(s.read_with(cx, |s, _| {
+        s.items.iter().any(|i| matches!(i, Item::Error(_)))
+    }));
     assert_eq!(state(&other, cx), State::Idle);
     assert_eq!(turn(&other, "say still here", cx), "still here");
     // What the backend makes of an exit it asked for, whatever its code and stderr.
@@ -532,7 +535,11 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly(cx: &mut 
     cx.update(|cx| deliver(cx, &other.downgrade(), id, Event::Closed));
     other.read_with(cx, |s, _| {
         assert_eq!(s.state, State::Ended(End::Closed));
-        assert!(!s.items.iter().any(|i| matches!(i, Item::Note(_))));
+        assert!(
+            !s.items
+                .iter()
+                .any(|i| matches!(i, Item::Note(_) | Item::Error(_)))
+        );
     });
 }
 

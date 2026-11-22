@@ -356,6 +356,7 @@ fn line(item: &Item) -> String {
             format!("[model] {}", config.model.as_deref().unwrap_or_default())
         }
         Item::Note(t) => format!("[note] {t}"),
+        Item::Error(t) => format!("[error] {t}"),
         Item::Act(a) => format!("[act] {a:?}"),
         Item::Woken => "[woken] new messages".into(),
         Item::Text(t) | Item::Thought(t) => t.clone(),

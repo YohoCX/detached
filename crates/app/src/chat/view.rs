@@ -322,7 +322,7 @@ impl ChatView {
             .unwrap_or("New chat")
             .to_string();
         let session = self.session.clone();
-        div()
+        ui::band(div(), cx)
             .id("chat.header")
             .test_support()
             .aria_label(SharedString::from(format!("{topic} {name}")))
@@ -332,8 +332,6 @@ impl ChatView {
             .gap(px(8.))
             .px(px(12.))
             .py(px(6.))
-            .border_b_1()
-            .border_color(t.line)
             .child(div().text_color(t.accent).child(Icon::Chat))
             .child(
                 div()
@@ -621,7 +619,7 @@ impl ChatView {
         let busy = chat.busy(cx);
         let empty = self.input.read(cx).value().trim().is_empty();
         let send = if busy {
-            ui::primary_button("chat.stop", "Stop", cx)
+            ui::quiet_button("chat.stop", "Stop", cx)
                 .role(Role::Button)
                 .aria_label("Stop")
                 .test_support()
@@ -629,16 +627,22 @@ impl ChatView {
                     this.session.update(cx, |s, cx| s.stop(cx));
                     this.focus(window, cx);
                 }))
+                .into_any_element()
         } else {
-            ui::primary_button("chat.send", "↑ Send", cx)
+            let send = ui::primary_button("chat.send", "↑ Send", cx)
                 .role(Role::Button)
                 .aria_label("Send")
-                .test_support()
-                .when(empty, |b| b.opacity(0.55))
+                .when(empty, |b| {
+                    b.bg(t.header_bg)
+                        .border_color(t.panel_edge)
+                        .text_color(t.muted)
+                        .hover(|s| s)
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.send(window, cx);
                     this.focus(window, cx);
-                }))
+                }));
+            ui::disabled(send, empty).test_support().into_any_element()
         };
 
         div()
@@ -926,7 +930,7 @@ impl ChatView {
         for (key, text) in whole {
             let md = match texts.remove(&key) {
                 Some((was, md)) if was == text => md,
-                _ => cx.new(|cx| Markdown::new(text.clone(), Links::Agent, true, cx)),
+                _ => cx.new(|cx| Markdown::new(text.clone(), Links::Agent, true, cx).chat()),
             };
             self.texts.insert(key, (text, md));
         }
@@ -1106,9 +1110,9 @@ impl ChatView {
             .aria_label(SharedString::from(summary.clone()))
             .flex()
             .items_center()
+            .h(px(24.))
             .gap(px(6.))
             .px(px(8.))
-            .py(px(4.))
             .rounded(radius::WIDGET)
             .text_size(text::SMALL)
             .text_color(t.muted)
@@ -1136,7 +1140,7 @@ impl ChatView {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
+                .gap(px(2.))
                 .ml(px(14.))
                 .pl(px(10.))
                 .border_l_1()
@@ -1182,7 +1186,9 @@ impl ChatView {
                     .px(px(12.))
                     .py(px(8.))
                     .rounded(radius::FIELD)
-                    .bg(t.selected_inactive)
+                    .bg(t.user_bg)
+                    .text_color(t.fg)
+                    .text_size(theme::doc::BODY)
                     .line_height(relative(theme::doc::LINE_HEIGHT))
                     .child(text),
             )
@@ -1195,7 +1201,10 @@ impl ChatView {
             self.row(i, label)
                 .flex()
                 .items_center()
+                .h(px(24.))
                 .gap(px(6.))
+                .px(px(8.))
+                .rounded(radius::WIDGET)
                 .text_size(text::SMALL)
                 .text_color(t.muted)
                 .child(icon)
@@ -1219,13 +1228,12 @@ impl ChatView {
             Item::Text(text) => {
                 let body = match self.texts.get(&(session, at.1)) {
                     Some((_, md)) => md.clone().into_any_element(),
-                    None => div()
-                        .text_size(theme::doc::BODY)
-                        .child(text.clone())
-                        .into_any_element(),
+                    None => text.clone().into_any_element(),
                 };
                 self.row(i, text.clone())
+                    .text_size(theme::doc::BODY)
                     .line_height(relative(theme::doc::LINE_HEIGHT))
+                    .text_color(t.fg)
                     .child(body)
                     .into_any_element()
             }
@@ -1237,10 +1245,7 @@ impl ChatView {
                 .child(text.clone())
                 .into_any_element(),
             Item::Tool(tool) if tool.status.as_deref() == Some("denied") => {
-                let icon = div()
-                    .text_color(t.warning)
-                    .child(Icon::Close.size(px(12.)))
-                    .into_any_element();
+                let icon = div().child(Icon::Close.size(px(12.))).into_any_element();
                 let (name, reason) = (kind(tool), output(tool));
                 let label = format!("Blocked {name}: {reason}");
                 line(label, icon, format!("Blocked {name}"), reason).into_any_element()
@@ -1307,12 +1312,15 @@ impl ChatView {
                         .aria_label(SharedString::from(output.clone()))
                         .max_h(px(240.))
                         .overflow_y_scroll()
-                        .ml(px(18.))
-                        .px(px(10.))
-                        .py(px(6.))
-                        .rounded(radius::WIDGET)
-                        .bg(t.ground)
-                        .text_size(text::SMALL)
+                        .ml(px(26.))
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(radius::ITEM)
+                        .border_1()
+                        .border_color(t.line)
+                        .bg(t.code_block_bg)
+                        .text_size(theme::doc::CODE)
+                        .line_height(px(20.))
                         .font_family(theme::mono(cx))
                         .whitespace_normal()
                         .child(output)
@@ -1338,7 +1346,13 @@ impl ChatView {
             Item::Note(text) => self
                 .row(i, text.clone())
                 .text_size(text::SMALL)
-                .text_color(t.warning)
+                .text_color(t.muted)
+                .child(text.clone())
+                .into_any_element(),
+            Item::Error(text) => self
+                .row(i, text.clone())
+                .text_size(text::SMALL)
+                .text_color(t.error)
                 .child(text.clone())
                 .into_any_element(),
             Item::Woken => self
@@ -1633,7 +1647,7 @@ impl ChatView {
             .p(px(12.))
             .rounded(radius::FIELD)
             .border_1()
-            .border_color(if open { t.accent } else { t.line })
+            .border_color(if open { t.warning } else { t.line })
             .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
             .when(!detail.is_empty(), |b| {
                 b.child(
@@ -2324,7 +2338,7 @@ impl Render for ChatView {
             .flex()
             .flex_col()
             .size_full()
-            .bg(t.code)
+            .bg(t.panel_bg)
             .child(self.header(cx))
             .child(
                 div()
@@ -2367,13 +2381,10 @@ impl Render for ChatView {
                                     .test_support()
                                     .relative()
                                     .track_focus(&self.composer_focus)
-                                    .border_color(
-                                        if self.composer_focus.contains_focused(window, cx) {
-                                            t.selected_ring
-                                        } else {
-                                            t.panel_line
-                                        },
-                                    )
+                                    .bg(t.header_bg)
+                                    .when(self.composer_focus.contains_focused(window, cx), |d| {
+                                        d.border_color(t.selected_ring)
+                                    })
                                     .flex()
                                     .flex_col()
                                     .p(size::PAD)
@@ -2485,7 +2496,6 @@ fn meter(fill: f32, used: f32, cx: &App) -> Div {
     let t = theme(cx);
     let color = match used {
         u if u >= 90. => t.error,
-        u if u >= 70. => t.warning,
         _ => t.accent,
     };
     div()

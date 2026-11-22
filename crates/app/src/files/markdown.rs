@@ -42,6 +42,7 @@ impl Global for ImageFetch {}
 pub struct Markdown {
     links: Links,
     breaks: bool,
+    chat: bool,
     state: Entity<TextViewState>,
     /// By URL as written; None while loading, or when it is no image.
     images: Arc<HashMap<String, Option<Arc<Image>>>>,
@@ -78,6 +79,7 @@ impl Markdown {
         let mut md = Markdown {
             links,
             breaks,
+            chat: false,
             state: cx.new(|cx| TextViewState::markdown("", cx)),
             images: Arc::default(),
             want,
@@ -91,6 +93,12 @@ impl Markdown {
         };
         md.set_text(text.into(), cx);
         md
+    }
+
+    /// The chat's look: its body metrics, so a finished text wraps as it did while streaming.
+    pub fn chat(mut self) -> Self {
+        self.chat = true;
+        self
     }
 
     /// Shows new text in place; a long one is prepared off the UI thread.
@@ -244,7 +252,7 @@ impl Render for Markdown {
         let this = cx.weak_entity();
         let click = this.clone();
         let view = TextView::new(&self.state)
-            .style(style(file, cx))
+            .style(style(file, self.chat, cx))
             .image_source(self.image_source())
             // In place of the kit's language label, which Monaco's colorized blocks did not have.
             .code_block_actions(|block, _, cx| copy_button(block.code(), cx))
@@ -255,7 +263,14 @@ impl Render for Markdown {
             .markdown_block_renderer("mermaid", move |node, _, cx| diagram(&this, node, cx));
         let root = div().id("markdown").test_support();
         if !file {
-            return root.child(view.text_size(doc::BODY)).into_any_element();
+            let view = view.text_size(doc::BODY);
+            let view = match self.chat {
+                true => view
+                    .line_height(relative(doc::LINE_HEIGHT))
+                    .text_color(theme(cx).fg),
+                false => view,
+            };
+            return root.child(view).into_any_element();
         }
         // The column is centered by padding, so the scrollbar stays at the edge.
         let list = self.state.read(cx).list_state().clone();
@@ -376,12 +391,29 @@ fn mermaid(source: &str, dark: bool) -> Diagram {
     )))
 }
 
-/// Files in a 14px column with rules under h1 and h2; MR text stays compact.
-fn style(file: bool, cx: &App) -> TextViewStyle {
+/// Files in a 14px column with rules under h1 and h2; MR text stays compact; the chat's code on
+/// its own surface in the mono font.
+fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
     let t = theme::theme(cx);
     let (h1, h2, h3, code) = match file {
         true => (doc::H1, doc::H2, doc::H3, doc::CODE),
+        false if chat => (text::TITLE, text::TITLE, text::TITLE, doc::CODE),
         false => (text::TITLE, text::TITLE, text::TITLE, text::SMALL),
+    };
+    let block = StyleRefinement::default().rounded(radius::ITEM);
+    let (block, inline) = match chat {
+        // The top padding keeps the first line clear of the Copy button.
+        true => (
+            block
+                .font_family(theme::mono(cx))
+                .text_size(doc::CODE)
+                .line_height(px(20.))
+                .px(px(12.))
+                .pt(px(32.))
+                .pb(px(8.)),
+            StyleRefinement::default().font_family(theme::mono(cx)),
+        ),
+        false => (block, StyleRefinement::default()),
     };
     let rule = t.line;
     TextViewStyle::default()
@@ -389,7 +421,7 @@ fn style(file: bool, cx: &App) -> TextViewStyle {
         .with_muted_foreground(t.muted)
         .with_link(t.accent)
         .with_selection(t.text_selection)
-        .with_code_background(t.hover)
+        .with_code_background(if chat { t.code_block_bg } else { t.hover })
         .with_border(t.line)
         .with_dark(theme::is_dark(cx))
         .with_heading(move |level| {
@@ -406,13 +438,8 @@ fn style(file: bool, cx: &App) -> TextViewStyle {
             background_color: Some(t.hover),
             ..HighlightStyle::default()
         })
-        .with_code_block(StyleRefinement::default().rounded(radius::ITEM))
-        .with_inline_code_style(
-            StyleRefinement::default()
-                .text_size(code)
-                .rounded(radius::LETTER)
-                .px(px(4.)),
-        )
+        .with_code_block(block)
+        .with_inline_code_style(inline.text_size(code).rounded(radius::LETTER).px(px(4.)))
         .with_blockquote_style(
             StyleRefinement::default()
                 .border_l(px(3.))

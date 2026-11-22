@@ -411,13 +411,22 @@ fn tools_and_blocks_show_in_the_feed(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn stop_ends_the_turn(cx: &mut TestAppContext) {
+fn stop_ends_the_turn_and_its_text_keeps_its_lines(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
+    assert_eq!(cx.find("chat.send").unwrap().disabled(), Some(true));
     cx.input(HANG);
+    assert_eq!(cx.find("chat.send").unwrap().disabled(), None);
     cx.click("chat.send");
     working(cx);
+    let at = items(cx).iter().position(|i| i == "Working").unwrap();
+    let height =
+        |cx: &mut VisualTestContext| cx.find(("chat.item", at)).unwrap().bounds().size.height;
+    // One line at 14px and a line height of 1.6, plain while streaming and markdown after.
+    let line = px(14. * 1.6);
+    assert!((height(cx) - line).abs() < px(0.5), "{:?}", height(cx));
     cx.click("chat.stop");
     idle(cx);
+    wait_until(cx, |cx| (height(cx) - line).abs() < px(0.5));
 }
 
 #[gpui_kit::test]

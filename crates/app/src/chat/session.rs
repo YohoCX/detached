@@ -293,7 +293,7 @@ impl Chat {
         if let Some(s) = self.live(cx) {
             s.update(cx, |s, cx| {
                 if let Err(e) = s.set(setting) {
-                    s.note(e.to_string());
+                    s.fail(e.to_string());
                     cx.notify();
                 }
             });
@@ -337,7 +337,7 @@ impl Chat {
         for (k, s) in self.sessions.iter().enumerate() {
             let s = s.read(cx);
             let shown = s.items.iter().enumerate().filter(|(i, it)| {
-                (k == 0 || *i >= s.history || matches!(it, Item::Note(_)))
+                (k == 0 || *i >= s.history || matches!(it, Item::Note(_) | Item::Error(_)))
                     && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
             });
             out.extend(shown.map(|(i, it)| ((k, i), it)));
@@ -430,7 +430,7 @@ impl Chat {
                     Err(e) => {
                         c.accepted = None;
                         if let Some(s) = live {
-                            s.update(cx, |s, _| s.note(format!("Cannot save the trust: {e}")));
+                            s.update(cx, |s, _| s.fail(format!("Cannot save the trust: {e}")));
                         }
                     }
                 }

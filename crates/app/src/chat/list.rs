@@ -1000,16 +1000,13 @@ impl Render for ChatList {
             .flex_col()
             .size_full()
             .child(
-                div()
+                ui::band(div(), cx)
                     .flex()
                     .flex_col()
                     .flex_none()
                     .gap(px(4.))
                     .px(px(8.))
                     .py(px(6.))
-                    .bg(t.panel)
-                    .border_b_1()
-                    .border_color(t.line)
                     .child(search)
                     .child(div().flex().child(filter)),
             )
