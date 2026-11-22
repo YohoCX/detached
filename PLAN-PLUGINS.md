@@ -12,8 +12,9 @@ covers:
 Plugins from a folder: a manifest that adds themes, tabs over a JSON CLI with actions, TUI tabs
 through the terminal and a worktree recipe, each install global or a workspace's own.
 
-**Status (2026-11-23): settled draft, nothing built. The draft's five questions and the review's
-findings are decided below by the owner's delegation; the plan waits for his acceptance.**
+**Status (2026-11-23): P0 built (2026-11-23), waiting for the Windows run and the owner's check.
+The draft's five questions and the review's findings are decided below by the owner's delegation;
+the plan waits for his acceptance.**
 
 Decisions, 2026-11-23:
 1. **Install copies the folder.** One model for a folder and a later catalog install; the hash

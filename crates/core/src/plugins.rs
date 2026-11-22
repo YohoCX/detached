@@ -125,6 +125,8 @@ pub struct Output {
 pub(crate) struct Block {
     global: BTreeMap<String, Entry>,
     workspaces: BTreeMap<String, BTreeMap<String, Entry>>,
+    #[serde(flatten)]
+    other: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -136,6 +138,8 @@ struct Entry {
     hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    #[serde(flatten)]
+    other: BTreeMap<String, Value>,
 }
 
 impl Block {
@@ -173,14 +177,19 @@ pub fn install(state: &AppState, from: &Path, scope: &Scope) -> Result<Plugin> {
         return Err(other(format!("{} is already installed", m.id)));
     }
     fs::create_dir_all(&root)?;
-    store::copy(&from, &root.join(&m.id), &files, &links)?;
+    let dir = root.join(&m.id);
+    store::copy(&from, &dir, &files, &links)?;
     let source = Some(from.display().to_string());
-    change(state, scope, &m.id, |e| {
+    let entry = |e: &mut Option<Entry>| {
         *e = Some(Entry {
             source,
             ..Default::default()
         })
-    })?;
+    };
+    if let Err(e) = change(state, scope, &m.id, entry) {
+        _ = fs::remove_dir_all(&dir);
+        return Err(e);
+    }
     Ok(plugin(state, scope, &root, &m.id))
 }
 
@@ -205,9 +214,9 @@ pub fn set_on(state: &AppState, p: &Plugin, on: bool) -> Result<()> {
 /// Deletes the copy and its entry; the folder it came from stays.
 pub fn remove(state: &AppState, p: &Plugin) -> Result<()> {
     let dir = home(state, p)?;
-    change(state, &p.scope, &p.manifest.id, |e| *e = None)?;
     let trash = tempfile::tempdir_in(dir.parent().unwrap())?;
-    Ok(fs::rename(&dir, trash.path().join("plugin"))?)
+    fs::rename(&dir, trash.path().join("plugin"))?;
+    change(state, &p.scope, &p.manifest.id, |e| *e = None)
 }
 
 /// The process for `cmd`, from the manifest as the folder holds it now: refused unless the plugin
@@ -509,14 +518,11 @@ fn inside(path: &str) -> Result<PathBuf> {
     Ok(rel)
 }
 
-/// A bare name on `path`'s absolute entries, so a file of that name in the command's folder never
-/// runs; else the file in the plugin's folder.
+/// A bare name on `path`, else the file in the plugin's folder.
 fn program(dir: &Path, name: &str, path: &OsStr) -> Result<PathBuf> {
     if !bare(name) {
         return Ok(dir.join(inside(name)?));
     }
-    let absolute = std::env::split_paths(path).filter(|d| d.is_absolute());
-    let path = std::env::join_paths(absolute).map_err(|e| other(e.to_string()))?;
     let found = crate::env::which(name, &path.to_string_lossy());
     found.ok_or_else(|| other(format!("{name} is not on PATH")))
 }
@@ -550,7 +556,9 @@ fn fill(run: &[String], row: Option<&Row>) -> Result<Vec<String>> {
                 "The row's {key} is not a text, a number or a boolean"
             )));
         }
-        if first.start() == 0 && filled.starts_with('-') && !dashed {
+        // Windows tools take `/x` as an option too.
+        let option = filled.starts_with('-') || cfg!(windows) && filled.starts_with('/');
+        if first.start() == 0 && option && !dashed {
             return Err(other(format!(
                 "{filled} would be an option: put -- before {arg}"
             )));
@@ -582,6 +590,16 @@ fn env(state: &AppState, tui: bool) -> Vec<(String, OsString)> {
     if tui {
         all.insert("TERM".into(), "xterm-256color".into());
         all.insert("COLORTERM".into(), "truecolor".into());
+    }
+    // Absolute entries only, so neither the program nor what it runs comes from the cwd.
+    if let Some(path) = all.get_mut("PATH") {
+        let dirs: Vec<_> = std::env::split_paths(path)
+            .filter(|d| d.is_absolute())
+            .collect();
+        *path = std::env::join_paths(dirs).unwrap_or_default();
+    }
+    if cfg!(windows) {
+        all.insert("NODEFAULTCURRENTDIRECTORYINEXEPATH".into(), "1".into());
     }
     all.retain(|k, _| !k.to_ascii_uppercase().starts_with("DETACHED_"));
     all.into_iter().collect()
@@ -669,6 +687,14 @@ mod tests {
 
     fn err<T>(r: Result<T>) -> String {
         r.err().expect("refused").to_string()
+    }
+
+    fn eventually(what: &str, done: impl Fn() -> bool) {
+        let began = std::time::Instant::now();
+        while !done() {
+            assert!(began.elapsed() < Duration::from_secs(15), "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn parse(toml: &str, files: &[&str]) -> Result<Manifest> {
@@ -869,6 +895,24 @@ mod tests {
         assert!(err(install(&sb.state, &big, &Scope::Global)).contains("more than 8 MB"));
         assert!(!sb.path("config/plugins/big").exists());
         assert!(block(&sb)["global"].get("big").is_none());
+
+        sb.state.set_block(BLOCK, 5).unwrap();
+        let late = folder(&sb, "late", "");
+        assert!(err(install(&sb.state, &late, &Scope::Global)).contains("is not valid"));
+        assert!(!sb.path("config/plugins/late").exists());
+    }
+
+    #[test]
+    fn keys_of_a_newer_build_in_the_block_survive_a_save() {
+        let sb = sandbox();
+        let p = install(&sb.state, &fixture(&sb, "local-postgres"), &Scope::Global).unwrap();
+        let mut newer = block(&sb);
+        newer["later"] = json!(2);
+        newer["global"]["local-postgres"]["later"] = json!(1);
+        sb.state.set_block(BLOCK, &newer).unwrap();
+        set_on(&sb.state, &p, true).unwrap();
+        newer["global"]["local-postgres"]["on"] = json!(true);
+        assert_eq!(block(&sb), newer);
     }
 
     #[cfg(unix)]
@@ -1015,6 +1059,11 @@ mod tests {
         assert_eq!(args("one", json!({"name": true})).unwrap(), json!(["true"]));
         let option = err(args("bare", json!({"v": "--all"})));
         assert!(option.contains("--all would be an option"), "{option}");
+        let slash = args("bare", json!({"v": "/all"}));
+        match cfg!(windows) {
+            true => assert!(err(slash).contains("/all would be an option")),
+            false => assert_eq!(slash.unwrap(), json!(["/all"])),
+        }
         assert_eq!(
             args("dashed", json!({"v": "--all"})).unwrap(),
             json!(["--", "--all"])
@@ -1059,12 +1108,36 @@ mod tests {
         let path = |dirs: &[&Path]| std::env::join_paths(dirs).unwrap().into_string().unwrap();
         sb.state.env.write().unwrap().path = path(&[Path::new("."), &sb.path("bin")]);
         assert_eq!(program().unwrap(), pg);
+        let spec = spec(&sb.state, &p, Cmd::Source("databases"), &work).unwrap();
+        let child = spec.env.iter().find(|(k, _)| k == "PATH").unwrap();
+        assert_eq!(
+            child.1,
+            sb.path("bin"),
+            "the command's own PATH has no relative entry"
+        );
         sb.state.env.write().unwrap().path = path(&[Path::new(".")]);
         assert!(err(program()).contains("pg-dev is not on PATH"));
     }
 
     #[test]
     fn a_command_gets_the_login_env_without_any_detached_name() {
+        const CHILD: &str = "PLUGINS_ENV_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let name = "plugins::tests::a_command_gets_the_login_env_without_any_detached_name";
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name])
+                .env(CHILD, "1")
+                .env("DETACHED_SOCKET", "/tmp/owner.sock")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success() && text.contains("1 passed"),
+                "{text}{stderr}"
+            );
+            return;
+        }
         let sb = sandbox();
         {
             let mut env = sb.state.env.write().unwrap();
@@ -1078,6 +1151,7 @@ mod tests {
         let names: Vec<String> =
             serde_json::from_slice(&go(&sb, &p, Cmd::Source("t")).unwrap().stdout).unwrap();
         assert!(names.iter().any(|n| n == "LOGIN_ONLY_TEST"), "{names:?}");
+        assert!(names.iter().any(|n| n == CHILD), "{names:?}");
         assert!(
             names.iter().any(|n| n.eq_ignore_ascii_case("PATH")),
             "{names:?}"
@@ -1141,12 +1215,16 @@ mod tests {
         );
         let spec = spec(&sb.state, &sleep, Cmd::Source("t"), sb.dir.path()).unwrap();
         let cancel = Cancel::default();
+        let pid = sb.path("bin/sleep.pid");
         let running = std::thread::scope(|s| {
             let r = s.spawn(|| run(&spec, &cancel));
+            eventually("fake_pg sleeps", || pid.exists());
             cancel.store(true, Ordering::SeqCst);
             r.join().unwrap()
         });
         assert!(matches!(running, Err(Error::Cancelled)), "{running:?}");
+        let pid = fs::read_to_string(pid).unwrap().parse().unwrap();
+        eventually("fake_pg sleep ends", || !crate::testutil::alive(pid));
 
         fs::write(
             sb.path("bin/dbs.json"),

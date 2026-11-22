@@ -1,6 +1,6 @@
 //! A scripted `pg-dev` for the tests; its databases are `dbs.json` beside its executable:
 //! `list --json` prints them, `drop [--] <name>` drops one, `args …` prints its arguments as JSON,
-//! `env` the names in its env, and `sleep` runs until killed.
+//! `env` the names in its env, and `sleep` writes its pid to `sleep.pid` and runs until killed.
 
 use std::path::Path;
 use std::process::exit;
@@ -38,9 +38,14 @@ fn main() {
                     .collect::<Vec<_>>()
             )
         ),
-        Some("sleep") => loop {
-            std::thread::park();
-        },
+        Some("sleep") => {
+            let part = db.with_file_name("sleep.part");
+            std::fs::write(&part, std::process::id().to_string()).unwrap();
+            std::fs::rename(part, db.with_file_name("sleep.pid")).unwrap();
+            loop {
+                std::thread::park();
+            }
+        }
         _ => {
             eprintln!("pg-dev: unknown command {args:?}");
             exit(2);
