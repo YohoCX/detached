@@ -22,6 +22,8 @@ use crate::{
 struct Panes {
     focus: HashMap<String, NodeId>,
     bounds: HashMap<NodeId, Bounds<Pixels>>,
+    constraints_pending: bool,
+    history: HashMap<String, Vec<(Doc, NodeId)>>,
 }
 
 impl Global for Panes {}
@@ -151,8 +153,19 @@ pub(super) fn click(node: NodeId, w: &mut Window, cx: &mut App) {
     w.refresh();
 }
 
-pub(super) fn measure(node: NodeId, bounds: Bounds<Pixels>, cx: &mut App) {
-    cx.default_global::<Panes>().bounds.insert(node, bounds);
+pub(super) fn measure(node: NodeId, bounds: Bounds<Pixels>, w: &mut Window, cx: &mut App) {
+    let p = cx.default_global::<Panes>();
+    let previous = p.bounds.insert(node, bounds);
+    if !p.constraints_pending
+        && previous != Some(bounds)
+        && (bounds.size.width < px(320.) || bounds.size.height < px(160.))
+    {
+        p.constraints_pending = true;
+        w.defer(cx, |w, cx| {
+            cx.default_global::<Panes>().constraints_pending = false;
+            constrain(w, cx);
+        });
+    }
 }
 
 fn bounds(node: NodeId, cx: &App) -> Option<Bounds<Pixels>> {
@@ -235,8 +248,37 @@ pub(super) fn show_doc(
         .and_then(|tree| tree.find_panel_node(id))
     {
         select(a, node, id, keep || !kind.preview(), w, cx);
+        if let Some(tab) = a.panel(id).and_then(|p| p.view().downcast::<DocTab>().ok()) {
+            remember(tab.read(cx).doc.clone(), node, cx);
+        }
     }
     cx.emit(gpui_kit::base::dock::DockEvent::LayoutChanged);
+}
+
+fn remember(doc: Doc, node: NodeId, cx: &mut App) {
+    let key = super::layout_key(cx);
+    let visits = cx.default_global::<Panes>().history.entry(key).or_default();
+    visits.retain(|(d, _)| *d != doc);
+    visits.push((doc, node));
+    if visits.len() > 100 {
+        visits.remove(0);
+    }
+}
+
+pub(super) fn open_history(a: &mut DockArea, doc: Doc, w: &mut Window, cx: &mut Context<DockArea>) {
+    let Some(kind) = super::doc_kind(doc.kind(), cx) else {
+        return;
+    };
+    let at = cx
+        .try_global::<Panes>()
+        .and_then(|p| p.history.get(&super::layout_key(cx)))
+        .and_then(|visits| {
+            visits
+                .iter()
+                .rfind(|(d, _)| *d == doc)
+                .map(|(_, node)| *node)
+        });
+    show_doc(a, doc, kind, false, at, w, cx);
 }
 
 fn room(
@@ -261,18 +303,19 @@ fn room(
             .is_some_and(|t| matches!(t.read(cx).doc, Doc::File(_) | Doc::Diff(_)));
         let whole = size_of(tree(a), Axis::Horizontal, cx).unwrap_or(width);
         let extra = a.dock_size(explorer).unwrap_or(px(264.));
-        let expanded = (whole + extra) * (width.as_f32() / whole.as_f32());
         if width < px(if code { 900. } else { 641. })
             && a.is_dock_open(explorer)
-            && expanded >= px(641.)
+            && whole + extra >= minimum_with_split(tree(a), Axis::Horizontal, Some(node))
         {
             a.toggle_dock(explorer, w, cx);
             return true;
         }
-        if width >= px(641.) {
+        if whole >= minimum_with_split(tree(a), Axis::Horizontal, Some(node)) {
             return true;
         }
-    } else if b.size.height >= px(321.) {
+    } else if size_of(tree(a), Axis::Vertical, cx).unwrap_or(b.size.height)
+        >= minimum_with_split(tree(a), Axis::Vertical, Some(node))
+    {
         return true;
     }
     Activity::global(cx).update(cx, |a, cx| {
@@ -400,24 +443,59 @@ fn next(by: isize, w: &mut Window, cx: &mut App) {
     });
 }
 
+fn facing(
+    current: Bounds<Pixels>,
+    target: Bounds<Pixels>,
+    side: Placement,
+) -> Option<(Pixels, Pixels)> {
+    let (gap, overlap) = match side {
+        Placement::Left => (
+            current.left() - target.right(),
+            current.bottom().min(target.bottom()) - current.top().max(target.top()),
+        ),
+        Placement::Right => (
+            target.left() - current.right(),
+            current.bottom().min(target.bottom()) - current.top().max(target.top()),
+        ),
+        Placement::Top => (
+            current.top() - target.bottom(),
+            current.right().min(target.right()) - current.left().max(target.left()),
+        ),
+        Placement::Bottom => (
+            target.top() - current.bottom(),
+            current.right().min(target.right()) - current.left().max(target.left()),
+        ),
+    };
+    (gap >= px(-2.) && overlap > px(0.)).then_some((gap, -overlap))
+}
+
 fn neighbor(a: &DockArea, node: NodeId, side: Placement, cx: &App) -> Option<NodeId> {
-    let current = bounds(node, cx)?.center();
+    let current = bounds(node, cx)?;
     groups(a)
-        .iter()
+        .into_iter()
         .filter(|g| g.0 != node)
-        .filter_map(|g| {
-            let delta = bounds(g.0, cx)?.center() - current;
-            let Point { x, y } = delta;
-            let (along, across) = match side {
-                Placement::Left => (-x, y),
-                Placement::Right => (x, y),
-                Placement::Top => (-y, x),
-                Placement::Bottom => (y, x),
-            };
-            (along > px(0.)).then(|| (g.0, along.as_f32() + 2. * across.as_f32().abs()))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter_map(|g| Some((g.0, facing(current, bounds(g.0, cx)?, side)?)))
+        .min_by_key(|g| g.1)
         .map(|g| g.0)
+}
+
+pub(super) fn focused_tabs(a: &DockArea, cx: &App) -> (Vec<(PanelId, String)>, usize) {
+    let Some((_, tabs, active)) = groups(a).into_iter().find(|g| is_focused(a, g.0, cx)) else {
+        return (Vec::new(), 0);
+    };
+    let selected = tabs.get(active).copied();
+    let tabs: Vec<_> = tabs
+        .into_iter()
+        .filter_map(|id| {
+            let tab = a.panel(id)?.view().downcast::<DocTab>().ok()?;
+            Some((id, tab.read(cx).title(cx).to_string()))
+        })
+        .collect();
+    let active = tabs
+        .iter()
+        .position(|(id, _)| Some(*id) == selected)
+        .unwrap_or_default();
+    (tabs, active)
 }
 
 fn direction(side: Placement, move_tab: bool, w: &mut Window, cx: &mut App) {
@@ -445,7 +523,7 @@ fn direction(side: Placement, move_tab: bool, w: &mut Window, cx: &mut App) {
             };
             keep(a, id, cx);
             a.move_panel(id, target, w, cx);
-            super::reveal(a, id, w, cx);
+            finish_move(a, id, w, cx);
         } else if let Some((node, tabs, ix)) = groups(a).into_iter().find(|g| Some(g.0) == other)
             && let Some(id) = tabs.get(ix)
         {
@@ -511,8 +589,30 @@ pub(super) fn drop_tab(
         };
         keep(a, drag.id, cx);
         a.move_panel(drag.id, target, w, cx);
-        super::reveal(a, drag.id, w, cx);
+        finish_move(a, drag.id, w, cx);
     });
+}
+
+fn finish_move(a: &mut DockArea, id: PanelId, w: &mut Window, cx: &mut Context<DockArea>) {
+    let pane = a
+        .layout(DockPlacement::Center)
+        .and_then(|t| t.find_panel_node(id));
+    if let Some((_, tabs, _)) = groups(a).into_iter().find(|g| Some(g.0) == pane) {
+        let placeholder = tabs
+            .into_iter()
+            .filter(|other| *other != id)
+            .filter_map(|other| a.panel(other)?.view().downcast::<DocTab>().ok())
+            .find(|other| other.read(cx).doc == Doc::NewTab);
+        if let Some(placeholder) = placeholder {
+            a.remove_panel(placeholder, w, cx);
+        }
+    }
+    super::reveal(a, id, w, cx);
+    if let Some(pane) = pane
+        && let Some(tab) = a.panel(id).and_then(|p| p.view().downcast::<DocTab>().ok())
+    {
+        remember(tab.read(cx).doc.clone(), pane, cx);
+    }
 }
 
 fn size_of(n: &PaneNode, axis: Axis, cx: &App) -> Option<Pixels> {
@@ -538,17 +638,31 @@ fn size_of(n: &PaneNode, axis: Axis, cx: &App) -> Option<Pixels> {
 }
 
 fn minimum(n: &PaneNode, axis: Axis) -> Pixels {
+    minimum_with_split(n, axis, None)
+}
+
+fn minimum_with_split(n: &PaneNode, axis: Axis, split_leaf: Option<NodeId>) -> Pixels {
     match n.kind() {
-        PaneRef::Tabs { .. } => match axis {
-            Axis::Horizontal => px(320.),
-            Axis::Vertical => px(160.),
-        },
+        PaneRef::Tabs { .. } => {
+            let min = if axis == Axis::Horizontal {
+                px(320.)
+            } else {
+                px(160.)
+            };
+            if split_leaf == Some(n.id()) {
+                min * 2. + px(1.)
+            } else {
+                min
+            }
+        }
         PaneRef::Split {
             axis: split,
             children,
             ..
         } => {
-            let mins = children.iter().map(|n| minimum(n, axis));
+            let mins = children
+                .iter()
+                .map(|n| minimum_with_split(n, axis, split_leaf));
             if axis == split {
                 mins.fold(px(0.), |a, b| a + b + px(1.)) - px(1.)
             } else {
@@ -556,6 +670,139 @@ fn minimum(n: &PaneNode, axis: Axis) -> Pixels {
             }
         }
     }
+}
+
+fn constrain(w: &mut Window, cx: &mut App) {
+    if Workspace::get(cx).archive() {
+        return;
+    }
+    super::with(cx, |a, cx| {
+        if a.is_zoomed() {
+            return;
+        }
+        let root = tree(a);
+        for (axis, dock) in [
+            (Axis::Horizontal, DockPlacement::Right),
+            (Axis::Vertical, DockPlacement::Bottom),
+        ] {
+            if size_of(root, axis, cx).is_some_and(|extent| extent + px(1.) < minimum(root, axis)) {
+                if a.is_dock_open(dock) {
+                    a.toggle_dock(dock, w, cx);
+                } else if groups(a).len() > 1
+                    && let Some(node) = focused(a, cx)
+                {
+                    a.set_zoomed_in(node, w, cx);
+                }
+                return;
+            }
+        }
+        let mut updates = Vec::new();
+        root.walk(&mut |node| {
+            let PaneRef::Split { axis, children, .. } = node.kind() else {
+                return;
+            };
+            let mins: Vec<_> = children.iter().map(|n| minimum(n, axis)).collect();
+            let Some(mut sizes) = children
+                .iter()
+                .map(|n| size_of(n, axis, cx))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return;
+            };
+            let mut excess = px(0.);
+            for (size, min) in sizes.iter_mut().zip(&mins) {
+                if *size < *min {
+                    excess += *min - *size;
+                    *size = *min;
+                }
+            }
+            if excess == px(0.) {
+                return;
+            }
+            for (size, min) in sizes.iter_mut().zip(&mins) {
+                let take = (*size - *min).min(excess);
+                excess -= take;
+                *size -= take;
+            }
+            if excess <= px(1.) {
+                updates.push((node.id(), sizes));
+            }
+        });
+        for (node, sizes) in updates {
+            a.set_split_sizes(node, sizes, w, cx);
+        }
+    });
+}
+
+fn node_bounds(n: &PaneNode, cx: &App) -> Option<Bounds<Pixels>> {
+    match n.kind() {
+        PaneRef::Tabs { .. } => bounds(n.id(), cx),
+        PaneRef::Split { children, .. } => children
+            .iter()
+            .filter_map(|n| node_bounds(n, cx))
+            .reduce(|a, b| a.union(&b)),
+    }
+}
+
+pub(super) fn equalize(axis: Axis, at: Point<Pixels>, w: &mut Window, cx: &mut App) -> bool {
+    let mut handled = false;
+    super::with(cx, |a, cx| {
+        let mut chosen = None;
+        tree(a).walk(&mut |n| {
+            let PaneRef::Split {
+                axis: split,
+                children,
+                ..
+            } = n.kind()
+            else {
+                return;
+            };
+            if split != axis {
+                return;
+            }
+            for (i, pair) in children.windows(2).enumerate() {
+                let Some(first) = node_bounds(&pair[0], cx) else {
+                    continue;
+                };
+                let distance = if axis == Axis::Horizontal {
+                    if at.y < first.top() || at.y > first.bottom() {
+                        continue;
+                    }
+                    (first.right() - at.x).abs()
+                } else {
+                    if at.x < first.left() || at.x > first.right() {
+                        continue;
+                    }
+                    (first.bottom() - at.y).abs()
+                };
+                if distance > px(5.) {
+                    continue;
+                }
+                let Some(mut sizes) = children
+                    .iter()
+                    .map(|n| size_of(n, axis, cx))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
+                let sum = sizes[i] + sizes[i + 1];
+                let min = minimum(&pair[0], axis);
+                let max = sum - minimum(&pair[1], axis);
+                if min > max {
+                    continue;
+                }
+                sizes[i] = (sum / 2.).clamp(min, max);
+                sizes[i + 1] = sum - sizes[i];
+                chosen = Some((n.id(), sizes));
+                break;
+            }
+        });
+        if let Some((node, sizes)) = chosen {
+            a.set_split_sizes(node, sizes, w, cx);
+            handled = true;
+        }
+    });
+    handled
 }
 
 fn resize_target(
@@ -800,8 +1047,6 @@ pub(super) const ACTIONS: &[(&str, &str)] = &[
     ("pane.resizeRight", "Resize Pane Right"),
     ("pane.resizeUp", "Resize Pane Up"),
     ("pane.resizeDown", "Resize Pane Down"),
-    ("tabs.switcher", "Switch Tab"),
-    ("tabs.switcherBack", "Switch Tab Backward"),
 ];
 
 pub(super) fn register(cx: &mut App) -> Vec<Registration> {
@@ -834,8 +1079,6 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
                     "pane.resizeRight" => resize(Placement::Right, w, cx),
                     "pane.resizeUp" => resize(Placement::Top, w, cx),
                     "pane.resizeDown" => resize(Placement::Bottom, w, cx),
-                    "tabs.switcher" => step_tab(1, w, cx),
-                    "tabs.switcherBack" => step_tab(-1, w, cx),
                     _ => {}
                 }
             })

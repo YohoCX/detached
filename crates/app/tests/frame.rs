@@ -21,6 +21,8 @@ fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
 #[gpui_kit::test]
 fn the_legacy_tabs_and_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
+    cx.workspace(|w, cx| w.set_archive(true, cx));
+    settle(cx);
     // A closed bottom zone keeps its tabs as a strip, none of them on.
     assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
     let (tab, dock) = (cx.find("bottom.Log").unwrap(), cx.find("dock").unwrap());
@@ -66,11 +68,7 @@ fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
         std::fs::write(sb.state.config_dir.join("keymap.json"), keymap).unwrap()
     });
     cx.press("secondary-9");
-    assert_eq!(
-        on(cx, "bottom.Log"),
-        Some(false),
-        "the default chord is free"
-    );
+    assert_eq!(on(cx, "doc.log"), None, "the default chord is free");
     cx.press("secondary-shift-l");
     assert_eq!(on(cx, "doc.log"), Some(true));
     cx.press("secondary-1");
@@ -198,11 +196,18 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    assert!(cx.find("sessions.new").is_some());
+    let folding = |cx: &mut VisualTestContext| {
+        cx.find("sessions.fold")
+            .unwrap()
+            .label()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(folding(cx), "Hide sessions");
     cx.press("secondary-b");
-    assert!(cx.find("sessions.new").is_none());
+    assert!(folding(cx).starts_with("Show sessions"));
     cx.press("secondary-b");
-    assert!(cx.find("sessions.new").is_some());
+    assert_eq!(folding(cx), "Hide sessions");
 }
 
 #[gpui_kit::test]
@@ -213,6 +218,8 @@ fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_s
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{point, px};
     let cx = &mut open_app(cx);
+    cx.workspace(|w, cx| w.set_archive(true, cx));
+    settle(cx);
     let width = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
             detached_app::dock::zones(cx)

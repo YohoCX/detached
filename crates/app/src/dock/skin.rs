@@ -20,7 +20,7 @@ use gpui_kit::{
     size,
 };
 
-use super::{DocTab, DragDoc, Tab, missing, panes, tabs};
+use super::{DocTab, DragDoc, Missing, Tab, missing, panes, tabs};
 use crate::ui::{self, DrawnMenu, GAP, Icon, TAB_TITLE, radius, text, theme};
 use crate::{actions, keymap};
 
@@ -334,7 +334,22 @@ impl DockAreaRenderer for Skin {
         let t = theme(cx);
         let lit = handle.state() != ResizeHandleState::Idle;
         let color = if lit { t.selected_ring } else { t.line };
-        Some(div().flex_none().size_full().bg(color).into_any_element())
+        let axis = handle.axis();
+        Some(
+            div()
+                .id("pane.splitter")
+                .flex_none()
+                .size_full()
+                .bg(color)
+                .when(!self.archive, |d| {
+                    d.on_mouse_down(MouseButton::Left, move |e, w, cx| {
+                        if e.click_count == 2 && panes::equalize(axis, e.position, w, cx) {
+                            cx.stop_propagation();
+                        }
+                    })
+                })
+                .into_any_element(),
+        )
     }
 
     fn build_placeholder(
@@ -496,6 +511,14 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
                 doc: None,
             };
         }
+        if let Ok(m) = view.clone().downcast::<Missing>() {
+            return Label {
+                id: format!("tab.missing.{ix}").into(),
+                title: m.read(cx).title(),
+                tip: None,
+                doc: None,
+            };
+        }
         match view.downcast::<DocTab>() {
             Ok(d) => Label {
                 id: d.read(cx).id(),
@@ -532,9 +555,9 @@ impl TabGroupRenderer for Group {
             .overflow_hidden()
             .when(pane, |d| {
                 let zoomed = group.is_zoomed();
-                d.on_prepaint(move |b, _, cx| {
+                d.on_prepaint(move |b, w, cx| {
                     if !zoomed {
-                        panes::measure(node, b, cx);
+                        panes::measure(node, b, w, cx);
                     }
                 })
                 .capture_any_mouse_down(move |_, w, cx| panes::click(node, w, cx))
@@ -596,6 +619,15 @@ impl TabGroupRenderer for Group {
                 .0
                 .upgrade()
                 .is_some_and(|a| panes::is_focused(a.read(cx), node, cx));
+        let ring = if focused {
+            let has_keyboard = group
+                .active_panel()
+                .is_some_and(|p| p.focus_handle(cx).contains_focused(window, cx));
+            t.selected_ring
+                .opacity(if pane && !has_keyboard { 0.55 } else { 1. })
+        } else {
+            t.line
+        };
         let widths: Vec<f32> = shown
             .iter()
             .map(|&ix| match self.1.tabs.borrow().get(&ids[ix]) {
@@ -678,12 +710,7 @@ impl TabGroupRenderer for Group {
                             .hover(|s| s.bg(t.hover).text_color(t.fg))
                             .active(|s| s.bg(t.selected_inactive)),
                     })
-                    .when(on && !collapsed, |d| {
-                        d.child(underline(
-                            if focused { t.selected_ring } else { t.line },
-                            pane,
-                        ))
-                    })
+                    .when(on && !collapsed, |d| d.child(underline(ring, pane)))
                     .on_click(move |e, window, cx| {
                         clicked.select_tab(ix, window, cx);
                         if let Some(a) = super::zones(cx) {
@@ -705,7 +732,7 @@ impl TabGroupRenderer for Group {
                         })
                     })
                     .when_some(
-                        (!pane).then(|| group.drag_panel(ix, cx)).flatten(),
+                        self.2.then(|| group.drag_panel(ix, cx)).flatten(),
                         |d, drag| {
                             d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
                                 cx.stop_propagation();
@@ -723,11 +750,27 @@ impl TabGroupRenderer for Group {
                             panes::drop_tab(drag, node, Some(ix), None, w, cx)
                         })
                     })
-                    .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
-                    .on_drop(move |drag: &DragPanel, window, cx| {
-                        dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
+                    .when(self.2, |d| {
+                        d.drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
+                            .on_drop(move |drag: &DragPanel, window, cx| {
+                                dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
+                            })
                     })
                     .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
+                    .when_some(l.doc.as_ref().filter(|_| pane), |d, tab| {
+                        let icon = match &tab.read(cx).doc {
+                            kernel::doc::Doc::Chat { .. } => Icon::Chat,
+                            kernel::doc::Doc::File(_) => Icon::File,
+                            kernel::doc::Doc::Diff(_) => Icon::Edit,
+                            kernel::doc::Doc::Mr { .. } => Icon::Mr,
+                            kernel::doc::Doc::Log { .. } => Icon::Branch,
+                            kernel::doc::Doc::Terminal { .. }
+                            | kernel::doc::Doc::Process { .. } => Icon::Next,
+                            kernel::doc::Doc::NewTab => return d,
+                            _ => Icon::Repo,
+                        };
+                        d.child(icon.size(px(14.)))
+                    })
                     .child(div().max_w(TAB_TITLE).truncate().child(l.title.clone()))
                     .children(close)
                     .on_prepaint(move |b, window, _| measured(&fit.tabs, id, b.size.width, window))
@@ -788,10 +831,12 @@ impl TabGroupRenderer for Group {
                             panes::drop_tab(drag, node, Some(count), None, w, cx)
                         })
                     })
-                    .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.hover))
-                    .on_drop(move |drag: &DragPanel, window, cx| {
-                        let ix = (drag.source() == node).then(|| count - 1);
-                        end.drop_panel(drag.clone(), ix, false, window, cx)
+                    .when(self.2, |d| {
+                        d.drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.hover))
+                            .on_drop(move |drag: &DragPanel, window, cx| {
+                                let ix = (drag.source() == node).then(|| count - 1);
+                                end.drop_panel(drag.clone(), ix, false, window, cx)
+                            })
                     }),
             )
             .children(more)
@@ -802,9 +847,11 @@ impl TabGroupRenderer for Group {
             false => strip(cx),
         };
         bar.id(("tabs", node.as_u64() as usize))
-            .drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.hover))
-            .on_drop(move |d: &DragDoc, window, cx| {
-                super::drop_doc(d.doc.clone(), Some(node), window, cx)
+            .when(pane || self.2, |d| {
+                d.drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.hover))
+                    .on_drop(move |d: &DragDoc, window, cx| {
+                        super::drop_doc(d.doc.clone(), Some(node), window, cx)
+                    })
             })
             .when(center && self.2, |d| {
                 d.child(chips(&labels, cx)).child(divider(cx))
@@ -903,6 +950,7 @@ impl TabGroupRenderer for Group {
                         d.child(overlay)
                     })
             })
+            .test_support()
             .with_animation(id, Animation::new(ui::motion::FAST), |d, t| {
                 d.opacity(0.3 + 0.7 * t)
             })

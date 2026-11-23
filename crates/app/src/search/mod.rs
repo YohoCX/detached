@@ -3,6 +3,8 @@
 mod find;
 mod palette;
 
+use std::cell::Cell;
+
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Global, InteractiveElement, IntoElement, ParentElement,
@@ -22,6 +24,7 @@ enum Mode {
     Vcs,
     Recent,
     Session,
+    Tabs,
 }
 
 impl Mode {
@@ -34,6 +37,7 @@ impl Mode {
             Mode::Vcs => "VCS Operations",
             Mode::Recent => "Recent Files",
             Mode::Session => "Switch Session or Tab",
+            Mode::Tabs => "Switch Tab",
         }
     }
 }
@@ -44,6 +48,7 @@ struct Search {
     mode: Option<Mode>,
     all: bool,
     find: bool,
+    tab_step: Cell<isize>,
 }
 
 impl Default for Search {
@@ -52,6 +57,7 @@ impl Default for Search {
             mode: None,
             all: true,
             find: false,
+            tab_step: Cell::new(0),
         }
     }
 }
@@ -67,6 +73,14 @@ fn open(mode: Mode, cx: &mut App) {
         s.mode = None;
     } else {
         s.mode = Some(mode);
+    }
+}
+
+fn open_tabs(by: isize, cx: &mut App) {
+    if crate::dock::focused_tabs(cx).0.len() > 1 {
+        let search = cx.global_mut::<Search>();
+        search.mode = Some(Mode::Tabs);
+        search.tab_step.set(search.tab_step.get() + by);
     }
 }
 

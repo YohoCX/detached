@@ -56,10 +56,14 @@ fn step(by: isize, window: &mut Window, cx: &mut App) {
 fn toggle(window: &mut Window, cx: &mut App) {
     use gpui_kit::base::dock::DockPlacement;
     let open = dock::is_open(DockPlacement::Left, cx);
-    let old: bool = ui_state::get(COLLAPSED, cx).unwrap_or(false);
-    ui_state::set(COLLAPSED, open && !old, cx);
-    if !open {
+    if !Workspace::get(cx).archive() {
         dock::toggle_zone(DockPlacement::Left, window, cx);
+    } else {
+        let old: bool = ui_state::get(COLLAPSED, cx).unwrap_or(false);
+        ui_state::set(COLLAPSED, open && !old, cx);
+        if !open {
+            dock::toggle_zone(DockPlacement::Left, window, cx);
+        }
     }
     cx.refresh_windows();
 }

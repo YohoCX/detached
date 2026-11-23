@@ -17,6 +17,14 @@ use kernel::workspace::Workspace;
 
 pub const NAME: &str = "doc";
 
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct ViewPosition {
+    pub line: u32,
+    pub column: u32,
+    pub x: f32,
+    pub y: f32,
+}
+
 /// What a document's tab does that differs by kind. It is given docs of its own kind, but for
 /// `replace`'s `new`, which may be any kind that shares the preview tab.
 pub trait DocKind {
@@ -41,6 +49,10 @@ pub trait DocKind {
         None
     }
     fn closing(&self, _: &Doc, _: &mut App) {}
+    fn position(&self, _: &AnyView, _: &App) -> Option<ViewPosition> {
+        None
+    }
+    fn restore_position(&self, _: &AnyView, _: ViewPosition, _: &mut App) {}
     /// The tab was closed.
     fn removed(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
     /// Whether `a` and `b` belong in the same tab.
@@ -85,6 +97,7 @@ pub struct DocTab {
     kind: Rc<dyn DocKind>,
     /// Built when first on screen, so a restored tab loads nothing until it is looked at.
     pub(super) view: Option<AnyView>,
+    position: Option<ViewPosition>,
     focus: FocusHandle,
 }
 
@@ -97,6 +110,8 @@ struct Saved {
     // Archive tabs need an explicit null to distinguish them from old layouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position: Option<ViewPosition>,
 }
 
 impl DocTab {
@@ -112,6 +127,7 @@ impl DocTab {
             keep,
             kind,
             view: None,
+            position: None,
             focus: cx.focus_handle(),
         })
     }
@@ -127,6 +143,9 @@ impl DocTab {
             && !self.kind.replace(v, &self.doc, &doc, window, cx)
         {
             self.view = None;
+        }
+        if self.doc != doc {
+            self.position = None;
         }
         self.doc = doc;
         self.kind = kind;
@@ -182,7 +201,10 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
     let PanelInfo::Panel(v) = &state.info else {
         return None;
     };
-    let s: Saved = serde_json::from_value(v.clone()).ok()?;
+    let mut s: Saved = serde_json::from_value(v.clone()).ok()?;
+    if let Doc::Terminal { id, .. } = &mut s.doc {
+        *id = 0;
+    }
     let legacy =
         v.get("session").is_none() && !matches!(s.doc, Doc::SessionArchive | Doc::PastChat { .. });
     let kind = doc_kind(s.doc.kind(), cx)?;
@@ -191,6 +213,7 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
         t.workspace = s.workspace;
         t.session = s.session.flatten();
         t.legacy = legacy;
+        t.position = s.position;
     });
     Some(Arc::new(tab))
 }
@@ -218,7 +241,11 @@ impl Render for DocTab {
             .flatten();
         if self.view.is_none() && archive.is_none() {
             let kind = self.kind.clone();
-            self.view = Some(kind.view(&mut self.doc, self.session.is_none(), window, cx));
+            let view = kind.view(&mut self.doc, self.session.is_none(), window, cx);
+            if let Some(at) = self.position {
+                kind.restore_position(&view, at, cx);
+            }
+            self.view = Some(view);
             if self.focus.is_focused(window)
                 && let Some(view) = self.view.clone()
             {
@@ -284,12 +311,24 @@ impl Panel for DocTab {
         });
     }
 
-    fn dump(&self, _: &App) -> PanelState {
+    fn dump(&self, cx: &App) -> PanelState {
         let saved = Saved {
-            doc: self.doc.clone(),
+            doc: match &self.doc {
+                Doc::Terminal { cwd, .. } => Doc::Terminal {
+                    id: 0,
+                    cwd: cwd.clone(),
+                },
+                doc => doc.clone(),
+            },
             keep: self.keep,
             workspace: self.workspace.clone(),
             session: (!self.legacy).then(|| self.session.clone()),
+            position: self.session.as_ref().and_then(|_| {
+                self.view
+                    .as_ref()
+                    .and_then(|v| self.kind.position(v, cx))
+                    .or(self.position)
+            }),
         };
         PanelState {
             info: PanelInfo::Panel(serde_json::to_value(saved).unwrap_or_default()),

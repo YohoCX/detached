@@ -207,16 +207,6 @@ fn of(area: &DockArea, category: &str, cx: &App) -> Vec<PanelId> {
 }
 
 /// The next or previous category, around.
-fn step_category(by: isize, window: &mut Window, cx: &mut App) {
-    let all = categories(cx);
-    let now = category(cx);
-    let Some(at) = all.iter().position(|c| c.id == now) else {
-        return;
-    };
-    let next = (at as isize + by).rem_euclid(all.len() as isize) as usize;
-    show(all[next].id, window, cx);
-}
-
 /// The next or previous tab of the category shown, around.
 fn step_tab(by: isize, window: &mut Window, cx: &mut App) {
     if !Workspace::get(cx).archive() {
@@ -248,23 +238,8 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
         actions::register(cx, id, title, Group::View, f)
     };
     vec![
-        reg(cx, "tabs.nextCategory", "Next Tab Category", |w, cx| {
-            step_category(1, w, cx)
-        }),
-        reg(cx, "tabs.prevCategory", "Previous Tab Category", |w, cx| {
-            step_category(-1, w, cx)
-        }),
         reg(cx, "tabs.next", "Next Tab", |w, cx| step_tab(1, w, cx)),
         reg(cx, "tabs.prev", "Previous Tab", |w, cx| step_tab(-1, w, cx)),
-        reg(cx, "tabs.docs", "Show Docs Tabs", |w, cx| {
-            show("docs", w, cx)
-        }),
-        reg(cx, "tabs.chats", "Show Chats Tabs", |w, cx| {
-            show("chats", w, cx)
-        }),
-        reg(cx, "tabs.code", "Show Code Tabs", |w, cx| {
-            show("code", w, cx)
-        }),
     ]
 }
 

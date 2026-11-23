@@ -97,39 +97,6 @@ fn in_window<R>(
 }
 
 #[gpui_kit::test]
-fn a_live_terminal_moves_to_another_zone_with_its_session_and_stays_there(cx: &mut TestAppContext) {
-    plain_shell();
-    let cx = &mut open_app_with(cx, layout);
-    cx.update(|w, cx| dock::open("terminal", w, cx));
-    settle(cx);
-    cx.input(ANSWER);
-    cx.press("enter");
-    let rows = |cx: &mut VisualTestContext| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            (0usize..)
-                .map_while(|i| w.try_find(("terminal.row", i)))
-                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
-        })
-    };
-    wait_until(cx, rows);
-    let session = cx.update(|_, cx| Terminals::global(cx).read(cx).sessions[0].clone());
-    assert!(x(cx, "bottom.Terminal") < px(1000.), "in the bottom zone");
-
-    drag_tab(cx, "bottom.Terminal", "tool.Changes");
-    assert!(x(cx, "bottom.Terminal") > px(1000.), "in the right zone");
-    assert!(rows(cx), "the same screen");
-    let now = cx.update(|_, cx| Terminals::global(cx).read(cx).sessions.clone());
-    assert_eq!(now, [session], "the same session");
-
-    let again = reopen(cx);
-    let at = in_window(cx, again, |w, _| {
-        w.find("bottom.Terminal").bounds().origin.x
-    });
-    assert!(at > px(1000.), "the saved layout keeps it on the right");
-}
-
-#[gpui_kit::test]
 fn a_saved_app_this_build_lacks_shows_a_placeholder_and_is_saved_back(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     cx.workspace(|w, cx| w.set_archive(true, cx));
@@ -200,10 +167,9 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
         }
         assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
         assert_eq!(w.find("tool.Project").checked(), Some(true));
-        assert!(w.try_find("doc.chat").is_none(), "before sessions");
         assert!(
-            w.try_find("doc.diff.README.md").is_none(),
-            "before sessions"
+            w.try_find("chat.send").is_none(),
+            "archived tabs are read only"
         );
     });
 }
@@ -254,7 +220,7 @@ impl Render for Stub {
 }
 
 #[gpui_kit::test]
-fn an_app_registered_by_a_test_alone_gets_a_tab_in_its_zone(cx: &mut TestAppContext) {
+fn an_app_registered_by_a_test_alone_can_open_its_tab(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     let stub = AppSpec {
         name: "stub",
@@ -268,15 +234,12 @@ fn an_app_registered_by_a_test_alone_gets_a_tab_in_its_zone(cx: &mut TestAppCont
     app(cx, |cx| dock::register_app(cx, stub));
 
     let again = reopen(cx);
-    in_window(cx, again, |w, cx| {
-        assert!(
-            w.find("tab.stub").bounds().origin.y > px(600.),
-            "at the bottom"
-        );
-        w.click("tab.stub", cx)
-    });
+    in_window(cx, again, |w, cx| dock::open("stub", w, cx));
     settle(cx);
-    in_window(cx, again, |w, _| assert!(w.find("stub.view").visible()));
+    in_window(cx, again, |w, _| {
+        assert!(w.find("tab.stub").visible());
+        assert!(w.find("stub.view").visible());
+    });
 }
 
 struct StubDocs;
@@ -424,99 +387,15 @@ fn a_running_chat_moves_to_another_pane_with_its_turn_going_on(cx: &mut TestAppC
     assert!(cx.find("chat.stop").is_some(), "the turn goes on");
     let now = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
     assert_eq!(now, session, "the same session");
-    cx.click("chat.stop");
-    wait_until(cx, |cx| cx.find("chat.stop").is_none());
-}
-
-#[gpui_kit::test]
-fn a_shell_dragged_out_of_the_terminal_is_a_tab_of_its_own_and_ends_with_it(
-    cx: &mut TestAppContext,
-) {
-    plain_shell();
-    let cx = &mut open_app_with(cx, layout);
-    cx.update(|w, cx| dock::open("terminal", w, cx));
+    run(cx, "pane.close");
+    assert!(cx.cx.has_pending_prompt());
+    cx.cx.simulate_prompt_answer("Cancel");
     settle(cx);
-    cx.input(ANSWER);
-    cx.press("enter");
-    let answered = |cx: &mut VisualTestContext| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            (0usize..)
-                .map_while(|i| w.try_find(("terminal.row", i)))
-                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
-        })
-    };
-    wait_until(cx, answered);
-    drag_tab(cx, ("terminal.tab", 0usize), "doc.session-overview");
-    let (left, docked) = cx.update(|_, cx| {
-        let t = Terminals::global(cx).read(cx);
-        (t.sessions.len(), t.docked.clone())
-    });
-    assert_eq!((left, docked.len()), (0, 1), "out of the Terminal app");
-    let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
-    let tab = gpui_kit::SharedString::from(id);
-    assert_eq!(cx.find(tab.clone()).unwrap().checked(), Some(true));
-    assert!(answered(cx), "the same screen, now in the center");
-    // A title as long as PowerShell's leaves the close button in the zone.
-    #[cfg(unix)]
-    {
-        cx.input(&format!("printf '\\033]0;{}\\007'", "x".repeat(120)));
-        cx.press("enter");
-        let long =
-            |cx: &mut VisualTestContext| cx.find(tab.clone()).and_then(|e| e.label().map(str::len));
-        wait_until(cx, |cx| long(cx) == Some(120));
-    }
-
-    cx.update(|w, cx| w.within(tab).click("tab.close", cx));
-    settle(cx);
-    let gone = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.is_empty());
-    assert!(gone, "closing the tab ends the shell");
-}
-
-/// A shell in the Terminal app with `ANSWER` run in it.
-fn shell_answered(cx: &mut TestAppContext) -> TestApp {
-    plain_shell();
-    let mut app = open_app_with(cx, layout);
-    let cx = &mut app.cx;
-    cx.update(|w, cx| dock::open("terminal", w, cx));
-    settle(cx);
-    cx.input(ANSWER);
-    cx.press("enter");
-    wait_until(cx, |cx| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            (0usize..)
-                .map_while(|i| w.try_find(("terminal.row", i)))
-                .any(|e| e.label().is_some_and(|l| l.trim() == "answer-42"))
-        })
-    });
-    app
-}
-
-#[gpui_kit::test]
-fn a_shell_dropped_on_a_legacy_strip_opens_in_the_session(cx: &mut TestAppContext) {
-    let cx = &mut shell_answered(cx);
-    drag_tab(cx, ("terminal.tab", 0usize), "tool.Changes");
-    let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
-    assert_eq!(docked.len(), 1, "out of the Terminal app");
-    let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
-    let tab = cx.find(gpui_kit::SharedString::from(id)).unwrap().bounds();
-    assert!(tab.origin.x < px(1000.), "in a session pane");
-}
-
-#[gpui_kit::test]
-fn a_shell_released_over_no_target_stays_in_the_terminal_app(cx: &mut TestAppContext) {
-    let cx = &mut shell_answered(cx);
-    let tab = cx.find(("terminal.tab", 0usize)).unwrap().bounds();
-    let from = point(tab.left() + px(4.), tab.center().y);
-    // The sidebar: the center's drop target also lies under the bottom zone.
-    cx.update(|w, cx| w.drag(from, point(px(100.), px(400.)), cx));
-    settle(cx);
-    let (left, docked) = cx.update(|_, cx| {
-        let t = Terminals::global(cx).read(cx);
-        (t.sessions.len(), t.docked.len())
-    });
-    assert_eq!((left, docked), (1, 0));
+    assert!(cx.find("chat.stop").is_some());
+    run(cx, "pane.close");
+    cx.cx.simulate_prompt_answer("Close");
+    wait_until(cx, |cx| cx.find("doc.chat").is_none());
+    assert!(cx.update(|_, cx| chat::find(&solo, 0, cx).is_none()));
 }
 
 fn file(repo: &Path, path: &str) -> Doc {
@@ -587,7 +466,14 @@ fn each_pane_has_its_own_preview_tab(cx: &mut TestAppContext) {
     show(cx, file(&app, "CHANGELOG.md"));
     assert!(cx.find("doc.file.CHANGELOG.md").is_some());
     assert!(cx.find("doc.file.README.md").is_none());
-    assert!(cx.find("doc.file.src/index.ts").is_some());
+    let copies = cx.update(|_, cx| {
+        let a = dock::zones(cx).unwrap();
+        dock::docs(a.read(cx))
+            .iter()
+            .filter(|(_, _, t)| t.read(cx).doc == file(&app, "src/index.ts"))
+            .count()
+    });
+    assert_eq!(copies, 2);
 }
 
 #[gpui_kit::test]
@@ -745,6 +631,10 @@ fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
         Doc::CouncilStats { repo: "/r".into() },
         Doc::Log { repo: "/r".into() },
         Doc::Process { repo: "/r".into() },
+        Doc::Tool {
+            name: "events".into(),
+            tab: "bottom.Events".into(),
+        },
         Doc::SessionOverview,
         Doc::NewTab,
         Doc::SessionArchive,
@@ -840,7 +730,6 @@ fn a_docked_terminal_lives_on_across_workspace_switches(cx: &mut TestAppContext)
         })
     };
     wait_until(cx, answered);
-    drag_tab(cx, ("terminal.tab", 0usize), "doc.session-overview");
     let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
     assert_eq!(docked.len(), 1);
     let tab = SharedString::from(format!("doc.terminal.{}", docked[0].entity_id().as_u64()));
@@ -908,7 +797,9 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
     switch(cx, "Other");
     run(cx, "tabs.code");
-    cx.update(|w, cx| w.within(SharedString::from(id)).click("tab.close", cx));
+    let id = SharedString::from(id);
+    cx.click(id.clone());
+    cx.update(|w, cx| w.within(id).click("tab.close", cx));
     settle(cx);
     switch(cx, "Default");
     cx.click("workspaces");

@@ -69,9 +69,6 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `pane.focusDown` | Focus Pane Down | Cmd+Alt+Down / Alt+Down on Windows and Linux | Sessions | F |
 | `pane.resizeDown` | Resize Pane Down | Ctrl+Cmd+Down / Alt+Shift+Down on Windows and Linux | Sessions | F |
 | `tab.moveDown` | Move Tab Down | Cmd+Alt+Shift+Down / Ctrl+Alt+Shift+Down on Windows and Linux | Sessions | F |
-| `zone.left` / `zone.bottom` / `zone.right` | Legacy dock controls | — | M2 | F |
-| `tabs.nextCategory` / `tabs.prevCategory` | Archive tab categories | — | W4 | F |
-| `tabs.docs` / `tabs.chats` / `tabs.code` | Show an archive tab category | — | W4 | F |
 
 Chords are bound in the window's context, so a focused text field or editor keeps its own binding
 of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable multi-line field, and on macOS

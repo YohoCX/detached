@@ -62,13 +62,13 @@ const fn os(unix: &'static str, windows: &'static str) -> &'static str {
 const ANSWER: &str = os("echo answer-$((6*7))", "echo \"answer-$(6*7)\"");
 
 fn sessions(cx: &mut VisualTestContext) -> usize {
-    cx.update(|_, cx| Terminals::global(cx).read(cx).sessions.len())
+    cx.update(|_, cx| Terminals::global(cx).read(cx).docked.len())
 }
 
 #[gpui_kit::test]
-fn the_legacy_terminal_opens_a_shell_that_runs_what_is_typed(cx: &mut TestAppContext) {
+fn a_terminal_tab_runs_what_is_typed(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    assert!(on_screen(cx, "bottom.Terminal"));
+    assert!(cx.find("terminal").is_some());
     run(cx, ANSWER);
     wait_for_line(cx, "answer-42");
 }
@@ -89,7 +89,12 @@ fn the_session_outlives_the_panel_switching_to_the_log(cx: &mut TestAppContext) 
     wait_for_line(cx, "answer-42");
     cx.press("secondary-9");
     assert!(cx.find("doc.log").is_some());
-    cx.click("bottom.Terminal");
+    let id = cx.update(|_, cx| {
+        Terminals::global(cx).read(cx).docked[0]
+            .entity_id()
+            .as_u64()
+    });
+    cx.click(gpui_kit::SharedString::from(format!("doc.terminal.{id}")));
     assert!(rows(cx).iter().any(|r| r.trim() == "answer-42"));
     assert_eq!(sessions(cx), 1);
 }
@@ -109,14 +114,14 @@ fn app_chords_go_to_the_shell_except_the_short_list(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn exiting_the_shell_closes_its_tab_and_the_last_one_the_panel(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    cx.click("terminal.new");
+    cx.update(|w, cx| detached_app::dock::open("terminal", w, cx));
     wait_until(cx, |cx| sessions(cx) == 2);
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 1);
-    assert!(on_screen(cx, "bottom.Terminal"));
+    assert!(cx.find("terminal").is_some());
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 0);
-    assert!(!on_screen(cx, "bottom.Terminal"));
+    assert!(cx.find("terminal").is_none());
 }
 
 #[cfg(unix)]
@@ -128,7 +133,7 @@ fn closing_a_shell_that_ignores_the_hangup_still_ends_its_session(cx: &mut TestA
     run(cx, "trap '' HUP");
     run(cx, ANSWER);
     wait_for_line(cx, "answer-42");
-    cx.click(("terminal.close", 0usize));
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "tab.close"));
     wait_until(cx, |cx| sessions(cx) == 0);
     wait_until(cx, |_| term.strong_count() == 0);
 }
@@ -142,7 +147,14 @@ struct Cell {
 }
 
 fn session<R>(cx: &mut VisualTestContext, f: impl FnOnce(&Session) -> R) -> R {
-    cx.update(|_, cx| f(Terminals::global(cx).read(cx).active().unwrap().read(cx)))
+    cx.update(|_, cx| {
+        f(Terminals::global(cx)
+            .read(cx)
+            .docked
+            .last()
+            .unwrap()
+            .read(cx))
+    })
 }
 
 /// The cells of the row that reads `line`.
@@ -262,7 +274,12 @@ fn a_drag_selects_what_copy_takes(cx: &mut TestAppContext) {
     let copy = |cx: &mut VisualTestContext| {
         settle(cx);
         cx.update(|_, cx| {
-            let s = Terminals::global(cx).read(cx).active().unwrap().clone();
+            let s = Terminals::global(cx)
+                .read(cx)
+                .docked
+                .last()
+                .unwrap()
+                .clone();
             s.update(cx, |s, cx| assert!(s.copy(cx)));
         });
         cx.read_from_clipboard().and_then(|c| c.text())

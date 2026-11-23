@@ -13,7 +13,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::{Mode, Search, close, open};
+use super::{Mode, Search, close, open, open_tabs};
 use crate::actions::{self, Action, Group, Registration};
 use crate::repos::{self, CheckoutTarget};
 use crate::ui::{self, Icon, radius, text, theme};
@@ -127,6 +127,16 @@ impl Palette {
             reg("vcs.popup", Group::Vcs, Mode::Vcs),
             reg("file.recent", Group::Navigate, Mode::Recent),
             reg("session.switch", Group::View, Mode::Session),
+            actions::register(cx, "tabs.switcher", "Switch Tab", Group::View, |_, cx| {
+                open_tabs(1, cx)
+            }),
+            actions::register(
+                cx,
+                "tabs.switcherBack",
+                "Switch Tab Backward",
+                Group::View,
+                |_, cx| open_tabs(-1, cx),
+            ),
         ];
         Palette {
             mode: None,
@@ -151,6 +161,7 @@ impl Palette {
     /// takes focus.
     fn opened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = cx.global::<Search>().mode;
+        let previous = self.mode;
         if mode != self.mode {
             if self.mode.is_none() {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
@@ -164,6 +175,13 @@ impl Palette {
         }
         if mode.is_some() {
             self.input.update(cx, |s, cx| s.focus(window, cx));
+        }
+        if mode == Some(Mode::Tabs) {
+            if previous != mode {
+                self.sel = crate::dock::focused_tabs(cx).1;
+            }
+            let by = cx.global::<Search>().tab_step.take();
+            self.step(by, cx);
         }
         self.sync(window, cx);
     }
@@ -198,6 +216,7 @@ impl Palette {
             (Some(Mode::File), _, _) => format!("File name in {}", w.session_name()),
             (Some(Mode::Everywhere), _, _) => format!("Search in {}", w.session_name()),
             (Some(Mode::Session), _, _) => "Switch to a session or a tab".into(),
+            (Some(Mode::Tabs), _, _) => "Switch to a tab in this pane".into(),
             _ => "Type to search".into(),
         };
         if *self.input.read(cx).presentation().placeholder() != placeholder {
@@ -340,6 +359,14 @@ impl Palette {
                     .chain(branches)
                     .chain(actions)
                     .collect()
+            }
+            Some(Mode::Tabs) => {
+                let items: Vec<_> = crate::dock::focused_tabs(cx)
+                    .0
+                    .into_iter()
+                    .map(|(id, title)| Item::Tab(title, id))
+                    .collect();
+                hits(&items, &query)
             }
             Some(Mode::Session) => {
                 let w = Workspace::get(cx);
@@ -594,6 +621,13 @@ impl Render for Palette {
             .child(empty);
         let dialog = div()
             .id("palette")
+            .on_modifiers_changed(cx.listener(
+                |this, e: &gpui_kit::ModifiersChangedEvent, w, cx| {
+                    if !e.modifiers.control && this.mode == Some(Mode::Tabs) {
+                        this.choose(this.sel, w, cx);
+                    }
+                },
+            ))
             .test_support()
             .role(Role::Dialog)
             .aria_label(mode.title())

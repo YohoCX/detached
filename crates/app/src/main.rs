@@ -54,6 +54,7 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         keys.detach();
         cx.on_window_closed(|cx, _| {
+            detached_app::dock::save_current(cx);
             if cx.windows().is_empty() {
                 cx.quit();
             }

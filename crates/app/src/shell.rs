@@ -91,6 +91,7 @@ pub struct Shell {
     status: Entity<StatusBar>,
     notices: Entity<Notices>,
     focus: FocusHandle,
+    folded_sides: Option<(bool, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -114,6 +115,7 @@ impl Shell {
                     dock::restore(window, cx);
                 }
             }),
+            cx.observe_window_bounds(window, |this, window, cx| this.fold_sides(window, cx)),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
@@ -144,7 +146,35 @@ impl Shell {
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
             focus,
+            folded_sides: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    fn fold_sides(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if Workspace::get(cx).archive() {
+            return;
+        }
+        let left = DockPlacement::Left;
+        let right = DockPlacement::Right;
+        if w.viewport_size().width < px(1100.) {
+            if self.folded_sides.is_none() {
+                let (a, b) = (dock::is_open(left, cx), dock::is_open(right, cx));
+                self.folded_sides = Some((a, b));
+                if a {
+                    dock::toggle_zone(left, w, cx);
+                }
+                if b {
+                    dock::toggle_zone(right, w, cx);
+                }
+            }
+        } else if let Some((a, b)) = self.folded_sides.take() {
+            if a && !dock::is_open(left, cx) {
+                dock::toggle_zone(left, w, cx);
+            }
+            if b && !dock::is_open(right, cx) {
+                dock::toggle_zone(right, w, cx);
+            }
         }
     }
 
@@ -196,24 +226,26 @@ impl Shell {
                         chat_on,
                         "agent.chat",
                     ))
-                    .child(zone(
-                        "zone.left",
-                        Icon::PanelLeft,
-                        "Left Zone",
-                        DockPlacement::Left,
-                    ))
-                    .child(zone(
-                        "zone.bottom",
-                        Icon::PanelBottom,
-                        "Bottom Zone",
-                        DockPlacement::Bottom,
-                    ))
-                    .child(zone(
-                        "zone.right",
-                        Icon::PanelRight,
-                        "Right Zone",
-                        DockPlacement::Right,
-                    ))
+                    .when(Workspace::get(cx).archive(), |bar| {
+                        bar.child(zone(
+                            "zone.left",
+                            Icon::PanelLeft,
+                            "Left Zone",
+                            DockPlacement::Left,
+                        ))
+                        .child(zone(
+                            "zone.bottom",
+                            Icon::PanelBottom,
+                            "Bottom Zone",
+                            DockPlacement::Bottom,
+                        ))
+                        .child(zone(
+                            "zone.right",
+                            Icon::PanelRight,
+                            "Right Zone",
+                            DockPlacement::Right,
+                        ))
+                    })
                     .child(run(
                         "top.settings",
                         Icon::Gear,
@@ -259,6 +291,8 @@ fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dock = dock::area(window, cx);
+        self.fold_sides(window, cx);
+        let live = !Workspace::get(cx).archive();
         let t = theme(cx);
         div()
             .key_context(keymap::CONTEXT)
@@ -279,7 +313,45 @@ impl Render for Shell {
             .line_height(relative(1.4))
             .font_weight(FontWeight::NORMAL)
             .child(self.title_bar(cx))
-            .child(div().flex().flex_1().min_h_0().child(dock))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .when(live && !dock::is_open(DockPlacement::Left, cx), |row| {
+                        row.child(
+                            div()
+                                .w(px(44.))
+                                .flex_none()
+                                .flex()
+                                .justify_center()
+                                .pt(GAP)
+                                .child(
+                                    ui::titled(
+                                        ui::icon_button("sessions.fold", Icon::PanelLeft, cx),
+                                        "Show sessions",
+                                    )
+                                    .test_support()
+                                    .on_click(|_, w, cx| {
+                                        actions::dispatch(w, cx, "panel.sessions")
+                                    }),
+                                ),
+                        )
+                    })
+                    .child(div().flex_1().min_w_0().child(dock))
+                    .when(live && !dock::is_open(DockPlacement::Right, cx), |row| {
+                        row.child(
+                            div().w(px(28.)).flex_none().pt(GAP).child(
+                                ui::titled(
+                                    ui::icon_button("explorer.fold", Icon::PanelRight, cx),
+                                    "Show files",
+                                )
+                                .test_support()
+                                .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.project")),
+                            ),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .flex()
@@ -358,6 +430,9 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (_dir, w) = open_shell(cx);
+        act(cx, w, |_, cx| {
+            Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx))
+        });
         assert_eq!(checked(cx, w, "zone.left"), Some(true));
         assert_eq!(
             checked(cx, w, "tool.Changes"),
@@ -400,6 +475,9 @@ mod tests {
     #[gpui_kit::test]
     fn a_dragged_grip_resizes_its_zone_and_the_saved_layout_keeps_it(cx: &mut TestAppContext) {
         let (dir, w) = open_shell(cx);
+        act(cx, w, |_, cx| {
+            Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx))
+        });
         let grip = |cx: &mut TestAppContext, w| {
             act(cx, w, |window, cx| {
                 window.render_frame(cx);

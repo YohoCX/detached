@@ -75,6 +75,10 @@ pub enum Doc {
     Process {
         repo: String,
     },
+    Tool {
+        name: String,
+        tab: String,
+    },
     SessionOverview,
     NewTab,
     SessionArchive,
@@ -93,7 +97,7 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 15] = [
+    pub const KINDS: [&str; 16] = [
         "file",
         "diff",
         "mr",
@@ -101,6 +105,7 @@ impl Doc {
         "chat",
         "log",
         "process",
+        "tool",
         "session-overview",
         "new-tab",
         "session-archive",
@@ -142,6 +147,7 @@ impl Doc {
             Doc::Chat { .. } => "chat",
             Doc::Log { .. } => "log",
             Doc::Process { .. } => "process",
+            Doc::Tool { .. } => "tool",
             Doc::SessionOverview => "session-overview",
             Doc::NewTab => "new-tab",
             Doc::SessionArchive => "session-archive",

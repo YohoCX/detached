@@ -181,28 +181,28 @@ impl Terminals {
 
 /// Types `line` into a new shell of the Terminal app and shows it.
 pub fn run(line: &str, window: &mut Window, cx: &mut App) {
-    Terminals::global(cx).update(cx, |t, cx| {
-        if let Some(s) = t.open(window, cx) {
-            s.read(cx).write(format!("{line}\r").into_bytes());
-        }
-    });
-    dock::open("terminal", window, cx);
+    let cwd =
+        dock::bound_repo(cx).or_else(|| std::env::home_dir().map(|p| p.display().to_string()));
+    if let Some(cwd) = cwd
+        && let Some(session) = open_tab(cwd, window, cx)
+    {
+        session.read(cx).write(format!("{line}\r").into_bytes());
+    }
 }
 
-pub(crate) fn open_tab(cwd: String, window: &mut Window, cx: &mut App) {
+pub(crate) fn open_tab(cwd: String, window: &mut Window, cx: &mut App) -> Option<Entity<Session>> {
     let terminals = Terminals::global(cx);
-    let session = terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&cwd), window, cx));
-    if let Some(session) = session {
-        dock::open_doc(
-            Doc::Terminal {
-                id: session.entity_id().as_u64(),
-                cwd,
-            },
-            true,
-            window,
-            cx,
-        );
-    }
+    let session = terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&cwd), window, cx))?;
+    dock::open_doc(
+        Doc::Terminal {
+            id: session.entity_id().as_u64(),
+            cwd,
+        },
+        true,
+        window,
+        cx,
+    );
+    Some(session)
 }
 
 /// The titles of the shells, in the Terminal app and in tabs of their own.

@@ -11,7 +11,7 @@ use super::api::{DiffDoc, DiffOptions, DiffView, Side, show_diff};
 use super::changes;
 use super::file::FileView;
 use crate::actions::{Group, Registration, register};
-use crate::dock::DocKind;
+use crate::dock::{DocKind, ViewPosition};
 use crate::ui::{self, text, theme};
 use crate::util::{base_name, dir_name};
 use kernel::doc::Doc;
@@ -232,6 +232,22 @@ impl DocKind for ViewerDocs {
     fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
         if let Ok(v) = view.clone().downcast::<Viewer>() {
             v.read(cx).raise(cx);
+        }
+    }
+
+    fn position(&self, view: &AnyView, cx: &App) -> Option<ViewPosition> {
+        let viewer = view.clone().downcast::<Viewer>().ok()?;
+        match &viewer.read(cx).shown {
+            Some(Shown::File(file)) => file.read(cx).position(cx),
+            _ => None,
+        }
+    }
+
+    fn restore_position(&self, view: &AnyView, at: ViewPosition, cx: &mut App) {
+        if let Ok(viewer) = view.clone().downcast::<Viewer>()
+            && let Some(Shown::File(file)) = &viewer.read(cx).shown
+        {
+            file.clone().update(cx, |file, _| file.restore(at));
         }
     }
 
