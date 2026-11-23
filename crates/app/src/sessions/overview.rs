@@ -97,10 +97,11 @@ impl Render for Overview {
             )
             .when(empty, |d| {
                 d.child(
-                    ui::primary_button("overview.addFolder", "Add a folder…", cx)
-                        .mt(px(12.))
-                        .test_support()
-                        .on_click(|_, _, cx| repos::add_folders(cx)),
+                    div().flex().mt(px(12.)).child(
+                        ui::primary_button("overview.addFolder", "Add a folder…", cx)
+                            .test_support()
+                            .on_click(|_, _, cx| repos::add_folders(cx)),
+                    ),
                 )
             })
             .when(!unavailable.is_empty(), |d| {
@@ -122,10 +123,11 @@ impl Render for Overview {
                 .child(table(cx).children(rows))
                 .when(main, |d| {
                     d.child(
-                        ui::primary_button("overview.new", "New session from here…", cx)
-                            .mt(px(16.))
-                            .test_support()
-                            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new")),
+                        div().flex().mt(px(16.)).child(
+                            ui::primary_button("overview.new", "New session from here…", cx)
+                                .test_support()
+                                .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new")),
+                        ),
                     )
                 })
             })
