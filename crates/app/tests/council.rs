@@ -409,7 +409,8 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
         copy_round(&repo, "agent-host-plan/16-codex");
         copy_round(&repo, "agent-host-plan/15-after-fix");
     });
-    open_tab(&mut app, "tab.council");    open_round(&mut app, "agent-host-plan", "16-codex");
+    open_tab(&mut app, "tab.council");
+    open_round(&mut app, "agent-host-plan", "16-codex");
     wait_until(&mut app, |cx| cx.find("council.findings").is_some());
     app.update(|w, cx| w.within("council.modes").click(0usize, cx));
     settle(&app);

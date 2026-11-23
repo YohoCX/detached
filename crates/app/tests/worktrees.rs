@@ -61,7 +61,7 @@ fn the_worktrees_page_creates_a_worktree_with_its_recipe_and_removes_it(cx: &mut
             .iter()
             .map(|r| r.path.clone())
             .collect::<Vec<_>>()),
-        [main.clone()]
+        std::slice::from_ref(&main)
     );
     cx.update(|_, cx| settings::open(cx, "worktrees"));
     assert_eq!(real(listed_worktree(cx).unwrap()), real(&tree));
