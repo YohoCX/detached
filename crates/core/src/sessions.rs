@@ -1,4 +1,4 @@
-//! Workspace sessions over existing linked worktrees.
+//! Workspace sessions and their worktrees.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -28,6 +28,12 @@ pub struct Workset {
     pub id: String,
     pub name: String,
     pub members: Vec<Member>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub archived: Option<i64>,
+    #[serde(default)]
+    pub draft: bool,
     created: i64,
 }
 
@@ -38,21 +44,78 @@ pub struct Member {
     pub branch: Option<String>,
     pub base_sha: String,
     pub state: MemberState,
+    #[serde(default)]
+    pub stage: Stage,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Stage {
+    #[default]
+    Ready,
+    Pending,
+    Adding,
+    Copy,
+    Install,
+    Removing,
+    Removed,
+}
+
+impl Member {
+    fn claims_path(&self) -> bool {
+        !matches!(self.stage, Stage::Pending | Stage::Removed)
+    }
+}
+
+fn holds_claim(core: &AppState, member: &Member) -> bool {
+    member.claims_path()
+        && (member.stage != Stage::Adding || provision::adding_checkout(core, member).is_some())
+}
+
+impl Workset {
+    pub fn visible(&self) -> bool {
+        self.archived.is_none() && !self.draft
+    }
+
+    pub fn default_branch(&self) -> Option<&str> {
+        self.branch
+            .as_deref()
+            .or_else(|| self.members.first()?.branch.as_deref())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MemberState {
     Ready,
+    Provisioning,
+    CopyFailed,
+    InstallFailed,
+    Removed,
     Missing,
     Unavailable,
     Conflict,
 }
 
 impl MemberState {
+    pub fn usable(self) -> bool {
+        matches!(self, Self::Ready | Self::CopyFailed | Self::InstallFailed)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Ready => "Ready",
+            Self::Provisioning => "Worktree not created",
+            Self::CopyFailed => "Copy incomplete",
+            Self::InstallFailed => "Install incomplete",
+            Self::Removed => "Removed",
+
             Self::Missing => "Missing",
             Self::Unavailable => "Unavailable",
             Self::Conflict => "Conflict",
@@ -96,7 +159,18 @@ fn manifest(path: &Path) -> Result<Option<Workset>> {
 }
 
 fn real(path: &Path) -> PathBuf {
-    crate::os::canonical(path).unwrap_or_else(|_| path.into())
+    for parent in path.ancestors() {
+        if let Ok(real) = crate::os::canonical(parent)
+            && let Ok(remainder) = path.strip_prefix(parent)
+        {
+            return if remainder.as_os_str().is_empty() {
+                real
+            } else {
+                real.join(remainder)
+            };
+        }
+    }
+    path.into()
 }
 
 fn present(path: &Path) -> bool {
@@ -153,6 +227,13 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
         let here = dir.file_name().is_some_and(|n| n == workspace);
         for member in &mut set.members {
             let path = real(Path::new(&member.path));
+            if !holds_claim(core, member) {
+                if member.stage == Stage::Adding {
+                    member.stage = Stage::Pending;
+                    member.state = MemberState::Provisioning;
+                }
+                continue;
+            }
             let first = claimed.insert(path.clone());
             if !here {
                 continue;
@@ -178,15 +259,26 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
                     {
                         Some(tree) if registered(&env, common, &path) => {
                             member.branch.clone_from(&tree.branch);
-                            MemberState::Ready
+                            match member.stage {
+                                Stage::Adding | Stage::Copy => MemberState::CopyFailed,
+                                Stage::Install => MemberState::InstallFailed,
+                                _ => MemberState::Ready,
+                            }
                         }
                         Some(_) => MemberState::Unavailable,
                         None => MemberState::Missing,
                     },
                 }
             };
+            if member.stage == Stage::Removing && member.state == MemberState::Missing {
+                member.stage = Stage::Removed;
+                member.state = MemberState::Removed;
+            }
         }
         if here {
+            if set.draft && set.members.iter().any(|m| m.state.usable()) {
+                set.draft = false;
+            }
             sets.push(set);
         }
     }
@@ -225,7 +317,7 @@ fn owned(core: &AppState) -> Result<HashMap<PathBuf, String>> {
     for dir in workspace_dirs(core)? {
         for dir in directories(&dir.join("sessions"))? {
             if let Some(set) = manifest(&dir.join(MANIFEST))? {
-                for member in set.members {
+                for member in set.members.into_iter().filter(|m| holds_claim(core, m)) {
                     owned.insert(real(Path::new(&member.path)), set.name.clone());
                 }
             }
@@ -388,12 +480,19 @@ pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) ->
             branch: row.branch,
             base_sha: row.head,
             state: MemberState::Ready,
+            stage: Stage::Ready,
+            error: None,
+            base: None,
+            steps: vec![],
         });
     }
     let set = Workset {
         id: crate::backend::random()[..16].into(),
         name,
         members,
+        branch: None,
+        archived: None,
+        draft: false,
         created: crate::council::record::now(),
     };
     let parent = root(core).join(workspace).join("sessions");
@@ -423,6 +522,9 @@ pub fn rename(core: &AppState, workspace: &str, id: &str, label: &str) -> Result
     value["name"] = name.into();
     crate::store::atomic(&path, &serde_json::to_vec_pretty(&value)?)
 }
+
+mod provision;
+pub use provision::*;
 
 #[cfg(test)]
 mod tests;

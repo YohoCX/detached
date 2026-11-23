@@ -159,6 +159,7 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
         );
     });
     cx.press("secondary-n");
+    cx.click("sessions.mode.adopt");
     wait_until(cx, |cx| cx.find(("sessions.candidate", 1usize)).is_some());
     cx.input("Release");
     cx.click(("sessions.candidate", 0usize));
@@ -401,4 +402,103 @@ fn an_archived_council_task_opens_a_read_only_round_and_history_errors_are_visib
             .path("repos/api/.git/detached/panels/topic/round/events.jsonl")
             .is_file()
     );
+}
+
+#[gpui_kit::test]
+fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let api = repo(sb, "api");
+        sb.commit_files(&api, "notes", [("notes.txt", "A note\n")]);
+        repo(sb, "web");
+    });
+    let ws = workspace(&app.sb);
+    app.press("secondary-n");
+    assert!(app.find("sessions.provision").is_some());
+    assert!(app.find("sessions.provisional").is_some());
+    assert!(app.find(("tree.root", 0usize)).is_none());
+    app.input("Banner copy");
+    app.click(("sessions.repository", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.basePicker", 0usize)).is_some()
+    });
+    app.click("sessions.create.submit");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| {
+            w.sessions().iter().any(|s| {
+                s.name == "Banner copy"
+                    && s.members
+                        .first()
+                        .is_some_and(|m| m.stage == sessions::Stage::Ready)
+            })
+        }) && cx.find("sessions.openCreated").is_some()
+    });
+    app.click("sessions.openCreated");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| w.session_name() == "Banner copy")
+    });
+
+    app.click("sessions.addRepo");
+    app.click(("sessions.repository", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.basePicker", 0usize)).is_some()
+    });
+    app.click("sessions.create.submit");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| w.session_repos().len() == 2)
+    });
+    let set = sessions::list(&app.sb.state, &ws).unwrap().sets.remove(0);
+    assert_eq!(set.members.len(), 2);
+    assert!(
+        set.members
+            .iter()
+            .all(|m| m.branch.as_deref() == Some("feature/banner-copy"))
+    );
+    let api = &set.members[0].path;
+    assert!(PathBuf::from(api).join("notes.txt").exists());
+    let loc = Location {
+        repo: api.clone(),
+        path: "notes.txt".into(),
+        rev: None,
+        line: None,
+        doc: None,
+    };
+    app.workspace(|w, cx| w.show_tab(Doc::File(loc), true, cx));
+    wait_until(&mut app, |cx| cx.find("viewer.code").is_some());
+    std::fs::write(PathBuf::from(api).join("draft.txt"), "keep me").unwrap();
+
+    app.click("sessions.archiveCurrent");
+    app.click("sessions.archive.confirm");
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.archive.resume", 0usize)).is_some()
+    });
+    assert!(!in_list(&mut app, &set.id));
+    app.click(("sessions.archive.resume", 0usize));
+    wait_until(&mut app, |cx| {
+        in_list(cx, &set.id) && cx.find("viewer.code").is_some()
+    });
+    assert_eq!(
+        std::fs::read_to_string(PathBuf::from(api).join("draft.txt")).unwrap(),
+        "keep me"
+    );
+
+    app.click("sessions.archiveCurrent");
+    app.click("sessions.archive.confirm");
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.archive.remove", 0usize)).is_some()
+    });
+    app.click(("sessions.archive.remove", 0usize));
+    wait_until(&mut app, |cx| cx.find(("sessions.force", 0usize)).is_some());
+    app.click("sessions.remove.clean");
+    let web = PathBuf::from(&set.members[1].path);
+    wait_until(&mut app, |_| !web.exists());
+    assert!(PathBuf::from(api).join("draft.txt").exists());
+    app.click("sessions.provision.cancel");
+    app.click(("sessions.archive.resume", 0usize));
+    wait_until(&mut app, |cx| cx.find("sessions.resume.confirm").is_some());
+    app.click("sessions.resume.confirm");
+    wait_until(&mut app, |cx| {
+        in_list(cx, &set.id) && cx.find("viewer.code").is_some()
+    });
+    assert!(web.exists());
+    assert!(PathBuf::from(api).join("draft.txt").exists());
 }

@@ -16,6 +16,7 @@ pub struct Op {
     pub repo: String,
     pub label: String,
     pub line: String,
+    pub recent: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -226,18 +227,22 @@ impl Activity {
             repo: repo.into(),
             label: label.into(),
             line: String::new(),
+            recent: vec![],
         });
         cx.notify();
         let weak = cx.weak_entity();
         let done = blocking::stream(
             cx,
             move |send| f(&core, id, &|line: &str| send(line.to_string())),
-            move |mut lines: Vec<String>, cx| {
+            move |lines: Vec<String>, cx| {
                 weak.update(cx, |a, cx| {
                     if let (Some(op), Some(line)) =
-                        (a.ops.iter_mut().find(|o| o.id == id), lines.pop())
+                        (a.ops.iter_mut().find(|o| o.id == id), lines.last())
                     {
-                        op.line = line;
+                        op.line.clone_from(line);
+                        op.recent.extend(lines);
+                        let excess = op.recent.len().saturating_sub(8);
+                        op.recent.drain(..excess);
                         cx.notify();
                     }
                 })

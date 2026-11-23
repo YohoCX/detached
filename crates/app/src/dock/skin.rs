@@ -135,6 +135,18 @@ impl DockAreaRenderer for Skin {
     /// With no tab, the center is still a pane, its chips in reach.
     fn center_frame(&self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
         let frame = div().id("dock.center");
+        if let Some(page) = crate::sessions::provision::page(cx) {
+            return frame.child(
+                ui::panel(div().id("sessions.new.page"), cx)
+                    .min_h_0()
+                    .overflow_hidden()
+                    .map(|mut d| {
+                        d.style().flex_grow = Some(1e4);
+                        d
+                    })
+                    .child(page),
+            );
+        }
         if !self.empty.get() {
             return frame;
         }
@@ -166,6 +178,10 @@ impl DockAreaRenderer for Skin {
         cx: &mut App,
     ) -> AnyElement {
         let p = dock.placement();
+        let creating = crate::sessions::provision::page(cx).is_some();
+        if creating && p == DockPlacement::Bottom {
+            return Empty.into_any_element();
+        }
         let (key, resizing, area) = (grip(p), self.resizing.clone(), self.area.clone());
         let (size, open) = (dock.size(), dock.is_open());
         let t = theme(cx);
@@ -294,7 +310,9 @@ impl DockAreaRenderer for Skin {
                 .size_full()
                 .min_h_0()
                 .child(self.sessions.clone())
-                .child(div().flex().flex_1().min_h_0().w_full().child(content))
+                .when(!creating, |d| {
+                    d.child(div().flex().flex_1().min_h_0().w_full().child(content))
+                })
                 .into_any_element()
         } else {
             content
@@ -539,6 +557,9 @@ impl TabGroupRenderer for Group {
         let count = group.panels().len();
         let ids: Vec<_> = group.panels().iter().map(|p| p.panel_id(cx)).collect();
         let center = self.center(group, cx);
+        if center && crate::sessions::provision::page(cx).is_some() {
+            return Empty.into_any_element();
+        }
         // A closed tab or a switch can leave a hidden tab active: the shown category's comes forward.
         if center && labels.get(group.active_ix()).is_some_and(|l| !drawn(l, cx)) {
             let pick = self
@@ -767,6 +788,9 @@ impl TabGroupRenderer for Group {
             return Empty.into_any_element();
         }
         let center = self.center(group, cx);
+        if center && crate::sessions::provision::page(cx).is_some() {
+            return Empty.into_any_element();
+        }
         let hidden = panel.clone().downcast::<DocTab>().is_ok_and(|d| {
             let d = d.read(cx);
             !tabs::mine(d, cx) || (center && !tabs::in_view(d, cx))

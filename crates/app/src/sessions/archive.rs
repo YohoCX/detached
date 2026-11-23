@@ -11,6 +11,7 @@ use gpui_kit::{
 
 use crate::dock::{self, DocKind};
 use crate::ui::{self, GAP, text, theme};
+use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::resource::Interest;
 use kernel::session::Item;
@@ -62,6 +63,9 @@ impl DocKind for ArchiveDocs {
 struct Archive {
     folders: Vec<String>,
     past: Vec<(&'static str, Interest<History>)>,
+    archived: Vec<detached_core::sessions::Workset>,
+    summaries: HashMap<String, String>,
+    _inspect: Option<gpui_kit::Task<()>>,
     _workspace: Subscription,
     _settings: Subscription,
 }
@@ -71,6 +75,9 @@ impl Archive {
         let mut view = Self {
             folders: vec![],
             past: vec![],
+            archived: vec![],
+            summaries: HashMap::new(),
+            _inspect: None,
             _workspace: Workspace::observe(cx, Self::sync),
             _settings: cx.observe(&Settings::global(cx), |view, _, cx| view.sync(cx)),
         };
@@ -83,7 +90,64 @@ impl Archive {
         if !w.archive() {
             self.folders.clear();
             self.past.clear();
+            self.archived.clear();
+            self.summaries.clear();
+            self._inspect = None;
             return;
+        }
+        let archived: Vec<_> = w
+            .sessions()
+            .iter()
+            .filter(|s| s.archived.is_some())
+            .cloned()
+            .collect();
+        if self.archived != archived
+            && let Some(ws) = w.id().map(str::to_owned)
+        {
+            self.archived.clone_from(&archived);
+            let core = kernel::core(cx).clone();
+            let task = blocking::run(cx, move || {
+                archived
+                    .into_iter()
+                    .map(|s| {
+                        let description =
+                            detached_core::sessions::cleanup_preview(&core, &ws, &s.id)
+                                .map(|rows| {
+                                    let kept: Vec<_> =
+                                        rows.iter().filter_map(|(_, p)| p.as_ref().ok()).collect();
+                                    match kept.len() {
+                                        0 => "No worktrees · chats and branches kept".to_owned(),
+                                        1 => format!(
+                                            "1 worktree kept · {}",
+                                            super::provision::cleanup_text(kept[0])
+                                        ),
+                                        n => {
+                                            let changed = kept
+                                                .iter()
+                                                .map(|p| p.changes + p.untracked)
+                                                .sum::<usize>();
+                                            if changed == 0 {
+                                                format!("{n} worktrees kept · clean")
+                                            } else {
+                                                format!(
+                                                    "{n} worktrees kept · {changed} changed files"
+                                                )
+                                            }
+                                        }
+                                    }
+                                })
+                                .unwrap_or_else(|error| error.to_string());
+                        (s.id, description)
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
+            self._inspect = Some(cx.spawn(async move |this, cx| {
+                let descriptions = task.await;
+                _ = this.update(cx, |view, cx| {
+                    view.summaries = descriptions;
+                    cx.notify();
+                });
+            }));
         }
         let folders = Settings::get(cx)
             .workspaces
@@ -138,7 +202,102 @@ impl Render for Archive {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Workspace archive"),
             );
+        if !self.archived.is_empty() {
+            page = page.child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Archived sessions"),
+            );
+        }
+        for (i, set) in self.archived.iter().enumerate() {
+            let resume = set.clone();
+            let cleanup = set.clone();
+            let needs_recreate = set
+                .members
+                .iter()
+                .any(|m| m.stage != detached_core::sessions::Stage::Pending && !m.state.usable());
+            let worktrees = self
+                .summaries
+                .get(&set.id)
+                .map_or("Checking worktrees…", String::as_str);
+            let when = set
+                .archived
+                .map(|at| crate::util::ago_text(at, detached_core::os::now()));
+            let names = set
+                .members
+                .iter()
+                .map(|m| crate::util::folder_name(&m.repo))
+                .collect::<Vec<_>>()
+                .join(", ");
+            page = page.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(GAP)
+                    .p(GAP)
+                    .border_b_1()
+                    .border_color(t.line)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .gap(GAP / 3.)
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(set.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(t.muted)
+                                    .text_size(text::SMALL)
+                                    .child(names)
+                                    .when_some(set.default_branch(), |d, branch| {
+                                        d.child(format!(" · {branch}"))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_color(t.muted)
+                                    .text_size(text::SMALL)
+                                    .child(worktrees.to_owned())
+                                    .when_some(when, |d, when| d.child(format!(" · {when}"))),
+                            ),
+                    )
+                    .child(
+                        ui::primary_button(
+                            ("sessions.archive.resume", i),
+                            if needs_recreate {
+                                "Resume…"
+                            } else {
+                                "Resume"
+                            },
+                            cx,
+                        )
+                        .test_support()
+                        .on_click(move |_, window, cx| {
+                            super::provision::resume(resume.clone(), window, cx)
+                        }),
+                    )
+                    .child(
+                        ui::quiet_button(("sessions.archive.remove", i), "Remove worktrees…", cx)
+                            .test_support()
+                            .on_click(move |_, _, cx| {
+                                super::provision::cleanup(cleanup.clone(), cx)
+                            }),
+                    ),
+            );
+        }
         let tabs = dock::archived_tabs(cx);
+        if !tabs.is_empty() || !self.past.is_empty() {
+            page = page.child(
+                div()
+                    .pt(GAP)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Before sessions"),
+            );
+        }
         let no_tabs = tabs.is_empty();
         if !tabs.is_empty() {
             page = page.child(
@@ -236,7 +395,7 @@ impl Render for Archive {
                     .text_color(t.muted)
                     .child("Loading past conversations…"),
             );
-        } else if !failed && chats.is_empty() && no_tabs {
+        } else if !failed && chats.is_empty() && no_tabs && self.archived.is_empty() {
             page = page.child(div().text_color(t.muted).child("Nothing is archived."));
         }
         page
