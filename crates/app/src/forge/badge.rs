@@ -1,4 +1,4 @@
-use detached_core::types::Pipeline;
+use detached_core::types::{Pipeline, PipelineStatus};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -37,7 +37,10 @@ impl PipelineBadge {
                 dock::open("pipelines", window, cx);
             },
         );
-        let subscriptions = vec![Workspace::observe(cx, |this, cx| this.sync(cx))];
+        let subscriptions = vec![Workspace::observe(cx, |this, cx| {
+            this.sync(cx);
+            cx.notify();
+        })];
         let mut this = PipelineBadge {
             repo: None,
             key: None,
@@ -50,7 +53,13 @@ impl PipelineBadge {
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let repo = Workspace::get(cx).current().map(String::from);
+        let workspace = Workspace::get(cx);
+        let repo = if workspace.archive() {
+            workspace.current()
+        } else {
+            workspace.session_current()
+        }
+        .map(String::from);
         let key = repo.as_deref().and_then(|r| {
             let st = Repo::get(cx, r)?
                 .status()
@@ -74,6 +83,9 @@ impl Render for PipelineBadge {
         let Some(p) = latest.and_then(|l| l.value.clone().flatten()) else {
             return div().hidden().into_any_element();
         };
+        if !Workspace::get(cx).archive() && p.status != PipelineStatus::Failed {
+            return div().hidden().into_any_element();
+        }
         let t = theme(cx);
         let (glyph, status) = (glyph(&p.status), name(&p.status));
         let tip = format!("Pipeline #{}: {status}", p.id);

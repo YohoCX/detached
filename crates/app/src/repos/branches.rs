@@ -7,7 +7,7 @@ use detached_core::api;
 use detached_core::error::Result;
 use detached_core::state::AppState;
 use detached_core::types::{CommitSummary, DeleteResult, LocalBranch, RemoteBranch};
-use gpui_kit::base::{ObservedElement, TestSupportExt};
+use gpui_kit::base::{ElementExt, ObservedElement, TestSupportExt};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{
     Enter, Escape, InputEvent, InputState, MoveDown, MoveRight, MoveUp,
@@ -254,6 +254,7 @@ struct Popup {
     /// The new branch's name, or the track view's query.
     text: Entity<InputState>,
     and_checkout: bool,
+    focus_on_mount: bool,
     busy: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -303,6 +304,7 @@ impl Popup {
             menu_sel: 0,
             text,
             and_checkout: true,
+            focus_on_mount: !Workspace::get(cx).archive(),
             busy: false,
             _subscriptions,
         };
@@ -1101,9 +1103,26 @@ impl Render for Popup {
             Sub::NotMerged { name, commits } => self.not_merged_view(name, commits, cx),
             Sub::DeleteRemote(b, full) => self.delete_remote_view(b, full, cx),
         };
+        let focus = std::mem::take(&mut self.focus_on_mount);
+        let this = cx.weak_entity();
         div()
             .id("branches.popup")
             .test_support()
+            .when(focus, |d| {
+                d.on_prepaint(move |_, w, cx| {
+                    let this = this.clone();
+                    w.defer(cx, move |w, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            let input = if matches!(this.sub, Sub::New { .. }) {
+                                &this.text
+                            } else {
+                                &this.query
+                            };
+                            input.update(cx, |s, cx| s.focus(w, cx));
+                        });
+                    });
+                })
+            })
             .track_focus(&self.focus)
             .role(Role::Dialog)
             .aria_label("Branches")

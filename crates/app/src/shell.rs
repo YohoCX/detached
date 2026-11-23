@@ -270,7 +270,7 @@ impl Shell {
                     )
                     .when(archive, |bar| bar.children(self.left.iter().cloned()))
                     .children(self.branches.iter().cloned())
-                    .when(archive, |bar| bar.children(self.center.iter().cloned()))
+                    .children(self.center.iter().cloned())
                     .child(div().flex_1())
                     .children(self.search.iter().cloned())
                     .when(!archive, |bar| bar.child(div().flex_1()))

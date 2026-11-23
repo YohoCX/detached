@@ -1034,6 +1034,7 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
         ("Council", "council"),
         ("Merge requests", "mrs"),
         ("Pipelines", "pipelines"),
+        ("Compare changes", "changes"),
         ("Events", "events"),
     ] {
         menu = menu.item(label, move |w, cx| {
@@ -1041,7 +1042,12 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
             super::open(name, w, cx);
         });
     }
-    menu = menu.separator();
+    menu = menu
+        .item("Create merge request…", move |w, cx| {
+            click(node, w, cx);
+            actions::dispatch(w, cx, "mr.create");
+        })
+        .separator();
     for repo in Workspace::get(cx).session_repos() {
         let path = repo.path.clone();
         let log = path.clone();

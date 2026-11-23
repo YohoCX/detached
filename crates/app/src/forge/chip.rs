@@ -359,7 +359,10 @@ impl Form {
 
 impl Render for MrChip {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(mr) = self.mr(cx) else {
+        if !Workspace::get(cx).archive() && self.form.is_none() {
+            return div().hidden().into_any_element();
+        }
+        let Some(mr) = self.mr(cx).or_else(|| self.form.as_ref().map(|_| None)) else {
             return div().hidden().into_any_element();
         };
         let anchor = match &mr {
