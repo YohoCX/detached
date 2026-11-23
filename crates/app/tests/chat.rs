@@ -301,6 +301,8 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
     cx.press("escape");
 
     // Narrower, Week leaves the bar before Model does and shows in More with its track.
+    zone_size(cx, gpui_kit::base::dock::DockPlacement::Left, 290.);
+    zone_size(cx, gpui_kit::base::dock::DockPlacement::Right, 310.);
     cx.simulate_resize(size(px(1330.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.limit.Week").is_none());
     assert!(cx.find("chat.model").is_some());
@@ -387,6 +389,8 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
         let limits = json!({"seven_day": {"utilization": 17}});
         fake(sb, json!({"rate_limits": limits}));
     });
+    zone_size(cx, gpui_kit::base::dock::DockPlacement::Left, 290.);
+    zone_size(cx, gpui_kit::base::dock::DockPlacement::Right, 310.);
     cx.simulate_resize(size(px(1400.), px(900.)));
     wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
     for (id, title, value) in [

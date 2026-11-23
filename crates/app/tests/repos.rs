@@ -189,8 +189,14 @@ fn collapsing_persists_in_ui_json(cx: &mut TestAppContext) {
     assert_eq!(saved, Some(vec![ws.clone()]));
     let file = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(file.contains("sidebar.collapsed"), "{file}");
-    cx.click("zone.left");
-    cx.click("zone.left");
+    cx.update(|w, cx| {
+        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
+    });
+    settle(cx);
+    cx.update(|w, cx| {
+        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
+    });
+    settle(cx);
     assert_eq!(
         paths(cx),
         [path(cx.sb.solo())],

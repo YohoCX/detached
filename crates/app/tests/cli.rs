@@ -173,8 +173,7 @@ fn env_run_asks_the_owner_once_per_tab_and_runs_with_the_profile(cx: &mut TestAp
     assert!(!app.has_pending_prompt());
     cli_in_tab(&mut app, "env run nope -- true");
     wait_for_row(&mut app, |r| r.contains("No env profile \"nope\""));
-    app.press("alt-f12");
-    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.maximize"));
+    app.update(|w, cx| detached_app::dock::open("terminal", w, cx));
     settle(&app);
     cli_in_tab(&mut app, &run);
     wait_until(&mut app, |cx| cx.has_pending_prompt());

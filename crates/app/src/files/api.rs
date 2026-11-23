@@ -27,6 +27,11 @@ pub fn show_diff(cx: &mut App, doc: DiffDoc, focus: bool) {
     Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Diff(doc), cx));
 }
 
+pub(crate) fn show_companion_diff(doc: DiffDoc, focus: bool, w: &mut Window, cx: &mut App) {
+    cx.set_global(FocusDiff(focus));
+    crate::dock::open_companion(Doc::Diff(doc), focus, w, cx);
+}
+
 /// Gets a line's side, its number and, when it is unchanged, its number on the other side.
 pub type OnAdd = Rc<dyn Fn(DiffSide, u32, Option<u32>, &mut Window, &mut App)>;
 

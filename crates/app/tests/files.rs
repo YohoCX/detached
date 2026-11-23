@@ -1015,7 +1015,10 @@ fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContex
     assert_eq!(label(cx, "changes.ab").as_deref(), Some("↑1 ↓0"));
 
     // Reopened, the tool is still in Compare with the base, as Compare with Base Branch opens it.
-    cx.click("zone.right");
+    cx.update(|w, cx| {
+        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Right, w, cx)
+    });
+    settle(cx);
     assert!(changes(cx).is_empty());
     open_tab(cx, "tool.Changes");
     wait_until(cx, |cx| changes(cx) == want);

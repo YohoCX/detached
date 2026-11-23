@@ -718,7 +718,10 @@ impl Pipelines {
                     .items_center()
                     .gap(px(8.))
                     .px(px(4.))
-                    .on_click(move |_, _, cx| nav::open(cx, loc.clone()))
+                    .on_click(move |_, w, cx| {
+                        nav::visit(cx, &loc);
+                        crate::dock::open_companion(loc.clone().into(), true, w, cx);
+                    })
                     .child(status(&j.status, cx))
                     .child(div().min_w_0().truncate().child(j.name.clone()))
                     .when(j.allow_failure, |d| {

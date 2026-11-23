@@ -151,11 +151,18 @@ impl DocKind for ToolDocs {
         )
     }
 
-    fn view(&self, doc: &mut Doc, read_only: bool, w: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, _: &mut Window, cx: &mut App) -> AnyView {
         if !read_only && let Some(app) = tool(doc, cx) {
-            return (app.view)(w, cx);
+            return Tab::new(app, cx).into();
         }
         cx.new(|_| Unavailable).into()
+    }
+    fn activated(&self, view: &AnyView, w: &mut Window, cx: &mut App) {
+        if let Ok(tab) = view.clone().downcast::<Tab>()
+            && let Some(shown) = tab.read(cx).app.shown
+        {
+            shown(w, cx);
+        }
     }
 }
 
@@ -252,6 +259,7 @@ impl Render for Missing {
             .id("dock.missing")
             .test_support()
             .aria_label(text.clone())
+            .track_focus(&self.focus)
             .flex()
             .size_full()
             .items_center()
@@ -611,6 +619,9 @@ fn live_tool(name: &str, cx: &App) -> Option<Doc> {
 }
 
 pub(crate) fn is_doc_view_shown(view: EntityId, cx: &App) -> bool {
+    if crate::search::palette_open(cx) {
+        return false;
+    }
     let (Some(area), Some(doc)) = (zones(cx), Workspace::get(cx).shown()) else {
         return false;
     };
@@ -776,8 +787,10 @@ pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut Ap
 }
 
 pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
-    if tab.read(cx).closable(cx) {
-        panes::confirm_close(vec![tab], None, window, cx);
+    if tab.read(cx).closable(cx)
+        && let Some(area) = zones(cx)
+    {
+        panes::confirm_close(area, vec![tab.panel_id(cx)], None, window, cx);
     }
 }
 
@@ -994,7 +1007,13 @@ pub(crate) fn bound_repo(cx: &App) -> Option<String> {
 }
 
 pub(crate) fn open_beside(doc: Doc, split: bool, keep: bool, w: &mut Window, cx: &mut App) {
-    panes::open_beside(doc, split, keep, w, cx);
+    panes::open_beside(
+        doc,
+        split.then_some(gpui_kit::base::Placement::Right),
+        keep,
+        w,
+        cx,
+    );
 }
 
 pub(crate) fn terminal_below(w: &mut Window, cx: &mut App) {
@@ -1017,4 +1036,8 @@ pub(crate) fn focused_tabs(cx: &App) -> (Vec<(PanelId, String)>, usize) {
     zones(cx).map_or_else(Default::default, |area| {
         panes::focused_tabs(area.read(cx), cx)
     })
+}
+
+pub(crate) fn open_companion(doc: Doc, focus: bool, w: &mut Window, cx: &mut App) {
+    panes::open_beside(doc, Some(gpui_kit::base::Placement::Bottom), focus, w, cx);
 }

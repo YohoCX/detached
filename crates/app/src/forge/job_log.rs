@@ -6,7 +6,7 @@ use detached_core::types::{Job, JobLogChunk, Project, Step};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ListHorizontalSizingBehavior,
-    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Subscription, Task,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Task,
     UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, rgb, uniform_list,
 };
 
@@ -17,13 +17,11 @@ use crate::ui::theme::{Theme, mono};
 use crate::ui::{self, Icon, text, theme};
 use kernel::blocking;
 use kernel::doc::Doc;
-use kernel::workspace::{Event, Workspace};
 
 const MB: usize = 1 << 20;
 
 /// A job's log, followed while the job runs.
 pub struct JobLog {
-    doc: Doc,
     repo: String,
     project: Project,
     id: u64,
@@ -44,7 +42,6 @@ pub struct JobLog {
     /// The scroll offset last rendered: a scroll since then pins or unpins.
     offset: Pixels,
     _fetch: Task<()>,
-    _shown: Subscription,
 }
 
 impl JobLog {
@@ -54,18 +51,11 @@ impl JobLog {
             project,
             id,
             name,
-        } = doc.clone()
+        } = doc
         else {
             unreachable!("the shell's pages are MRs and job logs")
         };
-        // Opening the shown job again starts it over, as it does after a retry.
-        let shown = cx.subscribe(&Workspace::global(cx), |this: &mut Self, w, e, cx| {
-            if matches!(e, Event::Shown { .. }) && w.read(cx).shown() == Some(&this.doc) {
-                this.start(cx);
-            }
-        });
         let mut this = JobLog {
-            doc,
             repo,
             project,
             id,
@@ -81,13 +71,12 @@ impl JobLog {
             stick: true,
             offset: px(0.),
             _fetch: Task::ready(()),
-            _shown: shown,
         };
         this.start(cx);
         this
     }
 
-    fn start(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn start(&mut self, cx: &mut Context<Self>) {
         let key = job_key(&self.project, self.id);
         let known = cx.try_global::<Seen>().and_then(|s| s.0.get(&key).cloned());
         (self.parser, self.rows, self.widest) = (LogParser::default(), vec![], 0);

@@ -610,6 +610,10 @@ fn tab_switcher_lists_only_the_focused_pane_and_moves_the_tab_at_a_facing_edge(
         Some("README.md")
     );
     assert!(app.find(("palette.row", 2usize)).is_none());
+    assert_eq!(
+        app.find(("palette.row", 0usize)).unwrap().selected(),
+        Some(true)
+    );
     app.press("enter");
     assert_eq!(
         app.find("doc.session-overview").unwrap().checked(),
@@ -691,6 +695,10 @@ fn a_live_layout_keeps_an_unavailable_document_as_a_closable_tab(cx: &mut TestAp
             {"panel_name": "doc", "children": [], "info": {"panel": {
                 "doc": {"RemovedKind": {"path": "memento.txt", "annotation": 19}},
                 "keep": true, "workspace": workspace(sb), "session": "main"
+            }}},
+            {"panel_name": "doc", "children": [], "info": {"panel": {
+                "doc": {"OlderKind": {"path": "other.txt"}},
+                "keep": true, "workspace": workspace(sb), "session": "main"
             }}}
         ]);
         dock["center"]["children"][0]["info"]["tabs"]["active_index"] = json!(0);
@@ -707,6 +715,74 @@ fn a_live_layout_keeps_an_unavailable_document_as_a_closable_tab(cx: &mut TestAp
     });
     let saved: serde_json::Value = app.update(|_, cx| ui_state::get(&key, cx).unwrap());
     assert!(saved.to_string().contains("\"annotation\":19"));
-    app.update(|w, cx| w.within("tab.missing.0").click("tab.close", cx));
-    wait_until(app, |cx| cx.find("dock.missing").is_none());
+    let run = |app: &mut VisualTestContext, id| {
+        app.update(|w, cx| detached_app::actions::dispatch(w, cx, id));
+        settle(app);
+    };
+    run(app, "tabs.switcher");
+    assert_eq!(
+        label(app, ("palette.row", 0usize)).as_deref(),
+        Some("memento.txt")
+    );
+    assert_eq!(
+        label(app, ("palette.row", 1usize)).as_deref(),
+        Some("other.txt")
+    );
+    app.press("enter");
+    wait_until(app, |cx| {
+        label(cx, "dock.missing").is_some_and(|label| label.contains("other.txt"))
+    });
+    app.press("secondary-w");
+    wait_until(app, |cx| cx.find("tab.missing.1").is_none());
+    let saved: serde_json::Value = app.update(|_, cx| ui_state::get(&key, cx).unwrap());
+    assert!(saved.to_string().contains(r#""annotation":19"#));
+    assert!(!saved.to_string().contains("OlderKind"));
+    app.click("tab.missing.0");
+    run(app, "pane.splitDown");
+    run(app, "pane.prev");
+    run(app, "pane.close");
+    wait_until(app, |cx| cx.find("tab.missing.0").is_none());
+    let saved: serde_json::Value = app.update(|_, cx| ui_state::get(&key, cx).unwrap());
+    assert!(!saved.to_string().contains("RemovedKind"));
+}
+
+#[gpui_kit::test]
+fn a_file_view_saves_its_cursor_and_scroll_in_its_session_layout(cx: &mut TestAppContext) {
+    let app = &mut open_app_with(cx, |sb| {
+        let path = repo(sb, "api");
+        let text: String = (1..=180)
+            .map(|line| format!("editor line {line}\n"))
+            .collect();
+        sb.commit_files(&path, "long file", [("long.txt", text)]);
+    });
+    let repo = app.workspace(|w, _| w.session_repos()[0].path.clone());
+    app.workspace(|w, cx| {
+        w.show_tab(
+            Doc::File(Location {
+                repo,
+                rev: None,
+                path: "long.txt".into(),
+                line: None,
+                doc: None,
+            }),
+            true,
+            cx,
+        );
+    });
+    wait_until(app, |cx| cx.find("viewer.code").is_some());
+    app.press("secondary-l");
+    app.input("130:5");
+    app.press("enter");
+    let key = format!("session.{}.main.layout", workspace(&app.sb));
+    wait_until(app, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            detached_app::dock::save_current(cx);
+            let saved: serde_json::Value = ui_state::get(&key, cx).unwrap();
+            let raw = saved.to_string();
+            raw.contains(r#""line":129"#)
+                && raw.contains(r#""column":4"#)
+                && raw.contains(r#""y":-"#)
+        })
+    });
 }

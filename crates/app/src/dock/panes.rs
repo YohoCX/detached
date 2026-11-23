@@ -328,7 +328,7 @@ fn room(
     false
 }
 
-fn split(side: Placement, doc: Option<Doc>, w: &mut Window, cx: &mut App) {
+fn split(side: Placement, doc: Option<Doc>, keyboard: bool, w: &mut Window, cx: &mut App) {
     super::with(cx, |a, cx| {
         let Some(node) = focused(a, cx) else { return };
         if !room(a, node, side, w, cx) {
@@ -341,6 +341,7 @@ fn split(side: Placement, doc: Option<Doc>, w: &mut Window, cx: &mut App) {
             .and_then(|(_, tabs, ix)| a.panel(*tabs.get(ix)?))
             .and_then(|p| p.view().downcast::<DocTab>().ok())
             .map(|t| t.read(cx).doc.clone());
+        let keep = doc.is_none() || keyboard;
         let doc = doc.unwrap_or(match current {
             Some(doc @ (Doc::File(_) | Doc::Diff(_))) => doc,
             _ => Doc::NewTab,
@@ -348,7 +349,8 @@ fn split(side: Placement, doc: Option<Doc>, w: &mut Window, cx: &mut App) {
         let Some(kind) = super::doc_kind(doc.kind(), cx) else {
             return;
         };
-        let tab = DocTab::new(doc, kind, true, cx);
+        let keep = keep || !kind.preview();
+        let tab = DocTab::new(doc, kind, keep, cx);
         let id = tab.panel_id(cx);
         a.add_panel(tab, DockPlacement::Center, None, w, cx);
         a.move_panel(
@@ -361,7 +363,12 @@ fn split(side: Placement, doc: Option<Doc>, w: &mut Window, cx: &mut App) {
             w,
             cx,
         );
-        super::reveal(a, id, w, cx);
+        if let Some(at) = a
+            .layout(DockPlacement::Center)
+            .and_then(|t| t.find_panel_node(id))
+        {
+            select(a, at, id, keyboard, w, cx);
+        }
     });
 }
 
@@ -370,13 +377,13 @@ pub(super) fn terminal_below(cwd: String, w: &mut Window, cx: &mut App) {
     if Workspace::get(cx).archive() {
         super::open_doc(doc, true, w, cx);
     } else {
-        split(Placement::Bottom, Some(doc), w, cx);
+        split(Placement::Bottom, Some(doc), true, w, cx);
     }
 }
 
 pub(super) fn open_beside(
     doc: Doc,
-    split_if_alone: bool,
+    split_if_alone: Option<Placement>,
     keep: bool,
     w: &mut Window,
     cx: &mut App,
@@ -385,10 +392,21 @@ pub(super) fn open_beside(
         return super::open_doc(doc, keep, w, cx);
     }
     let Some(area) = super::zones(cx) else { return };
-    let source = focused(area.read(cx), cx);
+    let a = area.read(cx);
+    let source = groups(a)
+        .into_iter()
+        .find(|(_, tabs, active)| {
+            tabs.get(*active)
+                .and_then(|id| a.panel(*id))
+                .is_some_and(|p| p.focus_handle(cx).contains_focused(w, cx))
+        })
+        .map(|g| g.0)
+        .or_else(|| focused(a, cx));
     let other = adjacent(area.read(cx), source, cx);
-    if other.is_none() && split_if_alone {
-        return split(Placement::Right, Some(doc), w, cx);
+    if other.is_none()
+        && let Some(side) = split_if_alone
+    {
+        return split(side, Some(doc), keep, w, cx);
     }
     if let Some(kind) = super::doc_kind(doc.kind(), cx) {
         area.update(cx, |a, cx| show_doc(a, doc, kind, keep, other, w, cx));
@@ -487,8 +505,11 @@ pub(super) fn focused_tabs(a: &DockArea, cx: &App) -> (Vec<(PanelId, String)>, u
     let tabs: Vec<_> = tabs
         .into_iter()
         .filter_map(|id| {
-            let tab = a.panel(id)?.view().downcast::<DocTab>().ok()?;
-            Some((id, tab.read(cx).title(cx).to_string()))
+            let title = match a.panel(id)?.view().downcast::<DocTab>() {
+                Ok(tab) => tab.read(cx).title(cx),
+                Err(view) => view.downcast::<super::Missing>().ok()?.read(cx).title(),
+            };
+            Some((id, title.to_string()))
         })
         .collect();
     let active = tabs
@@ -874,29 +895,35 @@ fn maximize(w: &mut Window, cx: &mut App) {
 }
 
 pub(super) fn confirm_close(
-    tabs: Vec<gpui_kit::Entity<DocTab>>,
+    area: gpui_kit::Entity<DockArea>,
+    ids: Vec<PanelId>,
     pane: Option<NodeId>,
     w: &mut Window,
     cx: &mut App,
 ) {
-    let busy: Vec<_> = tabs.iter().filter_map(|t| t.read(cx).running(cx)).collect();
-    let area = super::zones(cx);
+    let busy: Vec<_> = ids
+        .iter()
+        .filter_map(|id| {
+            let tab = area.read(cx).panel(*id)?.view().downcast::<DocTab>().ok()?;
+            tab.read(cx).running(cx)
+        })
+        .collect();
     let close = move |w: &mut Window, cx: &mut App| {
-        if let (Some(pane), Some(area)) = (pane, area) {
-            area.update(cx, |area, cx| {
-                let all = groups(area);
+        area.update(cx, |a, cx| {
+            if let Some(pane) = pane {
+                let all = groups(a);
                 let Some(other) = all.iter().find(|g| g.0 != pane) else {
                     return;
                 };
                 let overview = all.iter().find(|g| g.0 == pane).and_then(|g| {
                     g.1.iter().find(|id| {
-                        area.panel(**id)
+                        a.panel(**id)
                             .and_then(|p| p.view().downcast::<DocTab>().ok())
                             .is_some_and(|t| t.read(cx).doc == Doc::SessionOverview)
                     })
                 });
                 if let Some(id) = overview {
-                    area.move_panel(
+                    a.move_panel(
                         *id,
                         InsertTarget::Tabs {
                             node: other.0,
@@ -907,11 +934,21 @@ pub(super) fn confirm_close(
                         cx,
                     );
                 }
-            });
-        }
-        for t in tabs {
-            super::remove_doc(t, w, cx);
-        }
+            }
+            for id in ids {
+                if let Some(panel) = a.panel(id).filter(|p| p.closable(cx)) {
+                    let view = panel.view();
+                    match view.downcast::<DocTab>() {
+                        Ok(tab) => a.remove_panel(tab, w, cx),
+                        Err(view) => {
+                            if let Ok(missing) = view.downcast::<super::Missing>() {
+                                a.remove_panel(missing, w, cx);
+                            }
+                        }
+                    }
+                }
+            }
+        });
     };
     if busy.is_empty() {
         close(w, cx);
@@ -948,16 +985,11 @@ fn close(pane: bool, w: &mut Window, cx: &mut App) {
         return;
     };
     let ids = if pane {
-        ids.as_slice()
+        ids.clone()
     } else {
-        ids.get(*ix).map_or(&[][..], std::slice::from_ref)
+        ids.get(*ix).copied().into_iter().collect()
     };
-    let tabs: Vec<_> = ids
-        .iter()
-        .filter_map(|id| area.panel(*id)?.view().downcast::<DocTab>().ok())
-        .filter(|t| gpui_kit::base::dock::Panel::closable(t.read(cx), cx))
-        .collect();
-    confirm_close(tabs, pane.then_some(*node), w, cx);
+    confirm_close(a, ids, pane.then_some(*node), w, cx);
 }
 
 pub(super) fn menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
@@ -1060,8 +1092,8 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
                     return;
                 }
                 match id {
-                    "pane.splitRight" => split(Placement::Right, None, w, cx),
-                    "pane.splitDown" => split(Placement::Bottom, None, w, cx),
+                    "pane.splitRight" => split(Placement::Right, None, true, w, cx),
+                    "pane.splitDown" => split(Placement::Bottom, None, true, w, cx),
                     "pane.next" => next(1, w, cx),
                     "pane.prev" => next(-1, w, cx),
                     "pane.focusLeft" => direction(Placement::Left, false, w, cx),
