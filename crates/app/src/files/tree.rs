@@ -134,6 +134,7 @@ enum TreeRowKind {
     Root {
         name: String,
         detail: String,
+        show_detail: bool,
         open: bool,
         available: bool,
     },
@@ -379,7 +380,14 @@ impl Tree {
                     }),
             );
         }
+        let shared = set.and_then(crate::sessions::shared_branch);
         for (index, (repo, name, available, detail)) in roots.into_iter().enumerate() {
+            let show_detail = !detail.is_empty()
+                && (!self.live
+                    || changes
+                    || !available
+                    || Some(detail.as_str()) != shared
+                    || Repo::get(cx, &repo).is_some_and(|r| r.tree_ref.is_some()));
             let open = available && root_open(&repo, current, cx);
             rows.push(TreeRow {
                 repo: repo.clone(),
@@ -387,6 +395,7 @@ impl Tree {
                 kind: TreeRowKind::Root {
                     name,
                     detail,
+                    show_detail,
                     open,
                     available,
                 },
@@ -621,7 +630,7 @@ impl Tree {
                             "Browse a branch, tag or commit",
                         )
                         .test_support()
-                        .aria_toggled(self.browse.into())
+                        .when(at, |d| d.text_color(t.accent))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.browse = !this.browse;
                             cx.notify();
@@ -649,13 +658,15 @@ impl Tree {
             .gap(px(6.))
             .h(px(36.))
             .px(px(12.))
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(text::TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Browse"),
-            )
+            .when(!self.live, |d| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .text_size(text::TITLE)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Browse"),
+                )
+            })
             .child(
                 div()
                     .id("tree.ref")
@@ -664,7 +675,8 @@ impl Tree {
                     .flex_none()
                     .items_center()
                     .gap(px(4.))
-                    .w(px(120.))
+                    .when(self.live, |d| d.min_w_0().flex_1())
+                    .when(!self.live, |d| d.w(px(120.)))
                     .tooltip(tip("Browse a branch, tag or commit"))
                     .child(
                         div()
@@ -688,12 +700,24 @@ impl Tree {
                         cx.notify();
                     })),
             );
+        let editing = self.live && self.browse && !changes && self.key.is_some();
+        let ref_bar = ref_bar.when(self.live, |d| {
+            d.child(
+                ui::quiet_button("tree.browse.done", "Done", cx)
+                    .test_support()
+                    .on_click(cx.listener(|this, _, w, cx| {
+                        this.browse = false;
+                        w.focus(&this.focus, cx);
+                        cx.notify();
+                    })),
+            )
+        });
         div()
             .flex()
             .flex_col()
-            .child(modes)
+            .when(!editing, |d| d.child(modes))
             .when(
-                !changes && self.key.is_some() && (!self.live || at || self.browse),
+                editing || (!self.live && !changes && self.key.is_some()),
                 |d| d.child(ref_bar),
             )
             .when(self.live && changes, |d| {
@@ -745,15 +769,24 @@ impl Tree {
             TreeRowKind::Root {
                 name,
                 detail,
+                show_detail,
                 open,
                 available,
             } => {
                 let (repo, open, available) = (entry.repo.clone(), *open, *available);
+                let tip = if detail.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} · {detail}")
+                };
                 return ui::list_row(("tree.root", i), on, focused, cx)
                     .test_support()
                     .role(Role::TreeItem)
                     .aria_label(name.clone())
                     .aria_description(detail.clone())
+                    .tooltip(move |w, cx| Tooltip::new(tip.clone()).build(w, cx))
+                    .w_full()
+                    .min_w_0()
                     .aria_selected(on)
                     .when(available, |el| el.aria_expanded(open))
                     .h(px(26.))
@@ -771,21 +804,26 @@ impl Tree {
                     )
                     .child(
                         div()
-                            .truncate()
+                            .flex_1()
                             .min_w_0()
+                            .truncate()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(name.clone()),
                     )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(ui::theme::mono(cx))
-                            .text_size(text::LABEL)
-                            .text_color(if available { t.muted } else { t.warning })
-                            .child(detail.clone()),
-                    )
+                    .when(*show_detail, |d| {
+                        d.child(
+                            div()
+                                .id(("tree.root.detail", i))
+                                .test_support()
+                                .max_w(gpui_kit::relative(0.36))
+                                .min_w_0()
+                                .truncate()
+                                .font_family(ui::theme::mono(cx))
+                                .text_size(text::LABEL)
+                                .text_color(if available { t.muted } else { t.warning })
+                                .child(detail.clone()),
+                        )
+                    })
                     .into_any_element();
             }
         };

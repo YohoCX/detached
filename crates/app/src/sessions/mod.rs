@@ -44,7 +44,10 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             provision::archive,
         ),
         ("session.rename", "Rename Session…", sheet::rename),
-        ("session.archive", "Session Archive", open_archive),
+        ("session.archive", "Session Archive", |w, cx| {
+            provision::dismiss_new(cx);
+            open_archive(w, cx);
+        }),
         ("panel.sessions", "Show or Hide Sessions", toggle),
         ("session.next", "Next Session", |w, cx| step(1, w, cx)),
         ("session.prev", "Previous Session", |w, cx| step(-1, w, cx)),
@@ -93,6 +96,7 @@ pub(super) fn open_archive(window: &mut Window, cx: &mut App) {
 }
 
 fn select(id: &str, _: &mut Window, cx: &mut App) {
+    provision::dismiss_new(cx);
     Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
 }
 
@@ -176,6 +180,8 @@ impl Render for List {
             .child(title)
             .child(fold)
             .child(add);
+        let draft = provision::provisional(cx);
+        let browsing = draft.is_none();
         let rows = div()
             .id("sessions.rows")
             .test_support()
@@ -188,19 +194,19 @@ impl Render for List {
             .min_h_0()
             .overflow_y_scroll()
             .gap(px(3.))
-            .child(row(None, cx))
-            .when_some(provision::provisional(cx), |d, name| {
+            .child(row(None, browsing, cx))
+            .when_some(draft, |d, name| {
                 d.child(
                     div()
                         .id("sessions.provisional")
                         .test_support()
+                        .role(Role::ListItem)
+                        .aria_selected(true)
                         .m(GAP / 3.)
                         .p(GAP)
                         .rounded(radius::WIDGET)
-                        .border_1()
-                        .border_dashed()
-                        .border_color(t.line)
-                        .text_color(t.muted)
+                        .bg(t.active_bg)
+                        .shadow(vec![ui::marker(cx)])
                         .child(name),
                 )
             })
@@ -208,7 +214,7 @@ impl Render for List {
                 w.sessions()
                     .iter()
                     .filter(|s| s.visible())
-                    .map(|set| row(Some(set), cx)),
+                    .map(|set| row(Some(set), browsing, cx)),
             );
         let list = div()
             .id("sessions")
@@ -259,7 +265,7 @@ fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
     .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"))
 }
 
-fn shared_branch(set: &Workset) -> Option<&str> {
+pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {
     let branch = set.members.first()?.branch.as_deref()?;
     set.members
         .iter()
@@ -366,13 +372,14 @@ fn repo_count(count: usize) -> String {
     }
 }
 
-fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
+fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
     let w = Workspace::get(cx);
     let t = theme(cx);
     let (id, name) = set.map_or((MAIN, "Main checkouts"), |set| {
         (set.id.as_str(), set.name.as_str())
     });
-    let selected = !w.archive() && w.session_id() == id;
+    let expanded = !w.archive() && w.session_id() == id;
+    let selected = browsing && expanded;
     let count = set.map_or_else(
         || w.repos().iter().filter(|r| r.worktree_of.is_none()).count(),
         |set| set.members.iter().filter(|m| m.state.usable()).count(),
@@ -383,7 +390,7 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
     } else {
         repo_count(count)
     };
-    let members: Vec<_> = if selected {
+    let members: Vec<_> = if expanded {
         if let Some(set) = set {
             set.members
                 .iter()
@@ -421,8 +428,6 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
         .flex()
         .flex_col()
         .flex_none()
-        .rounded(radius::ICON_BUTTON)
-        .when(selected, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
         .child(
             ui::pressable(gpui_kit::SharedString::from(format!("sessions.row.{id}")))
                 .test_support()
@@ -435,7 +440,8 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                 .px(GAP)
                 .py(GAP / 2.)
                 .rounded(radius::WIDGET)
-                .hover(|d| d.bg(t.hover))
+                .when(selected, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
+                .when(!selected, |d| d.hover(|d| d.bg(t.hover)))
                 .on_click(move |_, window, cx| select(&id, window, cx))
                 .when(editable, |d| {
                     d.on_aux_click(move |e, window, cx| {

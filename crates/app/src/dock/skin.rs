@@ -143,7 +143,9 @@ impl DockAreaRenderer for Skin {
         let frame = div().id("dock.center");
         if let Some(page) = crate::sessions::provision::page(cx) {
             return frame.child(
-                ui::panel(div().id("sessions.new.page"), cx)
+                div()
+                    .id("sessions.new.page")
+                    .when(self.archive, |d| ui::panel(d, cx))
                     .min_h_0()
                     .overflow_hidden()
                     .map(|mut d| {

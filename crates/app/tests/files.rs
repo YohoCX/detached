@@ -1426,6 +1426,46 @@ fn arrows_move_right_expands_left_collapses_or_goes_to_the_parent_and_enter_open
 }
 
 #[gpui_kit::test]
+fn explorer_roots_leave_the_common_branch_in_the_session_header(cx: &mut TestAppContext) {
+    use detached_core::sessions;
+    let branch = "feature/application-maintenance";
+    let mut id = String::new();
+    let mut app = open_app_with(cx, |sb| {
+        let paths = ["api", "web"].map(|name| {
+            let repo = repo(sb, &format!("health-application/{name}"));
+            let tree = sb.path(&format!("{name}-tree"));
+            let path = tree.display().to_string();
+            sb.git(&repo, &["worktree", "add", "-b", branch, &path]);
+            path
+        });
+        let ws = &sb.state.get_settings().workspaces[0].id;
+        id = sessions::adopt(&sb.state, ws, "Maintenance", &paths)
+            .unwrap()
+            .id;
+    });
+    app.workspace(|w, cx| w.switch_session(&id, cx));
+    wait_until(&mut app, |cx| {
+        cx.find(("tree.root", 1usize))
+            .is_some_and(|e| e.description() == Some(branch))
+    });
+    let explorer = app.find("session.explorer").unwrap().bounds();
+    for (i, name) in ["health-application/api", "health-application/web"]
+        .iter()
+        .enumerate()
+    {
+        let row = app.find(("tree.root", i)).unwrap();
+        assert_eq!(row.label(), Some(*name));
+        assert!(row.bounds().left() >= explorer.left() && row.bounds().right() <= explorer.right());
+        assert!(app.find(("tree.root.detail", i)).is_none());
+    }
+    app.press("secondary-0");
+    assert!(
+        app.find(("tree.root.detail", 0usize)).is_some(),
+        "Changes keeps the count"
+    );
+}
+
+#[gpui_kit::test]
 fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cross(
     cx: &mut TestAppContext,
 ) {
@@ -1490,6 +1530,9 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
         Some("main")
     );
     assert_eq!(field(cx).value(), Some("main"));
+    cx.click("tree.browse.done");
+    assert!(cx.find("tree.ref").is_none());
+    assert!(cx.find("tree.changes").is_some());
     // lib's branch changed it; main has the original.
     click_row(cx, "index.ts");
     shown(cx, "export {}");
@@ -1499,6 +1542,7 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
         ("src/index.ts", Some("main"))
     );
 
+    cx.click("tree.browse");
     cx.click("tree.back");
     wait_until(cx, |cx| tree(cx).contains(&"feature.txt".to_string()));
     assert!(cx.repo(&lib, |r, _| r.tree_ref.is_none()));
