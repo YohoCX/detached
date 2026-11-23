@@ -33,9 +33,9 @@ fn checkout(dir: &Path) -> bool {
     dir.join(".git").symlink_metadata().is_ok()
 }
 
-pub fn working_path(repo: &Path, path: &str) -> bool {
+pub(super) fn working_path(repo: &Path, path: &Path) -> bool {
     let mut dir = repo.to_path_buf();
-    let mut parts = Path::new(path).components().peekable();
+    let mut parts = path.components().peekable();
     while let Some(part) = parts.next() {
         let Component::Normal(name) = part else {
             return false;
@@ -52,7 +52,7 @@ pub fn working_path(repo: &Path, path: &str) -> bool {
 }
 
 pub fn working_file(repo: &Path, path: &str) -> bool {
-    working_path(repo, path) && !checkout(&repo.join(path))
+    working_path(repo, Path::new(path)) && !checkout(&repo.join(path))
 }
 
 /// Working-tree files (None) or the files at `rev`, sorted.
