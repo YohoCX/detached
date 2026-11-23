@@ -277,3 +277,271 @@ fn linked_preserves_branch_and_lock_reason() {
         Some("Locked")
     );
 }
+
+fn request(repo: &Path, branch: &str, base: Option<&str>) -> Request {
+    Request {
+        repo: repo.display().to_string(),
+        branch: branch.into(),
+        base: base.map(String::from),
+    }
+}
+
+fn job<'a>(ws: &'a str, id: &'a str, repo: &'a str, cancel: &'a crate::state::Cancel) -> Job<'a> {
+    Job {
+        ws,
+        id,
+        repo,
+        cancel,
+        progress: &|_| {},
+    }
+}
+
+#[test]
+fn preview_uses_local_refs_and_create_tracks_a_branch_found_during_fetch() {
+    let (sb, ws, repo, _) = setup();
+    let mut request = request(&repo, "feature/arriving", Some("HEAD"));
+    let check = preview(&sb.state, &ws, &request).unwrap();
+    assert!(check.new_branch);
+    assert!(!check.path.exists());
+    assert!(
+        sb.git(&repo, &["branch", "--list", "feature/arriving"])
+            .is_empty()
+    );
+
+    let origin = sb.git(&repo, &["remote", "get-url", "origin"]);
+    let head = sb.git(&repo, &["rev-parse", "HEAD"]);
+    sb.git(Path::new(&origin), &["branch", "feature/arriving", &head]);
+    assert!(preview(&sb.state, &ws, &request).unwrap().new_branch);
+    let set = begin(
+        &sb.state,
+        &ws,
+        "Arriving",
+        &request.branch.clone(),
+        std::slice::from_ref(&request),
+    )
+    .unwrap();
+    assert!(!set.visible());
+    let cancel = crate::state::Cancel::default();
+    let set = provision(&sb.state, job(&ws, &set.id, &request.repo, &cancel), None).unwrap();
+    let member = &set.members[0];
+    assert!(set.visible());
+    assert_eq!(member.stage, Stage::Ready);
+    assert_eq!(member.base_sha, head);
+    assert_eq!(
+        sb.git(
+            Path::new(&member.path),
+            &["rev-parse", "--abbrev-ref", "@{upstream}"]
+        ),
+        "origin/feature/arriving"
+    );
+    assert!(
+        member
+            .steps
+            .iter()
+            .any(|line| line == "Tracks origin/feature/arriving")
+    );
+
+    request.branch = "renewal".into();
+    let error = preview(&sb.state, &ws, &request).unwrap_err().to_string();
+    assert!(error.contains("already checked out"), "{error}");
+}
+
+#[test]
+fn retry_install_keeps_earlier_work_and_archive_recreates_only_removed_trees() {
+    use crate::store::{Files, Kind, RepoStore};
+
+    let (sb, ws, repo, _) = setup();
+    sb.commit(&repo, ".gitignore", ".env\n.installed\n", "ignore");
+    fs::write(repo.join(".env"), "first").unwrap();
+    let write_recipe = |script: &str| {
+        let recipe = format!("copies = [\".env\"]\ninstall = \"{script}\"\n");
+        let files: Files = [(PathBuf::new(), recipe.into_bytes())].into();
+        let store = RepoStore::open(&sb.state, &repo).unwrap();
+        for item in store.list(&sb.state, Kind::Recipes).unwrap() {
+            fs::remove_file(item.path).unwrap();
+        }
+        store
+            .write(&sb.state, Kind::Recipes, worktree::RECIPE, &files)
+            .unwrap();
+    };
+    write_recipe("exit 1");
+    let request = request(&repo, "feature/retry", None);
+    let set = begin(
+        &sb.state,
+        &ws,
+        "Retry",
+        &request.branch,
+        std::slice::from_ref(&request),
+    )
+    .unwrap();
+    let id = set.id.clone();
+    let cancel = crate::state::Cancel::default();
+    let run = || provision(&sb.state, job(&ws, &id, &request.repo, &cancel), None).unwrap();
+    let partial = run();
+    let m = &partial.members[0];
+    let path = PathBuf::from(&m.path);
+    assert_eq!(m.stage, Stage::Install);
+    assert_eq!(m.state, MemberState::InstallFailed);
+    assert!(m.error.as_deref().unwrap().contains("exit 1"));
+    assert_eq!(fs::read_to_string(path.join(".env")).unwrap(), "first");
+    assert_eq!(list(&sb.state, &ws).unwrap().sets[0].members[0], *m);
+
+    fs::write(repo.join(".env"), "second").unwrap();
+    write_recipe("echo ok > .installed");
+    let installed = run();
+    assert_eq!(installed.members[0].stage, Stage::Ready);
+    assert!(path.join(".installed").exists());
+    assert_eq!(fs::read_to_string(path.join(".env")).unwrap(), "first");
+    fs::write(path.join("draft"), "keep").unwrap();
+    assert!(archive(&sb.state, &ws, &id).unwrap().archived.is_some());
+    assert!(
+        resume(&sb.state, &ws, &id, false)
+            .unwrap()
+            .archived
+            .is_none()
+    );
+    assert_eq!(fs::read_to_string(path.join("draft")).unwrap(), "keep");
+
+    archive(&sb.state, &ws, &id).unwrap();
+    let rows = cleanup_preview(&sb.state, &ws, &id).unwrap();
+    let preview = rows[0].1.as_ref().unwrap();
+    assert_eq!(preview.untracked, 1);
+    assert!(preview.ignored.iter().any(|p| p == ".env"));
+    let kept = remove(
+        &sb.state,
+        job(&ws, &id, &request.repo, &cancel),
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(
+        kept.members[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("has changes")
+    );
+    assert!(path.join("draft").exists());
+    let removed = remove(
+        &sb.state,
+        job(&ws, &id, &request.repo, &cancel),
+        true,
+        false,
+    )
+    .unwrap();
+    assert_eq!(removed.members[0].stage, Stage::Removed);
+    assert!(!path.exists());
+    assert!(resume(&sb.state, &ws, &id, false).is_err());
+    assert!(
+        resume(&sb.state, &ws, &id, true)
+            .unwrap()
+            .archived
+            .is_some()
+    );
+    assert_eq!(run().members[0].stage, Stage::Ready);
+    assert!(
+        resume(&sb.state, &ws, &id, false)
+            .unwrap()
+            .archived
+            .is_none()
+    );
+    assert!(path.is_dir());
+    assert!(!path.join("draft").exists());
+    assert_eq!(fs::read_to_string(path.join(".env")).unwrap(), "second");
+}
+
+#[test]
+fn an_archived_claim_is_kept_and_a_removed_path_cannot_reclaim_another_set() {
+    let (sb, ws, repo, path) = setup();
+    let set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
+    archive(&sb.state, &ws, &set.id).unwrap();
+    assert!(adopt(&sb.state, &ws, "Other", std::slice::from_ref(&path)).is_err());
+    let cancel = crate::state::Cancel::default();
+    let repo_name = &set.members[0].repo;
+    let removed = remove(
+        &sb.state,
+        job(&ws, &set.id, repo_name, &cancel),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(removed.members[0].stage, Stage::Removed);
+    sb.git(&repo, &["worktree", "add", &path, "renewal"]);
+    let other = adopt(&sb.state, &ws, "Other", std::slice::from_ref(&path)).unwrap();
+    assert!(resume(&sb.state, &ws, &set.id, true).is_err());
+    assert!(
+        provision(&sb.state, job(&ws, &set.id, repo_name, &cancel), None)
+            .unwrap()
+            .members[0]
+            .error
+            .is_some()
+    );
+    assert!(Path::new(&other.members[0].path).exists());
+}
+
+#[test]
+fn a_cancelled_member_leaves_created_worktrees_and_pending_requests_in_the_journal() {
+    let (sb, ws, repo, _) = setup();
+    let second = sb.clone_pair("web");
+    sb.state
+        .add_folder(Some(ws.clone()), second.display().to_string())
+        .unwrap();
+    let requests = [
+        request(&repo, "feature/keep", None),
+        request(&second, "feature/wait", None),
+    ];
+    let set = begin(&sb.state, &ws, "Partial", "feature/keep", &requests).unwrap();
+    let cancel = crate::state::Cancel::default();
+    let first = provision(
+        &sb.state,
+        job(&ws, &set.id, &requests[0].repo, &cancel),
+        None,
+    )
+    .unwrap();
+    assert_eq!(first.members[0].stage, Stage::Ready);
+    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    let cancelled = provision(
+        &sb.state,
+        job(&ws, &set.id, &requests[1].repo, &cancel),
+        None,
+    )
+    .unwrap();
+    let current = list(&sb.state, &ws).unwrap().sets.remove(0);
+    assert_eq!(current, cancelled);
+    assert!(current.visible());
+    assert!(Path::new(&current.members[0].path).exists());
+    assert_eq!(current.members[1].stage, Stage::Pending);
+    assert!(!Path::new(&current.members[1].path).exists());
+}
+
+#[test]
+fn resume_recreates_a_missing_but_still_registered_worktree() {
+    let (sb, ws, repo, path) = setup();
+    let set = adopt(&sb.state, &ws, "Missing", std::slice::from_ref(&path)).unwrap();
+    let path = Path::new(&set.members[0].path);
+    archive(&sb.state, &ws, &set.id).unwrap();
+    fs::remove_dir_all(path).unwrap();
+    assert!(resume(&sb.state, &ws, &set.id, false).is_err());
+    resume(&sb.state, &ws, &set.id, true).unwrap();
+    let cancel = crate::state::Cancel::default();
+    let result = provision(
+        &sb.state,
+        job(&ws, &set.id, &set.members[0].repo, &cancel),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        result.members[0].stage,
+        Stage::Ready,
+        "{:?}",
+        result.members[0].error
+    );
+    assert!(
+        resume(&sb.state, &ws, &set.id, false)
+            .unwrap()
+            .archived
+            .is_none()
+    );
+    assert_eq!(sb.git(path, &["branch", "--show-current"]), "renewal");
+    assert!(repo.is_dir());
+}

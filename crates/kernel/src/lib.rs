@@ -23,6 +23,7 @@ pub mod sharing;
 pub mod skills;
 pub mod ui_state;
 pub mod update;
+pub mod workset;
 pub mod workspace;
 
 use std::sync::Arc;

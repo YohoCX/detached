@@ -195,6 +195,17 @@ pub fn live(cx: &App) -> Vec<String> {
     shells.map(|s| s.read(cx).title().to_string()).collect()
 }
 
+pub(crate) fn live_in(paths: &[&str], cx: &App) -> Option<String> {
+    let terminals = cx.try_global::<Global_>()?.0.read(cx);
+    terminals
+        .sessions
+        .iter()
+        .chain(&terminals.docked)
+        .map(|s| s.read(cx))
+        .find(|s| paths.iter().any(|p| s.cwd.starts_with(p)))
+        .map(|s| s.title().to_owned())
+}
+
 pub(crate) fn docked(id: u64, cx: &App) -> bool {
     cx.try_global::<Global_>().is_some_and(|t| {
         t.0.read(cx)

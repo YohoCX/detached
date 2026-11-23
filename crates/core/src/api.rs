@@ -167,7 +167,7 @@ pub fn create_worktree(
 ) -> Result<String> {
     let (repo, main, folder) = (Path::new(repo), Path::new(main), Path::new(folder));
     let path = s.op(op_id, |c| {
-        worktree::create(s, repo, main, folder, branch, c, progress)
+        worktree::create(s, repo, main, folder, branch, None, c, progress)
     })?;
     Ok(path.display().to_string())
 }

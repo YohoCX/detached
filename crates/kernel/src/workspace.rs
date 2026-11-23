@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use detached_core::api;
-use detached_core::sessions::{Listing, MAIN, MemberState, Workset};
+use detached_core::sessions::{Listing, MAIN, Workset};
 use detached_core::settings;
 use detached_core::types::{RepoInfo, RepoStatus};
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
@@ -190,7 +190,7 @@ impl Workspace {
     }
 
     pub fn switch_session(&mut self, id: &str, cx: &mut Context<Self>) {
-        if id != MAIN && !self.sessions.iter().any(|s| s.id == id) {
+        if id != MAIN && !self.sessions.iter().any(|s| s.id == id && s.visible()) {
             return;
         }
         if let Some(ws) = &self.id {
@@ -223,14 +223,33 @@ impl Workspace {
     }
 
     pub fn session_adopted(&mut self, ws: &str, session: Workset, cx: &mut Context<Self>) {
+        self.session_saved(ws, session, true, cx);
+    }
+
+    pub fn session_saved(
+        &mut self,
+        ws: &str,
+        session: Workset,
+        select: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.id() != Some(ws) || self.wanted().as_deref() != Some(ws) {
             return;
         }
         let id = session.id.clone();
-        if !self.sessions.iter().any(|s| s.id == id) {
+        let visible = session.visible();
+        if let Some(old) = self.sessions.iter_mut().find(|s| s.id == id) {
+            *old = session;
+        } else {
             self.sessions.push(session);
         }
-        self.switch_session(&id, cx);
+        if select && visible {
+            self.switch_session(&id, cx);
+        } else if self.session == id && !visible {
+            self.switch_session(MAIN, cx);
+        }
+        self.apply_repos(cx);
+        cx.notify();
         if crate::invalidate::rescanning(cx) {
             crate::invalidate::relist(cx);
         }
@@ -424,7 +443,7 @@ impl Workspace {
             let key = self.id.as_ref().map(|id| format!("session.current.{id}"));
             let saved: Option<String> = key.as_ref().and_then(|key| ui_state::get(key, cx));
             let want = saved.as_deref().unwrap_or(MAIN);
-            let next = if self.sessions.iter().any(|s| s.id == want) {
+            let next = if self.sessions.iter().any(|s| s.id == want && s.visible()) {
                 want
             } else {
                 MAIN
@@ -459,7 +478,7 @@ impl Workspace {
             Some(set) => set
                 .members
                 .iter()
-                .filter(|m| m.state == MemberState::Ready)
+                .filter(|m| m.state.usable())
                 .filter_map(|m| {
                     let main = self.repos.iter().find(|r| {
                         r.worktree_of.is_none() && self.path_key(&r.path) == self.path_key(&m.repo)
