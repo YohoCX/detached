@@ -84,6 +84,7 @@ pub mod chat {
     use gpui_kit::{Pixels, px};
 
     pub const INSET: Pixels = px(20.);
+    pub const CONVERSATION: Pixels = px(820.);
     pub const PROSE: Pixels = px(760.);
     pub const INLINE: Pixels = px(640.);
     pub const WEEK: Pixels = px(720.);

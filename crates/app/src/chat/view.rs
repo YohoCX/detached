@@ -307,49 +307,26 @@ impl ChatView {
         }
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let t = theme(cx);
+    fn checkout_label(&self, cx: &App) -> impl IntoElement + use<> {
         let s = self.session.read(cx);
         let name = super::label(&s.repo, cx);
-        let icon = match s.checkouts.iter().any(|r| r.path == s.repo) {
-            true => Icon::Repo,
-            false => Icon::Folder,
+        let icon = if s.checkouts.iter().any(|r| r.path == s.repo) {
+            Icon::Repo
+        } else {
+            Icon::Folder
         };
-        let topic = s
-            .topic(cx)
-            .and_then(|t| t.lines().next())
-            .unwrap_or("New chat")
-            .to_string();
         div()
-            .id("chat.header")
+            .id("chat.checkout")
             .test_support()
-            .aria_label(SharedString::from(format!("{topic} {name}")))
+            .aria_label(name.clone())
             .flex()
-            .flex_none()
+            .min_w_0()
             .items_center()
-            .gap(size::PAD)
-            .py(size::GAP)
-            .px(size::INSET)
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(text::BODY)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(topic),
-            )
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .max_w(relative(0.5))
-                    .items_center()
-                    .gap(px(4.))
-                    .text_size(text::SMALL)
-                    .text_color(t.muted)
-                    .child(div().flex_none().child(icon.size(px(12.))))
-                    .child(div().min_w_0().truncate().child(name)),
-            )
+            .gap(px(4.))
+            .text_size(text::SMALL)
+            .text_color(theme(cx).muted)
+            .child(icon.size(px(12.)))
+            .child(div().min_w_0().truncate().child(name))
     }
 
     fn textarea(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1092,6 +1069,8 @@ impl ChatView {
         let t = theme(cx);
         div()
             .flex()
+            .w_full()
+            .max_w(size::CONVERSATION)
             .justify_end()
             .child(
                 self.row(i, format!("You: {text}"))
@@ -1958,7 +1937,7 @@ impl ChatView {
         Some(card.into_any_element())
     }
 
-    /// An empty chat: what to ask, the keys of the box, and the latest past conversations.
+    /// Shortcuts and recent conversations above the composer in an empty chat.
     fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
         let s = self.session.read(cx);
@@ -2041,18 +2020,8 @@ impl ChatView {
             .flex_col()
             .gap(px(10.))
             .w_full()
-            .max_w(px(440.))
-            .child(div().text_color(t.accent).child(Icon::Chat.size(px(20.))))
-            .child(
-                div()
-                    .text_size(text::TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(format!(
-                        "Ask {} about {}",
-                        s.provider.name,
-                        super::label(&s.repo, cx)
-                    )),
-            )
+            .max_w(size::CONVERSATION)
+            .children(recent)
             .child(
                 div()
                     .flex()
@@ -2065,7 +2034,6 @@ impl ChatView {
                     .child(hint("Enter", "sends"))
                     .child(hint("Shift Enter", "new line")),
             )
-            .children(recent)
             .into_any_element()
     }
 
@@ -2251,6 +2219,84 @@ impl Render for ChatView {
         )
         .absolute()
         .size_full();
+        let transcript = div()
+            .id("chat.items")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .px(size::INSET)
+            .pt(size::PAD)
+            .pb(size::GAP)
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .min_w_0()
+                    .children(items)
+                    .children(empty),
+            );
+        let composer = div()
+            .flex_none()
+            .px(size::INSET)
+            .pt(size::PAD)
+            .pb(ui::GAP)
+            .child(
+                div()
+                    .id("chat.input")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .max_w(size::CONVERSATION)
+                    .min_w_0()
+                    .gap(size::PAD)
+                    .children(review)
+                    .children(footer)
+                    .children(suggestions)
+                    .child(self.checkout_label(cx))
+                    .child(
+                        div()
+                            .id("chat.composer")
+                            .test_support()
+                            .relative()
+                            .track_focus(&self.composer_focus)
+                            // A click beside the text puts the caret in it.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if !window.default_prevented() {
+                                        window.prevent_default();
+                                        this.focus(window, cx);
+                                    }
+                                }),
+                            )
+                            .bg(t.header_bg)
+                            .rounded(radius::FIELD)
+                            .border_1()
+                            .border_color(match self.composer_focus.contains_focused(window, cx) {
+                                true => t.selected_ring,
+                                false => t.line,
+                            })
+                            .flex()
+                            .flex_col()
+                            .p(size::PAD)
+                            .gap(size::GAP)
+                            .child(measure)
+                            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                                if e.keystroke.key == "escape" && this.menu.take().is_some() {
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            }))
+                            .child(self.textarea(cx))
+                            .child(bar),
+                    ),
+            );
         div()
             .id("chat")
             .test_support()
@@ -2258,92 +2304,12 @@ impl Render for ChatView {
             .flex_col()
             .size_full()
             .bg(t.panel_bg)
-            .child(self.header(cx))
-            .child(
-                div()
-                    .id("chat.items")
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .px(size::INSET)
-                    .pt(size::PAD)
-                    .pb(px(24.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .when(empty.is_some(), |c| c.flex_1().justify_center())
-                            .children(items)
-                            .children(empty),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .px(size::INSET)
-                    .pt(size::PAD)
-                    .pb(ui::GAP)
-                    .child(
-                        div()
-                            .id("chat.input")
-                            .test_support()
-                            .flex()
-                            .flex_col()
-                            .min_w_0()
-                            .gap(size::PAD)
-                            .children(review)
-                            .children(footer)
-                            .children(suggestions)
-                            .child(
-                                div()
-                                    .id("chat.composer")
-                                    .test_support()
-                                    .relative()
-                                    .track_focus(&self.composer_focus)
-                                    // A click beside the text puts the caret in it.
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, window, cx| {
-                                            if !window.default_prevented() {
-                                                window.prevent_default();
-                                                this.focus(window, cx);
-                                            }
-                                        }),
-                                    )
-                                    .bg(t.header_bg)
-                                    .rounded(radius::FIELD)
-                                    .border_1()
-                                    .border_color(
-                                        match self.composer_focus.contains_focused(window, cx) {
-                                            true => t.selected_ring,
-                                            false => t.line,
-                                        },
-                                    )
-                                    .flex()
-                                    .flex_col()
-                                    .p(size::PAD)
-                                    .gap(size::GAP)
-                                    .child(measure)
-                                    .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                                        if e.keystroke.key == "escape" && this.menu.take().is_some()
-                                        {
-                                            cx.stop_propagation();
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .child(self.textarea(cx))
-                                    .child(bar),
-                            ),
-                    ),
-            )
+            .child(transcript)
+            .child(composer)
     }
 }
 
-/// A picker in the bar: its muted title and its value, opening `menu` upward.
+/// A picker in the bar: its muted title and its value, opening `menu` into the pane.
 fn picker(
     id: &'static str,
     title: &'static str,

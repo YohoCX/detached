@@ -430,14 +430,18 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
 }
 
 #[gpui_kit::test]
-fn the_chat_uses_the_pane_for_the_composer_and_tables_and_keeps_prose_readable(
-    cx: &mut TestAppContext,
-) {
+fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     cx.simulate_resize(size(px(2000.), px(900.)));
     wait_until(cx, |cx| {
         cx.find("chat").unwrap().bounds().size.width > px(1400.)
     });
+    let pane = cx.find("chat").unwrap().bounds();
+    let new_input = cx.find("chat.composer").unwrap().bounds();
+    let hint = cx.find("chat.empty").unwrap().bounds();
+    assert!(pane.bottom() - new_input.bottom() < px(20.));
+    assert!(hint.bottom() <= new_input.top() && new_input.top() - hint.bottom() < px(64.));
+    assert_eq!(label(cx, "chat.checkout").as_deref(), Some("solo"));
     let reply = |cx: &mut VisualTestContext, text: &str| {
         say(cx, &format!("say {text}"));
         wait_until(cx, |cx| items(cx).iter().any(|item| item == text));
@@ -459,11 +463,19 @@ fn the_chat_uses_the_pane_for_the_composer_and_tables_and_keeps_prose_readable(
     let pane = cx.find("chat").unwrap().bounds();
     let inset = composer.left() - pane.left();
     assert!(inset > px(0.) && inset < px(32.));
-    assert_eq!(composer.right(), pane.right() - inset);
+    assert_eq!(composer.size.width, new_input.size.width);
+    assert!(composer.size.width <= px(840.));
+    assert_eq!(composer.bottom(), new_input.bottom());
+    let last = items(cx).len() - 1;
+    let last = cx.find(("chat.item", last)).unwrap().bounds();
+    assert!(last.bottom() <= composer.top() && composer.top() - last.bottom() < px(96.));
+    assert!(pane.bottom() - composer.bottom() < px(20.));
+    let outgoing = cx.find(("chat.item", 0usize)).unwrap().bounds();
+    assert_eq!(outgoing.right(), composer.right());
     assert_eq!(markdown(cx, prose).left(), composer.left());
     assert!(markdown(cx, prose).size.width < px(800.));
     assert_eq!(markdown(cx, row).left(), composer.left());
-    assert_eq!(markdown(cx, row).right(), composer.right());
+    assert_eq!(markdown(cx, row).right(), pane.right() - inset);
 
     cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
     cx.simulate_resize(size(px(740.), px(900.)));
@@ -1241,12 +1253,12 @@ fn an_empty_chat_brings_forward_the_chat_that_already_shows_a_past_conversation(
         _ = past(sb, &sb.solo(), "old1", "Fix the build", 60)
     });
     assert!(cx.find("chat.empty").is_some());
-    assert_eq!(label(cx, "chat.header").as_deref(), Some("New chat solo"));
+    assert_eq!(label(cx, "chat.checkout").as_deref(), Some("solo"));
     wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
     cx.click(("chat.past", 0usize));
     wait_for_item(cx, "fixed");
     assert!(cx.find("chat.empty").is_none());
-    assert_eq!(label(cx, "chat.header").as_deref(), Some("fix it solo"));
+    assert_eq!(label(cx, "chat.checkout").as_deref(), Some("solo"));
 
     new_chat(cx);
     wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
@@ -1810,7 +1822,7 @@ fn a_named_session_s_chat_keeps_its_worktree_scope_in_the_background(cx: &mut Te
             n: 0
         })
     );
-    assert_eq!(label(cx, "chat.header").as_deref(), Some("New chat solo"));
+    assert_eq!(label(cx, "chat.checkout").as_deref(), Some("solo"));
     show_chats(cx);
     wait_until(cx, |cx| {
         label(cx, ("chats.past", 0usize)).as_deref() == Some("Adopted worktree history")
