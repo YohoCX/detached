@@ -122,6 +122,7 @@ fn pending(core: &AppState, ws: &str, set: &Workset, request: &Request) -> Resul
         base: request.base.clone(),
         steps: vec![],
         registration: None,
+        generation: None,
     })
 }
 
@@ -154,7 +155,10 @@ pub fn add_existing(core: &AppState, ws: &str, id: &str, worktree: &str) -> Resu
             "This repository is already in the session".into(),
         ));
     }
-    set.members.push(Member {
+    let registration = row
+        .registration
+        .ok_or_else(|| Error::Other("Missing worktree registration".into()))?;
+    let mut member = Member {
         repo: row.repo,
         path: row.path,
         branch: row.branch,
@@ -164,8 +168,11 @@ pub fn add_existing(core: &AppState, ws: &str, id: &str, worktree: &str) -> Resu
         error: None,
         base: None,
         steps: vec![],
-        registration: row.registration,
-    });
+        registration: None,
+        generation: None,
+    };
+    member.bind(registration)?;
+    set.members.push(member);
     save(&path, &set)?;
     Ok(set)
 }
@@ -300,8 +307,12 @@ fn provision_one(
         if let Some(head) = head {
             set.members[i].base_sha = head;
         }
-        if stage == Stage::Adding || registration.is_some() {
-            set.members[i].registration = registration;
+        if stage == Stage::Adding {
+            set.members[i].registration = None;
+            set.members[i].generation = None;
+        }
+        if let Some(registration) = registration {
+            set.members[i].bind(registration)?;
         }
         if stage == Stage::Copy {
             set.draft = false;
@@ -414,7 +425,7 @@ pub fn archive(core: &AppState, ws: &str, id: &str) -> Result<Workset> {
     for member in set.members.iter_mut().filter(|m| m.claims_path()) {
         if let Some((tree, registration)) = checkout(core, member) {
             member.branch = tree.branch;
-            member.registration = Some(registration);
+            member.bind(registration)?;
         }
     }
     set.archived = Some(crate::os::now());
@@ -465,7 +476,7 @@ pub fn remove(core: &AppState, job: Job<'_>, force: bool, drop_member: bool) -> 
     }
     let (tree, registration, _) = cleanup_member(core, m)?;
     m.branch = tree.branch;
-    m.registration = Some(registration);
+    m.bind(registration)?;
     let stage = m.stage;
     m.stage = Stage::Removing;
     save(&path, &set)?;
@@ -475,7 +486,7 @@ pub fn remove(core: &AppState, job: Job<'_>, force: bool, drop_member: bool) -> 
         Path::new(&m.repo),
         Path::new(&m.path),
         force,
-        m.registration.as_deref(),
+        m.registration.as_deref().zip(m.generation.as_deref()),
         job.cancel,
         job.progress,
     );
@@ -523,7 +534,7 @@ pub fn resume(core: &AppState, ws: &str, id: &str, recreate: bool) -> Result<Wor
         match checkout(core, m) {
             Some((tree, registration)) if holds_claim(core, m) => {
                 m.branch = tree.branch;
-                m.registration = Some(registration);
+                m.bind(registration)?;
                 if m.stage == Stage::Removing {
                     m.stage = Stage::Ready;
                 }

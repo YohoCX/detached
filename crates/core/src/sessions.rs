@@ -54,6 +54,8 @@ pub struct Member {
     pub steps: Vec<String>,
     #[serde(default)]
     registration: Option<PathBuf>,
+    #[serde(default)]
+    generation: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +72,12 @@ pub enum Stage {
 }
 
 impl Member {
+    fn bind(&mut self, registration: PathBuf) -> Result<()> {
+        self.generation = Some(worktree::bind_generation(&registration)?);
+        self.registration = Some(registration);
+        Ok(())
+    }
+
     fn claims_path(&self) -> bool {
         !matches!(self.stage, Stage::Pending | Stage::Removed)
     }
@@ -266,7 +274,7 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
                             if let Some(registration) =
                                 member_registration(&env, common, &path, member, tree)
                             {
-                                if member.registration.is_none() && member.stage != Stage::Adding {
+                                if member.generation.is_none() && member.stage != Stage::Adding {
                                     migrations.push((i, registration.clone()));
                                 }
                                 member.registration = Some(registration);
@@ -295,7 +303,10 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
                 let persist = || -> Result<()> {
                     if let Some(mut saved) = manifest(&file)? {
                         for (i, registration) in migrations {
-                            saved.members[i].registration = Some(registration);
+                            saved.members[i].bind(registration)?;
+                            set.members[i]
+                                .generation
+                                .clone_from(&saved.members[i].generation);
                         }
                         crate::store::atomic(&file, &serde_json::to_vec_pretty(&saved)?)?;
                     }
@@ -350,13 +361,22 @@ fn member_registration(
     tree: &worktree::Linked,
 ) -> Option<PathBuf> {
     let current = registration(env, common, path)?;
-    match &member.registration {
-        Some(recorded) => (recorded == &current).then_some(current),
-        // Older manifests can identify a checkout by its recorded branch.
-        None => (member.branch == tree.branch
-            && (member.stage != Stage::Adding || member.base_sha == tree.head))
-            .then_some(current),
+    if member
+        .registration
+        .as_ref()
+        .is_some_and(|recorded| recorded != &current)
+    {
+        return None;
     }
+    let matches = match &member.generation {
+        Some(id) => worktree::generation(&current).as_ref() == Some(id),
+        // Older manifests also need the branch they last recorded.
+        None => {
+            member.branch == tree.branch
+                && (member.stage != Stage::Adding || member.base_sha == tree.head)
+        }
+    };
+    matches.then_some(current)
 }
 
 fn owned(core: &AppState, except: Option<&str>) -> Result<HashMap<PathBuf, String>> {
@@ -562,7 +582,10 @@ pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) ->
         if !repos.insert(real(Path::new(&row.repo))) {
             return Err(Error::Other("Select one worktree per repository".into()));
         }
-        members.push(Member {
+        let registration = row
+            .registration
+            .ok_or_else(|| Error::Other("Missing worktree registration".into()))?;
+        let mut member = Member {
             repo: row.repo,
             path: row.path,
             branch: row.branch,
@@ -572,8 +595,11 @@ pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) ->
             error: None,
             base: None,
             steps: vec![],
-            registration: row.registration,
-        });
+            registration: None,
+            generation: None,
+        };
+        member.bind(registration)?;
+        members.push(member);
     }
     let set = Workset {
         id: crate::backend::random()[..16].into(),

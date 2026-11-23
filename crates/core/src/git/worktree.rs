@@ -465,6 +465,34 @@ pub(crate) fn add(
     })
 }
 
+const GENERATION: &str = "detached-registration";
+
+pub(crate) fn generation(git: &Path) -> Option<String> {
+    let marker = git.join(GENERATION);
+    if !fs::symlink_metadata(&marker).ok()?.is_file() {
+        return None;
+    }
+    let value = fs::read_to_string(marker).ok()?;
+    (value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())).then_some(value)
+}
+
+pub(crate) fn bind_generation(git: &Path) -> Result<String> {
+    if let Some(value) = generation(git) {
+        return Ok(value);
+    }
+    let mut staged = tempfile::NamedTempFile::new_in(git)?;
+    let random = crate::backend::random();
+    let value = &random[..32];
+    staged.write_all(value.as_bytes())?;
+    staged.as_file().sync_all()?;
+    match staged.persist_noclobber(git.join(GENERATION)) {
+        Ok(_) => Ok(value.to_owned()),
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => generation(git)
+            .ok_or_else(|| Error::Other("Invalid worktree registration marker".into())),
+        Err(e) => Err(e.error.into()),
+    }
+}
+
 pub(crate) fn finish(
     state: &AppState,
     repo: &Path,
@@ -477,7 +505,21 @@ pub(crate) fn finish(
     cancelled(steps.cancel)?;
     if !copied {
         steps.report("Worktree added")?;
-        copy(repo, path, &recipe.copies, steps)?;
+        if !recipe.copies.is_empty() {
+            let git = out(
+                &state.env(),
+                path,
+                &["rev-parse", "--absolute-git-dir"],
+                Kind::Read,
+            )?;
+            let git = os::canonical(Path::new(git.trim()))?;
+            if git.starts_with(os::canonical(path)?) {
+                return Err(Error::Other(
+                    "The worktree has no separate directory for private recipe staging".into(),
+                ));
+            }
+            copy(repo, path, &git, &recipe.copies, steps)?;
+        }
         on_copy()?;
     }
     cancelled(steps.cancel)?;
@@ -503,14 +545,16 @@ pub fn remove(
     repo: &Path,
     path: &Path,
     force: bool,
-    expected: Option<&Path>,
+    expected: Option<(&Path, &str)>,
     cancel: &Cancel,
     progress: Progress,
 ) -> Result<()> {
     cancelled(cancel)?;
     let env = state.env();
     let preview = cleanup(state, repo, path)?;
-    if expected.is_some_and(|expected| expected != preview.git_dir) {
+    if expected
+        .is_some_and(|(git, id)| git != preview.git_dir || generation(git).as_deref() != Some(id))
+    {
         return Err(Error::Other(format!(
             "{} has a different worktree registration",
             path.display()
@@ -557,7 +601,9 @@ pub fn remove(
     // From the shared git dir: Windows cannot delete a folder that is git's cwd.
     locked(state, repo, || {
         let current = out(&env, path, &["rev-parse", "--absolute-git-dir"], Kind::Read)?;
-        if os::canonical(Path::new(current.trim()))? != preview.git_dir {
+        if os::canonical(Path::new(current.trim()))? != preview.git_dir
+            || expected.is_some_and(|(git, id)| generation(git).as_deref() != Some(id))
+        {
             return Err(Error::Other(format!(
                 "{} has a different worktree registration",
                 path.display()
@@ -720,7 +766,7 @@ pub(crate) fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
 
 /// Copies each of `copies` that `from` has into `to`, readable by the owner only; a file the new
 /// worktree already has is kept.
-fn copy(from: &Path, to: &Path, copies: &[String], steps: &Steps<'_>) -> Result<()> {
+fn copy(from: &Path, to: &Path, git: &Path, copies: &[String], steps: &Steps<'_>) -> Result<()> {
     for rel in copies {
         cancelled(steps.cancel)?;
         let (source, dest) = (from.join(rel), to.join(rel));
@@ -750,7 +796,7 @@ fn copy(from: &Path, to: &Path, copies: &[String], steps: &Steps<'_>) -> Result<
             continue;
         }
         let mut input = fs::File::open(&source)?;
-        if !publish_copy(&mut input, &dir, &dest, steps.cancel)? {
+        if !publish_copy(&mut input, git, &dest, steps.cancel)? {
             continue;
         }
         steps.report(&format!("{rel} copied"))?;
@@ -759,7 +805,9 @@ fn copy(from: &Path, to: &Path, copies: &[String], steps: &Steps<'_>) -> Result<
 }
 
 fn publish_copy(input: &mut impl Read, dir: &Path, dest: &Path, cancel: &Cancel) -> Result<bool> {
-    let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+    let mut staged = tempfile::Builder::new()
+        .prefix("detached-copy-")
+        .tempfile_in(dir)?;
     let mut chunk = [0; 64 * 1024];
     loop {
         cancelled(cancel)?;
@@ -774,6 +822,9 @@ fn publish_copy(input: &mut impl Read, dir: &Path, dest: &Path, cancel: &Cancel)
     match staged.persist_noclobber(dest) {
         Ok(_) => Ok(true),
         Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) if e.error.kind() == std::io::ErrorKind::CrossesDevices => Err(Error::Other(
+            "Cannot publish the recipe copy atomically across filesystems".into(),
+        )),
         Err(e) => Err(e.error.into()),
     }
 }
@@ -911,6 +962,59 @@ mod tests {
         assert!(publish_copy(&mut &b"complete"[..], dir.path(), &path, &cancel).unwrap());
         assert!(!publish_copy(&mut &b"replacement"[..], dir.path(), &path, &cancel).unwrap());
         assert_eq!(fs::read(&path).unwrap(), b"complete");
+    }
+
+    #[test]
+    fn hard_interrupted_recipe_staging_is_excluded_from_git() {
+        const ROOT: &str = "DETACHED_TEST_INTERRUPTED_COPY_ROOT";
+        const ADMIN: &str = "DETACHED_TEST_INTERRUPTED_COPY_ADMIN";
+        if let (Some(root), Some(admin)) = (std::env::var_os(ROOT), std::env::var_os(ADMIN)) {
+            struct Interrupt(bool);
+            impl Read for Interrupt {
+                fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                    if self.0 {
+                        std::process::exit(23);
+                    }
+                    self.0 = true;
+                    bytes[..8].copy_from_slice(b"partial!");
+                    Ok(8)
+                }
+            }
+            let _ = publish_copy(
+                &mut Interrupt(false),
+                Path::new(&admin),
+                &Path::new(&root).join(".env.local"),
+                &Cancel::default(),
+            );
+            panic!("copy did not reach the interruption");
+        }
+
+        let (sb, repo) = sandbox();
+        let tree = new(&sb, &repo, "interrupted").unwrap();
+        let git = sb.git(&tree, &["rev-parse", "--absolute-git-dir"]);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::worktree::tests::hard_interrupted_recipe_staging_is_excluded_from_git",
+            ])
+            .env(ROOT, &tree)
+            .env(ADMIN, &git)
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(23));
+        assert!(fs::read_dir(&git).unwrap().flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("detached-copy-")
+                && fs::read(entry.path()).is_ok_and(|bytes| bytes == b"partial!")
+        }));
+        assert!(!tree.join(".env.local").exists());
+        sb.git(&tree, &["add", "-A"]);
+        assert!(
+            sb.git(&tree, &["diff", "--cached", "--name-only"])
+                .is_empty()
+        );
     }
 
     #[test]
