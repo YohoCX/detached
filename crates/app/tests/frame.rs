@@ -297,8 +297,15 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
     let label = |cx: &mut VisualTestContext, id: &'static str| {
         cx.find(id).and_then(|e| e.label().map(String::from))
     };
+    assert!(cx.find("status.bar").is_none());
     cx.activity(|s, cx| s.say("Boom", true, cx));
     assert_eq!(label(cx, "status.events").as_deref(), Some("Events: 1 new"));
+    let archive = cx.find("sessions.archive").unwrap().bounds();
+    let status = cx.find("status.bar").unwrap().bounds();
+    assert!(
+        archive.right() <= status.left(),
+        "status stays in the workspace"
+    );
     cx.executor().advance_clock(Duration::from_secs(11));
     settle(cx);
     assert!(cx.find("status.message").is_none(), "gone from the bar");
@@ -314,6 +321,8 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
         Some("Events"),
         "read"
     );
+    cx.click("events.clear");
+    assert!(cx.find("status.bar").is_none());
 }
 
 #[gpui_kit::test]

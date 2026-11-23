@@ -129,7 +129,13 @@ impl Render for List {
             .test_support()
             .role(Role::Button)
             .aria_label("Archive")
+            .aria_description(format!("{count} archived"))
             .aria_toggled(w.archive().into())
+            .when(collapsed, |d| {
+                d.tooltip(move |window, cx| {
+                    Tooltip::new(format!("Archive ({count})")).build(window, cx)
+                })
+            })
             .h(px(32.))
             .flex_none()
             .gap(GAP)
@@ -142,15 +148,14 @@ impl Render for List {
             .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
             .child(Icon::Archive.size(px(15.)))
             .when(!collapsed, |d| {
-                d.child(div().flex_1().child("Archive"))
-                    .when(count > 0, |d| {
-                        d.child(
-                            div()
-                                .font_family(ui::theme::mono(cx))
-                                .text_color(t.muted)
-                                .child(count.to_string()),
-                        )
-                    })
+                d.child("Archive").when(count > 0, |d| {
+                    d.child(
+                        div()
+                            .font_family(ui::theme::mono(cx))
+                            .text_color(t.muted)
+                            .child(count.to_string()),
+                    )
+                })
             });
         let fold = fold_button(collapsed, cx);
         let add = ui::button("sessions.new", "New session", cx)
@@ -240,21 +245,19 @@ impl Render for List {
         } else if collapsed {
             list.child(header.child(archive_button))
         } else {
-            list.child(header).child(rows).child(
-                div()
-                    .flex_none()
-                    .when(self.live, |d| {
-                        d.border_t_1().border_color(t.line).pt(px(4.))
-                    })
-                    .child(archive_button),
-            )
+            list.child(header).child(rows).child(archive_button)
         }
     }
 }
 
 fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
+    let icon = if collapsed {
+        Icon::Branch
+    } else {
+        Icon::PanelLeft
+    };
     ui::titled(
-        ui::icon_button("sessions.fold", Icon::PanelLeft.size(px(14.)), cx).size(px(26.)),
+        ui::icon_button("sessions.fold", icon.size(px(14.)), cx).size(px(26.)),
         if collapsed {
             "Show sessions"
         } else {
@@ -316,13 +319,11 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         .aria_label(name.clone())
         .flex()
         .flex_none()
-        .h(px(39.))
+        .h(px(36.))
         .min_w_0()
         .items_center()
         .gap(px(8.))
         .px(px(12.))
-        .border_b_1()
-        .border_color(t.line)
         .child(
             div()
                 .flex_none()

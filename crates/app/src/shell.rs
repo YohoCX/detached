@@ -14,7 +14,7 @@ use gpui_kit::{
 use crate::dock;
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
-use crate::ui::{self, GAP, Icon, radius, text, theme};
+use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
 use kernel::workspace::{Event, Workspace};
@@ -115,8 +115,7 @@ pub(crate) fn columns_for(window: &Window, cx: &App, minimum: Pixels) -> (bool, 
     let width = window.viewport_size().width;
     let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
     let (mut list, mut files) = (prefers(Side::Sessions), prefers(Side::Explorer));
-    let center =
-        |list, files| width - Side::Sessions.width(list) - Side::Explorer.width(files) - px(10.);
+    let center = |list, files| width - Side::Sessions.width(list) - Side::Explorer.width(files);
     if center(list, files) < minimum {
         files = false;
         if center(list, files) < minimum {
@@ -405,7 +404,7 @@ impl Render for Shell {
                                             ui::titled(
                                                 ui::icon_button(
                                                     "explorer.fold",
-                                                    Icon::PanelLeft.size(px(14.)),
+                                                    Icon::Folder.size(px(14.)),
                                                     cx,
                                                 )
                                                 .h(px(26.))
@@ -429,31 +428,15 @@ impl Render for Shell {
                             .min_w_0()
                             .min_h_0()
                             .when(live, |d| {
-                                d.mr(px(8.))
-                                    .mt(px(4.))
-                                    .mb(px(4.))
-                                    .overflow_hidden()
-                                    .bg(t.panel_bg)
-                                    .border_1()
-                                    .border_color(t.panel_edge)
-                                    .rounded(radius::WIDGET)
-                                    .when(!creating, |d| {
-                                        d.child(crate::sessions::header(window, cx))
-                                    })
+                                d.overflow_hidden().bg(t.panel_bg).when(!creating, |d| {
+                                    d.child(crate::sessions::header(window, cx))
+                                })
                             })
-                            .child(div().flex_1().min_h_0().min_w_0().child(dock)),
+                            .child(div().flex_1().min_h_0().min_w_0().child(dock))
+                            .when(live, |d| d.child(self.status.clone())),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .h(px(24.))
-                    .px(GAP)
-                    .border_t_1()
-                    .border_color(t.line)
-                    .child(self.status.clone()),
-            )
+            .when(!live, |d| d.child(self.status.clone()))
             .children(self.overlays.iter().cloned())
             .child(self.notices.clone())
     }

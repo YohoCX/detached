@@ -79,8 +79,6 @@ impl Render for Events {
                 .gap(px(8.))
                 .px(px(10.))
                 .py(px(5.))
-                .border_b_1()
-                .border_color(t.line)
                 .hover(|s| s.bg(t.hover))
                 .child(div().pt(px(3.)).text_color(color).child(icon.size(px(12.))))
                 .child(
@@ -120,8 +118,6 @@ impl Render for Events {
             .items_center()
             .px(px(8.))
             .py(px(4.))
-            .border_b_1()
-            .border_color(t.line)
             .child(ui::segmented(
                 "events.filter",
                 &[

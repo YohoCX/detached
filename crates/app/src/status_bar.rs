@@ -64,7 +64,6 @@ impl Render for StatusBar {
         let focused = match w.shown() {
             Some(Doc::File(loc)) => Some(format!("{}/{}", w.name_of(&loc.repo), loc.path)),
             Some(Doc::Diff(diff)) => Some(format!("{}/{}", w.name_of(&diff.repo), diff.path)),
-            _ if !w.session_repos().is_empty() => Some(w.session_name().to_string()),
             _ => None,
         };
         let repo = w.current().filter(|_| w.archive()).map(|repo| {
@@ -185,11 +184,26 @@ impl Render for StatusBar {
                 .child(Icon::Question.size(px(12.)))
                 .when(unread > 0, |d| d.child(unread.to_string()))
         });
+        let councils = crate::council::live::status(cx);
+        let update = update(cx);
+        if !w.archive()
+            && focused.is_none()
+            && message.is_none()
+            && a.ops.is_empty()
+            && councils.is_empty()
+            && update.is_none()
+            && events.is_none()
+        {
+            return gpui_kit::Empty.into_any_element();
+        }
         div()
+            .id("status.bar")
+            .test_support()
             .flex()
-            .flex_1()
+            .flex_none()
             .min_w_0()
-            .h_full()
+            .h(px(24.))
+            .when(w.archive(), |d| d.border_t_1().border_color(t.line))
             .items_center()
             .gap(px(12.))
             .px(px(8.))
@@ -207,11 +221,12 @@ impl Render for StatusBar {
             })
             .children(message)
             .child(div().flex_1())
-            .children(crate::council::live::status(cx))
+            .children(councils)
             .children(ops)
-            .children(update(cx))
+            .children(update)
             .children(events)
             .children(repo)
+            .into_any_element()
     }
 }
 

@@ -883,7 +883,13 @@ impl TabGroupRenderer for Group {
             .on_prepaint(move |b, window, _| measured(&fit.room, node, b.size.width, window));
         let bar = match collapsed {
             true => div().flex().flex_none().items_center().h_full().px(px(2.)),
-            false if pane => strip(cx).h(px(32.)).rounded_t(px(0.)),
+            false if pane => div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(4.))
+                .h(px(32.))
+                .px(px(8.)),
             false => strip(cx),
         };
         bar.id(("tabs", node.as_u64() as usize))
