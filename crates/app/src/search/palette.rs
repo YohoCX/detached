@@ -36,6 +36,7 @@ enum Item {
     /// Whether a handler is registered.
     Action(Action, bool),
     Session(String, String),
+    Archived(String, String),
     Tab(String, gpui_kit::base::dock::PanelId),
 }
 
@@ -46,7 +47,7 @@ impl Item {
             Item::File(l) => &l.path,
             Item::Branch { label, .. } => label,
             Item::Action(a, _) => a.title,
-            Item::Session(_, title) | Item::Tab(title, _) => title,
+            Item::Session(_, title) | Item::Archived(_, title) | Item::Tab(title, _) => title,
         }
     }
 }
@@ -377,6 +378,7 @@ impl Palette {
                 items.extend(
                     w.sessions()
                         .iter()
+                        .filter(|s| s.visible())
                         .map(|s| Item::Session(s.id.clone(), s.name.clone())),
                 );
                 items.extend(
@@ -385,8 +387,18 @@ impl Palette {
                         .map(|(id, title)| Item::Tab(title, id)),
                 );
                 items.extend(
-                    ["session.new", "session.archive"]
+                    w.sessions()
+                        .iter()
+                        .filter(|s| s.archived.is_some())
+                        .map(|s| Item::Archived(s.id.clone(), s.name.clone())),
+                );
+                items.extend(
+                    ["session.new", "session.addRepo", "session.archive"]
                         .into_iter()
+                        .filter(|id| {
+                            *id != "session.addRepo"
+                                || (!w.archive() && w.session_id() != detached_core::sessions::MAIN)
+                        })
                         .filter_map(|id| actions::find(id).map(|a| Item::Action(*a, true))),
                 );
                 hits(&items, &query)
@@ -440,6 +452,16 @@ impl Palette {
             Item::Session(id, _) => {
                 Workspace::global(cx).update(cx, |w, cx| w.switch_session(&id, cx))
             }
+            Item::Archived(id, _) => {
+                if let Some(set) = Workspace::get(cx)
+                    .sessions()
+                    .iter()
+                    .find(|s| s.id == id && s.archived.is_some())
+                    .cloned()
+                {
+                    crate::sessions::provision::resume(set, window, cx);
+                }
+            }
             Item::Tab(_, id) => crate::dock::select_tab(id, window, cx),
             Item::Branch { target, .. } => {
                 if let Some(repo) = Workspace::get(cx).session_current().map(String::from) {
@@ -460,6 +482,7 @@ impl Palette {
             }
             Item::Branch { .. } => ("Checkout".to_string(), false),
             Item::Session(..) => ("Session".to_string(), false),
+            Item::Archived(..) => ("Archived · Resume".to_string(), false),
             Item::Tab(..) => ("Tab".to_string(), false),
             Item::Action(a, on) => (keymap::chord_for(a.id, cx), !on),
         };
@@ -518,7 +541,7 @@ impl Palette {
                     )
                     .child(small.child(detail))
             }
-            Item::Branch { .. } | Item::Session(..) | Item::Tab(..) => base
+            Item::Branch { .. } | Item::Session(..) | Item::Archived(..) | Item::Tab(..) => base
                 .child(icon(Icon::Branch))
                 .child(name(&label, &row.indices).flex_1().min_w_0().truncate())
                 .child(small.child(detail)),

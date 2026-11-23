@@ -52,7 +52,12 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 fn step(by: isize, window: &mut Window, cx: &mut App) {
     let w = Workspace::get(cx);
     let ids: Vec<_> = std::iter::once(MAIN)
-        .chain(w.sessions().iter().map(|s| s.id.as_str()))
+        .chain(
+            w.sessions()
+                .iter()
+                .filter(|s| s.visible())
+                .map(|s| s.id.as_str()),
+        )
         .collect();
     let ix = ids
         .iter()

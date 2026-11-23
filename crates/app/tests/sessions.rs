@@ -490,7 +490,13 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
         cx.find(("sessions.archive.resume", 0usize)).is_some()
     });
     assert!(!in_list(&mut app, &set.id));
-    app.click(("sessions.archive.resume", 0usize));
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "session.switch"));
+    app.input("Banner copy");
+    wait_until(&mut app, |cx| {
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|e| e.description() == Some("Archived · Resume"))
+    });
+    app.press("enter");
     wait_until(&mut app, |cx| in_list(cx, &set.id) && code_open(cx));
     assert_eq!(
         std::fs::read_to_string(PathBuf::from(api).join("draft.txt")).unwrap(),
