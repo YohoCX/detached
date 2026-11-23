@@ -44,6 +44,42 @@ fn open(cx: &mut TestAppContext) -> (TestApp, Arc<Mutex<Vec<String>>>) {
     (app, seen)
 }
 
+#[cfg(unix)]
+#[gpui_kit::test]
+fn cli_start_reports_an_occupied_connection_differently_from_a_startup_error(
+    cx: &mut TestAppContext,
+) {
+    let app = &mut open_app(cx);
+    let path = app.update(|_, cx| detached_core::owner::socket(&kernel::core(cx).data_dir));
+    let start = |app: &mut TestApp| {
+        let listening = app.update(|_, cx| owner::start(|_, _| Task::ready(Ok(json!(null))), cx));
+        assert!(app.foreground_executor().block_test(listening).is_err());
+        app.activity(|activity, _| activity.log.last().unwrap().text.clone())
+    };
+    let server =
+        detached_core::owner::serve(&path, Arc::default(), Box::new(|_, _| Ok(json!(null))))
+            .unwrap();
+    let occupied = start(app);
+    assert!(
+        occupied.contains("already in use") && occupied.contains("relaunch"),
+        "{occupied}"
+    );
+    drop(server);
+
+    let dir = path.parent().unwrap();
+    std::fs::remove_dir(dir).unwrap();
+    std::fs::write(dir, "blocks creation of the CLI socket directory").unwrap();
+    let unavailable = start(app);
+    assert!(
+        unavailable.contains("could not start detached-cli support"),
+        "{unavailable}"
+    );
+    assert!(
+        !unavailable.contains("another Detached instance"),
+        "{unavailable}"
+    );
+}
+
 fn rows(cx: &mut VisualTestContext) -> Vec<String> {
     cx.update(|w, cx| {
         w.render_frame(cx);

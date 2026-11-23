@@ -212,7 +212,7 @@ mod sys {
         DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
         set_permissions(dir, Permissions::from_mode(0o700))?;
         if connect(path).is_ok() {
-            let e = "another Detached answers on this data folder";
+            let e = "the detached-cli socket is already in use";
             return Err(io::Error::new(io::ErrorKind::AddrInUse, e));
         }
         let _ = std::fs::remove_file(path);

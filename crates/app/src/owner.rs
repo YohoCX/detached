@@ -2,6 +2,7 @@
 //! and asks for `env run`, once per tab.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc as reply;
@@ -64,8 +65,19 @@ pub fn start(
     let serving = blocking::run(cx, move || owner::serve(&socket, tabs, handle));
     cx.spawn(async move |cx| {
         let server = serving.await.inspect_err(|e| {
-            let e = format!("detached-cli cannot reach Detached: {e}");
-            cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(e, true, cx)));
+            let message = match e {
+                Error::Io(err) if err.kind() == ErrorKind::AddrInUse => String::from(
+                    "The detached-cli connection for this data folder is already in use. If another \
+                     Detached instance is using this folder, quit it and relaunch this instance.",
+                ),
+                #[cfg(windows)]
+                Error::Io(err) if err.kind() == ErrorKind::PermissionDenied => format!(
+                    "This instance could not start detached-cli support ({e}). Check whether another \
+                     Detached instance is using this data folder or whether access is denied."
+                ),
+                _ => format!("This instance could not start detached-cli support ({e})."),
+            };
+            cx.update(|cx| Activity::global(cx).update(cx, |a, cx| a.say(message, true, cx)));
         })?;
         cx.update_global::<Owner, _>(|o, _| o._server = Some(server));
         Ok(())
