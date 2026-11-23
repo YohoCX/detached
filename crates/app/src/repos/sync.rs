@@ -114,6 +114,10 @@ fn show_outcome(repo: &str, o: &Outcome, cx: &mut App) {
     Repo::update(cx, repo, |r, cx| r.set_outcome(o.clone(), cx));
 }
 
+pub(crate) fn pull(repo: String, cx: &mut App) {
+    sync_one(Kind::Pull, repo, cx);
+}
+
 /// Fetches or pulls one repo and says how it went; Fetch All and Pull All stay enabled meanwhile.
 pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
     let done = run(kind, repo.clone(), cx);
@@ -225,6 +229,50 @@ pub fn prune(repo: String, cx: &mut App) {
     .detach();
 }
 
+fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
+    let w = Workspace::get(cx);
+    if w.archive() {
+        sync_repos(kind, None, cx);
+        return;
+    }
+    let repos: Vec<_> = w.session_repos().iter().map(|r| r.path.clone()).collect();
+    if kind == Kind::Fetch {
+        sync_repos(kind, Some(repos), cx);
+        return;
+    }
+    let preview = w
+        .session_repos()
+        .iter()
+        .map(|r| {
+            let detail = match Repo::get(cx, &r.path).and_then(Repo::status) {
+                None => "Status unavailable".into(),
+                Some(s) if s.in_progress.is_some() => "Operation in progress".into(),
+                Some(s) if s.upstream.is_none() => "No upstream".into(),
+                Some(s) if s.ahead > 0 && s.behind > 0 => "Diverged".into(),
+                Some(s) if s.behind > 0 => format!("{} commits behind", s.behind),
+                _ => "Up to date".into(),
+            };
+            format!("{} · {detail}", r.name)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let title = format!("Pull {}?", w.session_name());
+    let prompt = window.prompt(
+        gpui_kit::PromptLevel::Info,
+        &title,
+        Some(&preview),
+        &["Pull", "Cancel"],
+        cx,
+    );
+    window
+        .spawn(cx, async move |cx| {
+            if matches!(prompt.await, Ok(0)) {
+                let _ = cx.update(|_, cx| sync_repos(kind, Some(repos), cx));
+            }
+        })
+        .detach();
+}
+
 /// A running Fetch All or Pull All, or one of a folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bulk {
@@ -253,7 +301,15 @@ struct SyncButtons {
 impl Render for SyncButtons {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
-        let idle = bulk.is_none() && !Workspace::get(cx).repos().is_empty();
+        let w = Workspace::get(cx);
+        let live = !w.archive();
+        let main = w.session_id() == detached_core::sessions::MAIN;
+        let idle = bulk.is_none() && !(if live { w.session_repos() } else { w.repos() }).is_empty();
+        let suffix = if live && !main {
+            w.session_name()
+        } else {
+            "All"
+        };
         let t = theme(cx);
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
         let button = |kind, id: &'static str, icon: Icon, label: &str| {
@@ -263,52 +319,56 @@ impl Render for SyncButtons {
                 Some(b) if b.kind == kind => format!("{}/{}", b.done, b.total),
                 _ => label.to_string(),
             };
-            match kind {
-                Kind::Pull => ui::primary_button(id, label.clone(), cx),
-                Kind::Fetch => ui::button(id, label.clone(), cx),
-            }
-            .test_support()
-            // The pill's label comes first; the icon goes before it.
-            .flex_row_reverse()
-            .gap(px(6.))
-            .font_features(tnum.clone())
-            .role(Role::Button)
-            .aria_label(label.clone())
-            .aria_description(title.clone())
-            .tooltip(move |window, cx| {
-                let id = match kind {
-                    Kind::Pull => "vcs.pullAll",
-                    Kind::Fetch => "vcs.fetchAll",
-                };
-                Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
-            })
-            .map(|b| match idle {
-                true => b.on_click(move |_, _, cx| sync_repos(kind, None, cx)),
-                false => b.when(!running, |b| b.opacity(0.5)),
-            })
-            .map(|b| match running {
-                true => b.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .size(px(14.))
-                        .items_center()
-                        .justify_center()
-                        .child(ui::spinner(match kind {
-                            Kind::Pull => t.primary_fg,
-                            Kind::Fetch => t.fg,
-                        })),
-                ),
-                false => b.child(icon.size(px(14.))),
-            })
+            ui::button(id, label.clone(), cx)
+                .test_support()
+                // The pill's label comes first; the icon goes before it.
+                .flex_row_reverse()
+                .gap(px(6.))
+                .font_features(tnum.clone())
+                .role(Role::Button)
+                .aria_label(label.clone())
+                .aria_description(title.clone())
+                .tooltip(move |window, cx| {
+                    let id = match kind {
+                        Kind::Pull => "vcs.pullAll",
+                        Kind::Fetch => "vcs.fetchAll",
+                    };
+                    Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
+                })
+                .map(|b| match idle {
+                    true => b.on_click(move |_, w, cx| sync_session(kind, w, cx)),
+                    false => b.when(!running, |b| b.opacity(0.5)),
+                })
+                .map(|b| match running {
+                    true => b.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .size(px(14.))
+                            .items_center()
+                            .justify_center()
+                            .child(ui::spinner(t.accent)),
+                    ),
+                    false => b.child(icon.size(px(14.))),
+                })
         };
         div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .child(button(Kind::Fetch, "sync.fetch", Icon::Fetch, "Fetch All"))
-            .child(button(Kind::Pull, "sync.pull", Icon::Pull, "Pull All"))
+            .child(button(
+                Kind::Fetch,
+                "sync.fetch",
+                Icon::Fetch,
+                &format!("Fetch {suffix}"),
+            ))
+            .child(button(
+                Kind::Pull,
+                "sync.pull",
+                Icon::Pull,
+                &format!("Pull {suffix}{}", if live { "…" } else { "" }),
+            ))
     }
 }
 

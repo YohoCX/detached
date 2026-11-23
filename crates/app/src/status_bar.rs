@@ -15,6 +15,7 @@ use crate::dock;
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap, settings};
 use kernel::activity::{Activity, Level};
+use kernel::doc::Doc;
 use kernel::repo::Repo;
 use kernel::update::{State, Update};
 use kernel::workspace::Workspace;
@@ -60,7 +61,13 @@ impl Render for StatusBar {
                 .child(m.text.clone());
             ui::appear(m.text.clone(), message, 3., ui::motion::BASE)
         });
-        let repo = w.current().map(|repo| {
+        let focused = match w.shown() {
+            Some(Doc::File(loc)) => Some(format!("{}/{}", w.name_of(&loc.repo), loc.path)),
+            Some(Doc::Diff(diff)) => Some(format!("{}/{}", w.name_of(&diff.repo), diff.path)),
+            _ if !w.session_repos().is_empty() => Some(w.session_name().to_string()),
+            _ => None,
+        };
+        let repo = w.current().filter(|_| w.archive()).map(|repo| {
             let st = Repo::get(cx, repo).and_then(Repo::status);
             let branch = st.map(|st| {
                 let head = st.head.as_deref().unwrap_or("?");
@@ -188,6 +195,16 @@ impl Render for StatusBar {
             .px(px(8.))
             .text_size(text::SMALL)
             .text_color(t.muted)
+            .when(message.is_none() && !w.archive(), |d| {
+                d.children(focused.map(|label| {
+                    div()
+                        .truncate()
+                        .min_w_0()
+                        .font_family(theme::mono(cx))
+                        .text_size(text::LABEL)
+                        .child(label)
+                }))
+            })
             .children(message)
             .child(div().flex_1())
             .children(crate::council::live::status(cx))

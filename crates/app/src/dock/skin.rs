@@ -59,7 +59,7 @@ impl Skin {
             area: cx.weak_entity(),
             resizing: Rc::default(),
             fit: Rc::default(),
-            sessions: cx.new(crate::sessions::List::new),
+            sessions: cx.new(|cx| crate::sessions::List::new(false, cx)),
             empty,
             archive,
         })
@@ -132,7 +132,10 @@ fn estimate(title: &str, closable: bool, window: &Window, cx: &App) -> f32 {
 
 impl DockAreaRenderer for Skin {
     fn frame(&self, _: &mut Window, _: &mut App) -> Stateful<Div> {
-        div().id("dock").size_full().p(GAP)
+        div()
+            .id("dock")
+            .size_full()
+            .when(self.archive, |d| d.p(GAP))
     }
 
     /// With no tab, the center is still a pane, its chips in reach.
@@ -569,7 +572,9 @@ impl TabGroupRenderer for Group {
         }
         let node = group.node();
         let pane = self.center(group, cx) && !self.2;
-        ui::panel(div().id(id), cx)
+        div()
+            .id(id)
+            .when(!pane, |d| ui::panel(d, cx))
             .overflow_hidden()
             .when(pane, |d| {
                 let zoomed = group.is_zoomed();
@@ -716,7 +721,10 @@ impl TabGroupRenderer for Group {
                         true => d.py(px(1.)),
                         false => d.h(px(28.)),
                     })
-                    .rounded(radius::ICON_BUTTON)
+                    .when(!pane, |d| d.rounded(radius::ICON_BUTTON))
+                    .when(pane, |d| {
+                        d.rounded_t(radius::KBD).self_end().text_size(text::SMALL)
+                    })
                     .when(preview, |d| d.italic())
                     .when_some(l.tip.clone(), |d, tip| {
                         d.aria_description(tip.clone())
@@ -725,7 +733,9 @@ impl TabGroupRenderer for Group {
                     .relative()
                     .font_weight(FontWeight::MEDIUM)
                     .map(|d| match on {
-                        true => d.bg(t.selected).text_color(t.fg),
+                        true => d
+                            .bg(if pane { t.panel_bg } else { t.selected })
+                            .text_color(t.fg),
                         false => d
                             .text_color(t.muted)
                             .hover(|s| s.bg(t.hover).text_color(t.fg))
@@ -864,7 +874,7 @@ impl TabGroupRenderer for Group {
             .on_prepaint(move |b, window, _| measured(&fit.room, node, b.size.width, window));
         let bar = match collapsed {
             true => div().flex().flex_none().items_center().h_full().px(px(2.)),
-            false if pane => strip(cx).h(px(32.)),
+            false if pane => strip(cx).h(px(32.)).rounded_t(px(0.)),
             false => strip(cx),
         };
         bar.id(("tabs", node.as_u64() as usize))

@@ -1,9 +1,12 @@
 mod archive;
+mod overview;
 pub(crate) mod provision;
 mod sheet;
 
 use detached_core::sessions::{MAIN, MemberState, Workset};
+use detached_core::types::{InProgress, RepoStatus};
 use gpui_kit::base::TestSupportExt;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
@@ -12,6 +15,7 @@ use gpui_kit::{
 
 use crate::actions::{self, Group, Registration};
 use crate::dock;
+use crate::shell::{self, Side};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -23,6 +27,7 @@ const COLLAPSED: &str = "session.list.collapsed";
 pub fn register(cx: &mut App) -> Vec<Registration> {
     crate::shell::overlay(cx, sheet::overlay);
     crate::shell::overlay(cx, provision::overlay);
+    dock::register_doc(cx, "session-overview", overview::OverviewDoc);
     dock::register_doc(cx, "session-archive", archive::ArchiveDocs);
     dock::register_doc(cx, "past-chat", archive::ArchiveDocs);
     [
@@ -68,16 +73,16 @@ fn step(by: isize, window: &mut Window, cx: &mut App) {
 }
 
 fn toggle(window: &mut Window, cx: &mut App) {
-    use gpui_kit::base::dock::DockPlacement;
-    let open = dock::is_open(DockPlacement::Left, cx);
-    if !Workspace::get(cx).archive() {
-        dock::toggle_zone(DockPlacement::Left, window, cx);
-    } else {
-        let old: bool = ui_state::get(COLLAPSED, cx).unwrap_or(false);
+    use gpui_kit::base::dock::DockPlacement::Left;
+    if Workspace::get(cx).archive() {
+        let open = dock::is_open(Left, cx);
+        let old = ui_state::get(COLLAPSED, cx).unwrap_or(false);
         ui_state::set(COLLAPSED, open && !old, cx);
         if !open {
-            dock::toggle_zone(DockPlacement::Left, window, cx);
+            dock::toggle_zone(Left, window, cx);
         }
+    } else {
+        shell::toggle_side(Side::Sessions, window, cx);
     }
     cx.refresh_windows();
 }
@@ -87,19 +92,19 @@ pub(super) fn open_archive(window: &mut Window, cx: &mut App) {
     dock::show(Doc::SessionArchive, window, cx);
 }
 
-fn select(id: &str, window: &mut Window, cx: &mut App) {
+fn select(id: &str, _: &mut Window, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
-    dock::area(window, cx);
-    dock::open("project", window, cx);
 }
 
 pub(crate) struct List {
+    live: bool,
     _workspace: Subscription,
 }
 
 impl List {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(live: bool, cx: &mut Context<Self>) -> Self {
         Self {
+            live,
             _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
         }
     }
@@ -108,7 +113,11 @@ impl List {
 impl Render for List {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let collapsed: bool = ui_state::get(COLLAPSED, cx).unwrap_or(false);
+        let collapsed = if self.live {
+            !shell::side_open(Side::Sessions, window, cx)
+        } else {
+            ui_state::get(COLLAPSED, cx).unwrap_or(false)
+        };
         let w = Workspace::get(cx);
         let count = dock::archived_tabs(cx).len()
             + w.sessions().iter().filter(|s| s.archived.is_some()).count();
@@ -118,6 +127,7 @@ impl Render for List {
             .aria_label("Archive")
             .aria_toggled(w.archive().into())
             .h(px(32.))
+            .flex_none()
             .gap(GAP)
             .px(GAP)
             .rounded(radius::WIDGET)
@@ -138,84 +148,69 @@ impl Render for List {
                         )
                     })
             });
-        let fold = ui::icon_button("sessions.fold", Icon::PanelLeft.size(px(14.)), cx)
+        let fold = fold_button(collapsed, cx);
+        let add = ui::button("sessions.new", "New session", cx)
             .test_support()
-            .aria_label(if collapsed {
-                "Show sessions"
-            } else {
-                "Hide sessions"
+            .tooltip(|w, cx| {
+                Tooltip::new(crate::keymap::tip("New session", "session.new", cx)).build(w, cx)
             })
-            .on_click(|_, window, cx| actions::dispatch(window, cx, "panel.sessions"));
-        let add = ui::titled(
-            ui::icon_button("sessions.new", Icon::Plus.size(px(15.)), cx)
-                .on_click(|_, window, cx| actions::dispatch(window, cx, "session.new")),
-            "New session…",
-        )
-        .test_support();
+            .flex_row_reverse()
+            .gap(px(5.))
+            .h(px(24.))
+            .px(px(7.))
+            .child(Icon::Plus.size(px(12.)))
+            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"));
         let title = div()
             .flex_1()
-            .text_size(text::TITLE)
+            .text_size(text::LABEL)
+            .text_color(t.muted)
             .font_weight(FontWeight::SEMIBOLD)
             .child("Sessions");
-        let content = if collapsed {
-            div()
-                .flex()
-                .items_center()
-                .gap(GAP / 3.)
-                .child(title)
-                .child(add)
-                .child(archive_button)
-                .child(fold)
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .child(
+        let header = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .pl(px(8.))
+            .h(px(30.))
+            .child(title)
+            .child(fold)
+            .child(add);
+        let rows = div()
+            .id("sessions.rows")
+            .test_support()
+            .flex()
+            .flex_col()
+            .when(self.live, |d| d.flex_1())
+            .when(!self.live, |d| {
+                d.max_h(window.viewport_size().height * 0.22)
+            })
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap(px(3.))
+            .child(row(None, cx))
+            .when_some(provision::provisional(cx), |d, name| {
+                d.child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(GAP / 2.)
-                        .px(px(4.))
-                        .h(px(36.))
-                        .child(title)
-                        .child(add)
-                        .child(fold),
+                        .id("sessions.provisional")
+                        .test_support()
+                        .m(GAP / 3.)
+                        .p(GAP)
+                        .rounded(radius::WIDGET)
+                        .border_1()
+                        .border_dashed()
+                        .border_color(t.line)
+                        .text_color(t.muted)
+                        .child(name),
                 )
-                .child(
-                    div()
-                        .id("sessions.rows")
-                        .flex()
-                        .flex_col()
-                        .max_h(window.viewport_size().height * 0.22)
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .gap(GAP / 3.)
-                        .child(row(None, cx))
-                        .when_some(provision::provisional(cx), |d, name| {
-                            d.child(
-                                div()
-                                    .id("sessions.provisional")
-                                    .test_support()
-                                    .m(GAP / 3.)
-                                    .p(GAP)
-                                    .rounded(radius::WIDGET)
-                                    .border_1()
-                                    .border_dashed()
-                                    .border_color(t.line)
-                                    .text_color(t.muted)
-                                    .child(name),
-                            )
-                        })
-                        .children(
-                            w.sessions()
-                                .iter()
-                                .filter(|set| set.visible())
-                                .map(|set| row(Some(set), cx)),
-                        ),
-                )
-                .child(archive_button)
-        };
-        div()
+            })
+            .children(
+                w.sessions()
+                    .iter()
+                    .filter(|s| s.visible())
+                    .map(|set| row(Some(set), cx)),
+            );
+        let list = div()
             .id("sessions")
             .test_support()
             .role(Role::List)
@@ -225,11 +220,149 @@ impl Render for List {
             .flex_none()
             .w_full()
             .min_h_0()
-            .pb(GAP / 2.)
-            .border_b_1()
-            .border_color(t.line)
             .bg(t.window_bg)
-            .child(content)
+            .when(self.live, |d| d.h_full().p(px(8.)).gap(px(4.)))
+            .when(!self.live, |d| {
+                d.pb(GAP / 2.).border_b_1().border_color(t.line)
+            });
+        if self.live && collapsed {
+            list.px(px(4.))
+                .items_center()
+                .child(fold_button(true, cx))
+                .child(div().flex_1())
+                .child(archive_button.px(px(8.)))
+        } else if collapsed {
+            list.child(header.child(archive_button))
+        } else {
+            list.child(header).child(rows).child(
+                div()
+                    .flex_none()
+                    .when(self.live, |d| {
+                        d.border_t_1().border_color(t.line).pt(px(4.))
+                    })
+                    .child(archive_button),
+            )
+        }
+    }
+}
+
+fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
+    ui::titled(
+        ui::icon_button("sessions.fold", Icon::PanelLeft.size(px(14.)), cx).size(px(26.)),
+        if collapsed {
+            "Show sessions"
+        } else {
+            "Hide sessions"
+        },
+    )
+    .test_support()
+    .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"))
+}
+
+fn shared_branch(set: &Workset) -> Option<&str> {
+    let branch = set.members.first()?.branch.as_deref()?;
+    set.members
+        .iter()
+        .all(|m| m.branch.as_deref() == Some(branch))
+        .then_some(branch)
+}
+
+pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
+    let t = theme(cx);
+    let w = Workspace::get(cx);
+    let main = w.session_id() == MAIN;
+    let set = w.sessions().iter().find(|s| s.id == w.session_id());
+    let count = set.map_or(w.session_repos().len(), |s| s.members.len());
+    let branch = set.and_then(shared_branch).map(String::from);
+    let name = w.session_name().to_string();
+    let summary = match (main, count) {
+        (_, 0) => "No repositories yet".into(),
+        (true, 1) => "1 repository on its own branch".into(),
+        (true, n) => format!("{n} repositories on their own branches"),
+        (false, n) => repo_count(n),
+    };
+    let mut menu = ui::DrawnMenu::default().item("Overview", |w, cx| {
+        dock::open_doc(Doc::SessionOverview, true, w, cx)
+    });
+    if !main {
+        menu = menu.item("Rename session…", |w, cx| {
+            actions::dispatch(w, cx, "session.rename")
+        });
+        if actions::find("session.archiveCurrent").is_some() {
+            menu = menu.item("Archive session…", |w, cx| {
+                actions::dispatch(w, cx, "session.archiveCurrent")
+            });
+        }
+    }
+    let more = menu.item("Session archive", open_archive).button(
+        "session.actions",
+        ui::titled(
+            ui::icon_button("session.more", Icon::More, cx),
+            "Session actions",
+        )
+        .test_support(),
+        window,
+        cx,
+    );
+    div()
+        .id("session.header")
+        .test_support()
+        .aria_label(name.clone())
+        .flex()
+        .flex_none()
+        .h(px(39.))
+        .min_w_0()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .border_b_1()
+        .border_color(t.line)
+        .child(
+            div()
+                .flex_none()
+                .max_w(px(240.))
+                .truncate()
+                .text_size(text::TITLE)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(name),
+        )
+        .when_some(branch, |d, branch| {
+            d.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .bg(t.segment_bg)
+                    .px(px(5.))
+                    .rounded(radius::BADGE)
+                    .text_size(text::LABEL)
+                    .font_family(theme::mono(cx))
+                    .child(branch),
+            )
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(text::SMALL)
+                .text_color(t.muted)
+                .child(summary),
+        )
+        .when(!main && actions::find("session.addRepo").is_some(), |d| {
+            d.child(
+                ui::quiet_button("sessions.addRepo", "Add repository…", cx)
+                    .flex_none()
+                    .test_support()
+                    .on_click(|_, w, cx| actions::dispatch(w, cx, "session.addRepo")),
+            )
+        })
+        .child(div().flex_none().child(more))
+}
+
+fn repo_count(count: usize) -> String {
+    match count {
+        1 => "1 repository".into(),
+        n => format!("{n} repositories"),
     }
 }
 
@@ -244,17 +377,11 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
         || w.repos().iter().filter(|r| r.worktree_of.is_none()).count(),
         |set| set.members.iter().filter(|m| m.state.usable()).count(),
     );
-    let branch = set.and_then(|set| {
-        let branch = set.members.first()?.branch.as_ref()?;
-        set.members
-            .iter()
-            .all(|m| m.branch.as_ref() == Some(branch))
-            .then_some(branch)
-    });
-    let summary = match count {
-        0 => "No repositories yet".into(),
-        1 => "1 repository".into(),
-        n => format!("{n} repositories"),
+    let branch = set.and_then(shared_branch);
+    let summary = if count == 0 {
+        "No repositories yet".into()
+    } else {
+        repo_count(count)
     };
     let members: Vec<_> = if selected {
         if let Some(set) = set {
@@ -267,13 +394,13 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                     } else {
                         info
                     };
-                    member(name.to_owned(), &m.path, m.state, Some(&m.repo), cx)
+                    member(name.to_owned(), &m.path, m.state, Some(&m.repo), branch, cx)
                 })
                 .collect()
         } else {
             w.session_repos()
                 .iter()
-                .map(|r| member(r.name.clone(), &r.path, MemberState::Ready, None, cx))
+                .map(|r| member(r.name.clone(), &r.path, MemberState::Ready, None, None, cx))
                 .collect()
         }
     } else {
@@ -293,7 +420,8 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
     div()
         .flex()
         .flex_col()
-        .rounded(radius::WIDGET)
+        .flex_none()
+        .rounded(radius::ICON_BUTTON)
         .when(selected, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
         .child(
             ui::pressable(gpui_kit::SharedString::from(format!("sessions.row.{id}")))
@@ -348,7 +476,7 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                         .min_w_0()
                         .items_center()
                         .gap(GAP / 2.)
-                        .child(if editable { Icon::Branch } else { Icon::Folder }.size(px(14.)))
+                        .child(if editable { Icon::Branch } else { Icon::Home }.size(px(14.)))
                         .child(
                             div()
                                 .flex_1()
@@ -388,37 +516,13 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                                 div()
                                     .truncate()
                                     .font_family(ui::theme::mono(cx))
-                                    .child(branch.clone()),
+                                    .child(branch.to_string()),
                             )
                         }),
                 ),
         )
         .when(!members.is_empty(), |d| {
             d.child(div().pb(GAP / 2.).children(members))
-        })
-        .when(selected && editable, |d| {
-            d.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        ui::quiet_button("sessions.addRepo", "Add repository…", cx)
-                            .test_support()
-                            .on_click(|_, window, cx| provision::add(window, cx)),
-                    )
-                    .child(
-                        ui::titled(
-                            ui::icon_button(
-                                "sessions.archiveCurrent",
-                                Icon::Archive.size(px(13.)),
-                                cx,
-                            )
-                            .on_click(|_, window, cx| provision::archive(window, cx)),
-                            "Archive session",
-                        )
-                        .test_support(),
-                    ),
-            )
         })
         .into_any_element()
 }
@@ -428,28 +532,19 @@ fn member(
     path: &str,
     state: MemberState,
     repo: Option<&str>,
+    shared_branch: Option<&str>,
     cx: &App,
 ) -> AnyElement {
     let t = theme(cx);
-    let status = Repo::get(cx, path).and_then(|r| r.status());
-    let sync = status
-        .map(|s| {
-            let mut parts = vec![];
-            if s.ahead > 0 {
-                parts.push(format!("↑{}", s.ahead));
-            }
-            if s.behind > 0 {
-                parts.push(format!("↓{}", s.behind));
-            }
-            if !s.changes.is_empty() {
-                parts.push(format!("●{}", s.changes.len()));
-            }
-            parts.join(" ")
-        })
-        .unwrap_or_default();
+    let status = Repo::get(cx, path).and_then(Repo::status);
+    let branch = status
+        .and_then(|s| s.branch.clone())
+        .filter(|branch| Some(branch.as_str()) != shared_branch);
+    let sync = status.map(sync_label).unwrap_or_default();
+    let changed = status.map_or(0, |s| s.changes.len());
     let detail = match state {
-        MemberState::Ready => sync,
-        state => state.label().into(),
+        MemberState::Ready => status.and_then(|s| s.in_progress.as_ref()).map(operation),
+        state => Some(state.label()),
     };
     div()
         .id(gpui_kit::SharedString::from(format!(
@@ -465,24 +560,75 @@ fn member(
                     .show(event.position(), window, cx);
             })
         })
+        .test_support()
+        .role(Role::ListItem)
+        .aria_label(name.clone())
         .flex()
         .items_center()
-        .gap(GAP / 2.)
+        .gap(px(5.))
         .h(px(22.))
-        .pl(GAP * 3.)
+        .pl(px(16.))
         .pr(GAP)
         .text_size(text::SMALL)
-        .text_color(t.muted)
-        .child(div().flex_1().truncate().child(name))
-        .child(
-            div()
-                .font_family(ui::theme::mono(cx))
-                .text_color(if state == MemberState::Ready {
-                    t.muted
-                } else {
-                    t.warning
-                })
-                .child(detail),
-        )
+        .text_color(t.fg)
+        .child(div().min_w_0().truncate().child(name))
+        .when_some(branch, |d, branch| {
+            d.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::mono(cx))
+                    .text_size(text::LABEL)
+                    .text_color(t.muted)
+                    .child(branch),
+            )
+        })
+        .child(div().flex_1())
+        .when(!sync.is_empty(), |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .font_family(theme::mono(cx))
+                    .text_color(t.muted)
+                    .child(sync),
+            )
+        })
+        .when(changed > 0, |d| {
+            d.child(
+                div()
+                    .flex_none()
+                    .font_family(theme::mono(cx))
+                    .text_color(t.modified)
+                    .child(format!("●{changed}")),
+            )
+        })
+        .when_some(detail, |d, detail| {
+            d.child(
+                div()
+                    .flex_none()
+                    .text_size(text::LETTER)
+                    .text_color(t.warning)
+                    .child(detail),
+            )
+        })
         .into_any_element()
+}
+
+fn sync_label(status: &RepoStatus) -> String {
+    [("↑", status.ahead), ("↓", status.behind)]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(arrow, n)| format!("{arrow}{n}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn operation(op: &InProgress) -> &'static str {
+    match op {
+        InProgress::Merge => "MERGING",
+        InProgress::Rebase => "REBASING",
+        InProgress::CherryPick => "CHERRY-PICKING",
+        InProgress::Revert => "REVERTING",
+        InProgress::Bisect => "BISECTING",
+    }
 }

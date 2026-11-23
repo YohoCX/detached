@@ -48,6 +48,15 @@ fn in_list(cx: &mut VisualTestContext, id: &str) -> bool {
         .is_some_and(|e| e.selected() == Some(true))
 }
 
+fn open_archive_menu(cx: &mut VisualTestContext) {
+    cx.click("session.more");
+    let row = (0usize..)
+        .map_while(|i| cx.find(("menu.item", i)))
+        .position(|item| item.label() == Some("Archive session…"))
+        .expect("archive menu item");
+    cx.click(("menu.item", row));
+}
+
 fn root(cx: &mut VisualTestContext, i: usize) -> Option<String> {
     cx.find(("tree.root", i))
         .and_then(|e| e.label().map(String::from))
@@ -480,7 +489,7 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
     wait_until(&mut app, code_open);
     std::fs::write(PathBuf::from(api).join("draft.txt"), "keep me").unwrap();
 
-    app.click("sessions.archiveCurrent");
+    open_archive_menu(&mut app);
     wait_until(&mut app, |cx| {
         cx.find("sessions.archive.confirm")
             .is_some_and(|e| e.visible())
@@ -503,7 +512,7 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
         "keep me"
     );
 
-    app.click("sessions.archiveCurrent");
+    open_archive_menu(&mut app);
     wait_until(&mut app, |cx| {
         cx.find("sessions.archive.confirm")
             .is_some_and(|e| e.visible())
@@ -992,7 +1001,7 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
     app.click(SharedString::from(format!("sessions.row.{}", set.id)));
 
     let refused = |app: &mut VisualTestContext, reason: &str| {
-        app.click("sessions.archiveCurrent");
+        open_archive_menu(app);
         wait_until(app, |cx| {
             cx.find("sessions.archive.confirm")
                 .is_some_and(|e| e.visible())
@@ -1034,4 +1043,51 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
     refused(&mut app, "a shell is open");
     app.update(|window, cx| Terminals::global(cx).update(cx, |t, cx| t.close(&shell, window, cx)));
     assert!(PathBuf::from(&path).is_dir());
+}
+
+#[gpui_kit::test]
+fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{px, size};
+
+    let app = &mut open_app_with(cx, |sb| {
+        for n in 1..=11 {
+            repo(sb, &format!("repo-{n:02}"));
+        }
+    });
+    let bounds = |app: &mut VisualTestContext, id: &str| {
+        app.find(SharedString::from(id.to_string()))
+            .unwrap()
+            .bounds()
+    };
+    let members = app.workspace(|w, _| {
+        w.session_repos()
+            .iter()
+            .map(|r| format!("sessions.member.{}", r.path))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(members.len(), 11);
+    let archive = bounds(app, "sessions.archive");
+    assert!(bounds(app, &members[10]).bottom() <= archive.top());
+    assert!(bounds(app, "sessions").right() <= bounds(app, "session.explorer").left());
+    assert!(bounds(app, "session.explorer").right() <= bounds(app, "session.header").left());
+    assert!(app.find("session.overview").unwrap().visible());
+
+    app.update(|w, _| w.resize(size(px(1000.), px(700.))));
+    wait_until(app, |app| bounds(app, "sessions").size.width == px(44.));
+    assert_eq!(bounds(app, "session.explorer").size.width, px(28.));
+    assert!(app.find("sessions.rows").is_none());
+    app.press("secondary-b");
+    wait_until(app, |app| {
+        app.find(SharedString::from(members[10].clone())).is_some()
+    });
+    assert!(bounds(app, &members[10]).bottom() <= bounds(app, "sessions.archive").top());
+    app.press("secondary-0");
+    wait_until(app, |app| {
+        app.find("tree.changes")
+            .is_some_and(|el| el.checked() == Some(true))
+    });
+    app.press("secondary-1");
+    assert_eq!(app.find("tree.files").unwrap().checked(), Some(true));
 }

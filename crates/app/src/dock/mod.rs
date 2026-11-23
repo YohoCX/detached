@@ -87,7 +87,13 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         "panel.changes",
         "Session Changes",
         Group::View,
-        |w, cx| open("changes", w, cx),
+        |w, cx| {
+            if Workspace::get(cx).archive() {
+                open("changes", w, cx);
+            } else {
+                crate::files::choose_explorer(true, w, cx);
+            }
+        },
     ));
     all
 }
@@ -437,16 +443,20 @@ fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea
             if archive {
                 drop_unparsed(&mut area, window, cx);
             } else {
-                area.remove_dock(DockPlacement::Bottom, window, cx);
+                for p in [
+                    DockPlacement::Left,
+                    DockPlacement::Right,
+                    DockPlacement::Bottom,
+                ] {
+                    area.remove_dock(p, window, cx);
+                }
             }
-        } else {
-            default_layout(&mut area, archive, window, cx);
+        } else if archive {
+            default_layout(&mut area, window, cx);
         }
         let shown = active(&area);
         for app in apps(cx) {
-            if (archive || app.home.0 != DockPlacement::Bottom)
-                && find(&area, app.name, cx).is_none()
-            {
+            if archive && find(&area, app.name, cx).is_none() {
                 let (p, size) = app.home;
                 area.add_panel(Tab::new(app, cx), p, Some(px(size)), window, cx);
             }
@@ -501,35 +511,18 @@ fn drop_unparsed(area: &mut DockArea, window: &mut Window, cx: &mut Context<Dock
     }
 }
 
-fn default_layout(
-    area: &mut DockArea,
-    archive: bool,
-    window: &mut Window,
-    cx: &mut Context<DockArea>,
-) {
+fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
     for p in [
         DockPlacement::Left,
         DockPlacement::Right,
         DockPlacement::Bottom,
     ] {
-        if !archive && p == DockPlacement::Bottom {
-            continue;
-        }
         let apps = apps(cx).into_iter().filter(|a| a.home.0 == p);
-        let size = if archive {
-            home_size(p, cx)
-        } else if p == DockPlacement::Left {
-            248.
-        } else {
-            264.
-        };
         let layout = apps.fold(DockLayout::tabs(), |l, a| l.panel(Tab::new(a, cx)));
         area.set_dock(p, layout, window, cx);
-        area.set_dock_size(p, px(size), window, cx);
+        area.set_dock_size(p, px(home_size(p, cx)), window, cx);
     }
-    if archive {
-        area.toggle_dock(DockPlacement::Bottom, window, cx);
-    }
+    area.toggle_dock(DockPlacement::Bottom, window, cx);
 }
 
 /// A zone's size until the user drags it: its pane's and the gap beside it.
@@ -549,6 +542,9 @@ fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
 
 /// Shows the app named `name`, opening its zone.
 pub fn open(name: &str, window: &mut Window, cx: &mut App) {
+    if name == "project" && !Workspace::get(cx).archive() {
+        return crate::files::choose_explorer(false, window, cx);
+    }
     if let Some(doc) = live_tool(name, cx) {
         return open_doc(doc, true, window, cx);
     }
@@ -569,6 +565,13 @@ pub fn open(name: &str, window: &mut Window, cx: &mut App) {
 
 /// Shows the app, or closes its zone when it is on screen there.
 pub fn toggle(name: &str, window: &mut Window, cx: &mut App) {
+    if name == "project" && !Workspace::get(cx).archive() {
+        use crate::shell::{self, Side::Explorer};
+        if !crate::files::showing_changes(cx) && shell::side_open(Explorer, window, cx) {
+            return shell::set_side(Explorer, false, window, cx);
+        }
+        return crate::files::choose_explorer(false, window, cx);
+    }
     match is_shown(name, cx) {
         true => close(name, window, cx),
         false => open(name, window, cx),
@@ -599,6 +602,9 @@ pub fn close(name: &str, window: &mut Window, cx: &mut App) {
 
 /// Whether the app is the tab on screen in an open zone.
 pub fn is_shown(name: &str, cx: &App) -> bool {
+    if name == "project" && !Workspace::get(cx).archive() {
+        return !crate::files::showing_changes(cx);
+    }
     if let Some(doc) = live_tool(name, cx) {
         return Workspace::get(cx).shown() == Some(&doc);
     }
@@ -606,12 +612,12 @@ pub fn is_shown(name: &str, cx: &App) -> bool {
 }
 
 fn live_tool(name: &str, cx: &App) -> Option<Doc> {
-    if Workspace::get(cx).archive() || name == "terminal" {
+    if Workspace::get(cx).archive() || matches!(name, "terminal" | "project") {
         return None;
     }
     apps(cx)
         .into_iter()
-        .find(|a| a.name == name && a.home.0 == DockPlacement::Bottom)
+        .find(|a| a.name == name)
         .map(|tool| Doc::Tool {
             name: tool.name.into(),
             tab: tool.id.into(),
@@ -640,6 +646,10 @@ pub(crate) fn is_doc_view_shown(view: EntityId, cx: &App) -> bool {
             })
             && tabs_shown(area, p).contains(&id)
     })
+}
+
+pub(crate) fn minimum_width(cx: &App) -> gpui_kit::Pixels {
+    zones(cx).map_or(px(320.), |area| panes::minimum_width(area.read(cx)))
 }
 
 pub fn is_open(p: DockPlacement, cx: &App) -> bool {
@@ -946,28 +956,6 @@ pub(crate) fn restore(w: &mut Window, cx: &mut App) {
     {
         persist(&old, &area, cx);
     }
-    let side = cx
-        .try_global::<Zones>()
-        .and_then(|z| {
-            (z.current != KEY && key != KEY && z.current != key)
-                .then(|| z.areas.get(&z.current))
-                .flatten()
-                .cloned()
-        })
-        .map(|a| {
-            let a = a.read(cx);
-            [
-                DockPlacement::Left,
-                DockPlacement::Right,
-                DockPlacement::Bottom,
-            ]
-            .map(|p| {
-                let app = tabs_shown(a, p)
-                    .into_iter()
-                    .find_map(|id| name_of(a, id, cx));
-                (p, a.is_dock_open(p), a.dock_size(p), app)
-            })
-        });
     if let Some(archive) = cx
         .try_global::<Zones>()
         .and_then(|z| z.areas.get(KEY))
@@ -977,19 +965,6 @@ pub(crate) fn restore(w: &mut Window, cx: &mut App) {
     }
     let area = area(w, cx);
     cx.global_mut::<Zones>().current = key;
-    if let Some(side) = side {
-        area.update(cx, |a, cx| {
-            for (p, open, size, app) in side {
-                if let Some(size) = size {
-                    a.set_dock_size(p, size, w, cx);
-                }
-                if let Some((_, id)) = app.and_then(|name| find(a, name, cx)) {
-                    a.select_panel(id, w, cx);
-                }
-                set_open(a, p, open, w, cx);
-            }
-        });
-    }
     if Workspace::get(cx).archive() {
         area.update(cx, |a, cx| tabs::apply(a, w, cx));
     } else {

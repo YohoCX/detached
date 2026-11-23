@@ -40,6 +40,7 @@ use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::invalidate;
 use kernel::workspace::Workspace;
+pub(crate) use sync::pull as pull_repo;
 use sync::{Bulk, Kind};
 
 /// What this vertical keeps beside the kernel: the bulk sync, recent branches, the branches
@@ -84,9 +85,9 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         shown: None,
     };
     dock::register_app(cx, repos);
-    shell::top_bar(cx, TopBar::Left, 0, |_, cx| workspaces(cx));
+    shell::top_bar(cx, TopBar::Workspace, 0, |_, cx| workspaces(cx));
     shell::top_bar(cx, TopBar::Left, 1, |_, cx| switcher(cx));
-    shell::top_bar(cx, TopBar::Left, 2, branches);
+    shell::top_bar(cx, TopBar::Branch, 0, branches);
     shell::top_bar(cx, TopBar::Right, 1, |_, cx| sync_buttons(cx));
     pages::register(cx);
     vec![]
