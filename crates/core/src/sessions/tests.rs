@@ -642,6 +642,7 @@ fn a_different_worktree_from_the_same_repository_cannot_replace_a_session_member
         let mut set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
         if legacy {
             set.members[0].registration = None;
+            set.members[0].generation = None;
             let file = root(&sb.state)
                 .join(&ws)
                 .join("sessions")
@@ -703,6 +704,7 @@ fn a_legacy_registration_is_recorded_before_its_branch_changes() {
     let (sb, ws, _, path) = setup();
     let mut set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
     set.members[0].registration = None;
+    set.members[0].generation = None;
     let file = root(&sb.state)
         .join(&ws)
         .join("sessions")
@@ -796,4 +798,48 @@ fn cancelled_before_any_checkout_never_appears_as_a_session() {
             .join(&set.id)
             .exists()
     );
+}
+
+#[test]
+fn a_reused_git_admin_directory_does_not_reuse_session_ownership() {
+    let (sb, ws, repo, path) = setup();
+    let set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
+    let member = &set.members[0];
+    assert!(member.generation.is_some());
+    sb.git(&repo, &["worktree", "remove", &path]);
+    sb.git(&repo, &["worktree", "add", "-b", "unrelated", &path]);
+    let tree = Path::new(&path);
+    let git = sb.git(tree, &["rev-parse", "--absolute-git-dir"]);
+    assert_eq!(
+        member.registration.as_deref(),
+        Some(real(Path::new(&git)).as_path())
+    );
+    assert_eq!(
+        list(&sb.state, &ws).unwrap().sets[0].members[0].state,
+        MemberState::Unavailable
+    );
+    let cancel = crate::state::Cancel::default();
+    assert!(
+        remove(
+            &sb.state,
+            job(&ws, &set.id, &member.repo, &cancel),
+            true,
+            false
+        )
+        .is_err()
+    );
+    assert_eq!(sb.git(tree, &["branch", "--show-current"]), "unrelated");
+
+    // Even checking the original branch back out cannot revive the old ownership.
+    sb.git(tree, &["checkout", "renewal"]);
+    assert!(
+        remove(
+            &sb.state,
+            job(&ws, &set.id, &member.repo, &cancel),
+            true,
+            false
+        )
+        .is_err()
+    );
+    assert!(tree.is_dir());
 }
