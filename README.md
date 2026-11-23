@@ -26,8 +26,9 @@ The window is three zones around the open documents, Fleet-style: every app (Rep
 Council, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
 tab you can drag to any zone; drag a zone's edge to resize it, double-click to reset it, drag it
 nearly shut to close it. The center's tabs sort into Docs, Chats and Code. Errors and warnings
-from everywhere collect in Events. Themes: Fleet, Classic and Catppuccin, in System, Light or Dark
-mode, or your own JSON in the config folder's `themes`, reloaded as you edit.
+from everywhere collect in Events. Themes: Slate (the default), Fleet, Classic and Catppuccin, each
+in System, Light or Dark mode. You can edit custom themes in the config folder's `themes` directory
+and see changes as you save.
 
 Folders belong to workspaces, e.g. "Office" and "Personal". The top bar switches between them, and
 the current one is the context for everything: the sidebar, fetch and pull all, quick open, search,

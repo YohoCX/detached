@@ -385,7 +385,7 @@ impl Find {
             .font_family(theme::mono(cx))
             .text_size(text::SMALL)
             .whitespace_nowrap()
-            .when(on, |r| r.bg(t.selected).shadow(vec![ring]))
+            .when(on, |r| r.bg(t.popover_selected).shadow(vec![ring]))
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
                 if this.mouse.replace(e.position) != Some(e.position) && this.sel != Some(i) {
                     this.sel = Some(i);

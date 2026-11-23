@@ -723,7 +723,7 @@ impl Popup {
             .pl(px(10.))
             .pr(px(8.))
             .rounded(radius::ITEM)
-            .when(selected, |d| d.bg(t.selected).shadow(vec![ring]))
+            .when(selected, |d| d.bg(t.popover_selected).shadow(vec![ring]))
             .role(Role::ListBoxOption)
             .aria_selected(selected)
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {

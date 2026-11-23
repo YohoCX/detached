@@ -716,7 +716,7 @@ impl ChatView {
                 .gap(size::GAP)
                 .justify_start()
                 .rounded(radius::ITEM)
-                .when(selected == Some(i) && enabled, |d| d.bg(t.selected))
+                .when(selected == Some(i) && enabled, |d| d.bg(t.popover_selected))
                 .when(enabled, |d| d.hover(|s| s.bg(t.hover)))
                 .when(!enabled, |d| d.text_color(t.muted))
                 .on_click(

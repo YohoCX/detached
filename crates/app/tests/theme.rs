@@ -32,6 +32,18 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
         std::fs::write(config.join("ui.json"), r#"{"theme.name": "Mine"}"#).unwrap();
     });
     assert_eq!(accent(cx), red(), "only the accent is its own");
+    let fleet = theme::previews(&cx.sb.state.config_dir.join("themes"))
+        .into_iter()
+        .find(|(name, _, _)| name == "Fleet")
+        .unwrap();
+    cx.update(|_, cx| {
+        let base = if theme::is_dark(cx) {
+            &fleet.2
+        } else {
+            &fleet.1
+        };
+        assert_eq!(theme::theme(cx).muted, base.muted);
+    });
     let user_bg = |cx: &mut VisualTestContext| cx.update(|_, cx| theme::theme(cx).user_bg);
     let red_user = user_bg(cx);
     let file = cx.sb.state.config_dir.join(MINE);
@@ -57,7 +69,10 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
 #[gpui_kit::test]
 fn another_theme_is_chosen_and_kept_across_a_restart(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    let fleet = accent(cx);
+    let (names, chosen) = cx.update(|_, cx| theme::names(cx));
+    assert_eq!(names, ["Slate", "Fleet", "Classic", "Catppuccin"]);
+    assert_eq!(chosen, "Slate");
+    let slate = accent(cx);
     let fonts = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
             let k = Kit::global(cx);
@@ -66,7 +81,7 @@ fn another_theme_is_chosen_and_kept_across_a_restart(cx: &mut TestAppContext) {
     };
     assert_eq!(fonts(cx), ("Inter".into(), "JetBrains Mono".into()));
     cx.update(|_, cx| theme::choose("Classic", cx));
-    wait_until(cx, |cx| accent(cx) != fleet);
+    wait_until(cx, |cx| accent(cx) != slate);
     assert_ne!(fonts(cx).0, "Inter", "Classic keeps the system's");
     let ui = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(ui.contains(r#""theme.name": "Classic""#), "{ui}");
@@ -119,7 +134,9 @@ fn opening_the_themes_folder_seeds_a_copy_to_edit(_cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     theme::seed(dir.path()).unwrap();
     let text = std::fs::read_to_string(dir.path().join("my-theme.json")).unwrap();
-    assert!(text.contains(r#""name": "My theme""#));
+    let seeded: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(seeded["name"], "My theme");
+    assert_eq!(seeded["extends"], "Slate");
     std::fs::write(dir.path().join("my-theme.json"), "{}").unwrap();
     theme::seed(dir.path()).unwrap();
     assert_eq!(

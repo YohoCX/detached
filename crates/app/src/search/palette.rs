@@ -375,7 +375,7 @@ impl Palette {
             .h(ROW)
             .px(px(10.))
             .rounded(radius::ITEM)
-            .when(on, |r| r.bg(t.selected).shadow(vec![ring]))
+            .when(on, |r| r.bg(t.popover_selected).shadow(vec![ring]))
             .on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
                 if this.mouse.replace(e.position) != Some(e.position) && this.sel != i {
                     this.sel = i;
