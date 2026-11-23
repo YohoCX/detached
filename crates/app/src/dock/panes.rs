@@ -13,6 +13,7 @@ use gpui_kit::{
 use kernel::{activity::Activity, doc::Doc, workspace::Workspace};
 
 use super::{DocKind, DocTab};
+use crate::shell::{self, Side::Explorer};
 use crate::{
     actions::{self, Group, Registration},
     ui::{self, DrawnMenu, theme},
@@ -293,7 +294,6 @@ fn room(
     };
     let horizontal = side.axis() == Axis::Horizontal;
     if horizontal {
-        let explorer = DockPlacement::Right;
         let width = b.size.width;
         let code = groups(a)
             .into_iter()
@@ -302,12 +302,12 @@ fn room(
             .and_then(|p| p.view().downcast::<DocTab>().ok())
             .is_some_and(|t| matches!(t.read(cx).doc, Doc::File(_) | Doc::Diff(_)));
         let whole = size_of(tree(a), Axis::Horizontal, cx).unwrap_or(width);
-        let extra = a.dock_size(explorer).unwrap_or(px(264.));
+        let extra = px(236.);
         if width < px(if code { 900. } else { 641. })
-            && a.is_dock_open(explorer)
+            && shell::columns_for(w, cx, minimum_width(a)).1
             && whole + extra >= minimum_with_split(tree(a), Axis::Horizontal, Some(node))
         {
-            a.toggle_dock(explorer, w, cx);
+            shell::set_side(Explorer, false, w, cx);
             return true;
         }
         if whole >= minimum_with_split(tree(a), Axis::Horizontal, Some(node)) {
@@ -672,6 +672,10 @@ fn minimum_with_split(n: &PaneNode, axis: Axis, split_leaf: Option<NodeId>) -> P
     }
 }
 
+pub(super) fn minimum_width(a: &DockArea) -> Pixels {
+    minimum(tree(a), Axis::Horizontal)
+}
+
 fn constrain(w: &mut Window, cx: &mut App) {
     if Workspace::get(cx).archive() {
         return;
@@ -681,14 +685,9 @@ fn constrain(w: &mut Window, cx: &mut App) {
             return;
         }
         let root = tree(a);
-        for (axis, dock) in [
-            (Axis::Horizontal, DockPlacement::Right),
-            (Axis::Vertical, DockPlacement::Bottom),
-        ] {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
             if size_of(root, axis, cx).is_some_and(|extent| extent + px(1.) < minimum(root, axis)) {
-                if a.is_dock_open(dock) {
-                    a.toggle_dock(dock, w, cx);
-                } else if groups(a).len() > 1
+                if groups(a).len() > 1
                     && let Some(node) = focused(a, cx)
                 {
                     a.set_zoomed_in(node, w, cx);
@@ -992,6 +991,20 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
             click(node, w, cx);
             actions::dispatch(w, cx, "find.inFiles");
         });
+    menu = menu.separator();
+    for (label, name) in [
+        ("Chats", "chats"),
+        ("Council", "council"),
+        ("Merge requests", "mrs"),
+        ("Pipelines", "pipelines"),
+        ("Events", "events"),
+    ] {
+        menu = menu.item(label, move |w, cx| {
+            click(node, w, cx);
+            super::open(name, w, cx);
+        });
+    }
+    menu = menu.separator();
     for repo in Workspace::get(cx).session_repos() {
         let path = repo.path.clone();
         let log = path.clone();
@@ -1050,7 +1063,6 @@ pub(super) const ACTIONS: &[(&str, &str)] = &[
 ];
 
 pub(super) fn register(cx: &mut App) -> Vec<Registration> {
-    super::register_doc(cx, "session-overview", EmptyDoc);
     super::register_doc(cx, "new-tab", EmptyDoc);
     ACTIONS
         .iter()
@@ -1089,9 +1101,8 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
 struct EmptyDoc;
 
 impl DocKind for EmptyDoc {
-    fn view(&self, doc: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
-        let overview = *doc == Doc::SessionOverview;
-        cx.new(|_| EmptyPane(overview)).into()
+    fn view(&self, _: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
+        cx.new(|_| EmptyPane).into()
     }
     fn id(&self, doc: &Doc) -> SharedString {
         format!("doc.{}", doc.kind()).into()
@@ -1099,31 +1110,25 @@ impl DocKind for EmptyDoc {
     fn category(&self, _: &Doc) -> &'static str {
         "code"
     }
-    fn title(&self, doc: &Doc, _: Option<&AnyView>, _: &App) -> SharedString {
-        if *doc == Doc::SessionOverview {
-            "Overview"
-        } else {
-            "New tab"
-        }
-        .into()
+    fn title(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> SharedString {
+        "New tab".into()
     }
 }
 
-struct EmptyPane(bool);
+struct EmptyPane;
 impl Render for EmptyPane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = if self.0 {
-            Workspace::get(cx).session_name()
-        } else {
-            "Open something here"
-        };
         div()
             .flex()
             .flex_col()
             .size_full()
             .items_center()
             .justify_center()
-            .child(div().text_color(theme(cx).muted).child(title.to_string()))
+            .child(
+                div()
+                    .text_color(theme(cx).muted)
+                    .child("Open something here"),
+            )
             .child(super::skin::hints(cx))
     }
 }

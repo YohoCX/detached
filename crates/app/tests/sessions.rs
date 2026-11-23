@@ -710,3 +710,50 @@ fn a_live_layout_keeps_an_unavailable_document_as_a_closable_tab(cx: &mut TestAp
     app.update(|w, cx| w.within("tab.missing.0").click("tab.close", cx));
     wait_until(app, |cx| cx.find("dock.missing").is_none());
 }
+
+#[gpui_kit::test]
+fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{px, size};
+
+    let app = &mut open_app_with(cx, |sb| {
+        for n in 1..=11 {
+            repo(sb, &format!("repo-{n:02}"));
+        }
+    });
+    let bounds = |app: &mut VisualTestContext, id: &str| {
+        app.find(SharedString::from(id.to_string()))
+            .unwrap()
+            .bounds()
+    };
+    let members = app.workspace(|w, _| {
+        w.session_repos()
+            .iter()
+            .map(|r| format!("sessions.member.{}", r.path))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(members.len(), 11);
+    let archive = bounds(app, "sessions.archive");
+    assert!(bounds(app, &members[10]).bottom() <= archive.top());
+    assert!(bounds(app, "sessions").right() <= bounds(app, "session.explorer").left());
+    assert!(bounds(app, "session.explorer").right() <= bounds(app, "session.header").left());
+    assert!(app.find("session.overview").unwrap().visible());
+
+    app.update(|w, _| w.resize(size(px(1000.), px(700.))));
+    wait_until(app, |app| bounds(app, "sessions").size.width == px(44.));
+    assert_eq!(bounds(app, "session.explorer").size.width, px(28.));
+    assert!(app.find("sessions.rows").is_none());
+    app.press("secondary-b");
+    wait_until(app, |app| {
+        app.find(SharedString::from(members[10].clone())).is_some()
+    });
+    assert!(bounds(app, &members[10]).bottom() <= bounds(app, "sessions.archive").top());
+    app.press("secondary-0");
+    wait_until(app, |app| {
+        app.find("tree.changes")
+            .is_some_and(|el| el.checked() == Some(true))
+    });
+    app.press("secondary-1");
+    assert_eq!(app.find("tree.files").unwrap().checked(), Some(true));
+}

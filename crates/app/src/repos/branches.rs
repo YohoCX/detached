@@ -82,6 +82,9 @@ impl Widget {
 
 impl Render for Widget {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.open.is_none() && !Workspace::get(cx).archive() {
+            return div().into_any_element();
+        }
         let t = theme(cx);
         let current = Workspace::get(cx).current().is_some();
         let st = Repo::current(cx).and_then(Repo::status);
@@ -133,6 +136,7 @@ impl Render for Widget {
             window,
             cx,
         )
+        .into_any_element()
     }
 }
 

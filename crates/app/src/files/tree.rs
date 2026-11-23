@@ -21,8 +21,9 @@ use gpui_kit::{
 
 use super::api::{DiffDoc, Location, Side, show_diff};
 use crate::actions;
+use crate::shell::{self, Side as Column};
 use crate::ui::suggest::{Commit, Focused};
-use crate::ui::{self, GAP, Icon, Suggest, text, theme};
+use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::repo::Repo;
 use kernel::resource::{self, Interest, On, Policy, Resource};
@@ -30,8 +31,17 @@ use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
 
-/// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
 const CHANGES: &str = "tree.changes";
+
+pub(crate) fn showing_changes(cx: &App) -> bool {
+    ui_state::get(CHANGES, cx).unwrap_or(false)
+}
+
+pub(crate) fn choose_explorer(changes: bool, window: &mut Window, cx: &mut App) {
+    ui_state::set(CHANGES, changes, cx);
+    shell::set_side(Column::Explorer, true, window, cx);
+    cx.refresh_windows();
+}
 
 const NESTING: [(&str, &[&str]); 13] = [
     (".ts", &[".spec.ts", ".test.ts"]),
@@ -155,6 +165,8 @@ impl TreeRow {
 }
 
 pub struct Tree {
+    live: bool,
+    browse: bool,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     field: Entity<Suggest>,
@@ -167,7 +179,7 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(live: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace = Workspace::global(cx);
         let field = cx.new(|cx| {
             let field = Suggest::new(
@@ -205,6 +217,8 @@ impl Tree {
             }),
         ];
         let mut this = Tree {
+            live,
+            browse: false,
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             field,
@@ -324,7 +338,7 @@ impl Tree {
         let current = w.session_current();
         let mut rows = vec![];
         let mut file_index = 0;
-        let changes = ui_state::get(CHANGES, cx).unwrap_or(false);
+        let changes = showing_changes(cx);
         let set = w
             .sessions()
             .iter()
@@ -340,7 +354,13 @@ impl Tree {
                     r.path.clone(),
                     r.name.clone(),
                     true,
-                    detail.unwrap_or_default(),
+                    if changes {
+                        Repo::get(cx, &r.path)
+                            .and_then(Repo::status)
+                            .map_or_else(String::new, |s| s.changes.len().to_string())
+                    } else {
+                        detail.unwrap_or_default()
+                    },
                 )
             })
             .collect();
@@ -551,7 +571,7 @@ impl Tree {
         let tip = |tip: &'static str| {
             move |window: &mut Window, cx: &mut App| Tooltip::new(tip).build(window, cx)
         };
-        let changes: bool = ui_state::get(CHANGES, cx).unwrap_or(false);
+        let changes = showing_changes(cx);
         let mode = |id, label, value| {
             ui::quiet_button(id, label, cx)
                 .test_support()
@@ -564,15 +584,26 @@ impl Tree {
                     cx.notify();
                 }))
         };
-        let modes = ui::band(div(), cx)
+        let modes = div()
             .flex()
             .flex_none()
             .items_center()
-            .h(px(38.))
-            .gap(px(4.))
-            .px(GAP)
-            .child(mode("tree.files", "Files", false))
-            .child(mode("tree.changes", "Changes", true))
+            .h(px(40.))
+            .gap(px(3.))
+            .px(px(8.))
+            .when(!self.live, |d| ui::band(d, cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .p(px(2.))
+                    .when(self.live, |d| {
+                        d.bg(t.segment_bg).rounded(ui::radius::SEGMENT)
+                    })
+                    .child(mode("tree.files", "Files", false))
+                    .child(mode("tree.changes", "Changes", true)),
+            )
             .child(div().flex_1())
             .child(
                 ui::titled(
@@ -581,7 +612,31 @@ impl Tree {
                     "Find in files",
                 )
                 .test_support(),
-            );
+            )
+            .when(self.live, |d| {
+                d.when(self.key.is_some() && !changes, |d| {
+                    d.child(
+                        ui::titled(
+                            ui::icon_button("tree.browse", Icon::Branch.size(px(14.)), cx),
+                            "Browse a branch, tag or commit",
+                        )
+                        .test_support()
+                        .aria_toggled(self.browse.into())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.browse = !this.browse;
+                            cx.notify();
+                        })),
+                    )
+                })
+                .child(
+                    ui::titled(
+                        ui::icon_button("explorer.fold", Icon::PanelLeft.size(px(14.)), cx),
+                        "Hide files",
+                    )
+                    .test_support()
+                    .on_click(|_, w, cx| shell::toggle_side(Column::Explorer, w, cx)),
+                )
+            });
         let back = ui::icon_button("tree.back", Icon::Close.size(px(12.)), cx)
             .test_support()
             .aria_label("Back to the working tree")
@@ -637,7 +692,20 @@ impl Tree {
             .flex()
             .flex_col()
             .child(modes)
-            .when(!changes && self.key.is_some(), |d| d.child(ref_bar))
+            .when(
+                !changes && self.key.is_some() && (!self.live || at || self.browse),
+                |d| d.child(ref_bar),
+            )
+            .when(self.live && changes, |d| {
+                d.child(
+                    div()
+                        .px(px(12.))
+                        .pb(px(4.))
+                        .text_size(text::LABEL)
+                        .text_color(t.muted)
+                        .child("Working tree"),
+                )
+            })
     }
 
     fn row(&self, entry: &TreeRow, focused: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -922,6 +990,7 @@ impl Render for Tree {
         };
         div()
             .id("tree")
+            .test_support()
             .flex()
             .flex_col()
             .size_full()

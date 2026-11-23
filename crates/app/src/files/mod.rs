@@ -14,13 +14,18 @@ mod viewer;
 pub use api::*;
 
 use gpui_kit::base::dock::DockPlacement;
-use gpui_kit::{App, AppContext};
+use gpui_kit::{AnyView, App, AppContext, Window};
 
 use crate::actions::Registration;
 use crate::dock::{self, AppSpec};
 use changes::Changes;
 use tree::Tree;
+pub(crate) use tree::{choose_explorer, showing_changes};
 use viewer::ViewerDocs;
+
+pub(crate) fn explorer(window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| Tree::new(true, window, cx)).into()
+}
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     crate::settings::register_page(
@@ -44,7 +49,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "tool.Project",
         title: "Project",
         action: Some("panel.project"),
-        view: |w, cx| cx.new(|cx| Tree::new(w, cx)).into(),
+        view: |w, cx| cx.new(|cx| Tree::new(false, w, cx)).into(),
         ..changes
     };
     dock::register_app(cx, changes);

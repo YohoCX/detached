@@ -15,6 +15,7 @@ use crate::actions::{self, Registration};
 use crate::keymap;
 use crate::shell::{self, TopBar};
 use crate::ui::{self, Icon, radius, theme};
+use kernel::workspace::Workspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -89,7 +90,7 @@ fn close(cx: &mut App) {
 }
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
-    shell::top_bar(cx, TopBar::Right, 0, |_, cx| cx.new(Pill::new).into());
+    shell::top_bar(cx, TopBar::Search, 0, |_, cx| cx.new(Pill::new).into());
     shell::overlay(cx, palette);
     shell::overlay(cx, find);
     vec![]
@@ -124,17 +125,19 @@ impl Render for Pill {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let chord = keymap::chord_for("search.everywhere", cx);
+        let archive = Workspace::get(cx).archive();
         ui::pressable("search.pill")
             .test_support()
             .role(Role::Button)
             .aria_label("Search everywhere")
             .aria_description(chord.clone())
             .gap(px(8.))
-            .w(px(320.))
+            .w(px(if archive { 320. } else { 380. }))
+            .min_w(px(180.))
             .h(px(28.))
             .pl(px(12.))
             .pr(px(10.))
-            .rounded(radius::PILL)
+            .rounded(if archive { radius::PILL } else { radius::KBD })
             .bg(t.input)
             .border_1()
             .border_color(t.line)
@@ -144,11 +147,10 @@ impl Render for Pill {
             .on_click(|_, window, cx| actions::dispatch(window, cx, "search.everywhere"))
             .child(Icon::Search.size(px(14.)))
             .child(div().flex_1().truncate().child({
-                let workspace = kernel::workspace::Workspace::get(cx);
-                if workspace.archive() {
+                if archive {
                     "Search everywhere".to_string()
                 } else {
-                    format!("Search in {}", workspace.session_name())
+                    format!("Search in {}", Workspace::get(cx).session_name())
                 }
             }))
             .child(ui::kbd(chord, cx))
