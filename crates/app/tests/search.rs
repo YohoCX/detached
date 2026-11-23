@@ -329,7 +329,8 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
 fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let cx = &mut app;
-    assert!(on_screen(cx, "tool.Changes"));
+    cx.click("tree.changes");
+    assert_eq!(cx.find("tree.changes").unwrap().checked(), Some(true));
     cx.press("secondary-shift-a");
     search(cx, "project tree", "Project Tree");
     let chord = cx.update(|_, cx| keymap::chord_for("panel.project", cx));
@@ -338,7 +339,7 @@ fn find_action_runs_the_chosen_one_and_reopens_at_the_top(cx: &mut TestAppContex
     assert_eq!(first.disabled(), None);
     cx.press("enter");
     assert_eq!(title(cx), None);
-    assert!(on_screen(cx, "tool.Project"));
+    assert_eq!(cx.find("tree.files").unwrap().checked(), Some(true));
 
     // Reopened, the list starts at the top again.
     cx.press("secondary-shift-a");
@@ -482,9 +483,11 @@ fn working_tree_recents_stop_at_checkout_boundaries_on_offer_and_open(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn the_empty_centers_hints_open_their_palettes_and_show_their_chords(cx: &mut TestAppContext) {
+fn an_empty_pane_opens_palettes_from_its_hints_and_shows_their_chords(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let cx = &mut app;
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
+    settle(cx);
     let hints = [
         ("file.goto", "Go to File"),
         ("search.everywhere", "Search Everywhere"),

@@ -8,22 +8,11 @@ use detached_app::settings;
 use detached_core::api;
 use detached_core::git::worktree::RECIPE;
 use detached_core::store::{Files, Kind, RepoStore};
-use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext};
 use kernel::workspace::Workspace;
 
-/// Each sidebar row's repo path; empty for a header.
-fn rows(cx: &mut VisualTestContext) -> Vec<String> {
-    cx.update(|w, cx| {
-        w.render_frame(cx);
-        (0usize..)
-            .map_while(|i| {
-                let row = w.try_find(ElementId::from(("sidebar.row", i)))?;
-                let path = row.description().and_then(|d| d.lines().next());
-                Some(path.unwrap_or_default().to_string())
-            })
-            .collect()
-    })
+fn listed_worktree(cx: &mut VisualTestContext) -> Option<PathBuf> {
+    cx.find("worktrees.path.0")?.label().map(PathBuf::from)
 }
 
 fn real(p: impl AsRef<Path>) -> PathBuf {
@@ -66,11 +55,17 @@ fn the_worktrees_page_creates_a_worktree_with_its_recipe_and_removes_it(cx: &mut
     assert_eq!(wt.worktree_of.as_deref(), Some(main.as_str()));
     assert_eq!(wt.name, "feat");
     cx.press("escape");
-    let paths = rows(cx);
-    let at = paths.iter().position(|p| *p == main).unwrap();
-    assert_eq!(real(&paths[at + 1]), real(&tree), "{paths:?}");
-
+    assert_eq!(
+        cx.workspace(|w, _| w
+            .session_repos()
+            .iter()
+            .map(|r| r.path.clone())
+            .collect::<Vec<_>>()),
+        [main.clone()]
+    );
     cx.update(|_, cx| settings::open(cx, "worktrees"));
+    assert_eq!(real(listed_worktree(cx).unwrap()), real(&tree));
+    assert!(cx.find("worktrees.path.1").is_none());
     wait_until(cx, |cx| cx.find("worktrees.remove.0").is_some());
     assert!(cx.find("worktrees.force.0").is_none());
     fs::write(tree.join("draft.txt"), "wip").unwrap();
@@ -112,15 +107,19 @@ fn two_repo_folder_workspaces_with_one_basename_each_show_their_own_worktrees(
         let main = cx.sb.path(ws).join("app").display().to_string();
         let all = cx.settings(|s| s.workspaces.clone());
         let id = all.into_iter().find(|w| w.name == ws).unwrap().id;
-        cx.workspace(|w, cx| w.switch(id, cx));
-        wait_until(cx, |cx| rows(cx).contains(&main));
-        let paths = rows(cx);
-        let at = paths.iter().position(|p| *p == main).unwrap();
-        let tree = real(&paths[at + 1]);
-        assert!(
-            tree.starts_with(real(cx.sb.path("data/worktrees"))),
-            "{paths:?}"
+        cx.workspace(|w, cx| w.switch(id.clone(), cx));
+        wait_until(cx, |cx| cx.workspace(|w, _| w.id() == Some(id.as_str())));
+        assert_eq!(cx.workspace(|w, _| w.session_repos().len()), 1);
+        assert_eq!(
+            cx.workspace(|w, _| w.current().map(String::from))
+                .as_deref(),
+            Some(main.as_str())
         );
+        cx.update(|_, cx| settings::open(cx, "worktrees"));
+        wait_until(cx, |cx| listed_worktree(cx).is_some());
+        let tree = real(listed_worktree(cx).unwrap());
+        assert!(cx.find("worktrees.path.1").is_none());
+        assert!(tree.starts_with(real(cx.sb.path("data/worktrees"))));
         assert!(tree.ends_with("feat"));
         let common = cx.sb.git(&tree, &["rev-parse", "--git-common-dir"]);
         assert_eq!(

@@ -904,6 +904,12 @@ fn make_current(cx: &mut VisualTestContext, repo: &Path) {
     settle(cx);
 }
 
+fn archive_changes(cx: &mut VisualTestContext) {
+    cx.workspace(|w, cx| w.set_archive(true, cx));
+    settle(cx);
+    open_tab(cx, "tool.Changes");
+}
+
 /// The Changes list as drawn: "title: N files" for a group, "name status" for a file.
 fn changes(cx: &mut VisualTestContext) -> Vec<String> {
     cx.update(|w, cx| {
@@ -935,6 +941,7 @@ fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_doubl
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
+    archive_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     let want = [
@@ -971,6 +978,7 @@ fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_doubl
 #[gpui_kit::test]
 fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    archive_changes(cx);
     let lib = cx.sb.repo("lib");
     make_current(cx, &lib);
     cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
@@ -1037,6 +1045,7 @@ fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn a_repo_returned_to_compares_again_before_it_lists_changes(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    archive_changes(cx);
     let lib = cx.sb.repo("lib");
     make_current(cx, &lib);
     cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
@@ -1057,6 +1066,7 @@ fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selectio
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
+    archive_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     wait_until(cx, |cx| changes(cx).len() == 5);
@@ -1109,6 +1119,7 @@ fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selectio
 #[gpui_kit::test]
 fn the_change_of_a_diff_shown_from_elsewhere_is_selected_in_changes(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
+    archive_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     wait_until(cx, |cx| changes(cx).len() == 5);
@@ -1148,6 +1159,7 @@ fn changes_group_conflicts_changes_and_unversioned_files_and_collapse(cx: &mut T
         .unwrap();
         write(&r, [("u.txt", "u\n")]);
     });
+    archive_changes(cx);
     let want = [
         "Conflicts: 1 file",
         "README.md conflict",
@@ -1179,6 +1191,7 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
         let r = repo(sb, "solo");
         sb.git(&r, &["branch", "-m", "trunk"]);
     });
+    archive_changes(cx);
     wait_until(cx, |cx| cx.find("changes.empty").is_some());
     assert_eq!(
         label(cx, "changes.empty").as_deref(),
@@ -1208,6 +1221,7 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
 #[gpui_kit::test]
 fn a_file_saved_in_the_current_repo_shows_in_changes_by_itself(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| _ = repo(sb, "solo"));
+    archive_changes(cx);
     cx.update(|_, cx| invalidate::watch(cx));
     wait_until(cx, |cx| {
         cx.update(|_, cx| invalidate::watching(cx)) && cx.find("changes.empty").is_some()
@@ -1282,11 +1296,11 @@ fn explorer_double_click_and_enter_keep_their_file_tabs(cx: &mut TestAppContext)
     assert!(cx.find("doc.file.c.txt").is_some());
 }
 
-/// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
+/// Makes `repo` current and shows its Files in the session explorer.
 fn open_tree(cx: &mut TestApp, repo: &str) {
     let repo = cx.sb.repo(repo);
     make_current(cx, &repo);
-    cx.press("secondary-1");
+    cx.click("tree.files");
     wait_until(cx, |cx| !tree(cx).is_empty());
 }
 
@@ -1331,6 +1345,7 @@ fn related_files_nest_under_their_main_file_and_the_switch_flattens_the_tree(
     assert_eq!(&tree(cx)[2..5], ["a.ts", "a.spec.ts", "b.ts"]);
     assert_eq!(shown_file(cx), None, "the chevron does not open the file");
 
+    cx.click("tree.browse");
     cx.click("tree.nesting");
     let flat = ["src", "components", "a.spec.ts", "a.ts", "b.ts"];
     assert_eq!(&tree(cx)[..5], flat);
@@ -1424,6 +1439,8 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
             w.within("tree.ref").find("input-state")
         })
     };
+    assert!(cx.find("tree.ref").is_none());
+    cx.click("tree.browse");
     assert_eq!(field(cx).placeholder(), Some("Working tree"));
     assert!(cx.find("tree.back").is_none());
 
@@ -1656,4 +1673,23 @@ fn ignored_dot_folders_expand_lazily_refresh_and_hide_in_every_repo(cx: &mut Tes
             .hidden,
         [".claude"]
     );
+}
+
+#[gpui_kit::test]
+fn the_session_pane_opens_the_compare_tool(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let lib = cx.sb.repo("lib");
+    make_current(cx, &lib);
+    cx.click("pane.new");
+    let item = (0usize..16)
+        .map(|n| ("menu.item", n))
+        .find(|&id| {
+            cx.find(id)
+                .is_some_and(|row| row.label() == Some("Compare changes"))
+        })
+        .expect("compare launcher");
+    cx.click(item);
+    assert_eq!(cx.find("tool.Changes").unwrap().checked(), Some(true));
+    cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
+    wait_until(cx, |cx| cx.find("changes.ab").is_some());
 }

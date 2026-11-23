@@ -187,15 +187,8 @@ fn a_narrow_log_keeps_the_subject_over_long_refs_and_drops_the_author(cx: &mut T
         sb.git(&solo, &["branch", &format!("feature/{long}")]);
         sb.git(&solo, &["tag", &format!("v1-{long}")]);
     });
-    // The bottom zone is as wide as the center: the side zones close to give it 1000.
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
-    });
-    settle(cx);
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Right, w, cx)
-    });
-    settle(cx);
+    cx.press("secondary-b");
+    cx.press("secondary-1");
     toggle_log(cx);
     wait_for_status(cx, "4 commits");
     let top = |cx: &mut VisualTestContext, id: &'static str| {
@@ -720,15 +713,8 @@ fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    // The bottom zone is as wide as the center: the side zones close to give it 1000.
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
-    });
-    settle(cx);
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Right, w, cx)
-    });
-    settle(cx);
+    cx.press("secondary-b");
+    cx.press("secondary-1");
     toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let grip = |cx: &mut VisualTestContext| cx.find("grip.log.side").unwrap().bounds().center();
