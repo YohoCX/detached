@@ -1074,7 +1074,10 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
     assert!(bounds(app, "session.explorer").right() <= bounds(app, "session.header").left());
     assert!(app.find("session.overview").unwrap().visible());
 
-    app.update(|w, _| w.resize(size(px(1000.), px(700.))));
+    app.update(|w, cx| {
+        w.resize(size(px(1000.), px(700.)));
+        w.bounds_changed(cx);
+    });
     wait_until(app, |app| bounds(app, "sessions").size.width == px(44.));
     assert_eq!(bounds(app, "session.explorer").size.width, px(28.));
     assert!(app.find("sessions.rows").is_none());
