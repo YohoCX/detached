@@ -167,6 +167,9 @@ pub fn create_worktree(
 ) -> Result<String> {
     let (repo, main, folder) = (Path::new(repo), Path::new(main), Path::new(folder));
     let path = s.op(op_id, |c| {
+        let _guard = crate::sessions::lock(s)?;
+        worktree::check_branch(s, repo, branch)?;
+        crate::sessions::require_free(s, &worktree::root(&s.data_dir, main, folder).join(branch))?;
         worktree::create(s, repo, main, folder, branch, None, c, progress)
     })?;
     Ok(path.display().to_string())
@@ -182,7 +185,9 @@ pub fn remove_worktree(
 ) -> Result<()> {
     let (repo, path) = (Path::new(repo), Path::new(path));
     s.op(op_id, |c| {
-        worktree::remove(s, repo, path, force, c, progress)
+        let _guard = crate::sessions::lock(s)?;
+        crate::sessions::require_free(s, path)?;
+        worktree::remove(s, repo, path, force, None, c, progress)
     })
 }
 

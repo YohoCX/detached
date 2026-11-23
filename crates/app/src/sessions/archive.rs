@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use detached_core::adapters::PROVIDERS;
-use detached_core::backend::{History, Past, Update};
+use detached_core::adapters::{PROVIDERS, Provider};
+use detached_core::backend::{History, Kind, Past, Spec, Update};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
@@ -11,6 +11,7 @@ use gpui_kit::{
 
 use crate::dock::{self, DocKind};
 use crate::ui::{self, GAP, text, theme};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
 use kernel::resource::Interest;
@@ -66,6 +67,8 @@ struct Archive {
     archived: Vec<detached_core::sessions::Workset>,
     summaries: HashMap<String, String>,
     _inspect: Option<gpui_kit::Task<()>>,
+    confirm_clear: bool,
+    clearing: bool,
     _workspace: Subscription,
     _settings: Subscription,
 }
@@ -78,6 +81,8 @@ impl Archive {
             archived: vec![],
             summaries: HashMap::new(),
             _inspect: None,
+            confirm_clear: false,
+            clearing: false,
             _workspace: Workspace::observe(cx, Self::sync),
             _settings: cx.observe(&Settings::global(cx), |view, _, cx| view.sync(cx)),
         };
@@ -93,6 +98,7 @@ impl Archive {
             self.archived.clear();
             self.summaries.clear();
             self._inspect = None;
+            self.confirm_clear = false;
             return;
         }
         let archived: Vec<_> = w
@@ -113,25 +119,23 @@ impl Archive {
                         let description =
                             detached_core::sessions::cleanup_preview(&core, &ws, &s.id)
                                 .map(|rows| {
-                                    let kept: Vec<_> =
-                                        rows.iter().filter_map(|(_, p)| p.as_ref().ok()).collect();
+                                    let unknown = rows.iter().any(|(member, status)| status.is_err()
+                                        && s.members.iter().any(|m| m.repo == member.repo
+                                            && m.state != detached_core::sessions::MemberState::Missing));
+                                    let kept: Vec<_> = rows.iter().filter_map(|(_, p)| p.as_ref().ok()).collect();
+                                    if unknown {
+                                        return "Could not inspect every worktree".into();
+                                    }
                                     match kept.len() {
-                                        0 => "No worktrees · chats and branches kept".to_owned(),
-                                        1 => format!(
-                                            "1 worktree kept · {}",
-                                            super::provision::cleanup_text(kept[0])
-                                        ),
+                                        0 => "No worktrees · chats and branches kept".into(),
+                                        1 => format!("1 worktree kept · {}", super::provision::cleanup_text(kept[0])),
                                         n => {
-                                            let changed = kept
-                                                .iter()
-                                                .map(|p| p.changes + p.untracked)
-                                                .sum::<usize>();
-                                            if changed == 0 {
+                                            let changed = kept.iter().map(|p| p.changes + p.untracked).sum::<usize>();
+                                            let ignored = kept.iter().map(|p| p.ignored.len()).sum::<usize>();
+                                            if kept.iter().all(|p| p.clean()) {
                                                 format!("{n} worktrees kept · clean")
                                             } else {
-                                                format!(
-                                                    "{n} worktrees kept · {changed} changed files"
-                                                )
+                                                format!("{n} worktrees kept · {changed} changed files · {ignored} ignored paths")
                                             }
                                         }
                                     }
@@ -179,6 +183,50 @@ impl Archive {
                 .collect()
         };
         self.folders = folders;
+        cx.notify();
+    }
+
+    fn clear(
+        &mut self,
+        chats: Vec<(&'static Provider, String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.clearing || chats.is_empty() {
+            return;
+        }
+        self.clearing = true;
+        self.confirm_clear = false;
+        cx.spawn_in(window, async move |this, cx| {
+            for (provider, repo, id) in chats {
+                let task = this.update(cx, |_, cx| {
+                    kernel::session::delete(Spec::new(provider, &repo, Kind::Chat), id.clone(), cx)
+                });
+                let Ok(task) = task else { break };
+                let result = task.await;
+                _ = this.update_in(cx, |_, window, cx| match result {
+                    Ok(()) => {
+                        crate::chat::forget(&id, cx);
+                        dock::close_docs(
+                            |doc| {
+                                matches!(doc, Doc::PastChat { provider: p, id: i, .. }
+                            if p == provider.id && i == &id)
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        Activity::global(cx).update(cx, |a, cx| a.say(e.to_string(), true, cx))
+                    }
+                });
+            }
+            _ = this.update(cx, |s, cx| {
+                s.clearing = false;
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 }
@@ -290,13 +338,66 @@ impl Render for Archive {
             );
         }
         let tabs = dock::archived_tabs(cx);
+        let named_paths: BTreeSet<_> = Workspace::get(cx)
+            .sessions()
+            .iter()
+            .flat_map(|s| s.members.iter().map(|m| m.path.as_str()))
+            .collect();
+        let clearable: Vec<_> = self
+            .past
+            .iter()
+            .flat_map(|(provider, history)| {
+                let provider = crate::chat::provider(provider);
+                history
+                    .read(cx)
+                    .value
+                    .iter()
+                    .flat_map(|h| &h.chats)
+                    .filter_map(|p| {
+                        let repo = p.cwd.as_deref()?;
+                        (p.owned && !named_paths.contains(repo))
+                            .then(|| (provider, repo.to_owned(), p.id.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         if !tabs.is_empty() || !self.past.is_empty() {
             page = page.child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(GAP)
                     .pt(GAP)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Before sessions"),
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Before sessions"),
+                    )
+                    .when(
+                        !clearable.is_empty() && !self.confirm_clear && !self.clearing,
+                        |d| {
+                            d.child(
+                                ui::quiet_button("sessions.archive.clear", "Clear…", cx)
+                                    .test_support()
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.confirm_clear = true;
+                                        cx.notify();
+                                    })),
+                            )
+                        },
+                    ),
             );
+        }
+        if self.confirm_clear {
+            page = page.child(div().flex().flex_col().gap(GAP).p(GAP).bg(t.popover_bg)
+                .rounded(ui::radius::WIDGET)
+                .child("Delete the archived chats started by Detached? These conversations cannot be recovered.")
+                .child(div().flex().gap(GAP)
+                    .child(ui::quiet_button("sessions.archive.clear.cancel", "Cancel", cx).test_support()
+                        .on_click(cx.listener(|s, _, _, cx| { s.confirm_clear = false; cx.notify(); })))
+                    .child(ui::danger_button("sessions.archive.clear.confirm", "Delete chats", cx).test_support()
+                        .on_click(cx.listener(move |s, _, window, cx| s.clear(clearable.clone(), window, cx))))));
         }
         let no_tabs = tabs.is_empty();
         if !tabs.is_empty() {

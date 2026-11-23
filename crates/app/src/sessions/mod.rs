@@ -147,11 +147,6 @@ impl Render for List {
             "New session…",
         )
         .test_support();
-        let drafts = w
-            .sessions()
-            .iter()
-            .filter(|set| set.draft && set.archived.is_none())
-            .cloned();
         let title = div()
             .flex_1()
             .text_size(text::TITLE)
@@ -206,25 +201,6 @@ impl Render for List {
                                     .child(name),
                             )
                         })
-                        .children(drafts.filter(|_| provision::provisional(cx).is_none()).map(
-                            |set| {
-                                let name = set.name.clone();
-                                ui::row(
-                                    gpui_kit::SharedString::from(format!(
-                                        "sessions.draft.{}",
-                                        set.id
-                                    )),
-                                    false,
-                                    cx,
-                                )
-                                .test_support()
-                                .p(GAP)
-                                .on_click(move |_, window, cx| {
-                                    provision::recover(set.clone(), window, cx)
-                                })
-                                .child(format!("{name} · provisioning"))
-                            },
-                        ))
                         .children(
                             w.sessions()
                                 .iter()
@@ -348,11 +324,10 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                             menu = menu.item("Remove worktrees…", move |_, cx| {
                                 provision::cleanup(cleanup.clone(), cx)
                             });
-                            if set
-                                .members
-                                .iter()
-                                .any(|m| m.stage != detached_core::sessions::Stage::Ready)
-                            {
+                            if set.members.iter().any(|m| {
+                                !m.state.usable()
+                                    || m.stage != detached_core::sessions::Stage::Ready
+                            }) {
                                 menu = menu.item("Provisioning details…", move |window, cx| {
                                     provision::recover(set.clone(), window, cx)
                                 });

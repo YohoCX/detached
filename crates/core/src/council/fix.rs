@@ -176,7 +176,7 @@ pub fn discard(
     progress: Progress,
 ) -> Result<()> {
     if tree.exists() {
-        worktree::remove(core, repo, tree, true, cancel, progress)?;
+        worktree::remove(core, repo, tree, true, None, cancel, progress)?;
     }
     Ok(())
 }

@@ -52,6 +52,8 @@ pub struct Member {
     pub base: Option<String>,
     #[serde(default)]
     pub steps: Vec<String>,
+    #[serde(default)]
+    registration: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +134,7 @@ pub struct Candidate {
     pub changes: Option<usize>,
     pub outside_root: bool,
     head: String,
+    registration: Option<PathBuf>,
 }
 
 fn root(core: &AppState) -> PathBuf {
@@ -189,6 +192,7 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
     if !segment(workspace) {
         return Err(Error::Other("Invalid workspace id".into()));
     }
+    let migration_lock = lock_file(core).ok().filter(|file| file.try_lock().is_ok());
     let mut manifests = vec![];
     let mut problems = vec![];
     let mut problem = |file, error: Error| {
@@ -225,7 +229,8 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
     let mut sets = vec![];
     for (dir, mut set) in manifests {
         let here = dir.file_name().is_some_and(|n| n == workspace);
-        for member in &mut set.members {
+        let mut migrations = vec![];
+        for (i, member) in set.members.iter_mut().enumerate() {
             let path = real(Path::new(&member.path));
             if !holds_claim(core, member) {
                 if member.stage == Stage::Adding {
@@ -257,15 +262,24 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
                         .iter()
                         .find(|t| t.prunable.is_none() && real(&t.path) == path)
                     {
-                        Some(tree) if registered(&env, common, &path) => {
-                            member.branch.clone_from(&tree.branch);
-                            match member.stage {
-                                Stage::Adding | Stage::Copy => MemberState::CopyFailed,
-                                Stage::Install => MemberState::InstallFailed,
-                                _ => MemberState::Ready,
+                        Some(tree) => {
+                            if let Some(registration) =
+                                member_registration(&env, common, &path, member, tree)
+                            {
+                                if member.registration.is_none() && member.stage != Stage::Adding {
+                                    migrations.push((i, registration.clone()));
+                                }
+                                member.registration = Some(registration);
+                                member.branch.clone_from(&tree.branch);
+                                match member.stage {
+                                    Stage::Adding | Stage::Copy => MemberState::CopyFailed,
+                                    Stage::Install => MemberState::InstallFailed,
+                                    _ => MemberState::Ready,
+                                }
+                            } else {
+                                MemberState::Unavailable
                             }
                         }
-                        Some(_) => MemberState::Unavailable,
                         None => MemberState::Missing,
                     },
                 }
@@ -276,10 +290,27 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
             }
         }
         if here {
+            if migration_lock.is_some() && !migrations.is_empty() {
+                let file = dir.join("sessions").join(&set.id).join(MANIFEST);
+                let persist = || -> Result<()> {
+                    if let Some(mut saved) = manifest(&file)? {
+                        for (i, registration) in migrations {
+                            saved.members[i].registration = Some(registration);
+                        }
+                        crate::store::atomic(&file, &serde_json::to_vec_pretty(&saved)?)?;
+                    }
+                    Ok(())
+                };
+                if let Err(error) = persist() {
+                    problem(file, error);
+                }
+            }
             if set.draft && set.members.iter().any(|m| m.state.usable()) {
                 set.draft = false;
             }
-            sets.push(set);
+            if !set.draft {
+                sets.push(set);
+            }
         }
     }
     Ok(Listing { sets, problems })
@@ -292,7 +323,7 @@ fn workspace_dirs(core: &AppState) -> Result<impl Iterator<Item = PathBuf>> {
         .filter_map(|w| segment(&w.id).then(|| root(core).join(w.id))))
 }
 
-fn registered(env: &crate::env::Env, common: &Path, path: &Path) -> bool {
+fn registration(env: &crate::env::Env, common: &Path, path: &Path) -> Option<PathBuf> {
     use crate::git::runner::{Kind, out};
     let args = [
         "rev-parse",
@@ -300,30 +331,77 @@ fn registered(env: &crate::env::Env, common: &Path, path: &Path) -> bool {
         "--git-dir",
         "--git-common-dir",
     ];
-    let Ok(dirs) = out(env, path, &args, Kind::Read) else {
-        return false;
-    };
+    let dirs = out(env, path, &args, Kind::Read).ok()?;
     let mut dirs = dirs.lines().map(|s| real(Path::new(s)));
-    let Some(git) = dirs.next() else { return false };
+    let git = dirs.next()?;
     let registrations = common.join("worktrees");
-    dirs.next().as_deref() == Some(common)
+    (dirs.next().as_deref() == Some(common)
         && git.parent() == Some(registrations.as_path())
         && fs::read_to_string(git.join("gitdir"))
-            .is_ok_and(|link| real(&git.join(link.trim_end())) == real(&path.join(".git")))
+            .is_ok_and(|link| real(&git.join(link.trim_end())) == real(&path.join(".git"))))
+    .then_some(git)
 }
 
-fn owned(core: &AppState) -> Result<HashMap<PathBuf, String>> {
+fn member_registration(
+    env: &crate::env::Env,
+    common: &Path,
+    path: &Path,
+    member: &Member,
+    tree: &worktree::Linked,
+) -> Option<PathBuf> {
+    let current = registration(env, common, path)?;
+    match &member.registration {
+        Some(recorded) => (recorded == &current).then_some(current),
+        // Older manifests can identify a checkout by its recorded branch.
+        None => (member.branch == tree.branch
+            && (member.stage != Stage::Adding || member.base_sha == tree.head))
+            .then_some(current),
+    }
+}
+
+fn owned(core: &AppState, except: Option<&str>) -> Result<HashMap<PathBuf, String>> {
     let mut owned = HashMap::new();
     for dir in workspace_dirs(core)? {
         for dir in directories(&dir.join("sessions"))? {
-            if let Some(set) = manifest(&dir.join(MANIFEST))? {
+            if let Some(set) = manifest(&dir.join(MANIFEST))?
+                && Some(set.id.as_str()) != except
+            {
                 for member in set.members.into_iter().filter(|m| holds_claim(core, m)) {
                     owned.insert(real(Path::new(&member.path)), set.name.clone());
+                    if let Some(registration) = member.registration {
+                        owned.insert(registration, set.name.clone());
+                    }
                 }
             }
         }
     }
     Ok(owned)
+}
+
+pub(crate) fn require_free(core: &AppState, path: &Path) -> Result<()> {
+    use crate::git::runner::{Kind, out};
+
+    let claims = owned(core, None)?;
+    let owner = claims.get(&real(path)).or_else(|| {
+        if !present(path) {
+            return None;
+        }
+        let git = out(
+            &core.env(),
+            path,
+            &["rev-parse", "--absolute-git-dir"],
+            Kind::Read,
+        )
+        .ok()?;
+        claims.get(&real(Path::new(git.trim())))
+    });
+    if let Some(owner) = owner {
+        return Err(Error::Other(format!(
+            "{} belongs to {owner}. Manage it in Sessions.",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 pub fn candidates(core: &AppState, workspace: &str) -> Result<Vec<Candidate>> {
@@ -336,7 +414,7 @@ fn candidates_for(
     selected: Option<&HashSet<PathBuf>>,
 ) -> Result<Vec<Candidate>> {
     let env = core.env();
-    let owned = owned(core)?;
+    let owned = owned(core, None)?;
     let council_trees = real(&core.data_dir.join("trees"));
     let repos = core.repos_of(&require_workspace(core, workspace)?);
     let mut rows = vec![];
@@ -364,8 +442,10 @@ fn candidates_for(
         let managed = real(&worktree::root(&core.data_dir, repo, Path::new(folder)));
         for tree in trees {
             let actual = real(&tree.path);
-            let valid =
-                tree.prunable.is_none() && present(&actual) && registered(&env, &common, &actual);
+            let registration = (tree.prunable.is_none() && present(&actual))
+                .then(|| registration(&env, &common, &actual))
+                .flatten();
+            let valid = registration.is_some();
             let refusal = if actual.starts_with(&council_trees) {
                 Some("A Council run's worktree".into())
             } else if let Err(error) = &records {
@@ -380,7 +460,10 @@ fn candidates_for(
                 .is_ok_and(|(_, kept)| tree.branch.as_ref().is_some_and(|b| kept.contains(b)))
             {
                 Some("A Council run's worktree".into())
-            } else if let Some(owner) = owned.get(&actual) {
+            } else if let Some(owner) = owned
+                .get(&actual)
+                .or_else(|| registration.as_ref().and_then(|r| owned.get(r)))
+            {
                 Some(format!("Owned by {owner}"))
             } else if !present(&actual) || tree.prunable.is_some() {
                 Some("Its folder is gone".into())
@@ -409,6 +492,7 @@ fn candidates_for(
                 changes,
                 outside_root: !actual.starts_with(&managed),
                 head: tree.head,
+                registration,
             });
         }
     }
@@ -427,14 +511,18 @@ fn require_workspace(core: &AppState, workspace: &str) -> Result<crate::settings
     Err(Error::Other(format!("No workspace {workspace}")))
 }
 
-pub(crate) fn lock(core: &AppState) -> Result<File> {
+fn lock_file(core: &AppState) -> Result<File> {
     fs::create_dir_all(&core.config_dir)?;
-    let file = File::options()
+    Ok(File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(core.config_dir.join(".sessions.lock"))?;
+        .open(core.config_dir.join(".sessions.lock"))?)
+}
+
+pub(crate) fn lock(core: &AppState) -> Result<File> {
+    let file = lock_file(core)?;
     file.lock()?;
     Ok(file)
 }
@@ -484,6 +572,7 @@ pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) ->
             error: None,
             base: None,
             steps: vec![],
+            registration: row.registration,
         });
     }
     let set = Workset {

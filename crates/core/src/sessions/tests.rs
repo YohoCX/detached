@@ -217,7 +217,7 @@ fn listing_skips_bad_manifests_but_adoption_requires_them_all() {
     assert_eq!(listing.sets, [set]);
     assert_eq!(listing.problems.len(), 1);
     assert_eq!(listing.problems[0].file, bad);
-    assert!(owned(&sb.state).is_err());
+    assert!(owned(&sb.state, None).is_err());
     assert!(adopt(&sb.state, &ws, "Other", &[path]).is_err());
     assert_eq!(fs::read_to_string(bad).unwrap(), "{");
 }
@@ -544,4 +544,256 @@ fn resume_recreates_a_missing_but_still_registered_worktree() {
     );
     assert_eq!(sb.git(path, &["branch", "--show-current"]), "renewal");
     assert!(repo.is_dir());
+}
+
+#[test]
+fn ignored_only_members_require_an_explicit_removal() {
+    let (sb, ws, repo, _) = setup();
+    sb.commit(&repo, ".gitignore", ".env.local\n", "ignore");
+    let req = request(&repo, "feature/ignored", None);
+    let set = begin(
+        &sb.state,
+        &ws,
+        "Ignored",
+        &req.branch,
+        std::slice::from_ref(&req),
+    )
+    .unwrap();
+    let cancel = crate::state::Cancel::default();
+    let set = provision(&sb.state, job(&ws, &set.id, &req.repo, &cancel), None).unwrap();
+    let path = PathBuf::from(&set.members[0].path);
+    fs::write(path.join(".env.local"), "KEEP=1").unwrap();
+    archive(&sb.state, &ws, &set.id).unwrap();
+    let rows = cleanup_preview(&sb.state, &ws, &set.id).unwrap();
+    let preview = rows[0].1.as_ref().unwrap();
+    assert_eq!((preview.changes, preview.untracked), (0, 0));
+    assert_eq!(preview.ignored, [".env.local"]);
+    assert!(!preview.clean());
+    let kept = remove(
+        &sb.state,
+        job(&ws, &set.id, &req.repo, &cancel),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(kept.members[0].stage, Stage::Ready);
+    assert!(
+        kept.members[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains(".env.local")
+    );
+    assert_eq!(
+        fs::read_to_string(path.join(".env.local")).unwrap(),
+        "KEEP=1"
+    );
+    let removed = remove(
+        &sb.state,
+        job(&ws, &set.id, &req.repo, &cancel),
+        true,
+        false,
+    )
+    .unwrap();
+    assert_eq!(removed.members[0].stage, Stage::Removed);
+    assert!(!path.exists());
+    assert_eq!(
+        sb.git(&repo, &["branch", "--list", &req.branch]),
+        req.branch
+    );
+}
+
+#[test]
+fn two_instances_cannot_provision_the_same_path_under_different_sessions() {
+    let (sb, ws, repo, _) = setup();
+    let stale = AppState::new(
+        sb.state.config_dir.clone(),
+        sb.state.get_settings(),
+        sb.state.env(),
+        sb.state.tokens.clone(),
+    );
+    let second = sb.state.save_workspace("Other".into(), None).unwrap();
+    sb.state
+        .add_folder(Some(second.clone()), repo.display().to_string())
+        .unwrap();
+    let req = request(&repo, "feature/claim", None);
+    let plan = std::slice::from_ref(&req);
+    let a = begin(&sb.state, &ws, "First", &req.branch, plan).unwrap();
+    let b = begin(&stale, &second, "Second", &req.branch, plan).unwrap();
+    let cancel = crate::state::Cancel::default();
+    let a = provision(&sb.state, job(&ws, &a.id, &req.repo, &cancel), None).unwrap();
+    let b = provision(&stale, job(&second, &b.id, &req.repo, &cancel), None).unwrap();
+    assert!(a.visible());
+    assert!(!b.visible());
+    assert!(
+        b.members[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("reserved by First")
+    );
+    assert!(Path::new(&a.members[0].path).exists());
+}
+
+#[test]
+fn a_different_worktree_from_the_same_repository_cannot_replace_a_session_member() {
+    for legacy in [false, true] {
+        let (sb, ws, repo, path) = setup();
+        let mut set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
+        if legacy {
+            set.members[0].registration = None;
+            let file = root(&sb.state)
+                .join(&ws)
+                .join("sessions")
+                .join(&set.id)
+                .join(MANIFEST);
+            fs::write(file, serde_json::to_vec(&set).unwrap()).unwrap();
+        }
+        let moved = sb.path("other location");
+        sb.git(
+            &repo,
+            &["worktree", "move", &path, &moved.to_string_lossy()],
+        );
+        let second = sb.path("second");
+        sb.git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "different",
+                &second.to_string_lossy(),
+            ],
+        );
+        sb.git(
+            &repo,
+            &["worktree", "move", &second.to_string_lossy(), &path],
+        );
+        assert_eq!(
+            list(&sb.state, &ws).unwrap().sets[0].members[0].state,
+            MemberState::Unavailable
+        );
+        let cancel = crate::state::Cancel::default();
+        let result = remove(
+            &sb.state,
+            job(&ws, &set.id, &set.members[0].repo, &cancel),
+            true,
+            true,
+        );
+        assert!(result.is_err(), "{result:?}");
+        assert!(moved.exists());
+        assert!(Path::new(&path).exists());
+        assert_eq!(
+            sb.git(Path::new(&path), &["branch", "--show-current"]),
+            "different"
+        );
+        if !legacy {
+            let candidate = candidates(&sb.state, &ws)
+                .unwrap()
+                .into_iter()
+                .find(|c| real(Path::new(&c.path)) == real(&moved))
+                .unwrap();
+            assert_eq!(candidate.refusal.as_deref(), Some("Owned by Original"));
+        }
+    }
+}
+
+#[test]
+fn a_legacy_registration_is_recorded_before_its_branch_changes() {
+    let (sb, ws, _, path) = setup();
+    let mut set = adopt(&sb.state, &ws, "Original", std::slice::from_ref(&path)).unwrap();
+    set.members[0].registration = None;
+    let file = root(&sb.state)
+        .join(&ws)
+        .join("sessions")
+        .join(&set.id)
+        .join(MANIFEST);
+    fs::write(&file, serde_json::to_vec(&set).unwrap()).unwrap();
+    assert_eq!(
+        list(&sb.state, &ws).unwrap().sets[0].members[0].state,
+        MemberState::Ready
+    );
+    assert!(
+        manifest(&file).unwrap().unwrap().members[0]
+            .registration
+            .is_some()
+    );
+    sb.git(Path::new(&path), &["branch", "-m", "renamed"]);
+    let archived = archive(&sb.state, &ws, &set.id).unwrap();
+    assert_eq!(archived.members[0].branch.as_deref(), Some("renamed"));
+    assert!(
+        resume(&sb.state, &ws, &set.id, false)
+            .unwrap()
+            .archived
+            .is_none()
+    );
+}
+
+#[test]
+fn a_detached_member_is_never_removed_even_if_its_worktree_is_clean() {
+    let (sb, ws, repo, path) = setup();
+    let set = adopt(
+        &sb.state,
+        &ws,
+        "Detached commits",
+        std::slice::from_ref(&path),
+    )
+    .unwrap();
+    let path = Path::new(&path);
+    sb.git(path, &["checkout", "--detach"]);
+    sb.commit(path, "local.txt", "unique", "detached change");
+    let head = sb.git(path, &["rev-parse", "HEAD"]);
+    let original = sb.git(&repo, &["rev-parse", "renewal"]);
+    assert_ne!(head, original);
+    archive(&sb.state, &ws, &set.id).unwrap();
+    let rows = cleanup_preview(&sb.state, &ws, &set.id).unwrap();
+    assert!(rows[0].1.as_ref().unwrap().detached);
+    assert!(!rows[0].1.as_ref().unwrap().clean());
+    let cancel = crate::state::Cancel::default();
+    let refused = remove(
+        &sb.state,
+        job(&ws, &set.id, &set.members[0].repo, &cancel),
+        true,
+        false,
+    )
+    .unwrap();
+    assert!(
+        refused.members[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("detached HEAD")
+    );
+    assert_eq!(sb.git(path, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(path.join("local.txt")).unwrap(),
+        "unique"
+    );
+}
+
+#[test]
+fn cancelled_before_any_checkout_never_appears_as_a_session() {
+    let (sb, ws, repo, _) = setup();
+    let req = request(&repo, "feature/cancel-all", None);
+    let set = begin(
+        &sb.state,
+        &ws,
+        "Cancelled",
+        &req.branch,
+        std::slice::from_ref(&req),
+    )
+    .unwrap();
+    let cancel = crate::state::Cancel::default();
+    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = provision(&sb.state, job(&ws, &set.id, &req.repo, &cancel), None).unwrap();
+    assert!(result.members[0].error.is_some());
+    assert!(list(&sb.state, &ws).unwrap().sets.is_empty());
+    assert!(discard_draft(&sb.state, &ws, &set.id).unwrap());
+    assert!(
+        !root(&sb.state)
+            .join(&ws)
+            .join("sessions")
+            .join(&set.id)
+            .exists()
+    );
 }

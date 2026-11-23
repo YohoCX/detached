@@ -18,7 +18,7 @@ pub fn preview(core: &AppState, ws: &str, request: &Request) -> Result<worktree:
         &request.branch,
         request.base.as_deref(),
     )?;
-    if let Some(owner) = owned(core)?.get(&real(&value.path)) {
+    if let Some(owner) = owned(core, None)?.get(&real(&value.path)) {
         return Err(Error::Other(format!("Worktree path reserved by {owner}")));
     }
     Ok(value)
@@ -83,6 +83,20 @@ pub fn begin(
     Ok(set)
 }
 
+pub fn discard_draft(core: &AppState, ws: &str, id: &str) -> Result<bool> {
+    let _guard = lock(core)?;
+    let manifest = path(core, ws, id)?;
+    let set = load(&manifest)?;
+    if !set.draft || set.members.iter().any(|m| holds_claim(core, m)) {
+        return Ok(false);
+    }
+    fs::remove_file(&manifest)?;
+    if let Some(dir) = manifest.parent() {
+        let _ = fs::remove_dir(dir);
+    }
+    Ok(true)
+}
+
 fn pending(core: &AppState, ws: &str, set: &Workset, request: &Request) -> Result<Member> {
     let repo = repository(core, ws, &request.repo)?;
     if set
@@ -107,6 +121,7 @@ fn pending(core: &AppState, ws: &str, set: &Workset, request: &Request) -> Resul
         error: None,
         base: request.base.clone(),
         steps: vec![],
+        registration: None,
     })
 }
 
@@ -149,6 +164,7 @@ pub fn add_existing(core: &AppState, ws: &str, id: &str, worktree: &str) -> Resu
         error: None,
         base: None,
         steps: vec![],
+        registration: row.registration,
     });
     save(&path, &set)?;
     Ok(set)
@@ -161,21 +177,27 @@ fn active(set: &Workset) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn adding_checkout(core: &AppState, member: &Member) -> Option<worktree::Linked> {
-    checkout(core, member).filter(|t| t.branch == member.branch && t.head == member.base_sha)
+pub(super) fn adding_checkout(
+    core: &AppState,
+    member: &Member,
+) -> Option<(worktree::Linked, PathBuf)> {
+    checkout(core, member)
 }
 
-fn checkout(core: &AppState, member: &Member) -> Option<worktree::Linked> {
+fn checkout(core: &AppState, member: &Member) -> Option<(worktree::Linked, PathBuf)> {
     let path = Path::new(&member.path);
+    if !present(path) {
+        return None;
+    }
     let repo = Path::new(&member.repo);
     let common = real(&run::common(core, repo).ok()?);
     let env = core.env();
-    worktree::linked(&env, repo).ok()?.into_iter().find(|t| {
-        t.prunable.is_none()
-            && real(&t.path) == real(path)
-            && present(path)
-            && registered(&env, &common, path)
-    })
+    let tree = worktree::linked(&env, repo)
+        .ok()?
+        .into_iter()
+        .find(|t| t.prunable.is_none() && real(&t.path) == real(path))?;
+    let registration = member_registration(&env, &common, path, member, &tree)?;
+    Some((tree, registration))
 }
 
 pub struct Job<'a> {
@@ -191,6 +213,14 @@ pub fn provision(core: &AppState, job: Job<'_>, override_branch: Option<&str>) -
     let path = path(core, job.ws, job.id)?;
     let mut set = load(&path)?;
     let i = position(&set, job.repo)?;
+    if set.members[i].stage == Stage::Ready && override_branch.is_none() {
+        let member = &mut set.members[i];
+        repository(core, job.ws, &member.repo)?;
+        if matches!(fs::symlink_metadata(&member.path), Err(e) if e.kind() == ErrorKind::NotFound) {
+            member.stage = Stage::Removed;
+            save(&path, &set)?;
+        }
+    }
     let stage = set.members[i].stage;
     if matches!(stage, Stage::Ready | Stage::Removing) {
         return Err(Error::Other(
@@ -264,11 +294,14 @@ fn provision_one(
         .branch
         .as_deref()
         .ok_or_else(|| Error::Other("This worktree no longer has a branch".into()))?;
-    let advance = |stage, head: Option<String>| {
+    let advance = |stage, head: Option<String>, registration: Option<PathBuf>| {
         let mut set = set.borrow_mut();
         set.members[i].stage = stage;
         if let Some(head) = head {
             set.members[i].base_sha = head;
+        }
+        if stage == Stage::Adding || registration.is_some() {
+            set.members[i].registration = registration;
         }
         if stage == Stage::Copy {
             set.draft = false;
@@ -280,9 +313,9 @@ fn provision_one(
     }
     let mut stage = member.stage;
     if stage == Stage::Adding {
-        if let Some(tree) = adding_checkout(core, &member) {
+        if let Some((tree, registration)) = adding_checkout(core, &member) {
             stage = Stage::Copy;
-            advance(stage, Some(tree.head))?;
+            advance(stage, Some(tree.head), Some(registration))?;
         } else {
             stage = Stage::Pending;
         }
@@ -325,12 +358,20 @@ fn provision_one(
             &recipe,
             stage == Stage::Removed,
             &steps,
-            &|head| advance(Stage::Adding, Some(head.to_owned())),
+            &|head| advance(Stage::Adding, Some(head.to_owned()), None),
         )?;
-        advance(Stage::Copy, Some(head))?;
+        let registration = {
+            let set = set.borrow();
+            checkout(core, &set.members[i])
+                .ok_or_else(|| {
+                    Error::Other("The new worktree registration could not be verified".into())
+                })?
+                .1
+        };
+        advance(Stage::Copy, Some(head), Some(registration))?;
         recipe
     } else {
-        let tree = checkout(core, &member)
+        let (tree, _) = checkout(core, &member)
             .ok_or_else(|| Error::Other("The worktree is missing or has moved".into()))?;
         if tree.locked.is_some() {
             return Err(Error::Other("The worktree is locked".into()));
@@ -348,28 +389,14 @@ fn provision_one(
         &recipe,
         stage == Stage::Install,
         &steps,
-        &|| advance(Stage::Install, None),
+        &|| advance(Stage::Install, None, None),
     )?;
     record("Ready")?;
-    advance(Stage::Ready, None)
+    advance(Stage::Ready, None, None)
 }
 
 fn other_owner(core: &AppState, id: &str, path: &str) -> Result<Option<String>> {
-    let path = real(Path::new(path));
-    for ws in workspace_dirs(core)? {
-        for dir in directories(&ws.join("sessions"))? {
-            if let Some(set) = manifest(&dir.join(MANIFEST))?
-                && set.id != id
-                && set
-                    .members
-                    .iter()
-                    .any(|m| holds_claim(core, m) && real(Path::new(&m.path)) == path)
-            {
-                return Ok(Some(set.name));
-            }
-        }
-    }
-    Ok(None)
+    Ok(owned(core, Some(id))?.remove(&real(Path::new(path))))
 }
 
 fn position(set: &Workset, repo: &str) -> Result<usize> {
@@ -384,6 +411,12 @@ pub fn archive(core: &AppState, ws: &str, id: &str) -> Result<Workset> {
     let path = path(core, ws, id)?;
     let mut set = load(&path)?;
     active(&set)?;
+    for member in set.members.iter_mut().filter(|m| m.claims_path()) {
+        if let Some((tree, registration)) = checkout(core, member) {
+            member.branch = tree.branch;
+            member.registration = Some(registration);
+        }
+    }
     set.archived = Some(crate::os::now());
     save(&path, &set)?;
     Ok(set)
@@ -400,15 +433,20 @@ pub fn cleanup_preview(
         .into_iter()
         .filter(Member::claims_path)
         .map(|m| {
-            let result = cleanup_member(core, &m);
+            let result = cleanup_member(core, &m).map(|(_, _, preview)| preview);
             (m, result)
         })
         .collect())
 }
 
-fn cleanup_member(core: &AppState, m: &Member) -> Result<worktree::Cleanup> {
-    checkout(core, m).ok_or_else(|| Error::Other("The worktree is missing or has moved".into()))?;
-    worktree::cleanup(core, Path::new(&m.repo), Path::new(&m.path))
+fn cleanup_member(
+    core: &AppState,
+    m: &Member,
+) -> Result<(worktree::Linked, PathBuf, worktree::Cleanup)> {
+    let (tree, registration) = checkout(core, m)
+        .ok_or_else(|| Error::Other("The worktree is missing or has moved".into()))?;
+    let preview = worktree::cleanup(core, Path::new(&m.repo), Path::new(&m.path))?;
+    Ok((tree, registration, preview))
 }
 
 pub fn remove(core: &AppState, job: Job<'_>, force: bool, drop_member: bool) -> Result<Workset> {
@@ -425,7 +463,9 @@ pub fn remove(core: &AppState, job: Job<'_>, force: bool, drop_member: bool) -> 
     if !holds_claim(core, m) {
         return Err(Error::Other("This member has no worktree to remove".into()));
     }
-    cleanup_member(core, m)?;
+    let (tree, registration, _) = cleanup_member(core, m)?;
+    m.branch = tree.branch;
+    m.registration = Some(registration);
     let stage = m.stage;
     m.stage = Stage::Removing;
     save(&path, &set)?;
@@ -435,6 +475,7 @@ pub fn remove(core: &AppState, job: Job<'_>, force: bool, drop_member: bool) -> 
         Path::new(&m.repo),
         Path::new(&m.path),
         force,
+        m.registration.as_deref(),
         job.cancel,
         job.progress,
     );
@@ -480,11 +521,18 @@ pub fn resume(core: &AppState, ws: &str, id: &str, recreate: bool) -> Result<Wor
             return Err(Error::Other(format!("Worktree path reserved by {owner}")));
         }
         match checkout(core, m) {
-            Some(tree) if holds_claim(core, m) => {
+            Some((tree, registration)) if holds_claim(core, m) => {
                 m.branch = tree.branch;
+                m.registration = Some(registration);
                 if m.stage == Stage::Removing {
                     m.stage = Stage::Ready;
                 }
+            }
+            _ if m.claims_path() && present(Path::new(&m.path)) => {
+                return Err(Error::Other(format!(
+                    "{} has a different worktree registration",
+                    m.path
+                )));
             }
             _ if m.stage != Stage::Pending => {
                 m.stage = Stage::Removed;

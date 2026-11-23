@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
@@ -496,19 +496,32 @@ pub(crate) fn cancelled(cancel: &Cancel) -> Result<()> {
 }
 
 /// Runs the recipe's teardown in the linked worktree `path`, then removes it with hooks off, and
-/// the folders it leaves empty below its `worktrees` root; the branch stays. Changes or submodules
-/// in it, or a teardown that fails or is not accepted, stop it unless `force`; a lock always does.
+/// the empty managed folders; the branch stays. Changes, ignored files, submodules and teardown
+/// failures require `force`. A lock always stops removal.
 pub fn remove(
     state: &AppState,
     repo: &Path,
     path: &Path,
     force: bool,
+    expected: Option<&Path>,
     cancel: &Cancel,
     progress: Progress,
 ) -> Result<()> {
     cancelled(cancel)?;
     let env = state.env();
     let preview = cleanup(state, repo, path)?;
+    if expected.is_some_and(|expected| expected != preview.git_dir) {
+        return Err(Error::Other(format!(
+            "{} has a different worktree registration",
+            path.display()
+        )));
+    }
+    if preview.detached {
+        return Err(Error::Other(format!(
+            "{} has a detached HEAD. Check out a branch before removing it.",
+            path.display()
+        )));
+    }
     if preview.locked {
         return Err(Error::Other(format!(
             "{} is locked; git worktree unlock frees it",
@@ -516,8 +529,13 @@ pub fn remove(
         )));
     }
     if !force && !preview.clean() {
+        let reason = if preview.changes > 0 || preview.untracked > 0 || preview.submodules {
+            "has changes or submodules".into()
+        } else {
+            format!("has ignored files: {}", preview.ignored.join(", "))
+        };
         return Err(Error::Other(format!(
-            "{} has changes or submodules; Remove anyway discards them",
+            "{} {reason}. Remove anyway discards them.",
             path.display()
         )));
     }
@@ -537,7 +555,35 @@ pub fn remove(
     args.extend(force.then_some("--force"));
     args.push(&to);
     // From the shared git dir: Windows cannot delete a folder that is git's cwd.
-    locked(state, repo, || hookless(&env, &preview.common, &args))?;
+    locked(state, repo, || {
+        let current = out(&env, path, &["rev-parse", "--absolute-git-dir"], Kind::Read)?;
+        if os::canonical(Path::new(current.trim()))? != preview.git_dir {
+            return Err(Error::Other(format!(
+                "{} has a different worktree registration",
+                path.display()
+            )));
+        }
+        if out(&env, path, &["branch", "--show-current"], Kind::Read)?
+            .trim()
+            .is_empty()
+        {
+            return Err(Error::Other(format!(
+                "{} has a detached HEAD. Check out a branch before removing it.",
+                path.display()
+            )));
+        }
+        if !force {
+            let ignored = ignored_paths(&env, path)?;
+            if !ignored.is_empty() {
+                return Err(Error::Other(format!(
+                    "{} has ignored files: {}",
+                    path.display(),
+                    ignored.join(", ")
+                )));
+            }
+        }
+        hookless(&env, &preview.common, &args)
+    })?;
     let above = path.ancestors().skip(1);
     if let Some(root) = above
         .clone()
@@ -559,13 +605,20 @@ pub struct Cleanup {
     pub ignored: Vec<String>,
     pub submodules: bool,
     pub locked: bool,
+    pub detached: bool,
     pub teardown: Result<Option<String>>,
     common: PathBuf,
+    git_dir: PathBuf,
 }
 
 impl Cleanup {
     pub fn clean(&self) -> bool {
-        !self.locked && !self.submodules && self.changes == 0 && self.untracked == 0
+        !self.locked
+            && !self.detached
+            && !self.submodules
+            && self.changes == 0
+            && self.untracked == 0
+            && self.ignored.is_empty()
     }
 }
 
@@ -623,8 +676,24 @@ pub fn cleanup(state: &AppState, repo: &Path, path: &Path) -> Result<Cleanup> {
     let (untracked, changes): (Vec<_>, Vec<_>) = status
         .split_terminator('\0')
         .partition(|l| l.starts_with("?? "));
+    Ok(Cleanup {
+        changes: changes.len(),
+        untracked: untracked.len(),
+        ignored: ignored_paths(&env, path)?,
+        submodules: git.join("modules").is_dir(),
+        locked: git.join("locked").exists(),
+        detached: out(&env, path, &["branch", "--show-current"], Kind::Read)?
+            .trim()
+            .is_empty(),
+        teardown: recipe(state, repo).map(|r| r.teardown),
+        common: common.into(),
+        git_dir: os::canonical(git)?,
+    })
+}
+
+fn ignored_paths(env: &Env, path: &Path) -> Result<Vec<String>> {
     let ignored = out(
-        &env,
+        env,
         path,
         &[
             "ls-files",
@@ -636,15 +705,7 @@ pub fn cleanup(state: &AppState, repo: &Path, path: &Path) -> Result<Cleanup> {
         ],
         Kind::Read,
     )?;
-    Ok(Cleanup {
-        changes: changes.len(),
-        untracked: untracked.len(),
-        ignored: ignored.split_terminator('\0').map(String::from).collect(),
-        submodules: git.join("modules").is_dir(),
-        locked: git.join("locked").exists(),
-        teardown: recipe(state, repo).map(|r| r.teardown),
-        common: common.into(),
-    })
+    Ok(ignored.split_terminator('\0').map(String::from).collect())
 }
 
 /// Runs git with `core.hooksPath` at an empty folder, so no hook of the repo or a branch runs.
@@ -685,20 +746,36 @@ fn copy(from: &Path, to: &Path, copies: &[String], steps: &Steps<'_>) -> Result<
                 Err(_) => fs::create_dir(&dir)?,
             }
         }
-        let mut file = match os::create_private(&dest) {
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            file => file?,
-        };
-        let copied =
-            fs::File::open(&source).and_then(|mut source| std::io::copy(&mut source, &mut file));
-        drop(file);
-        if let Err(error) = copied {
-            let _ = fs::remove_file(&dest);
-            return Err(error.into());
+        if fs::symlink_metadata(&dest).is_ok() {
+            continue;
+        }
+        let mut input = fs::File::open(&source)?;
+        if !publish_copy(&mut input, &dir, &dest, steps.cancel)? {
+            continue;
         }
         steps.report(&format!("{rel} copied"))?;
     }
     Ok(())
+}
+
+fn publish_copy(input: &mut impl Read, dir: &Path, dest: &Path, cancel: &Cancel) -> Result<bool> {
+    let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+    let mut chunk = [0; 64 * 1024];
+    loop {
+        cancelled(cancel)?;
+        let n = input.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        staged.write_all(&chunk[..n])?;
+    }
+    staged.as_file_mut().sync_all()?;
+    cancelled(cancel)?;
+    match staged.persist_noclobber(dest) {
+        Ok(_) => Ok(true),
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.error.into()),
+    }
 }
 
 /// Runs `script` in `dir` with the login PATH, each output line to `progress`; the last lines make
@@ -799,7 +876,41 @@ mod tests {
     }
 
     fn rm(sb: &Sandbox, repo: &Path, path: &Path, force: bool) -> Result<()> {
-        remove(&sb.state, repo, path, force, &Cancel::default(), &|_| {})
+        remove(
+            &sb.state,
+            repo,
+            path,
+            force,
+            None,
+            &Cancel::default(),
+            &|_| {},
+        )
+    }
+
+    #[test]
+    fn a_cancelled_copy_leaves_no_partial_destination_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env.local");
+        let cancel = Cancel::default();
+        struct Interrupted(Cancel);
+        impl Read for Interrupted {
+            fn read(&mut self, chunk: &mut [u8]) -> std::io::Result<usize> {
+                chunk[..3].copy_from_slice(b"env");
+                self.0.store(true, Ordering::SeqCst);
+                Ok(3)
+            }
+        }
+        let mut input = Interrupted(cancel.clone());
+        assert!(matches!(
+            publish_copy(&mut input, dir.path(), &path, &cancel),
+            Err(Error::Cancelled)
+        ));
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        let cancel = Cancel::default();
+        assert!(publish_copy(&mut &b"complete"[..], dir.path(), &path, &cancel).unwrap());
+        assert!(!publish_copy(&mut &b"replacement"[..], dir.path(), &path, &cancel).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
     }
 
     #[test]
@@ -833,7 +944,11 @@ mod tests {
         assert_eq!(log.trim(), "installed");
         assert_eq!(sb.git(&path, &["branch", "--show-current"]), "feat/x");
 
-        rm(&sb, &repo, &path, false).unwrap();
+        let error = rm(&sb, &repo, &path, false).unwrap_err().to_string();
+        assert!(error.contains("has ignored files"), "{error}");
+        assert!(path.join(".env").exists());
+        assert!(!torn.exists());
+        rm(&sb, &repo, &path, true).unwrap();
         assert_eq!(fs::read_to_string(&torn).unwrap().trim(), "down");
         assert!(!sb.path("worktrees/repo").exists());
         assert!(sb.path("worktrees").exists());
