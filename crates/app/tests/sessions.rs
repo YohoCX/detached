@@ -63,6 +63,73 @@ fn root(cx: &mut VisualTestContext, i: usize) -> Option<String> {
 }
 
 #[gpui_kit::test]
+fn overview_shows_real_changes_and_does_not_repeat_the_shared_branch(cx: &mut TestAppContext) {
+    let mut session = None;
+    let app = &mut open_app_with(cx, |sb| {
+        let api = checkout(sb, "api");
+        let web = checkout(sb, "web");
+        session = Some(
+            sessions::adopt(
+                &sb.state,
+                &workspace(sb),
+                "Maintenance",
+                &[api.display().to_string(), web.display().to_string()],
+            )
+            .unwrap(),
+        );
+    });
+    let session = session.unwrap();
+    app.click(SharedString::from(format!("sessions.row.{}", session.id)));
+    wait_until(app, |cx| {
+        (0usize..2).all(|i| label(cx, ("overview.status", i)).as_deref() == Some("Clean"))
+    });
+    assert_eq!(
+        label(app, "overview.repositories").as_deref(),
+        Some("Repositories")
+    );
+    for i in 0usize..2 {
+        assert!(app.find(("overview.branch", i)).is_none());
+        assert!(app.find(("overview.sync", i)).is_none());
+        assert!(app.find(("overview.log", i)).unwrap().visible());
+    }
+
+    let api = session
+        .members
+        .iter()
+        .find(|m| m.path.ends_with("api-topic"))
+        .unwrap();
+    let path = std::path::Path::new(&api.path);
+    let index = (0usize..2)
+        .find(|&i| label(app, ("overview.repository", i)).as_deref() == Some("api"))
+        .unwrap();
+    let file = SharedString::from(format!("overview.file.{}/api-topic.txt", api.path));
+    assert!(app.find(file.clone()).is_none());
+    app.sb.git(path, &["remote", "add", "origin", "."]);
+    app.sb
+        .git(path, &["update-ref", "refs/remotes/origin/topic", "HEAD^"]);
+    app.sb
+        .git(path, &["branch", "--set-upstream-to=origin/topic", "topic"]);
+    std::fs::write(path.join("api-topic.txt"), "Updated content\n").unwrap();
+    app.update(|_, cx| kernel::invalidate::status(cx, &api.path).detach());
+    wait_until(app, |cx| {
+        label(cx, ("overview.status", index)).as_deref() == Some("1 changed file")
+    });
+    assert_eq!(
+        label(app, ("overview.sync", index)).as_deref(),
+        Some("↑1 ahead of origin/topic")
+    );
+    assert_eq!(
+        label(app, ("overview.status", 1 - index)).as_deref(),
+        Some("Clean")
+    );
+    assert!(app.find(file.clone()).unwrap().visible());
+    app.click(("overview.repository", index));
+    assert!(app.find(file.clone()).is_none());
+    app.click(("overview.repository", index));
+    assert!(app.find(file).unwrap().visible());
+}
+
+#[gpui_kit::test]
 fn the_list_switches_the_tree_go_to_file_and_find_to_the_session_members(cx: &mut TestAppContext) {
     let mut id = String::new();
     let mut app = open_app_with(cx, |sb| {
