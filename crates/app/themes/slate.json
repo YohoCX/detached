@@ -77,7 +77,7 @@
     ]
   },
   "dark": {
-    "ground": "#22292e",
+    "ground": "#22272e",
     "panel": "#161a1f",
     "panel_line": "#393d44",
     "panel_shadow": [],
@@ -89,12 +89,12 @@
     "accent_fg": "#0c1015",
     "primary": "#e3e6eb",
     "primary_fg": "#0c1015",
-    "hover": "#ffffff0d",
+    "hover": "#ffffff0b",
     "selected": "#82baff38",
     "selected_ring": "#6baaff",
     "selected_inactive": "#ffffff12",
     "hit": "#f5c761",
-    "popup": "#282731",
+    "popup": "#282c31",
     "shadow": [
       {
         "y": 0,

@@ -42,7 +42,7 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
         } else {
             &fleet.1
         };
-        assert_eq!(theme::theme(cx).panel_bg, base.panel_bg);
+        assert_eq!(theme::theme(cx).muted, base.muted);
     });
     let user_bg = |cx: &mut VisualTestContext| cx.update(|_, cx| theme::theme(cx).user_bg);
     let red_user = user_bg(cx);
@@ -134,7 +134,9 @@ fn opening_the_themes_folder_seeds_a_copy_to_edit(_cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     theme::seed(dir.path()).unwrap();
     let text = std::fs::read_to_string(dir.path().join("my-theme.json")).unwrap();
-    assert!(text.contains(r#""name": "My theme""#));
+    let seeded: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(seeded["name"], "My theme");
+    assert_eq!(seeded["extends"], "Slate");
     std::fs::write(dir.path().join("my-theme.json"), "{}").unwrap();
     theme::seed(dir.path()).unwrap();
     assert_eq!(

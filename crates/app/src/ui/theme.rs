@@ -70,8 +70,8 @@ tokens!(
     // The 16 terminal colors, for job logs and the terminal; the log graph's lanes.
     ansi: 16, lanes: 8;
     // Not in theme files: `derive` makes them from the colors above.
-    window_bg, panel_bg, header_bg, popover_bg, segment_bg, panel_edge, active_bg, user_bg,
-    code_block_bg
+    window_bg, panel_bg, header_bg, popover_bg, popover_selected, segment_bg, panel_edge, active_bg,
+    user_bg, code_block_bg
 );
 
 /// The gap between panes and around the window.
@@ -206,6 +206,7 @@ fn shadows(m: &Map<String, Value>, key: &str) -> Result<Vec<BoxShadow>, String> 
 
 /// A theme file's light and dark tokens over those of the theme it extends.
 fn pair(v: &Value, bases: &BTreeMap<String, Value>) -> Result<(Theme, Theme), String> {
+    // Existing custom themes keep Fleet as their base.
     let base = v["extends"].as_str().unwrap_or("Fleet");
     let base = bases
         .get(base)
@@ -437,7 +438,7 @@ pub fn seed(dir: &Path) -> std::io::Result<()> {
     if stamp(dir).is_empty() {
         let mine = BUNDLED[0].replacen(
             &format!("\"name\": \"{DEFAULT}\""),
-            "\"name\": \"My theme\"",
+            &format!("\"name\": \"My theme\",\n  \"extends\": \"{DEFAULT}\""),
             1,
         );
         std::fs::write(dir.join("my-theme.json"), mine)?;
@@ -498,6 +499,11 @@ impl Theme {
         };
         self.panel_edge = mix(self.panel_bg.blend(self.panel_line), f, edge);
         self.active_bg = p.blend(self.selected);
+        // Dark popovers start lighter than panels, leaving less contrast for status inks.
+        self.popover_selected = self.popover_bg.blend(Hsla {
+            a: self.selected.a.min(if dark { 0.07 } else { 1. }),
+            ..self.selected
+        });
         self.user_bg = mix(self.panel_bg, a, user);
         self.code_block_bg = mix(self.panel_bg.blend(self.code), self.window_bg, code);
         self
@@ -678,6 +684,7 @@ mod tests {
                 t.panel_bg,
                 t.header_bg,
                 t.popover_bg,
+                t.popover_selected,
                 t.panel_edge,
                 t.active_bg,
                 t.user_bg,
@@ -688,15 +695,15 @@ mod tests {
         assert_eq!(
             surfaces(&light),
             [
-                "#d9dde4", "#ffffff", "#e4e7ec", "#ffffff", "#7f8388", "#dbe6f3", "#e8eff8",
-                "#e5e8ed",
+                "#d9dde4", "#ffffff", "#e4e7ec", "#ffffff", "#dbe6f3", "#7f8388", "#dbe6f3",
+                "#e8eff8", "#e5e8ed",
             ]
         );
         assert_eq!(
             surfaces(&dark),
             [
-                "#0e1012", "#161a1f", "#2b2e33", "#31343a", "#64676e", "#2e3d50", "#263241",
-                "#111417",
+                "#0e1012", "#161a1f", "#2b2e33", "#31353a", "#373e48", "#64676e", "#2e3d50",
+                "#263241", "#111317",
             ]
         );
     }
@@ -719,6 +726,7 @@ mod tests {
                 let ink_grounds = [
                     ("popup", ground.blend(t.popup)),
                     ("popover_bg", t.popover_bg),
+                    ("popover_selected", t.popover_selected),
                     ("menu hover", t.popover_bg.blend(t.hover)),
                     ("panel_bg", pb),
                     ("header_bg", t.header_bg),

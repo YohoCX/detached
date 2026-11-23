@@ -145,7 +145,7 @@ impl Switcher {
             .pl(px(6.))
             .pr(px(10.))
             .rounded(radius::ITEM)
-            .when(selected, |d| d.bg(t.selected).shadow(vec![ring]))
+            .when(selected, |d| d.bg(t.popover_selected).shadow(vec![ring]))
             .role(Role::ListBoxOption)
             .aria_selected(selected)
             .aria_label(repo.name.clone())
