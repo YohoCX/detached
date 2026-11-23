@@ -83,6 +83,8 @@ pub const TAB_TITLE: Pixels = px(240.);
 pub mod chat {
     use gpui_kit::{Pixels, px};
 
+    pub const INSET: Pixels = px(20.);
+    pub const PROSE: Pixels = px(760.);
     pub const INLINE: Pixels = px(640.);
     pub const WEEK: Pixels = px(720.);
     pub const MENU: Pixels = px(280.);
@@ -718,7 +720,7 @@ mod tests {
                 ("focused", t.selected_ring, t.tab_active),
                 ("unfocused", t.muted, t.tab_unfocused),
             ] {
-                for bg in [fill, t.header_bg] {
+                for bg in [fill, t.panel_bg] {
                     let ratio = contrast(edge, bg);
                     assert!(ratio >= 3., "{mode} {state} tab outline is {ratio:.2}:1");
                 }

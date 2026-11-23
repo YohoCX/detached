@@ -430,6 +430,56 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
 }
 
 #[gpui_kit::test]
+fn the_chat_uses_the_pane_for_the_composer_and_tables_and_keeps_prose_readable(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open(cx);
+    cx.simulate_resize(size(px(2000.), px(900.)));
+    wait_until(cx, |cx| {
+        cx.find("chat").unwrap().bounds().size.width > px(1400.)
+    });
+    let reply = |cx: &mut VisualTestContext, text: &str| {
+        say(cx, &format!("say {text}"));
+        wait_until(cx, |cx| items(cx).iter().any(|item| item == text));
+        idle(cx);
+        items(cx).iter().position(|item| item == text).unwrap()
+    };
+    let prose = reply(cx, "A short answer");
+    let headings = "Checkout | Branch | Change | Scope | Status | Notes | Owner | Reviewed";
+    let table = format!("| {headings} |\n|{}\n| {headings} |", " --- |".repeat(8));
+    let row = reply(cx, &table);
+
+    let markdown = |cx: &mut VisualTestContext, index| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.within(("chat.item", index)).find("markdown").bounds()
+        })
+    };
+    let composer = cx.find("chat.composer").unwrap().bounds();
+    let pane = cx.find("chat").unwrap().bounds();
+    let inset = composer.left() - pane.left();
+    assert!(inset > px(0.) && inset < px(32.));
+    assert_eq!(composer.right(), pane.right() - inset);
+    assert_eq!(markdown(cx, prose).left(), composer.left());
+    assert!(markdown(cx, prose).size.width < px(800.));
+    assert_eq!(markdown(cx, row).left(), composer.left());
+    assert_eq!(markdown(cx, row).right(), composer.right());
+
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
+    cx.simulate_resize(size(px(740.), px(900.)));
+    wait_until(cx, |cx| {
+        cx.find("chat").unwrap().bounds().size.width < px(380.)
+    });
+    let composer = cx.find("chat.composer").unwrap().bounds();
+    assert_eq!(markdown(cx, row).right(), composer.right());
+    for id in ["chat.provider", "chat.mode", "chat.more", "chat.send"] {
+        let button = cx.find(id).unwrap();
+        assert!(button.visible(), "{id}");
+        assert!(button.bounds().right() <= composer.right(), "{id}");
+    }
+}
+
+#[gpui_kit::test]
 fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     cx.simulate_resize(size(px(1400.), px(900.)));

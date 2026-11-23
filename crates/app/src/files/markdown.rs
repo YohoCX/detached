@@ -14,10 +14,11 @@ use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::channel::oneshot;
 use gpui_kit::base::markdown_ast::Node;
 use gpui_kit::base::{MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, Global,
     HighlightStyle, Image, ImageFormat, ImageSource, InteractiveElement, IntoElement, ListOffset,
-    ParentElement, Pixels, Render, SharedString, SharedUri, StatefulInteractiveElement,
+    Overflow, ParentElement, Pixels, Render, SharedString, SharedUri, StatefulInteractiveElement,
     StyleRefinement, Styled, Task, WeakEntity, Window, div, img, px, relative,
 };
 use markdown::ParseOptions;
@@ -43,6 +44,7 @@ pub struct Markdown {
     links: Links,
     breaks: bool,
     chat: bool,
+    wide: bool,
     state: Entity<TextViewState>,
     /// By URL as written; None while loading, or when it is no image.
     images: Arc<HashMap<String, Option<Arc<Image>>>>,
@@ -80,6 +82,7 @@ impl Markdown {
             links,
             breaks,
             chat: false,
+            wide: false,
             state: cx.new(|cx| TextViewState::markdown("", cx)),
             images: Arc::default(),
             want,
@@ -106,25 +109,29 @@ impl Markdown {
         let (links, breaks) = (self.links.clone(), self.breaks);
         if text.len() < PIECE {
             self._prepare = Task::ready(());
-            let text = prepare(&text, &links, breaks);
-            return self.show(vec![text], cx);
+            let (text, wide) = prepare(&text, &links, breaks);
+            return self.show(vec![text], wide, cx);
         }
-        let job = blocking::run(cx, move || pieces(prepare(&text, &links, breaks)));
+        let job = blocking::run(cx, move || {
+            let (text, wide) = prepare(&text, &links, breaks);
+            (pieces(text), wide)
+        });
         self._prepare = cx.spawn(async move |this, cx| {
-            let pieces = job.await;
-            this.update(cx, |m, cx| m.show(pieces, cx)).ok();
+            let (pieces, wide) = job.await;
+            this.update(cx, |m, cx| m.show(pieces, wide, cx)).ok();
         });
     }
 
     /// A first text goes in a piece a frame, as the kit lays out a whole text in one
     /// (https://github.com/longbridge/gpui-kit/issues/3695); a new one replaces it at once.
-    fn show(&mut self, mut pieces: Vec<String>, cx: &mut Context<Self>) {
+    fn show(&mut self, mut pieces: Vec<String>, wide: bool, cx: &mut Context<Self>) {
         let text = match self.fed {
             0 => pieces.remove(0),
             _ => pieces.drain(..).collect(),
         };
         pieces.reverse();
         (self.rest, self.fed) = (pieces, text.len());
+        self.wide = wide;
         self.state.update(cx, |s, cx| s.set_text(&text, cx));
     }
 
@@ -270,7 +277,10 @@ impl Render for Markdown {
                     .text_color(theme(cx).fg),
                 false => view,
             };
-            return root.child(view).into_any_element();
+            return root
+                .when(self.chat && !self.wide, |d| d.max_w(theme::chat::PROSE))
+                .child(view)
+                .into_any_element();
         }
         // The column is centered by padding, so the scrollbar stays at the edge.
         let list = self.state.read(cx).list_state().clone();
@@ -416,6 +426,10 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
         false => (block, StyleRefinement::default()),
     };
     let rule = t.line;
+    let mut table = StyleRefinement::default();
+    if chat {
+        table.overflow.x = Some(Overflow::Scroll);
+    }
     TextViewStyle::default()
         .with_foreground(t.fg)
         .with_muted_foreground(t.muted)
@@ -443,6 +457,7 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
             ..HighlightStyle::default()
         })
         .with_code_block(block)
+        .with_table(table)
         .with_inline_code_style(inline.text_size(code).rounded(radius::LETTER).px(px(4.)))
         .with_blockquote_style(
             StyleRefinement::default()
@@ -461,12 +476,14 @@ const HIDDEN: &[&str] = &[
 /// The text the kit parses: fence languages by the viewer's names, images the rules show as
 /// links made links, `HIDDEN` elements dropped, and with `breaks` a lone newline outside code
 /// made a hard break.
-fn prepare(text: &str, links: &Links, breaks: bool) -> String {
+fn prepare(text: &str, links: &Links, breaks: bool) -> (String, bool) {
     let Ok(root) = markdown::to_mdast(text, &ParseOptions::gfm()) else {
-        return text.into();
+        return (text.into(), false);
     };
     let mut code = vec![];
+    let mut wide = false;
     visit(&root, &mut |n| {
+        wide |= matches!(n, Node::Code(_) | Node::Table(_));
         if let Node::Code(_) | Node::InlineCode(_) = n
             && let Some(p) = n.position()
         {
@@ -523,7 +540,7 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> String {
         out.push_str(&with);
         at = range.end;
     }
-    out + &text[at..]
+    (out + &text[at..], wide)
 }
 
 /// `HIDDEN` elements outside code, from their start tag to the end of their end tag.
@@ -865,6 +882,10 @@ pub(super) fn is_markdown(path: &str) -> bool {
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
+
+    fn prepare(text: &str, links: &Links, breaks: bool) -> String {
+        super::prepare(text, links, breaks).0
+    }
 
     fn repo(path: &str) -> Links {
         Links::Repo {
