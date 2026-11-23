@@ -113,8 +113,8 @@ pub fn make(
         worktree::hookless(&env, repo, &["branch", &branch, brief::sha(&s.head_sha)?])
     })?;
     let (main, folder) = home(core, &s.repo);
-    let made =
-        worktree::create(core, repo, &main, &folder, &branch, cancel, progress).and_then(|tree| {
+    let made = worktree::create(core, repo, &main, &folder, &branch, None, cancel, progress)
+        .and_then(|tree| {
             run::copy_local(repo, &tree)?;
             Ok(Made {
                 branch: branch.clone(),
@@ -176,7 +176,7 @@ pub fn discard(
     progress: Progress,
 ) -> Result<()> {
     if tree.exists() {
-        worktree::remove(core, repo, tree, true, cancel, progress)?;
+        worktree::remove(core, repo, tree, true, None, cancel, progress)?;
     }
     Ok(())
 }

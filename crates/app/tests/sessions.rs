@@ -159,6 +159,7 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
         );
     });
     cx.press("secondary-n");
+    cx.click("sessions.mode.adopt");
     wait_until(cx, |cx| cx.find(("sessions.candidate", 1usize)).is_some());
     cx.input("Release");
     cx.click(("sessions.candidate", 0usize));
@@ -401,4 +402,238 @@ fn an_archived_council_task_opens_a_read_only_round_and_history_errors_are_visib
             .path("repos/api/.git/detached/panels/topic/round/events.jsonl")
             .is_file()
     );
+}
+
+fn code_open(cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        window
+            .find_all("input-state")
+            .into_iter()
+            .any(|e| e.path().contains(&ElementId::from("viewer.code")) && e.visible())
+    })
+}
+
+#[gpui_kit::test]
+fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        let api = repo(sb, "api");
+        sb.commit_files(&api, "notes", [("notes.txt", "A note\n")]);
+        repo(sb, "web");
+    });
+    let ws = workspace(&app.sb);
+    app.press("secondary-n");
+    assert!(app.find("sessions.provision").is_some());
+    assert!(app.find("sessions.provisional").is_some());
+    assert!(app.find(("tree.root", 0usize)).is_none());
+    app.input("Banner copy");
+    app.click(("sessions.repository", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.basePicker", 0usize)).is_some()
+    });
+    app.click("sessions.create.submit");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| {
+            w.sessions().iter().any(|s| {
+                s.name == "Banner copy"
+                    && s.members
+                        .first()
+                        .is_some_and(|m| m.stage == sessions::Stage::Ready)
+            })
+        }) && cx.find("sessions.openCreated").is_some()
+    });
+    app.click("sessions.openCreated");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| w.session_name() == "Banner copy")
+    });
+
+    app.click("sessions.addRepo");
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.repository", 0usize))
+            .is_some_and(|e| e.visible())
+    });
+    app.click(("sessions.repository", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.basePicker", 0usize)).is_some()
+    });
+    app.click("sessions.create.submit");
+    wait_until(&mut app, |cx| {
+        cx.workspace(|w, _| w.session_repos().len() == 2)
+    });
+    let set = sessions::list(&app.sb.state, &ws).unwrap().sets.remove(0);
+    assert_eq!(set.members.len(), 2);
+    assert!(
+        set.members
+            .iter()
+            .all(|m| m.branch.as_deref() == Some("feature/banner-copy"))
+    );
+    let api = &set.members[0].path;
+    assert!(PathBuf::from(api).join("notes.txt").exists());
+    let loc = Location {
+        repo: api.clone(),
+        path: "notes.txt".into(),
+        rev: None,
+        line: None,
+        doc: None,
+    };
+    app.workspace(|w, cx| w.show_tab(Doc::File(loc), true, cx));
+    wait_until(&mut app, code_open);
+    std::fs::write(PathBuf::from(api).join("draft.txt"), "keep me").unwrap();
+
+    app.click("sessions.archiveCurrent");
+    wait_until(&mut app, |cx| {
+        cx.find("sessions.archive.confirm")
+            .is_some_and(|e| e.visible())
+    });
+    app.click("sessions.archive.confirm");
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.archive.resume", 0usize)).is_some()
+    });
+    assert!(!in_list(&mut app, &set.id));
+    app.click(("sessions.archive.resume", 0usize));
+    wait_until(&mut app, |cx| in_list(cx, &set.id) && code_open(cx));
+    assert_eq!(
+        std::fs::read_to_string(PathBuf::from(api).join("draft.txt")).unwrap(),
+        "keep me"
+    );
+
+    app.click("sessions.archiveCurrent");
+    wait_until(&mut app, |cx| {
+        cx.find("sessions.archive.confirm")
+            .is_some_and(|e| e.visible())
+    });
+    app.click("sessions.archive.confirm");
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.archive.remove", 0usize)).is_some()
+    });
+    app.click(("sessions.archive.remove", 0usize));
+    wait_until(&mut app, |cx| cx.find(("sessions.force", 0usize)).is_some());
+    app.click("sessions.remove.clean");
+    let web = PathBuf::from(&set.members[1].path);
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.cleanup.removed", 0usize)).is_some()
+    });
+    assert!(!web.exists());
+    assert!(PathBuf::from(api).join("draft.txt").exists());
+    app.click("sessions.provision.cancel");
+    wait_until(&mut app, |cx| cx.find("sessions.provision").is_none());
+    app.click(("sessions.archive.resume", 0usize));
+    wait_until(&mut app, |cx| cx.find("sessions.resume.confirm").is_some());
+    app.click("sessions.resume.confirm");
+    wait_until(&mut app, |cx| in_list(cx, &set.id) && code_open(cx));
+    assert!(web.exists());
+    assert!(PathBuf::from(api).join("draft.txt").exists());
+}
+
+#[gpui_kit::test]
+fn failed_creation_restores_the_editable_form_without_claiming_a_session(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    app.press("secondary-n");
+    app.input("Blocked");
+    app.click(("sessions.repository", 0usize));
+    wait_until(&mut app, |cx| {
+        cx.find(("sessions.basePicker", 0usize)).is_some()
+    });
+    let collision = app.sb.path("repos/worktrees/api/feature/blocked");
+    std::fs::create_dir_all(&collision).unwrap();
+    app.click("sessions.create.submit");
+    wait_until(&mut app, |cx| {
+        label(cx, ("sessions.creationError", 0usize)).is_some_and(|s| s.contains("already exists"))
+    });
+    assert!(app.find("sessions.create.submit").is_some());
+    assert!(
+        sessions::list(&app.sb.state, &workspace(&app.sb))
+            .unwrap()
+            .sets
+            .is_empty()
+    );
+    app.click("sessions.provision.cancel");
+    assert!(app.find("sessions.provisional").is_none());
+    assert!(collision.is_dir());
+}
+
+#[gpui_kit::test]
+fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut TestAppContext) {
+    use detached_app::terminal::Terminals;
+    use detached_core::adapters::CLAUDE;
+    use detached_core::backend::{Kind, Spec};
+    use detached_core::processes::{self, Definition};
+
+    let mut set = None;
+    let mut app = open_app_with(cx, |sb| {
+        let tree = checkout(sb, "api");
+        claude(sb, &detached_core::testutil::claude::fake());
+        processes::save(
+            &sb.state,
+            &tree,
+            &Definition {
+                name: "serve".into(),
+                command: if cfg!(windows) {
+                    "ping -n 60 127.0.0.1 >NUL".into()
+                } else {
+                    "sleep 60".into()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        set = Some(
+            sessions::adopt(
+                &sb.state,
+                &workspace(sb),
+                "Active",
+                &[tree.to_string_lossy().into()],
+            )
+            .unwrap(),
+        );
+    });
+    let set = set.unwrap();
+    let path = set.members[0].path.clone();
+    app.click(SharedString::from(format!("sessions.row.{}", set.id)));
+
+    let refused = |app: &mut VisualTestContext, reason: &str| {
+        app.click("sessions.archiveCurrent");
+        wait_until(app, |cx| {
+            cx.find("sessions.archive.confirm")
+                .is_some_and(|e| e.visible())
+        });
+        app.click("sessions.archive.confirm");
+        assert!(
+            label(app, "sessions.provision.error").is_some_and(|s| s.contains(reason)),
+            "{reason}"
+        );
+        assert!(app.workspace(|w, _| w.session_name() == "Active" && !w.archive()));
+        app.click("sessions.provision.cancel");
+    };
+
+    let chat = app.update(|_, cx| {
+        kernel::session::Session::open(Spec::new(&CLAUDE, &path, Kind::Chat), None, cx)
+    });
+    app.update(|_, cx| chat.update(cx, |s, cx| s.prompt("ask".into(), cx)));
+    wait_until(&mut app, |cx| cx.update(|_, cx| chat.read(cx).busy()));
+    refused(&mut app, "is working");
+    app.update(|_, cx| chat.update(cx, |s, cx| s.cancel_and_end(cx)));
+    wait_until(&mut app, |cx| cx.update(|_, cx| !chat.read(cx).busy()));
+
+    app.update(|_, cx| kernel::proc::start(cx, &path, "serve", false).detach());
+    let running = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            kernel::proc::get(cx, &path, "serve").is_some_and(|p| p.read(cx).running())
+        })
+    };
+    wait_until(&mut app, running);
+    refused(&mut app, "serve is running");
+    app.update(|_, cx| kernel::proc::stop(cx, &path, "serve", false).detach());
+    wait_until(&mut app, |cx| !running(cx));
+
+    let shell = app.update(|window, cx| {
+        Terminals::global(cx).update(cx, |t, cx| {
+            t.open_docked(PathBuf::from(&path), window, cx).unwrap()
+        })
+    });
+    refused(&mut app, "a shell is open");
+    app.update(|window, cx| Terminals::global(cx).update(cx, |t, cx| t.close(&shell, window, cx)));
+    assert!(PathBuf::from(&path).is_dir());
 }

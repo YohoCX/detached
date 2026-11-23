@@ -1,4 +1,5 @@
 mod archive;
+pub(crate) mod provision;
 mod sheet;
 
 use detached_core::sessions::{MAIN, MemberState, Workset};
@@ -21,13 +22,21 @@ const COLLAPSED: &str = "session.list.collapsed";
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     crate::shell::overlay(cx, sheet::overlay);
+    crate::shell::overlay(cx, provision::overlay);
     dock::register_doc(cx, "session-archive", archive::ArchiveDocs);
     dock::register_doc(cx, "past-chat", archive::ArchiveDocs);
     [
         (
             "session.new",
-            "Adopt Worktrees…",
-            sheet::adopt as fn(&mut Window, &mut App),
+            "New Session…",
+            provision::new as fn(&mut Window, &mut App),
+        ),
+        ("session.adopt", "Adopt Worktrees…", sheet::adopt),
+        ("session.addRepo", "Add Repository…", provision::add),
+        (
+            "session.archiveCurrent",
+            "Archive Session…",
+            provision::archive,
         ),
         ("session.rename", "Rename Session…", sheet::rename),
         ("session.archive", "Session Archive", open_archive),
@@ -49,7 +58,7 @@ fn toggle(window: &mut Window, cx: &mut App) {
     cx.refresh_windows();
 }
 
-fn open_archive(window: &mut Window, cx: &mut App) {
+pub(super) fn open_archive(window: &mut Window, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx));
     dock::show(Doc::SessionArchive, window, cx);
 }
@@ -76,7 +85,8 @@ impl Render for List {
         let t = theme(cx);
         let collapsed: bool = ui_state::get(COLLAPSED, cx).unwrap_or(false);
         let w = Workspace::get(cx);
-        let count = dock::archived_tabs(cx).len();
+        let count = dock::archived_tabs(cx).len()
+            + w.sessions().iter().filter(|s| s.archived.is_some()).count();
         let archive_button = ui::pressable("sessions.archive")
             .test_support()
             .role(Role::Button)
@@ -114,7 +124,7 @@ impl Render for List {
         let add = ui::titled(
             ui::icon_button("sessions.new", Icon::Plus.size(px(15.)), cx)
                 .on_click(|_, window, cx| actions::dispatch(window, cx, "session.new")),
-            "Adopt worktrees…",
+            "New session…",
         )
         .test_support();
         let title = div()
@@ -156,7 +166,27 @@ impl Render for List {
                         .overflow_y_scroll()
                         .gap(GAP / 3.)
                         .child(row(None, cx))
-                        .children(w.sessions().iter().map(|set| row(Some(set), cx))),
+                        .when_some(provision::provisional(cx), |d, name| {
+                            d.child(
+                                div()
+                                    .id("sessions.provisional")
+                                    .test_support()
+                                    .m(GAP / 3.)
+                                    .p(GAP)
+                                    .rounded(radius::WIDGET)
+                                    .border_1()
+                                    .border_dashed()
+                                    .border_color(t.line)
+                                    .text_color(t.muted)
+                                    .child(name),
+                            )
+                        })
+                        .children(
+                            w.sessions()
+                                .iter()
+                                .filter(|set| set.visible())
+                                .map(|set| row(Some(set), cx)),
+                        ),
                 )
                 .child(archive_button)
         };
@@ -187,7 +217,7 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
     let selected = !w.archive() && w.session_id() == id;
     let count = set.map_or_else(
         || w.repos().iter().filter(|r| r.worktree_of.is_none()).count(),
-        |set| set.members.len(),
+        |set| set.members.iter().filter(|m| m.state.usable()).count(),
     );
     let branch = set.and_then(|set| {
         let branch = set.members.first()?.branch.as_ref()?;
@@ -212,13 +242,13 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                     } else {
                         info
                     };
-                    member(name.to_owned(), &m.path, m.state, cx)
+                    member(name.to_owned(), &m.path, m.state, Some(&m.repo), cx)
                 })
                 .collect()
         } else {
             w.session_repos()
                 .iter()
-                .map(|r| member(r.name.clone(), &r.path, MemberState::Ready, cx))
+                .map(|r| member(r.name.clone(), &r.path, MemberState::Ready, None, cx))
                 .collect()
         }
     } else {
@@ -232,6 +262,8 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
         actions::dispatch(window, cx, "session.rename");
     };
     let context = rename.clone();
+    let context_id = id.clone();
+    let operations = set.cloned();
     let title = name.to_string();
     div()
         .flex()
@@ -255,9 +287,33 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
                 .when(editable, |d| {
                     d.on_aux_click(move |e, window, cx| {
                         let rename = context.clone();
-                        ui::Menu::default()
+                        let add = context_id.clone();
+                        let archive = context_id.clone();
+                        let mut menu = ui::Menu::default()
                             .item("Rename…", rename)
-                            .show(e.position(), window, cx);
+                            .item("Add repository…", move |window, cx| {
+                                select(&add, window, cx);
+                                provision::add(window, cx);
+                            })
+                            .item("Archive…", move |window, cx| {
+                                select(&archive, window, cx);
+                                provision::archive(window, cx);
+                            });
+                        if let Some(set) = operations.clone() {
+                            let cleanup = set.clone();
+                            menu = menu.item("Remove worktrees…", move |_, cx| {
+                                provision::cleanup(cleanup.clone(), cx)
+                            });
+                            if set.members.iter().any(|m| {
+                                !m.state.usable()
+                                    || m.stage != detached_core::sessions::Stage::Ready
+                            }) {
+                                menu = menu.item("Provisioning details…", move |window, cx| {
+                                    provision::recover(set.clone(), window, cx)
+                                });
+                            }
+                        }
+                        menu.show(e.position(), window, cx);
                     })
                 })
                 .child(
@@ -315,10 +371,40 @@ fn row(set: Option<&Workset>, cx: &App) -> AnyElement {
         .when(!members.is_empty(), |d| {
             d.child(div().pb(GAP / 2.).children(members))
         })
+        .when(selected && editable, |d| {
+            d.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        ui::quiet_button("sessions.addRepo", "Add repository…", cx)
+                            .test_support()
+                            .on_click(|_, window, cx| provision::add(window, cx)),
+                    )
+                    .child(
+                        ui::titled(
+                            ui::icon_button(
+                                "sessions.archiveCurrent",
+                                Icon::Archive.size(px(13.)),
+                                cx,
+                            )
+                            .on_click(|_, window, cx| provision::archive(window, cx)),
+                            "Archive session",
+                        )
+                        .test_support(),
+                    ),
+            )
+        })
         .into_any_element()
 }
 
-fn member(name: String, path: &str, state: MemberState, cx: &App) -> AnyElement {
+fn member(
+    name: String,
+    path: &str,
+    state: MemberState,
+    repo: Option<&str>,
+    cx: &App,
+) -> AnyElement {
     let t = theme(cx);
     let status = Repo::get(cx, path).and_then(|r| r.status());
     let sync = status
@@ -341,6 +427,19 @@ fn member(name: String, path: &str, state: MemberState, cx: &App) -> AnyElement 
         state => state.label().into(),
     };
     div()
+        .id(gpui_kit::SharedString::from(format!(
+            "sessions.member.{path}"
+        )))
+        .when_some(repo.map(str::to_owned), |d, repo| {
+            d.on_aux_click(move |event, window, cx| {
+                let repo = repo.clone();
+                ui::Menu::default()
+                    .item("Remove from session…", move |_, cx| {
+                        provision::remove_member(repo.clone(), cx);
+                    })
+                    .show(event.position(), window, cx);
+            })
+        })
         .flex()
         .items_center()
         .gap(GAP / 2.)

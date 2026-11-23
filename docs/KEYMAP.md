@@ -17,7 +17,10 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `editor.gotoLine` | Go to line | Cmd+L | M1 | V2 |
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
 | `panel.project` | Session files | Cmd+1 | M1 | F |
-| `session.new` | Adopt Worktrees… | Cmd+N | Sessions | F |
+| `session.new` | New Session… | Cmd+N | Sessions | F |
+| `session.adopt` | Adopt Worktrees… | — | Sessions | F |
+| `session.addRepo` | Add Repository… | — | Sessions | F |
+| `session.archiveCurrent` | Archive Session… | — | Sessions | F |
 | `session.rename` | Rename Session… | — | Sessions | F |
 | `session.archive` | Session Archive | — | Sessions | F |
 | `panel.sessions` | Show or Hide Sessions | — | Sessions | F |

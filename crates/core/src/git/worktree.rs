@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
@@ -63,6 +63,10 @@ pub struct Linked {
 }
 
 pub fn linked(env: &Env, repo: &Path) -> Result<Vec<Linked>> {
+    Ok(all_linked(env, repo)?.into_iter().skip(1).collect())
+}
+
+fn all_linked(env: &Env, repo: &Path) -> Result<Vec<Linked>> {
     let text = out(
         env,
         repo,
@@ -71,7 +75,6 @@ pub fn linked(env: &Env, repo: &Path) -> Result<Vec<Linked>> {
     )?;
     Ok(text
         .split("\0\0")
-        .skip(1)
         .filter_map(|entry| {
             let mut tree = Linked::default();
             for field in entry.split('\0') {
@@ -82,7 +85,6 @@ pub fn linked(env: &Env, repo: &Path) -> Result<Vec<Linked>> {
                     "branch" => tree.branch = value.strip_prefix("refs/heads/").map(String::from),
                     "locked" => tree.locked = Some(value.into()),
                     "prunable" => tree.prunable = Some(value.into()),
-                    "bare" => return None,
                     _ => {}
                 }
             }
@@ -164,18 +166,137 @@ pub fn recipe(state: &AppState, repo: &Path) -> Result<Recipe> {
 /// recipe's files from `repo` and runs its install there. A local branch is checked out, else
 /// origin's is tracked, else it starts from the recipe's base. A failed install keeps the worktree.
 /// The fetch before it runs `repo`'s own hooks, as Fetch does.
+#[allow(clippy::too_many_arguments)]
 pub fn create(
     state: &AppState,
     repo: &Path,
     main: &Path,
     folder: &Path,
     branch: &str,
+    base: Option<&str>,
     cancel: &Cancel,
     progress: Progress,
 ) -> Result<PathBuf> {
+    let (path, recipe) = prepare(state, repo, main, folder, branch)?;
+    let steps = Steps {
+        cancel,
+        progress,
+        record: &|_| Ok(()),
+    };
+    add(
+        state,
+        repo,
+        &path,
+        branch,
+        base,
+        &recipe,
+        false,
+        &steps,
+        &|_| Ok(()),
+    )?;
+    finish(state, repo, &path, &recipe, false, &steps, &|| Ok(()))
+        .map_err(|e| Error::Other(format!("{} is created, but: {e}", path.display())))?;
+    Ok(path)
+}
+
+#[derive(Debug)]
+pub struct Preview {
+    pub path: PathBuf,
+    pub decision: String,
+    pub recipe: Recipe,
+    pub bases: Vec<String>,
+    pub new_branch: bool,
+}
+
+pub fn preview(
+    state: &AppState,
+    repo: &Path,
+    folder: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<Preview> {
+    let (path, recipe) = prepare(state, repo, repo, folder, branch)?;
     let env = state.env();
+    let (start, new_branch, decision) = start(&env, repo, branch, base, &recipe)?;
+    if let Some(tree) = all_linked(&env, repo)?
+        .into_iter()
+        .find(|t| t.branch.as_deref() == Some(branch))
+    {
+        return Err(Error::Other(format!(
+            "{branch} is already checked out at {}. Pick another branch name.",
+            tree.path.display()
+        )));
+    }
+    if new_branch {
+        sha(&env, repo, &start)?;
+    }
+    let bases = out(
+        &env,
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ],
+        Kind::Read,
+    )?
+    .lines()
+    .filter(|r| *r != "origin/HEAD")
+    .map(String::from)
+    .collect();
+    Ok(Preview {
+        path,
+        decision,
+        recipe,
+        bases,
+        new_branch,
+    })
+}
+
+pub(crate) fn prepare(
+    state: &AppState,
+    repo: &Path,
+    main: &Path,
+    folder: &Path,
+    branch: &str,
+) -> Result<(PathBuf, Recipe)> {
+    check_branch(state, repo, branch)?;
+    let root = root(&state.data_dir, main, folder);
+    let path = root.join(branch);
+    check_destination(&path)?;
+    let boundary = if root.starts_with(&state.data_dir) {
+        &state.data_dir
+    } else {
+        folder
+    };
+    if let Some(parent) = path
+        .ancestors()
+        .skip(1)
+        .take_while(|p| *p != boundary)
+        .find(|p| fs::symlink_metadata(p).is_ok_and(|m| m.is_symlink()))
+    {
+        return Err(Error::Other(format!(
+            "{} is a symbolic link",
+            parent.display()
+        )));
+    }
+    Ok((path, checked_recipe(state, repo)?))
+}
+
+pub(crate) fn prepare_at(
+    state: &AppState,
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+) -> Result<Recipe> {
+    check_branch(state, repo, branch)?;
+    check_destination(path)?;
+    checked_recipe(state, repo)
+}
+
+pub(crate) fn check_branch(state: &AppState, repo: &Path, branch: &str) -> Result<()> {
     let check = ["check-ref-format", "--branch", arg(branch)?];
-    if out(&env, repo, &check, Kind::Read)
+    if out(&state.env(), repo, &check, Kind::Read)
         .ok()
         .as_deref()
         .map(str::trim)
@@ -183,10 +304,19 @@ pub fn create(
     {
         return Err(Error::Other(format!("Invalid branch name: {branch}")));
     }
-    let path = root(&state.data_dir, main, folder).join(branch);
-    if fs::symlink_metadata(&path).is_ok() {
-        return Err(Error::Other(format!("{} already exists", path.display())));
+    Ok(())
+}
+
+fn check_destination(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(Error::Other(format!("{} already exists", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
+}
+
+pub(crate) fn checked_recipe(state: &AppState, repo: &Path) -> Result<Recipe> {
+    let env = state.env();
     let recipe = recipe(state, repo)?;
     for rel in &recipe.copies {
         let normal = Path::new(rel)
@@ -208,97 +338,208 @@ pub fn create(
             )));
         }
     }
-    match pull::fetch(state, repo, cancel, progress) {
-        Err(Error::Cancelled) => return Err(Error::Cancelled),
-        Err(e) => progress(&format!("Fetch failed, using the refs at hand: {e}")),
-        Ok(()) => {}
+    Ok(recipe)
+}
+
+fn start(
+    env: &Env,
+    repo: &Path,
+    branch: &str,
+    base: Option<&str>,
+    recipe: &Recipe,
+) -> Result<(String, bool, String)> {
+    let has = |r: &str| sha(env, repo, r).is_ok();
+    let remote = format!("origin/{branch}");
+    if has(&format!("refs/heads/{branch}")) {
+        return Ok((
+            branch.into(),
+            false,
+            format!("Checks out the local branch {branch}"),
+        ));
     }
-    let has = |r: &str| {
-        let args = ["rev-parse", "--verify", "--quiet", r];
-        run(&env, repo, &args, Kind::Read, Opts::default()).is_ok_and(|o| o.code == 0)
+    if has(&format!("refs/remotes/{remote}")) {
+        return Ok((remote.clone(), false, format!("Tracks {remote}")));
+    }
+    let base = match (base, recipe.base.as_deref()) {
+        (Some(b), _) => arg(b)?.to_string(),
+        (None, Some(b)) if has(&format!("refs/remotes/origin/{b}")) => format!("origin/{b}"),
+        (None, Some(b)) => arg(b)?.to_string(),
+        (None, None) => "HEAD".into(),
     };
+    let decision = format!("New branch from {base}");
+    Ok((base, true, decision))
+}
+
+pub(crate) fn sha(env: &Env, repo: &Path, reference: &str) -> Result<String> {
+    let commit = format!("{reference}^{{commit}}");
+    Ok(out(
+        env,
+        repo,
+        &["rev-parse", "--verify", "--end-of-options", &commit],
+        Kind::Read,
+    )?
+    .trim()
+    .to_string())
+}
+
+pub(crate) struct Steps<'a> {
+    pub cancel: &'a Cancel,
+    pub progress: Progress<'a>,
+    pub record: &'a dyn Fn(&str) -> Result<()>,
+}
+
+impl Steps<'_> {
+    fn report(&self, line: &str) -> Result<()> {
+        (self.record)(line)?;
+        (self.progress)(line);
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add(
+    state: &AppState,
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+    recipe: &Recipe,
+    existing: bool,
+    steps: &Steps<'_>,
+    before_add: &dyn Fn(&str) -> Result<()>,
+) -> Result<String> {
+    cancelled(steps.cancel)?;
+    match pull::fetch(state, repo, steps.cancel, steps.progress) {
+        Err(Error::Cancelled) => return Err(Error::Cancelled),
+        Err(e) => steps.report(&format!("Fetch failed, using the refs at hand: {e}"))?,
+        Ok(()) => steps.report("Fetched")?,
+    }
+    cancelled(steps.cancel)?;
+    let env = state.env();
     let to = path.to_string_lossy();
-    let (remote, base) = (format!("origin/{branch}"), recipe.base.as_deref());
-    let base = match base {
-        Some(b) if has(&format!("refs/remotes/origin/{b}")) => format!("origin/{b}"),
-        Some(b) => arg(b)?.to_string(),
-        None => "HEAD".into(),
-    };
-    let from = if has(&format!("refs/heads/{branch}")) {
-        vec![&*to, branch]
-    } else if has(&format!("refs/remotes/{remote}")) {
-        vec!["--track", "-b", branch, &to, &remote]
-    } else {
-        vec!["--no-track", "-b", branch, &to, &base]
-    };
     locked(state, repo, || {
+        cancelled(steps.cancel)?;
+        check_destination(path)?;
+        let (start, new, decision) = start(&env, repo, branch, base, recipe)?;
+        if existing && (new || start != branch) {
+            return Err(Error::Other(format!("The local branch {branch} is gone")));
+        }
+        let head = if new {
+            sha(&env, repo, &start)?
+        } else if start != branch {
+            sha(&env, repo, &format!("refs/remotes/{start}"))?
+        } else {
+            sha(&env, repo, &format!("refs/heads/{branch}"))?
+        };
+        let from = if new {
+            steps.report(&format!("{decision} at {}", &head[..7.min(head.len())]))?;
+            vec!["--no-track", "-b", branch, "--", &to, &head]
+        } else if start != branch {
+            steps.report(&decision)?;
+            vec!["--track", "-b", branch, "--", &to, &start]
+        } else {
+            steps.report(&decision)?;
+            vec!["--", &to, branch]
+        };
+        if existing
+            && let Some(tree) = linked(&env, repo)?.into_iter().find(|t| {
+                t.prunable.is_some() && t.branch.as_deref() == Some(branch) && t.path == path
+            })
+        {
+            if tree.locked.is_some() {
+                return Err(Error::Other(format!(
+                    "{} is locked; git worktree unlock frees it",
+                    path.display()
+                )));
+            }
+            check_destination(path)?;
+            hookless(&env, repo, &["worktree", "remove", "--", &to])?;
+        }
+        before_add(&head)?;
         hookless(
             &env,
             repo,
-            &[&["worktree", "add", "-q"][..], &from[..]].concat(),
-        )
-    })?;
-    let copied = copy(repo, &path, &recipe.copies);
-    let installed = copied.and_then(|()| match &recipe.install {
-        Some(script) => shell(&env, &path, script, cancel, progress),
-        None => Ok(()),
-    });
-    installed.map_err(|e| Error::Other(format!("{} is created, but: {e}", path.display())))?;
-    Ok(path)
+            &[&["worktree", "add", "-q"][..], &from].concat(),
+        )?;
+        Ok(head)
+    })
+}
+
+pub(crate) fn finish(
+    state: &AppState,
+    repo: &Path,
+    path: &Path,
+    recipe: &Recipe,
+    copied: bool,
+    steps: &Steps<'_>,
+    on_copy: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    cancelled(steps.cancel)?;
+    if !copied {
+        steps.report("Worktree added")?;
+        copy(repo, path, &recipe.copies, steps)?;
+        on_copy()?;
+    }
+    cancelled(steps.cancel)?;
+    if let Some(script) = &recipe.install {
+        steps.report(&format!("Running {script}…"))?;
+        shell(&state.env(), path, script, steps.cancel, steps.progress)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn cancelled(cancel: &Cancel) -> Result<()> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(Error::Cancelled);
+    }
+    Ok(())
 }
 
 /// Runs the recipe's teardown in the linked worktree `path`, then removes it with hooks off, and
-/// the folders it leaves empty below its `worktrees` root; the branch stays. Changes or submodules
-/// in it, or a teardown that fails or is not accepted, stop it unless `force`; a lock always does.
+/// the empty managed folders; the branch stays. Changes, ignored files, submodules and teardown
+/// failures require `force`. A lock always stops removal.
 pub fn remove(
     state: &AppState,
     repo: &Path,
     path: &Path,
     force: bool,
+    expected: Option<&Path>,
     cancel: &Cancel,
     progress: Progress,
 ) -> Result<()> {
+    cancelled(cancel)?;
     let env = state.env();
-    let dirs = [
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-dir",
-        "--git-common-dir",
-    ];
-    let dirs = out(&env, path, &dirs, Kind::Read)?;
-    let mut dirs = dirs.lines().map(Path::new);
-    let (Some(git), Some(common)) = (dirs.next(), dirs.next()) else {
+    let preview = cleanup(state, repo, path)?;
+    if expected.is_some_and(|expected| expected != preview.git_dir) {
         return Err(Error::Other(format!(
-            "{} is not a worktree",
-            path.display()
-        )));
-    };
-    if git == common {
-        return Err(Error::Other(format!(
-            "{} is a main checkout",
+            "{} has a different worktree registration",
             path.display()
         )));
     }
-    if git.join("locked").exists() {
+    if preview.detached {
+        return Err(Error::Other(format!(
+            "{} has a detached HEAD. Check out a branch before removing it.",
+            path.display()
+        )));
+    }
+    if preview.locked {
         return Err(Error::Other(format!(
             "{} is locked; git worktree unlock frees it",
             path.display()
         )));
     }
-    let status = [
-        "status",
-        "--porcelain",
-        "--untracked-files=all",
-        "--ignore-submodules=none",
-    ];
-    if !force && (git.join("modules").is_dir() || !out(&env, path, &status, Kind::Read)?.is_empty())
-    {
+    if !force && !preview.clean() {
+        let reason = if preview.changes > 0 || preview.untracked > 0 || preview.submodules {
+            "has changes or submodules".into()
+        } else {
+            format!("has ignored files: {}", preview.ignored.join(", "))
+        };
         return Err(Error::Other(format!(
-            "{} has changes or submodules; Remove anyway discards them",
+            "{} {reason}. Remove anyway discards them.",
             path.display()
         )));
     }
-    let teardown = recipe(state, repo).and_then(|r| match r.teardown {
+    let teardown = preview.teardown.and_then(|script| match script {
         Some(script) => shell(&env, path, &script, cancel, progress),
         None => Ok(()),
     });
@@ -308,12 +549,41 @@ pub fn remove(
         Err(e) => progress(&format!("Teardown: {e}")),
         Ok(()) => {}
     }
+    cancelled(cancel)?;
     let to = path.to_string_lossy();
     let mut args = vec!["worktree", "remove"];
     args.extend(force.then_some("--force"));
     args.push(&to);
     // From the shared git dir: Windows cannot delete a folder that is git's cwd.
-    locked(state, repo, || hookless(&env, common, &args))?;
+    locked(state, repo, || {
+        let current = out(&env, path, &["rev-parse", "--absolute-git-dir"], Kind::Read)?;
+        if os::canonical(Path::new(current.trim()))? != preview.git_dir {
+            return Err(Error::Other(format!(
+                "{} has a different worktree registration",
+                path.display()
+            )));
+        }
+        if out(&env, path, &["branch", "--show-current"], Kind::Read)?
+            .trim()
+            .is_empty()
+        {
+            return Err(Error::Other(format!(
+                "{} has a detached HEAD. Check out a branch before removing it.",
+                path.display()
+            )));
+        }
+        if !force {
+            let ignored = ignored_paths(&env, path)?;
+            if !ignored.is_empty() {
+                return Err(Error::Other(format!(
+                    "{} has ignored files: {}",
+                    path.display(),
+                    ignored.join(", ")
+                )));
+            }
+        }
+        hookless(&env, &preview.common, &args)
+    })?;
     let above = path.ancestors().skip(1);
     if let Some(root) = above
         .clone()
@@ -328,6 +598,116 @@ pub fn remove(
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct Cleanup {
+    pub changes: usize,
+    pub untracked: usize,
+    pub ignored: Vec<String>,
+    pub submodules: bool,
+    pub locked: bool,
+    pub detached: bool,
+    pub teardown: Result<Option<String>>,
+    common: PathBuf,
+    git_dir: PathBuf,
+}
+
+impl Cleanup {
+    pub fn clean(&self) -> bool {
+        !self.locked
+            && !self.detached
+            && !self.submodules
+            && self.changes == 0
+            && self.untracked == 0
+            && self.ignored.is_empty()
+    }
+}
+
+pub fn cleanup(state: &AppState, repo: &Path, path: &Path) -> Result<Cleanup> {
+    let env = state.env();
+    let dirs = out(
+        &env,
+        path,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+        Kind::Read,
+    )?;
+    let mut dirs = dirs.lines().map(Path::new);
+    let (Some(git), Some(common)) = (dirs.next(), dirs.next()) else {
+        return Err(Error::Other(format!(
+            "{} is not a worktree",
+            path.display()
+        )));
+    };
+    if !path.join(".git").is_file() || git == common {
+        return Err(Error::Other(format!(
+            "{} is a main checkout",
+            path.display()
+        )));
+    }
+    let expected = out(
+        &env,
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        Kind::Read,
+    )?;
+    if os::canonical(common)? != os::canonical(Path::new(expected.trim()))? {
+        return Err(Error::Other(format!(
+            "{} belongs to a different repository",
+            path.display()
+        )));
+    }
+    let status = out(
+        &env,
+        path,
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--no-renames",
+        ],
+        Kind::Read,
+    )?;
+    let (untracked, changes): (Vec<_>, Vec<_>) = status
+        .split_terminator('\0')
+        .partition(|l| l.starts_with("?? "));
+    Ok(Cleanup {
+        changes: changes.len(),
+        untracked: untracked.len(),
+        ignored: ignored_paths(&env, path)?,
+        submodules: git.join("modules").is_dir(),
+        locked: git.join("locked").exists(),
+        detached: out(&env, path, &["branch", "--show-current"], Kind::Read)?
+            .trim()
+            .is_empty(),
+        teardown: recipe(state, repo).map(|r| r.teardown),
+        common: common.into(),
+        git_dir: os::canonical(git)?,
+    })
+}
+
+fn ignored_paths(env: &Env, path: &Path) -> Result<Vec<String>> {
+    let ignored = out(
+        env,
+        path,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+        Kind::Read,
+    )?;
+    Ok(ignored.split_terminator('\0').map(String::from).collect())
+}
+
 /// Runs git with `core.hooksPath` at an empty folder, so no hook of the repo or a branch runs.
 pub(crate) fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
     let none = tempfile::tempdir()?;
@@ -340,8 +720,9 @@ pub(crate) fn hookless(env: &Env, repo: &Path, args: &[&str]) -> Result<()> {
 
 /// Copies each of `copies` that `from` has into `to`, readable by the owner only; a file the new
 /// worktree already has is kept.
-fn copy(from: &Path, to: &Path, copies: &[String]) -> Result<()> {
+fn copy(from: &Path, to: &Path, copies: &[String], steps: &Steps<'_>) -> Result<()> {
     for rel in copies {
+        cancelled(steps.cancel)?;
         let (source, dest) = (from.join(rel), to.join(rel));
         let Ok(meta) = fs::symlink_metadata(&source) else {
             continue;
@@ -365,13 +746,36 @@ fn copy(from: &Path, to: &Path, copies: &[String]) -> Result<()> {
                 Err(_) => fs::create_dir(&dir)?,
             }
         }
-        let mut file = match os::create_private(&dest) {
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            file => file?,
-        };
-        std::io::copy(&mut fs::File::open(&source)?, &mut file)?;
+        if fs::symlink_metadata(&dest).is_ok() {
+            continue;
+        }
+        let mut input = fs::File::open(&source)?;
+        if !publish_copy(&mut input, &dir, &dest, steps.cancel)? {
+            continue;
+        }
+        steps.report(&format!("{rel} copied"))?;
     }
     Ok(())
+}
+
+fn publish_copy(input: &mut impl Read, dir: &Path, dest: &Path, cancel: &Cancel) -> Result<bool> {
+    let mut staged = tempfile::NamedTempFile::new_in(dir)?;
+    let mut chunk = [0; 64 * 1024];
+    loop {
+        cancelled(cancel)?;
+        let n = input.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        staged.write_all(&chunk[..n])?;
+    }
+    staged.as_file_mut().sync_all()?;
+    cancelled(cancel)?;
+    match staged.persist_noclobber(dest) {
+        Ok(_) => Ok(true),
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.error.into()),
+    }
 }
 
 /// Runs `script` in `dir` with the login PATH, each output line to `progress`; the last lines make
@@ -465,13 +869,48 @@ mod tests {
             repo,
             folder,
             branch,
+            None,
             &Cancel::default(),
             &|_| {},
         )
     }
 
     fn rm(sb: &Sandbox, repo: &Path, path: &Path, force: bool) -> Result<()> {
-        remove(&sb.state, repo, path, force, &Cancel::default(), &|_| {})
+        remove(
+            &sb.state,
+            repo,
+            path,
+            force,
+            None,
+            &Cancel::default(),
+            &|_| {},
+        )
+    }
+
+    #[test]
+    fn a_cancelled_copy_leaves_no_partial_destination_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env.local");
+        let cancel = Cancel::default();
+        struct Interrupted(Cancel);
+        impl Read for Interrupted {
+            fn read(&mut self, chunk: &mut [u8]) -> std::io::Result<usize> {
+                chunk[..3].copy_from_slice(b"env");
+                self.0.store(true, Ordering::SeqCst);
+                Ok(3)
+            }
+        }
+        let mut input = Interrupted(cancel.clone());
+        assert!(matches!(
+            publish_copy(&mut input, dir.path(), &path, &cancel),
+            Err(Error::Cancelled)
+        ));
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        let cancel = Cancel::default();
+        assert!(publish_copy(&mut &b"complete"[..], dir.path(), &path, &cancel).unwrap());
+        assert!(!publish_copy(&mut &b"replacement"[..], dir.path(), &path, &cancel).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
     }
 
     #[test]
@@ -505,7 +944,11 @@ mod tests {
         assert_eq!(log.trim(), "installed");
         assert_eq!(sb.git(&path, &["branch", "--show-current"]), "feat/x");
 
-        rm(&sb, &repo, &path, false).unwrap();
+        let error = rm(&sb, &repo, &path, false).unwrap_err().to_string();
+        assert!(error.contains("has ignored files"), "{error}");
+        assert!(path.join(".env").exists());
+        assert!(!torn.exists());
+        rm(&sb, &repo, &path, true).unwrap();
         assert_eq!(fs::read_to_string(&torn).unwrap().trim(), "down");
         assert!(!sb.path("worktrees/repo").exists());
         assert!(sb.path("worktrees").exists());
@@ -533,7 +976,10 @@ mod tests {
         let folder = repo.parent().unwrap();
         let progress = |l: &str| lines.lock().unwrap().push(l.trim().to_string());
         let cancel = Cancel::default();
-        create(&sb.state, &repo, &repo, folder, "feat", &cancel, &progress).unwrap();
+        create(
+            &sb.state, &repo, &repo, folder, "feat", None, &cancel, &progress,
+        )
+        .unwrap();
         let lines = lines.into_inner().unwrap();
         assert!(lines.contains(&"caf\u{fffd}".to_string()), "{lines:?}");
         assert_eq!(lines.last().map(String::as_str), Some("after"));
@@ -681,6 +1127,7 @@ mod tests {
                     &repo,
                     &repo,
                     "feat",
+                    None,
                     &Cancel::default(),
                     &|_| {},
                 )
