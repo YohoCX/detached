@@ -23,14 +23,10 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `session.archiveCurrent` | Archive Session… | — | Sessions | F |
 | `session.rename` | Rename Session… | — | Sessions | F |
 | `session.archive` | Session Archive | — | Sessions | F |
-| `panel.sessions` | Show or Hide Sessions | — | Sessions | F |
-| `panel.log` | Git log app | Cmd+9 | M2 | F |
+| `panel.log` | Log for the focused repository | Cmd+9 | M2 | F |
 | `panel.council` | Council app | — | P1 | P1 |
 | `panel.docs` | Docs app | — | H7 | H7 |
 | `panel.processes` | Processes app | — | H9 | H9 |
-| `panel.commit` | Commit panel | Cmd+0 | M3 | — |
-| `vcs.commit` | Commit | Cmd+K | M3 | — |
-| `vcs.push` | Push | Cmd+Shift+K | M3 | — |
 | `vcs.update` | Update project (pull) | Cmd+T | M1 | V1 |
 | `vcs.fetch` | Fetch the current repo | | M1 | V1 |
 | `vcs.fetchAll` / `vcs.pullAll` | Fetch / pull all repos | | M1 | V1 |
@@ -47,14 +43,35 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `mr.create` | Create a merge request from the current branch | | M2 | V5 |
 | `pipeline.run` | Run a pipeline for a branch | | M2 | V5 |
 | `markdown.preview` | Toggle the preview of an open markdown file | | M2 | V2 |
-| `panel.terminal` | Terminal app | Alt+F12 | M2 | V7 |
+| `panel.terminal` | Terminal in a pane below | Alt+F12 | M2 | V7 |
 | `agent.chat` | A new chat about the current repo, or its empty one, in a tab | | M2 | H11 |
-| `zone.left` | Open or close the left zone | Cmd+B | M2 | F |
-| `zone.bottom` | Open or close the bottom zone | Cmd+J | M2 | F |
-| `zone.right` | Open or close the right zone | Cmd+Alt+B | M2 | F |
-| `tabs.nextCategory` / `tabs.prevCategory` | Next / previous tab category of the center | Ctrl+Tab / Ctrl+Shift+Tab | W4 | F |
-| `tabs.next` / `tabs.prev` | Next / previous tab in the category | Cmd+Shift+] / Cmd+Shift+[ | W4 | F |
-| `tabs.docs` / `tabs.chats` / `tabs.code` | Show that category's tabs | | W4 | F |
+| `tabs.next` / `tabs.prev` | Next / previous tab in the focused pane | Cmd+Shift+] / Cmd+Shift+[ | W4 | F |
+| `panel.sessions` | Show or Hide Sessions | Cmd+B | Sessions | F |
+| `panel.changes` | Session Changes | Cmd+0 | Sessions | F |
+| `session.switch` | Switch Session or Tab | Cmd+K / Ctrl+Shift+K on Windows and Linux | Sessions | F |
+| `session.next` | Next Session | Cmd+Alt+] | Sessions | F |
+| `session.prev` | Previous Session | Cmd+Alt+[ | Sessions | F |
+| `pane.splitRight` | Split Right | Cmd+\ / Alt+Shift+= on Windows and Linux | Sessions | F |
+| `pane.splitDown` | Split Down | Cmd+Shift+\ / Alt+Shift+- on Windows and Linux | Sessions | F |
+| `pane.next` | Focus Next Pane | Alt+Tab / Ctrl+Alt+Tab on Windows and Linux | Sessions | F |
+| `pane.prev` | Focus Previous Pane | Alt+Shift+Tab / Ctrl+Alt+Shift+Tab on Windows and Linux | Sessions | F |
+| `pane.maximize` | Maximize or Restore Pane | Cmd+Shift+Enter | Sessions | F |
+| `pane.close` | Close Pane | Cmd+Shift+W | Sessions | F |
+| `tab.close` | Close Tab | Cmd+W | Sessions | F |
+| `tabs.switcher` | Switch Tab | Ctrl+Tab | Sessions | F |
+| `tabs.switcherBack` | Switch Tab Backward | Ctrl+Shift+Tab | Sessions | F |
+| `pane.focusLeft` | Focus Pane Left | Cmd+Alt+Left / Alt+Left on Windows and Linux | Sessions | F |
+| `pane.resizeLeft` | Resize Pane Left | Ctrl+Cmd+Left / Alt+Shift+Left on Windows and Linux | Sessions | F |
+| `tab.moveLeft` | Move Tab Left | Cmd+Alt+Shift+Left / Ctrl+Alt+Shift+Left on Windows and Linux | Sessions | F |
+| `pane.focusRight` | Focus Pane Right | Cmd+Alt+Right / Alt+Right on Windows and Linux | Sessions | F |
+| `pane.resizeRight` | Resize Pane Right | Ctrl+Cmd+Right / Alt+Shift+Right on Windows and Linux | Sessions | F |
+| `tab.moveRight` | Move Tab Right | Cmd+Alt+Shift+Right / Ctrl+Alt+Shift+Right on Windows and Linux | Sessions | F |
+| `pane.focusUp` | Focus Pane Up | Cmd+Alt+Up / Alt+Up on Windows and Linux | Sessions | F |
+| `pane.resizeUp` | Resize Pane Up | Ctrl+Cmd+Up / Alt+Shift+Up on Windows and Linux | Sessions | F |
+| `tab.moveUp` | Move Tab Up | Cmd+Alt+Shift+Up / Ctrl+Alt+Shift+Up on Windows and Linux | Sessions | F |
+| `pane.focusDown` | Focus Pane Down | Cmd+Alt+Down / Alt+Down on Windows and Linux | Sessions | F |
+| `pane.resizeDown` | Resize Pane Down | Ctrl+Cmd+Down / Alt+Shift+Down on Windows and Linux | Sessions | F |
+| `tab.moveDown` | Move Tab Down | Cmd+Alt+Shift+Down / Ctrl+Alt+Shift+Down on Windows and Linux | Sessions | F |
 
 Chords are bound in the window's context, so a focused text field or editor keeps its own binding
 of a chord: Cmd+[ and Cmd+] (outdent, indent) in an editable multi-line field, and on macOS

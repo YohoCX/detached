@@ -111,14 +111,22 @@ pub fn open(cx: &mut App, loc: Location) {
 }
 
 pub fn back(cx: &mut App) {
-    if let Some(loc) = nav(cx).back() {
+    if let Some(loc) = step(cx, false) {
         show(loc, cx);
     }
 }
 
 pub fn forward(cx: &mut App) {
-    if let Some(loc) = nav(cx).forward() {
+    if let Some(loc) = step(cx, true) {
         show(loc, cx);
+    }
+}
+
+pub fn step(cx: &mut App, forward: bool) -> Option<Location> {
+    if forward {
+        nav(cx).forward()
+    } else {
+        nav(cx).back()
     }
 }
 

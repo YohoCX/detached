@@ -37,6 +37,7 @@ pub(super) struct FileView {
     preview: Option<Entity<Markdown>>,
     /// Put the cursor on the location's line once loaded.
     reveal: bool,
+    restored: Option<crate::dock::ViewPosition>,
     goto: Option<(Entity<GotoLine>, Subscription)>,
     _load: Task<()>,
     _actions: Vec<Registration>,
@@ -90,6 +91,7 @@ impl FileView {
             body: Body::Loading,
             preview: None,
             reveal: true,
+            restored: None,
             goto: None,
             _load: Task::ready(()),
             _actions: actions,
@@ -99,9 +101,21 @@ impl FileView {
         view
     }
 
+    pub(super) fn position(&self, cx: &App) -> Option<crate::dock::ViewPosition> {
+        self.restored.or_else(|| {
+            (self.preview.is_none() && matches!(self.body, Body::Text { .. }))
+                .then(|| self.code.read(cx).position(cx))
+        })
+    }
+
+    pub(super) fn restore(&mut self, at: crate::dock::ViewPosition) {
+        self.restored = Some(at);
+    }
+
     /// A fresh show: loads `loc` and reveals its line.
     pub(super) fn show(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
         self.loc = loc;
+        self.restored = None;
         self.reveal = true;
         self.load(window, cx);
         cx.notify();
@@ -136,9 +150,12 @@ impl FileView {
         };
         let (path, line) = (&self.loc.path, self.loc.line.unwrap_or(1));
         let shown = reveal && crate::dock::is_doc_view_shown(self.viewer, cx);
+        let restored = self.restored.take();
         self.code.update(cx, |c, cx| {
             c.set(path, &text, !reveal, window, cx);
-            if reveal {
+            if let Some(at) = restored {
+                c.restore(at, cx);
+            } else if reveal {
                 c.reveal(line, 1, shown, window, cx);
             }
         });
@@ -148,7 +165,7 @@ impl FileView {
         }
         if let Some(p) = &self.preview {
             p.update(cx, |m, cx| m.set_text(text.into(), cx));
-        } else if reveal && self.is_markdown() && self.loc.line.is_none() {
+        } else if reveal && restored.is_none() && self.is_markdown() && self.loc.line.is_none() {
             let on = ui_state::get("viewer.mdPreview", cx).unwrap_or(true);
             self.set_preview(on, shown, window, cx);
         }

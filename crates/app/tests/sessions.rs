@@ -502,3 +502,311 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
     assert!(web.exists());
     assert!(PathBuf::from(api).join("draft.txt").exists());
 }
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_terminal_moves_live_and_restarts_in_its_pane_and_worktree(cx: &mut TestAppContext) {
+    use detached_app::{actions, dock, shell, terminal::Terminals};
+    use gpui_kit::base::dock::DockPlacement;
+    use gpui_kit::{point, px};
+    use kernel::workspace::Workspace;
+
+    // SAFETY: the other tests in this executable do not start a shell.
+    unsafe { std::env::set_var("SHELL", "/bin/sh") };
+    let app = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    let cwd = app.workspace(|w, _| w.session_repos()[0].path.clone());
+    app.update(|_, cx| {
+        Workspace::global(cx).update(cx, |w, cx| {
+            w.show_tab(
+                Doc::Terminal {
+                    id: 0,
+                    cwd: cwd.clone(),
+                },
+                true,
+                cx,
+            );
+        });
+    });
+
+    fn terminal(cx: &mut VisualTestContext) -> Option<u64> {
+        cx.update(|_, cx| {
+            Terminals::global(cx)
+                .read(cx)
+                .docked
+                .last()
+                .map(|s| s.entity_id().as_u64())
+        })
+    }
+    fn output(cx: &mut VisualTestContext, line: &str) -> bool {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("terminal.row", i)))
+                .any(|e| e.label().is_some_and(|l| l.trim() == line))
+        })
+    }
+    wait_until(app, |cx| terminal(cx).is_some());
+    let id = terminal(app).unwrap();
+    app.input("export DETACHED_PANES_TEST=kept");
+    app.press("enter");
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.splitDown"));
+    settle(app);
+
+    let tab = app
+        .find(SharedString::from(format!("doc.terminal.{id}")))
+        .unwrap()
+        .bounds();
+    let target = app.find("doc.new-tab").unwrap().bounds().center();
+    app.update(|w, cx| w.drag(point(tab.left() + px(4.), tab.center().y), target, cx));
+    settle(app);
+    assert_eq!(terminal(app), Some(id));
+
+    app.input("printf 'session-%s\\n' \"$DETACHED_PANES_TEST\"");
+    app.press("enter");
+    wait_until(app, |cx| output(cx, "session-kept"));
+
+    let at = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let area = dock::zones(cx).unwrap();
+            let area = area.read(cx);
+            let tree = area.layout(DockPlacement::Center).unwrap();
+            let doc = dock::docs(area)
+                .into_iter()
+                .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
+                .unwrap();
+            tree.find_panel_node(doc.1).unwrap()
+        })
+    };
+    let moved = at(app);
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.focusUp"));
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.focusDown"));
+    app.input("pwd -P");
+    app.press("enter");
+    let expected = std::fs::canonicalize(&cwd).unwrap().display().to_string();
+    wait_until(app, |cx| output(cx, &expected));
+
+    let config = app.sb.state.config_dir.clone();
+    app.update(|w, _| w.remove_window());
+    settle(app);
+    let again = app.cx.cx.update(|cx| {
+        ui_state::init(&config, cx);
+        fn legacy_terminal(value: &mut serde_json::Value, id: u64) -> bool {
+            match value {
+                serde_json::Value::Object(fields) => {
+                    if let Some(terminal) = fields.get_mut("Terminal") {
+                        terminal["id"] = json!(id);
+                        true
+                    } else {
+                        fields.values_mut().any(|child| legacy_terminal(child, id))
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter_mut().any(|child| legacy_terminal(child, id))
+                }
+                _ => false,
+            }
+        }
+        let ws = Workspace::get(cx).id().unwrap();
+        let key = format!("session.{ws}.{}.layout", Workspace::get(cx).session_id());
+        let mut saved: serde_json::Value = ui_state::get(&key, cx).unwrap();
+        assert!(legacy_terminal(&mut saved, id));
+        ui_state::set(&key, saved, cx);
+        shell::open(cx).unwrap()
+    });
+    let mut again = VisualTestContext::from_window(again, &app.cx.cx);
+    wait_until(&mut again, |cx| terminal(cx).is_some_and(|new| new != id));
+    assert_ne!(at(&mut again), moved);
+    let restored_id = terminal(&mut again).unwrap();
+    let tab = again
+        .find(SharedString::from(format!("doc.terminal.{restored_id}")))
+        .unwrap()
+        .bounds();
+    assert!(tab.top() > again.find("doc.session-overview").unwrap().bounds().top());
+    let new = terminal(&mut again).unwrap();
+    again.click(SharedString::from(format!("doc.terminal.{new}")));
+    again.input("printf 'session-%s\\n' \"$DETACHED_PANES_TEST\"");
+    again.press("enter");
+    wait_until(&mut again, |cx| output(cx, "session-"));
+    again.input("pwd -P");
+    again.press("enter");
+    wait_until(&mut again, |cx| output(cx, &expected));
+
+    let pid_file = app.sb.path("background-pid");
+    again.input(&format!("sleep 60 & echo $! > '{}'", pid_file.display()));
+    again.press("enter");
+    wait_until(&mut again, |_| pid_file.is_file());
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    let exists = || {
+        std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    assert!(exists());
+    again.input("sleep 61");
+    again.press("enter");
+    wait_until(&mut again, |cx| {
+        cx.update(|_, cx| {
+            Terminals::global(cx)
+                .read(cx)
+                .docked
+                .last()
+                .is_some_and(|s| s.read(cx).running())
+        })
+    });
+    again.update(|w, cx| actions::dispatch(w, cx, "tab.close"));
+    assert!(again.cx.has_pending_prompt());
+    again.cx.simulate_prompt_answer("Cancel");
+    settle(&again);
+    assert_eq!(terminal(&mut again), Some(new));
+    again.update(|w, cx| actions::dispatch(w, cx, "tab.close"));
+    again.cx.simulate_prompt_answer("Close");
+    wait_until(&mut again, |cx| terminal(cx) == Some(id) && !exists());
+    again.update(|_, cx| Terminals::global(cx).update(cx, |t, _| t.docked.clear()));
+}
+
+#[gpui_kit::test]
+fn tab_switcher_lists_only_the_focused_pane_and_moves_the_tab_at_a_facing_edge(
+    cx: &mut TestAppContext,
+) {
+    use detached_app::{actions, dock};
+    use gpui_kit::base::dock::{DockPlacement, PaneRef};
+    let app = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    let run = |app: &mut VisualTestContext, id| {
+        app.update(|w, cx| actions::dispatch(w, cx, id));
+        settle(app);
+    };
+    run(app, "pane.splitDown");
+    run(app, "pane.splitRight");
+    app.click("doc.session-overview");
+    let repo = app.workspace(|w, _| w.session_repos()[0].path.clone());
+    app.workspace(|w, cx| {
+        w.show_tab(
+            Doc::File(Location {
+                repo,
+                rev: None,
+                path: "README.md".into(),
+                line: None,
+                doc: None,
+            }),
+            true,
+            cx,
+        );
+    });
+    wait_until(app, |cx| cx.find("doc.file.README.md").is_some());
+    run(app, "tabs.switcher");
+    assert_eq!(label(app, "palette").as_deref(), Some("Switch Tab"));
+    assert_eq!(
+        label(app, ("palette.row", 0usize)).as_deref(),
+        Some("Overview")
+    );
+    assert_eq!(
+        label(app, ("palette.row", 1usize)).as_deref(),
+        Some("README.md")
+    );
+    assert!(app.find(("palette.row", 2usize)).is_none());
+    app.press("enter");
+    assert_eq!(
+        app.find("doc.session-overview").unwrap().checked(),
+        Some(true)
+    );
+    app.click("doc.file.README.md");
+
+    run(app, "tab.moveRight");
+    let count = app.update(|_, cx| {
+        let area = dock::zones(cx).unwrap();
+        let mut count = 0;
+        area.read(cx)
+            .layout(DockPlacement::Center)
+            .unwrap()
+            .root()
+            .walk(&mut |node| {
+                count += usize::from(matches!(node.kind(), PaneRef::Tabs { .. }));
+            });
+        count
+    });
+    assert_eq!(count, 4, "the full-width upper pane splits beside itself");
+    let file = app.find("doc.file.README.md").unwrap().bounds();
+    let overview = app.find("doc.session-overview").unwrap().bounds();
+    assert!((file.top() - overview.top()).abs() < gpui_kit::px(4.));
+    assert!(file.left() > overview.right());
+}
+
+#[gpui_kit::test]
+fn dragging_a_splitter_and_shrinking_keep_minimum_pane_widths(cx: &mut TestAppContext) {
+    use detached_app::{actions, dock};
+    use gpui_kit::base::dock::{DockPlacement, PaneRef};
+    use gpui_kit::{point, px, size};
+    let app = &mut open_app(cx);
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.splitRight"));
+    settle(app);
+    let panes = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            let a = dock::zones(cx).unwrap();
+            let mut panes = Vec::new();
+            a.read(cx)
+                .layout(DockPlacement::Center)
+                .unwrap()
+                .root()
+                .walk(&mut |node| {
+                    if matches!(node.kind(), PaneRef::Tabs { .. }) {
+                        panes.push(w.find(("pane.body", node.id().as_u64() as usize)).bounds());
+                    }
+                });
+            panes
+        })
+    };
+    let before = panes(app);
+    let grip = point(
+        (before[0].right() + before[1].left()) / 2.,
+        before[0].center().y,
+    );
+    app.update(|w, cx| w.drag(grip, grip - point(px(200.), px(0.)), cx));
+    wait_until(app, |cx| {
+        panes(cx).iter().all(|pane| pane.size.width >= px(319.))
+    });
+    let after = panes(app);
+    assert!(after[0].size.width < before[0].size.width);
+    app.update(|w, _| w.resize(size(px(1000.), px(700.))));
+    wait_until(app, |cx| {
+        panes(cx).iter().all(|pane| pane.size.width >= px(319.))
+    });
+    assert_eq!(panes(app).len(), 2);
+}
+
+#[gpui_kit::test]
+fn a_live_layout_keeps_an_unavailable_document_as_a_closable_tab(cx: &mut TestAppContext) {
+    let mut key = String::new();
+    let app = &mut open_app_with(cx, |sb| {
+        key = format!("session.{}.main.layout", workspace(sb));
+        let mut dock: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/dock-0.5.0.json")).unwrap();
+        dock["center"]["children"][0]["children"] = json!([
+            {"panel_name": "doc", "children": [], "info": {"panel": {
+                "doc": {"RemovedKind": {"path": "memento.txt", "annotation": 19}},
+                "keep": true, "workspace": workspace(sb), "session": "main"
+            }}}
+        ]);
+        dock["center"]["children"][0]["info"]["tabs"]["active_index"] = json!(0);
+        write(
+            &sb.state.config_dir,
+            [(
+                "ui.json",
+                json!({&key: {"dock": dock, "focus": 0}}).to_string(),
+            )],
+        );
+    });
+    wait_until(app, |cx| {
+        label(cx, "dock.missing").is_some_and(|label| label.contains("memento.txt"))
+    });
+    let saved: serde_json::Value = app.update(|_, cx| ui_state::get(&key, cx).unwrap());
+    assert!(saved.to_string().contains("\"annotation\":19"));
+    app.update(|w, cx| w.within("tab.missing.0").click("tab.close", cx));
+    wait_until(app, |cx| cx.find("dock.missing").is_none());
+}

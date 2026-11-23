@@ -739,7 +739,7 @@ fn no_repo_selected_says_so(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, layout);
     app.workspace(|w, cx| w.set_current(None, cx));
     app.click("top.chat");
-    assert!(app.workspace(|w, _| w.shown().is_none()));
+    assert!(!app.workspace(|w, _| matches!(w.shown(), Some(Doc::Chat { .. }))));
     assert!(app.activity(|s, _| s.message.is_some()));
 }
 

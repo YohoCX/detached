@@ -82,7 +82,7 @@ pub fn mine(tab: &DocTab, cx: &App) -> bool {
 
 /// Whether a center tab is drawn now: the current workspace's, of the category shown.
 pub fn in_view(tab: &DocTab, cx: &App) -> bool {
-    mine(tab, cx) && tab.category() == category(cx)
+    mine(tab, cx) && (!Workspace::get(cx).archive() || tab.category() == category(cx))
 }
 
 /// A tab came forward: its category remembers it.
@@ -207,18 +207,11 @@ fn of(area: &DockArea, category: &str, cx: &App) -> Vec<PanelId> {
 }
 
 /// The next or previous category, around.
-fn step_category(by: isize, window: &mut Window, cx: &mut App) {
-    let all = categories(cx);
-    let now = category(cx);
-    let Some(at) = all.iter().position(|c| c.id == now) else {
-        return;
-    };
-    let next = (at as isize + by).rem_euclid(all.len() as isize) as usize;
-    show(all[next].id, window, cx);
-}
-
 /// The next or previous tab of the category shown, around.
 fn step_tab(by: isize, window: &mut Window, cx: &mut App) {
+    if !Workspace::get(cx).archive() {
+        return super::panes::step_tab(by, window, cx);
+    }
     let Some(area) = super::zones(cx) else {
         return;
     };
@@ -245,32 +238,17 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
         actions::register(cx, id, title, Group::View, f)
     };
     vec![
-        reg(cx, "tabs.nextCategory", "Next Tab Category", |w, cx| {
-            step_category(1, w, cx)
-        }),
-        reg(cx, "tabs.prevCategory", "Previous Tab Category", |w, cx| {
-            step_category(-1, w, cx)
-        }),
         reg(cx, "tabs.next", "Next Tab", |w, cx| step_tab(1, w, cx)),
         reg(cx, "tabs.prev", "Previous Tab", |w, cx| step_tab(-1, w, cx)),
-        reg(cx, "tabs.docs", "Show Docs Tabs", |w, cx| {
-            show("docs", w, cx)
-        }),
-        reg(cx, "tabs.chats", "Show Chats Tabs", |w, cx| {
-            show("chats", w, cx)
-        }),
-        reg(cx, "tabs.code", "Show Code Tabs", |w, cx| {
-            show("code", w, cx)
-        }),
     ]
 }
 
 /// Workspace `id`'s tabs, in every zone.
 pub fn tabs_of(id: &str, cx: &App) -> Vec<Entity<DocTab>> {
-    let Some(area) = super::zones(cx) else {
-        return vec![];
-    };
-    let all = super::docs(area.read(cx)).into_iter().map(|(_, _, t)| t);
+    let all = super::areas(cx)
+        .into_iter()
+        .flat_map(|area| super::docs(area.read(cx)))
+        .map(|(_, _, t)| t);
     all.filter(|t| t.read(cx).workspace.as_deref() == Some(id))
         .collect()
 }
@@ -278,10 +256,8 @@ pub fn tabs_of(id: &str, cx: &App) -> Vec<Entity<DocTab>> {
 /// Closes workspace `id`'s tabs and forgets what its center showed.
 pub fn forget(id: &str, window: &mut Window, cx: &mut App) {
     let tabs = tabs_of(id, cx);
-    super::with(cx, |area, cx| {
-        for tab in tabs {
-            area.remove_panel(tab, window, cx);
-        }
-    });
+    for tab in tabs {
+        super::remove_doc(tab, window, cx);
+    }
     ui_state::set(&format!("tabs.{id}"), serde_json::Value::Null, cx);
 }

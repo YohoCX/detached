@@ -22,6 +22,7 @@ fn open(cx: &mut TestAppContext) -> (TestApp, Arc<Mutex<Vec<String>>>) {
         std::env::set_var("SHELL", "/bin/sh")
     };
     let mut app = open_app_with(cx, |sb| {
+        repo(sb, "api");
         let vars = [("GREETING".into(), "hello".into())];
         secrets::save(&sb.state, "dev", &vars).unwrap();
     });
@@ -172,7 +173,9 @@ fn env_run_asks_the_owner_once_per_tab_and_runs_with_the_profile(cx: &mut TestAp
     assert!(!app.has_pending_prompt());
     cli_in_tab(&mut app, "env run nope -- true");
     wait_for_row(&mut app, |r| r.contains("No env profile \"nope\""));
-    app.click("terminal.new");
+    app.press("alt-f12");
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.maximize"));
+    settle(&app);
     cli_in_tab(&mut app, &run);
     wait_until(&mut app, |cx| cx.has_pending_prompt());
     app.simulate_prompt_answer("Deny");

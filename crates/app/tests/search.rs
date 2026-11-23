@@ -40,7 +40,7 @@ fn rows(cx: &mut VisualTestContext) -> Vec<(String, String)> {
 fn selected(cx: &mut VisualTestContext) -> Option<(usize, String)> {
     cx.update(|w, cx| {
         w.render_frame(cx);
-        (0..60).find_map(|i| {
+        (0..detached_app::actions::ACTIONS.len()).find_map(|i| {
             let e = w.try_find(row(i)).filter(|e| e.selected() == Some(true))?;
             Some((i, e.label()?.to_string()))
         })

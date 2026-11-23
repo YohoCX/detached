@@ -13,12 +13,13 @@ use detached_core::types::LogRow;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    App, AppContext, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    AnyView, App, AppContext, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use crate::actions::Registration;
-use crate::dock::{self, AppSpec};
+use crate::actions::{self, Group, Registration};
+use crate::dock::{self, AppSpec, DocKind};
+use kernel::{doc::Doc, workspace::Workspace};
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     let log = AppSpec {
@@ -31,7 +32,40 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         shown: None,
     };
     dock::register_app(cx, log);
-    vec![log::register(cx)]
+    dock::register_doc(cx, "log", LogDoc);
+    vec![
+        log::register(cx),
+        actions::register(cx, "panel.log", "Git Log", Group::View, |w, cx| {
+            if let Some(repo) = dock::bound_repo(cx) {
+                dock::open_doc(Doc::Log { repo }, true, w, cx);
+            }
+        }),
+    ]
+}
+
+struct LogDoc;
+
+impl DocKind for LogDoc {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
+
+    fn view(&self, doc: &mut Doc, _: bool, w: &mut Window, cx: &mut App) -> AnyView {
+        let repo = doc.repo().map(String::from);
+        cx.new(|cx| Log::for_repo(w, repo, cx)).into()
+    }
+
+    fn id(&self, _: &Doc) -> SharedString {
+        "doc.log".into()
+    }
+
+    fn title(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> SharedString {
+        format!(
+            "Log · {}",
+            Workspace::get(cx).name_of(doc.repo().unwrap_or_default())
+        )
+        .into()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

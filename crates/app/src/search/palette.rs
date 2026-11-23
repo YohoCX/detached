@@ -13,7 +13,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::{Mode, Search, close, open};
+use super::{Mode, Search, close, open, open_tabs};
 use crate::actions::{self, Action, Group, Registration};
 use crate::repos::{self, CheckoutTarget};
 use crate::ui::{self, Icon, radius, text, theme};
@@ -35,6 +35,8 @@ enum Item {
     },
     /// Whether a handler is registered.
     Action(Action, bool),
+    Session(String, String),
+    Tab(String, gpui_kit::base::dock::PanelId),
 }
 
 impl Item {
@@ -44,6 +46,7 @@ impl Item {
             Item::File(l) => &l.path,
             Item::Branch { label, .. } => label,
             Item::Action(a, _) => a.title,
+            Item::Session(_, title) | Item::Tab(title, _) => title,
         }
     }
 }
@@ -123,6 +126,17 @@ impl Palette {
             reg("action.find", Group::Search, Mode::Action),
             reg("vcs.popup", Group::Vcs, Mode::Vcs),
             reg("file.recent", Group::Navigate, Mode::Recent),
+            reg("session.switch", Group::View, Mode::Session),
+            actions::register(cx, "tabs.switcher", "Switch Tab", Group::View, |_, cx| {
+                open_tabs(1, cx)
+            }),
+            actions::register(
+                cx,
+                "tabs.switcherBack",
+                "Switch Tab Backward",
+                Group::View,
+                |_, cx| open_tabs(-1, cx),
+            ),
         ];
         Palette {
             mode: None,
@@ -147,6 +161,7 @@ impl Palette {
     /// takes focus.
     fn opened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = cx.global::<Search>().mode;
+        let previous = self.mode;
         if mode != self.mode {
             if self.mode.is_none() {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
@@ -160,6 +175,13 @@ impl Palette {
         }
         if mode.is_some() {
             self.input.update(cx, |s, cx| s.focus(window, cx));
+        }
+        if mode == Some(Mode::Tabs) {
+            if previous != mode {
+                self.sel = crate::dock::focused_tabs(cx).1;
+            }
+            let by = cx.global::<Search>().tab_step.take();
+            self.step(by, cx);
         }
         self.sync(window, cx);
     }
@@ -193,6 +215,8 @@ impl Palette {
             (Some(Mode::File), false, Some(repo)) => format!("Files in {}", w.name_of(repo)),
             (Some(Mode::File), _, _) => format!("File name in {}", w.session_name()),
             (Some(Mode::Everywhere), _, _) => format!("Search in {}", w.session_name()),
+            (Some(Mode::Session), _, _) => "Switch to a session or a tab".into(),
+            (Some(Mode::Tabs), _, _) => "Switch to a tab in this pane".into(),
             _ => "Type to search".into(),
         };
         if *self.input.read(cx).presentation().placeholder() != placeholder {
@@ -336,6 +360,37 @@ impl Palette {
                     .chain(actions)
                     .collect()
             }
+            Some(Mode::Tabs) => {
+                let items: Vec<_> = crate::dock::focused_tabs(cx)
+                    .0
+                    .into_iter()
+                    .map(|(id, title)| Item::Tab(title, id))
+                    .collect();
+                hits(&items, &query)
+            }
+            Some(Mode::Session) => {
+                let w = Workspace::get(cx);
+                let mut items = vec![Item::Session(
+                    detached_core::sessions::MAIN.into(),
+                    "Main checkouts".into(),
+                )];
+                items.extend(
+                    w.sessions()
+                        .iter()
+                        .map(|s| Item::Session(s.id.clone(), s.name.clone())),
+                );
+                items.extend(
+                    crate::dock::switchable_tabs(cx)
+                        .into_iter()
+                        .map(|(id, title)| Item::Tab(title, id)),
+                );
+                items.extend(
+                    ["session.new", "session.archive"]
+                        .into_iter()
+                        .filter_map(|id| actions::find(id).map(|a| Item::Action(*a, true))),
+                );
+                hits(&items, &query)
+            }
             Some(Mode::Everywhere) | None => vec![],
         }
     }
@@ -382,6 +437,10 @@ impl Palette {
             }
             Item::File(loc) => files::open(cx, loc),
             Item::Action(a, _) => actions::dispatch(window, cx, a.id),
+            Item::Session(id, _) => {
+                Workspace::global(cx).update(cx, |w, cx| w.switch_session(&id, cx))
+            }
+            Item::Tab(_, id) => crate::dock::select_tab(id, window, cx),
             Item::Branch { target, .. } => {
                 if let Some(repo) = Workspace::get(cx).session_current().map(String::from) {
                     repos::checkout(cx, &repo, target).detach();
@@ -400,6 +459,8 @@ impl Palette {
                 (l.rev.as_ref().map_or(name.to_string(), at), false)
             }
             Item::Branch { .. } => ("Checkout".to_string(), false),
+            Item::Session(..) => ("Session".to_string(), false),
+            Item::Tab(..) => ("Tab".to_string(), false),
             Item::Action(a, on) => (keymap::chord_for(a.id, cx), !on),
         };
         let on = i == self.sel;
@@ -457,7 +518,7 @@ impl Palette {
                     )
                     .child(small.child(detail))
             }
-            Item::Branch { .. } => base
+            Item::Branch { .. } | Item::Session(..) | Item::Tab(..) => base
                 .child(icon(Icon::Branch))
                 .child(name(&label, &row.indices).flex_1().min_w_0().truncate())
                 .child(small.child(detail)),
@@ -560,6 +621,13 @@ impl Render for Palette {
             .child(empty);
         let dialog = div()
             .id("palette")
+            .on_modifiers_changed(cx.listener(
+                |this, e: &gpui_kit::ModifiersChangedEvent, w, cx| {
+                    if !e.modifiers.control && this.mode == Some(Mode::Tabs) {
+                        this.choose(this.sel, w, cx);
+                    }
+                },
+            ))
             .test_support()
             .role(Role::Dialog)
             .aria_label(mode.title())

@@ -1752,9 +1752,8 @@ impl ChatView {
                     .aria_label(SharedString::from(f.path.clone()))
                     .h(px(24.))
                     .gap(px(6.))
-                    .on_click(move |_, _, cx| {
-                        let doc = doc.clone();
-                        Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx))
+                    .on_click(move |_, w, cx| {
+                        crate::dock::open_beside(doc.clone(), false, false, w, cx)
                     })
                     .child(ui::status(status_of(f), cx))
                     .child(

@@ -20,7 +20,7 @@ use gpui_kit::{
     size,
 };
 
-use super::{DocTab, DragDoc, Tab, missing, tabs};
+use super::{DocTab, DragDoc, Missing, Tab, missing, panes, tabs};
 use crate::ui::{self, DrawnMenu, GAP, Icon, TAB_TITLE, radius, text, theme};
 use crate::{actions, keymap};
 
@@ -46,10 +46,11 @@ pub struct Skin {
     sessions: Entity<crate::sessions::List>,
     /// The center holds no tab: the area cannot be read while it draws.
     empty: Rc<Cell<bool>>,
+    archive: bool,
 }
 
 impl Skin {
-    pub fn new(cx: &mut Context<DockArea>) -> Rc<Self> {
+    pub fn new(cx: &mut Context<DockArea>, archive: bool) -> Rc<Self> {
         let empty = Rc::new(Cell::new(false));
         let watch = empty.clone();
         cx.observe_self(move |a, cx| watch.set(a.is_empty(DockPlacement::Center, cx)))
@@ -60,6 +61,7 @@ impl Skin {
             fit: Rc::default(),
             sessions: cx.new(crate::sessions::List::new),
             empty,
+            archive,
         })
     }
 }
@@ -69,6 +71,7 @@ impl Skin {
 struct Fit {
     room: RefCell<HashMap<NodeId, Pixels>>,
     tabs: RefCell<HashMap<PanelId, Pixels>>,
+    drop: Cell<Option<(NodeId, Option<gpui_kit::base::Placement>)>>,
 }
 
 /// Keeps `width` under `key`, and draws again when it moved.
@@ -147,7 +150,7 @@ impl DockAreaRenderer for Skin {
                     .child(page),
             );
         }
-        if !self.empty.get() {
+        if !self.archive || !self.empty.get() {
             return frame;
         }
         let t = theme(cx);
@@ -349,7 +352,22 @@ impl DockAreaRenderer for Skin {
         let t = theme(cx);
         let lit = handle.state() != ResizeHandleState::Idle;
         let color = if lit { t.selected_ring } else { t.line };
-        Some(div().flex_none().size_full().bg(color).into_any_element())
+        let axis = handle.axis();
+        Some(
+            div()
+                .id("pane.splitter")
+                .flex_none()
+                .size_full()
+                .bg(color)
+                .when(!self.archive, |d| {
+                    d.on_mouse_down(MouseButton::Left, move |e, w, cx| {
+                        if e.click_count == 2 && panes::equalize(axis, e.position, w, cx) {
+                            cx.stop_propagation();
+                        }
+                    })
+                })
+                .into_any_element(),
+        )
     }
 
     fn build_placeholder(
@@ -362,15 +380,15 @@ impl DockAreaRenderer for Skin {
     }
 
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
-        Rc::new(Group(self.area.clone(), self.fit.clone()))
+        Rc::new(Group(self.area.clone(), self.fit.clone(), self.archive))
     }
 }
 
 /// The active tab's accent bar on the tab bar's bottom line, growing out from the middle.
-fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
+fn underline(color: gpui_kit::Hsla, top: bool) -> impl IntoElement {
     div()
         .absolute()
-        .bottom(px(-7.))
+        .map(|d| if top { d.top_0() } else { d.bottom(px(-7.)) })
         .h(px(2.))
         .rounded_full()
         .bg(color)
@@ -393,7 +411,7 @@ fn grip(p: DockPlacement) -> &'static str {
     }
 }
 
-struct Group(WeakEntity<DockArea>, Rc<Fit>);
+struct Group(WeakEntity<DockArea>, Rc<Fit>, bool);
 
 impl Group {
     /// Whether the group is in the center, where tabs show by workspace and category.
@@ -511,6 +529,14 @@ fn labels(group: &TabGroupContext, cx: &App) -> Vec<Label> {
                 doc: None,
             };
         }
+        if let Ok(m) = view.clone().downcast::<Missing>() {
+            return Label {
+                id: format!("tab.missing.{ix}").into(),
+                title: m.read(cx).title(),
+                tip: None,
+                doc: None,
+            };
+        }
         match view.downcast::<DocTab>() {
             Ok(d) => Label {
                 id: d.read(cx).id(),
@@ -541,7 +567,19 @@ impl TabGroupRenderer for Group {
                 .border_color(t.panel_edge)
                 .rounded(radius::ICON_BUTTON);
         }
-        ui::panel(div().id(id), cx).overflow_hidden()
+        let node = group.node();
+        let pane = self.center(group, cx) && !self.2;
+        ui::panel(div().id(id), cx)
+            .overflow_hidden()
+            .when(pane, |d| {
+                let zoomed = group.is_zoomed();
+                d.on_prepaint(move |b, w, cx| {
+                    if !zoomed {
+                        panes::measure(node, b, w, cx);
+                    }
+                })
+                .capture_any_mouse_down(move |_, w, cx| panes::click(node, w, cx))
+            })
     }
 
     fn render_tab_bar(
@@ -574,7 +612,7 @@ impl TabGroupRenderer for Group {
         // The kit keeps the last tab of a zone; a document still closes, to an empty center.
         let closable: Vec<bool> = (labels.iter().zip(&ids))
             .map(|(l, id)| match &l.doc {
-                Some(doc) => !doc.read(cx).legacy(),
+                Some(doc) => gpui_kit::base::dock::Panel::closable(doc.read(cx), cx),
                 None => group.is_panel_closable(*id, cx),
             })
             .collect();
@@ -596,6 +634,21 @@ impl TabGroupRenderer for Group {
             window.defer(cx, move |window, cx| g.select_tab(ix, window, cx));
         }
         let node = group.node();
+        let pane = center && !self.2;
+        let focused = !pane
+            || self
+                .0
+                .upgrade()
+                .is_some_and(|a| panes::is_focused(a.read(cx), node, cx));
+        let ring = if focused {
+            let has_keyboard = group
+                .active_panel()
+                .is_some_and(|p| p.focus_handle(cx).contains_focused(window, cx));
+            t.selected_ring
+                .opacity(if pane && !has_keyboard { 0.55 } else { 1. })
+        } else {
+            t.line
+        };
         let widths: Vec<f32> = shown
             .iter()
             .map(|&ix| match self.1.tabs.borrow().get(&ids[ix]) {
@@ -644,6 +697,8 @@ impl TabGroupRenderer for Group {
                         })
                 });
                 let fit = self.1.clone();
+                let drag_fit = fit.clone();
+                let drag_title = title.clone();
                 div()
                     .id(l.id.clone())
                     .test_support()
@@ -676,7 +731,7 @@ impl TabGroupRenderer for Group {
                             .hover(|s| s.bg(t.hover).text_color(t.fg))
                             .active(|s| s.bg(t.selected_inactive)),
                     })
-                    .when(on && !collapsed, |d| d.child(underline(t.accent)))
+                    .when(on && !collapsed, |d| d.child(underline(ring, pane)))
                     .on_click(move |e, window, cx| {
                         clicked.select_tab(ix, window, cx);
                         if let Some(a) = super::zones(cx) {
@@ -691,19 +746,52 @@ impl TabGroupRenderer for Group {
                             closed(window, cx)
                         })
                     })
-                    .when_some(group.drag_panel(ix, cx), |d, drag| {
-                        d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
-                            cx.stop_propagation();
-                            drag.set_drag_offset(offset);
-                            drag.set_preview_size(size(px(120.), px(28.)));
-                            cx.new(|_| Preview(title.clone()))
+                    .when(pane, |d| {
+                        d.on_drag(panes::Drag { id, node }, move |_, _, _, cx| {
+                            drag_fit.drop.set(None);
+                            cx.new(|_| Preview(drag_title.clone()))
                         })
                     })
-                    .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
-                    .on_drop(move |drag: &DragPanel, window, cx| {
-                        dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
+                    .when_some(
+                        self.2.then(|| group.drag_panel(ix, cx)).flatten(),
+                        |d, drag| {
+                            d.on_drag(drag, move |drag: &DragPanel, offset, _, cx| {
+                                cx.stop_propagation();
+                                drag.set_drag_offset(offset);
+                                drag.set_preview_size(size(px(120.), px(28.)));
+                                cx.new(|_| Preview(title.clone()))
+                            })
+                        },
+                    )
+                    .when(pane, |d| {
+                        d.drag_over::<panes::Drag>(move |d, _, _, _| {
+                            d.border_l_1().border_color(t.selected_ring)
+                        })
+                        .on_drop(move |drag: &panes::Drag, w, cx| {
+                            panes::drop_tab(drag, node, Some(ix), None, w, cx)
+                        })
+                    })
+                    .when(self.2, |d| {
+                        d.drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.selected))
+                            .on_drop(move |drag: &DragPanel, window, cx| {
+                                dropped.drop_panel(drag.clone(), Some(ix), true, window, cx)
+                            })
                     })
                     .children(l.doc.as_ref().and_then(|d| d.read(cx).badge(cx)))
+                    .when_some(l.doc.as_ref().filter(|_| pane), |d, tab| {
+                        let icon = match &tab.read(cx).doc {
+                            kernel::doc::Doc::Chat { .. } => Icon::Chat,
+                            kernel::doc::Doc::File(_) => Icon::File,
+                            kernel::doc::Doc::Diff(_) => Icon::Edit,
+                            kernel::doc::Doc::Mr { .. } => Icon::Mr,
+                            kernel::doc::Doc::Log { .. } => Icon::Branch,
+                            kernel::doc::Doc::Terminal { .. }
+                            | kernel::doc::Doc::Process { .. } => Icon::Next,
+                            kernel::doc::Doc::NewTab => return d,
+                            _ => Icon::Repo,
+                        };
+                        d.child(icon.size(px(14.)))
+                    })
                     .child(div().max_w(TAB_TITLE).truncate().child(l.title.clone()))
                     .children(close)
                     .on_prepaint(move |b, window, _| measured(&fit.tabs, id, b.size.width, window))
@@ -717,7 +805,11 @@ impl TabGroupRenderer for Group {
                         a.update(cx, |a, cx| super::reveal(a, id, window, cx));
                     }
                 });
-                match labels[ix].doc.clone().filter(|d| !d.read(cx).legacy()) {
+                match labels[ix]
+                    .doc
+                    .clone()
+                    .filter(|d| gpui_kit::base::dock::Panel::closable(d.read(cx), cx))
+                {
                     Some(d) => menu.hint(
                         ui::icon_button(("tabs.more.close", ix), Icon::Close.size(px(10.)), cx)
                             .test_support()
@@ -755,25 +847,53 @@ impl TabGroupRenderer for Group {
                     .id("tabs.end")
                     .flex_1()
                     .h(px(24.))
-                    .drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.hover))
-                    .on_drop(move |drag: &DragPanel, window, cx| {
-                        let ix = (drag.source() == node).then(|| count - 1);
-                        end.drop_panel(drag.clone(), ix, false, window, cx)
+                    .when(pane, |d| {
+                        d.on_drop(move |drag: &panes::Drag, w, cx| {
+                            panes::drop_tab(drag, node, Some(count), None, w, cx)
+                        })
+                    })
+                    .when(self.2, |d| {
+                        d.drag_over::<DragPanel>(move |d, _, _, _| d.bg(t.hover))
+                            .on_drop(move |drag: &DragPanel, window, cx| {
+                                let ix = (drag.source() == node).then(|| count - 1);
+                                end.drop_panel(drag.clone(), ix, false, window, cx)
+                            })
                     }),
             )
             .children(more)
             .on_prepaint(move |b, window, _| measured(&fit.room, node, b.size.width, window));
         let bar = match collapsed {
             true => div().flex().flex_none().items_center().h_full().px(px(2.)),
+            false if pane => strip(cx).h(px(32.)),
             false => strip(cx),
         };
         bar.id(("tabs", node.as_u64() as usize))
-            .drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.hover))
-            .on_drop(move |d: &DragDoc, window, cx| {
-                super::drop_doc(d.doc.clone(), Some(node), window, cx)
+            .when(pane || self.2, |d| {
+                d.drag_over::<DragDoc>(move |d, _, _, _| d.bg(t.hover))
+                    .on_drop(move |d: &DragDoc, window, cx| {
+                        super::drop_doc(d.doc.clone(), Some(node), window, cx)
+                    })
             })
-            .when(center, |d| d.child(chips(&labels, cx)).child(divider(cx)))
+            .when(center && self.2, |d| {
+                d.child(chips(&labels, cx)).child(divider(cx))
+            })
             .child(area)
+            .when(group.is_zoomed(), |d| {
+                let hidden = self
+                    .0
+                    .upgrade()
+                    .map_or(0, |a| panes::count(a.read(cx)).saturating_sub(1));
+                d.child(
+                    div()
+                        .text_size(text::SMALL)
+                        .text_color(t.muted)
+                        .child(format!("{hidden} panes hidden")),
+                )
+            })
+            .when(pane, |d| {
+                d.child(panes::new_menu(node, window, cx))
+                    .child(panes::menu(node, window, cx))
+            })
             .into_any_element()
     }
 
@@ -791,6 +911,14 @@ impl TabGroupRenderer for Group {
         if center && crate::sessions::provision::page(cx).is_some() {
             return Empty.into_any_element();
         }
+        let node = group.node();
+        let pane = center && !self.2;
+        let highlight = self
+            .1
+            .drop
+            .get()
+            .filter(|(n, _)| *n == node && cx.has_active_drag());
+        let fit = self.1.clone();
         let hidden = panel.clone().downcast::<DocTab>().is_ok_and(|d| {
             let d = d.read(cx);
             !tabs::mine(d, cx) || (center && !tabs::in_view(d, cx))
@@ -804,12 +932,49 @@ impl TabGroupRenderer for Group {
         // Keyed by the view, so reordering or closing other tabs keeps its state.
         let id = ("panel.in", panel.entity_id().as_u64() as usize);
         div()
+            .id(("pane.body", node.as_u64() as usize))
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .size_full()
             .child(panel)
+            .when(pane, |d| {
+                let style = theme(cx);
+                d.relative()
+                    .on_drag_move::<panes::Drag>(move |e, w, _| {
+                        let zone = e
+                            .bounds
+                            .contains(&e.event.position)
+                            .then(|| (node, panes::zone(e.bounds, e.event.position)));
+                        if zone.is_some() && fit.drop.replace(zone) != zone {
+                            w.refresh();
+                        }
+                    })
+                    .on_drop(move |drag: &panes::Drag, w, cx| {
+                        let side = highlight.and_then(|(_, side)| side);
+                        panes::drop_tab(drag, node, None, side, w, cx);
+                    })
+                    .when_some(highlight, |d, (_, side)| {
+                        use gpui_kit::base::Placement::*;
+                        let band = gpui_kit::relative(0.35);
+                        let overlay = div()
+                            .absolute()
+                            .bg(style.selected.opacity(0.55))
+                            .border_1()
+                            .border_dashed()
+                            .border_color(style.selected_ring);
+                        let overlay = match side {
+                            Some(Left) => overlay.left_0().top_0().bottom_0().w(band),
+                            Some(Right) => overlay.right_0().top_0().bottom_0().w(band),
+                            Some(Top) => overlay.top_0().left_0().right_0().h(band),
+                            Some(Bottom) => overlay.bottom_0().left_0().right_0().h(band),
+                            None => overlay.inset_0(),
+                        };
+                        d.child(overlay)
+                    })
+            })
+            .test_support()
             .with_animation(id, Animation::new(ui::motion::FAST), |d, t| {
                 d.opacity(0.3 + 0.7 * t)
             })
@@ -873,7 +1038,7 @@ fn empty(cx: &App) -> impl IntoElement + use<> {
 }
 
 /// Rows that run their action, each with its chord.
-fn hints(cx: &App) -> Div {
+pub(super) fn hints(cx: &App) -> Div {
     let t = theme(cx);
     let hints = [
         ("Go to file", "file.goto"),

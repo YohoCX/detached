@@ -9,6 +9,7 @@ use gpui_kit::{
     Styled, Window, div, point, px,
 };
 
+use crate::dock::ViewPosition;
 use crate::keymap;
 use crate::util::base_name;
 
@@ -16,6 +17,7 @@ pub(super) struct Code {
     editor: Entity<EditorState>,
     /// A line to center once the editor is laid out.
     center: Option<u32>,
+    restored: Option<ViewPosition>,
 }
 
 impl Code {
@@ -24,6 +26,7 @@ impl Code {
         Code {
             editor,
             center: None,
+            restored: None,
         }
     }
 
@@ -73,6 +76,28 @@ impl Code {
             }
         });
         self.center = Some(line.max(1));
+        self.restored = None;
+        cx.notify();
+    }
+
+    pub(super) fn position(&self, cx: &App) -> ViewPosition {
+        if let Some(at) = self.restored {
+            return at;
+        }
+        let e = self.editor.read(cx);
+        let at = e.cursor_position();
+        let scroll = e.scroll_offset();
+        ViewPosition {
+            line: at.line,
+            column: at.character,
+            x: scroll.x.as_f32(),
+            y: scroll.y.as_f32(),
+        }
+    }
+
+    pub(super) fn restore(&mut self, at: ViewPosition, cx: &mut Context<Self>) {
+        self.center = None;
+        self.restored = Some(at);
         cx.notify();
     }
 
@@ -87,6 +112,20 @@ impl Code {
 
 impl Render for Code {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(at) = self.restored
+            && self.editor.read(cx).line_height().is_some()
+        {
+            self.restored = None;
+            self.editor.update(cx, |e, cx| {
+                let i = e
+                    .text()
+                    .position_to_offset(&Position::new(at.line, at.column));
+                e.set_selected_range(i..i, cx);
+                e.set_scroll_offset(point(px(at.x), px(at.y)), cx);
+            });
+        } else if self.restored.is_some() {
+            window.request_animation_frame();
+        }
         if let Some(line) = self.center {
             let e = self.editor.read(cx);
             // The kit scrolls the cursor just into view; Monaco centered it.

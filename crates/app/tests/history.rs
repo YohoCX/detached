@@ -1,4 +1,8 @@
 mod common;
+fn toggle_log(cx: &mut gpui_kit::VisualTestContext) {
+    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
+    settle(cx);
+}
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -138,7 +142,7 @@ fn set_current(cx: &mut VisualTestContext, repo: &Path) {
 fn cmd_9_lists_the_current_repos_commits_with_their_refs(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let want = count(&cx.sb, &cx.sb.solo());
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, &want);
     assert_eq!(subjects(cx), ["data", "upstream change", "initial"]);
     assert_eq!(refs(cx, "data"), BTreeSet::from(["HEAD -> main".into()]));
@@ -148,7 +152,7 @@ fn cmd_9_lists_the_current_repos_commits_with_their_refs(cx: &mut TestAppContext
 #[gpui_kit::test]
 fn changing_the_current_repo_loads_its_log(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let app = cx.sb.repo("app");
     let want = count(&cx.sb, &app);
@@ -161,7 +165,7 @@ fn changing_the_current_repo_loads_its_log(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_new_commit_reloads_the_log_on_the_status_refresh(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let solo = cx.sb.solo();
     cx.sb
@@ -186,7 +190,7 @@ fn a_narrow_log_keeps_the_subject_over_long_refs_and_drops_the_author(cx: &mut T
     // The bottom zone is as wide as the center: the side zones close to give it 1000.
     cx.click("zone.left");
     cx.click("zone.right");
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "4 commits");
     let top = |cx: &mut VisualTestContext, id: &'static str| {
         cx.update(|w, cx| {
@@ -222,7 +226,7 @@ fn a_narrow_log_keeps_the_subject_over_long_refs_and_drops_the_author(cx: &mut T
 #[gpui_kit::test]
 fn rows_take_the_lists_width_so_their_columns_line_up(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let rows: Vec<_> = cx.update(|w, cx| {
         w.render_frame(cx);
@@ -245,7 +249,7 @@ fn rows_take_the_lists_width_so_their_columns_line_up(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_branch_made_outside_shows_after_refresh_not_on_a_status_refresh(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let solo = cx.sb.solo();
     for (cmd, name) in [("branch", "feat"), ("branch", "fix"), ("tag", "v1")] {
@@ -277,7 +281,7 @@ fn a_merge_widens_the_graph_to_its_lanes(cx: &mut TestAppContext) {
             &["merge", "-q", "--no-ff", "feature", "-m", "merge feature"],
         );
     });
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "4 commits");
     for i in 0..4usize {
         let graph = cx.update(|w, cx| {
@@ -291,7 +295,7 @@ fn a_merge_widens_the_graph_to_its_lanes(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn no_repo_shows_no_repository(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    cx.press("secondary-9");
+    toggle_log(cx);
     assert_eq!(label(cx, "log.message").as_deref(), Some("No repository"));
 }
 
@@ -302,7 +306,7 @@ fn an_unborn_repo_shows_the_error_and_no_commits(cx: &mut TestAppContext) {
         std::fs::create_dir(&fresh).unwrap();
         sb.git(&fresh, &["init", "-q"]);
     });
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_until(cx, |cx| {
         let error = label(cx, "log.message").is_some_and(|m| m.contains("'HEAD'"));
         error && status(cx).as_deref() == Some("0 commits")
@@ -337,7 +341,7 @@ fn linear(sb: &Sandbox, n: usize) {
 #[gpui_kit::test]
 fn a_long_history_streams_in_to_the_full_count(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| linear(sb, 1200));
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "1,200 commits");
     assert_eq!(subjects(cx)[0], "commit 1200");
 }
@@ -345,7 +349,7 @@ fn a_long_history_streams_in_to_the_full_count(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn text_matches_the_message_case_insensitively_and_hides_the_graph(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     assert!(graph_shown(cx));
     filter(cx, "log.text", "UPSTREAM");
@@ -357,7 +361,7 @@ fn text_matches_the_message_case_insensitively_and_hides_the_graph(cx: &mut Test
 fn a_hash_prefix_shows_only_its_commit(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let sha = cx.sb.git(&cx.sb.solo(), &["rev-parse", "HEAD~2"]);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     filter(cx, "log.text", &sha[..7]);
     wait_for_rows(cx, &["initial"]);
@@ -375,7 +379,7 @@ fn the_author_filter_lists_that_authors_commits(cx: &mut TestAppContext) {
         );
         sb.commit(&r, "README.md", "more\n", "test's work");
     });
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     filter(cx, "log.author", "Ann");
     wait_for_rows(cx, &["ann's work"]);
@@ -385,7 +389,7 @@ fn the_author_filter_lists_that_authors_commits(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_path_filter_lists_the_commits_touching_it_and_keeps_the_graph(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     filter(cx, "log.path", "CHANGELOG.md");
     wait_for_rows(cx, &["upstream change"]);
@@ -397,7 +401,7 @@ fn refs_pick_all_branches_head_or_one_branch(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let (app, lib) = (cx.sb.repo("app"), cx.sb.repo("lib"));
     set_current(cx, &app);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "4 commits");
     assert!(
         subjects(cx).contains(&"spike work".into())
@@ -421,7 +425,7 @@ fn refs_pick_all_branches_head_or_one_branch(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn typed_text_applies_after_the_debounce_and_blank_text_is_no_filter(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     cx.click("log.text");
     cx.input("data");
@@ -444,7 +448,7 @@ fn a_repo_change_resets_refs_and_path_and_keeps_text(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let (app, lib) = (cx.sb.repo("app"), cx.sb.repo("lib"));
     set_current(cx, &app);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "4 commits");
     pick(cx, "other");
     filter(cx, "log.path", "README.md");
@@ -460,15 +464,15 @@ fn a_repo_change_resets_refs_and_path_and_keeps_text(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn filters_survive_closing_and_opening_the_log(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     pick(cx, "HEAD");
     filter(cx, "log.path", "CHANGELOG.md");
     filter(cx, "log.text", "upstream");
     wait_for_rows(cx, &["upstream change"]);
-    cx.press("secondary-9");
+    toggle_log(cx);
     assert!(cx.find("log.status").is_none());
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_rows(cx, &["upstream change"]);
     assert_eq!(value(cx, "log.refs").as_deref(), Some("HEAD"));
     assert_eq!(value(cx, "log.path").as_deref(), Some("CHANGELOG.md"));
@@ -502,7 +506,7 @@ fn file_history_of_a_diff_moves_to_its_repo_and_keeps_refs_text_and_author(
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     pick(cx, "HEAD");
     filter(cx, "log.text", "t");
@@ -601,7 +605,7 @@ fn click_cmd_click_and_shift_click_show_the_selection_newest_first(cx: &mut Test
     ];
     let [one, two, three] = revs.map(|revs| want(&cx.sb, &solo, revs));
     let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     assert_eq!(side(cx), "Select a commit");
 
@@ -625,7 +629,7 @@ fn arrows_start_at_the_top_and_step_from_the_anchor(cx: &mut TestAppContext) {
     let solo = cx.sb.solo();
     let [top, middle, bottom] = ["HEAD", "HEAD~1", "HEAD~2"].map(|r| want(&cx.sb, &solo, &[r]));
     let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     click_row(cx, 2, Modifiers::none());
     let focused = cx.find("log.list").and_then(|e| e.focused());
@@ -654,7 +658,7 @@ fn arrows_start_at_the_top_and_step_from_the_anchor(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn an_arrow_scrolls_its_row_into_view(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| linear(sb, 40));
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "40 commits");
     click_row(cx, 0, Modifiers::none());
     let row = |cx: &mut VisualTestContext| cx.find(("log.row", 30usize));
@@ -672,7 +676,7 @@ fn an_arrow_scrolls_its_row_into_view(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_repo_change_clears_the_selection(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     click_row(cx, 2, Modifiers::none());
     assert_ne!(side(cx), "Select a commit");
@@ -695,7 +699,7 @@ fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo();
     let picked = want(&cx.sb, &solo, &["HEAD~1"]);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     click_row(cx, 1, Modifiers::none());
     cx.sb
@@ -713,7 +717,7 @@ fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppC
     // The bottom zone is as wide as the center: the side zones close to give it 1000.
     cx.click("zone.left");
     cx.click("zone.right");
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     let grip = |cx: &mut VisualTestContext| cx.find("grip.log.side").unwrap().bounds().center();
     let stored =
@@ -736,8 +740,8 @@ fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppC
     let dir = cx.sb.state.config_dir.clone();
     cx.update(|_, cx| ui_state::init(&dir, cx));
     assert_eq!(stored(cx), Some(1000.));
-    cx.press("secondary-9");
-    cx.press("secondary-9");
+    toggle_log(cx);
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     assert_eq!(
         grip(cx).x,
@@ -768,7 +772,7 @@ fn four(sb: &Sandbox) {
 /// Opens the Log tall enough for a commit's fields and four files.
 fn open_tall(cx: &mut VisualTestContext) {
     zone_size(cx, DockPlacement::Bottom, 600.);
-    cx.press("secondary-9");
+    toggle_log(cx);
 }
 
 /// A file row as the side panel shows it: letter, path and tooltip.
@@ -1148,7 +1152,7 @@ fn copy_revision_number_copies_the_full_sha_of_the_row(cx: &mut TestAppContext) 
     let solo = cx.sb.solo();
     let [middle, bottom] = ["HEAD~1", "HEAD~2"].map(|r| cx.sb.git(&solo, &["rev-parse", r]));
     let cmd = cx.update(|_, cx| Modifiers::secondary_key(cx));
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     click_row(cx, 0, Modifiers::none());
     click_row(cx, 1, cmd);
@@ -1177,7 +1181,7 @@ fn new_branch_without_checkout_creates_it_at_the_row_and_reloads(cx: &mut TestAp
     let solo = cx.sb.solo();
     let sha = cx.sb.git(&solo, &["rev-parse", "HEAD~1"]);
     let repo = solo.display().to_string();
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     right_click(cx, 1, "New Branch…");
     let at = format!("New branch at {}", &sha[..10]);
@@ -1207,7 +1211,7 @@ fn the_new_branch_bar_cancels_on_escape_needs_a_name_and_creates_on_enter(cx: &m
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo();
     let head = cx.sb.git(&solo, &["rev-parse", "HEAD"]);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     right_click(cx, 0, "New Branch…");
     cx.input("dropped");
@@ -1243,7 +1247,7 @@ fn the_new_branch_bar_cancels_on_escape_needs_a_name_and_creates_on_enter(cx: &m
 #[gpui_kit::test]
 fn a_taken_branch_name_raises_the_error_notice(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     right_click(cx, 1, "New Branch…");
     cx.input("main");
@@ -1263,7 +1267,7 @@ fn checkout_revision_detaches_head_at_the_row(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo();
     let sha = cx.sb.git(&solo, &["rev-parse", "HEAD~1"]);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     right_click(cx, 1, "Checkout Revision");
     let done = Some((format!("Checked out {}", &sha[..10]), false));
@@ -1319,7 +1323,7 @@ fn open_in_browser_opens_the_commit_on_the_forge(cx: &mut TestAppContext) {
     let gitlab = cx.sb.forge_dir().join("gitlab");
     let sha = cx.sb.git(&gitlab, &["rev-parse", "HEAD"]);
     set_current(cx, &gitlab);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "2 commits");
     right_click(cx, 0, "Open in Browser");
     let want = format!("{}/group/app/-/commit/{sha}", forge.gitlab());
@@ -1329,7 +1333,7 @@ fn open_in_browser_opens_the_commit_on_the_forge(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn open_in_browser_without_a_forge_says_no_page_is_known(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-9");
+    toggle_log(cx);
     wait_for_status(cx, "3 commits");
     right_click(cx, 0, "Open in Browser");
     let none = Some(("No web page is known for this repository".into(), true));

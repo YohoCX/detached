@@ -328,6 +328,30 @@ impl DocKind for ChatDocs {
         })
     }
 
+    fn running(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> Option<String> {
+        let Doc::Chat { repo, n } = doc else {
+            return None;
+        };
+        let chat = find(repo, *n, cx)?;
+        chat.read(cx)
+            .busy(cx)
+            .then(|| format!("{} is working.", self.title(doc, None, cx)))
+    }
+
+    fn closing(&self, doc: &Doc, cx: &mut App) {
+        if let Doc::Chat { repo, n } = doc
+            && let Some(chat) = cx.default_global::<Chats>().0.remove(&(repo.clone(), *n))
+        {
+            chat.update(cx, |chat, cx| chat.end(cx));
+        }
+    }
+
+    fn activated(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
+        if let Ok(v) = view.clone().downcast::<view::ChatView>() {
+            v.update(cx, |v, cx| v.focus(window, cx));
+        }
+    }
+
     /// Shown again, it keeps its view and takes the cursor.
     fn replace(
         &self,

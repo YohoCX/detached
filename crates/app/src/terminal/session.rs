@@ -60,6 +60,9 @@ pub struct Session {
     listener: Listener,
     killer: Box<dyn ChildKiller + Send + Sync>,
     shell: String,
+    #[cfg(unix)]
+    pid: u32,
+    processes: Arc<os::Session>,
     /// Where it started, for a new shell in its place after a restart.
     pub cwd: PathBuf,
     pub title: Option<String>,
@@ -169,13 +172,16 @@ impl Session {
     pub fn new(s: Started, cx: &mut Context<Self>) -> Self {
         let shell = Arc::new(os::Session::new(s.pid));
         crate::owner::add_tab(cx.entity_id().as_u64(), &shell, cx);
-        let memory = memory(shell, cx);
+        let memory = memory(shell.clone(), cx);
         Session {
             term: s.term,
             pty: s.pty,
             listener: s.listener,
             killer: s.killer,
             shell: shell_name(),
+            #[cfg(unix)]
+            pid: s.pid,
+            processes: shell,
             cwd: s.cwd,
             title: None,
             memory: None,
@@ -186,6 +192,13 @@ impl Session {
             scrolled: 0.,
             _tasks: [events(s.rx, cx), memory],
         }
+    }
+
+    pub fn running(&self) -> bool {
+        #[cfg(unix)]
+        return self.pty.foreground_job(self.pid);
+        #[cfg(windows)]
+        return self.processes.has_children();
     }
 
     pub fn title(&self) -> &str {
@@ -249,9 +262,9 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // A hangup for the shell and the job in front of it. Dropping the stop then ends the PTY's
-        // threads, even if a job that outlives them still holds the shell's side.
-        self.pty.hangup();
+        let processes = self.processes.clone();
+        let _ = thread("PTY close", move || processes.terminate());
+        self.pty.kill_foreground();
         let _ = self.killer.kill();
     }
 }

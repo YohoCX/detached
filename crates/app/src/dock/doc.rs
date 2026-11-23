@@ -7,8 +7,8 @@ use std::sync::Arc;
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Global, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::FluentBuilder,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::FluentBuilder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,14 @@ use kernel::doc::Doc;
 use kernel::workspace::Workspace;
 
 pub const NAME: &str = "doc";
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct ViewPosition {
+    pub line: u32,
+    pub column: u32,
+    pub x: f32,
+    pub y: f32,
+}
 
 /// What a document's tab does that differs by kind. It is given docs of its own kind, but for
 /// `replace`'s `new`, which may be any kind that shares the preview tab.
@@ -37,6 +45,14 @@ pub trait DocKind {
     }
     /// The tab came forward.
     fn activated(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
+    fn running(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> Option<String> {
+        None
+    }
+    fn closing(&self, _: &Doc, _: &mut App) {}
+    fn position(&self, _: &AnyView, _: &App) -> Option<ViewPosition> {
+        None
+    }
+    fn restore_position(&self, _: &AnyView, _: ViewPosition, _: &mut App) {}
     /// The tab was closed.
     fn removed(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
     /// Whether `a` and `b` belong in the same tab.
@@ -81,6 +97,7 @@ pub struct DocTab {
     kind: Rc<dyn DocKind>,
     /// Built when first on screen, so a restored tab loads nothing until it is looked at.
     pub(super) view: Option<AnyView>,
+    position: Option<ViewPosition>,
     focus: FocusHandle,
 }
 
@@ -93,6 +110,8 @@ struct Saved {
     // Archive tabs need an explicit null to distinguish them from old layouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position: Option<ViewPosition>,
 }
 
 impl DocTab {
@@ -108,6 +127,7 @@ impl DocTab {
             keep,
             kind,
             view: None,
+            position: None,
             focus: cx.focus_handle(),
         })
     }
@@ -124,6 +144,9 @@ impl DocTab {
         {
             self.view = None;
         }
+        if self.doc != doc {
+            self.position = None;
+        }
         self.doc = doc;
         self.kind = kind;
         cx.notify();
@@ -132,6 +155,21 @@ impl DocTab {
     pub fn keep(&mut self, cx: &mut Context<Self>) {
         self.keep = true;
         cx.notify();
+    }
+
+    pub(super) fn preview(&mut self, cx: &mut Context<Self>) {
+        self.keep = false;
+        cx.notify();
+    }
+
+    pub(super) fn take_focus(&self, window: &mut Window, cx: &mut App) {
+        if let Some(view) = &self.view {
+            self.kind.activated(view, window, cx);
+        }
+    }
+
+    pub(super) fn running(&self, cx: &App) -> Option<String> {
+        self.kind.running(&self.doc, self.view.as_ref(), cx)
     }
 
     pub fn id(&self) -> SharedString {
@@ -163,7 +201,10 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
     let PanelInfo::Panel(v) = &state.info else {
         return None;
     };
-    let s: Saved = serde_json::from_value(v.clone()).ok()?;
+    let mut s: Saved = serde_json::from_value(v.clone()).ok()?;
+    if let Doc::Terminal { id, .. } = &mut s.doc {
+        *id = 0;
+    }
     let legacy =
         v.get("session").is_none() && !matches!(s.doc, Doc::SessionArchive | Doc::PastChat { .. });
     let kind = doc_kind(s.doc.kind(), cx)?;
@@ -172,6 +213,7 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
         t.workspace = s.workspace;
         t.session = s.session.flatten();
         t.legacy = legacy;
+        t.position = s.position;
     });
     Some(Arc::new(tab))
 }
@@ -199,11 +241,21 @@ impl Render for DocTab {
             .flatten();
         if self.view.is_none() && archive.is_none() {
             let kind = self.kind.clone();
-            self.view = Some(kind.view(&mut self.doc, self.session.is_none(), window, cx));
+            let view = kind.view(&mut self.doc, self.session.is_none(), window, cx);
+            if let Some(at) = self.position {
+                kind.restore_position(&view, at, cx);
+            }
+            self.view = Some(view);
+            if self.focus.is_focused(window)
+                && let Some(view) = self.view.clone()
+            {
+                window.defer(cx, move |w, cx| kind.activated(&view, w, cx));
+            }
         }
         div()
             .flex()
             .flex_col()
+            .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .when_some(archive, |d, message| {
@@ -224,7 +276,7 @@ impl Panel for DocTab {
     }
 
     fn closable(&self, _: &App) -> bool {
-        !self.legacy()
+        !self.legacy() && self.doc != Doc::SessionOverview
     }
 
     fn zoomable(&self, _: &App) -> bool {
@@ -233,7 +285,7 @@ impl Panel for DocTab {
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Another workspace's tab, hidden, can be its group's active one.
-        if !active || !super::tabs::mine(self, cx) {
+        if !active || !Workspace::get(cx).archive() || !super::tabs::mine(self, cx) {
             return;
         }
         if let Some(v) = &self.view {
@@ -245,6 +297,9 @@ impl Panel for DocTab {
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_some() {
+            self.kind.closing(&self.doc, cx);
+        }
         if let Some(v) = &self.view {
             self.kind.removed(v, window, cx);
         }
@@ -256,12 +311,24 @@ impl Panel for DocTab {
         });
     }
 
-    fn dump(&self, _: &App) -> PanelState {
+    fn dump(&self, cx: &App) -> PanelState {
         let saved = Saved {
-            doc: self.doc.clone(),
+            doc: match &self.doc {
+                Doc::Terminal { cwd, .. } => Doc::Terminal {
+                    id: 0,
+                    cwd: cwd.clone(),
+                },
+                doc => doc.clone(),
+            },
             keep: self.keep,
             workspace: self.workspace.clone(),
             session: (!self.legacy).then(|| self.session.clone()),
+            position: self.session.as_ref().and_then(|_| {
+                self.view
+                    .as_ref()
+                    .and_then(|v| self.kind.position(v, cx))
+                    .or(self.position)
+            }),
         };
         PanelState {
             info: PanelInfo::Panel(serde_json::to_value(saved).unwrap_or_default()),

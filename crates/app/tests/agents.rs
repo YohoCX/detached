@@ -173,7 +173,7 @@ fn the_login_runs_the_found_cli_in_a_terminal_tab(cx: &mut TestAppContext) {
     assert!(cx.find("agents.claude.installer").is_none());
     cx.click("agents.claude.login");
     wait_until(cx, |cx| {
-        let shells = cx.update(|_, cx| Terminals::global(cx).read(cx).sessions.len());
+        let shells = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.len());
         cx.find("settings").is_none() && shells == 1
     });
 }

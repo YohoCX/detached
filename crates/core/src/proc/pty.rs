@@ -44,12 +44,28 @@ impl Pty {
         self.master.resize(size).map_err(io::Error::other)
     }
 
-    /// A hangup for the job in front of the PTY.
+    #[cfg(unix)]
+    pub fn foreground_job(&self, shell: u32) -> bool {
+        self.master
+            .process_group_leader()
+            .is_some_and(|pg| pg as u32 != shell)
+    }
+
     pub fn hangup(&self) {
         #[cfg(unix)]
+        self.signal_foreground(libc::SIGHUP);
+    }
+
+    pub fn kill_foreground(&self) {
+        #[cfg(unix)]
+        self.signal_foreground(libc::SIGKILL);
+    }
+
+    #[cfg(unix)]
+    fn signal_foreground(&self, signal: libc::c_int) {
         if let Some(pg) = self.master.process_group_leader() {
             // SAFETY: a signal to a process group.
-            unsafe { libc::killpg(pg, libc::SIGHUP) };
+            unsafe { libc::killpg(pg, signal) };
         }
     }
 }

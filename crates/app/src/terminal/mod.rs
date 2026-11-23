@@ -20,7 +20,7 @@ use gpui_kit::{
 pub use ghostty::Rgb;
 pub use session::Session;
 
-use crate::actions::Registration;
+use crate::actions::{self, Group, Registration};
 use crate::dock::{self, AppSpec, DocKind, DragDoc};
 use crate::keymap;
 use crate::ui::{self, Icon, radius, text, theme};
@@ -31,13 +31,17 @@ use kernel::workspace::Workspace;
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
     "panel.project",
+    "panel.sessions",
+    "panel.changes",
     "panel.log",
     "app.settings",
     "panel.terminal",
-    "tabs.nextCategory",
-    "tabs.prevCategory",
     "tabs.next",
     "tabs.prev",
+    "session.next",
+    "session.prev",
+    "tabs.switcher",
+    "tabs.switcherBack",
 ];
 
 #[derive(Default)]
@@ -177,12 +181,28 @@ impl Terminals {
 
 /// Types `line` into a new shell of the Terminal app and shows it.
 pub fn run(line: &str, window: &mut Window, cx: &mut App) {
-    Terminals::global(cx).update(cx, |t, cx| {
-        if let Some(s) = t.open(window, cx) {
-            s.read(cx).write(format!("{line}\r").into_bytes());
-        }
-    });
-    dock::open("terminal", window, cx);
+    let cwd =
+        dock::bound_repo(cx).or_else(|| std::env::home_dir().map(|p| p.display().to_string()));
+    if let Some(cwd) = cwd
+        && let Some(session) = open_tab(cwd, window, cx)
+    {
+        session.read(cx).write(format!("{line}\r").into_bytes());
+    }
+}
+
+pub(crate) fn open_tab(cwd: String, window: &mut Window, cx: &mut App) -> Option<Entity<Session>> {
+    let terminals = Terminals::global(cx);
+    let session = terminals.update(cx, |t, cx| t.open_docked(PathBuf::from(&cwd), window, cx))?;
+    dock::open_doc(
+        Doc::Terminal {
+            id: session.entity_id().as_u64(),
+            cwd,
+        },
+        true,
+        window,
+        cx,
+    );
+    Some(session)
 }
 
 /// The titles of the shells, in the Terminal app and in tabs of their own.
@@ -227,7 +247,13 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     };
     dock::register_app(cx, terminal);
     dock::register_doc(cx, "terminal", TerminalDocs);
-    vec![]
+    vec![actions::register(
+        cx,
+        "panel.terminal",
+        "Terminal",
+        Group::View,
+        dock::terminal_below,
+    )]
 }
 
 /// The tabs over the active terminal; the first shell starts when it is shown.
@@ -302,6 +328,13 @@ impl DocKind for TerminalDocs {
         if let Ok(s) = view.clone().downcast::<Session>() {
             window.focus(&s.read(cx).focus.clone(), cx);
         }
+    }
+
+    fn running(&self, _: &Doc, view: Option<&AnyView>, cx: &App) -> Option<String> {
+        let s = view?.clone().downcast::<Session>().ok()?;
+        let s = s.read(cx);
+        s.running()
+            .then(|| format!("A foreground command is running in {}.", s.title()))
     }
 
     fn adopt(&self, doc: &Doc, cx: &mut App) {
@@ -433,7 +466,21 @@ fn intercept(cx: &mut App) {
         };
         let k = &e.keystroke;
         let action = keymap::action_of(k, cx);
-        if action.is_some_and(|a| PASS.contains(&a)) {
+        if action.is_some_and(|a| {
+            PASS.contains(&a)
+                || (!mac
+                    && matches!(
+                        a,
+                        "pane.splitRight"
+                            | "pane.splitDown"
+                            | "pane.next"
+                            | "pane.prev"
+                            | "session.switch"
+                    ))
+                || (mac
+                    && e.keystroke.modifiers.platform
+                    && (a.starts_with("pane.") || a.starts_with("tab.") || a == "session.switch"))
+        }) {
             return;
         }
         let m = &k.modifiers;

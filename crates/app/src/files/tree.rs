@@ -805,8 +805,20 @@ impl Tree {
             .pr(px(8.))
             .whitespace_nowrap()
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, e: &gpui_kit::ClickEvent, _, cx| {
-                this.activate(&repo, &path, expand, e.click_count() > 1, cx)
+            .on_click(cx.listener(move |this, e: &gpui_kit::ClickEvent, w, cx| {
+                if e.modifiers().alt && expand.is_none() && !path.is_empty() {
+                    let loc = Location {
+                        repo: repo.clone(),
+                        rev: this.roots.get(&repo).and_then(|r| r.rev.clone()),
+                        path: path.clone(),
+                        line: None,
+                        doc: None,
+                    };
+                    kernel::nav::visit(cx, &loc);
+                    crate::dock::open_beside(loc.into(), true, e.click_count() > 1, w, cx);
+                } else {
+                    this.activate(&repo, &path, expand, e.click_count() > 1, cx);
+                }
             }))
             .children((0..r.depth).map(|d| {
                 let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
