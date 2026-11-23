@@ -276,6 +276,11 @@ pub(super) fn open_history(a: &mut DockArea, doc: Doc, w: &mut Window, cx: &mut 
             visits
                 .iter()
                 .rfind(|(d, _)| *d == doc)
+                .or_else(|| {
+                    visits
+                        .iter()
+                        .rfind(|(d, _)| d.kind() == doc.kind() && kind.same(d, &doc))
+                })
                 .map(|(_, node)| *node)
         });
     show_doc(a, doc, kind, false, at, w, cx);
