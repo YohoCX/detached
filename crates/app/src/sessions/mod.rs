@@ -513,13 +513,16 @@ fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
                 .child(
                     div()
                         .flex()
+                        .w_full()
+                        .min_w_0()
                         .gap(GAP / 2.)
                         .text_size(text::LABEL)
                         .text_color(t.muted)
-                        .child(summary)
+                        .child(div().flex_none().child(summary))
                         .when_some(branch, |d, branch| {
                             d.child(
                                 div()
+                                    .min_w_0()
                                     .truncate()
                                     .font_family(ui::theme::mono(cx))
                                     .child(branch.to_string()),
