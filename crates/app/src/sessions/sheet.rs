@@ -33,7 +33,11 @@ pub(super) fn overlay(window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 pub(super) fn adopt(window: &mut Window, cx: &mut App) {
-    open(None, window, cx);
+    open(None, None, window, cx);
+}
+
+pub(super) fn adopt_from_new(name: String, window: &mut Window, cx: &mut App) {
+    open(None, Some(name), window, cx);
 }
 
 pub(super) fn rename(window: &mut Window, cx: &mut App) {
@@ -41,16 +45,21 @@ pub(super) fn rename(window: &mut Window, cx: &mut App) {
     if !w.archive()
         && let Some(set) = w.sessions().iter().find(|s| s.id == w.session_id())
     {
-        open(Some((set.id.clone(), set.name.clone())), window, cx);
+        open(Some((set.id.clone(), set.name.clone())), None, window, cx);
     }
 }
 
-fn open(rename: Option<(String, String)>, window: &mut Window, cx: &mut App) {
+fn open(
+    rename: Option<(String, String)>,
+    draft_name: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let Some(ws) = Workspace::get(cx).id().map(str::to_string) else {
         return;
     };
     if let Some(sheet) = cx.try_global::<Controller>().and_then(|c| c.0.upgrade()) {
-        sheet.update(cx, |s, cx| s.open(ws, rename, window, cx));
+        sheet.update(cx, |s, cx| s.open(ws, rename, draft_name, window, cx));
     }
 }
 
@@ -62,6 +71,7 @@ struct Sheet {
 struct Form {
     ws: String,
     rename: Option<String>,
+    from_new: bool,
     rows: Vec<Candidate>,
     selected: HashMap<String, String>,
     error: Option<String>,
@@ -74,6 +84,7 @@ impl Sheet {
         &mut self,
         ws: String,
         rename: Option<(String, String)>,
+        draft_name: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -81,13 +92,18 @@ impl Sheet {
             return;
         }
         self.name.update(cx, |input, cx| {
-            input.set_value(rename.as_ref().map_or("", |(_, name)| name), window, cx);
+            let name = rename
+                .as_ref()
+                .map(|(_, name)| name)
+                .or(draft_name.as_ref());
+            input.set_value(name.map_or("", String::as_str), window, cx);
             input.focus(window, cx);
             input.select_all(window, cx);
         });
         let mut form = Form {
             ws: ws.clone(),
             rename: rename.map(|(id, _)| id),
+            from_new: draft_name.is_some(),
             rows: vec![],
             selected: HashMap::new(),
             error: None,
@@ -115,9 +131,11 @@ impl Sheet {
         cx.notify();
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.form.as_ref().is_some_and(|f| !f.saving) {
-            self.form = None;
+            if self.form.take().is_some_and(|f| f.from_new) {
+                super::provision::focus_new(window, cx);
+            }
             cx.notify();
         }
     }
@@ -147,7 +165,9 @@ impl Sheet {
             _ = this.update_in(cx, |s, window, cx| {
                 match done {
                     Ok(set) => {
-                        s.form = None;
+                        if s.form.take().is_some_and(|f| f.from_new) {
+                            super::provision::dismiss_new(cx);
+                        }
                         if let Some(set) = set {
                             Workspace::global(cx)
                                 .update(cx, |w, cx| w.session_adopted(&ws, set, cx));
@@ -194,8 +214,8 @@ impl Render for Sheet {
             .flex_col()
             .gap(GAP)
             .p(GAP * 2.)
-            .capture_action(cx.listener(|s, _: &Escape, _, cx| {
-                s.close(cx);
+            .capture_action(cx.listener(|s, _: &Escape, window, cx| {
+                s.close(window, cx);
                 cx.stop_propagation();
             }))
             .capture_action(cx.listener(|s, _: &Enter, window, cx| {
@@ -327,7 +347,7 @@ impl Render for Sheet {
                     .child(
                         ui::quiet_button("sessions.cancel", "Cancel", cx)
                             .test_support()
-                            .on_click(cx.listener(|s, _, _, cx| s.close(cx))),
+                            .on_click(cx.listener(|s, _, window, cx| s.close(window, cx))),
                     )
                     .child(
                         ui::primary_button("sessions.submit", label, cx)
@@ -341,8 +361,8 @@ impl Render for Sheet {
             px(560.),
             0.12,
             ui::radius::GLASS,
-            move |_, cx| {
-                _ = handle.update(cx, |s, cx| s.close(cx));
+            move |window, cx| {
+                _ = handle.update(cx, |s, cx| s.close(window, cx));
             },
             body,
             cx,

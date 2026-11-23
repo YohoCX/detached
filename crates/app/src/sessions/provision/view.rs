@@ -3,7 +3,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::Escape;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, ElementId, FontWeight, InteractiveElement, ParentElement, Role,
+    AnyElement, ElementId, FontWeight, InteractiveElement, KeyDownEvent, ParentElement, Role,
     StatefulInteractiveElement, Styled, div, px,
 };
 use kernel::doc::Doc;
@@ -15,7 +15,7 @@ use super::*;
 impl Render for Sheet {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(dialog) = &self.dialog else {
-            return div();
+            return div().into_any_element();
         };
         let title = match dialog {
             Dialog::Form(f) => f.set.as_ref().map_or_else(
@@ -31,24 +31,11 @@ impl Render for Sheet {
             Dialog::Result(_, set, _) if self.busy => format!("Preparing {}", set.name),
             Dialog::Result(_, set, _) => set.name.clone(),
         };
-        let content = div()
-            .id("sessions.provision")
+        let body = div()
+            .id("sessions.provision.fields")
             .flex()
             .flex_col()
             .gap(GAP)
-            .p(GAP * 2.)
-            .max_h(window.viewport_size().height * 0.78)
-            .overflow_y_scroll()
-            .capture_action(cx.listener(|s, _: &Escape, _, cx| {
-                s.close(cx);
-                cx.stop_propagation();
-            }))
-            .child(
-                div()
-                    .text_size(text::TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title.clone()),
-            )
             .map(|d| match dialog {
                 Dialog::Form(form) => self.render_form(d, form, cx),
                 Dialog::Manage(m) => self.render_management(d, m, cx),
@@ -61,17 +48,104 @@ impl Render for Sheet {
                 d.when_some(self.current_op(cx), |d, op| {
                     d.child(mono(op.line.clone(), cx))
                 })
-            })
+            });
+        let header = div().flex().flex_none().items_center().gap(GAP).child(
+            div()
+                .flex_1()
+                .text_size(text::TITLE)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title.clone()),
+        );
+        let frame = div()
+            .id("sessions.provision")
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .track_focus(&self.focus)
             .test_support()
             .role(Role::Dialog)
-            .aria_label(title);
+            .aria_label(title)
+            .capture_action(cx.listener(|s, _: &Escape, _, cx| {
+                s.close(cx);
+                cx.stop_propagation();
+            }))
+            .capture_key_down(cx.listener(|s, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    s.close(cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }));
+        if let Dialog::Form(form) = dialog
+            && form.set.is_none()
+        {
+            let cancel = self.action(
+                "sessions.provision.cancel",
+                "Cancel",
+                Kind::Quiet,
+                true,
+                |s, _, cx| s.close(cx),
+                cx,
+            );
+            let t = theme(cx);
+            return frame
+                .size_full()
+                .items_center()
+                .child(
+                    div()
+                        .size_full()
+                        .max_w(px(760.))
+                        .flex()
+                        .flex_col()
+                        .min_h_0()
+                        .child(
+                            header
+                                .px(GAP * 2.)
+                                .h(px(46.))
+                                .border_b_1()
+                                .border_color(t.line)
+                                .child(cancel),
+                        )
+                        .child(
+                            body.test_support()
+                                .p(GAP * 2.)
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll(),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .justify_end()
+                                .px(GAP * 2.)
+                                .py(GAP)
+                                .border_t_1()
+                                .border_color(t.line)
+                                .child(self.form_button(form, cx)),
+                        ),
+                )
+                .into_any_element();
+        }
+        let content = frame
+            .gap(GAP)
+            .p(GAP * 2.)
+            .max_h(window.viewport_size().height * 0.78)
+            .overflow_y_scroll()
+            .child(header)
+            .child(body)
+            .map(|d| match dialog {
+                Dialog::Form(form) => d.child(self.footer(self.form_button(form, cx), cx)),
+                _ => d,
+            });
         if self.page_mode() {
             return div()
                 .size_full()
                 .flex()
                 .justify_center()
                 .min_h_0()
-                .child(content.max_w(px(760.)).w_full().max_h_full());
+                .child(content.max_w(px(760.)).w_full().max_h_full())
+                .into_any_element();
         }
         let handle = cx.weak_entity();
         ui::modal(
@@ -84,6 +158,7 @@ impl Render for Sheet {
             content,
             cx,
         )
+        .into_any_element()
     }
 }
 
@@ -111,10 +186,10 @@ impl Sheet {
         f: &Form,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        let t = theme(cx);
         let adding = f.set.is_some();
+        let name = self.name.read(cx).value();
         let branch = self.branch.read(cx).value();
-        let n = f.rows.iter().filter(|r| r.checked).count();
+        let t = theme(cx);
         if !adding {
             d = d
                 .child(
@@ -122,130 +197,201 @@ impl Sheet {
                         .flex()
                         .items_center()
                         .gap(GAP)
-                        .child(button(
-                            "sessions.mode.branch",
-                            "A new branch",
-                            Kind::Primary,
-                            true,
-                            |_, _| {},
-                            cx,
-                        ))
+                        .child(
+                            div()
+                                .px(px(8.))
+                                .py(px(4.))
+                                .rounded(ui::radius::SEGMENT)
+                                .bg(t.active_bg)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("A new branch"),
+                        )
                         .child(button(
                             "sessions.mode.adopt",
                             "Worktrees I already have…",
                             Kind::Quiet,
-                            true,
-                            {
-                                let handle = cx.weak_entity();
-                                move |window, cx| {
-                                    _ = handle.update(cx, |s, cx| s.close(cx));
-                                    crate::sessions::sheet::adopt(window, cx);
-                                }
+                            !self.busy,
+                            move |window, cx| {
+                                crate::sessions::sheet::adopt_from_new(name.to_string(), window, cx)
                             },
                             cx,
                         )),
                 )
-                .child(field("Name", "sessions.new.name", &self.name, cx));
+                .child(field("Session name", "sessions.new.name", &self.name, cx));
         }
         d = d
-            .child(field("Branch", "sessions.new.branch", &self.branch, cx))
-            .when(!adding, |d| {
-                d.child(detail(
-                    "The same branch name in every repository. You can override it per repository.",
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(GAP)
+                    .child(detail("Branch", cx))
+                    .child(
+                        div()
+                            .id("sessions.branch.preview")
+                            .test_support()
+                            .aria_label(branch.clone())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(if branch.is_empty() {
+                                detail("From the session name", cx)
+                            } else {
+                                mono(branch.clone(), cx)
+                            }),
+                    )
+                    .child(button(
+                        "sessions.branch.edit",
+                        if f.edit_branch { "Done" } else { "Edit" },
+                        Kind::Quiet,
+                        !self.busy,
+                        self.command(
+                            |s, window, cx| {
+                                if let Some(Dialog::Form(f)) = &mut s.dialog {
+                                    f.edit_branch = !f.edit_branch;
+                                    if f.edit_branch {
+                                        s.branch.update(cx, |input, cx| input.focus(window, cx));
+                                    }
+                                    cx.notify();
+                                }
+                            },
+                            cx,
+                        ),
+                        cx,
+                    )),
+            )
+            .when(f.edit_branch, |d| {
+                d.child(field(
+                    "Shared branch",
+                    "sessions.new.branch",
+                    &self.branch,
                     cx,
                 ))
             })
+            .when_some(
+                f.shared_preview
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err()),
+                |d, error| d.child(warning("sessions.branch.error", error.to_string(), cx)),
+            );
+        d.child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Repositories"),
+        )
+        .child(
+            div().flex().flex_col().children(
+                f.rows
+                    .iter()
+                    .map(|row| self.repository(f, row, &branch, cx)),
+            ),
+        )
+        .when(f.rows.is_empty(), |d| {
+            d.child(detail("No available repositories in this workspace.", cx))
+        })
+    }
+
+    fn repository(
+        &self,
+        f: &Form,
+        row: &Row,
+        branch: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let i = row.i;
+        let request = row.request(branch, cx);
+        let candidate = existing(f, &row.repo.path, &request.branch);
+        let ready_to_check = !request.branch.trim().is_empty();
+        let t = theme(cx);
+        let card = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .py(px(4.))
+            .border_b_1()
+            .border_color(t.line)
             .child(
                 div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Repositories"),
-            );
-        for row in &f.rows {
-            let i = row.i;
-            let request = row.request(&branch, cx);
-            let candidate = existing(f, &row.repo.path, &request.branch);
-            let status = kernel::repo::Repo::get(cx, &row.repo.path).and_then(|r| r.status());
-            let base_input = field("Base", ("sessions.base", i), &row.base, cx);
-            let detail_text = status.and_then(|s| {
-                s.branch.as_ref().map(|b| {
-                    let mut text = b.clone();
-                    if s.behind > 0 {
-                        text.push_str(&format!(" ↓{}", s.behind));
-                    }
-                    if s.ahead > 0 {
-                        text.push_str(&format!(" ↑{}", s.ahead));
-                    }
-                    if let Some(state) = &s.in_progress {
-                        text.push_str(match state {
-                            detached_core::types::InProgress::Merge => " · MERGING",
-                            detached_core::types::InProgress::Rebase => " · REBASING",
-                            detached_core::types::InProgress::CherryPick => " · CHERRY-PICKING",
-                            detached_core::types::InProgress::Revert => " · REVERTING",
-                            detached_core::types::InProgress::Bisect => " · BISECTING",
-                        });
-                    }
-                    text
-                })
-            });
-            let card = div()
-                .flex()
-                .flex_col()
-                .gap(GAP / 2.)
-                .p(GAP)
-                .border_b_1()
-                .border_color(t.line)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(GAP)
-                        .child(
-                            Checkbox::new(("sessions.repository", i))
-                                .checked(row.checked)
-                                .disabled(self.busy)
-                                .label(row.repo.name.clone())
-                                .on_click(cx.listener(move |s, checked: &bool, _, cx| {
-                                    if let Some(Dialog::Form(f)) = &mut s.dialog {
-                                        if f.set.is_some() {
-                                            for row in &mut f.rows {
-                                                row.checked = false;
-                                                row.adopt = false;
-                                            }
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(GAP)
+                    .h(px(28.))
+                    .child(
+                        Checkbox::new(("sessions.repository", i))
+                            .checked(row.checked)
+                            .disabled(self.busy)
+                            .label(row.repo.name.clone())
+                            .on_click(cx.listener(move |s, checked: &bool, _, cx| {
+                                if let Some(Dialog::Form(f)) = &mut s.dialog {
+                                    if f.set.is_some() {
+                                        for row in &mut f.rows {
+                                            row.checked = false;
+                                            row.adopt = false;
                                         }
-                                        f.rows[i].checked = *checked;
                                     }
-                                    s.preview(cx);
-                                })),
-                        )
-                        .when_some(detail_text, |d, text| d.child(mono(text, cx))),
-                );
-            let card = if row.checked {
-                card.when_some(candidate, |d, c| {
-                    let label = if row.adopt {
+                                    f.rows[i].checked = *checked;
+                                }
+                                s.preview(cx);
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .when(row.checked && !row.adopt, |d| {
+                        d.when(ready_to_check && row.preview.is_none(), |d| {
+                            d.child(detail("Checking…", cx))
+                        })
+                        .child(button(
+                            ("sessions.customize", i),
+                            if row.customize {
+                                "Done"
+                            } else {
+                                "Customize…"
+                            },
+                            Kind::Quiet,
+                            !self.busy,
+                            {
+                                let handle = cx.weak_entity();
+                                move |_, cx| {
+                                    _ = handle.update(cx, |s, cx| {
+                                        if let Some(Dialog::Form(f)) = &mut s.dialog {
+                                            f.rows[i].customize = !f.rows[i].customize;
+                                            cx.notify();
+                                        }
+                                    });
+                                }
+                            },
+                            cx,
+                        ))
+                    }),
+            );
+        card.when(row.checked, |card| {
+            card.when_some(candidate, |d, c| {
+                d.child(button(
+                    ("sessions.useWorktree", i),
+                    if row.adopt {
                         "A new worktree".into()
                     } else {
                         format!("Use the worktree at {}", c.path)
-                    };
-                    d.child(button(
-                        ("sessions.useWorktree", i),
-                        label,
-                        Kind::Quiet,
-                        !self.busy,
-                        {
-                            let handle = cx.weak_entity();
-                            move |_, cx| {
-                                _ = handle.update(cx, |s, cx| {
-                                    if let Some(Dialog::Form(f)) = &mut s.dialog {
-                                        f.rows[i].adopt = !f.rows[i].adopt;
-                                    }
-                                    s.preview(cx);
-                                });
-                            }
-                        },
-                        cx,
-                    ))
-                })
-                .when(!row.adopt, |d| {
+                    },
+                    Kind::Quiet,
+                    !self.busy,
+                    {
+                        let handle = cx.weak_entity();
+                        move |_, cx| {
+                            _ = handle.update(cx, |s, cx| {
+                                if let Some(Dialog::Form(f)) = &mut s.dialog {
+                                    f.rows[i].adopt = !f.rows[i].adopt;
+                                }
+                                s.preview(cx);
+                            });
+                        }
+                    },
+                    cx,
+                ))
+            })
+            .when(!row.adopt, |d| {
+                d.when(row.customize, |d| {
+                    let base = field("Base", ("sessions.base", i), &row.base, cx);
                     d.child(field(
                         "Branch override",
                         ("sessions.override", i),
@@ -253,23 +399,38 @@ impl Sheet {
                         cx,
                     ))
                     .map(|d| match &row.preview {
-                        None => d
-                            .child(detail("Checking refs and recipe…", cx))
-                            .child(base_input),
-                        Some(Err(e)) => {
-                            let error = e.to_string();
-                            d.child(warning(
-                                ("sessions.refusal", i),
-                                format!("Refused: {error}"),
-                                cx,
-                            ))
-                            .when(error.contains("Accept the worktree recipe"), |d| {
+                        Some(Ok(p)) if p.new_branch => d
+                            .child(self.base_picker(i, row, p, &request, cx))
+                            .child(base),
+                        Some(Ok(_)) => d,
+                        _ => d.child(base),
+                    })
+                    .when_some(
+                        row.preview.as_ref().and_then(|result| result.as_ref().ok()),
+                        |d, p| {
+                            d.child(detail(format!("{} · as of the last fetch", p.decision), cx))
+                                .child(mono(p.path.display().to_string(), cx))
+                                .child(detail(recipe_text(p), cx))
+                        },
+                    )
+                })
+                .map(|d| match &row.preview {
+                    Some(Err(e)) => {
+                        let error = e.to_string();
+                        d.child(warning(
+                            ("sessions.refusal", i),
+                            format!("Refused: {error}"),
+                            cx,
+                        ))
+                        .when(
+                            error.contains("Accept the worktree recipe"),
+                            |d| {
                                 let repo = row.repo.path.clone();
                                 d.child(button(
                                     ("sessions.trust", i),
                                     "Trust…",
                                     Kind::Quiet,
-                                    true,
+                                    !self.busy,
                                     move |_, cx| {
                                         Workspace::global(cx).update(cx, |w, cx| {
                                             w.set_current(Some(repo.clone()), cx)
@@ -278,92 +439,89 @@ impl Sheet {
                                     },
                                     cx,
                                 ))
-                            })
-                            .child(base_input)
-                        }
-                        Some(Ok(p)) => {
-                            let recipe = recipe_text(p);
-                            d.child(detail(format!("{} · as of the last fetch", p.decision), cx))
-                                .when(p.new_branch, |d| {
-                                    let base = row.base.clone();
-                                    let options = p.bases.clone();
-                                    let caption = request.base.as_ref().map_or_else(
-                                        || {
-                                            format!(
-                                                "{} · recipe",
-                                                p.decision.trim_start_matches("New branch from ")
-                                            )
-                                        },
-                                        |b| format!("{b} · chosen"),
-                                    );
-                                    d.child(button(
-                                        ("sessions.basePicker", i),
-                                        caption,
-                                        Kind::Quiet,
-                                        !self.busy,
-                                        move |window, cx| {
-                                            let mut menu = ui::Menu::default();
-                                            for (label, value) in [
-                                                ("Recipe base".to_string(), String::new()),
-                                                ("The main checkout’s HEAD".into(), "HEAD".into()),
-                                            ]
-                                            .into_iter()
-                                            .chain(options.iter().map(|b| (b.clone(), b.clone())))
-                                            {
-                                                let base = base.clone();
-                                                menu = menu.item(label, move |window, cx| {
-                                                    base.update(cx, |input, cx| {
-                                                        input.set_value(&value, window, cx)
-                                                    });
-                                                });
-                                            }
-                                            menu.show(window.mouse_position(), window, cx);
-                                        },
-                                        cx,
-                                    ))
-                                    .child(base_input)
-                                })
-                                .child(mono(p.path.display().to_string(), cx))
-                                .child(detail(recipe, cx))
-                        }
-                    })
+                            },
+                        )
+                    }
+                    _ => d,
                 })
-                .when(status.is_some_and(|s| s.in_progress.is_some()), |d| {
-                    d.child(detail(
-                        "The main checkout has an operation in progress. A worktree is unaffected.",
-                        cx,
-                    ))
-                })
-            } else {
-                card.child(detail("Not in the session", cx))
-            };
-            d = d.child(card.when_some(f.failures.get(&row.repo.path), |d, error| {
+            })
+            .when_some(f.failures.get(&row.repo.path), |d, error| {
                 d.child(warning(("sessions.creationError", i), error.clone(), cx))
-            }));
-        }
-        if f.rows.is_empty() {
-            d = d.child(detail("No available repositories in this workspace.", cx));
-        }
-        let label = if adding {
-            f.rows.iter().find(|r| r.checked).map_or_else(
+            })
+        })
+    }
+
+    fn base_picker(
+        &self,
+        i: usize,
+        row: &Row,
+        p: &Preview,
+        request: &Request,
+        cx: &App,
+    ) -> AnyElement {
+        let base = row.base.clone();
+        let options = p.bases.clone();
+        let caption = request.base.as_ref().map_or_else(
+            || {
+                format!(
+                    "{} · recipe",
+                    p.decision.trim_start_matches("New branch from ")
+                )
+            },
+            |b| format!("{b} · chosen"),
+        );
+        button(
+            ("sessions.basePicker", i),
+            caption,
+            Kind::Quiet,
+            !self.busy,
+            move |window, cx| {
+                let mut menu = ui::Menu::default();
+                for (label, value) in [
+                    ("Recipe base".to_string(), String::new()),
+                    ("The main checkout’s HEAD".into(), "HEAD".into()),
+                ]
+                .into_iter()
+                .chain(options.iter().map(|b| (b.clone(), b.clone())))
+                {
+                    let base = base.clone();
+                    menu = menu.item(label, move |window, cx| {
+                        base.update(cx, |input, cx| input.set_value(&value, window, cx));
+                    });
+                }
+                menu.show(window.mouse_position(), window, cx);
+            },
+            cx,
+        )
+    }
+
+    fn form_button(&self, f: &Form, cx: &Context<Self>) -> AnyElement {
+        let mut selected = f.rows.iter().filter(|r| r.checked);
+        let label = if f.set.is_some() {
+            selected.next().map_or_else(
                 || "Add repository".into(),
                 |r| format!("Add {}", r.repo.name),
             )
         } else {
-            match n {
+            match selected.count() {
                 0 => "Create worktrees".into(),
                 1 => "Create 1 worktree".into(),
                 n => format!("Create {n} worktrees"),
             }
         };
-        d.child(detail(if adding {
-            "Chats on the entire session can write there from their next message."
-        } else {
-            "Previews use the refs at hand. Create fetches first, so a branch that has appeared on origin is tracked."
-        }, cx))
-            .child(self.footer(button("sessions.create.submit", label, Kind::Primary,
-                !self.busy && valid(f, &self.name.read(cx).value()),
-                self.command(Self::submit, cx), cx), cx))
+        button(
+            "sessions.create.submit",
+            label,
+            Kind::Primary,
+            !self.busy
+                && valid(
+                    f,
+                    &self.name.read(cx).value(),
+                    &self.branch.read(cx).value(),
+                ),
+            self.command(Self::submit, cx),
+            cx,
+        )
     }
 
     fn render_management(
@@ -934,17 +1092,18 @@ fn button(
     cx: &App,
 ) -> AnyElement {
     let label = label.into();
-    match kind {
-        Kind::Primary => ui::primary_button(id, label, cx),
-        Kind::Quiet => ui::quiet_button(id, label, cx),
-        Kind::Danger => ui::danger_button(id, label, cx),
+    let button = match kind {
+        Kind::Primary => ui::primary_button(id, label.clone(), cx),
+        Kind::Quiet => ui::quiet_button(id, label.clone(), cx),
+        Kind::Danger => ui::danger_button(id, label.clone(), cx),
     }
-    .test_support()
+    .role(Role::Button)
+    .aria_label(label)
     .when(!enabled, |d| d.opacity(0.5))
-    .on_click(move |_, window, cx| {
-        if enabled {
-            click(window, cx);
-        }
-    })
-    .into_any_element()
+    .when(enabled, |d| {
+        d.on_click(move |_, window, cx| click(window, cx))
+    });
+    ui::disabled(button, !enabled)
+        .test_support()
+        .into_any_element()
 }

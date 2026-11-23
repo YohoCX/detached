@@ -294,7 +294,7 @@ pub(crate) fn prepare_at(
     checked_recipe(state, repo)
 }
 
-pub(crate) fn check_branch(state: &AppState, repo: &Path, branch: &str) -> Result<()> {
+pub fn check_branch(state: &AppState, repo: &Path, branch: &str) -> Result<()> {
     let check = ["check-ref-format", "--branch", arg(branch)?];
     if out(&state.env(), repo, &check, Kind::Read)
         .ok()

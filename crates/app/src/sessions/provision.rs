@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use detached_core::git::worktree::{Cleanup, Preview};
+use detached_core::git::worktree::{Cleanup, Preview, check_branch};
 use detached_core::sessions::{self, Candidate, Member, Request, Stage, Workset};
 use detached_core::types::RepoInfo;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, Global, IntoElement, Render, Task, WeakEntity,
-    Window,
+    AnyView, App, AppContext, Context, Entity, FocusHandle, Global, IntoElement, Render, Task,
+    WeakEntity, Window,
 };
 use kernel::activity::Activity;
 use kernel::blocking;
@@ -44,6 +44,7 @@ pub fn overlay(window: &mut Window, cx: &mut App) -> AnyView {
         let activity = Activity::global(cx);
         cx.observe(&activity, |_, _, cx| cx.notify()).detach();
         Sheet {
+            focus: cx.focus_handle(),
             name,
             branch,
             dialog: None,
@@ -102,7 +103,29 @@ fn sheet(cx: &App) -> Option<Entity<Sheet>> {
 }
 
 pub fn new(window: &mut Window, cx: &mut App) {
+    if sheet(cx).is_some_and(|sheet| sheet.read(cx).new_form()) {
+        return;
+    }
     form(None, window, cx);
+}
+
+pub(crate) fn dismiss_new(cx: &mut App) {
+    if let Some(sheet) = sheet(cx) {
+        sheet.update(cx, |s, cx| {
+            if s.new_form() && !s.busy {
+                s.close(cx);
+            }
+        });
+    }
+}
+
+pub(super) fn focus_new(window: &mut Window, cx: &mut App) {
+    if let Some(sheet) = sheet(cx)
+        && sheet.read(cx).new_form()
+    {
+        let name = sheet.read(cx).name.clone();
+        name.update(cx, |input, cx| input.focus(window, cx));
+    }
 }
 
 pub fn add(window: &mut Window, cx: &mut App) {
@@ -150,7 +173,9 @@ fn form(set: Option<Workset>, window: &mut Window, cx: &mut App) {
                 .update(cx, |input, cx| input.set_value(branch, window, cx));
             s.name.update(cx, |input, cx| {
                 input.set_value("", window, cx);
-                input.focus(window, cx);
+                if set.is_none() {
+                    input.focus(window, cx);
+                }
             });
             let rows = repos
                 .into_iter()
@@ -172,32 +197,41 @@ fn form(set: Option<Workset>, window: &mut Window, cx: &mut App) {
                         branch,
                         base,
                         checked: false,
+                        customize: false,
                         preview: None,
                         adopt: false,
                     }
                 })
                 .collect();
             if set.is_some() {
-                s.branch.update(cx, |input, cx| input.focus(window, cx));
+                window.focus(&s.focus, cx);
             }
             s.error = None;
             s.loading = None;
-            let adding = set.is_some();
+            let adding = set.as_ref().map(|s| s.id.clone());
             s.dialog = Some(Dialog::Form(Form {
                 ws: ws.clone(),
                 set,
                 rows,
                 generated: String::new(),
+                edit_branch: false,
+                shared_preview: None,
                 existing: vec![],
                 failures: HashMap::new(),
             }));
-            if adding {
+            if let Some(id) = adding {
                 let core = kernel::core(cx).clone();
-                let task = blocking::run(cx, move || sessions::candidates(&core, &ws));
+                let task = blocking::run(cx, {
+                    let ws = ws.clone();
+                    move || sessions::candidates(&core, &ws)
+                });
                 cx.spawn(async move |this, cx| {
                     let rows = task.await.unwrap_or_default();
                     _ = this.update(cx, |s, cx| {
-                        if let Some(Dialog::Form(f)) = &mut s.dialog {
+                        if let Some(Dialog::Form(f)) = &mut s.dialog
+                            && f.ws == ws
+                            && f.set.as_ref().is_some_and(|s| s.id == id)
+                        {
                             f.existing = rows;
                             cx.notify();
                         }
@@ -288,6 +322,8 @@ struct Form {
     set: Option<Workset>,
     rows: Vec<Row>,
     generated: String,
+    edit_branch: bool,
+    shared_preview: Option<detached_core::error::Result<()>>,
     existing: Vec<Candidate>,
     failures: HashMap<String, String>,
 }
@@ -298,6 +334,7 @@ struct Row {
     branch: Entity<InputState>,
     base: Entity<InputState>,
     checked: bool,
+    customize: bool,
     preview: Option<detached_core::error::Result<Preview>>,
     adopt: bool,
 }
@@ -334,6 +371,7 @@ struct Management {
 }
 
 struct Sheet {
+    focus: FocusHandle,
     name: Entity<InputState>,
     branch: Entity<InputState>,
     dialog: Option<Dialog>,
@@ -347,23 +385,21 @@ struct Sheet {
 }
 
 impl Sheet {
+    fn new_form(&self) -> bool {
+        matches!(&self.dialog, Some(Dialog::Form(Form { set: None, .. })))
+    }
+
     fn name_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(Dialog::Form(form)) = &mut self.dialog
             && form.set.is_none()
         {
+            let name = self.name.read(cx).value();
+            let generated = suggested_branch(&name);
             if self.branch.read(cx).value().as_ref() == form.generated {
-                let name = self.name.read(cx).value().trim().to_lowercase();
-                form.generated = if name.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "feature/{}",
-                        name.split_whitespace().collect::<Vec<_>>().join("-")
-                    )
-                };
                 self.branch
-                    .update(cx, |input, cx| input.set_value(&form.generated, window, cx));
+                    .update(cx, |input, cx| input.set_value(&generated, window, cx));
             }
+            form.generated = generated;
             self.preview(cx);
             cx.refresh_windows();
         }
@@ -389,26 +425,40 @@ impl Sheet {
             .rows
             .iter_mut()
             .filter(|r| r.checked && !r.adopt)
-            .map(|row| {
+            .filter_map(|row| {
                 row.preview = None;
-                (row.i, row.request(&branch, cx))
+                let request = row.request(&branch, cx);
+                (!request.branch.trim().is_empty()).then_some((row.i, request))
             })
             .collect();
+        form.shared_preview = None;
         self.loading = None;
-        if !requests.is_empty() {
+        if let Some((_, first)) = requests.first() {
+            // Each row validates its branch. Check the default separately when every row overrides it.
+            let shared = (form.set.is_none()
+                && !branch.trim().is_empty()
+                && !requests
+                    .iter()
+                    .any(|(_, r)| r.branch.as_str() == branch.as_ref()))
+            .then(|| (first.repo.clone(), branch.to_string()));
             let ws = form.ws.clone();
             let core = kernel::core(cx).clone();
             let task = blocking::run(cx, move || {
-                requests
+                let shared = shared.map_or(Ok(()), |(repo, branch)| {
+                    check_branch(&core, repo.as_ref(), &branch)
+                });
+                let rows = requests
                     .into_iter()
                     .map(|(i, r)| (i, sessions::preview(&core, &ws, &r)))
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                (shared, rows)
             });
             self.loading = Some(cx.spawn(async move |this, cx| {
-                let result = task.await;
+                let (shared, rows) = task.await;
                 _ = this.update(cx, |s, cx| {
                     if let Some(Dialog::Form(f)) = &mut s.dialog {
-                        for (i, p) in result {
+                        f.shared_preview = Some(shared);
+                        for (i, p) in rows {
                             f.rows[i].preview = Some(p);
                         }
                     }
@@ -425,11 +475,11 @@ impl Sheet {
             return;
         };
         let name = self.name.read(cx).value().trim().to_owned();
-        if self.busy || !valid(f, &name) {
+        let branch = self.branch.read(cx).value().to_string();
+        if self.busy || !valid(f, &name, &branch) {
             return;
         }
         let ws = f.ws.clone();
-        let branch = self.branch.read(cx).value().to_string();
         let selected: Vec<_> = f.rows.iter().filter(|r| r.checked).collect();
         let adopt = selected.first().filter(|r| r.adopt).and_then(|r| {
             existing(f, &r.repo.path, &r.request(&branch, cx).branch).map(|c| c.path.clone())
@@ -827,8 +877,51 @@ fn existing<'a>(f: &'a Form, repo: &str, branch: &str) -> Option<&'a Candidate> 
         .find(|c| c.repo == repo && c.branch.as_deref() == Some(branch) && c.refusal.is_none())
 }
 
-fn valid(f: &Form, name: &str) -> bool {
-    (f.set.is_some() || !name.is_empty() && !name.eq_ignore_ascii_case("Main checkouts"))
+fn suggested_branch(name: &str) -> String {
+    let name = name.trim();
+    if name.contains('/')
+        && !name.starts_with('-')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && !name.contains("@{")
+        && !name
+            .chars()
+            .any(|c| c.is_ascii_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+    {
+        return name.to_owned();
+    }
+    let lower = name.to_lowercase();
+    let slug = lower
+        .split(|c: char| !c.is_alphanumeric() && !matches!(c, '-' | '_' | '.'))
+        .map(|part| part.trim_matches(['-', '.']))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let slug = slug
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(".");
+    if slug.is_empty() {
+        return String::new();
+    }
+    if let Some(base) = slug.strip_suffix(".lock") {
+        return format!("feature/{base}-lock");
+    }
+    format!("feature/{slug}")
+}
+
+fn valid(f: &Form, name: &str, branch: &str) -> bool {
+    let name = name.trim();
+    (f.set.is_some()
+        || !name.is_empty()
+            && !name.eq_ignore_ascii_case("Main checkouts")
+            && !name.chars().any(char::is_control)
+            && !branch.trim().is_empty()
+            && f.shared_preview.as_ref().is_some_and(Result::is_ok))
         && f.rows.iter().any(|r| r.checked)
         && f.rows
             .iter()
@@ -884,4 +977,29 @@ fn blocker(set: &Workset, repos: &[String], cx: &App) -> Option<String> {
         .iter()
         .find(|op| paths.contains(&op.repo.as_str()) || repos.contains(&op.repo))
         .map(|op| format!("{} is running.", op.label))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_branch;
+
+    #[test]
+    fn branch_suggestions_keep_refs_and_make_valid_slugs_from_titles() {
+        for (name, expected) in [
+            ("", ""),
+            (" ? ... ", ""),
+            ("App maintenance", "feature/app-maintenance"),
+            (
+                "APP-123: Показать статус?",
+                "feature/app-123-показать-статус",
+            ),
+            ("Release 0.6.1", "feature/release-0.6.1"),
+            ("..Ship..0.6.lock...", "feature/ship.0.6-lock"),
+            ("feature/foo.lock", "feature/feature-foo-lock"),
+            ("feature/.hidden", "feature/feature-hidden"),
+            ("Feature/App-maintenance", "Feature/App-maintenance"),
+        ] {
+            assert_eq!(suggested_branch(name), expected, "{name}");
+        }
+    }
 }

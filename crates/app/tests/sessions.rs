@@ -183,6 +183,8 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
     );
     cx.click("sessions.submit");
     wait_until(cx, |cx| cx.workspace(|w, _| w.session_name() == "Release"));
+    assert!(cx.find("sessions.provision").is_none());
+    assert!(cx.find("sessions.sheet").is_none());
     let ws = workspace(&cx.sb);
     let list = sessions::list(&cx.sb.state, &ws).unwrap().sets;
     assert_eq!(list.len(), 1);
@@ -193,6 +195,196 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
     wait_until(cx, |cx| {
         cx.workspace(|w, _| w.session_name() == "Next release")
     });
+}
+
+#[gpui_kit::test]
+fn the_draft_stays_intact_when_leaving_the_worktree_picker(cx: &mut TestAppContext) {
+    use gpui_kit::{ScrollDelta, point, px, size};
+
+    let mut original = String::new();
+    let app = &mut open_app_with(cx, |sb| {
+        checkout(sb, "api");
+        let linked = checkout(sb, "root");
+        original = sessions::adopt(
+            &sb.state,
+            &workspace(sb),
+            "Previous",
+            &[linked.display().to_string()],
+        )
+        .unwrap()
+        .id;
+        for n in 2..=10 {
+            repo(sb, &format!("repo-{n:02}"));
+        }
+    });
+    app.click(SharedString::from(format!("sessions.row.{original}")));
+    app.press("secondary-n");
+    app.update(|w, cx| {
+        w.resize(size(px(900.), px(600.)));
+        w.bounds_changed(cx);
+    });
+
+    let set = |cx: &mut VisualTestContext, id: ElementId, value: &str| {
+        cx.update(|w, cx| w.within(id).click("input-state", cx));
+        cx.press("secondary-a");
+        cx.input(value);
+    };
+    let value = |cx: &mut VisualTestContext, id: ElementId| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.within(id).find("input-state").value().map(String::from)
+        })
+    };
+    set(app, "sessions.new.name".into(), "feature/app-maintenance");
+    assert_eq!(
+        label(app, "sessions.branch.preview").as_deref(),
+        Some("feature/app-maintenance")
+    );
+    assert!(app.find("sessions.new.branch").is_none());
+    app.click("sessions.branch.edit");
+    set(app, "sessions.new.branch".into(), "topic/shared");
+    app.click("sessions.branch.edit");
+    let next_repo = app.find(("sessions.repository", 1usize)).unwrap().bounds();
+    app.click(("sessions.repository", 0usize));
+    assert_eq!(
+        app.find(("sessions.repository", 1usize)).unwrap().bounds(),
+        next_repo
+    );
+    assert!(app.find(("sessions.base", 0usize)).is_none());
+    app.click(("sessions.customize", 0usize));
+    set(app, ("sessions.override", 0usize).into(), "topic/api");
+    set(app, ("sessions.base", 0usize).into(), "HEAD");
+    app.click(("sessions.customize", 0usize));
+
+    for esc in [true, false] {
+        app.click("sessions.mode.adopt");
+        wait_until(app, |cx| cx.find(("sessions.candidate", 0usize)).is_some());
+        assert_eq!(
+            value(app, "sessions.name".into()).as_deref(),
+            Some("feature/app-maintenance")
+        );
+        app.input("A different name in the picker");
+        if esc {
+            app.press("escape");
+        } else {
+            app.click("sessions.cancel");
+        }
+        assert!(app.find("sessions.sheet").is_none());
+        assert!(app.workspace(|w, _| w.session_id() == original));
+        assert_eq!(
+            value(app, "sessions.new.name".into()).as_deref(),
+            Some("feature/app-maintenance")
+        );
+        assert_eq!(
+            label(app, "sessions.branch.preview").as_deref(),
+            Some("topic/shared")
+        );
+        assert_eq!(
+            app.find(("sessions.repository", 0usize)).unwrap().checked(),
+            Some(true)
+        );
+    }
+    app.press("secondary-n");
+    assert_eq!(
+        value(app, "sessions.new.name".into()).as_deref(),
+        Some("feature/app-maintenance")
+    );
+    app.click(("sessions.customize", 0usize));
+    assert_eq!(
+        value(app, ("sessions.override", 0usize).into()).as_deref(),
+        Some("topic/api")
+    );
+    assert_eq!(
+        value(app, ("sessions.base", 0usize).into()).as_deref(),
+        Some("HEAD")
+    );
+
+    let before = app.find("sessions.provision.cancel").unwrap().bounds();
+    let first_row = app.find(("sessions.repository", 0usize)).unwrap().bounds();
+    assert!(app.find("sessions.provision.cancel").unwrap().visible());
+    app.update(|w, cx| {
+        w.scroll(
+            "sessions.provision.fields",
+            ScrollDelta::Pixels(point(px(0.), px(-600.))),
+            cx,
+        )
+    });
+    assert_eq!(
+        app.find("sessions.provision.cancel").unwrap().bounds(),
+        before
+    );
+    assert!(
+        app.find(("sessions.repository", 0usize))
+            .unwrap()
+            .bounds()
+            .top()
+            < first_row.top()
+    );
+    app.click("sessions.provision.cancel");
+    assert!(app.find("sessions.provision").is_none());
+    assert!(app.workspace(|w, _| w.session_id() == original));
+
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "session.adopt"));
+    wait_until(app, |cx| cx.find(("sessions.candidate", 0usize)).is_some());
+    assert_eq!(value(app, "sessions.name".into()).as_deref(), Some(""));
+    app.press("escape");
+    assert!(app.find("sessions.sheet").is_none());
+    assert!(app.find("sessions.provision").is_none());
+    assert!(app.workspace(|w, _| w.session_id() == original));
+
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "session.adopt"));
+    wait_until(app, |cx| cx.find(("sessions.candidate", 1usize)).is_some());
+    let api = (0usize..2)
+        .map(|index| ("sessions.candidate", index))
+        .find(|id| label(app, *id).is_some_and(|name| name.starts_with("api ·")))
+        .unwrap();
+    app.input("Imported");
+    app.click(api);
+    app.click("sessions.submit");
+    wait_until(app, |cx| {
+        cx.workspace(|w, _| w.session_name() == "Imported")
+    });
+    assert!(app.find("sessions.sheet").is_none());
+    assert!(app.find("sessions.provision").is_none());
+}
+
+#[gpui_kit::test]
+fn empty_and_invalid_branches_cannot_create_a_session(cx: &mut TestAppContext) {
+    let app = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    app.press("secondary-n");
+    app.click(("sessions.repository", 0usize));
+    assert!(app.find(("sessions.refusal", 0usize)).is_none());
+    assert_eq!(
+        app.find("sessions.create.submit").unwrap().disabled(),
+        Some(true)
+    );
+
+    app.update(|w, cx| w.within("sessions.new.name").click("input-state", cx));
+    app.input("App maintenance");
+    assert_eq!(
+        label(app, "sessions.branch.preview").as_deref(),
+        Some("feature/app-maintenance")
+    );
+    app.click(("sessions.customize", 0usize));
+    app.update(|w, cx| {
+        w.within(("sessions.override", 0usize))
+            .click("input-state", cx)
+    });
+    app.input("topic/api");
+    app.click("sessions.branch.edit");
+    app.update(|w, cx| w.within("sessions.new.branch").click("input-state", cx));
+    app.press("secondary-a");
+    app.input("bad branch");
+    wait_until(app, |cx| cx.find("sessions.branch.error").is_some());
+    assert_eq!(
+        app.find("sessions.create.submit").unwrap().disabled(),
+        Some(true)
+    );
+    app.press("escape");
+    assert!(app.find("sessions.provision").is_none());
+    assert!(app.workspace(|w, _| w.session_id() == sessions::MAIN));
 }
 
 #[gpui_kit::test]
@@ -433,12 +625,20 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
     let ws = workspace(&app.sb);
     app.press("secondary-n");
     assert!(app.find("sessions.provision").is_some());
-    assert!(app.find("sessions.provisional").is_some());
+    assert_eq!(
+        app.find("sessions.row.main").unwrap().selected(),
+        Some(false)
+    );
+    assert_eq!(
+        app.find("sessions.provisional").unwrap().selected(),
+        Some(true)
+    );
     assert!(app.find(("tree.root", 0usize)).is_none());
     app.input("Banner copy");
     app.click(("sessions.repository", 0usize));
     wait_until(&mut app, |cx| {
-        cx.find(("sessions.basePicker", 0usize)).is_some()
+        cx.find("sessions.create.submit")
+            .is_some_and(|submit| submit.disabled().is_none())
     });
     app.click("sessions.create.submit");
     wait_until(&mut app, |cx| {
@@ -463,7 +663,8 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
     });
     app.click(("sessions.repository", 0usize));
     wait_until(&mut app, |cx| {
-        cx.find(("sessions.basePicker", 0usize)).is_some()
+        cx.find("sessions.create.submit")
+            .is_some_and(|submit| submit.disabled().is_none())
     });
     app.click("sessions.create.submit");
     wait_until(&mut app, |cx| {
@@ -941,7 +1142,8 @@ fn failed_creation_restores_the_editable_form_without_claiming_a_session(cx: &mu
     app.input("Blocked");
     app.click(("sessions.repository", 0usize));
     wait_until(&mut app, |cx| {
-        cx.find(("sessions.basePicker", 0usize)).is_some()
+        cx.find("sessions.create.submit")
+            .is_some_and(|submit| submit.disabled().is_none())
     });
     let collision = app.sb.path("repos/worktrees/api/feature/blocked");
     std::fs::create_dir_all(&collision).unwrap();
