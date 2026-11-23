@@ -71,7 +71,7 @@ tokens!(
     ansi: 16, lanes: 8;
     // Not in theme files: `derive` makes them from the colors above.
     window_bg, panel_bg, header_bg, popover_bg, popover_selected, segment_bg, panel_edge, active_bg,
-    user_bg, code_block_bg
+    tab_active, tab_unfocused, user_bg, code_block_bg
 );
 
 /// The gap between panes and around the window.
@@ -499,6 +499,8 @@ impl Theme {
         };
         self.panel_edge = mix(self.panel_bg.blend(self.panel_line), f, edge);
         self.active_bg = p.blend(self.selected);
+        self.tab_active = self.header_bg.blend(self.selected);
+        self.tab_unfocused = self.header_bg.blend(self.selected_inactive);
         // Dark popovers start lighter than panels, leaving less contrast for status inks.
         self.popover_selected = self.popover_bg.blend(Hsla {
             a: self.selected.a.min(if dark { 0.07 } else { 1. }),
@@ -709,6 +711,22 @@ mod tests {
     }
 
     #[test]
+    fn slate_tab_outlines_contrast_with_the_tab_and_strip() {
+        let (light, dark) = pair(&bundled()[DEFAULT], &bundled()).unwrap();
+        for (mode, t) in [("light", light), ("dark", dark)] {
+            for (state, edge, fill) in [
+                ("focused", t.selected_ring, t.tab_active),
+                ("unfocused", t.muted, t.tab_unfocused),
+            ] {
+                for bg in [fill, t.header_bg] {
+                    let ratio = contrast(edge, bg);
+                    assert!(ratio >= 3., "{mode} {state} tab outline is {ratio:.2}:1");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn text_keeps_4_5_to_1_on_every_ground_it_sits_on() {
         let black: Hsla = rgba(0x000000ff).into();
         for (name, v) in bundled() {
@@ -739,7 +757,8 @@ mod tests {
                 let mut pairs = vec![
                     ("primary_fg", t.primary_fg, "primary", t.primary),
                     ("accent_fg", t.accent_fg, "accent", t.accent),
-                    ("fg", t.fg, "active tab", t.header_bg.blend(t.selected)),
+                    ("fg", t.fg, "active tab", t.tab_active),
+                    ("fg", t.fg, "unfocused or hovered tab", t.tab_unfocused),
                     (
                         "fg",
                         t.fg,

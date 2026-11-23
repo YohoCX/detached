@@ -388,10 +388,10 @@ impl DockAreaRenderer for Skin {
 }
 
 /// The active tab's accent bar on the tab bar's bottom line, growing out from the middle.
-fn underline(color: gpui_kit::Hsla, top: bool) -> impl IntoElement {
+fn underline(color: gpui_kit::Hsla) -> impl IntoElement {
     div()
         .absolute()
-        .map(|d| if top { d.top_0() } else { d.bottom(px(-7.)) })
+        .bottom(px(-7.))
         .h(px(2.))
         .rounded_full()
         .bg(color)
@@ -640,19 +640,23 @@ impl TabGroupRenderer for Group {
         }
         let node = group.node();
         let pane = center && !self.2;
-        let focused = !pane
-            || self
+        let focused = pane
+            && self
                 .0
                 .upgrade()
                 .is_some_and(|a| panes::is_focused(a.read(cx), node, cx));
-        let ring = if focused {
-            let has_keyboard = group
-                .active_panel()
-                .is_some_and(|p| p.focus_handle(cx).contains_focused(window, cx));
-            t.selected_ring
-                .opacity(if pane && !has_keyboard { 0.55 } else { 1. })
+        let (tab_fill, tab_edge) = if focused {
+            (t.tab_active, t.selected_ring)
         } else {
-            t.line
+            (t.tab_unfocused, t.muted)
+        };
+        let outline = BoxShadow::new(px(0.), px(0.), tab_edge)
+            .spread_radius(px(1.))
+            .inset();
+        let (hover_fill, press_fill) = if pane {
+            (t.tab_unfocused, t.tab_active)
+        } else {
+            (t.hover, t.selected_inactive)
         };
         let widths: Vec<f32> = shown
             .iter()
@@ -722,9 +726,7 @@ impl TabGroupRenderer for Group {
                         false => d.h(px(28.)),
                     })
                     .when(!pane, |d| d.rounded(radius::ICON_BUTTON))
-                    .when(pane, |d| {
-                        d.rounded_t(radius::KBD).self_end().text_size(text::SMALL)
-                    })
+                    .when(pane, |d| d.rounded(radius::KBD).text_size(text::SMALL))
                     .when(preview, |d| d.italic())
                     .when_some(l.tip.clone(), |d, tip| {
                         d.aria_description(tip.clone())
@@ -732,16 +734,21 @@ impl TabGroupRenderer for Group {
                     })
                     .relative()
                     .font_weight(FontWeight::MEDIUM)
-                    .map(|d| match on {
-                        true => d
-                            .bg(if pane { t.panel_bg } else { t.selected })
-                            .text_color(t.fg),
-                        false => d
+                    .map(|d| match (pane, on) {
+                        (true, true) => d
+                            .bg(tab_fill)
+                            .shadow(vec![outline.clone()])
+                            .text_color(t.fg)
+                            .font_weight(FontWeight::SEMIBOLD),
+                        (false, true) => d.bg(t.selected).text_color(t.fg),
+                        (_, false) => d
                             .text_color(t.muted)
-                            .hover(|s| s.bg(t.hover).text_color(t.fg))
-                            .active(|s| s.bg(t.selected_inactive)),
+                            .hover(|s| s.bg(hover_fill).text_color(t.fg))
+                            .active(|s| s.bg(press_fill).text_color(t.fg)),
                     })
-                    .when(on && !collapsed, |d| d.child(underline(ring, pane)))
+                    .when(on && !collapsed && !pane, |d| {
+                        d.child(underline(t.selected_ring))
+                    })
                     .on_click(move |e, window, cx| {
                         clicked.select_tab(ix, window, cx);
                         if let Some(a) = super::zones(cx) {
