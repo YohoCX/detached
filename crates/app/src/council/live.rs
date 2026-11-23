@@ -642,7 +642,7 @@ pub(super) fn record_actions<V: 'static>(
     state: &State,
     live: bool,
     confirm: Option<&str>,
-    view: WeakEntity<V>,
+    view: Option<WeakEntity<V>>,
     set_confirm: fn(&mut V, Option<String>),
     cx: &App,
 ) -> AnyElement {
@@ -662,6 +662,10 @@ pub(super) fn record_actions<V: 'static>(
             .gap(GAP)
             .items_center()
             .child(div().flex_1().min_w_0().truncate().child(label));
+        let Some(view) = view.as_ref() else {
+            out = out.child(line);
+            continue;
+        };
         let ids = (
             repo.to_string(),
             task.to_string(),
@@ -713,7 +717,7 @@ pub(super) fn record_actions<V: 'static>(
         };
         out = out.child(line);
     }
-    if state.ended.is_none() && !live && state.started.is_some() {
+    if view.is_some() && state.ended.is_none() && !live && state.started.is_some() {
         let (r, tk, n) = (repo.to_string(), task.to_string(), round.to_string());
         out = out.child(
             div()

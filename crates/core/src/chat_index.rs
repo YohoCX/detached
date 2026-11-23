@@ -1,4 +1,4 @@
-//! The host's index of agent sessions, beside the agents' own transcripts: each one's archive flag.
+//! The host's ownership and archive flags, beside the agents' own transcripts.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -14,6 +14,8 @@ const FILE: &str = "sessions.json";
 pub struct Entry {
     #[serde(default)]
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     #[serde(flatten)]
     other: BTreeMap<String, serde_json::Value>,
 }
@@ -33,11 +35,14 @@ pub fn archive(core: &AppState, id: &str, archived: bool) -> Result<()> {
 }
 
 /// Lists a session the host started, unless it is listed.
-pub fn seen(core: &AppState, id: &str) -> Result<()> {
-    if index(core).contains_key(id) {
-        return Ok(());
-    }
-    edit(core, |all| _ = all.entry(id.into()).or_default())
+pub fn created(core: &AppState, id: &str, provider: &str) -> Result<()> {
+    edit(core, |all| {
+        all.entry(id.into()).or_default().owner = Some(provider.into())
+    })
+}
+
+pub fn owned(core: &AppState, id: &str, provider: &str) -> bool {
+    index(core).get(id).and_then(|e| e.owner.as_deref()) == Some(provider)
 }
 
 /// Drops a deleted session's entry.

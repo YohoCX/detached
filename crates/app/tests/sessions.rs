@@ -191,6 +191,12 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
         let repo = repo(sb, "api");
         sb.commit_files(&repo, "notes", [("notes.txt", "A note\n")]);
         let root = claude(sb, &detached_core::testutil::claude::fake());
+        sb.state
+            .env
+            .write()
+            .unwrap()
+            .vars
+            .push(("CODEX_HOME".into(), sb.path("codex").display().to_string()));
         let real = detached_core::os::canonical(&repo).unwrap();
         let project: String = real
             .display()
@@ -204,11 +210,17 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
             [(
                 format!("{id}.jsonl"),
                 format!(
-                    "{}\n{}\n{}\n",
+                    "{}\n{}\n{}\n{}\n",
                     json!({"type": "user", "uuid": "u", "parentUuid": null, "sessionId": id,
                "message": {"role": "user", "content": "What did we ship?"}}),
                     json!({"type": "assistant", "uuid": "a", "parentUuid": "u", "sessionId": id,
-               "message": {"role": "assistant", "content": [{"type": "text", "text": "The API."}]}}),
+                    "message": {"role": "assistant", "content": [
+                         {"type": "text", "text": "The API."},
+                         {"type":"tool_use", "id":"tool", "name":"Read", "input":{"file_path":"notes.txt"}}
+                    ]}}),
+                    json!({"type": "user", "uuid":"r", "parentUuid":"a", "sessionId":id,
+                        "message":{"role":"user", "content":[{"type":"tool_result", "tool_use_id":"tool",
+                        "content":"Recorded release notes"}]}}),
                     json!({"type": "custom-title", "customTitle": "Release history", "sessionId": id}),
                 ),
             )],
@@ -231,6 +243,9 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
         sb.state.set_block("future", json!({"option": 7})).unwrap();
     });
     assert!(cx.find("doc.file.README.md").is_none());
+    cx.update(|w, cx| detached_app::dock::open("chats", w, cx));
+    wait_until(cx, |cx| cx.find("chats.list").is_some());
+    assert!(cx.find(("chats.past", 0usize)).is_none());
     cx.click("sessions.archive");
     wait_until(cx, |cx| cx.find("sessions.archive.page").is_some());
     assert_eq!(
@@ -264,6 +279,10 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
     });
     assert!(cx.find("archive.transcript").is_some());
     assert!(cx.find("chat.send").is_none());
+    assert_eq!(
+        label(cx, ("archive.message", 2usize)).as_deref(),
+        Some("Recorded release notes")
+    );
     let loc = Location {
         repo: cx.workspace(|w, _| w.repos()[0].path.clone()),
         rev: None,
@@ -280,5 +299,68 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
     assert_eq!(
         cx.settings(|s| s.block::<serde_json::Value>("future")),
         Some(json!({"option": 7}))
+    );
+}
+
+#[gpui_kit::test]
+fn an_archived_council_task_opens_a_read_only_round_and_history_errors_are_visible(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "api");
+        let codex = sb.path("codex");
+        std::fs::write(&codex, "").unwrap();
+        sb.state
+            .env
+            .write()
+            .unwrap()
+            .vars
+            .push(("CODEX_HOME".into(), codex.display().to_string()));
+        let record = detached_core::council::record::Record::create(
+            &repo.join(".git/detached/panels/topic/round"),
+        )
+        .unwrap();
+        record
+            .append(
+                0,
+                &detached_core::council::record::Event::Kept {
+                    participant: "finder".into(),
+                    branch: "kept".into(),
+                    dirty: false,
+                },
+            )
+            .unwrap();
+        let doc = Doc::CouncilTask {
+            repo: repo.display().to_string(),
+            task: "topic".into(),
+        };
+        let mut layout: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/dock-0.5.0.json")).unwrap();
+        layout["center"]["children"][0]["children"] = json!([
+            {"panel_name": "doc", "children": [], "info": {"panel": {"doc": doc, "keep": true}}}
+        ]);
+        layout["center"]["children"][0]["info"]["tabs"]["active_index"] = json!(0);
+        write(
+            &sb.state.config_dir,
+            [("ui.json", json!({"dock.layout": layout}).to_string())],
+        );
+    });
+    cx.click("sessions.archive");
+    wait_until(cx, |cx| {
+        label(cx, ("archive.error", 0usize)).is_some_and(|s| s.contains("Codex"))
+    });
+    cx.click(("archive.savedTab", 0usize));
+    wait_until(cx, |cx| cx.find("council.task.open.round").is_some());
+    assert!(cx.find("council.task.next").is_none());
+    cx.click("council.task.open.round");
+    wait_until(cx, |cx| {
+        label(cx, ("council.kept", 0usize)).as_deref() == Some("finder kept kept")
+    });
+    assert!(cx.find(("council.discard", 0usize)).is_none());
+    assert!(cx.find(("council.merge", 0usize)).is_none());
+    assert!(
+        cx.sb
+            .path("repos/api/.git/detached/panels/topic/round/events.jsonl")
+            .is_file()
     );
 }

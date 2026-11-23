@@ -193,7 +193,7 @@ impl Render for Sheet {
             .flex()
             .flex_col()
             .gap(GAP)
-            .p(px(16.))
+            .p(GAP * 2.)
             .capture_action(cx.listener(|s, _: &Escape, _, cx| {
                 s.close(cx);
                 cx.stop_propagation();
@@ -266,7 +266,7 @@ impl Render for Sheet {
                         )
                         .child(
                             div()
-                                .pl(px(22.))
+                                .pl(GAP * 2.)
                                 .text_size(text::LABEL)
                                 .font_family(ui::theme::mono(cx))
                                 .text_color(t.muted)
@@ -274,7 +274,7 @@ impl Render for Sheet {
                         )
                         .child(
                             div()
-                                .pl(px(22.))
+                                .pl(GAP * 2.)
                                 .text_size(text::SMALL)
                                 .text_color(if row.refusal.is_some() {
                                     t.warning

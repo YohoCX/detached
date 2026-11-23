@@ -110,16 +110,25 @@ impl Workspaces {
         cx.notify();
         let tabs = crate::dock::tabs_of(&id, cx);
         let terminals: Vec<_> = (tabs.iter())
-            .filter(|t| t.read(cx).doc.kind() == "terminal")
+            .filter(|t| {
+                matches!(t.read(cx).doc, kernel::doc::Doc::Terminal { id, .. }
+                if !t.read(cx).legacy() && crate::terminal::docked(id, cx))
+            })
             .map(|t| t.read(cx).title(cx).to_string())
             .collect();
         if !terminals.is_empty() {
             let said = format!("Close its terminal tabs first: {}", terminals.join(", "));
             return super::say(said, true, cx);
         }
-        crate::dock::forget_workspace(&id, window, cx);
-        let gone = move |core: &_| api::remove_workspace(core, id);
-        core_then(cx, gone, |_, cx| kernel::invalidate::rescan(cx)).detach();
+        let window = window.window_handle();
+        let gone = move |core: &_| api::remove_workspace(core, id.clone()).map(|()| id);
+        core_then(cx, gone, move |id, cx| {
+            _ = window.update(cx, |_, window, cx| {
+                crate::dock::forget_workspace(&id, window, cx)
+            });
+            kernel::invalidate::rescan(cx);
+        })
+        .detach();
     }
 
     fn rename(&mut self, from: String, window: &mut Window, cx: &mut Context<Self>) {

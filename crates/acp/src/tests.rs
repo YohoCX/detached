@@ -278,15 +278,58 @@ fn closed(rx: &Receiver<backend::Event>) {
 }
 
 #[test]
-fn a_transcript_replays_without_interfering_with_its_live_chat() {
-    let (acp, sb) = (Acp::default(), sandbox());
-    let (chat, rx) = open(&acp, &sb, None);
-    let spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
-    let transcript = acp.transcript(&sb.state, &spec, &chat.id).unwrap();
-    assert!(matches!(&transcript[..], [Update::User(a), Update::Text(b)]
-        if a == "earlier" && b == "replayed"));
-    chat.prompt("say still here").unwrap();
-    assert_eq!(said(&rx), "still here");
+fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
+    let sb = Sandbox::new();
+    let home = sb.path("codex");
+    sb.state
+        .env
+        .write()
+        .unwrap()
+        .vars
+        .push(("CODEX_HOME".into(), home.display().to_string()));
+    let dir = home.join("sessions/2026/11/23");
+    std::fs::create_dir_all(&dir).unwrap();
+    let repo = sb.dir.path().display().to_string();
+    let id = "38d60b10-15d8-4def-a954-2ffb285421d1";
+    let file = dir.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl"));
+    let text = [
+        json!({"type":"session_meta", "payload":{"id":id, "cwd":repo}}),
+        json!({"type":"event_msg", "payload":{"type":"user_message", "message":"Earlier"}}),
+        json!({"type":"response_item", "payload":{"type":"function_call", "name":"lookup", "call_id":"call"}}),
+        json!({"type":"response_item", "payload":{"type":"function_call_output", "call_id":"call", "output":"recorded output"}}),
+        json!({"type":"response_item", "payload":{"type":"message", "role":"assistant",
+            "content":[{"type":"output_text", "text":"Replayed"}]}}),
+    ].map(|line| line.to_string()).join("\n");
+    std::fs::write(&file, &text).unwrap();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let check = || {
+        let past = acp.archive_past(&sb.state, &spec).unwrap();
+        assert_eq!((&*past[0].id, &*past[0].title), (id, "Earlier"));
+        let shown = acp.transcript(&sb.state, &spec, id).unwrap();
+        assert!(
+            matches!(&shown[..], [Update::User(a), Update::Break, Update::Tool(call), Update::Tool(result), Update::Text(b), Update::Break]
+            if a == "Earlier" && call.id == result.id && result.output == Some(json!("recorded output")) && b == "Replayed")
+        );
+        assert!(acp.adapters.lock().unwrap().is_empty());
+    };
+    check();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    if let Some(zstd) = detached_core::env::which("zstd", &sb.state.env().path) {
+        let output = Command::new(zstd)
+            .args(["-c", "--"])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        std::fs::remove_file(&file).unwrap();
+        let packed = file.with_extension("jsonl.zst");
+        std::fs::write(&packed, &output.stdout).unwrap();
+        check();
+        assert_eq!(std::fs::read(packed).unwrap(), output.stdout);
+        assert!(!file.exists());
+    }
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
 }
 
 #[test]
@@ -812,7 +855,7 @@ fn codex_lists_the_host_s_own_sessions_of_the_folder_and_its_delete_archives() {
     let mut all: Vec<Value> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     all.push(json!({"sessionId": "from-the-cli", "cwd": repo, "title": "mine"}));
     std::fs::write(&file, Value::from(all).to_string()).unwrap();
-    chat_index::seen(&sb.state, &opened.id).unwrap();
+    chat_index::created(&sb.state, &opened.id, CODEX.id).unwrap();
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
     let past = acp.past(&sb.state, &spec).unwrap();
     let listed: Vec<_> = past

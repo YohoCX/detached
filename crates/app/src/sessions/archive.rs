@@ -6,19 +6,21 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    prelude::FluentBuilder,
 };
 
 use crate::dock::{self, DocKind};
 use crate::ui::{self, GAP, text, theme};
 use kernel::doc::Doc;
 use kernel::resource::Interest;
+use kernel::session::Item;
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 pub(super) struct ArchiveDocs;
 
 impl DocKind for ArchiveDocs {
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
         if let Doc::PastChat {
             repo,
             provider,
@@ -100,7 +102,7 @@ impl Archive {
             for provider in PROVIDERS {
                 let key = (repo.clone(), provider.id);
                 if !self.past.iter().any(|(k, _)| *k == key) {
-                    let past = kernel::session::past_of(provider, &repo, cx);
+                    let past = kernel::session::past_of(provider, &repo, true, cx);
                     self.past.push((key, Interest::view(past, cx)));
                 }
             }
@@ -129,6 +131,7 @@ impl Render for Archive {
                     .child("Workspace archive"),
             );
         let tabs = dock::archived_tabs(cx);
+        let no_tabs = tabs.is_empty();
         if !tabs.is_empty() {
             page = page.child(
                 div()
@@ -149,19 +152,27 @@ impl Render for Archive {
             }
         }
         let mut chats = BTreeSet::new();
+        let mut errors = BTreeSet::new();
         let mut index = 0usize;
         for ((repo, provider), history) in &self.past {
+            let history = history.read(cx);
+            let provider = crate::chat::provider(provider);
+            if let Some(error) = history.error.as_ref() {
+                errors.insert(format!(
+                    "{} · {}: {error}",
+                    crate::chat::label(repo, cx),
+                    provider.name
+                ));
+            }
             let list: Vec<_> = history
-                .read(cx)
                 .value
                 .iter()
                 .flatten()
-                .filter(|past| chats.insert((provider, &past.id)))
+                .filter(|past| chats.insert((provider.id, &past.id)))
                 .collect();
             if list.is_empty() {
                 continue;
             }
-            let provider = crate::chat::provider(provider);
             page = page.child(
                 div()
                     .pt(GAP)
@@ -192,6 +203,15 @@ impl Render for Archive {
                 index += 1;
             }
         }
+        let failed = !errors.is_empty();
+        page = page.children(errors.into_iter().enumerate().map(|(i, error)| {
+            div()
+                .id(("archive.error", i))
+                .test_support()
+                .aria_label(error.clone())
+                .text_color(t.error)
+                .child(error)
+        }));
         let loading = self
             .past
             .iter()
@@ -202,7 +222,7 @@ impl Render for Archive {
                     .text_color(t.muted)
                     .child("Loading past conversations…"),
             );
-        } else if chats.is_empty() && dock::archived_tabs(cx).is_empty() {
+        } else if !failed && chats.is_empty() && no_tabs {
             page = page.child(div().text_color(t.muted).child("Nothing is archived."));
         }
         page
@@ -211,7 +231,7 @@ impl Render for Archive {
 
 struct Transcript {
     title: String,
-    result: Option<Result<Vec<(bool, String)>, String>>,
+    result: Option<Result<Vec<Item>, String>>,
 }
 
 impl Transcript {
@@ -238,23 +258,36 @@ impl Transcript {
     }
 }
 
-fn messages(updates: Vec<Update>) -> Vec<(bool, String)> {
-    let mut out: Vec<(bool, String)> = vec![];
-    let mut split = true;
+fn messages(updates: Vec<Update>) -> Vec<Item> {
+    let mut out: Vec<Item> = vec![];
+    let mut split = false;
     for update in updates {
-        let (user, chunk) = match update {
-            Update::User(text) => (true, text),
-            Update::Text(text) => (false, text),
+        match update {
+            Update::Tool(tool) => {
+                if let Some(Item::Tool(was)) = out
+                    .iter_mut()
+                    .rev()
+                    .find(|i| matches!(i, Item::Tool(t) if t.id == tool.id))
+                {
+                    was.update(*tool);
+                } else {
+                    out.push(Item::Tool(*tool));
+                }
+            }
+            Update::User(text) => match out.last_mut() {
+                Some(Item::User(was)) if !split => was.push_str(&text),
+                _ => out.push(Item::User(text)),
+            },
+            Update::Text(text) => match out.last_mut() {
+                Some(Item::Text(was)) if !split => was.push_str(&text),
+                _ => out.push(Item::Text(text)),
+            },
             _ => {
                 split = true;
                 continue;
             }
-        };
-        match out.last_mut() {
-            Some((same, text)) if *same == user && !split => text.push_str(&chunk),
-            _ => out.push((user, chunk)),
         }
-        split = false;
+        split = matches!(out.last(), Some(Item::Tool(_)));
     }
     out
 }
@@ -282,24 +315,46 @@ impl Render for Transcript {
             None => page.child(div().text_color(t.muted).child("Loading transcript…")),
             Some(Err(e)) => page.child(div().text_color(t.error).child(e.clone())),
             Some(Ok(messages)) => {
-                page.children(messages.iter().enumerate().map(|(i, (user, text))| {
-                    div()
-                        .id(("archive.message", i))
-                        .test_support()
-                        .aria_label(text.clone())
-                        .flex()
-                        .flex_col()
-                        .gap(GAP / 2.)
-                        .p(GAP)
-                        .rounded(ui::radius::WIDGET)
-                        .bg(if *user { t.user_bg } else { t.panel_bg })
-                        .child(
-                            div()
-                                .text_size(ui::text::LABEL)
-                                .text_color(t.muted)
-                                .child(if *user { "You" } else { "Assistant" }),
-                        )
-                        .child(text.clone())
+                page.children(messages.iter().enumerate().filter_map(|(i, item)| {
+                    let (label, body) = match item {
+                        Item::User(text) => ("You", text.clone()),
+                        Item::Text(text) => ("Assistant", text.clone()),
+                        Item::Tool(tool) => (
+                            tool.title
+                                .as_deref()
+                                .or(tool.kind.as_deref())
+                                .unwrap_or("Tool"),
+                            tool.output_text(),
+                        ),
+                        _ => return None,
+                    };
+                    Some(
+                        div()
+                            .id(("archive.message", i))
+                            .test_support()
+                            .aria_label(if body.is_empty() {
+                                label.into()
+                            } else {
+                                body.clone()
+                            })
+                            .flex()
+                            .flex_col()
+                            .gap(GAP / 2.)
+                            .p(GAP)
+                            .rounded(ui::radius::WIDGET)
+                            .bg(if matches!(item, Item::User(_)) {
+                                t.user_bg
+                            } else {
+                                t.panel_bg
+                            })
+                            .child(
+                                div()
+                                    .text_size(ui::text::LABEL)
+                                    .text_color(t.muted)
+                                    .child(label.to_string()),
+                            )
+                            .when(!body.is_empty(), |d| d.child(body)),
+                    )
                 }))
             }
         }

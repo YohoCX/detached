@@ -492,7 +492,16 @@ impl Session {
             Some(s) => s.accept.clone(),
         };
         blocking::run(cx, move || {
-            let events = events(me.clone(), past.clone(), tx.clone());
+            let mut events = events(me.clone(), past.clone(), tx.clone());
+            let owner =
+                (past.is_none() && spec.kind == backend::Kind::Chat).then_some(spec.provider.id);
+            let state = core.clone();
+            let events = Box::new(move |event| {
+                if let (Some(provider), Event::Opened(o)) = (owner, &event) {
+                    _ = chat_index::created(&state, &o.id, provider);
+                }
+                events(event);
+            });
             let watched = accept.is_some();
             let started = start(&core, spec.clone(), past.as_deref(), events, accept);
             let started = started.map(|mut s| {
@@ -918,11 +927,6 @@ impl Session {
         let opened = matches!(e, Event::Opened(_));
         match e {
             Event::Opened(o) => {
-                // The chat's, which the lists show; an agent may list other clients' sessions too.
-                if self.seat.is_none() {
-                    let (core, id) = (crate::core(cx).clone(), o.id.clone());
-                    blocking::run(cx, move || _ = chat_index::seen(&core, &id)).detach();
-                }
                 self.id = Some(o.id);
                 self.version = Some(o.version);
                 self.config = o.config;
@@ -1005,15 +1009,7 @@ impl Session {
                     _ => None,
                 });
                 match known {
-                    Some(was) => {
-                        let t = *t;
-                        was.title = t.title.or(was.title.take());
-                        was.kind = t.kind.or(was.kind.take());
-                        was.status = t.status.or(was.status.take());
-                        was.input = t.input.or(was.input.take());
-                        was.output = t.output.or(was.output.take());
-                        was.lines = t.lines.or(was.lines.take());
-                    }
+                    Some(was) => was.update(*t),
                     None => items.push(Item::Tool(*t)),
                 }
             }
@@ -1332,18 +1328,27 @@ fn blocked(blocks: &[&str], was: &str, now: &str) -> bool {
 /// The past sessions in the spec's folder, newest first, each archived as the host's index says.
 pub fn past(spec: Spec, cx: &App) -> Task<Result<Vec<backend::Past>>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || listed(&core, &spec))
+    blocking::run(cx, move || listed(&core, &spec, false))
 }
 
-fn listed(core: &AppState, spec: &Spec) -> Result<Vec<backend::Past>> {
-    let mut all = backend(spec.provider).past(core, spec)?;
+fn listed(core: &AppState, spec: &Spec, archive: bool) -> Result<Vec<backend::Past>> {
+    let backend = backend(spec.provider);
+    let mut all = if archive {
+        backend.archive_past(core, spec)?
+    } else {
+        backend.past(core, spec)?
+    };
     let index = chat_index::index(core);
     for p in &mut all {
         p.cwd = Some(spec.repo.clone());
         p.provider = spec.provider.id.into();
         if let Some(e) = index.get(&p.id) {
             p.tag = e.archived.then(|| "archived".into());
+            p.owned = e.owner.as_deref() == Some(spec.provider.id);
         }
+    }
+    if archive {
+        all.retain(|p| !p.owned || p.archived());
     }
     Ok(all)
 }
@@ -1352,10 +1357,15 @@ fn listed(core: &AppState, spec: &Spec) -> Result<Vec<backend::Past>> {
 pub fn past_of(
     provider: &'static Provider,
     folder: &str,
+    archive: bool,
     cx: &mut App,
 ) -> Entity<Resource<Vec<backend::Past>>> {
     let folder = folder.to_string();
-    let key = format!("past:{}:{folder}", provider.id);
+    let key = if archive {
+        format!("archive:{}:{folder}", provider.id)
+    } else {
+        format!("past:{}:{folder}", provider.id)
+    };
     resource::get(cx, key, || {
         let policy = Policy {
             fresh_for: Some(Duration::from_secs(60)),
@@ -1364,7 +1374,7 @@ pub fn past_of(
         Resource::new(policy, move |cx| {
             let core = crate::core(cx).clone();
             let spec = Spec::new(provider, &folder, backend::Kind::Chat);
-            move || listed(&core, &spec)
+            move || listed(&core, &spec, archive)
         })
     })
 }
@@ -1382,6 +1392,11 @@ pub fn transcript(
     })
 }
 
+pub fn owned(provider: &'static Provider, id: String, cx: &App) -> Task<bool> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || chat_index::owned(&core, &id, provider.id))
+}
+
 /// Archives or unarchives the past session `id` in the host's index.
 pub fn archive(id: String, archived: bool, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
@@ -1392,6 +1407,11 @@ pub fn archive(id: String, archived: bool, cx: &App) -> Task<Result<()>> {
 pub fn delete(spec: Spec, id: String, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
     blocking::run(cx, move || {
+        if !chat_index::owned(&core, &id, spec.provider.id) {
+            return Err(Error::Other(
+                "Only chats created by Detached can be deleted.".into(),
+            ));
+        }
         backend(spec.provider).delete(&core, &spec, &id)?;
         chat_index::forget(&core, &id)
     })

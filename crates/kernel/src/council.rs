@@ -95,7 +95,16 @@ impl Rounds {
 }
 
 pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
-    let key = format!("council\0{repo}");
+    rounds_view(cx, repo, false)
+}
+
+pub fn rounds_view(cx: &mut App, repo: &str, read_only: bool) -> Entity<Resource<Rounds>> {
+    let scope = if read_only {
+        "council-archive"
+    } else {
+        "council"
+    };
+    let key = format!("{scope}\0{repo}");
     let repo = repo.to_string();
     resource::get(cx, key, || {
         Resource::new(
@@ -108,7 +117,7 @@ pub fn rounds(cx: &mut App, repo: &str) -> Entity<Resource<Rounds>> {
                 move || {
                     let mut rounds = council::for_repo(&core, &repo)?;
                     let mut records = BTreeMap::new();
-                    for (task, run, dir) in run::records(&core, Path::new(&repo))? {
+                    for (task, run, dir) in run::records_view(&core, Path::new(&repo), read_only)? {
                         match record::read(&dir) {
                             Ok(events) => {
                                 let state = State::replay(&events);

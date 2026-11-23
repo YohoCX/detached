@@ -169,10 +169,12 @@ fn pass(cx: &mut App, all: bool) {
                             .as_deref()
                             .map_or_else(Vec::new, |id| api::list_repos(&core, id));
                         let sessions = id.as_deref().map(|id| {
-                            detached_core::sessions::list(&core, id).map_err(|error| FileProblem {
-                                file: core.data_dir.join("workspaces"),
-                                error: error.to_string(),
-                                backup: None,
+                            detached_core::sessions::list_for(&core, id, &list).map_err(|error| {
+                                FileProblem {
+                                    file: core.data_dir.join("workspaces"),
+                                    error: error.to_string(),
+                                    backup: None,
+                                }
                             })
                         });
                         (id, RepoList::new(list), sessions)

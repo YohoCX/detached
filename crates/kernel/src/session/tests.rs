@@ -982,7 +982,7 @@ fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut Tes
     let id = s.read_with(cx, |s, _| s.id.clone());
     let again = open_spec(spec.clone(), id.clone(), cx);
     assert_eq!(turn(&again, "say on", cx), "on");
-    let past = listed(&f.core, &spec).unwrap();
+    let past = listed(&f.core, &spec, false).unwrap();
     assert_eq!(
         past.iter().map(|p| &p.id).collect::<Vec<_>>(),
         [&id.unwrap()]

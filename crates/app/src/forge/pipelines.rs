@@ -64,6 +64,7 @@ struct RunForm {
 
 /// A repo's pipelines; with `mr`, that MR's, without the branch scope and Run Pipeline….
 pub struct Pipelines {
+    read_only: bool,
     /// The MR page's repo; None follows the current one.
     fixed: Option<String>,
     mr: Option<u64>,
@@ -88,6 +89,7 @@ impl Pipelines {
     pub fn new(
         repo: Option<String>,
         mr: Option<u64>,
+        read_only: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -99,6 +101,7 @@ impl Pipelines {
             }),
         ];
         let mut this = Pipelines {
+            read_only,
             fixed: repo,
             mr,
             repo: None,
@@ -242,6 +245,9 @@ impl Pipelines {
         then: fn(&mut Self),
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let Some(repo) = self.repo.clone() else {
             return;
         };
@@ -265,7 +271,8 @@ impl Pipelines {
     }
 
     fn take_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mr.is_none() && cx.try_global::<Session>().is_some_and(|s| s.run) {
+        if !self.read_only && self.mr.is_none() && cx.try_global::<Session>().is_some_and(|s| s.run)
+        {
             cx.global_mut::<Session>().run = false;
             self.open_run(window, cx);
         }
@@ -649,17 +656,17 @@ impl Pipelines {
                     )
                     .child(div().min_w_0().truncate().text_color(t.muted).child(meta)),
             )
-            .when(retry_failed, |d| {
+            .when(!self.read_only && retry_failed, |d| {
                 d.child(button(
                     "retry-failed",
                     "Retry Failed",
                     PipelineAction::RetryFailed,
                 ))
             })
-            .when(p.retryable, |d| {
+            .when(!self.read_only && p.retryable, |d| {
                 d.child(button("retry", "Retry", PipelineAction::Retry))
             })
-            .when(p.cancellable, |d| {
+            .when(!self.read_only && p.cancellable, |d| {
                 d.child(button("cancel", "Cancel", PipelineAction::Cancel))
             })
     }
@@ -729,13 +736,13 @@ impl Pipelines {
                     })
                     .child(div().text_color(t.muted).child(duration)),
             )
-            .when(j.playable, |d| {
+            .when(!self.read_only && j.playable, |d| {
                 d.child(button("play", "Play", JobAction::Play))
             })
-            .when(j.retryable, |d| {
+            .when(!self.read_only && j.retryable, |d| {
                 d.child(button("retry", "Retry", JobAction::Retry))
             })
-            .when(j.cancellable, |d| {
+            .when(!self.read_only && j.cancellable, |d| {
                 d.child(button("cancel", "Cancel", JobAction::Cancel))
             })
     }
@@ -802,9 +809,10 @@ impl Render for Pipelines {
         }
         let setup = self.setup.clone().filter(|_| list.is_none());
         let body = match (&list, error.clone(), setup.clone()) {
+            (None, _, Some(s)) if self.read_only => note("pipelines.setup", &s, t.muted),
             (None, _, Some(s)) => setup_note("pipelines.setup", "pipelines.settings", s, cx),
             (None, Some(e), None) => {
-                let settings = e.ends_with("in Settings");
+                let settings = !self.read_only && e.ends_with("in Settings");
                 div()
                     .id("pipelines.error")
                     .test_support()

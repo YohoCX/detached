@@ -14,12 +14,12 @@ impl DocKind for StatsDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "chats"
     }
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::CouncilStats { repo } = doc else {
             unreachable!()
         };
         cx.new(|cx| StatsView {
-            rounds: Interest::view(kernel::council::rounds(cx, repo), cx),
+            rounds: Interest::view(kernel::council::rounds_view(cx, repo, read_only), cx),
             at: None,
             stats: Stats::new(),
         })

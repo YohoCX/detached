@@ -60,7 +60,7 @@ impl JobLog {
         };
         // Opening the shown job again starts it over, as it does after a retry.
         let shown = cx.subscribe(&Workspace::global(cx), |this: &mut Self, w, e, cx| {
-            if matches!(e, Event::Shown) && w.read(cx).shown() == Some(&this.doc) {
+            if matches!(e, Event::Shown { .. }) && w.read(cx).shown() == Some(&this.doc) {
                 this.start(cx);
             }
         });

@@ -195,6 +195,15 @@ pub fn live(cx: &App) -> Vec<String> {
     shells.map(|s| s.read(cx).title().to_string()).collect()
 }
 
+pub(crate) fn docked(id: u64, cx: &App) -> bool {
+    cx.try_global::<Global_>().is_some_and(|t| {
+        t.0.read(cx)
+            .docked
+            .iter()
+            .any(|s| s.entity_id().as_u64() == id)
+    })
+}
+
 pub fn register(cx: &mut App) -> Vec<Registration> {
     let terminal = AppSpec {
         name: "terminal",
@@ -240,7 +249,7 @@ impl DocKind for TerminalDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "code"
     }
-    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, _: bool, window: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Terminal { id, cwd } = doc else {
             unreachable!()
         };

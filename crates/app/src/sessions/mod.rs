@@ -345,7 +345,7 @@ fn member(name: String, path: &str, state: MemberState, cx: &App) -> AnyElement 
         .items_center()
         .gap(GAP / 2.)
         .h(px(22.))
-        .pl(px(30.))
+        .pl(GAP * 3.)
         .pr(GAP)
         .text_size(text::SMALL)
         .text_color(t.muted)

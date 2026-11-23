@@ -110,9 +110,9 @@ impl Shell {
             cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.observe(&dock, |_, _, cx| cx.notify()),
             cx.subscribe_in(&workspace, window, |this, w, e: &Event, window, cx| {
-                if let (Event::Shown, Some(doc)) = (e, w.read(cx).shown().cloned()) {
+                if let (Event::Shown { keep }, Some(doc)) = (e, w.read(cx).shown().cloned()) {
                     this.dock
-                        .update(cx, |a, cx| dock::show_doc(a, doc, window, cx));
+                        .update(cx, |a, cx| dock::show_doc(a, doc, *keep, window, cx));
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),

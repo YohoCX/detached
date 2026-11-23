@@ -21,7 +21,7 @@ pub const NAME: &str = "doc";
 /// `replace`'s `new`, which may be any kind that shares the preview tab.
 pub trait DocKind {
     /// Built when the tab is first on screen; it may update `doc`, as a restored shell its id.
-    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView;
+    fn view(&self, doc: &mut Doc, read_only: bool, window: &mut Window, cx: &mut App) -> AnyView;
     /// The tab's element id, stable for tests.
     fn id(&self, doc: &Doc) -> SharedString;
     /// The center category its tab is in, one `register_category` made.
@@ -150,7 +150,7 @@ impl DocTab {
         self.kind.tip(&self.doc, cx)
     }
 
-    pub(super) fn legacy(&self) -> bool {
+    pub(crate) fn legacy(&self) -> bool {
         self.legacy
     }
 
@@ -187,7 +187,8 @@ impl Focusable for DocTab {
 impl Render for DocTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let archive = self
-            .legacy
+            .session
+            .is_none()
             .then_some(match &self.doc {
                 Doc::Chat { .. } => Some("Read earlier conversations from the Archive page."),
                 Doc::Terminal { .. } => {
@@ -198,7 +199,7 @@ impl Render for DocTab {
             .flatten();
         if self.view.is_none() && archive.is_none() {
             let kind = self.kind.clone();
-            self.view = Some(kind.view(&mut self.doc, window, cx));
+            self.view = Some(kind.view(&mut self.doc, self.session.is_none(), window, cx));
         }
         div()
             .flex()

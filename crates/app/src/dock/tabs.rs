@@ -277,8 +277,11 @@ pub fn tabs_of(id: &str, cx: &App) -> Vec<Entity<DocTab>> {
 
 /// Closes workspace `id`'s tabs and forgets what its center showed.
 pub fn forget(id: &str, window: &mut Window, cx: &mut App) {
-    for t in tabs_of(id, cx) {
-        super::close_doc(t, window, cx);
-    }
+    let tabs = tabs_of(id, cx);
+    super::with(cx, |area, cx| {
+        for tab in tabs {
+            area.remove_panel(tab, window, cx);
+        }
+    });
     ui_state::set(&format!("tabs.{id}"), serde_json::Value::Null, cx);
 }

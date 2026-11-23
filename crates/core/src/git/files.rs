@@ -19,8 +19,18 @@ pub fn walker(repo: &Path) -> WalkBuilder {
     b.hidden(false)
         .parents(false)
         .ignore(false)
-        .filter_entry(|e| e.file_name() != ".git");
+        .filter_entry(|e| {
+            e.depth() == 0
+                || (e.file_name() != ".git"
+                    && !e
+                        .file_type()
+                        .is_some_and(|t| t.is_dir() && checkout(e.path())))
+        });
     b
+}
+
+fn checkout(dir: &Path) -> bool {
+    dir.join(".git").symlink_metadata().is_ok()
 }
 
 /// Working-tree files (None) or the files at `rev`, sorted.
@@ -64,28 +74,10 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
     };
     let by_path: HashMap<&str, &FileChange> =
         changes.iter().map(|c| (c.path.as_str(), c)).collect();
-    // Status lists an untracked nested repo once, as `dir/`, even with `-uall`.
-    let untracked_dirs: Vec<&str> = changes
-        .iter()
-        .map(|c| c.path.as_str())
-        .filter(|p| p.ends_with('/'))
-        .collect();
     Ok(files
         .into_iter()
         .map(|path| {
-            let change = match by_path.get(path.as_str()) {
-                Some(c) => Some((*c).clone()),
-                None => untracked_dirs
-                    .iter()
-                    .any(|d| path.starts_with(d))
-                    .then(|| FileChange {
-                        path: path.clone(),
-                        orig_path: None,
-                        index: '?',
-                        worktree: '?',
-                        conflicted: false,
-                    }),
-            };
+            let change = by_path.get(path.as_str()).map(|c| (*c).clone());
             FileEntry {
                 path,
                 change,
@@ -193,6 +185,9 @@ pub fn tree(
             }
             let is_dir = e.file_type()?.is_dir();
             if is_dir {
+                if checkout(&path) {
+                    continue;
+                }
                 entries.push(FileEntry {
                     path: format!("{relative}/"),
                     change: None,
@@ -221,15 +216,19 @@ pub fn tree(
 
 /// One level beneath an ignored folder; descendants stay lazy.
 pub fn children(repo: &Path, dir: &str, settings: &TreeSettings) -> Result<Vec<FileEntry>> {
-    if !Path::new(dir)
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)))
-    {
-        return Err(Error::Other("Invalid tree directory".into()));
+    let mut folder = repo.to_path_buf();
+    for part in Path::new(dir).components() {
+        let std::path::Component::Normal(name) = part else {
+            return Err(Error::Other("Invalid tree directory".into()));
+        };
+        folder.push(name);
+        if name == ".git" || !folder.symlink_metadata()?.is_dir() || checkout(&folder) {
+            return Ok(vec![]);
+        }
     }
     let hidden = settings.matcher();
     let mut entries = vec![];
-    for e in std::fs::read_dir(repo.join(dir))? {
+    for e in std::fs::read_dir(folder)? {
         let e = e?;
         let name = e.file_name();
         if name == ".git" {
@@ -240,6 +239,9 @@ pub fn children(repo: &Path, dir: &str, settings: &TreeSettings) -> Result<Vec<F
             continue;
         }
         let lazy = e.file_type()?.is_dir();
+        if lazy && checkout(&e.path()) {
+            continue;
+        }
         entries.push(FileEntry {
             path: if lazy { format!("{path}/") } else { path },
             change: None,
@@ -363,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn dot_entries_work_in_linked_worktrees_and_nested_repositories() {
+    fn each_checkout_is_walked_from_its_own_root() {
         let sb = Sandbox::new();
         let work = sb.clone_pair("work");
         sb.commit(&work, ".gitignore", ".cache/\n", "ignore");
@@ -378,24 +380,32 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "").unwrap();
         }
-        let entries = tree(&sb.state.env(), &linked, None, &Default::default()).unwrap();
-        for path in [".cache/", "nested/.cache/"] {
-            assert!(
-                entries
-                    .iter()
-                    .any(|e| e.path == path && e.ignored && e.lazy)
-            );
-        }
+        let ignored = linked.join(".cache/inside");
+        sb.git(
+            &work,
+            &["worktree", "add", "--detach", ignored.to_str().unwrap()],
+        );
+        let settings = TreeSettings::default();
+        let env = sb.state.env();
+        let entries = tree(&env, &linked, None, &settings).unwrap();
         assert!(
             entries
                 .iter()
-                .any(|e| e.path == "nested/f"
-                    && e.change.as_ref().is_some_and(|c| c.worktree == '?'))
+                .any(|e| e.path == ".cache/" && e.ignored && e.lazy)
+        );
+        assert!(entries.iter().all(|e| !e.path.starts_with("nested/")));
+        assert_eq!(
+            paths(&env, &linked.join("nested"), None).unwrap(),
+            [".gitignore", "f"]
+        );
+        assert_eq!(
+            children(&linked, ".cache", &settings).unwrap()[0].path,
+            ".cache/a"
         );
         assert!(
-            entries
-                .iter()
-                .all(|e| !e.path.split('/').any(|n| n == ".git"))
+            children(&linked, ".cache/inside", &settings)
+                .unwrap()
+                .is_empty()
         );
         let old: FileEntry = serde_json::from_str(r#"{"path":"f","change":null}"#).unwrap();
         assert!(!old.ignored && !old.lazy);

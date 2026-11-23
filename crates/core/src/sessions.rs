@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::council::{fix, tree};
+use crate::council::{fix, run};
 use crate::error::{Error, Result};
 use crate::git::worktree;
 use crate::paths::directories;
@@ -108,6 +108,10 @@ fn segment(id: &str) -> bool {
 }
 
 pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
+    list_for(core, workspace, &core.list_repos(workspace))
+}
+
+pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Result<Listing> {
     if !segment(workspace) {
         return Err(Error::Other("Invalid workspace id".into()));
     }
@@ -120,7 +124,7 @@ pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
             backup: None,
         })
     };
-    for dir in directories(&root(core))? {
+    for dir in workspace_dirs(core) {
         let parent = dir.join("sessions");
         match directories(&parent) {
             Ok(dirs) => {
@@ -137,6 +141,11 @@ pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
     }
     manifests.sort_by(|(x, a), (y, b)| (a.created, &a.id, x).cmp(&(b.created, &b.id, y)));
     let env = core.env();
+    let attached: HashSet<_> = attached
+        .iter()
+        .filter(|r| r.worktree_of.is_none())
+        .map(|r| real(Path::new(&r.path)))
+        .collect();
     let mut repos = HashMap::new();
     let mut claimed = HashSet::new();
     let mut sets = vec![];
@@ -150,22 +159,28 @@ pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
             }
             member.state = if !first {
                 MemberState::Conflict
+            } else if !attached.contains(&real(Path::new(&member.repo))) {
+                MemberState::Unavailable
             } else if !present(&path) {
                 MemberState::Missing
             } else {
-                match repos
-                    .entry(member.repo.clone())
-                    .or_insert_with(|| worktree::linked(&env, Path::new(&member.repo)))
-                {
+                match repos.entry(member.repo.clone()).or_insert_with(|| {
+                    let repo = Path::new(&member.repo);
+                    Ok::<_, Error>((
+                        real(&run::common(core, repo)?),
+                        worktree::linked(&env, repo)?,
+                    ))
+                }) {
                     Err(_) => MemberState::Unavailable,
-                    Ok(trees) => match trees
+                    Ok((common, trees)) => match trees
                         .iter()
                         .find(|t| t.prunable.is_none() && real(&t.path) == path)
                     {
-                        Some(tree) => {
+                        Some(tree) if registered(&env, common, &path) => {
                             member.branch.clone_from(&tree.branch);
                             MemberState::Ready
                         }
+                        Some(_) => MemberState::Unavailable,
                         None => MemberState::Missing,
                     },
                 }
@@ -178,9 +193,36 @@ pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
     Ok(Listing { sets, problems })
 }
 
+fn workspace_dirs(core: &AppState) -> impl Iterator<Item = PathBuf> {
+    core.get_settings()
+        .workspaces
+        .into_iter()
+        .filter_map(|w| segment(&w.id).then(|| root(core).join(w.id)))
+}
+
+fn registered(env: &crate::env::Env, common: &Path, path: &Path) -> bool {
+    use crate::git::runner::{Kind, out};
+    let args = [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-dir",
+        "--git-common-dir",
+    ];
+    let Ok(dirs) = out(env, path, &args, Kind::Read) else {
+        return false;
+    };
+    let mut dirs = dirs.lines().map(|s| real(Path::new(s)));
+    let Some(git) = dirs.next() else { return false };
+    let registrations = common.join("worktrees");
+    dirs.next().as_deref() == Some(common)
+        && git.parent() == Some(registrations.as_path())
+        && fs::read_to_string(git.join("gitdir"))
+            .is_ok_and(|link| real(&git.join(link.trim_end())) == real(&path.join(".git")))
+}
+
 fn owned(core: &AppState) -> Result<HashMap<PathBuf, String>> {
     let mut owned = HashMap::new();
-    for dir in directories(&root(core))? {
+    for dir in workspace_dirs(core) {
         for dir in directories(&dir.join("sessions"))? {
             if let Some(set) = manifest(&dir.join(MANIFEST))? {
                 for member in set.members {
@@ -225,25 +267,33 @@ fn candidates_for(
         if trees.is_empty() {
             continue;
         }
-        let fixes = fix::worktrees(core, repo);
+        let common = real(&run::common(core, repo)?);
+        let records = fix::worktrees(&common);
         let managed = real(&worktree::root(&core.data_dir, repo, Path::new(folder)));
         for tree in trees {
             let actual = real(&tree.path);
-            let prefix = tree.branch.as_deref().and_then(|b| b.split_once('/'));
-            let refusal = if prefix.is_some_and(|(p, _)| p == fix::PREFIX) {
+            let valid =
+                tree.prunable.is_none() && present(&actual) && registered(&env, &common, &actual);
+            let refusal = if actual.starts_with(&council_trees) {
+                Some("A Council run's worktree".into())
+            } else if let Err(error) = &records {
+                Some(format!("Could not read Council records: {error}"))
+            } else if records
+                .as_ref()
+                .is_ok_and(|(fixes, _)| fixes.contains(&actual))
+            {
                 Some("A Fix's worktree: it stays its Fix's".into())
-            } else if prefix.is_some_and(|(p, _)| p == tree::PREFIX)
-                || actual.starts_with(&council_trees)
+            } else if records
+                .as_ref()
+                .is_ok_and(|(_, kept)| tree.branch.as_ref().is_some_and(|b| kept.contains(b)))
             {
                 Some("A Council run's worktree".into())
-            } else if let Err(error) = &fixes {
-                Some(format!("Could not read Fix records: {error}"))
-            } else if fixes.as_ref().is_ok_and(|fixes| fixes.contains(&actual)) {
-                Some("A Fix's worktree: it stays its Fix's".into())
             } else if let Some(owner) = owned.get(&actual) {
                 Some(format!("Owned by {owner}"))
-            } else if tree.prunable.is_some() || !present(&tree.path) {
+            } else if !present(&actual) || tree.prunable.is_some() {
                 Some("Its folder is gone".into())
+            } else if !valid {
+                Some("Its checkout does not match Git's registration".into())
             } else if tree.locked.is_some() {
                 Some("Locked".into())
             } else if tree.branch.is_none() {
@@ -251,7 +301,7 @@ fn candidates_for(
             } else {
                 None
             };
-            let changes = if selected.is_none() && present(&tree.path) {
+            let changes = if selected.is_none() && valid {
                 crate::git::status::status(&env, &tree.path)
                     .ok()
                     .map(|s| s.changes.len())
@@ -273,7 +323,7 @@ fn candidates_for(
     Ok(rows)
 }
 
-fn lock(core: &AppState, workspace: &str) -> Result<File> {
+fn require_workspace(core: &AppState, workspace: &str) -> Result<()> {
     if !segment(workspace)
         || !core
             .get_settings()
@@ -283,6 +333,10 @@ fn lock(core: &AppState, workspace: &str) -> Result<File> {
     {
         return Err(Error::Other(format!("No workspace {workspace}")));
     }
+    Ok(())
+}
+
+pub(crate) fn lock(core: &AppState) -> Result<File> {
     let root = root(core);
     fs::create_dir_all(&root)?;
     let file = File::options()
@@ -310,7 +364,8 @@ fn name(value: &str) -> Result<String> {
 
 pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) -> Result<Workset> {
     let name = name(label)?;
-    let _lock = lock(core, workspace)?;
+    let _lock = lock(core)?;
+    require_workspace(core, workspace)?;
     let selected: HashSet<_> = paths.iter().map(|p| real(Path::new(p))).collect();
     if selected.is_empty() || selected.len() != paths.len() {
         return Err(Error::Other("Select distinct linked worktrees".into()));
@@ -357,7 +412,8 @@ pub fn rename(core: &AppState, workspace: &str, id: &str, label: &str) -> Result
     if !segment(id) || id == MAIN {
         return Err(Error::Other("Choose a named session to rename".into()));
     }
-    let _lock = lock(core, workspace)?;
+    let _lock = lock(core)?;
+    require_workspace(core, workspace)?;
     let path = root(core)
         .join(workspace)
         .join("sessions")

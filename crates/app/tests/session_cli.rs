@@ -121,6 +121,34 @@ fn mode_and_model_switch_between_turns_and_an_unknown_one_is_refused() {
 }
 
 #[test]
+fn an_old_chat_prints_its_transcript_and_cannot_be_deleted() {
+    let sb = sandbox();
+    let (out, code) = session(&sb, &["say earlier"], "");
+    assert_eq!(code, 0, "{out}");
+    let id = out
+        .split("[session] ")
+        .nth(1)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap();
+    let index = sb.state.data_dir.join("sessions.json");
+    std::fs::write(
+        &index,
+        serde_json::json!({(id): {"archived": false}}).to_string(),
+    )
+    .unwrap();
+    let (out, code) = session(&sb, &["--resume", id], "say newer\n");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("You: say earlier") && !out.contains("newer"),
+        "{out}"
+    );
+    assert_eq!(session(&sb, &["--delete", id], "").1, 1);
+    assert!(session(&sb, &["--past"], "").0.starts_with(id));
+}
+
+#[test]
 fn an_unknown_answer_asks_again_and_a_cyrillic_y_allows() {
     let sb = sandbox();
     let (out, code) = session(&sb, &["ask; say done"], "yes\n\u{443}\n");

@@ -302,7 +302,7 @@ fn a_codex_chat_shows_a_command_s_output_switches_its_mode_and_lists_itself() {
         seen.tools
     );
     open.set(Setting::Mode("read-only".into())).unwrap();
-    chat_index::seen(&sb.state, &open.id).unwrap();
+    chat_index::created(&sb.state, &open.id, CODEX.id).unwrap();
     let past = Acp::default().past(&sb.state, &spec).unwrap();
     assert!(past.iter().any(|p| p.id == open.id), "{past:?}");
     assert!(config() == before, "the user's config.toml changed");

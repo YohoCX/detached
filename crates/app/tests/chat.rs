@@ -68,6 +68,7 @@ fn project(sb: &Sandbox, cwd: &Path) -> PathBuf {
 /// A past conversation `id` in `cwd`, titled `title`, in which "fix it" was answered "fixed", last
 /// written `age` seconds ago.
 fn past(sb: &Sandbox, cwd: &Path, id: &str, title: &str, age: u64) -> PathBuf {
+    detached_core::chat_index::created(&sb.state, id, "claude").unwrap();
     let dir = project(sb, cwd);
     std::fs::create_dir_all(&dir).unwrap();
     let lines = [

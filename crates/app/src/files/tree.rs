@@ -19,7 +19,7 @@ use gpui_kit::{
     prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::api::{DiffDoc, Location, Side, open, show_diff};
+use super::api::{DiffDoc, Location, Side, show_diff};
 use crate::actions;
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, GAP, Icon, Suggest, text, theme};
@@ -430,7 +430,14 @@ impl Tree {
         cx.notify();
     }
 
-    fn activate(&mut self, repo: &str, path: &str, expand: Option<bool>, cx: &mut Context<Self>) {
+    fn activate(
+        &mut self,
+        repo: &str,
+        path: &str,
+        expand: Option<bool>,
+        keep: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.sel = Some((repo.into(), path.into()));
         if path.is_empty() {
             if let Some(open) = expand {
@@ -443,16 +450,15 @@ impl Tree {
             if let Some(open) = expand {
                 self.expand(repo, path, !open, cx);
             } else {
-                open(
-                    cx,
-                    Location {
-                        repo: repo.into(),
-                        rev,
-                        path: path.into(),
-                        line: None,
-                        doc: None,
-                    },
-                );
+                let loc = Location {
+                    repo: repo.into(),
+                    rev,
+                    path: path.into(),
+                    line: None,
+                    doc: None,
+                };
+                kernel::nav::visit(cx, &loc);
+                Workspace::global(cx).update(cx, |w, cx| w.show_tab(loc.into(), keep, cx));
             }
         }
         cx.notify();
@@ -522,10 +528,10 @@ impl Tree {
             }
             ("enter", Some(r)) => match &r.kind {
                 TreeRowKind::File(row) => {
-                    self.activate(&r.repo, r.path(), row.dir.then_some(row.open), cx)
+                    self.activate(&r.repo, r.path(), row.dir.then_some(row.open), true, cx)
                 }
                 TreeRowKind::Change(change) => self.open_change(&r.repo, change, cx),
-                _ => self.activate(&r.repo, r.path(), r.expandable(), cx),
+                _ => self.activate(&r.repo, r.path(), r.expandable(), true, cx),
             },
             _ => return,
         }
@@ -686,7 +692,7 @@ impl Tree {
                     .px(px(8.))
                     .gap(px(5.))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.activate(&repo, "", available.then_some(open), cx)
+                        this.activate(&repo, "", available.then_some(open), false, cx)
                     }))
                     .child(
                         div()
@@ -799,7 +805,9 @@ impl Tree {
             .pr(px(8.))
             .whitespace_nowrap()
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, _, _, cx| this.activate(&repo, &path, expand, cx)))
+            .on_click(cx.listener(move |this, e: &gpui_kit::ClickEvent, _, cx| {
+                this.activate(&repo, &path, expand, e.click_count() > 1, cx)
+            }))
             .children((0..r.depth).map(|d| {
                 let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
                 guide.left(px(14. + 16. * d as f32))

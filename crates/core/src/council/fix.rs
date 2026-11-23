@@ -210,9 +210,9 @@ pub fn passed(env: &Env, repo: &Path, head: &str, f: &host::Finding, recheck: &S
     }
 }
 
-pub(crate) fn worktrees(core: &AppState, repo: &Path) -> Result<BTreeSet<PathBuf>> {
-    let common = run::common(core, repo)?;
+pub(crate) fn worktrees(common: &Path) -> Result<(BTreeSet<PathBuf>, BTreeSet<String>)> {
     let mut paths = BTreeSet::new();
+    let mut branches = BTreeSet::new();
     for name in ["detached/council", "detached/panels"] {
         for task in crate::paths::directories(&common.join(name))? {
             for round in crate::paths::directories(&task)? {
@@ -220,6 +220,7 @@ pub(crate) fn worktrees(core: &AppState, repo: &Path) -> Result<BTreeSet<PathBuf
                     continue;
                 }
                 let mut latest = std::collections::HashMap::new();
+                let mut kept = BTreeSet::new();
                 for (_, event) in super::record::read(&round)? {
                     match event {
                         Event::Fix { finding, tree, .. } => {
@@ -233,13 +234,20 @@ pub(crate) fn worktrees(core: &AppState, repo: &Path) -> Result<BTreeSet<PathBuf
                                 paths.remove(&path);
                             }
                         }
+                        Event::Kept { branch, .. } => {
+                            kept.insert(branch);
+                        }
+                        Event::BranchDone { branch, .. } => {
+                            kept.remove(&branch);
+                        }
                         _ => {}
                     }
                 }
+                branches.extend(kept);
             }
         }
     }
-    Ok(paths)
+    Ok((paths, branches))
 }
 
 /// Whether the Fix of `finding` in `task`'s `run` passed its latest re-check, as the records read

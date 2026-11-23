@@ -149,7 +149,7 @@ impl ChatView {
             s.check_trust(cx);
         });
         let repo = session.read(cx).repo.clone();
-        let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
+        let past = Interest::view(kernel::session::past_of(p, &repo, false, cx), cx);
         scroll.scroll_to_bottom();
         let seen = session.read(cx).feed(cx).len();
         ChatView {
@@ -188,7 +188,7 @@ impl ChatView {
                 .update(cx, |s, cx| s.set_placeholder(text, window, cx));
         }
         if self.past.0 != p.id {
-            let past = kernel::session::past_of(p, &repo, cx);
+            let past = kernel::session::past_of(p, &repo, false, cx);
             self.past = (p.id, Interest::view(past, cx));
         }
     }
@@ -1968,7 +1968,9 @@ impl ChatView {
                 .into_any_element();
         }
         let past = self.past.1.read(cx).value.iter().flatten();
-        let mut past: Vec<&Past> = past.filter(|p| enabled && !p.archived()).collect();
+        let mut past: Vec<&Past> = past
+            .filter(|p| enabled && p.owned && !p.archived())
+            .collect();
         past.sort_by_key(|p| std::cmp::Reverse(p.modified));
         let rows: Vec<_> = past
             .into_iter()
@@ -2196,11 +2198,7 @@ fn title_of(t: &Tool, asking: bool) -> String {
 
 /// The end of what a call printed, or why it was denied.
 fn output(t: &Tool) -> String {
-    match &t.output {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(v) => v.to_string(),
-        None => String::new(),
-    }
+    t.output_text()
 }
 
 /// Whether a call went well; None while it runs.

@@ -85,18 +85,93 @@ fn council_worktrees_are_refused_without_records() {
     let (sb, ws, repo, free) = setup();
     let trees = sb.state.data_dir.join("trees");
     fs::create_dir_all(&trees).unwrap();
-    for (path, branch) in [
-        (sb.path("fix"), "detached-fix/run/f1"),
-        (sb.path("finder"), "detached-run/run/finder"),
-        (trees.join("finder"), "ordinary-branch"),
-    ] {
-        let path = path.display().to_string();
-        sb.git(&repo, &["worktree", "add", "-b", branch, &path]);
-        let error = adopt(&sb.state, &ws, "Council", &[free.clone(), path]).unwrap_err();
-        assert!(error.to_string().contains("worktree"), "{error}");
-        assert!(list(&sb.state, &ws).unwrap().sets.is_empty());
-    }
+    let path = trees.join("finder").display().to_string();
+    sb.git(&repo, &["worktree", "add", "-b", "ordinary-branch", &path]);
+    let error = adopt(&sb.state, &ws, "Council", &[free.clone(), path]).unwrap_err();
+    assert!(error.to_string().contains("worktree"), "{error}");
+    assert!(list(&sb.state, &ws).unwrap().sets.is_empty());
     adopt(&sb.state, &ws, "Free", &[free]).unwrap();
+}
+
+#[test]
+fn prefixes_alone_are_free_but_a_recorded_finder_branch_is_reserved() {
+    let (sb, ws, repo, _) = setup();
+    for (name, branch) in [
+        ("fix", "detached-fix/docs"),
+        ("run", "detached-run/docs"),
+        ("kept", "kept"),
+    ] {
+        let path = sb.path(name).display().to_string();
+        sb.git(&repo, &["worktree", "add", "-b", branch, &path]);
+        if name == "kept" {
+            let common = crate::council::run::common(&sb.state, &repo).unwrap();
+            let record = Record::create(&common.join("detached/council/task/round")).unwrap();
+            record
+                .append(
+                    0,
+                    &Event::Kept {
+                        participant: "finder".into(),
+                        branch: branch.into(),
+                        dirty: false,
+                    },
+                )
+                .unwrap();
+            let err = adopt(&sb.state, &ws, name, &[path]).unwrap_err();
+            assert!(err.to_string().contains("Council run"));
+        } else {
+            adopt(&sb.state, &ws, name, &[path]).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_replacement_checkout_does_not_satisfy_the_old_registration() {
+    let (sb, ws, repo, path) = setup();
+    adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();
+    fs::rename(&path, sb.path("moved")).unwrap();
+    let other = sb.clone_pair("other");
+    sb.git(&other, &["worktree", "add", "-b", "other", &path]);
+    assert!(
+        worktree::linked(&sb.state.env(), &repo).unwrap()[0]
+            .prunable
+            .is_none()
+    );
+    let set = list(&sb.state, &ws).unwrap().sets.remove(0);
+    assert_eq!(set.members[0].state, MemberState::Unavailable);
+
+    sb.state.remove_workspace(ws).unwrap();
+    let ws = sb.state.save_workspace("New".into(), None).unwrap();
+    sb.state
+        .add_folder(Some(ws.clone()), repo.display().to_string())
+        .unwrap();
+    let error = adopt(&sb.state, &ws, "Wrong repo", &[path]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not match Git's registration"),
+        "{error}"
+    );
+}
+
+#[test]
+fn workspace_removal_releases_claims_and_detaching_only_makes_members_unavailable() {
+    let (sb, ws, repo, path) = setup();
+    let folder = repo.display().to_string();
+    let set = adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();
+    sb.state.remove_folder(ws.clone(), folder.clone()).unwrap();
+    let detached = list(&sb.state, &ws).unwrap().sets.remove(0);
+    assert_eq!(detached.id, set.id);
+    assert_eq!(detached.members[0].state, MemberState::Unavailable);
+    sb.state
+        .add_folder(Some(ws.clone()), folder.clone())
+        .unwrap();
+    assert_eq!(list(&sb.state, &ws).unwrap().sets, [set]);
+
+    let other = sb.state.save_workspace("Other".into(), None).unwrap();
+    sb.state.add_folder(Some(other.clone()), folder).unwrap();
+    sb.state.remove_workspace(ws).unwrap();
+    assert!(Path::new(&path).is_dir());
+    adopt(&sb.state, &other, "Renewal", &[path]).unwrap();
 }
 
 #[test]

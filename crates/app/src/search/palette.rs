@@ -167,8 +167,7 @@ impl Palette {
         let recent = nav::recent(cx);
         let w = Workspace::get(cx);
         let mine = |l: &Location| {
-            w.session_repos().iter().any(|r| r.path == l.repo)
-                && (all || self.mode != Some(Mode::File) || w.session_current() == Some(&l.repo))
+            all || self.mode != Some(Mode::File) || w.session_current() == Some(&l.repo)
         };
         self.recent = recent.into_iter().filter(mine).map(Item::File).collect();
         let placeholder = match (self.mode, all, w.session_current()) {

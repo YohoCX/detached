@@ -696,7 +696,7 @@ impl TabGroupRenderer for Group {
                         a.update(cx, |a, cx| super::reveal(a, id, window, cx));
                     }
                 });
-                match labels[ix].doc.clone() {
+                match labels[ix].doc.clone().filter(|d| !d.read(cx).legacy()) {
                     Some(d) => menu.hint(
                         ui::icon_button(("tabs.more.close", ix), Icon::Close.size(px(10.)), cx)
                             .test_support()

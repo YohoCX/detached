@@ -407,7 +407,13 @@ fn leave_archive_for_live_doc(doc: &Doc, cx: &mut App) {
 /// Brings forward the current workspace's tab holding `doc`, else shows a file or diff in the
 /// preview tab of its category in the center, else opens a new tab there; its category comes
 /// forward.
-pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Context<DockArea>) {
+pub fn show_doc(
+    area: &mut DockArea,
+    doc: Doc,
+    keep: bool,
+    window: &mut Window,
+    cx: &mut Context<DockArea>,
+) {
     leave_archive_for_live_doc(&doc, cx);
     let Some(kind) = doc_kind(doc.kind(), cx) else {
         return;
@@ -430,7 +436,7 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
             };
             tabs.iter()
                 .find(free)
-                .filter(|_| preview && !Workspace::get(cx).archive())
+                .filter(|_| preview && !keep && !Workspace::get(cx).archive())
         })
         .map(|(p, id, t)| (*p, *id, t.clone()));
     match found {
@@ -438,12 +444,17 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
             if p == DockPlacement::Center {
                 tabs::set(category, cx);
             }
-            tab.update(cx, |t, cx| t.set_doc(doc, kind, window, cx));
+            tab.update(cx, |t, cx| {
+                t.set_doc(doc, kind, window, cx);
+                if keep {
+                    t.keep(cx);
+                }
+            });
             reveal(area, id, window, cx);
         }
         None => {
             tabs::set(category, cx);
-            let tab = DocTab::new(doc, kind, !preview, cx);
+            let tab = DocTab::new(doc, kind, keep || !preview, cx);
             area.add_panel(tab, DockPlacement::Center, None, window, cx);
         }
     }
@@ -487,7 +498,9 @@ pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut Ap
 }
 
 pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
-    with(cx, |a, cx| a.remove_panel(tab, window, cx));
+    if !tab.read(cx).legacy() {
+        with(cx, |a, cx| a.remove_panel(tab, window, cx));
+    }
 }
 
 /// Closes every document tab whose doc `gone` picks.
@@ -495,7 +508,7 @@ pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App
     with(cx, |a, cx| {
         let tabs: Vec<_> = docs(a)
             .into_iter()
-            .filter(|(_, _, t)| gone(&t.read(cx).doc))
+            .filter(|(_, _, t)| !t.read(cx).legacy() && gone(&t.read(cx).doc))
             .collect();
         for (_, _, tab) in tabs {
             a.remove_panel(tab, window, cx);
@@ -504,7 +517,7 @@ pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App
 }
 
 pub(crate) fn show(doc: Doc, window: &mut Window, cx: &mut App) {
-    with(cx, |area, cx| show_doc(area, doc, window, cx));
+    with(cx, |area, cx| show_doc(area, doc, false, window, cx));
 }
 
 pub(crate) fn archived_tabs(cx: &App) -> Vec<Entity<DocTab>> {

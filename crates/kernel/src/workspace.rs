@@ -23,7 +23,9 @@ const CURRENT: &str = "workspace.current";
 
 pub enum Event {
     /// `show` ran, even with the same doc: its tab comes forward and focuses it.
-    Shown,
+    Shown {
+        keep: bool,
+    },
     /// A repo's status was refreshed, changed or not; views showing its files reload.
     Status(String),
     /// A listed repo's entity changed. Views that follow a repo by path take this.
@@ -315,8 +317,12 @@ impl Workspace {
 
     /// Opens `doc` in a tab, or brings forward the tab that has it.
     pub fn show(&mut self, doc: Doc, cx: &mut Context<Self>) {
+        self.show_tab(doc, false, cx);
+    }
+
+    pub fn show_tab(&mut self, doc: Doc, keep: bool, cx: &mut Context<Self>) {
         self.shown = Some(doc);
-        cx.emit(Event::Shown);
+        cx.emit(Event::Shown { keep });
         cx.notify();
     }
 
@@ -454,14 +460,16 @@ impl Workspace {
                 .members
                 .iter()
                 .filter(|m| m.state == MemberState::Ready)
-                .map(|m| {
-                    let main = self.repos.iter().find(|r| r.path == m.repo);
-                    RepoInfo {
-                        name: main.map_or_else(|| repo_name(&m.repo).into(), |r| r.name.clone()),
-                        folder: main.map_or_else(|| m.repo.clone(), |r| r.folder.clone()),
+                .filter_map(|m| {
+                    let main = self.repos.iter().find(|r| {
+                        r.worktree_of.is_none() && self.path_key(&r.path) == self.path_key(&m.repo)
+                    })?;
+                    Some(RepoInfo {
+                        name: main.name.clone(),
+                        folder: main.folder.clone(),
                         path: m.path.clone(),
                         worktree_of: Some(m.repo.clone()),
-                    }
+                    })
                 })
                 .collect(),
             None => self
@@ -508,13 +516,6 @@ impl Workspace {
         }
         cx.notify();
     }
-}
-
-fn repo_name(path: &str) -> &str {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -725,7 +726,7 @@ mod tests {
             cx.subscribe(&workspace, move |_, e: &Event, _| match e {
                 Event::Status(r) => seen.borrow_mut().push(format!("status {r}")),
                 Event::Changed(r) => seen.borrow_mut().push(format!("changed {r}")),
-                Event::Shown => seen.borrow_mut().push("shown".into()),
+                Event::Shown { .. } => seen.borrow_mut().push("shown".into()),
                 Event::Switched => seen.borrow_mut().push("switched".into()),
                 Event::SessionChanged => seen.borrow_mut().push("session changed".into()),
             })

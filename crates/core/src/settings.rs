@@ -394,6 +394,7 @@ impl AppState {
 
     /// Drops workspace `id` from the settings; its folders and repos stay where they are.
     pub fn remove_workspace(&self, id: String) -> Result<()> {
+        let _sessions = crate::sessions::lock(self)?;
         self.update_field("workspaces", |s| s.workspaces.retain(|w| w.id != id))
             .map(drop)
     }

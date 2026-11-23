@@ -282,7 +282,7 @@ impl DocKind for StubDocs {
         "code"
     }
 
-    fn view(&self, _: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, _: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
         cx.new(|_| Stub).into()
     }
 
@@ -807,7 +807,7 @@ impl DocKind for Counted {
         "code"
     }
 
-    fn view(&self, _: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, _: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
         cx.new(|_| Stub).into()
     }
 

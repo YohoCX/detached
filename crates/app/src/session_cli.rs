@@ -85,6 +85,35 @@ pub fn run(core: Arc<AppState>, args: &[String]) -> ! {
                 Err(e) => exit(&e.to_string(), 1),
             })
             .detach();
+        } else if let Some(id) = run.resume.clone() {
+            let owned = session::owned(spec.provider, id.clone(), cx);
+            cx.spawn(async move |cx| {
+                if owned.await {
+                    cx.update(|cx| chat(spec, run, cx));
+                    return;
+                }
+                let transcript =
+                    cx.update(|cx| session::transcript(spec.provider, spec.repo, id, cx));
+                match transcript.await {
+                    Ok(updates) => {
+                        for update in updates {
+                            use detached_core::backend::Update;
+                            match update {
+                                Update::User(text) => println!("You: {text}"),
+                                Update::Text(text) => print!("{text}"),
+                                Update::Break => println!(),
+                                Update::Tool(tool) if tool.output.is_some() => {
+                                    println!("{}", tool.output_text());
+                                }
+                                _ => {}
+                            }
+                        }
+                        exit("", 0)
+                    }
+                    Err(e) => exit(&e.to_string(), 1),
+                }
+            })
+            .detach();
         } else {
             chat(spec, run, cx);
         }

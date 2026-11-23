@@ -28,6 +28,7 @@ use futures::channel::oneshot;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
+mod history;
 mod mcp;
 
 /// Pages of a session list read at most.
@@ -80,6 +81,7 @@ impl Backend for Acp {
                     tag: None,
                     model: None,
                     provider: String::new(),
+                    owned: false,
                 }
             }));
             cursor = r.next_cursor;
@@ -91,29 +93,12 @@ impl Backend for Acp {
         Ok(all)
     }
 
-    fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
-        // A separate adapter isolates live chat routes. Codex's thread/resume may write session files.
-        let (live, _) = Acp::default().adapter(core, spec)?;
-        let options = Options {
-            cwd: spec.repo.clone().into(),
-            ..Default::default()
-        };
-        live.adapter.load_session(id, &options)?;
-        let events = live
-            .demux
-            .lock()
-            .unwrap()
-            .early
-            .remove(id)
-            .unwrap_or_default();
-        live.adapter.close_session(id);
-        Ok(events
-            .into_iter()
-            .filter_map(|event| match event {
-                backend::Event::Update(update) => Some(update),
-                _ => None,
-            })
-            .collect())
+    fn archive_past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
+        history::past(core, &spec.repo)
+    }
+
+    fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        history::transcript(core, id)
     }
 
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {

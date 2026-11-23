@@ -1253,6 +1253,32 @@ fn selected_row(cx: &mut VisualTestContext) -> Option<String> {
         .find_map(|e| e.label().map(String::from))
 }
 
+#[gpui_kit::test]
+fn explorer_double_click_and_enter_keep_their_file_tabs(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "solo");
+        sb.commit_files(
+            &repo,
+            "files",
+            [("a.txt", "a"), ("folder/b.txt", "b"), ("c.txt", "c")],
+        );
+    });
+    open_tree(cx, "solo");
+    wait_until(cx, |cx| tree(cx).iter().any(|name| name == "a.txt"));
+    let i = tree_row(cx, "a.txt").0;
+    double_click(cx, ("tree.row", i));
+    wait_until(cx, editor_focused);
+    click_row(cx, "folder");
+    cx.press("right");
+    cx.press("down");
+    assert_eq!(selected_row(cx).as_deref(), Some("b.txt"));
+    cx.press("enter");
+    click_row(cx, "c.txt");
+    assert!(cx.find("doc.file.a.txt").is_some());
+    assert!(cx.find("doc.file.folder/b.txt").is_some());
+    assert!(cx.find("doc.file.c.txt").is_some());
+}
+
 /// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
 fn open_tree(cx: &mut TestApp, repo: &str) {
     let repo = cx.sb.repo(repo);
