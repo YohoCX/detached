@@ -1018,17 +1018,59 @@ pub(super) fn menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoEleme
     menu.button(("pane.menu", node.as_u64() as usize), trigger, w, cx)
 }
 
+type OpenCheckout = fn(String, &mut Window, &mut App);
+
 pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
-    let mut menu = DrawnMenu::default()
-        .item("New chat", move |w, cx| {
-            click(node, w, cx);
-            actions::dispatch(w, cx, "agent.chat");
-        })
+    let mut menu = DrawnMenu::default();
+    let repos = Workspace::get(cx).session_repos();
+    let actions: [(_, _, OpenCheckout); 4] = [
+        ("New chat", "Choose checkout for new chat", |repo, _, cx| {
+            crate::chat::new_chat(repo, cx);
+        }),
+        ("Terminal", "Choose checkout for terminal", |repo, w, cx| {
+            crate::terminal::open_tab(repo, w, cx);
+        }),
+        ("Log", "Choose checkout for log", |repo, w, cx| {
+            super::open_doc(Doc::Log { repo }, true, w, cx);
+        }),
+        (
+            "Processes",
+            "Choose checkout for processes",
+            |repo, w, cx| {
+                super::open_doc(Doc::Process { repo }, true, w, cx);
+            },
+        ),
+    ];
+    for (label, title, open) in actions {
+        menu = menu.item_if(!repos.is_empty(), label, move |w, cx| {
+            let repos = Workspace::get(cx).session_repos();
+            let layout = super::layout_key(cx);
+            let run = move |repo, w: &mut Window, cx: &mut App| {
+                if super::layout_key(cx) == layout
+                    && super::zones(cx).is_some_and(|area| {
+                        area.read(cx)
+                            .layout(DockPlacement::Center)
+                            .is_some_and(|tree| tree.find_node(node).is_some())
+                    })
+                {
+                    click(node, w, cx);
+                    open(repo, w, cx);
+                }
+            };
+            match repos {
+                [] => {}
+                [repo] => run(repo.path.clone(), w, cx),
+                _ => crate::search::choose_checkout(title, run, cx),
+            }
+        });
+    }
+    menu = menu
+        .separator()
         .item("Find in session", move |w, cx| {
             click(node, w, cx);
             actions::dispatch(w, cx, "find.inFiles");
-        });
-    menu = menu.separator();
+        })
+        .separator();
     for (label, name) in [
         ("Chats", "chats"),
         ("Council", "council"),
@@ -1042,42 +1084,10 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
             super::open(name, w, cx);
         });
     }
-    menu = menu
-        .item("Create merge request…", move |w, cx| {
-            click(node, w, cx);
-            actions::dispatch(w, cx, "mr.create");
-        })
-        .separator();
-    for repo in Workspace::get(cx).session_repos() {
-        let path = repo.path.clone();
-        let log = path.clone();
-        let process = path.clone();
-        let chat = path.clone();
-        menu = menu
-            .item(format!("Chat in {}", repo.name), move |w, cx| {
-                click(node, w, cx);
-                crate::chat::new_chat(chat.clone(), cx);
-            })
-            .item(format!("Terminal · {}", repo.name), move |w, cx| {
-                click(node, w, cx);
-                crate::terminal::open_tab(path.clone(), w, cx);
-            })
-            .item(format!("Log · {}", repo.name), move |w, cx| {
-                click(node, w, cx);
-                super::open_doc(Doc::Log { repo: log.clone() }, true, w, cx);
-            })
-            .item(format!("Processes · {}", repo.name), move |w, cx| {
-                click(node, w, cx);
-                super::open_doc(
-                    Doc::Process {
-                        repo: process.clone(),
-                    },
-                    true,
-                    w,
-                    cx,
-                );
-            });
-    }
+    menu = menu.item("Create merge request…", move |w, cx| {
+        click(node, w, cx);
+        actions::dispatch(w, cx, "mr.create");
+    });
     let trigger =
         ui::titled(ui::icon_button("pane.new", ui::Icon::Plus, cx), "New tab").test_support();
     menu.button(("pane.new", node.as_u64() as usize), trigger, w, cx)

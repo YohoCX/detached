@@ -38,6 +38,10 @@ enum Item {
     Session(String, String),
     Archived(String, String),
     Tab(String, gpui_kit::base::dock::PanelId),
+    Checkout {
+        name: String,
+        path: String,
+    },
 }
 
 impl Item {
@@ -45,6 +49,7 @@ impl Item {
     fn text(&self) -> &str {
         match self {
             Item::File(l) => &l.path,
+            Item::Checkout { name, .. } => name,
             Item::Branch { label, .. } => label,
             Item::Action(a, _) => a.title,
             Item::Session(_, title) | Item::Archived(_, title) | Item::Tab(title, _) => title,
@@ -164,7 +169,7 @@ impl Palette {
         let mode = cx.global::<Search>().mode;
         let previous = self.mode;
         if mode != self.mode {
-            if self.mode.is_none() {
+            if self.mode.is_none() || matches!(mode, Some(Mode::Checkout(_))) {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
                 self.branches.clear();
                 self.branch_repo = None;
@@ -218,6 +223,7 @@ impl Palette {
             (Some(Mode::Everywhere), _, _) => format!("Search in {}", w.session_name()),
             (Some(Mode::Session), _, _) => "Switch to a session or a tab".into(),
             (Some(Mode::Tabs), _, _) => "Switch to a tab in this pane".into(),
+            (Some(Mode::Checkout(_)), _, _) => "Search checkouts".into(),
             _ => "Type to search".into(),
         };
         if *self.input.read(cx).presentation().placeholder() != placeholder {
@@ -369,6 +375,17 @@ impl Palette {
                     .collect();
                 hits(&items, &query)
             }
+            Some(Mode::Checkout(_)) => {
+                let items: Vec<_> = Workspace::get(cx)
+                    .session_repos()
+                    .iter()
+                    .map(|repo| Item::Checkout {
+                        name: repo.name.clone(),
+                        path: repo.path.clone(),
+                    })
+                    .collect();
+                hits(&items, &query)
+            }
             Some(Mode::Session) => {
                 let w = Workspace::get(cx);
                 let mut items = vec![Item::Session(
@@ -419,8 +436,14 @@ impl Palette {
         let Some(row) = self.rows(cx).into_iter().nth(i) else {
             return;
         };
+        let checkout = cx.global_mut::<Search>().checkout.take();
         close(cx);
         match row.item {
+            Item::Checkout { path, .. } => {
+                if let Some(run) = checkout {
+                    run(path, window, cx);
+                }
+            }
             Item::File(loc)
                 if matches!(self.mode, Some(Mode::File | Mode::Recent))
                     && (self.mode == Some(Mode::Recent)
@@ -481,6 +504,7 @@ impl Palette {
                 (l.rev.as_ref().map_or(name.to_string(), at), false)
             }
             Item::Branch { .. } => ("Checkout".to_string(), false),
+            Item::Checkout { path, .. } => (path.clone(), false),
             Item::Session(..) => ("Session".to_string(), false),
             Item::Archived(..) => ("Archived · Resume".to_string(), false),
             Item::Tab(..) => ("Tab".to_string(), false),
@@ -545,6 +569,18 @@ impl Palette {
                 .child(icon(Icon::Branch))
                 .child(name(&label, &row.indices).flex_1().min_w_0().truncate())
                 .child(small.child(detail)),
+            Item::Checkout { .. } => base
+                .child(icon(Icon::Tree))
+                .child(name(&label, &row.indices).flex_none())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(text::SMALL)
+                        .text_color(t.muted)
+                        .child(detail),
+                ),
             Item::Action(..) => base
                 .child(div().flex_none().w(px(14.)))
                 .child(

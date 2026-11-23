@@ -155,7 +155,12 @@ fn pick(cx: &mut VisualTestContext, trigger: &'static str, label: &str) {
 }
 
 fn new_chat(cx: &mut VisualTestContext) {
+    let name = cx.workspace(|w, _| w.name_of(w.session_current().unwrap()).to_string());
     pick(cx, "pane.new", "New chat");
+    if cx.find("palette").is_some() {
+        cx.input(&name);
+        cx.press("enter");
+    }
 }
 
 fn show_chats(cx: &mut VisualTestContext) {
@@ -745,10 +750,10 @@ fn an_active_chat_archives_or_deletes_its_conversation_and_ends(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn no_repo_selected_says_so(cx: &mut TestAppContext) {
+fn the_new_chat_command_requires_a_selected_checkout(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, layout);
     app.workspace(|w, cx| w.set_current(None, cx));
-    new_chat(&mut app);
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "agent.chat"));
     assert!(!app.workspace(|w, _| matches!(w.shown(), Some(Doc::Chat { .. }))));
     assert!(app.activity(|s, _| s.message.is_some()));
 }

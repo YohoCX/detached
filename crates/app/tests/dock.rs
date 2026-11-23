@@ -17,9 +17,9 @@ use std::path::Path;
 use detached_app::actions;
 use detached_core::api;
 use gpui_kit::SharedString;
-use gpui_kit::base::dock::DockPlacement;
+use gpui_kit::base::dock::{DockPlacement, PaneRef};
 use kernel::doc::{Doc, Location};
-use kernel::ui_state;
+use kernel::{ui_state, workspace::Workspace};
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
 fn plain_shell() {
@@ -92,13 +92,137 @@ fn in_window<R>(
     .unwrap()
 }
 
-fn new_chat(cx: &mut VisualTestContext) {
-    cx.click("pane.new");
-    let (i, _) = (0usize..)
-        .map_while(|i| cx.find(("menu.item", i)).map(|item| (i, item)))
-        .find(|(_, item)| item.label() == Some("New chat"))
-        .expect("the pane menu offers a new chat");
+fn pick_menu_item(cx: &mut VisualTestContext, label: &str) {
+    let (i, _) = (0usize..14)
+        .filter_map(|i| cx.find(("menu.item", i)).map(|item| (i, item)))
+        .find(|(_, item)| item.label() == Some(label))
+        .unwrap_or_else(|| panic!("the pane menu offers {label}"));
     cx.click(("menu.item", i));
+}
+
+fn new_chat(cx: &mut VisualTestContext) {
+    let name = cx.workspace(|w, _| w.name_of(w.session_current().unwrap()).to_string());
+    cx.click("pane.new");
+    pick_menu_item(cx, "New chat");
+    if cx.find("palette").is_some() {
+        cx.input(&name);
+        cx.press("enter");
+    }
+}
+
+#[gpui_kit::test]
+fn new_tab_tools_choose_a_checkout_by_keyboard_and_open_in_the_triggering_pane(
+    cx: &mut TestAppContext,
+) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, |sb| {
+        for i in 0..11 {
+            repo(sb, &format!("checkout-{i:02}"));
+        }
+    });
+    let checkout = cx.sb.path("repos/checkout-10");
+    run(cx, "pane.splitDown");
+    let bottom = cx.update(|_, cx| {
+        let area = dock::zones(cx).unwrap();
+        let mut last = None;
+        area.read(cx)
+            .layout(DockPlacement::Center)
+            .unwrap()
+            .root()
+            .walk(&mut |node| {
+                if matches!(node.kind(), PaneRef::Tabs { .. }) {
+                    last = Some(node.id().as_u64() as usize);
+                }
+            });
+        last.unwrap()
+    });
+    let open_menu = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| w.within(("pane.new", bottom)).click("pane.new", cx));
+        settle(cx);
+    };
+    open_menu(cx);
+    let labels: Vec<_> = (0usize..20)
+        .filter_map(|i| cx.find(("menu.item", i)))
+        .filter_map(|item| item.label().map(String::from))
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "New chat",
+            "Terminal",
+            "Log",
+            "Processes",
+            "Find in session",
+            "Chats",
+            "Council",
+            "Merge requests",
+            "Pipelines",
+            "Compare changes",
+            "Events",
+            "Create merge request…",
+        ]
+    );
+    cx.press("escape");
+    for (label, title) in [
+        ("New chat", "Choose checkout for new chat"),
+        ("Terminal", "Choose checkout for terminal"),
+        ("Log", "Choose checkout for log"),
+        ("Processes", "Choose checkout for processes"),
+    ] {
+        cx.click("doc.session-overview");
+        open_menu(cx);
+        pick_menu_item(cx, label);
+        assert_eq!(cx.find("palette").unwrap().label(), Some(title));
+        cx.input("checkout-10");
+        assert_eq!(
+            cx.find(("palette.row", 0usize)).unwrap().label(),
+            Some("checkout-10")
+        );
+        cx.press("enter");
+        let doc = cx.update(|_, cx| Workspace::get(cx).shown().cloned().unwrap());
+        let path = match (label, doc) {
+            ("New chat", Doc::Chat { repo, .. })
+            | ("Terminal", Doc::Terminal { cwd: repo, .. })
+            | ("Log", Doc::Log { repo })
+            | ("Processes", Doc::Process { repo }) => repo,
+            (_, doc) => panic!("{label} opened {doc:?}"),
+        };
+        assert_eq!(Path::new(&path), checkout);
+        cx.update(|_, cx| {
+            let area = dock::zones(cx).unwrap();
+            let area = area.read(cx);
+            let shown = Workspace::get(cx).shown().unwrap();
+            let (_, id, _) = dock::docs(area)
+                .into_iter()
+                .find(|(_, _, tab)| &tab.read(cx).doc == shown)
+                .unwrap();
+            let node = area
+                .layout(DockPlacement::Center)
+                .unwrap()
+                .find_panel_node(id)
+                .unwrap();
+            assert_eq!(node.as_u64() as usize, bottom);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn new_tab_opens_directly_for_a_single_checkout(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "only");
+    });
+    cx.click("pane.new");
+    pick_menu_item(cx, "Log");
+    assert!(cx.find("palette").is_none());
+    let expected = cx.sb.path("repos/only");
+    cx.workspace(|w, _| {
+        assert_eq!(
+            w.shown(),
+            Some(&Doc::Log {
+                repo: expected.display().to_string(),
+            })
+        )
+    });
 }
 
 #[gpui_kit::test]

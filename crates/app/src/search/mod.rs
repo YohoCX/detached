@@ -26,6 +26,7 @@ enum Mode {
     Recent,
     Session,
     Tabs,
+    Checkout(&'static str),
 }
 
 impl Mode {
@@ -39,17 +40,19 @@ impl Mode {
             Mode::Recent => "Recent Files",
             Mode::Session => "Switch Session or Tab",
             Mode::Tabs => "Switch Tab",
+            Mode::Checkout(title) => title,
         }
     }
 }
 
-/// The open palette's mode, its "All repositories", which lasts the session, and whether Find in
-/// Files is open.
+type CheckoutAction = Box<dyn FnOnce(String, &mut Window, &mut App)>;
+
 struct Search {
     mode: Option<Mode>,
     all: bool,
     find: bool,
     tab_step: Cell<isize>,
+    checkout: Option<CheckoutAction>,
 }
 
 impl Default for Search {
@@ -59,6 +62,7 @@ impl Default for Search {
             all: true,
             find: false,
             tab_step: Cell::new(0),
+            checkout: None,
         }
     }
 }
@@ -68,6 +72,7 @@ impl Global for Search {}
 /// Go to File while it is open toggles "All repositories".
 fn open(mode: Mode, cx: &mut App) {
     let s = cx.global_mut::<Search>();
+    s.checkout = None;
     if s.mode == Some(mode) && mode == Mode::File {
         s.all = !s.all;
     } else if s.mode == Some(Mode::Session) && mode == Mode::Session {
@@ -77,10 +82,21 @@ fn open(mode: Mode, cx: &mut App) {
     }
 }
 
+pub(crate) fn choose_checkout(
+    title: &'static str,
+    run: impl FnOnce(String, &mut Window, &mut App) + 'static,
+    cx: &mut App,
+) {
+    let s = cx.global_mut::<Search>();
+    s.mode = Some(Mode::Checkout(title));
+    s.checkout = Some(Box::new(run));
+}
+
 fn open_tabs(by: isize, cx: &mut App) {
     if crate::dock::focused_tabs(cx).0.len() > 1 {
         let search = cx.global_mut::<Search>();
         search.mode = Some(Mode::Tabs);
+        search.checkout = None;
         search.tab_step.set(search.tab_step.get() + by);
     }
 }
@@ -90,7 +106,9 @@ pub(crate) fn palette_open(cx: &App) -> bool {
 }
 
 fn close(cx: &mut App) {
-    cx.global_mut::<Search>().mode = None;
+    let s = cx.global_mut::<Search>();
+    s.mode = None;
+    s.checkout = None;
 }
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
