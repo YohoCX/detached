@@ -20,7 +20,7 @@ fn open(cx: &mut TestAppContext) -> TestApp {
     let solo = app.sb.solo().display().to_string();
     app.workspace(|w, cx| w.set_current(Some(solo), cx));
     app.update(|w, cx| detached_app::dock::open("terminal", w, cx));
-    settle(&mut app);
+    settle(&app);
     app
 }
 
