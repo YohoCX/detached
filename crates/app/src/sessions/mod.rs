@@ -32,10 +32,25 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         ("session.rename", "Rename Session…", sheet::rename),
         ("session.archive", "Session Archive", open_archive),
         ("panel.sessions", "Show or Hide Sessions", toggle),
+        ("session.next", "Next Session", |w, cx| step(1, w, cx)),
+        ("session.prev", "Previous Session", |w, cx| step(-1, w, cx)),
     ]
     .into_iter()
     .map(|(id, title, f)| actions::register(cx, id, title, Group::View, f))
     .collect()
+}
+
+fn step(by: isize, window: &mut Window, cx: &mut App) {
+    let w = Workspace::get(cx);
+    let ids: Vec<_> = std::iter::once(MAIN)
+        .chain(w.sessions().iter().map(|s| s.id.as_str()))
+        .collect();
+    let ix = ids
+        .iter()
+        .position(|id| *id == w.session_id())
+        .unwrap_or_default();
+    let next = ids[(ix as isize + by).rem_euclid(ids.len() as isize) as usize].to_string();
+    select(&next, window, cx);
 }
 
 fn toggle(window: &mut Window, cx: &mut App) {
@@ -56,6 +71,7 @@ fn open_archive(window: &mut Window, cx: &mut App) {
 
 fn select(id: &str, window: &mut Window, cx: &mut App) {
     Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
+    dock::area(window, cx);
     dock::open("project", window, cx);
 }
 

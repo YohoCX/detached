@@ -1,7 +1,7 @@
 //! The window: the title bar with each vertical's widgets, the dock, the status bar.
 
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::{DockArea, DockPlacement};
+use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -87,7 +87,6 @@ pub struct Shell {
     left: Vec<AnyView>,
     center: Vec<AnyView>,
     right: Vec<AnyView>,
-    dock: Entity<DockArea>,
     overlays: Vec<AnyView>,
     status: Entity<StatusBar>,
     notices: Entity<Notices>,
@@ -103,16 +102,16 @@ impl Shell {
         let workspace = Workspace::global(cx);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let dock = dock::area(window, cx);
+        dock::new_window(window, cx);
         let subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.observe(&workspace, |_, _, cx| cx.notify()),
-            cx.observe(&dock, |_, _, cx| cx.notify()),
-            cx.subscribe_in(&workspace, window, |this, w, e: &Event, window, cx| {
+            cx.subscribe_in(&workspace, window, |_, w, e: &Event, window, cx| {
                 if let (Event::Shown { keep }, Some(doc)) = (e, w.read(cx).shown().cloned()) {
-                    this.dock
-                        .update(cx, |a, cx| dock::show_doc(a, doc, *keep, window, cx));
+                    dock::open_doc(doc, *keep, window, cx);
+                } else if matches!(e, Event::Switched | Event::SessionChanged) {
+                    dock::restore(window, cx);
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| ui::theme::sync(window, cx)),
@@ -141,7 +140,6 @@ impl Shell {
             left,
             center,
             right,
-            dock,
             overlays: overlays.iter().map(|view| view(window, cx)).collect(),
             status: cx.new(StatusBar::new),
             notices: cx.new(Notices::new),
@@ -259,12 +257,18 @@ fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
 }
 
 impl Render for Shell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dock = dock::area(window, cx);
         let t = theme(cx);
         div()
             .key_context(keymap::CONTEXT)
             .track_focus(&self.focus)
             .capture_any_mouse_down(|_, _, cx| keymap::DoubleShift::reset(cx))
+            .capture_key_down(|e, w, cx| {
+                if e.keystroke.key == "escape" && cx.stop_active_drag(w) {
+                    cx.stop_propagation();
+                }
+            })
             .relative()
             .flex()
             .flex_col()
@@ -275,7 +279,7 @@ impl Render for Shell {
             .line_height(relative(1.4))
             .font_weight(FontWeight::NORMAL)
             .child(self.title_bar(cx))
-            .child(div().flex().flex_1().min_h_0().child(self.dock.clone()))
+            .child(div().flex().flex_1().min_h_0().child(dock))
             .child(
                 div()
                     .flex()

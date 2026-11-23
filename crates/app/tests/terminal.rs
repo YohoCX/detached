@@ -19,7 +19,8 @@ fn open(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);
     let solo = app.sb.solo().display().to_string();
     app.workspace(|w, cx| w.set_current(Some(solo), cx));
-    app.press("alt-f12");
+    app.update(|w, cx| detached_app::dock::open("terminal", w, cx));
+    settle(&mut app);
     app
 }
 
@@ -65,7 +66,7 @@ fn sessions(cx: &mut VisualTestContext) -> usize {
 }
 
 #[gpui_kit::test]
-fn alt_f12_opens_a_shell_that_runs_what_is_typed(cx: &mut TestAppContext) {
+fn the_legacy_terminal_opens_a_shell_that_runs_what_is_typed(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     assert!(on_screen(cx, "bottom.Terminal"));
     run(cx, ANSWER);
@@ -87,8 +88,8 @@ fn the_session_outlives_the_panel_switching_to_the_log(cx: &mut TestAppContext) 
     run(cx, ANSWER);
     wait_for_line(cx, "answer-42");
     cx.press("secondary-9");
-    assert!(on_screen(cx, "bottom.Log"));
-    cx.press("alt-f12");
+    assert!(cx.find("doc.log").is_some());
+    cx.click("bottom.Terminal");
     assert!(rows(cx).iter().any(|r| r.trim() == "answer-42"));
     assert_eq!(sessions(cx), 1);
 }
@@ -102,7 +103,7 @@ fn app_chords_go_to_the_shell_except_the_short_list(cx: &mut TestAppContext) {
     assert!(cx.find("palette").is_none());
     // Cmd+9 still reaches the app.
     cx.press("secondary-9");
-    assert!(on_screen(cx, "bottom.Log"));
+    assert!(cx.find("doc.log").is_some());
 }
 
 #[gpui_kit::test]

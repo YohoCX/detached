@@ -21,6 +21,7 @@ enum Mode {
     Action,
     Vcs,
     Recent,
+    Session,
 }
 
 impl Mode {
@@ -32,6 +33,7 @@ impl Mode {
             Mode::Action => "Find Action",
             Mode::Vcs => "VCS Operations",
             Mode::Recent => "Recent Files",
+            Mode::Session => "Switch Session or Tab",
         }
     }
 }
@@ -61,6 +63,8 @@ fn open(mode: Mode, cx: &mut App) {
     let s = cx.global_mut::<Search>();
     if s.mode == Some(mode) && mode == Mode::File {
         s.all = !s.all;
+    } else if s.mode == Some(Mode::Session) && mode == Mode::Session {
+        s.mode = None;
     } else {
         s.mode = Some(mode);
     }

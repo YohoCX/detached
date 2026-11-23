@@ -7,8 +7,8 @@ use std::sync::Arc;
 use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Global, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::FluentBuilder,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::FluentBuilder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,10 @@ pub trait DocKind {
     }
     /// The tab came forward.
     fn activated(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
+    fn running(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> Option<String> {
+        None
+    }
+    fn closing(&self, _: &Doc, _: &mut App) {}
     /// The tab was closed.
     fn removed(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
     /// Whether `a` and `b` belong in the same tab.
@@ -134,6 +138,21 @@ impl DocTab {
         cx.notify();
     }
 
+    pub(super) fn preview(&mut self, cx: &mut Context<Self>) {
+        self.keep = false;
+        cx.notify();
+    }
+
+    pub(super) fn take_focus(&self, window: &mut Window, cx: &mut App) {
+        if let Some(view) = &self.view {
+            self.kind.activated(view, window, cx);
+        }
+    }
+
+    pub(super) fn running(&self, cx: &App) -> Option<String> {
+        self.kind.running(&self.doc, self.view.as_ref(), cx)
+    }
+
     pub fn id(&self) -> SharedString {
         self.kind.id(&self.doc)
     }
@@ -200,10 +219,16 @@ impl Render for DocTab {
         if self.view.is_none() && archive.is_none() {
             let kind = self.kind.clone();
             self.view = Some(kind.view(&mut self.doc, self.session.is_none(), window, cx));
+            if self.focus.is_focused(window)
+                && let Some(view) = self.view.clone()
+            {
+                window.defer(cx, move |w, cx| kind.activated(&view, w, cx));
+            }
         }
         div()
             .flex()
             .flex_col()
+            .track_focus(&self.focus)
             .size_full()
             .min_h_0()
             .when_some(archive, |d, message| {
@@ -224,7 +249,7 @@ impl Panel for DocTab {
     }
 
     fn closable(&self, _: &App) -> bool {
-        !self.legacy()
+        !self.legacy() && self.doc != Doc::SessionOverview
     }
 
     fn zoomable(&self, _: &App) -> bool {
@@ -233,7 +258,7 @@ impl Panel for DocTab {
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Another workspace's tab, hidden, can be its group's active one.
-        if !active || !super::tabs::mine(self, cx) {
+        if !active || !Workspace::get(cx).archive() || !super::tabs::mine(self, cx) {
             return;
         }
         if let Some(v) = &self.view {
@@ -245,6 +270,9 @@ impl Panel for DocTab {
     }
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_some() {
+            self.kind.closing(&self.doc, cx);
+        }
         if let Some(v) = &self.view {
             self.kind.removed(v, window, cx);
         }

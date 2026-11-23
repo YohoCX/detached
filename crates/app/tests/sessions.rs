@@ -402,3 +402,107 @@ fn an_archived_council_task_opens_a_read_only_round_and_history_errors_are_visib
             .is_file()
     );
 }
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_terminal_moves_live_and_restarts_in_its_pane_and_worktree(cx: &mut TestAppContext) {
+    use detached_app::{actions, dock, shell, terminal::Terminals};
+    use gpui_kit::base::dock::DockPlacement;
+    use gpui_kit::{point, px};
+    use kernel::workspace::Workspace;
+
+    let app = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    let cwd = app.workspace(|w, _| w.session_repos()[0].path.clone());
+    app.update(|_, cx| {
+        Workspace::global(cx).update(cx, |w, cx| {
+            w.show_tab(
+                Doc::Terminal {
+                    id: 0,
+                    cwd: cwd.clone(),
+                },
+                true,
+                cx,
+            );
+        });
+    });
+
+    fn terminal(cx: &mut VisualTestContext) -> Option<u64> {
+        cx.update(|_, cx| {
+            Terminals::global(cx)
+                .read(cx)
+                .docked
+                .last()
+                .map(|s| s.entity_id().as_u64())
+        })
+    }
+    fn output(cx: &mut VisualTestContext, line: &str) -> bool {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .map_while(|i| w.try_find(("terminal.row", i)))
+                .any(|e| e.label().is_some_and(|l| l.trim() == line))
+        })
+    }
+    wait_until(app, |cx| terminal(cx).is_some());
+    let id = terminal(app).unwrap();
+    app.input("export DETACHED_PANES_TEST=kept");
+    app.press("enter");
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.splitDown"));
+    settle(app);
+
+    let tab = app
+        .find(SharedString::from(format!("doc.terminal.{id}")))
+        .unwrap()
+        .bounds();
+    let target = app.find("doc.new-tab").unwrap().bounds().center();
+    app.update(|w, cx| w.drag(point(tab.left() + px(4.), tab.center().y), target, cx));
+    settle(app);
+    assert_eq!(terminal(app), Some(id));
+
+    app.input("printf 'session-%s\\n' \"$DETACHED_PANES_TEST\"");
+    app.press("enter");
+    wait_until(app, |cx| output(cx, "session-kept"));
+
+    let at = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let area = dock::zones(cx).unwrap();
+            let area = area.read(cx);
+            let tree = area.layout(DockPlacement::Center).unwrap();
+            let doc = dock::docs(area)
+                .into_iter()
+                .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
+                .unwrap();
+            tree.find_panel_node(doc.1).unwrap()
+        })
+    };
+    let moved = at(app);
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.focusUp"));
+    app.update(|w, cx| actions::dispatch(w, cx, "pane.focusDown"));
+    app.input("pwd -P");
+    app.press("enter");
+    let expected = std::fs::canonicalize(&cwd).unwrap().display().to_string();
+    wait_until(app, |cx| output(cx, &expected));
+
+    let config = app.sb.state.config_dir.clone();
+    app.update(|w, _| w.remove_window());
+    settle(app);
+    let again = app.cx.cx.update(|cx| {
+        ui_state::init(&config, cx);
+        Terminals::global(cx).update(cx, |t, _| t.docked.clear());
+
+        shell::open(cx).unwrap()
+    });
+    let mut again = VisualTestContext::from_window(again, &app.cx.cx);
+    wait_until(&mut again, |cx| terminal(cx).is_some_and(|new| new != id));
+    assert_ne!(at(&mut again), moved);
+    let new = terminal(&mut again).unwrap();
+    again.click(SharedString::from(format!("doc.terminal.{new}")));
+    again.input("printf 'session-%s\\n' \"$DETACHED_PANES_TEST\"");
+    again.press("enter");
+    wait_until(&mut again, |cx| output(cx, "session-"));
+    again.input("pwd -P");
+    again.press("enter");
+    wait_until(&mut again, |cx| output(cx, &expected));
+}

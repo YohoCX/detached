@@ -152,6 +152,7 @@ pub struct Log {
     /// The list's width, which decides whether rows show the author.
     width: Pixels,
     filters: Filters,
+    own: Option<Filters>,
     refs: Entity<SelectState<Vec<Refs>>>,
     names: Vec<String>,
     inputs: [Entity<InputState>; 3],
@@ -173,6 +174,10 @@ pub struct Log {
 
 impl Log {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::for_repo(window, None, cx)
+    }
+
+    pub fn for_repo(window: &mut Window, repo: Option<String>, cx: &mut Context<Self>) -> Self {
         let workspace = Workspace::global(cx);
         let inputs =
             FIELDS.map(|(_, hint, _)| cx.new(|cx| InputState::new(window, cx).placeholder(hint)));
@@ -194,7 +199,7 @@ impl Log {
             }),
             cx.subscribe_in(&refs, window, |this, _, e: &SelectEvent<_>, window, cx| {
                 if let SelectEvent::Confirm(Some(refs)) = e {
-                    cx.global_mut::<Filters>().refs = refs.clone();
+                    this.edit_filters(cx).refs = refs.clone();
                     this.sync(window, cx);
                 }
             }),
@@ -212,7 +217,7 @@ impl Log {
                 this.timers[i] = Some(cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(DEBOUNCE).await;
                     this.update_in(cx, |this, window, cx| {
-                        cx.global_mut::<Filters>().fields[i] = value;
+                        this.edit_filters(cx).fields[i] = value;
                         this.sync(window, cx);
                     })
                     .ok();
@@ -232,6 +237,10 @@ impl Log {
             scroll: UniformListScrollHandle::new(),
             width: px(0.),
             filters: Filters::default(),
+            own: repo.map(|repo| Filters {
+                repo: Some(repo),
+                ..Filters::default()
+            }),
             refs,
             names: vec![],
             inputs,
@@ -249,16 +258,26 @@ impl Log {
         log
     }
 
+    fn edit_filters<'a>(&'a mut self, cx: &'a mut App) -> &'a mut Filters {
+        self.own
+            .as_mut()
+            .unwrap_or_else(|| cx.default_global::<Filters>())
+    }
+
     /// Resets refs and path when the repo changes, brings the widgets to the filters and the
     /// repo's branches, and reloads when the filters changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let repo = Workspace::get(cx).current().map(String::from);
+        let repo = self
+            .own
+            .as_ref()
+            .and_then(|f| f.repo.clone())
+            .or_else(|| Workspace::get(cx).current().map(String::from));
         let names = repo
             .as_ref()
             .and_then(|r| Repo::get(cx, r)?.branch_names.as_ref());
         let names = (names.map_or(&[][..], Vec::as_slice) != self.names)
             .then(|| names.cloned().unwrap_or_default());
-        let f = cx.default_global::<Filters>();
+        let f = self.edit_filters(cx);
         if f.repo != repo {
             (f.repo, f.refs) = (repo, LogRefs::All);
             f.fields[PATH].clear();
@@ -774,7 +793,7 @@ fn thousands(n: usize) -> String {
 impl Render for Log {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        if Workspace::get(cx).current().is_none() {
+        if self.filters.repo.is_none() {
             return message("log.message", "No repository", t.muted).into_any_element();
         }
         let status = match self.loading {

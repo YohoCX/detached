@@ -14,9 +14,10 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::SelectState;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, EntityId, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    AnyElement, AnyView, App, AppContext, Context, Entity, EntityId, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    px,
 };
 use kernel::blocking;
 use kernel::proc::{self as procs, Proc, State};
@@ -24,10 +25,11 @@ use kernel::resource::Interest;
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
-use crate::actions::Registration;
-use crate::dock::{self, AppSpec};
+use crate::actions::{self, Group, Registration};
+use crate::dock::{self, AppSpec, DocKind};
 use crate::ui::page::{Opt, Pick, button, labeled, muted, row, select};
 use crate::ui::{self, text, theme};
+use kernel::doc::Doc;
 
 /// The lines of the log drawn.
 const SHOWN: usize = 500;
@@ -41,11 +43,69 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             title: "Processes",
             action: Some("panel.processes"),
             home: (DockPlacement::Bottom, 280.),
-            view: |w, cx| cx.new(|cx| Processes::new(w, cx)).into(),
+            view: |w, cx| cx.new(|cx| Processes::new(w, None, cx)).into(),
             shown: None,
         },
     );
-    vec![]
+    dock::register_doc(cx, "process", ProcessDoc);
+    vec![actions::register(
+        cx,
+        "panel.processes",
+        "Processes",
+        Group::View,
+        |w, cx| {
+            if let Some(repo) = dock::bound_repo(cx) {
+                dock::open_doc(Doc::Process { repo }, true, w, cx);
+            }
+        },
+    )]
+}
+
+struct ProcessDoc;
+
+impl DocKind for ProcessDoc {
+    fn category(&self, _: &Doc) -> &'static str {
+        "code"
+    }
+
+    fn view(&self, doc: &mut Doc, _: bool, w: &mut Window, cx: &mut App) -> AnyView {
+        let repo = doc.repo().map(String::from);
+        cx.new(|cx| Processes::new(w, repo, cx)).into()
+    }
+
+    fn id(&self, _: &Doc) -> SharedString {
+        "doc.process".into()
+    }
+
+    fn title(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> SharedString {
+        format!(
+            "Processes · {}",
+            Workspace::get(cx).name_of(doc.repo().unwrap_or_default())
+        )
+        .into()
+    }
+
+    fn running(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> Option<String> {
+        let names = running(doc.repo()?, cx);
+        (!names.is_empty()).then(|| format!("Running: {}", names.join(", ")))
+    }
+
+    fn closing(&self, doc: &Doc, cx: &mut App) {
+        if let Some(repo) = doc.repo() {
+            for name in running(repo, cx) {
+                procs::stop(cx, repo, &name, false).detach();
+            }
+        }
+    }
+}
+
+fn running(repo: &str, cx: &App) -> Vec<String> {
+    procs::runs(cx, repo)
+        .filter_map(|p| {
+            let p = p.read(cx);
+            p.running().then(|| p.name.clone())
+        })
+        .collect()
 }
 
 struct Form {
@@ -60,6 +120,7 @@ struct Form {
 }
 
 struct Processes {
+    fixed: Option<String>,
     repo: Option<String>,
     defs: Option<Interest<Vec<Entry>>>,
     selected: Option<String>,
@@ -72,8 +133,9 @@ struct Processes {
 }
 
 impl Processes {
-    fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(_: &mut Window, fixed: Option<String>, cx: &mut Context<Self>) -> Self {
         let mut this = Processes {
+            fixed,
             repo: None,
             defs: None,
             selected: None,
@@ -89,7 +151,10 @@ impl Processes {
     }
 
     fn follow(&mut self, cx: &mut Context<Self>) {
-        let repo = Workspace::get(cx).current().map(String::from);
+        let repo = self
+            .fixed
+            .clone()
+            .or_else(|| Workspace::get(cx).current().map(String::from));
         if self.repo != repo {
             self.defs = (repo.as_ref()).map(|r| Interest::view(procs::definitions(cx, r), cx));
             (self.repo, self.selected, self.form, self.error) = (repo, None, None, None);

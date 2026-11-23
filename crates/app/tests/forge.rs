@@ -249,7 +249,8 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
     api::remove_account(&core, &gitlab.id).unwrap();
 
     show(cx, "gitlab");
-    cx.press("secondary-9");
+    cx.update(|w, cx| detached_app::dock::open("log", w, cx));
+    settle(cx);
     cx.click("bottom.Pipelines");
     let says = |e: &str| e.starts_with("No account for ") && e.ends_with("; add one in Settings.");
     wait_until(cx, |cx| {

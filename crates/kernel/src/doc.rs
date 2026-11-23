@@ -69,6 +69,14 @@ pub enum Doc {
         #[serde(default)]
         n: u32,
     },
+    Log {
+        repo: String,
+    },
+    Process {
+        repo: String,
+    },
+    SessionOverview,
+    NewTab,
     SessionArchive,
     PastChat {
         repo: String,
@@ -85,12 +93,16 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 11] = [
+    pub const KINDS: [&str; 15] = [
         "file",
         "diff",
         "mr",
         "job",
         "chat",
+        "log",
+        "process",
+        "session-overview",
+        "new-tab",
         "session-archive",
         "past-chat",
         "terminal",
@@ -98,6 +110,24 @@ impl Doc {
         "council-task",
         "council-stats",
     ];
+
+    pub fn repo(&self) -> Option<&str> {
+        match self {
+            Self::File(loc) => Some(&loc.repo),
+            Self::Diff(doc) => Some(&doc.repo),
+            Self::Terminal { cwd, .. } => Some(cwd),
+            Self::Log { repo }
+            | Self::Process { repo }
+            | Self::Chat { repo, .. }
+            | Self::Council { repo, .. }
+            | Self::CouncilTask { repo, .. }
+            | Self::CouncilStats { repo }
+            | Self::Mr { repo, .. }
+            | Self::Job { repo, .. }
+            | Self::PastChat { repo, .. } => Some(repo),
+            _ => None,
+        }
+    }
 
     /// The name the dock finds this document's behavior by.
     pub fn kind(&self) -> &'static str {
@@ -110,6 +140,10 @@ impl Doc {
             Doc::Mr { .. } => "mr",
             Doc::Job { .. } => "job",
             Doc::Chat { .. } => "chat",
+            Doc::Log { .. } => "log",
+            Doc::Process { .. } => "process",
+            Doc::SessionOverview => "session-overview",
+            Doc::NewTab => "new-tab",
             Doc::SessionArchive => "session-archive",
             Doc::PastChat { .. } => "past-chat",
             Doc::Terminal { .. } => "terminal",

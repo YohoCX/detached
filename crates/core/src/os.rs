@@ -181,26 +181,39 @@ impl Session {
         self.job.holds(pid)
     }
 
+    pub fn terminate(&self) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if self.sid > 0 {
+            for pid in session_pids(self.sid) {
+                // SAFETY: the PID belongs to this terminal session.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+        #[cfg(windows)]
+        self.job.terminate();
+    }
+
+    #[cfg(windows)]
+    pub fn has_children(&self) -> bool {
+        self.job.has_children()
+    }
+
     /// Bytes in use: macOS phys_footprint, Linux Pss, Windows private bytes. None when unknown.
     pub fn memory(&self) -> Option<u64> {
         #[cfg(target_os = "macos")]
         {
-            let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-            // Room for the processes started between the two calls.
-            let mut pids = vec![0 as libc::pid_t; n.max(0) as usize + 64];
-            let bytes = (pids.len() * size_of::<libc::pid_t>()) as i32;
-            let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-            pids.truncate(n.max(0) as usize);
             let footprint = |pid| {
                 let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
                 let p = (&raw mut info).cast();
                 (unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V2, p) } == 0)
                     .then_some(info.ri_phys_footprint)
             };
-            let mine = pids
-                .into_iter()
-                .filter(|&p| unsafe { libc::getsid(p) } == self.sid);
-            Some(mine.filter_map(footprint).sum())
+            Some(
+                session_pids(self.sid)
+                    .into_iter()
+                    .filter_map(footprint)
+                    .sum(),
+            )
         }
         #[cfg(target_os = "linux")]
         {
@@ -209,10 +222,13 @@ impl Session {
                 let kb = s.lines().find_map(|l| l.strip_prefix("Pss:"))?;
                 kb.trim().trim_end_matches("kB").trim().parse::<u64>().ok()
             };
-            let pids = std::fs::read_dir("/proc").ok()?.flatten();
-            let pids = pids.filter_map(|e| e.file_name().to_str()?.parse::<libc::pid_t>().ok());
-            let mine = pids.filter(|&p| unsafe { libc::getsid(p) } == self.sid);
-            Some(mine.filter_map(pss).sum::<u64>() * 1024)
+            Some(
+                session_pids(self.sid)
+                    .into_iter()
+                    .filter_map(pss)
+                    .sum::<u64>()
+                    * 1024,
+            )
         }
         #[cfg(windows)]
         {
@@ -223,14 +239,36 @@ impl Session {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn session_pids(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    #[cfg(target_os = "macos")]
+    let pids = {
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        let mut pids = vec![0 as libc::pid_t; n.max(0) as usize + 64];
+        let bytes = (pids.len() * size_of::<libc::pid_t>()) as i32;
+        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        pids.truncate(n.max(0) as usize);
+        pids.into_iter()
+    };
+    #[cfg(target_os = "linux")]
+    let pids = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<libc::pid_t>().ok());
+    pids.filter(|&p| p > 0 && unsafe { libc::getsid(p) } == sid)
+        .collect()
+}
+
 #[cfg(windows)]
 mod win {
     use std::ptr::null;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectBasicProcessIdList,
-        QueryInformationJobObject,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+        JobObjectBasicProcessIdList, QueryInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::ProcessStatus::{
         GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
@@ -268,6 +306,24 @@ mod win {
                 let ok = IsProcessInJob(p, self.0, &mut r);
                 CloseHandle(p);
                 ok != 0 && r != 0
+            }
+        }
+
+        pub fn terminate(&self) {
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+
+        pub fn has_children(&self) -> bool {
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut info).cast(),
+                    size_of_val(&info) as u32,
+                    std::ptr::null_mut(),
+                ) != 0
+                    && info.ActiveProcesses > 1
             }
         }
 

@@ -19,7 +19,7 @@ fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
 }
 
 #[gpui_kit::test]
-fn cmd_9_the_tabs_and_the_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
+fn the_legacy_tabs_and_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     // A closed bottom zone keeps its tabs as a strip, none of them on.
     assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
@@ -32,15 +32,18 @@ fn cmd_9_the_tabs_and_the_zone_button_open_and_switch_the_bottom_zone(cx: &mut T
         "{b:?} fits the strip"
     );
 
-    cx.press("secondary-9");
+    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
+    settle(cx);
     assert!(cx.find("bottom.Log").unwrap().visible());
     assert_eq!(on(cx, "bottom.Log"), Some(true));
     cx.click("bottom.Pipelines");
     assert_eq!(on(cx, "bottom.Pipelines"), Some(true));
     assert_eq!(on(cx, "bottom.Log"), Some(false));
-    cx.press("secondary-9");
+    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
+    settle(cx);
     assert_eq!(on(cx, "bottom.Log"), Some(true), "switches back to Log");
-    cx.press("secondary-9");
+    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
+    settle(cx);
     assert_eq!(on(cx, "bottom.Log"), Some(false));
 
     cx.click("zone.bottom");
@@ -59,6 +62,7 @@ fn cmd_9_the_tabs_and_the_zone_button_open_and_switch_the_bottom_zone(cx: &mut T
 fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
     let keymap = r#"{"panel.log": "Cmd+Shift+L", "panel.project": ""}"#;
     let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
         std::fs::write(sb.state.config_dir.join("keymap.json"), keymap).unwrap()
     });
     cx.press("secondary-9");
@@ -68,7 +72,7 @@ fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
         "the default chord is free"
     );
     cx.press("secondary-shift-l");
-    assert_eq!(on(cx, "bottom.Log"), Some(true));
+    assert_eq!(on(cx, "doc.log"), Some(true));
     cx.press("secondary-1");
     assert!(on_screen(cx, "tool.Changes"));
 }
@@ -192,17 +196,13 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn cmd_b_cmd_j_and_cmd_alt_b_open_and_close_the_zones(cx: &mut TestAppContext) {
+fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    for (key, zone) in [
-        ("secondary-b", "zone.left"),
-        ("secondary-j", "zone.bottom"),
-        ("secondary-alt-b", "zone.right"),
-    ] {
-        let was = on(cx, zone);
-        cx.press(key);
-        assert_ne!(on(cx, zone), was, "{key} toggles {zone}");
-    }
+    assert!(cx.find("sessions.new").is_some());
+    cx.press("secondary-b");
+    assert!(cx.find("sessions.new").is_none());
+    cx.press("secondary-b");
+    assert!(cx.find("sessions.new").is_some());
 }
 
 #[gpui_kit::test]

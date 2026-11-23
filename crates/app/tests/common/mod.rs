@@ -426,7 +426,10 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
                 .repos()
                 .iter()
                 .all(|r| Repo::get(cx, &r.path).is_some_and(|r| r.status.is_some()));
-            settings && w.repos() == repos && loaded
+            settings
+                && w.id() == first.map(|first| first.id.as_str())
+                && w.repos() == repos
+                && loaded
         })
     });
     TestApp { cx, sb }
