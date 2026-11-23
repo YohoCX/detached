@@ -56,6 +56,37 @@ fn ownership_survives_reloading_and_applies_across_workspaces() {
 }
 
 #[test]
+fn running_instances_use_new_claims_and_release_removed_workspaces() {
+    let (sb, first, repo, path) = setup();
+    let instance = || {
+        AppState::new(
+            sb.state.config_dir.clone(),
+            sb.state.get_settings(),
+            sb.state.env(),
+            sb.state.tokens.clone(),
+        )
+    };
+    let before_creation = instance();
+    let second = sb.state.save_workspace("Second".into(), None).unwrap();
+    sb.state
+        .add_folder(Some(second.clone()), repo.display().to_string())
+        .unwrap();
+    let before_removal = instance();
+    let paths = &[path];
+    adopt(&sb.state, &second, "Mine", paths).unwrap();
+    let conflict = adopt(&before_creation, &first, "Other", paths).unwrap_err();
+    assert!(conflict.to_string().contains("Owned by Mine"));
+    before_creation.set_block("unrelated", true).unwrap();
+    assert!(adopt(&before_creation, &first, "Other", paths).is_err());
+
+    sb.state.remove_workspace(second.clone()).unwrap();
+    before_removal.set_block("another", true).unwrap();
+    assert!(adopt(&before_removal, &second, "Removed workspace", paths).is_err());
+    adopt(&before_removal, &first, "Released", paths).unwrap();
+    assert!(list(&sb.state, &second).unwrap().sets.is_empty());
+}
+
+#[test]
 fn a_fix_is_refused_by_its_record_and_the_selection_is_atomic() {
     let (sb, ws, repo, path) = setup();
     let other = sb.path("free").display().to_string();

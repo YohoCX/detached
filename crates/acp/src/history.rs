@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::UNIX_EPOCH;
 
-use detached_core::backend::{Past, Tool, Update};
+use detached_core::backend::{History, Past, Tool, Update};
 use detached_core::error::{Error, Result};
 use detached_core::state::AppState;
 use detached_core::{os, proc};
@@ -24,15 +23,26 @@ fn home(core: &AppState) -> Option<PathBuf> {
         })
 }
 
-fn rollouts(home: &Path) -> Result<BTreeMap<String, PathBuf>> {
+fn rollouts(home: &Path, errors: &mut Vec<String>) -> BTreeMap<String, PathBuf> {
     let mut all = BTreeMap::<String, PathBuf>::new();
     for name in ["sessions", "archived_sessions"] {
         let dir = home.join(name);
-        if !dir.try_exists()? {
-            continue;
+        match dir.try_exists() {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                errors.push(format!("{}: {error}", dir.display()));
+                continue;
+            }
         }
         for entry in WalkDir::new(dir).sort_by_file_name() {
-            let entry = entry.map_err(io::Error::other)?;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    errors.push(error.to_string());
+                    continue;
+                }
+            };
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -66,113 +76,152 @@ fn rollouts(home: &Path) -> Result<BTreeMap<String, PathBuf>> {
             }
         }
     }
-    Ok(all)
+    all
 }
 
-fn open(core: &AppState, path: &Path) -> Result<Box<dyn BufRead>> {
+fn open(path: &Path) -> Result<Box<dyn BufRead>> {
+    let file = File::open(path)?;
     if path.extension().is_some_and(|e| e == "zst") {
-        let env = core.env();
-        let exe = detached_core::env::which("zstd", &env.path)
-            .ok_or_else(|| Error::Other("Compressed conversations need zstd to open.".into()))?;
-        let out = Command::new(exe)
-            .args(["-d", "-c"])
-            .stdin(Stdio::from(File::open(path)?))
-            .output()?;
-        if !out.status.success() {
-            return Err(Error::Other(format!(
-                "Could not read {}: {}",
-                path.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
-        }
-        return Ok(Box::new(io::Cursor::new(out.stdout)));
+        let mut decoder = zstd::stream::read::Decoder::new(file)?;
+        decoder.window_log_max(27)?;
+        return Ok(Box::new(BufReader::new(decoder)));
     }
-    Ok(Box::new(BufReader::new(File::open(path)?)))
+    Ok(Box::new(BufReader::new(file)))
 }
 
-fn records(reader: impl BufRead) -> impl Iterator<Item = Result<Value>> {
-    reader.lines().filter_map(|line| match line {
-        Ok(line) => serde_json::from_str(&line).ok().map(Ok),
-        Err(e) => Some(Err(e.into())),
+const MAX_RECORD: u64 = 8 * 1024 * 1024;
+
+fn records(mut reader: impl BufRead) -> impl Iterator<Item = Result<Value>> {
+    let mut line = Vec::new();
+    let mut done = false;
+    std::iter::from_fn(move || {
+        while !done {
+            line.clear();
+            match reader
+                .by_ref()
+                .take(MAX_RECORD + 1)
+                .read_until(b'\n', &mut line)
+            {
+                Ok(0) => done = true,
+                Ok(n) if n as u64 > MAX_RECORD => {
+                    done = true;
+                    return Some(Err(Error::Other("Rollout record exceeds 8 MiB.".into())));
+                }
+                Ok(_) => {
+                    if let Ok(row) = serde_json::from_slice(&line) {
+                        return Some(Ok(row));
+                    }
+                }
+                Err(error) => {
+                    done = true;
+                    return Some(Err(error.into()));
+                }
+            }
+        }
+        None
     })
 }
 
-pub(super) fn past(core: &AppState, repo: &str) -> Result<Vec<Past>> {
+fn real(path: &Path) -> PathBuf {
+    os::canonical(path).unwrap_or_else(|_| path.into())
+}
+
+pub(super) fn past(core: &AppState, folders: &[String]) -> History {
+    let mut history = History::default();
     let Some(home) = home(core) else {
-        return Ok(vec![]);
+        return history;
     };
-    if home.try_exists()? && !home.is_dir() {
-        return Err(Error::Other(
-            "Codex history location is not a directory.".into(),
-        ));
+    if home.is_file() {
+        history
+            .errors
+            .push(format!("{} is not a directory.", home.display()));
+        return history;
     }
-    let real = |p: &Path| os::canonical(p).unwrap_or_else(|_| p.into());
-    let repo = real(Path::new(repo));
+    let places: HashMap<_, _> = folders.iter().map(|p| (real(Path::new(p)), p)).collect();
     let mut titles = HashMap::new();
-    match File::open(home.join("session_index.jsonl")) {
+    let index = home.join("session_index.jsonl");
+    match File::open(&index) {
         Ok(file) => {
             for row in records(BufReader::new(file)) {
-                let row = row?;
-                if let (Some(id), Some(title)) = (row["id"].as_str(), row["thread_name"].as_str()) {
-                    titles.insert(id.to_string(), title.to_string());
+                match row {
+                    Ok(row) => {
+                        if let (Some(id), Some(title)) =
+                            (row["id"].as_str(), row["thread_name"].as_str())
+                        {
+                            titles.insert(id.to_string(), title.to_string());
+                        }
+                    }
+                    Err(error) => history.errors.push(format!("{}: {error}", index.display())),
                 }
             }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        Err(error) => history.errors.push(format!("{}: {error}", index.display())),
     }
-    let mut all = vec![];
-    for (id, path) in rollouts(&home)? {
-        let mut rows = records(open(core, &path)?);
-        let Some(meta) = rows.next().transpose()? else {
-            continue;
-        };
-        if meta["type"] != "session_meta"
-            || !meta["payload"]["cwd"]
-                .as_str()
-                .is_some_and(|p| real(Path::new(p)) == repo)
-        {
-            continue;
+    for (id, path) in rollouts(&home, &mut history.errors) {
+        let title = titles.remove(&id);
+        match metadata(id, &path, &places, title) {
+            Ok(chat) => history.chats.extend(chat),
+            Err(error) => history.errors.push(format!("{}: {error}", path.display())),
         }
-        let mut title = titles.remove(&id);
-        if title.is_none() {
-            for row in rows {
-                let row = row?;
-                if let Some(message) = user(&row) {
-                    title = Some(
-                        message
-                            .lines()
-                            .next()
-                            .unwrap_or_default()
-                            .chars()
-                            .take(200)
-                            .collect(),
-                    );
-                    break;
-                }
+    }
+    history.chats.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    history
+}
+
+fn metadata(
+    id: String,
+    path: &Path,
+    places: &HashMap<PathBuf, &String>,
+    mut title: Option<String>,
+) -> Result<Option<Past>> {
+    let mut rows = records(open(path)?);
+    let Some(meta) = rows.next().transpose()? else {
+        return Ok(None);
+    };
+    if meta["type"] != "session_meta" {
+        return Ok(None);
+    }
+    let Some(cwd) = meta["payload"]["cwd"]
+        .as_str()
+        .and_then(|p| places.get(&real(Path::new(p))))
+    else {
+        return Ok(None);
+    };
+    if title.is_none() {
+        for row in rows {
+            if let Some(message) = user(&row?) {
+                title = Some(
+                    message
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(200)
+                        .collect(),
+                );
+                break;
             }
         }
-        let modified = path
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as u64);
-        all.push(Past {
-            id,
-            title: title
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "Untitled".into()),
-            modified,
-            cwd: Some(repo.display().to_string()),
-            tag: None,
-            model: None,
-            provider: String::new(),
-            owned: false,
-        });
     }
-    all.sort_by_key(|p| std::cmp::Reverse(p.modified));
-    Ok(all)
+    let modified = path
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64);
+    Ok(Some(Past {
+        id,
+        title: title
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Untitled".into()),
+        modified,
+        cwd: Some((*cwd).clone()),
+        tag: None,
+        model: None,
+        provider: String::new(),
+        owned: false,
+    }))
 }
 
 fn user(row: &Value) -> Option<&str> {
@@ -183,12 +232,12 @@ fn user(row: &Value) -> Option<&str> {
 
 pub(super) fn transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
     let missing = || Error::Other("The transcript is unavailable.".into());
-    let path = rollouts(&home(core).ok_or_else(missing)?)?
+    let path = rollouts(&home(core).ok_or_else(missing)?, &mut vec![])
         .remove(id)
         .ok_or_else(missing)?;
     let mut out = vec![];
     let mut turns = vec![];
-    for row in records(open(core, &path)?) {
+    for row in records(open(&path)?) {
         let row = row?;
         let p = &row["payload"];
         if let Some(message) = user(&row) {

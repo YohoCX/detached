@@ -8,7 +8,7 @@ use detached_app::keymap;
 use detached_core::types::RepoInfo;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Modifiers, Role, TestAppContext, VisualTestContext, point, px};
-use kernel::activity::{Level, Notice};
+use kernel::activity::{Activity, Level, Notice};
 use kernel::doc::{Doc, Location};
 use kernel::repo::Repo;
 
@@ -217,10 +217,10 @@ fn go_to_file_searches_the_tree_ref_and_lists_recent_files(cx: &mut TestAppConte
     cx.press("secondary-shift-o");
     let recent: [(String, String); 2] =
         ["src/index.ts", "README.md"].map(|p| (p.into(), "app @ other".into()));
-    assert_eq!(rows(cx), recent, "newest first");
+    wait_until(cx, |cx| rows(cx) == recent);
     cx.press("secondary-e");
     assert_eq!(title(cx).as_deref(), Some("Recent Files"));
-    assert_eq!(rows(cx), recent);
+    wait_until(cx, |cx| rows(cx) == recent);
     cx.press("up");
     assert_eq!(selected(cx).unwrap().0, 1, "Up from the first row wraps");
     cx.input("read");
@@ -423,11 +423,11 @@ fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut
 
     cx.press("secondary-shift-o");
     let both = [row("feature.txt", "lib"), row("README.md", "app")];
-    assert_eq!(rows(cx), both, "a repo no longer listed is dropped");
+    wait_until(cx, |cx| rows(cx) == both);
     cx.click("palette.all");
-    assert_eq!(rows(cx), [row("README.md", "app")]);
+    wait_until(cx, |cx| rows(cx) == [row("README.md", "app")]);
     cx.press("secondary-e");
-    assert_eq!(rows(cx), both);
+    wait_until(cx, |cx| rows(cx) == both);
 
     cx.press("secondary-shift-o");
     search(cx, "index", "src/index.ts");
@@ -443,6 +443,42 @@ fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut
     assert_eq!(empty(cx).as_deref(), Some("No recent files"));
     cx.input("zzzz");
     assert_eq!(empty(cx).as_deref(), Some("Nothing found"));
+}
+
+#[gpui_kit::test]
+fn working_tree_recents_stop_at_checkout_boundaries_on_offer_and_open(cx: &mut TestAppContext) {
+    let mut app = open_app_with(cx, |sb| {
+        layout(sb);
+        let repo = sb.repo("app");
+        let nested = repo.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("only.txt"), "nested content").unwrap();
+        std::fs::create_dir(repo.join("later")).unwrap();
+        std::fs::write(repo.join("later/file.txt"), "plain content").unwrap();
+        sb.git(&nested, &["init", "-q"]);
+        let at = |path: &str| serde_json::json!({"repo": repo, "path": path});
+        let ui = serde_json::json!({"nav.recent": [at("nested/only.txt"), at("later/file.txt")]});
+        std::fs::write(sb.state.config_dir.join("ui.json"), ui.to_string()).unwrap();
+    });
+    let repo = app.sb.repo("app");
+    let cx = &mut app;
+    cx.press("secondary-shift-o");
+    wait_until(cx, |cx| {
+        rows(cx) == [("later/file.txt".into(), "app".into())]
+    });
+    let before = shown(cx);
+    cx.sb.git(&repo.join("later"), &["init", "-q"]);
+    cx.press("enter");
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            Activity::global(cx)
+                .read(cx)
+                .message
+                .as_ref()
+                .is_some_and(|m| m.text == "The recent file is outside the current session.")
+        })
+    });
+    assert_eq!(shown(cx), before);
 }
 
 #[gpui_kit::test]

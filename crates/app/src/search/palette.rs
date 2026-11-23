@@ -19,6 +19,7 @@ use crate::repos::{self, CheckoutTarget};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
 use crate::{files, keymap};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Location;
 use kernel::nav;
@@ -80,6 +81,7 @@ pub struct Palette {
     seq: u64,
     /// Recent files, of the current repo in Go to File unless "All repositories".
     recent: Vec<Item>,
+    recent_load: Option<Task<()>>,
     /// Search Everywhere's branches of the current repo, read once per open by `load`.
     branches: Vec<Item>,
     branch_repo: Option<String>,
@@ -104,10 +106,11 @@ impl Palette {
                 window,
                 |this, _, _: &Event, window, cx| this.sync(window, cx),
             ),
-            cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
+            cx.subscribe_in(&input, window, |this, _, e: &InputEvent, _, cx| {
                 if let InputEvent::Change = e {
                     this.sel = 0;
-                    this.sync(window, cx);
+                    this.search(cx);
+                    cx.notify();
                 }
             }),
         ];
@@ -129,6 +132,7 @@ impl Palette {
             asked: None,
             seq: 0,
             recent: vec![],
+            recent_load: None,
             branches: vec![],
             branch_repo: None,
             load: None,
@@ -164,12 +168,27 @@ impl Palette {
     /// the recent files and the branches.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = cx.global::<Search>().all;
-        let recent = nav::recent(cx);
+        self.recent.clear();
+        self.recent_load = None;
         let w = Workspace::get(cx);
-        let mine = |l: &Location| {
-            all || self.mode != Some(Mode::File) || w.session_current() == Some(&l.repo)
-        };
-        self.recent = recent.into_iter().filter(mine).map(Item::File).collect();
+        if matches!(self.mode, Some(Mode::File | Mode::Recent)) {
+            let repo = w.session_current().map(String::from);
+            let restrict = !all && self.mode == Some(Mode::File);
+            let recent = nav::recent(cx);
+            self.recent_load = Some(cx.spawn(async move |this, cx| {
+                let recent = recent
+                    .await
+                    .into_iter()
+                    .filter(|l| !restrict || repo.as_ref() == Some(&l.repo))
+                    .map(Item::File)
+                    .collect();
+                _ = this.update(cx, |this, cx| {
+                    this.recent = recent;
+                    cx.notify();
+                });
+            }));
+        }
+        let w = Workspace::get(cx);
         let placeholder = match (self.mode, all, w.session_current()) {
             (Some(Mode::File), false, Some(repo)) => format!("Files in {}", w.name_of(repo)),
             (Some(Mode::File), _, _) => format!("File name in {}", w.session_name()),
@@ -335,6 +354,32 @@ impl Palette {
         };
         close(cx);
         match row.item {
+            Item::File(loc)
+                if matches!(self.mode, Some(Mode::File | Mode::Recent))
+                    && (self.mode == Some(Mode::Recent)
+                        || self.input.read(cx).value().is_empty()) =>
+            {
+                let check = loc.clone();
+                let ready = blocking::run(cx, move || nav::file_available(&check));
+                cx.spawn(async move |_, cx| {
+                    let ready = ready.await;
+                    cx.update(|cx| {
+                        if ready
+                            && Workspace::get(cx)
+                                .session_repos()
+                                .iter()
+                                .any(|r| r.path == loc.repo)
+                        {
+                            files::open(cx, loc);
+                        } else {
+                            Activity::global(cx).update(cx, |a, cx| {
+                                a.say("The recent file is outside the current session.", true, cx)
+                            });
+                        }
+                    });
+                })
+                .detach();
+            }
             Item::File(loc) => files::open(cx, loc),
             Item::Action(a, _) => actions::dispatch(window, cx, a.id),
             Item::Branch { target, .. } => {

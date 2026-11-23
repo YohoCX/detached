@@ -67,10 +67,10 @@ fn nav(cx: &mut App) -> &mut Nav {
 }
 
 /// Recent files in the current session, using its checkout paths.
-pub fn recent(cx: &mut App) -> Vec<Location> {
+pub fn recent(cx: &mut App) -> gpui::Task<Vec<Location>> {
     let recent = nav(cx).recent.clone();
     let w = Workspace::get(cx);
-    recent
+    let mut recent: Vec<_> = recent
         .into_iter()
         .filter_map(|mut loc| {
             let key = w.path_key(&loc.repo);
@@ -81,7 +81,17 @@ pub fn recent(cx: &mut App) -> Vec<Location> {
             loc.repo.clone_from(&repo.path);
             Some(loc)
         })
-        .collect()
+        .collect();
+    crate::blocking::run(cx, move || {
+        recent.retain(file_available);
+        recent
+    })
+}
+
+pub fn file_available(loc: &Location) -> bool {
+    loc.rev.is_some()
+        || loc.doc.is_some()
+        || detached_core::git::files::working_file(std::path::Path::new(&loc.repo), &loc.path)
 }
 
 /// Records `loc`.

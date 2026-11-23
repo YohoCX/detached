@@ -313,6 +313,9 @@ fn classify(bytes: Vec<u8>) -> Content {
 }
 
 fn worktree(env: &Env, repo: &Path, path: &str) -> Result<Content> {
+    if !super::files::working_path(repo, path) {
+        return Ok(Content::Missing);
+    }
     let full = repo.join(path);
     let Ok(meta) = fs::symlink_metadata(&full) else {
         return Ok(Content::Missing);

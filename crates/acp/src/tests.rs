@@ -304,7 +304,9 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
     let acp = Acp::default();
     let check = || {
-        let past = acp.archive_past(&sb.state, &spec).unwrap();
+        let history = acp.archive_past(&sb.state, &CODEX, std::slice::from_ref(&repo));
+        assert!(history.errors.is_empty());
+        let past = history.chats;
         assert_eq!((&*past[0].id, &*past[0].title), (id, "Earlier"));
         let shown = acp.transcript(&sb.state, &spec, id).unwrap();
         assert!(
@@ -315,21 +317,71 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
     };
     check();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
-    if let Some(zstd) = detached_core::env::which("zstd", &sb.state.env().path) {
-        let output = Command::new(zstd)
-            .args(["-c", "--"])
-            .arg(&file)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        std::fs::remove_file(&file).unwrap();
-        let packed = file.with_extension("jsonl.zst");
-        std::fs::write(&packed, &output.stdout).unwrap();
-        check();
-        assert_eq!(std::fs::read(packed).unwrap(), output.stdout);
-        assert!(!file.exists());
-    }
+    let compressed = zstd::encode_all(text.as_bytes(), 1).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    let packed = file.with_extension("jsonl.zst");
+    std::fs::write(&packed, &compressed).unwrap();
+    check();
+    assert_eq!(std::fs::read(packed).unwrap(), compressed);
+    assert!(!file.exists());
     assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
+}
+
+#[test]
+fn archive_scans_both_folders_and_reports_bad_rollouts_once() {
+    let sb = Sandbox::new();
+    let home = sb.path("codex");
+    sb.state
+        .env
+        .write()
+        .unwrap()
+        .vars
+        .push(("CODEX_HOME".into(), home.display().to_string()));
+    let dir = home.join("archived_sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let folders = ["one", "two"].map(|p| sb.path(p).display().to_string());
+    let rollout = |n, ext| {
+        dir.join(format!(
+            "rollout-2026-11-23T12-00-00-00000000-0000-0000-0000-{n:012}.{ext}"
+        ))
+    };
+    let meta =
+        |cwd: &str| json!({"type": "session_meta", "payload": {"cwd": cwd}}).to_string() + "\n";
+
+    std::fs::write(rollout(1, "jsonl"), meta(&folders[0])).unwrap();
+    let second = zstd::encode_all(meta(&folders[1]).as_bytes(), 1).unwrap();
+    std::fs::write(rollout(2, "jsonl.zst"), second).unwrap();
+    let corrupt = rollout(3, "jsonl.zst");
+    std::fs::write(&corrupt, "bad frame").unwrap();
+    let oversize = rollout(4, "jsonl.zst");
+    let oversized_record = meta(&folders[0]) + &"x".repeat(9 * 1024 * 1024);
+    std::fs::write(
+        &oversize,
+        zstd::encode_all(oversized_record.as_bytes(), 1).unwrap(),
+    )
+    .unwrap();
+
+    let acp = Acp::default();
+    let history = acp.archive_past(&sb.state, &CODEX, &folders);
+    assert_eq!(history.chats.len(), 2);
+    for folder in &folders {
+        assert!(
+            history
+                .chats
+                .iter()
+                .any(|chat| chat.cwd.as_ref() == Some(folder))
+        );
+    }
+    assert_eq!(history.errors.len(), 2);
+    assert!(
+        history
+            .errors
+            .iter()
+            .any(|err| err.contains(corrupt.file_name().unwrap().to_str().unwrap()))
+    );
+    assert!(history.errors.iter().any(|err| {
+        err.contains(oversize.file_name().unwrap().to_str().unwrap()) && err.contains("8 MiB")
+    }));
 }
 
 #[test]

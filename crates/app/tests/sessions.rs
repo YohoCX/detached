@@ -186,6 +186,44 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn archive_shows_both_repos_despite_a_bad_rollout_and_hides_deleted_chats(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let home = sb.path("codex");
+        sb.state
+            .env
+            .write()
+            .unwrap()
+            .vars
+            .push(("CODEX_HOME".into(), home.display().to_string()));
+        let api = repo(sb, "api");
+        let web = repo(sb, "web");
+        let archived = home.join("archived_sessions");
+        let id = |n| format!("00000000-0000-0000-0000-{n:012}");
+        let rollout = |n| format!("rollout-2026-11-23T12-00-00-{}.jsonl", id(n));
+        for (n, path, message) in [
+            (1, &api, "API history"),
+            (2, &web, "Web history"),
+            (3, &web, "Deleted"),
+        ] {
+            let meta = json!({"type": "session_meta", "payload": {"cwd": path}});
+            let turn = json!({"type": "event_msg", "payload": {"type": "user_message", "message": message}});
+            write(&archived, [(rollout(n), format!("{meta}\n{turn}\n"))]);
+        }
+        write(&archived, [(format!("{}.zst", rollout(4)), "broken frame")]);
+        detached_core::chat_index::created(&sb.state, &id(3), "codex").unwrap();
+        detached_core::chat_index::deleted(&sb.state, &id(3), "codex").unwrap();
+    });
+    cx.click("sessions.archive");
+    wait_until(cx, |cx| {
+        label(cx, ("archive.pastChat", 0usize)).as_deref() == Some("API history")
+            && label(cx, ("archive.pastChat", 1usize)).as_deref() == Some("Web history")
+            && label(cx, ("archive.error", 0usize)).is_some_and(|s| s.contains("000000000004"))
+    });
+    assert!(cx.find(("archive.pastChat", 2usize)).is_none());
+    assert!(cx.find(("archive.error", 1usize)).is_none());
+}
+
+#[gpui_kit::test]
 fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         let repo = repo(sb, "api");
@@ -281,7 +319,7 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
     assert!(cx.find("chat.send").is_none());
     assert_eq!(
         label(cx, ("archive.message", 2usize)).as_deref(),
-        Some("Recorded release notes")
+        Some("{\"file_path\":\"notes.txt\"}\nRecorded release notes")
     );
     let loc = Location {
         repo: cx.workspace(|w, _| w.repos()[0].path.clone()),

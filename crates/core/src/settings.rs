@@ -226,8 +226,13 @@ impl AppState {
 
     /// Memory keeps the old settings when the save fails.
     pub(crate) fn update(&self, f: impl FnOnce(&mut Settings) -> Result<()>) -> Result<Settings> {
+        let _sessions = crate::sessions::lock(self)?;
         let mut s = self.settings.lock().unwrap();
-        let mut next = s.clone();
+        let mut next = if self.config_dir.join(FILE).try_exists()? {
+            Settings::load(&self.config_dir)
+        } else {
+            s.clone()
+        };
         f(&mut next)?;
         next.save(&self.config_dir)?;
         *s = next.clone();
@@ -282,6 +287,17 @@ impl AppState {
         })
     }
 
+    pub(crate) fn saved_workspaces(&self) -> Result<Vec<Workspace>> {
+        let file = self.config_dir.join(FILE);
+        let raw = read_json::<BTreeMap<String, Value>>(&file, false)
+            .map_err(|problem| Error::Other(problem.error))?;
+        raw.and_then(|mut raw| raw.remove("workspaces"))
+            .map(serde_json::from_value)
+            .transpose()
+            .map(|workspaces| workspaces.unwrap_or_default())
+            .map_err(Into::into)
+    }
+
     /// The repos of workspace `id`; none when there is no such workspace.
     pub fn list_repos(&self, id: &str) -> Vec<RepoInfo> {
         let s = self.get_settings();
@@ -299,7 +315,7 @@ impl AppState {
         all.filter(|r| seen.insert(r.path.clone())).collect()
     }
 
-    fn repos_of(&self, w: &Workspace) -> Vec<RepoInfo> {
+    pub(crate) fn repos_of(&self, w: &Workspace) -> Vec<RepoInfo> {
         let mut repos = discovery::discover(&w.folders, &w.excluded_repos);
         worktree::add_linked(self, &mut repos, &w.excluded_repos);
         repos
@@ -374,27 +390,34 @@ impl AppState {
     /// A new empty workspace, or workspace `from` renamed when given: its id.
     pub fn save_workspace(&self, name: String, from: Option<String>) -> Result<String> {
         let name = name.trim().to_string();
-        let s = self.get_settings();
         if name.is_empty() {
             return Err(Error::Other("A workspace needs a name".into()));
         }
-        if s.workspaces.iter().any(|w| w.name == name) {
-            return Err(Error::Other(format!("Workspace {name} already exists")));
-        }
-        match from {
-            Some(id) => self.in_workspace(&id, |w| w.name = name).map(|_| id),
-            None => {
-                let w = Workspace::new(name);
-                let id = w.id.clone();
-                self.update_field("workspaces", |s| s.workspaces.push(w))?;
-                Ok(id)
+        let mut id = from.clone().unwrap_or_default();
+        self.update(|s| {
+            if s.workspaces.iter().any(|w| w.name == name) {
+                return Err(Error::Other(format!("Workspace {name} already exists")));
             }
-        }
+            if let Some(from) = from {
+                let w = s
+                    .workspaces
+                    .iter_mut()
+                    .find(|w| w.id == from)
+                    .ok_or_else(|| Error::Other(format!("No workspace {from}")))?;
+                w.name = name;
+            } else {
+                let w = Workspace::new(name);
+                id = w.id.clone();
+                s.workspaces.push(w);
+                s.recovery.invalid.remove("workspaces");
+            }
+            Ok(())
+        })?;
+        Ok(id)
     }
 
     /// Drops workspace `id` from the settings; its folders and repos stay where they are.
     pub fn remove_workspace(&self, id: String) -> Result<()> {
-        let _sessions = crate::sessions::lock(self)?;
         self.update_field("workspaces", |s| s.workspaces.retain(|w| w.id != id))
             .map(drop)
     }

@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use detached_core::adapters::PROVIDERS;
-use detached_core::backend::{Past, Update};
+use detached_core::backend::{History, Past, Update};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
@@ -59,10 +59,9 @@ impl DocKind for ArchiveDocs {
     }
 }
 
-type History = ((String, &'static str), Interest<Vec<Past>>);
-
 struct Archive {
-    past: Vec<History>,
+    folders: Vec<String>,
+    past: Vec<(&'static str, Interest<History>)>,
     _workspace: Subscription,
     _settings: Subscription,
 }
@@ -70,6 +69,7 @@ struct Archive {
 impl Archive {
     fn new(cx: &mut Context<Self>) -> Self {
         let mut view = Self {
+            folders: vec![],
             past: vec![],
             _workspace: Workspace::observe(cx, Self::sync),
             _settings: cx.observe(&Settings::global(cx), |view, _, cx| view.sync(cx)),
@@ -81,6 +81,7 @@ impl Archive {
     fn sync(&mut self, cx: &mut Context<Self>) {
         let w = Workspace::get(cx);
         if !w.archive() {
+            self.folders.clear();
             self.past.clear();
             return;
         }
@@ -97,16 +98,23 @@ impl Archive {
             .chain(folders)
             .cloned()
             .collect();
-        self.past.retain(|((repo, _), _)| places.contains(repo));
-        for repo in places {
-            for provider in PROVIDERS {
-                let key = (repo.clone(), provider.id);
-                if !self.past.iter().any(|(k, _)| *k == key) {
-                    let past = kernel::session::past_of(provider, &repo, true, cx);
-                    self.past.push((key, Interest::view(past, cx)));
-                }
-            }
+        let folders: Vec<_> = places.into_iter().collect();
+        if self.folders == folders {
+            cx.notify();
+            return;
         }
+        self.past = if folders.is_empty() {
+            vec![]
+        } else {
+            PROVIDERS
+                .iter()
+                .map(|provider| {
+                    let past = kernel::session::archive_past(provider, folders.clone(), cx);
+                    (provider.id, Interest::view(past, cx))
+                })
+                .collect()
+        };
+        self.folders = folders;
         cx.notify();
     }
 }
@@ -154,25 +162,31 @@ impl Render for Archive {
         let mut chats = BTreeSet::new();
         let mut errors = BTreeSet::new();
         let mut index = 0usize;
-        for ((repo, provider), history) in &self.past {
+        let mut groups: BTreeMap<(&str, &str), Vec<&Past>> = BTreeMap::new();
+        for (provider, history) in &self.past {
             let history = history.read(cx);
+            let name = crate::chat::provider(provider).name;
+            if let Some(error) = &history.error {
+                errors.insert(format!("{name}: {error}"));
+            }
+            if let Some(history) = &history.value {
+                errors.extend(
+                    history
+                        .errors
+                        .iter()
+                        .map(|error| format!("{name}: {error}")),
+                );
+                for past in &history.chats {
+                    if let Some(repo) = past.cwd.as_deref()
+                        && chats.insert((*provider, &past.id))
+                    {
+                        groups.entry((repo, provider)).or_default().push(past);
+                    }
+                }
+            }
+        }
+        for ((repo, provider), list) in groups {
             let provider = crate::chat::provider(provider);
-            if let Some(error) = history.error.as_ref() {
-                errors.insert(format!(
-                    "{} · {}: {error}",
-                    crate::chat::label(repo, cx),
-                    provider.name
-                ));
-            }
-            let list: Vec<_> = history
-                .value
-                .iter()
-                .flatten()
-                .filter(|past| chats.insert((provider.id, &past.id)))
-                .collect();
-            if list.is_empty() {
-                continue;
-            }
             page = page.child(
                 div()
                     .pt(GAP)
@@ -187,7 +201,7 @@ impl Render for Archive {
             for past in list {
                 let title = past.title.clone();
                 let doc = Doc::PastChat {
-                    repo: repo.clone(),
+                    repo: repo.into(),
                     provider: provider.id.into(),
                     id: past.id.clone(),
                     title: title.clone(),
@@ -242,9 +256,9 @@ impl Transcript {
         title: String,
         cx: &mut Context<Self>,
     ) -> Self {
-        let read = kernel::session::transcript(provider, repo, id, cx);
+        let read = kernel::session::transcript(provider, repo, id, messages, cx);
         cx.spawn(async move |this, cx| {
-            let result = read.await.map(messages).map_err(|e| e.to_string());
+            let result = read.await.map_err(|e| e.to_string());
             _ = this.update(cx, |view, cx| {
                 view.result = Some(result);
                 cx.notify();
@@ -261,16 +275,16 @@ impl Transcript {
 fn messages(updates: Vec<Update>) -> Vec<Item> {
     let mut out: Vec<Item> = vec![];
     let mut split = false;
+    let mut tools = HashMap::new();
     for update in updates {
         match update {
             Update::Tool(tool) => {
-                if let Some(Item::Tool(was)) = out
-                    .iter_mut()
-                    .rev()
-                    .find(|i| matches!(i, Item::Tool(t) if t.id == tool.id))
-                {
-                    was.update(*tool);
+                if let Some(&i) = tools.get(&tool.id) {
+                    if let Item::Tool(was) = &mut out[i] {
+                        was.update(*tool);
+                    }
                 } else {
+                    tools.insert(tool.id.clone(), out.len());
                     out.push(Item::Tool(*tool));
                 }
             }
@@ -324,7 +338,17 @@ impl Render for Transcript {
                                 .as_deref()
                                 .or(tool.kind.as_deref())
                                 .unwrap_or("Tool"),
-                            tool.output_text(),
+                            [
+                                tool.input.as_ref().map(|v| {
+                                    v.as_str().map_or_else(|| v.to_string(), String::from)
+                                }),
+                                Some(tool.output_text()),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
                         ),
                         _ => return None,
                     };

@@ -303,7 +303,7 @@ impl ChatList {
             for &x in &providers {
                 let key = (p.clone(), x.id);
                 if !self.past.iter().any(|(k, _)| *k == key) {
-                    let past = kernel::session::past_of(x, &p, false, cx);
+                    let past = kernel::session::past_of(x, &p, cx);
                     self.past.push((key, Interest::view(past, cx)));
                 }
             }

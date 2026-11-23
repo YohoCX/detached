@@ -93,8 +93,13 @@ impl Backend for Acp {
         Ok(all)
     }
 
-    fn archive_past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
-        history::past(core, &spec.repo)
+    fn archive_past(
+        &self,
+        core: &AppState,
+        _provider: &'static detached_core::adapters::Provider,
+        folders: &[String],
+    ) -> backend::History {
+        history::past(core, folders)
     }
 
     fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {

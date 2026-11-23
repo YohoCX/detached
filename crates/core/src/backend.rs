@@ -45,8 +45,23 @@ pub trait Backend: Send + Sync {
     fn past(&self, _core: &AppState, _spec: &Spec) -> Result<Vec<Past>> {
         Err(Error::Other("This agent lists no past sessions.".into()))
     }
-    fn archive_past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
-        self.past(core, spec)
+    fn archive_past(
+        &self,
+        core: &AppState,
+        provider: &'static Provider,
+        folders: &[String],
+    ) -> History {
+        let mut history = History::default();
+        for folder in folders {
+            match self.past(core, &Spec::new(provider, folder, Kind::Chat)) {
+                Ok(chats) => history.chats.extend(chats.into_iter().map(|mut chat| {
+                    chat.cwd = Some(folder.clone());
+                    chat
+                })),
+                Err(error) => history.errors.push(format!("{folder}: {error}")),
+            }
+        }
+        history
     }
     fn transcript(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<Vec<Update>> {
         Err(Error::Other(
@@ -402,6 +417,12 @@ pub struct Task {
 pub struct Part {
     pub name: String,
     pub tokens: u64,
+}
+
+#[derive(Default)]
+pub struct History {
+    pub chats: Vec<Past>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

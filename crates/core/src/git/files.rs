@@ -1,7 +1,7 @@
 //! File lists for the tree and quick open.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -31,6 +31,28 @@ pub fn walker(repo: &Path) -> WalkBuilder {
 
 fn checkout(dir: &Path) -> bool {
     dir.join(".git").symlink_metadata().is_ok()
+}
+
+pub fn working_path(repo: &Path, path: &str) -> bool {
+    let mut dir = repo.to_path_buf();
+    let mut parts = Path::new(path).components().peekable();
+    while let Some(part) = parts.next() {
+        let Component::Normal(name) = part else {
+            return false;
+        };
+        if name == ".git" {
+            return false;
+        }
+        dir.push(name);
+        if parts.peek().is_some() && (dir.is_symlink() || checkout(&dir)) {
+            return false;
+        }
+    }
+    dir != repo
+}
+
+pub fn working_file(repo: &Path, path: &str) -> bool {
+    working_path(repo, path) && !checkout(&repo.join(path))
 }
 
 /// Working-tree files (None) or the files at `rev`, sorted.
@@ -72,9 +94,13 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
         Some(_) => vec![],
         None => status::status(env, repo)?.changes,
     };
+    Ok(file_entries(files, &changes))
+}
+
+fn file_entries(files: Vec<String>, changes: &[FileChange]) -> Vec<FileEntry> {
     let by_path: HashMap<&str, &FileChange> =
         changes.iter().map(|c| (c.path.as_str(), c)).collect();
-    Ok(files
+    files
         .into_iter()
         .map(|path| {
             let change = by_path.get(path.as_str()).map(|c| (*c).clone());
@@ -85,7 +111,7 @@ pub fn list_files(env: &Env, repo: &Path, rev: Option<&str>) -> Result<Vec<FileE
                 lazy: false,
             }
         })
-        .collect())
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -152,12 +178,17 @@ pub fn tree(
             .filter(|e| !hidden(&e.path))
             .collect());
     }
-    let mut entries = list_files(env, repo, None)?;
-    let visible: HashSet<_> = walker(repo)
-        .build()
-        .flatten()
-        .map(|e| e.path().to_path_buf())
-        .collect();
+    let mut files = vec![];
+    let mut visible = HashSet::new();
+    for e in walker(repo).build().flatten() {
+        if e.file_type().is_some_and(|t| !t.is_dir())
+            && let Some(path) = e.path().strip_prefix(repo).ok().and_then(Path::to_str)
+        {
+            files.push(slashed(path));
+        }
+        visible.insert(e.into_path());
+    }
+    let mut entries = file_entries(files, &status::status(env, repo)?.changes);
     fn visit(
         repo: &Path,
         dir: &Path,
@@ -185,7 +216,7 @@ pub fn tree(
             }
             let is_dir = e.file_type()?.is_dir();
             if is_dir {
-                if checkout(&path) {
+                if ignored && checkout(&path) {
                     continue;
                 }
                 entries.push(FileEntry {
@@ -380,6 +411,16 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "").unwrap();
         }
+        assert!(matches!(
+            crate::git::diff::content(
+                &sb.state,
+                &linked,
+                &crate::types::Side::Worktree,
+                "nested/f"
+            )
+            .unwrap(),
+            crate::types::Content::Missing
+        ));
         let ignored = linked.join(".cache/inside");
         sb.git(
             &work,

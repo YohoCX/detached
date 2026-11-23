@@ -92,8 +92,9 @@ pub fn run(core: Arc<AppState>, args: &[String]) -> ! {
                     cx.update(|cx| chat(spec, run, cx));
                     return;
                 }
-                let transcript =
-                    cx.update(|cx| session::transcript(spec.provider, spec.repo, id, cx));
+                let transcript = cx.update(|cx| {
+                    session::transcript(spec.provider, spec.repo, id, std::convert::identity, cx)
+                });
                 match transcript.await {
                     Ok(updates) => {
                         for update in updates {

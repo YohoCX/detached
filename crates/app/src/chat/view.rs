@@ -149,7 +149,7 @@ impl ChatView {
             s.check_trust(cx);
         });
         let repo = session.read(cx).repo.clone();
-        let past = Interest::view(kernel::session::past_of(p, &repo, false, cx), cx);
+        let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
         scroll.scroll_to_bottom();
         let seen = session.read(cx).feed(cx).len();
         ChatView {
@@ -188,7 +188,7 @@ impl ChatView {
                 .update(cx, |s, cx| s.set_placeholder(text, window, cx));
         }
         if self.past.0 != p.id {
-            let past = kernel::session::past_of(p, &repo, false, cx);
+            let past = kernel::session::past_of(p, &repo, cx);
             self.past = (p.id, Interest::view(past, cx));
         }
     }

@@ -124,7 +124,7 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
             backup: None,
         })
     };
-    for dir in workspace_dirs(core) {
+    for dir in workspace_dirs(core)? {
         let parent = dir.join("sessions");
         match directories(&parent) {
             Ok(dirs) => {
@@ -193,11 +193,11 @@ pub fn list_for(core: &AppState, workspace: &str, attached: &[RepoInfo]) -> Resu
     Ok(Listing { sets, problems })
 }
 
-fn workspace_dirs(core: &AppState) -> impl Iterator<Item = PathBuf> {
-    core.get_settings()
-        .workspaces
+fn workspace_dirs(core: &AppState) -> Result<impl Iterator<Item = PathBuf>> {
+    Ok(core
+        .saved_workspaces()?
         .into_iter()
-        .filter_map(|w| segment(&w.id).then(|| root(core).join(w.id)))
+        .filter_map(|w| segment(&w.id).then(|| root(core).join(w.id))))
 }
 
 fn registered(env: &crate::env::Env, common: &Path, path: &Path) -> bool {
@@ -222,7 +222,7 @@ fn registered(env: &crate::env::Env, common: &Path, path: &Path) -> bool {
 
 fn owned(core: &AppState) -> Result<HashMap<PathBuf, String>> {
     let mut owned = HashMap::new();
-    for dir in workspace_dirs(core) {
+    for dir in workspace_dirs(core)? {
         for dir in directories(&dir.join("sessions"))? {
             if let Some(set) = manifest(&dir.join(MANIFEST))? {
                 for member in set.members {
@@ -246,7 +246,7 @@ fn candidates_for(
     let env = core.env();
     let owned = owned(core)?;
     let council_trees = real(&core.data_dir.join("trees"));
-    let repos = core.list_repos(workspace);
+    let repos = core.repos_of(&require_workspace(core, workspace)?);
     let mut rows = vec![];
     let mut seen = HashSet::new();
     for RepoInfo {
@@ -323,28 +323,26 @@ fn candidates_for(
     Ok(rows)
 }
 
-fn require_workspace(core: &AppState, workspace: &str) -> Result<()> {
-    if !segment(workspace)
-        || !core
-            .get_settings()
-            .workspaces
-            .iter()
-            .any(|w| w.id == workspace)
+fn require_workspace(core: &AppState, workspace: &str) -> Result<crate::settings::Workspace> {
+    if segment(workspace)
+        && let Some(workspace) = core
+            .saved_workspaces()?
+            .into_iter()
+            .find(|w| w.id == workspace)
     {
-        return Err(Error::Other(format!("No workspace {workspace}")));
+        return Ok(workspace);
     }
-    Ok(())
+    Err(Error::Other(format!("No workspace {workspace}")))
 }
 
 pub(crate) fn lock(core: &AppState) -> Result<File> {
-    let root = root(core);
-    fs::create_dir_all(&root)?;
+    fs::create_dir_all(&core.config_dir)?;
     let file = File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(root.join(".sessions.lock"))?;
+        .open(core.config_dir.join(".sessions.lock"))?;
     file.lock()?;
     Ok(file)
 }
@@ -365,7 +363,6 @@ fn name(value: &str) -> Result<String> {
 pub fn adopt(core: &AppState, workspace: &str, label: &str, paths: &[String]) -> Result<Workset> {
     let name = name(label)?;
     let _lock = lock(core)?;
-    require_workspace(core, workspace)?;
     let selected: HashSet<_> = paths.iter().map(|p| real(Path::new(p))).collect();
     if selected.is_empty() || selected.len() != paths.len() {
         return Err(Error::Other("Select distinct linked worktrees".into()));
