@@ -64,7 +64,7 @@ fn a_long_cwd_s_folder_is_cut_at_200_with_its_hash_and_lists_its_sessions() {
         (past[0].id.as_str(), past[0].title.as_str()),
         (LONG, "first")
     );
-    let h = read(dir.path(), LONG).unwrap();
+    let h = read(dir.path(), LONG, false).unwrap();
     assert_eq!(texts(&h), ["user: first", "text: one"]);
 }
 
@@ -80,7 +80,7 @@ fn a_subagent_shows_as_its_tool_call_and_its_sidechain_is_skipped() {
     text.push_str(&fs::read_to_string(sub).unwrap());
     fs::write(&file, text).unwrap();
 
-    let h = read(dir.path(), SUBAGENT).unwrap();
+    let h = read(dir.path(), SUBAGENT, false).unwrap();
     assert_eq!(texts(&h), ["user: go", "text: main done", "text: done"]);
     // The notification between the two is noise: a break alone keeps them apart.
     let main = h
@@ -107,7 +107,7 @@ fn a_subagent_shows_as_its_tool_call_and_its_sidechain_is_skipped() {
 #[test]
 fn a_compacted_session_starts_at_its_boundary() {
     let dir = laid("compaction", "/tmp/h4c/transcripts-compaction/repo");
-    let h = read(dir.path(), COMPACTION).unwrap();
+    let h = read(dir.path(), COMPACTION, false).unwrap();
     assert_eq!(
         h,
         [
@@ -140,7 +140,7 @@ fn each_of_parallel_calls_has_its_result_though_one_alone_is_on_the_chain() {
         line("assistant", "a3", Some("r2"), json!("both")),
     ];
     let bytes: String = lines.iter().map(|l| format!("{l}\n")).collect();
-    let h = history(bytes.as_bytes()).unwrap();
+    let h = history(bytes.as_bytes(), false).unwrap();
     let outputs: Vec<_> = h
         .iter()
         .filter_map(|u| match u {
@@ -194,7 +194,7 @@ fn a_worktree_s_session_is_in_its_own_folder_and_found_from_any() {
     .unwrap();
     assert_eq!(past(dir.path(), cwd).len(), 1);
     assert!(past(dir.path(), "/tmp/h4c/transcripts-worktree/main").is_empty());
-    assert!(read(dir.path(), WORKTREE).is_some());
+    assert!(read(dir.path(), WORKTREE, false).is_some());
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn a_file_of_unknown_lines_has_no_history_and_no_list_entry() {
         lines,
     )
     .unwrap();
-    assert_eq!(read(dir.path(), id), None);
+    assert_eq!(read(dir.path(), id, false), None);
     let past = past(dir.path(), cwd);
     assert_eq!(
         past.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
@@ -248,7 +248,7 @@ fn delete_removes_the_transcript_and_its_folder_and_never_follows_a_path() {
     delete(dir.path(), SUBAGENT).unwrap();
     assert!(!file.exists() && !file.with_extension("").exists());
     assert!(past(dir.path(), cwd).is_empty());
-    assert_eq!(read(dir.path(), SUBAGENT), None);
+    assert_eq!(read(dir.path(), SUBAGENT, false), None);
     assert!(delete(dir.path(), SUBAGENT).is_err());
 }
 

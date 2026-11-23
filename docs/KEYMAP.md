@@ -9,14 +9,18 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 
 | Action id | Action | Keys | Milestone | Owner |
 | --- | --- | --- | --- | --- |
-| `search.everywhere` | Search everywhere | Double Shift | M1 | V3 |
-| `file.goto` | Go to file | Cmd+Shift+O | M1 | V3 |
-| `find.inFiles` | Find in files | Cmd+Shift+F | M1 | V3 |
+| `search.everywhere` | Search everywhere in the session | Double Shift | M1 | V3 |
+| `file.goto` | Go to file in the session | Cmd+Shift+O | M1 | V3 |
+| `find.inFiles` | Find in session files | Cmd+Shift+F | M1 | V3 |
 | `action.find` | Find action | Cmd+Shift+A | M1 | V3 |
 | `file.recent` | Recent files | Cmd+E | M1 | V3 |
 | `editor.gotoLine` | Go to line | Cmd+L | M1 | V2 |
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
-| `panel.project` | Project tree app | Cmd+1 | M1 | F |
+| `panel.project` | Session files | Cmd+1 | M1 | F |
+| `session.new` | Adopt Worktrees… | Cmd+N | Sessions | F |
+| `session.rename` | Rename Session… | — | Sessions | F |
+| `session.archive` | Session Archive | — | Sessions | F |
+| `panel.sessions` | Show or Hide Sessions | — | Sessions | F |
 | `panel.log` | Git log app | Cmd+9 | M2 | F |
 | `panel.council` | Council app | — | P1 | P1 |
 | `panel.docs` | Docs app | — | H7 | H7 |

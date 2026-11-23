@@ -262,9 +262,23 @@ pub fn image(
     }
     let bytes = match rev {
         None => {
-            let full = repo.join(path);
-            match fs::metadata(&full) {
-                Ok(m) if m.is_file() && m.len() <= MAX_SIZE => fs::read(full)?,
+            let path = Path::new(path);
+            if !super::files::working_path(repo, path) {
+                return Ok(None);
+            }
+            let (Ok(root), Ok(target)) =
+                (fs::canonicalize(repo), fs::canonicalize(repo.join(path)))
+            else {
+                return Ok(None);
+            };
+            if !target
+                .strip_prefix(&root)
+                .is_ok_and(|path| super::files::working_path(&root, path))
+            {
+                return Ok(None);
+            }
+            match fs::metadata(&target) {
+                Ok(m) if m.is_file() && m.len() <= MAX_SIZE => fs::read(target)?,
                 _ => return Ok(None),
             }
         }
@@ -313,6 +327,9 @@ fn classify(bytes: Vec<u8>) -> Content {
 }
 
 fn worktree(env: &Env, repo: &Path, path: &str) -> Result<Content> {
+    if !super::files::working_path(repo, Path::new(path)) {
+        return Ok(Content::Missing);
+    }
     let full = repo.join(path);
     let Ok(meta) = fs::symlink_metadata(&full) else {
         return Ok(Content::Missing);
@@ -632,5 +649,44 @@ mod tests {
         assert_eq!(img(None, "img/../img/a.svg"), None);
         assert_eq!(img(None, "/etc/a.svg"), None);
         assert!(image(&sb.state, &work, Some("-x"), "img/a.svg").is_err());
+    }
+    #[test]
+    fn worktree_images_stay_in_the_selected_checkout() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        let nested = work.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let rev = sb.commit(&work, "nested/image.svg", "<svg/>", "svg");
+        sb.git(&work, &["rm", "nested/image.svg"]);
+        sb.git(&work, &["commit", "-qm", "remove svg"]);
+        sb.git(
+            &work,
+            &["worktree", "add", "--detach", nested.to_str().unwrap()],
+        );
+        fs::write(nested.join("image.svg"), "<svg></svg>").unwrap();
+        fs::write(work.join("local.svg"), "<svg/>").unwrap();
+
+        let img = |rev, path| image(&sb.state, &work, rev, path).unwrap();
+        let svg = Some("data:image/svg+xml;base64,PHN2Zy8+".into());
+        assert_eq!(img(None, "nested/image.svg"), None);
+        assert_eq!(img(Some(&rev), "nested/image.svg"), svg);
+        assert_eq!(img(None, "local.svg"), svg);
+        assert!(
+            image(&sb.state, &nested, None, "image.svg")
+                .unwrap()
+                .is_some()
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            symlink("nested/image.svg", work.join("into.svg")).unwrap();
+            symlink("../local.svg", nested.join("out.svg")).unwrap();
+            symlink("local.svg", work.join("alias.svg")).unwrap();
+            assert_eq!(img(None, "into.svg"), None);
+            assert_eq!(img(None, "nested/out.svg"), None);
+            assert_eq!(img(None, "alias.svg"), svg);
+        }
     }
 }

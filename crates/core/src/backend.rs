@@ -45,6 +45,29 @@ pub trait Backend: Send + Sync {
     fn past(&self, _core: &AppState, _spec: &Spec) -> Result<Vec<Past>> {
         Err(Error::Other("This agent lists no past sessions.".into()))
     }
+    fn archive_past(
+        &self,
+        core: &AppState,
+        provider: &'static Provider,
+        folders: &[String],
+    ) -> History {
+        let mut history = History::default();
+        for folder in folders {
+            match self.past(core, &Spec::new(provider, folder, Kind::Chat)) {
+                Ok(chats) => history.chats.extend(chats.into_iter().map(|mut chat| {
+                    chat.cwd = Some(folder.clone());
+                    chat
+                })),
+                Err(error) => history.errors.push(format!("{folder}: {error}")),
+            }
+        }
+        history
+    }
+    fn transcript(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<Vec<Update>> {
+        Err(Error::Other(
+            "This agent cannot read a past transcript.".into(),
+        ))
+    }
     /// Removes the past session `id`.
     fn delete(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<()> {
         Err(Error::Other("This agent deletes no past sessions.".into()))
@@ -265,6 +288,25 @@ pub struct Tool {
     pub lines: Option<(usize, usize)>,
 }
 
+impl Tool {
+    pub fn output_text(&self) -> String {
+        match &self.output {
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        }
+    }
+
+    pub fn update(&mut self, tool: Self) {
+        self.title = tool.title.or(self.title.take());
+        self.kind = tool.kind.or(self.kind.take());
+        self.status = tool.status.or(self.status.take());
+        self.input = tool.input.or(self.input.take());
+        self.output = tool.output.or(self.output.take());
+        self.lines = tool.lines.or(self.lines.take());
+    }
+}
+
 /// A permission request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ask {
@@ -377,6 +419,12 @@ pub struct Part {
     pub tokens: u64,
 }
 
+#[derive(Default)]
+pub struct History {
+    pub chats: Vec<Past>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Past {
     pub id: String,
@@ -389,6 +437,8 @@ pub struct Past {
     pub model: Option<String>,
     /// The provider's id, which a resume takes.
     pub provider: String,
+    /// Set only for chats Detached can prove it created.
+    pub owned: bool,
 }
 
 impl Past {

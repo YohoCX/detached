@@ -6,7 +6,7 @@ mod palette;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, Global, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, Window, div, px,
+    Render, Role, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 
 use crate::actions::{self, Registration};
@@ -38,11 +38,20 @@ impl Mode {
 
 /// The open palette's mode, its "All repositories", which lasts the session, and whether Find in
 /// Files is open.
-#[derive(Default)]
 struct Search {
     mode: Option<Mode>,
     all: bool,
     find: bool,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            all: true,
+            find: false,
+        }
+    }
 }
 
 impl Global for Search {}
@@ -62,7 +71,7 @@ fn close(cx: &mut App) {
 }
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
-    shell::top_bar(cx, TopBar::Right, 0, |_, cx| cx.new(|_| Pill).into());
+    shell::top_bar(cx, TopBar::Right, 0, |_, cx| cx.new(Pill::new).into());
     shell::overlay(cx, palette);
     shell::overlay(cx, find);
     vec![]
@@ -81,7 +90,17 @@ fn find(window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 /// The top bar's "Search everywhere", drawn as the field it opens.
-struct Pill;
+struct Pill {
+    _workspace: Subscription,
+}
+
+impl Pill {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            _workspace: kernel::workspace::Workspace::observe(cx, |_, cx| cx.notify()),
+        }
+    }
+}
 
 impl Render for Pill {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -106,7 +125,14 @@ impl Render for Pill {
             .active(|s| s.opacity(0.75))
             .on_click(|_, window, cx| actions::dispatch(window, cx, "search.everywhere"))
             .child(Icon::Search.size(px(14.)))
-            .child(div().flex_1().child("Search everywhere"))
+            .child(div().flex_1().truncate().child({
+                let workspace = kernel::workspace::Workspace::get(cx);
+                if workspace.archive() {
+                    "Search everywhere".to_string()
+                } else {
+                    format!("Search in {}", workspace.session_name())
+                }
+            }))
             .child(ui::kbd(chord, cx))
     }
 }

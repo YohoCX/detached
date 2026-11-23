@@ -98,6 +98,21 @@ mod drive {
             let repo = common::repo(sb, &format!("repo-{i}"));
             fs::write(repo.join("README.md"), "hello\nchanged\n").unwrap();
         }
+        if repos > 0 {
+            let main = folder.join("repo-1");
+            let tree = sb.path("renewal");
+            sb.git(
+                &main,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    "feature/renewal",
+                    &tree.display().to_string(),
+                ],
+            );
+            fs::write(tree.join("renewal.txt"), "Notes for the renewal.\n").unwrap();
+        }
         common::claude(sb, &detached_core::testutil::claude::fake());
     }
 

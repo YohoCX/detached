@@ -19,6 +19,7 @@ use crate::repos::{self, CheckoutTarget};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::fuzzy;
 use crate::{files, keymap};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Location;
 use kernel::nav;
@@ -80,8 +81,10 @@ pub struct Palette {
     seq: u64,
     /// Recent files, of the current repo in Go to File unless "All repositories".
     recent: Vec<Item>,
+    recent_load: Option<Task<()>>,
     /// Search Everywhere's branches of the current repo, read once per open by `load`.
     branches: Vec<Item>,
+    branch_repo: Option<String>,
     load: Option<Task<()>>,
     scroll: UniformListScrollHandle,
     /// A move to the same place (content scrolled under a resting pointer) does not select.
@@ -103,10 +106,11 @@ impl Palette {
                 window,
                 |this, _, _: &Event, window, cx| this.sync(window, cx),
             ),
-            cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
+            cx.subscribe_in(&input, window, |this, _, e: &InputEvent, _, cx| {
                 if let InputEvent::Change = e {
                     this.sel = 0;
-                    this.sync(window, cx);
+                    this.search(cx);
+                    cx.notify();
                 }
             }),
         ];
@@ -128,7 +132,9 @@ impl Palette {
             asked: None,
             seq: 0,
             recent: vec![],
+            recent_load: None,
             branches: vec![],
+            branch_repo: None,
             load: None,
             scroll: UniformListScrollHandle::new(),
             mouse: None,
@@ -145,6 +151,7 @@ impl Palette {
             if self.mode.is_none() {
                 self.input.update(cx, |s, cx| s.set_value("", window, cx));
                 self.branches.clear();
+                self.branch_repo = None;
                 self.load = None;
                 self.scroll = UniformListScrollHandle::new();
             }
@@ -161,14 +168,31 @@ impl Palette {
     /// the recent files and the branches.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = cx.global::<Search>().all;
-        let recent = nav::recent(cx);
+        self.recent.clear();
+        self.recent_load = None;
         let w = Workspace::get(cx);
-        let mine =
-            |l: &Location| all || self.mode != Some(Mode::File) || w.current() == Some(&l.repo);
-        self.recent = recent.into_iter().filter(mine).map(Item::File).collect();
-        let placeholder = match (self.mode, all, w.current()) {
+        if matches!(self.mode, Some(Mode::File | Mode::Recent)) {
+            let repo = w.session_current().map(String::from);
+            let restrict = !all && self.mode == Some(Mode::File);
+            let recent = nav::recent(cx);
+            self.recent_load = Some(cx.spawn(async move |this, cx| {
+                let recent = recent
+                    .await
+                    .into_iter()
+                    .filter(|l| !restrict || repo.as_ref() == Some(&l.repo))
+                    .map(Item::File)
+                    .collect();
+                _ = this.update(cx, |this, cx| {
+                    this.recent = recent;
+                    cx.notify();
+                });
+            }));
+        }
+        let w = Workspace::get(cx);
+        let placeholder = match (self.mode, all, w.session_current()) {
             (Some(Mode::File), false, Some(repo)) => format!("Files in {}", w.name_of(repo)),
-            (Some(Mode::File), false, None) => "Files in no repository".into(),
+            (Some(Mode::File), _, _) => format!("File name in {}", w.session_name()),
+            (Some(Mode::Everywhere), _, _) => format!("Search in {}", w.session_name()),
             _ => "Type to search".into(),
         };
         if *self.input.read(cx).presentation().placeholder() != placeholder {
@@ -181,12 +205,12 @@ impl Palette {
     }
 
     fn ask(&self, cx: &App) -> Ask {
-        let all = cx.global::<Search>().all;
+        let all = self.mode == Some(Mode::Everywhere) || cx.global::<Search>().all;
         let w = Workspace::get(cx);
         let query = self.input.read(cx).value().to_string();
         let repos: Vec<String> = match all {
-            true => w.repos().iter().map(|r| r.path.clone()).collect(),
-            false => w.current().into_iter().map(String::from).collect(),
+            true => w.session_repos().iter().map(|r| r.path.clone()).collect(),
+            false => w.session_current().into_iter().map(String::from).collect(),
         };
         let limit = match self.mode {
             Some(Mode::File) => 50,
@@ -197,17 +221,20 @@ impl Palette {
             return None;
         }
         // One repo browses its tree's ref; across repos, the working trees.
-        let rev = w
-            .current()
-            .filter(|_| !all)
-            .and_then(|r| Repo::get(cx, r).and_then(|r| r.tree_ref.as_deref()));
-        Some((query, repos, rev.map(String::from), limit))
+        let rev = (repos.len() == 1)
+            .then(|| Repo::get(cx, &repos[0]).and_then(|r| r.tree_ref.clone()))
+            .flatten();
+        Some((query, repos, rev, limit))
     }
 
     fn search(&mut self, cx: &mut Context<Self>) {
         let ask = self.ask(cx);
         if ask == self.asked {
             return;
+        }
+        if self.asked.as_ref().map(|a| (&a.1, &a.2)) != ask.as_ref().map(|a| (&a.1, &a.2)) {
+            self.files.clear();
+            self.sel = 0;
         }
         self.asked = ask.clone();
         self.seq += 1;
@@ -247,12 +274,17 @@ impl Palette {
     }
 
     fn load_branches(&mut self, cx: &mut Context<Self>) {
-        let wanted = self.mode == Some(Mode::Everywhere) && self.load.is_none();
-        let Some(repo) = Workspace::get(cx)
-            .current()
-            .filter(|_| wanted)
-            .map(String::from)
-        else {
+        let repo = Workspace::get(cx)
+            .session_current()
+            .filter(|_| self.mode == Some(Mode::Everywhere))
+            .map(String::from);
+        if repo == self.branch_repo {
+            return;
+        }
+        self.branch_repo = repo.clone();
+        self.branches.clear();
+        self.load = None;
+        let Some(repo) = repo else {
             return;
         };
         let core = kernel::core(cx).clone();
@@ -322,10 +354,36 @@ impl Palette {
         };
         close(cx);
         match row.item {
+            Item::File(loc)
+                if matches!(self.mode, Some(Mode::File | Mode::Recent))
+                    && (self.mode == Some(Mode::Recent)
+                        || self.input.read(cx).value().is_empty()) =>
+            {
+                let check = loc.clone();
+                let ready = blocking::run(cx, move || nav::file_available(&check));
+                cx.spawn(async move |_, cx| {
+                    let ready = ready.await;
+                    cx.update(|cx| {
+                        if ready
+                            && Workspace::get(cx)
+                                .session_repos()
+                                .iter()
+                                .any(|r| r.path == loc.repo)
+                        {
+                            files::open(cx, loc);
+                        } else {
+                            Activity::global(cx).update(cx, |a, cx| {
+                                a.say("The recent file is outside the current session.", true, cx)
+                            });
+                        }
+                    });
+                })
+                .detach();
+            }
             Item::File(loc) => files::open(cx, loc),
             Item::Action(a, _) => actions::dispatch(window, cx, a.id),
             Item::Branch { target, .. } => {
-                if let Some(repo) = Workspace::get(cx).current().map(String::from) {
+                if let Some(repo) = Workspace::get(cx).session_current().map(String::from) {
                     repos::checkout(cx, &repo, target).detach();
                 }
             }
@@ -451,7 +509,7 @@ impl Render for Palette {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(mode.title()),
             )
-            .when(matches!(mode, Mode::File | Mode::Everywhere), |d| {
+            .when(mode == Mode::File, |d| {
                 d.child(
                     Checkbox::new("palette.all")
                         .checked(all)

@@ -691,7 +691,25 @@ pub fn brief_file(p: &Prepared, name: &str, text: &str) -> Result<()> {
 
 /// Every run record of `repo`: its task, run id and folder.
 pub fn records(core: &AppState, repo: &Path) -> Result<Vec<(String, String, PathBuf)>> {
-    let root = super::migrate::records(&common(core, repo)?);
+    records_view(core, repo, false)
+}
+
+pub fn records_view(
+    core: &AppState,
+    repo: &Path,
+    read_only: bool,
+) -> Result<Vec<(String, String, PathBuf)>> {
+    let common = common(core, repo)?;
+    let root = if read_only {
+        let new = common.join("detached/council");
+        if new.exists() {
+            new
+        } else {
+            common.join("detached/panels")
+        }
+    } else {
+        super::migrate::records(&common)
+    };
     let mut all = vec![];
     for task in fs::read_dir(&root).into_iter().flatten().flatten() {
         for run in fs::read_dir(task.path()).into_iter().flatten().flatten() {

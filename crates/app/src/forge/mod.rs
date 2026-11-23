@@ -54,7 +54,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         title: "Pipelines",
         action: Some("panel.pipelines"),
         home: (DockPlacement::Bottom, 280.),
-        view: |w, cx| cx.new(|cx| Pipelines::new(None, None, w, cx)).into(),
+        view: |w, cx| cx.new(|cx| Pipelines::new(None, None, false, w, cx)).into(),
         shown: None,
     };
     dock::register_app(cx, mrs);
@@ -77,11 +77,12 @@ impl DocKind for MrDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "code"
     }
-    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, window: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Mr { repo, number } = doc.clone() else {
             unreachable!()
         };
-        cx.new(|cx| MrPage::new(repo, number, window, cx)).into()
+        cx.new(|cx| MrPage::new(repo, number, read_only, window, cx))
+            .into()
     }
 
     fn id(&self, doc: &Doc) -> SharedString {
@@ -119,7 +120,7 @@ impl DocKind for JobDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "code"
     }
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, _: bool, _: &mut Window, cx: &mut App) -> AnyView {
         cx.new(|cx| JobLog::new(doc.clone(), cx)).into()
     }
 

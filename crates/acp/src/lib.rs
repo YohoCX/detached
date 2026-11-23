@@ -19,15 +19,16 @@ use detached_core::backend::{
     self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
     Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
+use detached_core::chat_index;
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
-use detached_core::sessions;
 use detached_core::state::AppState;
 use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use serde_json::{Value, json};
 
+mod history;
 mod mcp;
 
 /// Pages of a session list read at most.
@@ -58,7 +59,7 @@ impl Backend for Acp {
     /// host's index does not know are hidden.
     fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
         let (live, _) = self.adapter(core, spec)?;
-        let known = sessions::index(core);
+        let known = chat_index::index(core);
         let mut all = vec![];
         let mut cursor = None;
         // A page filtered by folder may be empty with more after it; a bad cursor ends the walk.
@@ -80,6 +81,7 @@ impl Backend for Acp {
                     tag: None,
                     model: None,
                     provider: String::new(),
+                    owned: false,
                 }
             }));
             cursor = r.next_cursor;
@@ -89,6 +91,19 @@ impl Backend for Acp {
         }
         all.sort_by_key(|p| std::cmp::Reverse(p.modified));
         Ok(all)
+    }
+
+    fn archive_past(
+        &self,
+        core: &AppState,
+        _provider: &'static detached_core::adapters::Provider,
+        folders: &[String],
+    ) -> backend::History {
+        history::past(core, folders)
+    }
+
+    fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        history::transcript(core, id)
     }
 
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {

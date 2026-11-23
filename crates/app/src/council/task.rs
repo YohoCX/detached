@@ -8,13 +8,14 @@ impl DocKind for TaskDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "chats"
     }
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::CouncilTask { repo, task } = doc else {
             unreachable!()
         };
         let (repo, task) = (repo.clone(), task.clone());
         cx.new(|cx| TaskView {
-            rounds: Interest::view(kernel::council::rounds(cx, &repo), cx),
+            rounds: Interest::view(kernel::council::rounds_view(cx, &repo, read_only), cx),
+            read_only,
             repo,
             task,
         })
@@ -38,6 +39,7 @@ struct TaskView {
     repo: String,
     task: String,
     rounds: Interest<Rounds>,
+    read_only: bool,
 }
 
 fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) {
@@ -157,7 +159,7 @@ impl TaskView {
             _ if open == 0 => ("Loop stops: no major or critical is open".into(), false),
             _ => (format!("Loop goes on: {open} major or critical open"), true),
         };
-        let start = rounds.next(&self.task).filter(|_| next);
+        let start = rounds.next(&self.task).filter(|_| next && !self.read_only);
         let estimate = rounds
             .estimate("gate")
             .map_or("estimate unknown".into(), |e| {

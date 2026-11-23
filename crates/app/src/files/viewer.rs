@@ -207,7 +207,7 @@ impl DocKind for ViewerDocs {
         }
     }
 
-    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, _: bool, window: &mut Window, cx: &mut App) -> AnyView {
         let v = cx.new(Viewer::new);
         v.update(cx, |v, cx| v.show(Some(doc.clone()), window, cx));
         v.into()

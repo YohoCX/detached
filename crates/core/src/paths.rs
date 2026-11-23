@@ -1,3 +1,5 @@
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -27,6 +29,22 @@ pub(crate) fn in_base(base: &Path) -> PathBuf {
         let _ = std::fs::rename(base.join("dev.wdevs.detached"), &dir);
     }
     dir
+}
+
+pub(crate) fn directories(path: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let mut dirs = vec![];
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    Ok(dirs)
 }
 
 #[cfg(test)]

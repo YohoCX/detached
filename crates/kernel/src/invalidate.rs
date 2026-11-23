@@ -6,6 +6,7 @@ use std::mem;
 use std::sync::Arc;
 
 use detached_core::api;
+use detached_core::settings::FileProblem;
 use detached_core::types::RepoInfo;
 use detached_core::watch::{Batch, Watcher};
 use futures::StreamExt;
@@ -63,11 +64,12 @@ pub(crate) fn init(cx: &mut App) {
 /// in during; the task ends with the load that saw this call.
 pub fn status(cx: &mut App, repo: &str) -> Task<()> {
     let (tx, rx) = oneshot::channel();
+    let key = Workspace::get(cx).path_key(repo).to_string();
     let loading = &mut cx.default_global::<Loading>().0;
-    if let Some(waiting) = loading.get_mut(repo) {
+    if let Some(waiting) = loading.get_mut(&key) {
         waiting.push(tx);
     } else {
-        loading.insert(repo.into(), vec![tx]);
+        loading.insert(key.clone(), vec![tx]);
         let repo = repo.to_string();
         cx.spawn(async move |cx| {
             loop {
@@ -76,11 +78,11 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
                     let loaded = &mut cx.default_global::<Loaded>().0;
                     // A load while away may miss what no watch sees, so it counts as old.
                     if away {
-                        loaded.remove(&repo);
+                        loaded.remove(&key);
                     } else {
-                        loaded.insert(repo.clone(), n);
+                        loaded.insert(key.clone(), n);
                     }
-                    let waiting = cx.global_mut::<Loading>().0.get_mut(&repo).map(mem::take);
+                    let waiting = cx.global_mut::<Loading>().0.get_mut(&key).map(mem::take);
                     let load =
                         Workspace::global(cx).update(cx, |w, cx| w.refresh(repo.clone(), cx));
                     (waiting, load)
@@ -89,9 +91,9 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
                 waiting.into_iter().flatten().for_each(|tx| _ = tx.send(()));
                 let done = cx.update(|cx| {
                     let loading = &mut cx.global_mut::<Loading>().0;
-                    let done = loading.get(&repo).is_none_or(Vec::is_empty);
+                    let done = loading.get(&key).is_none_or(Vec::is_empty);
                     if done {
-                        loading.remove(&repo);
+                        loading.remove(&key);
                     }
                     done
                 });
@@ -110,6 +112,26 @@ pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
     resource::input(cx, Input::On(On::Status(repo.into())));
     if moved {
         resource::input(cx, Input::On(On::Head(repo.into())));
+    }
+}
+
+pub struct RepoList {
+    pub(crate) repos: Vec<RepoInfo>,
+    pub(crate) aliases: HashMap<String, String>,
+}
+
+impl RepoList {
+    /// Resolves checkout aliases on a blocking thread.
+    pub fn new(repos: Vec<RepoInfo>) -> Self {
+        let aliases = repos
+            .iter()
+            .filter_map(|r| {
+                let real = detached_core::os::canonical(r.path.as_ref()).ok()?;
+                let real = real.into_os_string().into_string().ok()?;
+                (real != r.path).then(|| (r.path.clone(), real))
+            })
+            .collect();
+        Self { repos, aliases }
     }
 }
 
@@ -138,26 +160,37 @@ fn pass(cx: &mut App, all: bool) {
                 (crate::core(cx).clone(), listed, all, asked)
             });
             let want = asked.clone();
-            let (id, list) = cx
+            let (id, list, sessions) = cx
                 .update(|cx| {
                     blocking::run(cx, move || {
                         _ = api::assign_ids(&core);
                         let id = pick(&api::get_settings(&core).workspaces, want.as_deref());
-                        let list = id.as_deref().map(|id| api::list_repos(&core, id));
-                        (id, list.unwrap_or_default())
+                        let list = id
+                            .as_deref()
+                            .map_or_else(Vec::new, |id| api::list_repos(&core, id));
+                        let sessions = id.as_deref().map(|id| {
+                            detached_core::sessions::list_for(&core, id, &list).map_err(|error| {
+                                FileProblem {
+                                    file: core.data_dir.join("workspaces"),
+                                    error: error.to_string(),
+                                    backup: None,
+                                }
+                            })
+                        });
+                        (id, RepoList::new(list), sessions)
                     })
                 })
                 .await;
             let repos = cx.update(|cx| {
                 let workspace = Workspace::global(cx);
                 if cx.global::<Rescan>().listed == listed {
-                    workspace.update(cx, |w, cx| w.listed(asked, id, list, cx));
+                    workspace.update(cx, |w, cx| w.listed(asked, id, list, sessions, cx));
                 }
                 let away = cx.try_global::<Away>().map_or(0, |a| a.0);
                 let loaded = cx.try_global::<Loaded>().map(|l| &l.0);
                 let old = |r: &str| loaded.and_then(|l| l.get(r)).is_none_or(|n| *n < away);
-                let repos = workspace.read(cx).repos().iter();
-                let stale = repos.filter(|r| all || old(&r.path));
+                let w = workspace.read(cx);
+                let stale = w.listed_repos().filter(|r| all || old(w.path_key(&r.path)));
                 stale.map(|r| r.path.clone()).collect::<Vec<_>>()
             });
             futures::stream::iter(repos)
@@ -180,11 +213,11 @@ fn pass(cx: &mut App, all: bool) {
 
 /// The repos a settings change of workspace `ws` returned: they are listed at once when it is the
 /// current one, then rescanned.
-pub fn listed(cx: &mut App, ws: Option<String>, list: Vec<RepoInfo>) {
+pub fn listed(cx: &mut App, ws: Option<String>, list: RepoList) {
     let w = Workspace::global(cx);
     if w.read(cx).wanted() == ws {
         cx.default_global::<Rescan>().listed += 1;
-        w.update(cx, |w, cx| w.listed(ws.clone(), ws, list, cx));
+        w.update(cx, |w, cx| w.listed(ws.clone(), ws, list, None, cx));
     }
     rescan(cx);
 }
@@ -269,14 +302,19 @@ pub fn watching(cx: &App) -> bool {
     let w = Workspace::get(cx);
     cx.try_global::<Watch>().is_some_and(|watch| {
         let applied = watch.applied.as_ref();
-        !watch.busy && applied.is_some_and(|(r, c)| r == w.repos() && c.as_deref() == w.current())
+        !watch.busy
+            && applied
+                .is_some_and(|(r, c)| r.iter().eq(w.listed_repos()) && c.as_deref() == w.current())
     })
 }
 
 /// Sets the watcher to the workspace, one set at a time, the last one to what it is by then.
 fn follow(cx: &mut App) {
     let w = Workspace::get(cx);
-    let want = (w.repos().to_vec(), w.current().map(String::from));
+    let want = (
+        w.listed_repos().cloned().collect(),
+        w.current().map(String::from),
+    );
     let watch = cx.global_mut::<Watch>();
     if watch.busy || watch.applied.as_ref() == Some(&want) {
         return;

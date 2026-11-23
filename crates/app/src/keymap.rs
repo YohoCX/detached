@@ -39,6 +39,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("nav.back", "Cmd+["),
     ("nav.forward", "Cmd+]"),
     ("panel.project", "Cmd+1"),
+    ("session.new", "Cmd+N"),
     ("vcs.update", "Cmd+T"),
     ("vcs.popup", "Ctrl+V"),
     ("diff.show", "Cmd+D"),

@@ -120,7 +120,7 @@ impl Find {
             input,
             glob,
             toggles: [false; 3],
-            all: false,
+            all: true,
             asked: None,
             wait: None,
             query: None,
@@ -171,14 +171,15 @@ impl Find {
             regex,
             glob: (!glob.is_empty()).then_some(glob),
         };
-        if self.all {
-            return (q, w.repos().iter().map(|r| r.path.clone()).collect(), None);
-        }
-        let repo = w.current();
-        let rev = repo
-            .and_then(|r| Repo::get(cx, r).and_then(|r| r.tree_ref.as_deref()))
-            .map(String::from);
-        (q, repo.into_iter().map(String::from).collect(), rev)
+        let repos: Vec<_> = if self.all {
+            w.session_repos().iter().map(|r| r.path.clone()).collect()
+        } else {
+            w.session_current().into_iter().map(String::from).collect()
+        };
+        let rev = (repos.len() == 1)
+            .then(|| Repo::get(cx, &repos[0]).and_then(|r| r.tree_ref.clone()))
+            .flatten();
+        (q, repos, rev)
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -186,7 +187,14 @@ impl Find {
         if ask.is_none() || ask == self.asked {
             return;
         }
+        let scope_changed =
+            self.asked.as_ref().map(|a| (&a.1, &a.2)) != ask.as_ref().map(|a| (&a.1, &a.2));
         self.asked = ask;
+        if scope_changed {
+            self.wait = None;
+            self.start(cx);
+            return;
+        }
         cx.notify();
         self.wait = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
@@ -442,10 +450,10 @@ impl Render for Find {
         }
         let t = theme(cx);
         let w = Workspace::get(cx);
-        let scope = match (self.all, w.current()) {
-            (true, _) => "All repositories".into(),
-            (false, None) => "No repository".into(),
-            (false, Some(r)) => {
+        let scope = match (self.all, w.session_current()) {
+            (true, _) if w.session_repos().len() != 1 => w.session_name().to_string(),
+            (_, None) => "No repository".into(),
+            (_, Some(r)) => {
                 let name = w.name_of(r);
                 Repo::get(cx, r)
                     .and_then(|r| r.tree_ref.as_ref())

@@ -66,12 +66,32 @@ fn nav(cx: &mut App) -> &mut Nav {
     cx.global_mut::<Nav>()
 }
 
-/// Recent files in repos still listed, newest first.
-pub fn recent(cx: &mut App) -> Vec<Location> {
-    let mut recent = nav(cx).recent.clone();
-    let repos = Workspace::get(cx).repos();
-    recent.retain(|l| repos.iter().any(|r| r.path == l.repo));
-    recent
+/// Recent files in the current session, using its checkout paths.
+pub fn recent(cx: &mut App) -> gpui::Task<Vec<Location>> {
+    let recent = nav(cx).recent.clone();
+    let w = Workspace::get(cx);
+    let mut recent: Vec<_> = recent
+        .into_iter()
+        .filter_map(|mut loc| {
+            let key = w.path_key(&loc.repo);
+            let repo = w
+                .session_repos()
+                .iter()
+                .find(|r| w.path_key(&r.path) == key)?;
+            loc.repo.clone_from(&repo.path);
+            Some(loc)
+        })
+        .collect();
+    crate::blocking::run(cx, move || {
+        recent.retain(file_available);
+        recent
+    })
+}
+
+pub fn file_available(loc: &Location) -> bool {
+    loc.rev.is_some()
+        || loc.doc.is_some()
+        || detached_core::git::files::working_file(std::path::Path::new(&loc.repo), &loc.path)
 }
 
 /// Records `loc`.
@@ -199,7 +219,7 @@ mod tests {
         let seen = shown.clone();
         cx.update(|cx| {
             cx.subscribe(&Workspace::global(cx), move |w, e: &Event, cx| {
-                if let (Event::Shown, Some(Doc::File(l))) = (e, w.read(cx).shown()) {
+                if let (Event::Shown { .. }, Some(Doc::File(l))) = (e, w.read(cx).shown()) {
                     seen.borrow_mut().push(l.path.clone());
                 }
             })

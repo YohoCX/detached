@@ -169,6 +169,12 @@ impl Backend for Direct {
         place(spec, env(core, spec)).past(&spec.repo)
     }
 
+    fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        place(spec, env(core, spec))
+            .read(id, true)
+            .ok_or_else(|| Error::Other("The transcript is unavailable.".into()))
+    }
+
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
         place(spec, env(core, spec)).delete(id)
     }
@@ -347,7 +353,7 @@ fn start_in(
     };
     let id = resume.map_or_else(uuid, String::from);
     // Read before the CLI holds the file.
-    let history = resume.map(|id| place(spec, env.clone()).read(id));
+    let history = resume.map(|id| place(spec, env.clone()).read(id, false));
     let (pass, off) = skills(spec, &env);
     let plugin = plugin(core, &id, &pass)?;
     let mut flags = flags(spec, &id, resume.is_some(), off);

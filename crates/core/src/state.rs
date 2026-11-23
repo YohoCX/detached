@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -15,6 +15,7 @@ pub struct AppState {
     pub cache_dir: PathBuf,
     pub(crate) settings: Mutex<Settings>,
     pub(crate) revision: AtomicU64,
+    pub(crate) pending_chat_owners: Mutex<BTreeMap<String, String>>,
     pub env: RwLock<Env>,
     pub ops: Ops,
     pub locks: RepoLocks,
@@ -47,6 +48,7 @@ impl AppState {
             config_dir,
             settings: Mutex::new(settings),
             revision: Default::default(),
+            pending_chat_owners: Default::default(),
             env: RwLock::new(env),
             ops: Default::default(),
             locks: Default::default(),

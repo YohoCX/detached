@@ -20,11 +20,7 @@ pub(super) struct Code {
 
 impl Code {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let editor = cx.new(|cx| {
-            let mut e = EditorState::new(window, cx);
-            e.set_readonly(true, cx);
-            e
-        });
+        let editor = cx.new(|cx| EditorState::new(window, cx));
         Code {
             editor,
             center: None,
@@ -110,7 +106,12 @@ impl Render for Code {
             .id("viewer.code")
             .key_context(keymap::VIEWER)
             .size_full()
-            .child(Editor::new(&self.editor).bordered(false).h_full())
+            .child(
+                Editor::new(&self.editor)
+                    .readonly(true)
+                    .bordered(false)
+                    .h_full(),
+            )
     }
 }
 

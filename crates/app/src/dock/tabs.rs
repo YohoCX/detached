@@ -47,7 +47,13 @@ struct Shown {
 }
 
 fn key(cx: &App) -> Option<String> {
-    Some(format!("tabs.{}", Workspace::get(cx).id()?))
+    let w = Workspace::get(cx);
+    let ws = w.id()?;
+    Some(if w.archive() {
+        format!("tabs.{ws}")
+    } else {
+        format!("tabs.session.{ws}.{}", w.session_id())
+    })
 }
 
 fn state(cx: &App) -> Shown {
@@ -69,7 +75,9 @@ pub fn category(cx: &App) -> String {
 
 /// Whether `tab` is of the current workspace.
 pub fn mine(tab: &DocTab, cx: &App) -> bool {
-    tab.workspace.as_deref() == Workspace::get(cx).id()
+    let w = Workspace::get(cx);
+    tab.workspace.as_deref() == w.id()
+        && tab.session.as_deref() == (!w.archive()).then(|| w.session_id())
 }
 
 /// Whether a center tab is drawn now: the current workspace's, of the category shown.
@@ -177,8 +185,13 @@ pub(super) fn adopt(area: &DockArea, cx: &mut App) {
     }
     let first = groups(area).into_iter().next();
     let active = first.and_then(|(panels, at)| tab(area, *panels.get(at)?));
-    if let Some(t) = active.filter(|_| adopted && state(cx).category.is_none()) {
-        set(t.read(cx).category(), cx);
+    if let Some(t) = active.filter(|_| adopted) {
+        let key = format!("tabs.{id}");
+        let mut state: Shown = ui_state::get(&key, cx).unwrap_or_default();
+        if state.category.is_none() {
+            state.category = Some(t.read(cx).category().into());
+            ui_state::set(&key, state, cx);
+        }
     }
 }
 
@@ -264,8 +277,11 @@ pub fn tabs_of(id: &str, cx: &App) -> Vec<Entity<DocTab>> {
 
 /// Closes workspace `id`'s tabs and forgets what its center showed.
 pub fn forget(id: &str, window: &mut Window, cx: &mut App) {
-    for t in tabs_of(id, cx) {
-        super::close_doc(t, window, cx);
-    }
+    let tabs = tabs_of(id, cx);
+    super::with(cx, |area, cx| {
+        for tab in tabs {
+            area.remove_panel(tab, window, cx);
+        }
+    });
     ui_state::set(&format!("tabs.{id}"), serde_json::Value::Null, cx);
 }

@@ -1253,6 +1253,32 @@ fn selected_row(cx: &mut VisualTestContext) -> Option<String> {
         .find_map(|e| e.label().map(String::from))
 }
 
+#[gpui_kit::test]
+fn explorer_double_click_and_enter_keep_their_file_tabs(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "solo");
+        sb.commit_files(
+            &repo,
+            "files",
+            [("a.txt", "a"), ("folder/b.txt", "b"), ("c.txt", "c")],
+        );
+    });
+    open_tree(cx, "solo");
+    wait_until(cx, |cx| tree(cx).iter().any(|name| name == "a.txt"));
+    let i = tree_row(cx, "a.txt").0;
+    double_click(cx, ("tree.row", i));
+    wait_until(cx, editor_focused);
+    click_row(cx, "folder");
+    cx.press("right");
+    cx.press("down");
+    assert_eq!(selected_row(cx).as_deref(), Some("b.txt"));
+    cx.press("enter");
+    click_row(cx, "c.txt");
+    assert!(cx.find("doc.file.a.txt").is_some());
+    assert!(cx.find("doc.file.folder/b.txt").is_some());
+    assert!(cx.find("doc.file.c.txt").is_some());
+}
+
 /// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
 fn open_tree(cx: &mut TestApp, repo: &str) {
     let repo = cx.sb.repo(repo);
@@ -1369,8 +1395,9 @@ fn arrows_move_right_expands_left_collapses_or_goes_to_the_parent_and_enter_open
     step(cx, "left", "src");
     step(cx, "left", "src");
     assert_eq!(tree(cx), ["src", "feature.txt", "README.md"]);
-    step(cx, "up", "src");
-    for _ in 0..3 {
+    cx.press("up");
+    assert_eq!(selected_row(cx), None, "the repository root is selected");
+    for _ in 0..4 {
         cx.press("down");
     }
     assert_eq!(selected_row(cx).as_deref(), Some("README.md"), "clamped");
@@ -1410,8 +1437,13 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
 
     cx.input("nope");
     cx.press("enter");
-    wait_until(cx, |cx| cx.find("tree.empty").is_some());
-    let error = label(cx, "tree.empty").unwrap();
+    wait_until(cx, |cx| cx.find(("tree.error", 0usize)).is_some());
+    let error = cx
+        .find(("tree.error", 0usize))
+        .unwrap()
+        .label()
+        .unwrap()
+        .to_string();
     assert!(error.contains("nope"), "{error}");
     assert!(tree(cx).is_empty());
     cx.click("tree.back");

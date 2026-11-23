@@ -68,7 +68,9 @@ fn a_repo_added_while_the_list_loads_is_not_missed(cx: &mut TestAppContext) {
         .recv_timeout(scaled(Duration::from_secs(30)))
         .expect("the listing ran");
 
-    let list = api::add_folder(&core, None, more.display().to_string()).unwrap();
+    let list = invalidate::RepoList::new(
+        api::add_folder(&core, None, more.display().to_string()).unwrap(),
+    );
     let missed = Rc::new(Cell::new(false));
     let seen = missed.clone();
     let workspace = cx.read(Workspace::global);

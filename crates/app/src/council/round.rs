@@ -13,20 +13,24 @@ impl DocKind for CouncilDocs {
     fn category(&self, _: &Doc) -> &'static str {
         "chats"
     }
-    fn view(&self, doc: &mut Doc, _: &mut Window, cx: &mut App) -> AnyView {
+    fn view(&self, doc: &mut Doc, read_only: bool, _: &mut Window, cx: &mut App) -> AnyView {
         let Doc::Council { repo, task, round } = doc else {
             unreachable!()
         };
         let (repo, task, round) = (repo.clone(), task.clone(), round.clone());
         cx.new(|cx| RunView {
-            live: kernel::council::live::find(cx, &repo, &task, &round).map(|p| {
-                let watch = cx.observe(&p, |_, _, cx| cx.notify());
-                (p, watch, super::live::ticking(cx))
-            }),
+            read_only,
+            live: (!read_only)
+                .then(|| kernel::council::live::find(cx, &repo, &task, &round))
+                .flatten()
+                .map(|p| {
+                    let watch = cx.observe(&p, |_, _, cx| cx.notify());
+                    (p, watch, super::live::ticking(cx))
+                }),
             confirm: None,
             reason: None,
             fix: None,
-            rounds: Interest::view(kernel::council::rounds(cx, &repo), cx),
+            rounds: Interest::view(kernel::council::rounds_view(cx, &repo, read_only), cx),
             mode: kernel::ui_state::get("council.mode", cx).unwrap_or(2),
             repo,
             task,
@@ -67,6 +71,7 @@ impl DocKind for CouncilDocs {
 }
 
 pub(super) struct RunView {
+    read_only: bool,
     /// The run while it is live in this app, with its observer and ticker.
     live: Option<(
         Entity<kernel::council::live::Council>,
@@ -160,6 +165,9 @@ impl RunView {
 
     /// Whether `id` takes a Fix now, and its card, when selected, is not already on its way.
     fn can_fix(&self, id: &str, cx: &App) -> bool {
+        if self.read_only {
+            return false;
+        }
         let idle = self.selected.as_deref() != Some(id)
             || self.fix.as_ref().is_some_and(|(c, _)| c.read(cx).idle());
         let task = (self.rounds.read(cx).value.as_ref()).and_then(|r| r.tasks.get(&self.task));
@@ -198,6 +206,9 @@ impl RunView {
                 .text_color(theme(cx).muted)
                 .child(text),
         );
+        if self.read_only {
+            return Some(row.into_any_element());
+        }
         if self.can_fix(&f.id, cx) {
             row = row.child(
                 ui::primary_button("council.fix", "Fix…", cx)
@@ -307,7 +318,7 @@ impl RunView {
             self.show_aside = true;
         }
         if self.selected.as_ref() != Some(&f.id) {
-            self.fix = self.record(cx).is_some().then(|| {
+            self.fix = (!self.read_only && self.record(cx).is_some()).then(|| {
                 let ids = [&*self.repo, &self.task, &self.round, &f.id];
                 let card = cx.new(|cx| super::fix::FixCard::new(ids, cx));
                 let watch = cx.observe(&card, |_, _, cx| cx.notify());
@@ -390,7 +401,7 @@ impl RunView {
                     },
                 )));
             }
-            if matches!(fate, Some(Fate::Open | Fate::FixReady)) {
+            if !self.read_only && matches!(fate, Some(Fate::Open | Fate::FixReady)) {
                 let finding = f.clone();
                 let id = SharedString::from(format!("council.row.dismiss.{}", f.id));
                 actions = actions.child(small(ui::button(id, "Dismiss…", cx)).on_click(
@@ -859,7 +870,7 @@ impl Render for RunView {
                     d.child(super::live::header(p, cx))
                 })
                 .when_some(record, |d, state| {
-                    let view = cx.entity().downgrade();
+                    let view = (!self.read_only).then(|| cx.weak_entity());
                     d.child(super::live::record_actions(
                         [&self.repo, &self.task, &self.round],
                         &state,

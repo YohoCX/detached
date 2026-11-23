@@ -310,7 +310,8 @@ impl Render for Thread {
             .enumerate()
             .map(|(k, n)| self.note(k, n, cx))
             .collect();
-        let footer = match (&self.text, th) {
+        let can_write = self.page.upgrade().is_some_and(|p| !p.read(cx).read_only);
+        let footer = match (&self.text, th.filter(|_| can_write)) {
             (Some((text, _)), _) => Some(self.input(text, cx).into_any_element()),
             (None, Some(x)) if x.replyable || x.resolvable => {
                 Some(self.buttons(x, cx).into_any_element())

@@ -8,6 +8,7 @@ use gpui_kit::base::dock::{Panel, PanelEvent, PanelInfo, PanelState, PanelView};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     Global, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
+    prelude::FluentBuilder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +21,7 @@ pub const NAME: &str = "doc";
 /// `replace`'s `new`, which may be any kind that shares the preview tab.
 pub trait DocKind {
     /// Built when the tab is first on screen; it may update `doc`, as a restored shell its id.
-    fn view(&self, doc: &mut Doc, window: &mut Window, cx: &mut App) -> AnyView;
+    fn view(&self, doc: &mut Doc, read_only: bool, window: &mut Window, cx: &mut App) -> AnyView;
     /// The tab's element id, stable for tests.
     fn id(&self, doc: &Doc) -> SharedString;
     /// The center category its tab is in, one `register_category` made.
@@ -73,6 +74,8 @@ pub struct DocTab {
     /// The workspace it was opened in; None for a tab of a layout from before workspaces, until
     /// one is current.
     pub workspace: Option<String>,
+    pub session: Option<String>,
+    legacy: bool,
     /// A preview tab takes the next file or diff shown; a double click on it keeps it.
     pub keep: bool,
     kind: Rc<dyn DocKind>,
@@ -87,14 +90,21 @@ struct Saved {
     keep: bool,
     #[serde(default)]
     workspace: Option<String>,
+    // Archive tabs need an explicit null to distinguish them from old layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session: Option<Option<String>>,
 }
 
 impl DocTab {
     pub fn new(doc: Doc, kind: Rc<dyn DocKind>, keep: bool, cx: &mut App) -> Entity<DocTab> {
-        let workspace = Workspace::get(cx).id().map(String::from);
+        let w = Workspace::get(cx);
+        let workspace = w.id().map(String::from);
+        let session = (!w.archive()).then(|| w.session_id().into());
         cx.new(|cx| DocTab {
             doc,
             workspace,
+            session,
+            legacy: false,
             keep,
             kind,
             view: None,
@@ -140,6 +150,10 @@ impl DocTab {
         self.kind.tip(&self.doc, cx)
     }
 
+    pub(crate) fn legacy(&self) -> bool {
+        self.legacy
+    }
+
     pub fn category(&self) -> &'static str {
         self.kind.category(&self.doc)
     }
@@ -150,9 +164,15 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
         return None;
     };
     let s: Saved = serde_json::from_value(v.clone()).ok()?;
+    let legacy =
+        v.get("session").is_none() && !matches!(s.doc, Doc::SessionArchive | Doc::PastChat { .. });
     let kind = doc_kind(s.doc.kind(), cx)?;
     let tab = DocTab::new(s.doc, kind, s.keep, cx);
-    tab.update(cx, |t, _| t.workspace = s.workspace);
+    tab.update(cx, |t, _| {
+        t.workspace = s.workspace;
+        t.session = s.session.flatten();
+        t.legacy = legacy;
+    });
     Some(Arc::new(tab))
 }
 
@@ -166,15 +186,34 @@ impl Focusable for DocTab {
 
 impl Render for DocTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.view.is_none() {
+        let archive = self
+            .session
+            .is_none()
+            .then_some(match &self.doc {
+                Doc::Chat { .. } => Some("Read earlier conversations from the Archive page."),
+                Doc::Terminal { .. } => {
+                    Some("Terminal output was kept only while the shell was open.")
+                }
+                _ => None,
+            })
+            .flatten();
+        if self.view.is_none() && archive.is_none() {
             let kind = self.kind.clone();
-            self.view = Some(kind.view(&mut self.doc, window, cx));
+            self.view = Some(kind.view(&mut self.doc, self.session.is_none(), window, cx));
         }
         div()
             .flex()
             .flex_col()
             .size_full()
             .min_h_0()
+            .when_some(archive, |d, message| {
+                d.child(
+                    div()
+                        .p(crate::ui::GAP)
+                        .text_color(crate::ui::theme(cx).muted)
+                        .child(message),
+                )
+            })
             .children(self.view.clone())
     }
 }
@@ -182,6 +221,10 @@ impl Render for DocTab {
 impl Panel for DocTab {
     fn panel_name(&self) -> &'static str {
         NAME
+    }
+
+    fn closable(&self, _: &App) -> bool {
+        !self.legacy()
     }
 
     fn zoomable(&self, _: &App) -> bool {
@@ -218,6 +261,7 @@ impl Panel for DocTab {
             doc: self.doc.clone(),
             keep: self.keep,
             workspace: self.workspace.clone(),
+            session: (!self.legacy).then(|| self.session.clone()),
         };
         PanelState {
             info: PanelInfo::Panel(serde_json::to_value(saved).unwrap_or_default()),

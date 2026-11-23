@@ -43,6 +43,7 @@ pub struct Skin {
     area: WeakEntity<DockArea>,
     resizing: Held,
     fit: Rc<Fit>,
+    sessions: Entity<crate::sessions::List>,
     /// The center holds no tab: the area cannot be read while it draws.
     empty: Rc<Cell<bool>>,
 }
@@ -57,6 +58,7 @@ impl Skin {
             area: cx.weak_entity(),
             resizing: Rc::default(),
             fit: Rc::default(),
+            sessions: cx.new(crate::sessions::List::new),
             empty,
         })
     }
@@ -285,6 +287,18 @@ impl DockAreaRenderer for Skin {
         )
         .absolute()
         .size_0();
+        let content = if p == DockPlacement::Left && open {
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_h_0()
+                .child(self.sessions.clone())
+                .child(div().flex().flex_1().min_h_0().w_full().child(content))
+                .into_any_element()
+        } else {
+            content
+        };
         div()
             .id(match p {
                 DockPlacement::Left => "zone.left.pane",
@@ -538,11 +552,28 @@ impl TabGroupRenderer for Group {
         }
         // The kit keeps the last tab of a zone; a document still closes, to an empty center.
         let closable: Vec<bool> = (labels.iter().zip(&ids))
-            .map(|(l, id)| l.doc.is_some() || group.is_panel_closable(*id, cx))
+            .map(|(l, id)| match &l.doc {
+                Some(doc) => !doc.read(cx).legacy(),
+                None => group.is_panel_closable(*id, cx),
+            })
             .collect();
         let shown: Vec<usize> = (0..labels.len())
-            .filter(|ix| !center || drawn(&labels[*ix], cx))
+            .filter(|ix| {
+                let doc = labels[*ix].doc.as_ref();
+                if center {
+                    drawn(&labels[*ix], cx)
+                } else {
+                    doc.is_none_or(|d| tabs::mine(d.read(cx), cx))
+                }
+            })
             .collect();
+        if !center
+            && !shown.contains(&group.active_ix())
+            && let Some(&ix) = shown.first()
+        {
+            let g = group.clone();
+            window.defer(cx, move |window, cx| g.select_tab(ix, window, cx));
+        }
         let node = group.node();
         let widths: Vec<f32> = shown
             .iter()
@@ -665,7 +696,7 @@ impl TabGroupRenderer for Group {
                         a.update(cx, |a, cx| super::reveal(a, id, window, cx));
                     }
                 });
-                match labels[ix].doc.clone() {
+                match labels[ix].doc.clone().filter(|d| !d.read(cx).legacy()) {
                     Some(d) => menu.hint(
                         ui::icon_button(("tabs.more.close", ix), Icon::Close.size(px(10.)), cx)
                             .test_support()
@@ -735,11 +766,15 @@ impl TabGroupRenderer for Group {
         if group.is_collapsed() {
             return Empty.into_any_element();
         }
-        let hidden = panel
-            .clone()
-            .downcast::<DocTab>()
-            .is_ok_and(|d| !tabs::in_view(d.read(cx), cx));
-        if hidden && self.center(group, cx) {
+        let center = self.center(group, cx);
+        let hidden = panel.clone().downcast::<DocTab>().is_ok_and(|d| {
+            let d = d.read(cx);
+            !tabs::mine(d, cx) || (center && !tabs::in_view(d, cx))
+        });
+        if hidden && !center {
+            return Empty.into_any_element();
+        }
+        if hidden {
             return empty(cx).into_any_element();
         }
         // Keyed by the view, so reordering or closing other tabs keeps its state.

@@ -1,16 +1,20 @@
 //! The current workspace: its id, its repos with one `Repo` each, the current repo and the
 //! document shown. A switch swaps them all; what a live session holds stays.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use detached_core::api;
+use detached_core::sessions::{Listing, MAIN, MemberState, Workset};
 use detached_core::settings;
 use detached_core::types::{RepoInfo, RepoStatus};
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 
+use crate::activity::Activity;
 use crate::blocking;
 use crate::doc::Doc;
+use crate::invalidate::RepoList;
 use crate::repo::Repo;
 use crate::settings::Settings;
 use crate::ui_state;
@@ -19,13 +23,16 @@ const CURRENT: &str = "workspace.current";
 
 pub enum Event {
     /// `show` ran, even with the same doc: its tab comes forward and focuses it.
-    Shown,
+    Shown {
+        keep: bool,
+    },
     /// A repo's status was refreshed, changed or not; views showing its files reload.
     Status(String),
     /// A listed repo's entity changed. Views that follow a repo by path take this.
     Changed(String),
     /// Another workspace is current, its repos listed and its current repo back.
     Switched,
+    SessionChanged,
 }
 
 type Held = (Entity<Repo>, Subscription);
@@ -35,13 +42,17 @@ pub struct Workspace {
     /// The workspace a `switch` asked for, until its repos are listed.
     to: Option<String>,
     repos: Vec<RepoInfo>,
-    /// One per listed repo, in `repos`' order.
-    entities: Vec<Held>,
+    entities: HashMap<String, Held>,
+    aliases: HashMap<String, String>,
+    sessions: Vec<Workset>,
+    session_problems: HashSet<PathBuf>,
+    session: String,
+    session_repos: Vec<RepoInfo>,
+    archive: bool,
     current: Option<String>,
     shown: Option<Doc>,
     /// How many live sessions hold each repo, and the entities of held repos not listed.
     held: HashMap<String, usize>,
-    kept: Vec<(String, Held)>,
 }
 
 struct GlobalWorkspace(Entity<Workspace>);
@@ -57,11 +68,16 @@ pub(crate) fn init(cx: &mut App) {
         id: None,
         to,
         repos: vec![],
-        entities: vec![],
+        entities: HashMap::new(),
+        aliases: HashMap::new(),
+        sessions: vec![],
+        session_problems: HashSet::new(),
+        session: MAIN.into(),
+        session_repos: vec![],
+        archive: false,
         current: None,
         shown: None,
         held: HashMap::new(),
-        kept: vec![],
     });
     cx.set_global(GlobalWorkspace(workspace));
     crate::invalidate::rescan(cx);
@@ -128,12 +144,127 @@ impl Workspace {
         &self.repos
     }
 
-    /// A listed repo's entity, or a held one's.
     pub fn repo(&self, path: &str) -> Option<&Entity<Repo>> {
-        match self.repos.iter().position(|r| r.path == path) {
-            Some(i) => Some(&self.entities[i].0),
-            None => self.kept.iter().find(|(p, _)| p == path).map(|k| &k.1.0),
+        self.entities.get(self.path_key(path)).map(|e| &e.0)
+    }
+
+    pub fn sessions(&self) -> &[Workset] {
+        &self.sessions
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session
+    }
+
+    pub fn session_name(&self) -> &str {
+        self.sessions
+            .iter()
+            .find(|s| s.id == self.session)
+            .map_or("Main checkouts", |s| &s.name)
+    }
+
+    pub fn session_repos(&self) -> &[RepoInfo] {
+        if self.archive {
+            &[]
+        } else {
+            &self.session_repos
         }
+    }
+
+    pub fn session_current(&self) -> Option<&str> {
+        self.current()
+            .filter(|p| self.session_repos().iter().any(|r| r.path == *p))
+            .or_else(|| self.session_repos().first().map(|r| r.path.as_str()))
+    }
+
+    pub fn archive(&self) -> bool {
+        self.archive
+    }
+
+    pub fn set_archive(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.archive != open {
+            self.archive = open;
+            cx.emit(Event::SessionChanged);
+            cx.notify();
+        }
+    }
+
+    pub fn switch_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        if id != MAIN && !self.sessions.iter().any(|s| s.id == id) {
+            return;
+        }
+        if let Some(ws) = &self.id {
+            let key = format!("session.current.{ws}");
+            if ui_state::get::<String>(&key, cx).as_deref() != Some(id) {
+                ui_state::set(&key, id, cx);
+            }
+        }
+        if self.session == id && !self.archive {
+            return;
+        }
+        self.archive = false;
+        if self.session != id {
+            self.session = id.into();
+            self.restore_repo(cx);
+            self.apply_repos(cx);
+            for repo in &self.session_repos {
+                if Some(repo.path.as_str()) == self.current()
+                    || self
+                        .repo(&repo.path)
+                        .is_some_and(|r| r.read(cx).status.is_none())
+                {
+                    let path = repo.path.clone();
+                    cx.defer(move |cx| crate::invalidate::status(cx, &path).detach());
+                }
+            }
+        }
+        cx.emit(Event::SessionChanged);
+        cx.notify();
+    }
+
+    pub fn session_adopted(&mut self, ws: &str, session: Workset, cx: &mut Context<Self>) {
+        if self.id() != Some(ws) || self.wanted().as_deref() != Some(ws) {
+            return;
+        }
+        let id = session.id.clone();
+        if !self.sessions.iter().any(|s| s.id == id) {
+            self.sessions.push(session);
+        }
+        self.switch_session(&id, cx);
+        if crate::invalidate::rescanning(cx) {
+            crate::invalidate::relist(cx);
+        }
+    }
+
+    fn restore_repo(&mut self, cx: &App) {
+        self.current = self
+            .id
+            .as_ref()
+            .and_then(|id| ui_state::get(&self.repo_key(id), cx));
+    }
+
+    fn repo_key(&self, ws: &str) -> String {
+        if self.session == MAIN {
+            format!("workspace.repo.{ws}")
+        } else {
+            format!("session.repo.{ws}.{}", self.session)
+        }
+    }
+
+    pub(crate) fn listed_repos(&self) -> impl Iterator<Item = &RepoInfo> {
+        let mut seen = HashSet::new();
+        self.repos
+            .iter()
+            .chain(&self.session_repos)
+            .find(|r| Some(r.path.as_str()) == self.current())
+            .into_iter()
+            .chain(&self.session_repos)
+            .chain(&self.repos)
+            .filter(move |r| seen.insert(self.path_key(&r.path)))
+    }
+
+    pub(crate) fn path_key<'a>(&'a self, path: &'a str) -> &'a str {
+        self.aliases.get(path).map_or(path, String::as_str)
     }
 
     /// Keeps `repo`'s entity while a live session works in it, listed or not.
@@ -148,13 +279,20 @@ impl Workspace {
         *n -= 1;
         if *n == 0 {
             self.held.remove(repo);
-            self.kept.retain(|(p, _)| p != repo);
+            let key = self.path_key(repo);
+            if !self.listed_repos().any(|r| self.path_key(&r.path) == key)
+                && !self.held.keys().any(|r| self.path_key(r) == key)
+            {
+                let key = key.to_string();
+                self.entities.remove(&key);
+            }
         }
     }
 
     pub fn name_of<'a>(&'a self, repo: &'a str) -> &'a str {
-        self.repos
+        self.session_repos
             .iter()
+            .chain(&self.repos)
             .find(|r| r.path == repo)
             .map_or(repo, |r| &r.name)
     }
@@ -166,7 +304,7 @@ impl Workspace {
     /// Remembered per workspace, so a switch back restores it.
     pub fn set_current(&mut self, repo: Option<String>, cx: &mut Context<Self>) {
         if let (Some(id), Some(r)) = (&self.id, &repo) {
-            ui_state::set(&format!("workspace.repo.{id}"), r, cx);
+            ui_state::set(&self.repo_key(id), r, cx);
         }
         self.current = repo;
         cx.notify();
@@ -179,8 +317,12 @@ impl Workspace {
 
     /// Opens `doc` in a tab, or brings forward the tab that has it.
     pub fn show(&mut self, doc: Doc, cx: &mut Context<Self>) {
+        self.show_tab(doc, false, cx);
+    }
+
+    pub fn show_tab(&mut self, doc: Doc, keep: bool, cx: &mut Context<Self>) {
         self.shown = Some(doc);
-        cx.emit(Event::Shown);
+        cx.emit(Event::Shown { keep });
         cx.notify();
     }
 
@@ -212,71 +354,166 @@ impl Workspace {
                         moved
                     })
                 });
-                cx.emit(Event::Status(repo.clone()));
-                crate::invalidate::status_loaded(cx, &repo, moved);
+                let key = w.path_key(&repo);
+                let mut seen = HashSet::new();
+                let paths = w
+                    .repos
+                    .iter()
+                    .chain(&w.session_repos)
+                    .map(|r| r.path.as_str());
+                for path in std::iter::once(repo.as_str())
+                    .chain(paths)
+                    .filter(|p| w.path_key(p) == key && seen.insert(*p))
+                {
+                    cx.emit(Event::Status(path.into()));
+                    crate::invalidate::status_loaded(cx, path, moved);
+                }
             })
             .ok();
         })
     }
 
-    /// The repos of workspace `id`, picked for `asked`: a new id is a switch, which brings back
-    /// its current repo. A listing asked for a workspace no longer wanted is dropped.
     pub(crate) fn listed(
         &mut self,
         asked: Option<String>,
         id: Option<String>,
-        list: Vec<RepoInfo>,
+        list: RepoList,
+        sessions: Option<Result<Listing, settings::FileProblem>>,
         cx: &mut Context<Self>,
     ) {
         if asked != self.wanted() {
             return;
         }
         self.to = None;
+        self.aliases.retain(|path, _| self.held.contains_key(path));
+        self.aliases.extend(list.aliases);
         let switched = self.id != id;
         if switched {
-            self.current = id
-                .as_ref()
-                .and_then(|id| ui_state::get(&format!("workspace.repo.{id}"), cx));
-            if let Some(id) = &id {
+            self.archive = false;
+            self.id = id;
+            if let Some(id) = &self.id {
                 ui_state::set(CURRENT, id, cx);
             }
-            self.id = id;
         }
-        self.set_repos(list, cx);
+        if let Some(problems) = sessions.as_ref().map(|result| match result {
+            Ok(listing) => listing.problems.as_slice(),
+            Err(problem) => std::slice::from_ref(problem),
+        }) {
+            let seen = std::mem::replace(
+                &mut self.session_problems,
+                problems.iter().map(|p| p.file.clone()).collect(),
+            );
+            for problem in problems.iter().filter(|p| !seen.contains(&p.file)) {
+                Activity::config_problem(problem, cx);
+            }
+        }
+        let (listed, complete) = match sessions {
+            Some(Ok(Listing { sets, problems })) => {
+                self.sessions = sets;
+                (true, problems.is_empty())
+            }
+            _ => {
+                if switched {
+                    self.sessions.clear();
+                }
+                (false, false)
+            }
+        };
+        let mut changed = false;
+        if switched || listed {
+            let key = self.id.as_ref().map(|id| format!("session.current.{id}"));
+            let saved: Option<String> = key.as_ref().and_then(|key| ui_state::get(key, cx));
+            let want = saved.as_deref().unwrap_or(MAIN);
+            let next = if self.sessions.iter().any(|s| s.id == want) {
+                want
+            } else {
+                MAIN
+            };
+            changed = self.session != next;
+            self.session = next.into();
+            if complete
+                && next != want
+                && let Some(key) = key
+            {
+                ui_state::set(&key, next, cx);
+            }
+        }
+        if switched || changed {
+            self.restore_repo(cx);
+        }
+        self.set_repos(list.repos, cx);
         if switched {
             cx.emit(Event::Switched);
+        } else if changed {
+            cx.emit(Event::SessionChanged);
         }
     }
 
-    /// Keeps the entities of repos still listed or held, makes one for each new repo and drops the
-    /// rest.
     pub(crate) fn set_repos(&mut self, list: Vec<RepoInfo>, cx: &mut Context<Self>) {
-        let old = self.repos.drain(..).zip(self.entities.drain(..));
-        let mut old: Vec<_> = old.map(|(r, e)| (r.path, e)).collect();
-        old.append(&mut self.kept);
-        for r in &list {
-            let kept = old.iter().position(|(o, _)| *o == r.path);
-            let entity = match kept {
-                Some(i) => old.swap_remove(i).1,
-                None => {
-                    let repo = cx.new(|_| Repo::new(r.path.clone()));
-                    let path = r.path.clone();
-                    let sub =
-                        cx.observe(&repo, move |_, _, cx| cx.emit(Event::Changed(path.clone())));
-                    (repo, sub)
-                }
-            };
-            self.entities.push(entity);
-        }
-        self.kept = old
-            .into_iter()
-            .filter(|(p, _)| self.held.contains_key(p))
-            .collect();
-        let listed = |repo: &String| list.iter().any(|r| &r.path == repo);
-        if !self.current.as_ref().is_some_and(listed) {
-            self.current = list.first().map(|r| r.path.clone());
-        }
         self.repos = list;
+        self.apply_repos(cx);
+    }
+
+    fn apply_repos(&mut self, cx: &mut Context<Self>) {
+        self.session_repos = match self.sessions.iter().find(|s| s.id == self.session) {
+            Some(set) => set
+                .members
+                .iter()
+                .filter(|m| m.state == MemberState::Ready)
+                .filter_map(|m| {
+                    let main = self.repos.iter().find(|r| {
+                        r.worktree_of.is_none() && self.path_key(&r.path) == self.path_key(&m.repo)
+                    })?;
+                    Some(RepoInfo {
+                        name: main.name.clone(),
+                        folder: main.folder.clone(),
+                        path: m.path.clone(),
+                        worktree_of: Some(m.repo.clone()),
+                    })
+                })
+                .collect(),
+            None => self
+                .repos
+                .iter()
+                .filter(|r| r.worktree_of.is_none())
+                .cloned()
+                .collect(),
+        };
+        let mut paths = HashMap::new();
+        for r in self.repos.iter().chain(&self.session_repos) {
+            paths
+                .entry(self.path_key(&r.path).to_string())
+                .or_insert_with(|| r.path.clone());
+        }
+        let held: HashSet<_> = self
+            .held
+            .keys()
+            .map(|r| self.path_key(r).to_string())
+            .collect();
+        self.entities
+            .retain(|p, _| paths.contains_key(p) || held.contains(p));
+        for (key, path) in paths {
+            let (repo, _) = self.entities.entry(key).or_insert_with(|| {
+                let repo = cx.new(|_| Repo::new(path.clone()));
+                let sub = cx.observe(&repo, |_, repo, cx| {
+                    cx.emit(Event::Changed(repo.read(cx).path.clone()));
+                });
+                (repo, sub)
+            });
+            if repo.read(cx).path != path {
+                repo.update(cx, |r, cx| {
+                    r.path = path;
+                    cx.notify();
+                });
+            }
+        }
+        if !self
+            .current
+            .as_ref()
+            .is_some_and(|p| self.session_repos.iter().any(|r| &r.path == p))
+        {
+            self.current = self.session_repos.first().map(|r| r.path.clone());
+        }
         cx.notify();
     }
 }
@@ -353,6 +590,116 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_session_is_restored_from_ui_state_and_keeps_workspace_discovery(cx: &mut TestAppContext) {
+        use detached_core::sessions;
+        let sb = Sandbox::new();
+        let a = sb.clone_pair("a");
+        let b = sb.clone_pair("b");
+        let ws = sb.state.save_workspace("Default".into(), None).unwrap();
+        for repo in [&a, &b] {
+            sb.state
+                .add_folder(Some(ws.clone()), repo.display().to_string())
+                .unwrap();
+        }
+        let linked = sb.path("linked").display().to_string();
+        sb.git(&a, &["worktree", "add", "-b", "topic", &linked]);
+        std::fs::create_dir(sb.path("alias")).unwrap();
+        let alias = sb.path("alias/../linked").display().to_string();
+        sb.state
+            .add_folder(Some(ws.clone()), alias.clone())
+            .unwrap();
+        let set = sessions::adopt(&sb.state, &ws, "Topic", &[linked]).unwrap();
+        let member = &set.members[0].path;
+        cx.update(|cx| {
+            ui_state::set(&format!("session.current.{ws}"), &set.id, cx);
+            ui_state::set(&format!("workspace.repo.{ws}"), &alias, cx);
+            crate::init(Arc::new(sb.state), cx);
+        });
+        wait_until(cx, |cx| !crate::invalidate::rescanning(cx));
+        cx.update(|cx| {
+            let w = Workspace::get(cx);
+            assert_eq!(w.session_id(), set.id);
+            assert_eq!(w.repos().len(), 3);
+            assert!(w.repos().iter().any(|r| r.path == alias));
+            assert_eq!(w.session_repos()[0].path, *member);
+            assert_eq!(w.listed_repos().count(), 3);
+            assert_eq!(w.repo(&alias), w.repo(member));
+            assert!(status(cx, member));
+            let workspace = Workspace::global(cx);
+            workspace.update(cx, |w, cx| w.set_archive(true, cx));
+            let w = Workspace::get(cx);
+            assert!(w.session_repos().is_empty());
+            assert_eq!(
+                ui_state::get::<String>(&format!("session.current.{ws}"), cx).unwrap(),
+                set.id
+            );
+            workspace.update(cx, |w, cx| w.switch_session(MAIN, cx));
+            assert_eq!(Workspace::get(cx).session_repos().len(), 2);
+            assert_eq!(Workspace::get(cx).current(), Some(a.to_str().unwrap()));
+            assert!(!crate::invalidate::rescanning(cx));
+            assert!(
+                Workspace::get(cx)
+                    .session_repos()
+                    .iter()
+                    .all(|r| r.worktree_of.is_none())
+            );
+            assert_eq!(
+                ui_state::get::<String>(&format!("session.current.{ws}"), cx).as_deref(),
+                Some(MAIN)
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_broken_session_is_reported_once_and_its_selection_is_restored(cx: &mut TestAppContext) {
+        let sb = Sandbox::new();
+        let main = sb.clone_pair("api");
+        let ws = sb.state.save_workspace("Default".into(), None).unwrap();
+        sb.state
+            .add_folder(Some(ws.clone()), main.display().to_string())
+            .unwrap();
+        let linked = sb.path("linked").display().to_string();
+        sb.git(&main, &["worktree", "add", "-b", "topic", &linked]);
+        let set = detached_core::sessions::adopt(&sb.state, &ws, "Topic", &[linked]).unwrap();
+        let manifest = sb
+            .state
+            .data_dir
+            .join("workspaces")
+            .join(&ws)
+            .join("sessions")
+            .join(&set.id)
+            .join("manifest.json");
+        let saved = std::fs::read(&manifest).unwrap();
+        std::fs::write(&manifest, "{").unwrap();
+        let key = format!("session.current.{ws}");
+        cx.update(|cx| {
+            ui_state::set(&key, &set.id, cx);
+            crate::init(Arc::new(sb.state), cx);
+        });
+        wait_until(cx, |cx| !crate::invalidate::rescanning(cx));
+        rescan(cx);
+        cx.read(|cx| {
+            assert_eq!(Workspace::get(cx).session_id(), MAIN);
+            assert_eq!(
+                ui_state::get::<String>(&key, cx).as_deref(),
+                Some(set.id.as_str())
+            );
+            let activity = Activity::global(cx);
+            let notices = &activity.read(cx).notices;
+            assert_eq!(
+                notices
+                    .iter()
+                    .filter(|n| n.reveal.as_ref() == Some(&manifest))
+                    .count(),
+                1
+            );
+        });
+        std::fs::write(&manifest, saved).unwrap();
+        rescan(cx);
+        cx.read(|cx| assert_eq!(Workspace::get(cx).session_id(), set.id));
+    }
+
+    #[gpui::test]
     fn boots_with_the_first_repo_current_and_its_status(cx: &mut TestAppContext) {
         let (_dir, a, _) = boot(cx);
         cx.read(|cx| {
@@ -379,8 +726,9 @@ mod tests {
             cx.subscribe(&workspace, move |_, e: &Event, _| match e {
                 Event::Status(r) => seen.borrow_mut().push(format!("status {r}")),
                 Event::Changed(r) => seen.borrow_mut().push(format!("changed {r}")),
-                Event::Shown => seen.borrow_mut().push("shown".into()),
+                Event::Shown { .. } => seen.borrow_mut().push("shown".into()),
                 Event::Switched => seen.borrow_mut().push("switched".into()),
+                Event::SessionChanged => seen.borrow_mut().push("session changed".into()),
             })
         });
         std::fs::write(Path::new(&a).join("f"), "y\n").unwrap();

@@ -375,7 +375,7 @@ impl ChatList {
             }
             Key::Past(id) => {
                 let all = self.all(cx);
-                let p = all.iter().find(|p| p.id == *id)?;
+                let p = all.iter().find(|p| p.owned && p.id == *id)?;
                 let cwd = p.cwd.clone().unwrap_or_default();
                 Some((cwd, id.clone(), super::provider(&p.provider)))
             }
@@ -454,7 +454,7 @@ impl ChatList {
         let mut groups: BTreeMap<String, Group> = BTreeMap::new();
         for ((place, provider), past) in &self.past {
             let name = label(place, cx);
-            for p in past.read(cx).value.iter().flatten() {
+            for p in past.read(cx).value.iter().flatten().filter(|p| p.owned) {
                 if ids.iter().any(|(x, id)| x == provider && *id == p.id) {
                     seen.insert(p.id.clone(), p.clone());
                 } else if p.archived() == archived
@@ -584,10 +584,22 @@ impl ChatList {
                 Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
             }
             Key::Past(id) => {
-                let Some((cwd, _, p)) = self.conversation(key, cx) else {
+                let Some(p) = self.all(cx).into_iter().find(|p| p.owned && p.id == *id) else {
                     return;
                 };
-                super::resume(cwd, p, id.clone(), cx);
+                let archived = p.archived();
+                let repo = p.cwd.unwrap_or_default();
+                if archived {
+                    let doc = Doc::PastChat {
+                        repo,
+                        provider: p.provider,
+                        id: p.id,
+                        title: p.title,
+                    };
+                    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+                } else {
+                    super::resume(repo, super::provider(&p.provider), p.id, cx);
+                }
             }
             // A search holds open every group it matches in.
             Key::Group(..) if !self.query(cx).is_empty() => {}

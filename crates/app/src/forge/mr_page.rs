@@ -68,6 +68,7 @@ struct Ready {
 
 /// A merge request's page. It loads on open and after Refresh or an action, never on a timer.
 pub struct MrPage {
+    pub(super) read_only: bool,
     repo: String,
     number: u64,
     tab: Tab,
@@ -110,13 +111,20 @@ impl MrPage {
         }
     }
 
-    pub fn new(repo: String, number: u64, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        repo: String,
+        number: u64,
+        read_only: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let page = cx.weak_entity();
         let comment = cx.new(|cx| Thread::comment(page, window, cx));
         let hint = "Review comment, required to request changes";
         let review = cx.new(|cx| TextareaState::new(window, cx).rows(2).placeholder(hint));
         let typed = cx.subscribe(&review, |_, _, _: &InputEvent, cx| cx.notify());
         let mut this = MrPage {
+            read_only,
             repo,
             number,
             tab: Tab::Overview,
@@ -205,8 +213,9 @@ impl MrPage {
             return;
         };
         let (core, repo) = (core(cx), self.repo.clone());
+        let read_only = self.read_only;
         let task = cx.spawn(async move |this, cx| {
-            let r = resolve(core, repo, m, cx).await;
+            let r = resolve(core, repo, m, read_only, cx).await;
             this.update(cx, |this, cx| this.resolved(r, cx)).ok();
         });
         self.refs = Refs::Loading { _task: task };
@@ -295,7 +304,7 @@ impl MrPage {
             },
         };
         let page = cx.weak_entity();
-        let on_add = (!r.moved && m.state == MrState::Open).then(|| {
+        let on_add = (!self.read_only && !r.moved && m.state == MrState::Open).then(|| {
             Rc::new(
                 move |side, line, other, window: &mut Window, cx: &mut App| {
                     page.update(cx, |p, cx| p.add_draft(side, line, other, window, cx))
@@ -375,6 +384,9 @@ impl MrPage {
     /// Runs `a`, busy meanwhile, keeps its error as the failure, then reloads; resolves with
     /// whether `a` succeeded once the reload is done.
     pub(super) fn act(&mut self, a: MrAction, cx: &mut Context<Self>) -> Task<bool> {
+        if self.read_only {
+            return Task::ready(false);
+        }
         self.busy = true;
         cx.notify();
         let (core, repo, n) = (core(cx), self.repo.clone(), self.number);
@@ -416,8 +428,8 @@ impl MrPage {
         }
         let (repo, n) = (Some(self.repo.clone()), Some(self.number));
         self.tab = tab;
-        self.pipelines =
-            (tab == Tab::Pipelines).then(|| cx.new(|cx| Pipelines::new(repo, n, window, cx)));
+        self.pipelines = (tab == Tab::Pipelines)
+            .then(|| cx.new(|cx| Pipelines::new(repo, n, self.read_only, window, cx)));
         self.mount_diff(cx);
         self.resolve(cx);
     }
@@ -721,12 +733,12 @@ impl MrPage {
                             .rounded(radius::FIELD)
                             .child(description),
                     )
-                    .when(open, |d| {
+                    .when(open && !self.read_only, |d| {
                         d.child(self.merge.render(m, busy, cx))
                             .child(actions)
                             .when(!gitlab, |d| d.child(review))
                     })
-                    .when(m.state == MrState::Closed, |d| {
+                    .when(m.state == MrState::Closed && !self.read_only, |d| {
                         d.child(row().child(button(
                             "mr.reopen",
                             "Reopen",
@@ -745,7 +757,9 @@ impl MrPage {
                     )
                     .children(threads)
                     .children(none)
-                    .child(div().id("mr.comment").child(self.comment.clone())),
+                    .when(!self.read_only, |d| {
+                        d.child(div().id("mr.comment").child(self.comment.clone()))
+                    }),
             )
     }
 
@@ -1001,6 +1015,7 @@ async fn resolve(
     core: Arc<AppState>,
     repo: String,
     m: MergeRequest,
+    read_only: bool,
     cx: &mut AsyncApp,
 ) -> Result<(Ready, Option<MergeRequest>)> {
     let (c, r, base, head) = (
@@ -1011,7 +1026,7 @@ async fn resolve(
     );
     let remote = cx.update(|cx| {
         blocking::run(cx, move || -> Result<_> {
-            if api::merge_base(&c, &r, &base, &head).is_ok() {
+            if read_only || api::merge_base(&c, &r, &base, &head).is_ok() {
                 return Ok(None);
             }
             let remote = api::forge_hosts(&c, &r)?.mr_remote;

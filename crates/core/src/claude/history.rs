@@ -43,14 +43,14 @@ pub(crate) enum Place {
 
 impl Place {
     /// The history of session `id`; None when it cannot be read.
-    pub(crate) fn read(&self, id: &str) -> Option<Vec<Update>> {
+    pub(crate) fn read(&self, id: &str, read_only: bool) -> Option<Vec<Update>> {
         match self {
-            Place::Here(dir) => read(dir, id),
+            Place::Here(dir) => read(dir, id, read_only),
             _ if !valid(id) => None,
             Place::Wsl(d, env) => {
                 let script = r#"for f in "$p"/*/"$1".jsonl; do [ -f "$f" ] && exec cat "$f"; done
                     exit 1"#;
-                history(&sh(d, env, None, script, &[id]).ok()?)
+                history(&sh(d, env, None, script, &[id]).ok()?, read_only)
             }
         }
     }
@@ -155,8 +155,8 @@ fn valid(id: &str) -> bool {
 }
 
 /// The history of session `id` under the CLI's config dir `dir`; None when it cannot be read.
-pub(crate) fn read(dir: &Path, id: &str) -> Option<Vec<Update>> {
-    history(&fs::read(file(dir, id)?).ok()?)
+pub(crate) fn read(dir: &Path, id: &str, read_only: bool) -> Option<Vec<Update>> {
+    history(&fs::read(file(dir, id)?).ok()?, read_only)
 }
 
 /// Removes a session's transcript and its folder of subagents and title.
@@ -274,6 +274,7 @@ fn summary(bytes: &[u8], named: Option<String>) -> Option<Past> {
         tag: tag.map(String::from),
         model: model.map(String::from),
         provider: String::new(),
+        owned: false,
     })
 }
 
@@ -294,7 +295,7 @@ fn ends(path: &Path) -> Option<Vec<u8>> {
 /// A session's history as a resume's first updates, each message ended by a `Break`: the chain of
 /// messages from the last one back to the start or the last compaction, sidechains and lines of
 /// unknown types aside. None when the transcript holds no message.
-pub(crate) fn history(bytes: &[u8]) -> Option<Vec<Update>> {
+pub(crate) fn history(bytes: &[u8], read_only: bool) -> Option<Vec<Update>> {
     let lines: Vec<Value> = lines(bytes).collect();
     let by_id: HashMap<&str, &Value> = lines
         .iter()
@@ -329,7 +330,7 @@ pub(crate) fn history(bytes: &[u8]) -> Option<Vec<Update>> {
     let mut model = None;
     for l in shown {
         let from = out.len();
-        updates(l, &mut names, &mut out);
+        updates(l, &mut names, &mut out, read_only);
         if out[from..].iter().any(|u| matches!(u, Update::User(_)))
             && let Some(model) = model.take()
         {
@@ -375,7 +376,7 @@ fn said(content: &Value) -> Option<String> {
 }
 
 /// A message's updates; `names` maps each tool call's id to its tool, for its result.
-fn updates(l: &Value, names: &mut HashMap<String, String>, out: &mut Vec<Update>) {
+fn updates(l: &Value, names: &mut HashMap<String, String>, out: &mut Vec<Update>, read_only: bool) {
     let user = l["type"] == "user";
     let content = &l["message"]["content"];
     if let Some(t) = content.as_str() {
@@ -407,7 +408,11 @@ fn updates(l: &Value, names: &mut HashMap<String, String>, out: &mut Vec<Update>
             (Some("tool_result"), true) => {
                 let id = text("tool_use_id").unwrap_or_default();
                 let bash = names.get(&id).is_some_and(|n| n == "Bash");
-                out.push(Update::Tool(Box::new(result(b, bash))));
+                let mut tool = result(b, bash);
+                if read_only {
+                    tool.output = b.get("content").cloned();
+                }
+                out.push(Update::Tool(Box::new(tool)));
             }
             _ => {}
         }
