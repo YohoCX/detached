@@ -314,7 +314,8 @@ mod drive {
         let listener = listen(dir.path());
         let cmds = [
             "tree",
-            "click top.chat",
+            "click pane.new",
+            "click menu.item:0",
             "type pong",
             "key enter",
             "wait said pong",
@@ -324,10 +325,10 @@ mod drive {
         ];
         let client = thread::spawn(move || cmds.map(|c| send(&sock, c)));
         serve(listener, dir.path(), 1);
-        let [tree, click, typed, key, wait, shot, missing, quit] = client.join().unwrap();
+        let [tree, menu, click, typed, key, wait, shot, missing, quit] = client.join().unwrap();
         let ids = tree["ok"].as_array().expect("tree lists elements");
-        assert!(ids.iter().any(|e| e["id"] == "top.chat"), "{tree}");
-        for ok in [click, typed, key, wait, quit] {
+        assert!(ids.iter().any(|e| e["id"] == "pane.new"), "{tree}");
+        for ok in [menu, click, typed, key, wait, quit] {
             assert_eq!(ok, json!({ "ok": null }));
         }
         let png = shot["ok"].as_str().expect("shot returns its path");

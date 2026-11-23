@@ -41,6 +41,8 @@ pub struct Workspace {
     id: Option<String>,
     /// The workspace a `switch` asked for, until its repos are listed.
     to: Option<String>,
+    /// Document to reveal once a user-requested workspace switch finishes.
+    reveal: Option<(String, String, Doc)>,
     repos: Vec<RepoInfo>,
     entities: HashMap<String, Held>,
     aliases: HashMap<String, String>,
@@ -67,6 +69,7 @@ pub(crate) fn init(cx: &mut App) {
     let workspace = cx.new(|_| Workspace {
         id: None,
         to,
+        reveal: None,
         repos: vec![],
         entities: HashMap::new(),
         aliases: HashMap::new(),
@@ -135,6 +138,7 @@ impl Workspace {
     /// Makes workspace `id` current once its repos are listed; that listing emits `Switched`.
     pub fn switch(&mut self, id: String, cx: &mut Context<Self>) {
         if self.wanted().as_deref() != Some(&id) {
+            self.reveal = None;
             self.to = Some(id);
             crate::invalidate::relist(cx);
         }
@@ -167,8 +171,12 @@ impl Workspace {
         if self.archive {
             &[]
         } else {
-            &self.session_repos
+            self.session_checkouts()
         }
+    }
+
+    pub fn session_checkouts(&self) -> &[RepoInfo] {
+        &self.session_repos
     }
 
     pub fn session_current(&self) -> Option<&str> {
@@ -334,6 +342,34 @@ impl Workspace {
         self.shown.as_ref()
     }
 
+    /// Brings a document forward in its original workspace and live session.
+    pub fn show_in_session(
+        &mut self,
+        workspace: String,
+        session: String,
+        doc: Doc,
+        cx: &mut Context<Self>,
+    ) {
+        self.switch(workspace.clone(), cx);
+        if self.id() != Some(&workspace) {
+            self.reveal = Some((workspace, session, doc));
+            return;
+        }
+        if self.session == session && !self.archive {
+            self.show(doc, cx);
+            return;
+        }
+        self.switch_session(&session, cx);
+        // Restore the layout before showing its tab. A later switch supersedes the request.
+        cx.defer(move |cx| {
+            Self::global(cx).update(cx, |w, cx| {
+                if w.wanted().as_deref() == Some(&workspace) && w.session == session && !w.archive {
+                    w.show(doc, cx);
+                }
+            })
+        });
+    }
+
     /// Opens `doc` in a tab, or brings forward the tab that has it.
     pub fn show(&mut self, doc: Doc, cx: &mut Context<Self>) {
         self.show_tab(doc, false, cx);
@@ -465,6 +501,17 @@ impl Workspace {
             cx.emit(Event::Switched);
         } else if changed {
             cx.emit(Event::SessionChanged);
+        }
+        if let Some((workspace, session, doc)) = self.reveal.take()
+            && self.id() == Some(&workspace)
+        {
+            cx.defer(move |cx| {
+                Self::global(cx).update(cx, |w, cx| {
+                    if w.wanted().as_deref() == Some(&workspace) {
+                        w.show_in_session(workspace, session, doc, cx);
+                    }
+                })
+            });
         }
     }
 

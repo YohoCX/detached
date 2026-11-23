@@ -1094,3 +1094,39 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
     app.press("secondary-1");
     assert_eq!(app.find("tree.files").unwrap().checked(), Some(true));
 }
+
+#[gpui_kit::test]
+fn revealing_a_background_document_restores_its_session_and_existing_tab(cx: &mut TestAppContext) {
+    let mut named = String::new();
+    let mut app = open_app_with(cx, |sb| {
+        let linked = checkout(sb, "api");
+        named = sessions::adopt(
+            &sb.state,
+            &workspace(sb),
+            "Review",
+            &[linked.display().to_string()],
+        )
+        .unwrap()
+        .id;
+    });
+    let ws = workspace(&app.sb);
+    app.click(SharedString::from(format!("sessions.row.{named}")));
+    let doc = Doc::File(Location {
+        repo: app.sb.path("api-topic").display().to_string(),
+        path: "api-topic.txt".into(),
+        rev: None,
+        line: None,
+        doc: None,
+    });
+    app.workspace(|w, cx| w.show_tab(doc.clone(), true, cx));
+    wait_until(&mut app, |cx| cx.find("doc.file.api-topic.txt").is_some());
+    app.click("sessions.row.main");
+    assert!(app.find("doc.file.api-topic.txt").is_none());
+    app.workspace(|w, cx| w.show_in_session(ws, named.clone(), doc.clone(), cx));
+    wait_until(&mut app, |cx| {
+        cx.find("doc.file.api-topic.txt")
+            .is_some_and(|e| e.checked() == Some(true))
+    });
+    assert!(in_list(&mut app, &named));
+    assert_eq!(app.workspace(|w, _| w.shown().cloned()), Some(doc));
+}

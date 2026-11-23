@@ -30,6 +30,14 @@ fn copy_round(repo: &Path, name: &str) {
     }
 }
 
+fn split_council_list(app: &mut TestApp) {
+    open_tab(app, "tab.council");
+    app.update(|w, _| w.resize(gpui_kit::size(px(2400.), px(900.))));
+    settle(app);
+    app.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
+    settle(app);
+}
+
 fn open_round(app: &mut TestApp, task: &str, round: &str) {
     wait_until(app, |cx| cx.find(format!("council.task.{task}")).is_some());
     let repo = app.sb.path("repos/reviewed").display().to_string();
@@ -183,7 +191,9 @@ fn finding_diff_shows_the_reviewed_commits_once_they_resolve(cx: &mut TestAppCon
     let repo = app.sb.path("repos/reviewed");
     app.sb.git(&repo, &["tag", "reviewed-a", &a]);
     app.sb.git(&repo, &["tag", "reviewed-b", &b]);
+    open_tab(&mut app, "tab.council");
     app.click("council.refresh");
+    open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
     wait_until(&mut app, |cx| {
         current_line(cx).contains("reviewed line 228")
     });
@@ -278,7 +288,7 @@ fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppCon
         let repo = repo(sb, "reviewed");
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
     });
-    open_tab(&mut app, "tab.council");
+    split_council_list(&mut app);
     open_round(&mut app, "foundation-8-watcher", "03-after-fix-retry");
     let repo = app.sb.path("repos/reviewed").display().to_string();
     let rounds = app.update(|_, cx| kernel::council::rounds(cx, &repo));
@@ -399,8 +409,7 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
         copy_round(&repo, "agent-host-plan/16-codex");
         copy_round(&repo, "agent-host-plan/15-after-fix");
     });
-    open_tab(&mut app, "tab.council");
-    open_round(&mut app, "agent-host-plan", "16-codex");
+    open_tab(&mut app, "tab.council");    open_round(&mut app, "agent-host-plan", "16-codex");
     wait_until(&mut app, |cx| cx.find("council.findings").is_some());
     app.update(|w, cx| w.within("council.modes").click(0usize, cx));
     settle(&app);
@@ -414,9 +423,11 @@ fn round_modes_remember_and_flow_selects_a_finding(cx: &mut TestAppContext) {
     assert!(app.find("council.timeline.lane.fit").is_some());
     assert!(app.find("council.timeline.lane.merge").is_some());
     assert!(app.find("council.timeline.lane.verify").is_some());
+    open_tab(&mut app, "tab.council");
     open_round(&mut app, "agent-host-plan", "15-after-fix");
     wait_until(&mut app, |cx| cx.find("council.timeline").is_some());
     assert!(app.find("council.findings").is_none());
+    open_tab(&mut app, "tab.council");
     open_round(&mut app, "agent-host-plan", "16-codex");
     app.update(|w, cx| w.within("council.modes").click(0usize, cx));
     settle(&app);
@@ -451,7 +462,7 @@ fn refresh_replaces_a_removed_selection_and_clears_empty_details(cx: &mut TestAp
         .unwrap();
     };
     let mut app = open_app_with(cx, |sb| write(&repo(sb, "reviewed"), &["first", "second"]));
-    open_tab(&mut app, "tab.council");
+    split_council_list(&mut app);
     open_round(&mut app, "task", "round");
     wait_until(&mut app, |cx| cx.find("council.finding.second").is_some());
     app.click("council.finding.second");
@@ -671,6 +682,7 @@ fn task_history_orders_rounds_expands_fates_and_remembers_expansion(cx: &mut Tes
     settle(&app);
     let config = app.sb.state.config_dir.clone();
     app.update(|_, cx| kernel::ui_state::init(&config, cx));
+    open_tab(&mut app, "tab.council");
     app.click("council.task.thread-history");
     wait_until(&mut app, |cx| {
         cx.find("council.task.finding.01.a").is_some()
@@ -686,6 +698,7 @@ fn task_history_orders_rounds_expands_fates_and_remembers_expansion(cx: &mut Tes
     assert!(
         matches!(app.workspace(|w, _| w.shown().cloned()), Some(Doc::Council { round, .. }) if round == "03")
     );
+    open_tab(&mut app, "tab.council");
     app.click("council.task.thread-history");
     app.click("council.task.open.02");
     settle(&app);

@@ -88,8 +88,10 @@ fn the_docs_app_shows_the_index_sections_their_cites_staleness_and_decisions_by_
     };
     cx.click("docs.section.docs/src.md:10");
     assert_eq!(shown(cx), at("docs/src.md", Some(10)));
+    open_tab(cx, "tab.docs");
     cx.click("docs.cite.docs/src.md:10.src/w.rs:3");
     assert_eq!(shown(cx), at("src/w.rs", Some(3)));
+    open_tab(cx, "tab.docs");
     cx.click("docs.doc.docs/KEYMAP.md");
     assert_eq!(
         shown(cx),

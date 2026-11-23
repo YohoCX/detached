@@ -58,7 +58,13 @@ pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Chat>> {
 
 /// A chat's place by name: the repo's, or the folder's with a slash.
 pub fn label(path: &str, cx: &App) -> String {
-    match Workspace::get(cx).repos().iter().find(|r| r.path == path) {
+    let w = Workspace::get(cx);
+    match w
+        .session_checkouts()
+        .iter()
+        .chain(w.repos())
+        .find(|r| r.path == path)
+    {
         Some(r) => r.name.clone(),
         None => format!("{}/", crate::util::folder_name(path)),
     }
@@ -83,8 +89,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             && let Ok(n) = n.parse()
             && find(repo, n, cx).is_some()
         {
-            let repo = repo.to_string();
-            Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
+            foreground(repo.to_string(), n, cx);
             cx.activate(true);
         }
     });
@@ -104,16 +109,58 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 
 /// Shows `repo`'s first open chat, or a new one.
 pub fn show(repo: String, cx: &mut App) {
-    if let Some((_, n, _)) = open(cx).into_iter().find(|(r, ..)| *r == repo) {
-        Workspace::global(cx).update(cx, |w, cx| w.show(Doc::Chat { repo, n }, cx));
+    if let Some((_, n, _)) = open(cx)
+        .into_iter()
+        .find(|(r, _, chat)| *r == repo && owned_here(chat.read(cx), cx))
+    {
+        foreground(repo, n, cx);
     } else {
         new_chat(repo, cx);
     }
 }
 
+fn owned_here(chat: &Chat, cx: &App) -> bool {
+    let w = Workspace::get(cx);
+    chat.owner
+        .as_ref()
+        .is_none_or(|(ws, session)| w.id() == Some(ws) && w.session_id() == session)
+}
+
+fn foreground(repo: String, n: u32, cx: &mut App) {
+    let Some(chat) = find(&repo, n, cx) else {
+        return;
+    };
+    let owner = chat.read(cx).owner.clone();
+    Workspace::global(cx).update(cx, |w, cx| {
+        let doc = Doc::Chat { repo, n };
+        if let Some((workspace, session)) = owner {
+            w.show_in_session(workspace, session, doc, cx);
+        } else {
+            w.show(doc, cx);
+        }
+    });
+}
+
+fn can_open_here(repo: &str, cx: &mut App) -> bool {
+    let w = Workspace::get(cx);
+    if w.session_id() == detached_core::sessions::MAIN
+        || w.session_checkouts().iter().any(|r| r.path == repo)
+    {
+        return true;
+    }
+    Activity::global(cx).update(cx, |a, cx| {
+        a.say(
+            "Select a repository in this session to chat about",
+            false,
+            cx,
+        )
+    });
+    false
+}
+
 /// Shows a new chat on `repo`, reusing an untouched blank tab when possible.
 pub fn new_chat(repo: String, cx: &mut App) {
-    if !can_start(cx) {
+    if !can_open_here(&repo, cx) || !can_start(cx) {
         return;
     }
     let n = fresh(&repo, cx);
@@ -123,7 +170,7 @@ pub fn new_chat(repo: String, cx: &mut App) {
 
 /// Sends `prompt` in a chat on `repo` with nothing in it, and shows it.
 pub fn ask(repo: String, prompt: String, cx: &mut App) {
-    if !can_start(cx) {
+    if !can_open_here(&repo, cx) || !can_start(cx) {
         return;
     }
     let n = fresh(&repo, cx);
@@ -173,9 +220,9 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
         .into_iter()
         .find(|(.., s)| s.read(cx).shows(&id, cx))
     {
-        Some((repo, n, _)) => (repo, n),
+        Some((repo, n, _)) => return foreground(repo, n, cx),
         None => {
-            if !provider_config(cx).shows(p) {
+            if !can_open_here(&cwd, cx) || !provider_config(cx).shows(p) {
                 return;
             }
             let n = fresh(&cwd, cx);
@@ -188,7 +235,10 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
 
 fn fresh(repo: &str, cx: &mut App) -> u32 {
     let mine: Vec<_> = open(cx).into_iter().filter(|(r, ..)| r == repo).collect();
-    if let Some((_, n, _)) = mine.iter().find(|(.., s)| s.read(cx).untouched(cx)) {
+    if let Some((_, n, _)) = mine
+        .iter()
+        .find(|(.., s)| owned_here(s.read(cx), cx) && s.read(cx).untouched(cx))
+    {
         return *n;
     }
     mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0)
