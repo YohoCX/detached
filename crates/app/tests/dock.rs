@@ -10,7 +10,7 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AnyView, AnyWindowHandle, App, AppContext, Context, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, TestAppContext, VisualTestContext, Window, div, point, px,
+    ParentElement, Render, TestAppContext, VisualTestContext, Window, div, point, px,
 };
 use std::path::Path;
 
@@ -35,10 +35,6 @@ const ANSWER: &str = if cfg!(windows) {
 } else {
     "echo answer-$((6*7))"
 };
-
-fn x(cx: &mut VisualTestContext, id: &'static str) -> Pixels {
-    cx.find(id).unwrap().bounds().origin.x
-}
 
 /// Drags tab `id` onto tab `onto`, as a hand would.
 fn drag_tab(
@@ -94,6 +90,15 @@ fn in_window<R>(
         f(window, cx)
     })
     .unwrap()
+}
+
+fn new_chat(cx: &mut VisualTestContext) {
+    cx.click("pane.new");
+    let (i, _) = (0usize..)
+        .map_while(|i| cx.find(("menu.item", i)).map(|item| (i, item)))
+        .find(|(_, item)| item.label() == Some("New chat"))
+        .expect("the pane menu offers a new chat");
+    cx.click(("menu.item", i));
 }
 
 #[gpui_kit::test]
@@ -333,16 +338,19 @@ fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut T
     cx.workspace(|w, cx| w.set_current(Some(solo), cx));
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);
-    cx.click("top.chat");
+    new_chat(cx);
     let again = reopen(cx);
-    let chat = in_window(cx, again, |w, _| w.try_find("doc.chat").is_some());
-    assert!(chat, "Chats, the category shown last");
-    in_window(cx, again, |w, cx| actions::dispatch(w, cx, "tabs.code"));
-    settle(cx);
-    let diff = in_window(cx, again, |w, _| w.try_find("doc.diff.README.md").is_some());
-    assert!(diff);
-    in_window(cx, again, |w, cx| actions::dispatch(w, cx, "tabs.chats"));
-    settle(cx);
+    in_window(cx, again, |w, _| {
+        assert_eq!(
+            w.find("doc.chat").checked(),
+            Some(true),
+            "the last active tab is restored"
+        );
+        assert!(
+            w.find("doc.diff.README.md").visible(),
+            "the diff shares its strip"
+        );
+    });
     in_window(cx, again, |w, cx| {
         w.within("doc.chat").click("tab.close", cx)
     });
@@ -359,10 +367,9 @@ fn a_running_chat_moves_to_another_pane_with_its_turn_going_on(cx: &mut TestAppC
     });
     let solo = cx.sb.solo().display().to_string();
     cx.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
-    // A second document, since the last tab of the center can't be dragged out.
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);
-    cx.click("top.chat");
+    new_chat(cx);
     cx.input("say Working; wait never");
     cx.press("enter");
     let working = |cx: &mut VisualTestContext| {
@@ -375,12 +382,18 @@ fn a_running_chat_moves_to_another_pane_with_its_turn_going_on(cx: &mut TestAppC
     };
     wait_until(cx, working);
     let session = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
-    assert!(x(cx, "doc.chat") < px(1000.), "in the center");
+    let original = cx.find("doc.chat").unwrap().bounds();
+    let overview = cx.find("doc.session-overview").unwrap().bounds();
+    assert_eq!(
+        original.top(),
+        overview.top(),
+        "the chat initially shares the Overview strip"
+    );
 
     run(cx, "pane.splitDown");
     drag_tab(cx, "doc.chat", "doc.new-tab");
     assert!(
-        cx.find("doc.chat").unwrap().bounds().top() > px(300.),
+        cx.find("doc.chat").unwrap().bounds().top() > original.bottom(),
         "in the lower pane"
     );
     assert!(working(cx), "the same feed");
@@ -705,10 +718,8 @@ fn no_switch_removes_a_tab_and_its_view_is_the_same_after(cx: &mut TestAppContex
     );
     let view = |cx: &mut VisualTestContext| cx.find("stub.view").map(|e| e.bounds());
     assert!(view(cx).is_some());
-    run(cx, "tabs.docs");
     switch(cx, "Other");
     switch(cx, "Default");
-    run(cx, "tabs.code");
     assert!(view(cx).is_some());
     assert_eq!(removed.get(), 0);
 }
@@ -737,7 +748,6 @@ fn a_docked_terminal_lives_on_across_workspace_switches(cx: &mut TestAppContext)
     switch(cx, "Other");
     assert!(cx.find(tab.clone()).is_none());
     switch(cx, "Default");
-    run(cx, "tabs.code");
     assert!(cx.find(tab.clone()).is_some());
     assert!(answered(cx), "the same screen");
     let now = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
@@ -796,7 +806,6 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     let docked = cx.update(|_, cx| Terminals::global(cx).read(cx).docked.clone());
     let id = format!("doc.terminal.{}", docked[0].entity_id().as_u64());
     switch(cx, "Other");
-    run(cx, "tabs.code");
     let id = SharedString::from(id);
     cx.click(id.clone());
     cx.update(|w, cx| w.within(id).click("tab.close", cx));

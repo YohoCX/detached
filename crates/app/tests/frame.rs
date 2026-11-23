@@ -71,8 +71,14 @@ fn keymap_json_rebinds_and_unbinds_chords(cx: &mut TestAppContext) {
     assert_eq!(on(cx, "doc.log"), None, "the default chord is free");
     cx.press("secondary-shift-l");
     assert_eq!(on(cx, "doc.log"), Some(true));
+    cx.press("secondary-0");
+    assert_eq!(on(cx, "tree.changes"), Some(true));
     cx.press("secondary-1");
-    assert!(on_screen(cx, "tool.Changes"));
+    assert_eq!(
+        on(cx, "tree.changes"),
+        Some(true),
+        "the unbound chord leaves Changes open"
+    );
 }
 
 fn names(cx: &mut VisualTestContext) -> Vec<String> {
@@ -203,11 +209,19 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
             .unwrap()
             .to_string()
     };
+    let width = |cx: &mut VisualTestContext| cx.find("sessions").unwrap().bounds().size.width;
+    assert!(
+        cx.find("zone.left").is_none(),
+        "the live frame has no dock toggle"
+    );
     assert_eq!(folding(cx), "Hide sessions");
+    assert_eq!(width(cx), gpui_kit::px(248.));
     cx.press("secondary-b");
-    assert!(folding(cx).starts_with("Show sessions"));
+    assert_eq!(folding(cx), "Show sessions");
+    assert_eq!(width(cx), gpui_kit::px(44.));
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Hide sessions");
+    assert_eq!(width(cx), gpui_kit::px(248.));
 }
 
 #[gpui_kit::test]
@@ -303,30 +317,33 @@ fn an_error_lands_in_events_and_its_message_goes_after_10_s(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn the_status_bar_shows_the_current_repo_and_branch_beside_a_message_and_opens_branches(
-    cx: &mut TestAppContext,
-) {
+fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let api = cx.sb.repo("group/api").display().to_string();
+    let solo = cx.sb.solo().display().to_string();
     let name = cx.workspace(|w, cx| {
-        w.set_current(Some(api.clone()), cx);
+        w.set_current(Some(solo), cx);
         w.name_of(&api).to_string()
     });
-    let repo = |cx: &mut VisualTestContext| {
-        cx.find("status.repo")
-            .and_then(|e| e.label().map(String::from))
-    };
-    assert_eq!(repo(cx), Some(format!("{name} main ↓1")));
-    cx.activity(|s, cx| s.say("Fetched", false, cx));
-    assert!(cx.find("status.message").is_some());
-    assert_eq!(
-        repo(cx),
-        Some(format!("{name} main ↓1")),
-        "beside the message"
+    let (ix, _) = (0usize..)
+        .map_while(|i| cx.find(("overview.repository", i)).map(|row| (i, row)))
+        .find(|(_, row)| row.label() == Some(name.as_str()))
+        .expect("the Overview lists the repository");
+    assert!(
+        cx.find(("overview.pull", ix)).is_some(),
+        "the repository is behind"
     );
-    cx.click("status.message");
-    cx.click("status.repo");
+    cx.activity(|s, cx| s.say("Fetched", false, cx));
+    assert!(
+        cx.find("status.message")
+            .is_some_and(|message| message.visible())
+    );
+    cx.click(("overview.switch", ix));
     assert!(cx.find("branches.popup").is_some());
+    assert_eq!(
+        cx.workspace(|w, _| w.current().map(String::from)),
+        Some(api)
+    );
 }
 
 #[gpui_kit::test]
