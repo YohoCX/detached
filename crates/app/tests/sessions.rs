@@ -769,20 +769,28 @@ fn a_file_view_saves_its_cursor_and_scroll_in_its_session_layout(cx: &mut TestAp
             cx,
         );
     });
-    wait_until(app, |cx| cx.find("viewer.code").is_some());
+    wait_until(app, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.find_all("input-state").iter().any(|e| {
+                e.value()
+                    .is_some_and(|text| text.contains("editor line 180"))
+            })
+        })
+    });
     app.press("secondary-l");
     app.input("130:5");
     app.press("enter");
     let key = format!("session.{}.main.layout", workspace(&app.sb));
-    wait_until(app, |cx| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            detached_app::dock::save_current(cx);
-            let saved: serde_json::Value = ui_state::get(&key, cx).unwrap();
-            let raw = saved.to_string();
-            raw.contains(r#""line":129"#)
-                && raw.contains(r#""column":4"#)
-                && raw.contains(r#""y":-"#)
-        })
+    let raw = app.update(|w, cx| {
+        w.render_frame(cx);
+        detached_app::dock::save_current(cx);
+        ui_state::get::<serde_json::Value>(&key, cx)
+            .unwrap()
+            .to_string()
     });
+    assert!(
+        raw.contains(r#""line":129"#) && raw.contains(r#""column":4"#) && raw.contains(r#""y":-"#),
+        "{raw}"
+    );
 }
