@@ -75,6 +75,7 @@ pub struct DocTab {
     /// one is current.
     pub workspace: Option<String>,
     pub session: Option<String>,
+    legacy: bool,
     /// A preview tab takes the next file or diff shown; a double click on it keeps it.
     pub keep: bool,
     kind: Rc<dyn DocKind>,
@@ -89,8 +90,9 @@ struct Saved {
     keep: bool,
     #[serde(default)]
     workspace: Option<String>,
+    // Archive tabs need an explicit null to distinguish them from old layouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    session: Option<String>,
+    session: Option<Option<String>>,
 }
 
 impl DocTab {
@@ -102,6 +104,7 @@ impl DocTab {
             doc,
             workspace,
             session,
+            legacy: false,
             keep,
             kind,
             view: None,
@@ -148,7 +151,7 @@ impl DocTab {
     }
 
     pub(super) fn legacy(&self) -> bool {
-        self.session.is_none() && !matches!(self.doc, Doc::SessionArchive | Doc::PastChat { .. })
+        self.legacy
     }
 
     pub fn category(&self) -> &'static str {
@@ -161,11 +164,14 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
         return None;
     };
     let s: Saved = serde_json::from_value(v.clone()).ok()?;
+    let legacy =
+        v.get("session").is_none() && !matches!(s.doc, Doc::SessionArchive | Doc::PastChat { .. });
     let kind = doc_kind(s.doc.kind(), cx)?;
     let tab = DocTab::new(s.doc, kind, s.keep, cx);
     tab.update(cx, |t, _| {
         t.workspace = s.workspace;
-        t.session = s.session;
+        t.session = s.session.flatten();
+        t.legacy = legacy;
     });
     Some(Arc::new(tab))
 }
@@ -181,8 +187,7 @@ impl Focusable for DocTab {
 impl Render for DocTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let archive = self
-            .session
-            .is_none()
+            .legacy
             .then_some(match &self.doc {
                 Doc::Chat { .. } => Some("Read earlier conversations from the Archive page."),
                 Doc::Terminal { .. } => {
@@ -255,7 +260,7 @@ impl Panel for DocTab {
             doc: self.doc.clone(),
             keep: self.keep,
             workspace: self.workspace.clone(),
-            session: self.session.clone(),
+            session: (!self.legacy).then(|| self.session.clone()),
         };
         PanelState {
             info: PanelInfo::Panel(serde_json::to_value(saved).unwrap_or_default()),

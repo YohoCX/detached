@@ -7,14 +7,21 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::council::{fix, tree};
 use crate::error::{Error, Result};
 use crate::git::worktree;
-use crate::os::directories;
+use crate::paths::directories;
+use crate::settings::FileProblem;
 use crate::state::AppState;
 use crate::types::RepoInfo;
 
 const MANIFEST: &str = "manifest.json";
 pub const MAIN: &str = "main";
+
+pub struct Listing {
+    pub sets: Vec<Workset>,
+    pub problems: Vec<FileProblem>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workset {
@@ -39,6 +46,18 @@ pub enum MemberState {
     Ready,
     Missing,
     Unavailable,
+    Conflict,
+}
+
+impl MemberState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "Ready",
+            Self::Missing => "Missing",
+            Self::Unavailable => "Unavailable",
+            Self::Conflict => "Conflict",
+        }
+    }
 }
 
 pub struct Candidate {
@@ -56,25 +75,24 @@ fn root(core: &AppState) -> PathBuf {
     core.data_dir.join("workspaces")
 }
 
-fn manifests(path: &Path) -> Result<Vec<Workset>> {
-    let mut sets = vec![];
-    for dir in directories(path)? {
-        let bytes = match fs::read(dir.join(MANIFEST)) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        };
-        let set: Workset = serde_json::from_slice(&bytes)?;
-        if dir.file_name().and_then(|n| n.to_str()) != Some(&set.id) {
-            return Err(Error::Other(format!(
-                "Invalid session directory {}",
-                dir.display()
-            )));
-        }
-        sets.push(set);
+fn manifest(path: &Path) -> Result<Option<Workset>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let set: Workset = serde_json::from_slice(&bytes)?;
+    if !segment(&set.id)
+        || set.id == MAIN
+        || path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|n| n.to_str())
+            != Some(&set.id)
+    {
+        return Err(Error::Other("Invalid session id".into()));
     }
-    sets.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
-    Ok(sets)
+    Ok(Some(set))
 }
 
 fn real(path: &Path) -> PathBuf {
@@ -89,42 +107,85 @@ fn segment(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-pub fn list(core: &AppState, workspace: &str) -> Result<Vec<Workset>> {
+pub fn list(core: &AppState, workspace: &str) -> Result<Listing> {
     if !segment(workspace) {
         return Err(Error::Other("Invalid workspace id".into()));
     }
-    let mut sets = manifests(&root(core).join(workspace).join("sessions"))?;
+    let mut manifests = vec![];
+    let mut problems = vec![];
+    let mut problem = |file, error: Error| {
+        problems.push(FileProblem {
+            file,
+            error: error.to_string(),
+            backup: None,
+        })
+    };
+    for dir in directories(&root(core))? {
+        let parent = dir.join("sessions");
+        match directories(&parent) {
+            Ok(dirs) => {
+                for path in dirs.into_iter().map(|p| p.join(MANIFEST)) {
+                    match manifest(&path) {
+                        Ok(Some(set)) => manifests.push((dir.clone(), set)),
+                        Ok(None) => {}
+                        Err(error) => problem(path, error),
+                    }
+                }
+            }
+            Err(error) => problem(parent, error),
+        }
+    }
+    manifests.sort_by(|(x, a), (y, b)| (a.created, &a.id, x).cmp(&(b.created, &b.id, y)));
     let env = core.env();
     let mut repos = HashMap::new();
-    for member in sets.iter_mut().flat_map(|set| &mut set.members) {
-        let path = Path::new(&member.path);
-        let trees = repos
-            .entry(member.repo.clone())
-            .or_insert_with(|| worktree::linked(&env, Path::new(&member.repo)));
-        member.state = match trees {
-            _ if !present(path) => MemberState::Missing,
-            Err(_) => MemberState::Unavailable,
-            Ok(trees) => match trees
-                .iter()
-                .find(|t| t.prunable.is_none() && real(&t.path) == real(path))
-            {
-                Some(tree) => {
-                    member.branch.clone_from(&tree.branch);
-                    MemberState::Ready
+    let mut claimed = HashSet::new();
+    let mut sets = vec![];
+    for (dir, mut set) in manifests {
+        let here = dir.file_name().is_some_and(|n| n == workspace);
+        for member in &mut set.members {
+            let path = real(Path::new(&member.path));
+            let first = claimed.insert(path.clone());
+            if !here {
+                continue;
+            }
+            member.state = if !first {
+                MemberState::Conflict
+            } else if !present(&path) {
+                MemberState::Missing
+            } else {
+                match repos
+                    .entry(member.repo.clone())
+                    .or_insert_with(|| worktree::linked(&env, Path::new(&member.repo)))
+                {
+                    Err(_) => MemberState::Unavailable,
+                    Ok(trees) => match trees
+                        .iter()
+                        .find(|t| t.prunable.is_none() && real(&t.path) == path)
+                    {
+                        Some(tree) => {
+                            member.branch.clone_from(&tree.branch);
+                            MemberState::Ready
+                        }
+                        None => MemberState::Missing,
+                    },
                 }
-                None => MemberState::Missing,
-            },
-        };
+            };
+        }
+        if here {
+            sets.push(set);
+        }
     }
-    Ok(sets)
+    Ok(Listing { sets, problems })
 }
 
 fn owned(core: &AppState) -> Result<HashMap<PathBuf, String>> {
     let mut owned = HashMap::new();
     for dir in directories(&root(core))? {
-        for set in manifests(&dir.join("sessions"))? {
-            for member in set.members {
-                owned.insert(real(Path::new(&member.path)), set.name.clone());
+        for dir in directories(&dir.join("sessions"))? {
+            if let Some(set) = manifest(&dir.join(MANIFEST))? {
+                for member in set.members {
+                    owned.insert(real(Path::new(&member.path)), set.name.clone());
+                }
             }
         }
     }
@@ -142,6 +203,7 @@ fn candidates_for(
 ) -> Result<Vec<Candidate>> {
     let env = core.env();
     let owned = owned(core)?;
+    let council_trees = real(&core.data_dir.join("trees"));
     let repos = core.list_repos(workspace);
     let mut rows = vec![];
     let mut seen = HashSet::new();
@@ -163,11 +225,18 @@ fn candidates_for(
         if trees.is_empty() {
             continue;
         }
-        let fixes = crate::council::fix::worktrees(core, repo);
+        let fixes = fix::worktrees(core, repo);
         let managed = real(&worktree::root(&core.data_dir, repo, Path::new(folder)));
         for tree in trees {
             let actual = real(&tree.path);
-            let refusal = if let Err(error) = &fixes {
+            let prefix = tree.branch.as_deref().and_then(|b| b.split_once('/'));
+            let refusal = if prefix.is_some_and(|(p, _)| p == fix::PREFIX) {
+                Some("A Fix's worktree: it stays its Fix's".into())
+            } else if prefix.is_some_and(|(p, _)| p == tree::PREFIX)
+                || actual.starts_with(&council_trees)
+            {
+                Some("A Council run's worktree".into())
+            } else if let Err(error) = &fixes {
                 Some(format!("Could not read Fix records: {error}"))
             } else if fixes.as_ref().is_ok_and(|fixes| fixes.contains(&actual)) {
                 Some("A Fix's worktree: it stays its Fix's".into())

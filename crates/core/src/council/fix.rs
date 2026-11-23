@@ -214,8 +214,8 @@ pub(crate) fn worktrees(core: &AppState, repo: &Path) -> Result<BTreeSet<PathBuf
     let common = run::common(core, repo)?;
     let mut paths = BTreeSet::new();
     for name in ["detached/council", "detached/panels"] {
-        for task in crate::os::directories(&common.join(name))? {
-            for round in crate::os::directories(&task)? {
+        for task in crate::paths::directories(&common.join(name))? {
+            for round in crate::paths::directories(&task)? {
                 if !round.join("events.jsonl").try_exists()? {
                     continue;
                 }

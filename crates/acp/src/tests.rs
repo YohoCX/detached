@@ -278,6 +278,18 @@ fn closed(rx: &Receiver<backend::Event>) {
 }
 
 #[test]
+fn a_transcript_replays_without_interfering_with_its_live_chat() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (chat, rx) = open(&acp, &sb, None);
+    let spec = Spec::new(&CODEX, &sb.dir.path().display().to_string(), Kind::Chat);
+    let transcript = acp.transcript(&sb.state, &spec, &chat.id).unwrap();
+    assert!(matches!(&transcript[..], [Update::User(a), Update::Text(b)]
+        if a == "earlier" && b == "replayed"));
+    chat.prompt("say still here").unwrap();
+    assert_eq!(said(&rx), "still here");
+}
+
+#[test]
 fn after_a_session_s_close_the_backend_holds_no_event_for_its_id() {
     let (acp, sb) = (Acp::default(), sandbox());
     let (other, _rx) = open(&acp, &sb, None);

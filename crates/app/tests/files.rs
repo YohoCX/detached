@@ -1256,22 +1256,9 @@ fn selected_row(cx: &mut VisualTestContext) -> Option<String> {
 /// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
 fn open_tree(cx: &mut TestApp, repo: &str) {
     let repo = cx.sb.repo(repo);
-    focus_tree_repo(cx, &repo);
+    make_current(cx, &repo);
     cx.press("secondary-1");
     wait_until(cx, |cx| !tree(cx).is_empty());
-}
-
-fn focus_tree_repo(cx: &mut TestApp, repo: &Path) {
-    cx.workspace(|w, cx| {
-        for r in w.session_repos() {
-            ui_state::set(
-                &format!("tree.root.{}", r.path),
-                Path::new(&r.path) == repo,
-                cx,
-            );
-        }
-    });
-    make_current(cx, repo);
 }
 
 /// The layout, with related files in lib's src.
@@ -1525,7 +1512,7 @@ fn expansion_and_the_selection_outlive_the_tool(cx: &mut TestAppContext) {
 
     // Each repo has its own.
     let app = cx.sb.repo("app");
-    focus_tree_repo(cx, &app);
+    make_current(cx, &app);
     wait_until(cx, |cx| tree(cx).contains(&"notes.txt".to_string()));
     assert_eq!(tree(cx), ["src", "CHANGELOG.md", "notes.txt", "README.md"]);
 }
@@ -1629,7 +1616,7 @@ fn ignored_dot_folders_expand_lazily_refresh_and_hide_in_every_repo(cx: &mut Tes
     });
     wait_until(cx, |cx| !tree(cx).contains(&".claude".into()));
     let lib = cx.sb.repo("lib");
-    focus_tree_repo(cx, &lib);
+    make_current(cx, &lib);
     wait_until(cx, |cx| tree(cx).contains(&"feature.txt".into()));
     assert!(!tree(cx).contains(&".claude".into()));
     let saved = detached_core::settings::Settings::load(&cx.sb.state.config_dir);

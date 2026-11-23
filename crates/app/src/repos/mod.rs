@@ -156,7 +156,11 @@ pub(crate) fn settings_call(
     ws: Option<String>,
     f: impl FnOnce(&AppState) -> Result<Vec<RepoInfo>> + Send + 'static,
 ) -> Task<()> {
-    core_then(cx, f, move |list, cx| invalidate::listed(cx, ws, list))
+    core_then(
+        cx,
+        move |core| f(core).map(invalidate::RepoList::new),
+        move |list, cx| invalidate::listed(cx, ws, list),
+    )
 }
 
 /// Runs `f` on core's threads, then `then` with its value; its error is said in red.

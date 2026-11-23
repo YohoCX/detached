@@ -115,7 +115,7 @@ impl Render for Archive {
         let mut page = div()
             .id("sessions.archive.page")
             .test_support()
-            .aria_label("Before sessions")
+            .aria_label("Workspace archive")
             .flex()
             .flex_col()
             .gap(GAP)
@@ -126,7 +126,7 @@ impl Render for Archive {
                 div()
                     .text_size(text::TITLE)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Before sessions"),
+                    .child("Workspace archive"),
             );
         let tabs = dock::archived_tabs(cx);
         if !tabs.is_empty() {
@@ -200,7 +200,7 @@ impl Render for Archive {
             page = page.child(
                 div()
                     .text_color(t.muted)
-                    .child("Loading earlier conversations…"),
+                    .child("Loading past conversations…"),
             );
         } else if chats.is_empty() && dock::archived_tabs(cx).is_empty() {
             page = page.child(div().text_color(t.muted).child("Nothing is archived."));

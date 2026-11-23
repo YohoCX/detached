@@ -14,7 +14,7 @@ use detached_core::settings::Settings;
 use detached_core::state::AppState;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed, Status};
-use gpui_kit::platform::current_headless_renderer;
+use gpui_kit::platform::{current_headless_renderer, current_platform};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
     AnyWindowHandle, App, Context, ElementId, HeadlessAppContext, TestAppContext,
@@ -443,17 +443,9 @@ pub fn headless(sb: &Sandbox, ui: impl FnOnce(&mut App)) -> (HeadlessAppContext,
     let workspaces = api::get_settings(&core).workspaces;
     let first = workspaces.iter().find(|w| w.active).or(workspaces.first());
     let repos = first.map_or(vec![], |w| api::list_repos(&core, &w.id));
-    // Creating a MacPlatform accesses the system pasteboard even in headless mode.
-    #[cfg(target_os = "macos")]
-    let text = Arc::new(gpui_apple::AppleTextSystem::new());
-    #[cfg(not(target_os = "macos"))]
-    let text = gpui_kit::platform::current_platform(true).text_system();
+    let text = current_platform(true).text_system();
     let assets = Arc::new(gpui_kit::assets::Assets);
-    let mut cx =
-        HeadlessAppContext::with_platform(text, assets, || match current_headless_renderer() {
-            Err(e) if e.to_string() == "accessing a compatible Metal device" => Ok(None),
-            result => result,
-        });
+    let mut cx = HeadlessAppContext::with_platform(text, assets, current_headless_renderer);
     cx.allow_parking();
     let keys = cx.update(|cx| {
         gpui_kit::init(cx);

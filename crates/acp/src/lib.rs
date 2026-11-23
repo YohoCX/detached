@@ -92,6 +92,7 @@ impl Backend for Acp {
     }
 
     fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        // A separate adapter isolates live chat routes. Codex's thread/resume may write session files.
         let (live, _) = Acp::default().adapter(core, spec)?;
         let options = Options {
             cwd: spec.repo.clone().into(),

@@ -330,14 +330,8 @@ mod drive {
         for ok in [click, typed, key, wait, quit] {
             assert_eq!(ok, json!({ "ok": null }));
         }
-        if let Some(png) = shot["ok"].as_str() {
-            assert!(fs::metadata(png).unwrap().len() > 0);
-        } else {
-            assert_eq!(
-                shot,
-                json!({"error": "render_to_image not available: no HeadlessRenderer configured"})
-            );
-        }
+        let png = shot["ok"].as_str().expect("shot returns its path");
+        assert!(fs::metadata(png).unwrap().len() > 0);
         assert_eq!(missing, json!({ "error": "no visible nothing.here" }));
     }
 }

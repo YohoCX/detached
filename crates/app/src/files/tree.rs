@@ -225,10 +225,30 @@ impl Tree {
         let key = w
             .session_current()
             .map(|path| (path.to_string(), revision(path)));
+        self.sync_roots(cx);
+        if key != self.key {
+            self.key = key;
+            let at = self.key.as_ref().and_then(|k| k.1.as_deref());
+            self.field.update(cx, |f, cx| {
+                f.set_value(at.unwrap_or(""), window, cx);
+                f.set_highlighted(at.is_some());
+            });
+        }
+    }
+
+    fn sync_roots(&mut self, cx: &mut Context<Self>) {
+        let w = Workspace::get(cx);
+        let current = w.session_current();
         let roots: Vec<_> = w
             .session_repos()
             .iter()
-            .map(|r| (r.path.clone(), revision(&r.path)))
+            .filter(|r| root_open(&r.path, current, cx))
+            .map(|r| {
+                (
+                    r.path.clone(),
+                    Repo::get(cx, &r.path).and_then(|r| r.tree_ref.clone()),
+                )
+            })
             .collect();
         self.roots
             .retain(|path, _| roots.iter().any(|(repo, _)| repo == path));
@@ -251,14 +271,6 @@ impl Tree {
                     },
                 );
             }
-        }
-        if key != self.key {
-            self.key = key;
-            let at = self.key.as_ref().and_then(|k| k.1.as_deref());
-            self.field.update(cx, |f, cx| {
-                f.set_value(at.unwrap_or(""), window, cx);
-                f.set_highlighted(at.is_some());
-            });
         }
     }
 
@@ -309,6 +321,7 @@ impl Tree {
 
     fn rows(&self, cx: &App) -> Vec<TreeRow> {
         let w = Workspace::get(cx);
+        let current = w.session_current();
         let mut rows = vec![];
         let mut file_index = 0;
         let changes = ui_state::get(CHANGES, cx).unwrap_or(false);
@@ -321,15 +334,13 @@ impl Tree {
             .session_repos()
             .iter()
             .map(|r| {
-                let branch = Repo::get(cx, &r.path)
-                    .and_then(|r| r.status())
-                    .and_then(|s| s.branch.clone());
-                let rev = self.roots.get(&r.path).and_then(|r| r.rev.clone());
+                let detail = Repo::get(cx, &r.path)
+                    .and_then(|r| r.tree_ref.clone().or_else(|| r.status()?.branch.clone()));
                 (
                     r.path.clone(),
                     r.name.clone(),
                     true,
-                    rev.or(branch).unwrap_or_default(),
+                    detail.unwrap_or_default(),
                 )
             })
             .collect();
@@ -344,17 +355,12 @@ impl Tree {
                         } else {
                             w.name_of(&m.repo)
                         };
-                        let detail = if m.state == MemberState::Missing {
-                            "Missing"
-                        } else {
-                            "Unavailable"
-                        };
-                        (m.path.clone(), name.into(), false, detail.into())
+                        (m.path.clone(), name.into(), false, m.state.label().into())
                     }),
             );
         }
         for (index, (repo, name, available, detail)) in roots.into_iter().enumerate() {
-            let open = available && ui_state::get(&format!("tree.root.{repo}"), cx).unwrap_or(true);
+            let open = available && root_open(&repo, current, cx);
             rows.push(TreeRow {
                 repo: repo.clone(),
                 index,
@@ -405,6 +411,7 @@ impl Tree {
     fn expand(&mut self, repo: &str, path: &str, on: bool, cx: &mut Context<Self>) {
         if path.is_empty() {
             ui_state::set(&format!("tree.root.{repo}"), on, cx);
+            self.sync_roots(cx);
         } else {
             let key = format!("tree.expanded.{repo}");
             let mut set: HashSet<String> = ui_state::get(&key, cx).unwrap_or_default();
@@ -425,14 +432,15 @@ impl Tree {
 
     fn activate(&mut self, repo: &str, path: &str, expand: Option<bool>, cx: &mut Context<Self>) {
         self.sel = Some((repo.into(), path.into()));
-        if let Some(listing) = self.roots.get(repo) {
+        if path.is_empty() {
+            if let Some(open) = expand {
+                Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo.into()), cx));
+                self.expand(repo, path, !open, cx);
+            }
+        } else if let Some(listing) = self.roots.get(repo) {
             let rev = listing.rev.clone();
             Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo.into()), cx));
-            if path.is_empty() {
-                if let Some(open) = expand {
-                    self.expand(repo, path, !open, cx);
-                }
-            } else if let Some(open) = expand {
+            if let Some(open) = expand {
                 self.expand(repo, path, !open, cx);
             } else {
                 open(
@@ -926,6 +934,10 @@ fn rules(user: &BTreeMap<String, Vec<String>>) -> Vec<(&str, Vec<&str>)> {
         }
     }
     rules
+}
+
+fn root_open(repo: &str, current: Option<&str>, cx: &App) -> bool {
+    ui_state::get(&format!("tree.root.{repo}"), cx).unwrap_or(current == Some(repo))
 }
 
 /// `repo`'s files at `rev`; the working tree's reload with the repo's status.

@@ -1606,7 +1606,6 @@ dependencies = [
  "embed-resource",
  "futures",
  "gpui-kit",
- "gpui-pre-apple",
  "markdown",
  "mermaid-rs-renderer",
  "parking_lot",

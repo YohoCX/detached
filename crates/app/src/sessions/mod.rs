@@ -50,7 +50,7 @@ fn toggle(window: &mut Window, cx: &mut App) {
 }
 
 fn open_archive(window: &mut Window, cx: &mut App) {
-    Workspace::global(cx).update(cx, |w, cx| w.show_archive(cx));
+    Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx));
     dock::show(Doc::SessionArchive, window, cx);
 }
 
@@ -338,8 +338,7 @@ fn member(name: String, path: &str, state: MemberState, cx: &App) -> AnyElement 
         .unwrap_or_default();
     let detail = match state {
         MemberState::Ready => sync,
-        MemberState::Missing => "Missing".into(),
-        MemberState::Unavailable => "Unavailable".into(),
+        state => state.label().into(),
     };
     div()
         .flex()

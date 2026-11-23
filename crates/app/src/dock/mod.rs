@@ -400,9 +400,7 @@ pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Co
 
 fn leave_archive_for_live_doc(doc: &Doc, cx: &mut App) {
     if matches!(doc, Doc::Chat { .. } | Doc::Terminal { .. }) && Workspace::get(cx).archive() {
-        let w = Workspace::global(cx);
-        let id = w.read(cx).session_id().to_string();
-        w.update(cx, |w, cx| w.switch_session(&id, cx));
+        Workspace::global(cx).update(cx, |w, cx| w.set_archive(false, cx));
     }
 }
 

@@ -81,6 +81,18 @@ fn the_list_switches_the_tree_go_to_file_and_find_to_the_session_members(cx: &mu
     cx.click("sessions.row.main");
     wait_until(cx, |cx| root(cx, 1).as_deref() == Some("web"));
     assert_eq!(root(cx, 0).as_deref(), Some("api"));
+    let expanded =
+        |cx: &mut VisualTestContext, i: usize| cx.find(("tree.root", i)).unwrap().expanded();
+    assert_eq!(expanded(cx, 0), Some(true));
+    assert_eq!(expanded(cx, 1), Some(false));
+    cx.click(("tree.root", 1usize));
+    wait_until(cx, |cx| {
+        (0usize..)
+            .map_while(|i| label(cx, ("tree.row", i)))
+            .any(|name| name == "web-main.txt")
+    });
+    assert_eq!(expanded(cx, 0), Some(false));
+    assert_eq!(expanded(cx, 1), Some(true));
 
     cx.click(SharedString::from(format!("sessions.row.{id}")));
     wait_until(cx, |cx| {
@@ -162,7 +174,7 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
     cx.click("sessions.submit");
     wait_until(cx, |cx| cx.workspace(|w, _| w.session_name() == "Release"));
     let ws = workspace(&cx.sb);
-    let list = sessions::list(&cx.sb.state, &ws).unwrap();
+    let list = sessions::list(&cx.sb.state, &ws).unwrap().sets;
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].members.len(), 1);
     cx.click("sessions.rename");
@@ -177,6 +189,7 @@ fn adopts_one_worktree_per_repo_and_keeps_the_name_editable(cx: &mut TestAppCont
 fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         let repo = repo(sb, "api");
+        sb.commit_files(&repo, "notes", [("notes.txt", "A note\n")]);
         let root = claude(sb, &detached_core::testutil::claude::fake());
         let real = detached_core::os::canonical(&repo).unwrap();
         let project: String = real
@@ -221,11 +234,26 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
     cx.click("sessions.archive");
     wait_until(cx, |cx| cx.find("sessions.archive.page").is_some());
     assert_eq!(
+        label(cx, "sessions.archive.page").as_deref(),
+        Some("Workspace archive")
+    );
+    assert_eq!(
         label(cx, ("archive.savedTab", 0usize)).as_deref(),
         Some("README.md")
     );
     cx.click(("archive.savedTab", 0usize));
     wait_until(cx, |cx| cx.find("markdown").is_some());
+    cx.update(|w, cx| w.within("viewer.md").click(0usize, cx));
+    let source = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            let editor = w.within("viewer.code").find("input-state");
+            editor.value().map(String::from)
+        })
+    };
+    let before = source(cx).unwrap();
+    cx.input("do not save");
+    assert_eq!(source(cx).as_deref(), Some(before.as_str()));
     cx.click("sessions.archive");
     wait_until(cx, |cx| {
         label(cx, ("archive.pastChat", 0usize)).as_deref() == Some("Release history")
@@ -236,6 +264,17 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
     });
     assert!(cx.find("archive.transcript").is_some());
     assert!(cx.find("chat.send").is_none());
+    let loc = Location {
+        repo: cx.workspace(|w, _| w.repos()[0].path.clone()),
+        rev: None,
+        path: "notes.txt".into(),
+        line: None,
+        doc: None,
+    };
+    cx.update(|_, cx| detached_app::files::open(cx, loc));
+    wait_until(cx, |cx| cx.find("doc.file.notes.txt").is_some());
+    cx.update(|w, cx| w.within("doc.file.notes.txt").click("tab.close", cx));
+    wait_until(cx, |cx| cx.find("doc.file.notes.txt").is_none());
     let future: Option<serde_json::Value> = cx.update(|_, cx| ui_state::get("future.key", cx));
     assert_eq!(future, Some(json!({"keep": true})));
     assert_eq!(
