@@ -92,8 +92,8 @@ Driving the app: run `make drive` in the background; once it prints `ready <dir>
   outside a job declares the repo's status stale with `kernel::invalidate::status`.
 - Colors, radii, spacing and fonts come from `ui::theme` tokens, never literals in views.
 - Shared widgets live in `ui/`; a vertical adds one there in its own commit.
-- The center shows the current workspace's tabs of one category (Docs, Chats, Code): a doc kind
-  names its `category`; a switch hides tabs, never removes them, so what they run goes on.
+- Live sessions own their pane tree, focus and tabs. Switching sessions preserves running work.
+  The legacy dock layout and category filters apply to archived tabs.
 - Keys: every action has an id in `actions.rs`; default chords in `keymap.rs` match
   docs/KEYMAP.md; text fields and the editor keep their keys through binding contexts.
 - UI state that persists goes through `kernel::ui_state` with the owner's key prefix (`sidebar.`, `size.`,

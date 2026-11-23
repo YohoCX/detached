@@ -22,18 +22,19 @@ switch, stash and pull; worktrees it creates and removes for you; restoring a ch
 Council's fixes, which are committed on a branch of their own in their own worktree and reach your
 branch only when you click Merge. Agents in a chat edit files with your permission.
 
-The window is three zones around the open documents, Fleet-style: every app (Repositories, Chats,
-Council, Docs, Processes, Changes, Project, Merge Requests, Log, Pipelines, Terminal, Events) is a
-tab you can drag to any zone; drag a zone's edge to resize it, double-click to reset it, drag it
-nearly shut to close it. The center's tabs sort into Docs, Chats and Code. Errors and warnings
-from everywhere collect in Events. Themes: Slate (the default), Fleet, Classic and Catppuccin, each
+Select **Main checkouts** to browse the workspace's repositories on their current branches.
+Create a named session to work in a separate worktree for each member repository, or adopt
+worktrees you already have. Files, Go to File and Find follow the selected session. Split its
+panes to keep a file, chat or terminal visible side by side. Archive an idle session to keep
+its worktrees and open tabs for later. Earlier chats and tabs are readable from Archive.
+
+Errors and warnings collect in Events. Themes include Slate (the default), Fleet, Classic and Catppuccin, each
 in System, Light or Dark mode. You can edit custom themes in the config folder's `themes` directory
 and see changes as you save.
 
-Folders belong to workspaces, e.g. "Office" and "Personal". The top bar switches between them, and
-the current one is the context for everything: the sidebar, fetch and pull all, quick open, search,
-the Chats list and its own tabs. A switch stops nothing; the other workspace's terminals and chats
-keep running. The project tree nests related files under their main file (`a.spec.ts` under `a.ts`, `bun.lock` under
+Folders belong to workspaces, e.g. "Office" and "Personal". Switch workspaces in the top bar.
+Each session keeps its pane layout, and open terminals and chats keep running when you switch.
+The project tree nests related files under their main file (`a.spec.ts` under `a.ts`, `bun.lock` under
 `package.json`); `fileNesting` in `settings.json` adds or replaces rules by main suffix, e.g.
 `{".vue": [".spec.ts"]}`, and an empty list drops one.
 
