@@ -45,18 +45,21 @@ pub fn bare_title(mr: &MergeRequest) -> &str {
 
 /// Records and shows the MR page.
 pub fn show_mr(cx: &mut App, repo: String, number: u64) {
+    nav::open(cx, location(repo, number));
+}
+
+pub(super) fn location(repo: String, number: u64) -> Location {
     let doc = DocRef::Mr {
         repo: repo.clone(),
         number,
     };
-    let loc = Location {
+    Location {
         repo,
         rev: None,
         path: String::new(),
         line: None,
         doc: Some(doc),
-    };
-    nav::open(cx, loc);
+    }
 }
 
 #[cfg(test)]

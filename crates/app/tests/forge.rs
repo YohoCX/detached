@@ -114,12 +114,23 @@ fn line(i: usize) -> (&'static str, usize) {
     ("line", i)
 }
 
-/// From the badge to the expanded pipeline `id` and its job `id + 1`.
+fn archive(cx: &mut VisualTestContext) {
+    cx.workspace(|w, cx| w.set_archive(true, cx));
+    settle(cx);
+}
+
+fn pane_item(cx: &mut VisualTestContext, name: &str) {
+    cx.click("pane.new");
+    let item = (0usize..16)
+        .map(|n| ("menu.item", n))
+        .find(|&id| label(cx, id).as_deref() == Some(name))
+        .expect("tool in New tab");
+    cx.click(item);
+}
+
+/// Opens Pipelines in the current pane and expands pipeline `id`.
 fn open_pipeline(cx: &mut VisualTestContext, id: u64) {
-    wait_until(cx, |cx| {
-        label(cx, "pipeline.badge").as_deref() == Some("✓success")
-    });
-    cx.click("pipeline.badge");
+    pane_item(cx, "Pipelines");
     assert!(on_screen(cx, "bottom.Pipelines"));
     let row = ("pipeline", id);
     wait_until(cx, |cx| label(cx, row).is_some());
@@ -133,7 +144,7 @@ fn open_pipeline(cx: &mut VisualTestContext, id: u64) {
 }
 
 #[gpui_kit::test]
-fn gitlab_badge_opens_pipelines_jobs_retry_and_run_with_variables(cx: &mut TestAppContext) {
+fn gitlab_pipelines_jobs_retry_and_run_with_variables(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
     let api = "/gitlab/api/v4/projects/group/app";
@@ -306,6 +317,7 @@ fn pipeline_run_opens_the_panel_with_the_form(cx: &mut TestAppContext) {
 fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     let (mut app, forge, mut seed) = open_forge(cx);
     let cx = &mut app;
+    archive(cx);
     seed.projects[0].pipelines[0].status = Status::Running;
     forge.reset(seed.clone());
     show(cx, "gitlab");
@@ -494,7 +506,7 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
     show(cx, "gitlab");
-    open_tab(cx, "tool.MRs");
+    pane_item(cx, "Merge requests");
     let row = ("mr", 1u64);
     wait_until(cx, |cx| label(cx, row).is_some());
     let l = label(cx, row).unwrap();
@@ -518,6 +530,7 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
 fn the_chip_opens_the_current_branchs_mr(cx: &mut TestAppContext) {
     let (mut app, _forge, _) = open_forge(cx);
     let cx = &mut app;
+    archive(cx);
     show(cx, "github");
     wait_until(cx, |cx| label(cx, "mr.chip").is_some());
     assert_eq!(label(cx, "mr.chip").as_deref(), Some("#1 Add feature"));
@@ -547,13 +560,12 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
     };
     // Until then the create button can show under the old branch, read after the switch.
     wait_until(cx, |cx| upstream(cx).as_deref() == Some("origin/topic"));
-    wait_until(cx, |cx| cx.find("mr.new").is_some());
 
-    cx.click("mr.new");
+    pane_item(cx, "Create merge request…");
     wait_until(cx, |cx| cx.find("mr.form").is_some());
     cx.press("escape");
     assert!(cx.find("mr.form").is_none(), "Escape closes the form");
-    cx.click("mr.new");
+    pane_item(cx, "Create merge request…");
     wait_until(cx, |cx| cx.find("mr.form").is_some());
     let (icon, form) = (cx.find("mr.new").unwrap(), cx.find("mr.form").unwrap());
     let (form, icon) = (form.bounds(), icon.bounds());
@@ -579,7 +591,7 @@ fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
     assert!(wrote(&forge, api, Some(body)), "{:?}", forge.writes());
     assert!(cx.find("mr.form").is_none());
     wait_until(cx, |cx| {
-        label(cx, "mr.chip").as_deref() == Some("!2 topic work")
+        label(cx, "doc.mr.2").as_deref() == Some("!2 topic work")
     });
 }
 
@@ -625,6 +637,7 @@ fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppCont
 fn the_mr_list_is_one_request_and_a_repo_returned_to_shows_its_cache(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
+    archive(cx);
     show(cx, "gitlab");
     wait_until(cx, |cx| label(cx, "mr.chip").is_some());
     let before = forge.requests().len();
@@ -1256,4 +1269,27 @@ fn the_mr_diff_takes_f7_and_go_to_line_from_the_viewer_while_shown(cx: &mut Test
         }
         current_line(cx) == "line 25 edited"
     });
+}
+
+#[gpui_kit::test]
+fn the_live_frame_opens_failed_pipelines_and_merge_requests(cx: &mut TestAppContext) {
+    let (mut app, forge, mut seed) = open_forge(cx);
+    // The GitHub repo is current on startup. Select GitLab after changing its fixture.
+    seed.projects[0].pipelines[0].status = Status::Failed;
+    forge.reset(seed);
+    let cx = &mut app;
+    show(cx, "gitlab");
+    wait_until(cx, |cx| {
+        label(cx, "pipeline.badge").as_deref() == Some("✕failed")
+    });
+    cx.click("pipeline.badge");
+    wait_until(cx, |cx| {
+        label(cx, ("pipeline", 100u64)).is_some_and(|l| l.starts_with("✕"))
+    });
+    assert!(on_screen(cx, "bottom.Pipelines"));
+
+    pane_item(cx, "Merge requests");
+    wait_until(cx, |cx| label(cx, ("mr", 1u64)).is_some());
+    cx.click(("mr", 1u64));
+    assert_eq!(shown_mr(cx), Some(1));
 }

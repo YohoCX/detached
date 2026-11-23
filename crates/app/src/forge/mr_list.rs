@@ -11,12 +11,13 @@ use gpui_kit::{
     prelude::FluentBuilder, px, relative, transparent_black,
 };
 
-use super::mr::{bare_title, number, show_mr};
+use super::mr::{bare_title, location, number};
 use super::{color, name, note, now, setup_note};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::util::{ago, fuzzy};
 use kernel::doc::Doc;
 use kernel::forge::{self, Listed};
+use kernel::nav;
 use kernel::resource::Interest;
 use kernel::workspace::Workspace;
 
@@ -179,7 +180,11 @@ impl MrList {
                 transparent_black()
             })
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(move |_, _, cx| show_mr(cx, repo.clone(), n))
+            .on_click(move |_, w, cx| {
+                let loc = location(repo.clone(), n);
+                nav::visit(cx, &loc);
+                crate::dock::open_companion(loc.into(), true, w, cx);
+            })
             .child(
                 line()
                     .font_weight(FontWeight::SEMIBOLD)
