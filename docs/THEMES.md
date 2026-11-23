@@ -15,8 +15,8 @@ running app within a second. A file that does not load keeps the theme in use an
 }
 ```
 
-- `extends`: a bundled theme, `Fleet` (the default), `Classic` or `Catppuccin`. Every token the
-  file leaves out comes from it, so a file holds only what it changes.
+- `extends` names a bundled theme. Omitted tokens come from that theme. Files without `extends`
+  inherit from Fleet.
 - `font`, `mono_font`: family names. Inter and JetBrains Mono come with the app; leaving them out
   uses the system's.
 - `light`, `dark`: the tokens for each appearance: the system's, or the one Settings › Appearance ›
@@ -26,6 +26,7 @@ The bundled themes:
 
 | Theme | Light | Dark |
 | --- | --- | --- |
+| [Slate](../crates/app/themes/slate.json) (default) | cool blue-grays, azure accent | the same at night |
 | [Fleet](../crates/app/themes/fleet.json) | neutral grays, blue accent | the same at night |
 | [Classic](../crates/app/themes/classic.json) | translucent glass panes, indigo accent | the same at night |
 | [Catppuccin](../crates/app/themes/catppuccin.json) | Latte, mauve accent | Mocha, mauve accent |
@@ -35,7 +36,7 @@ status colors are darkened in hue to read as text. Every bundled theme keeps tex
 on the grounds it sits on, the derived ones below included, which a unit test in `ui/theme.rs` holds.
 
 The full token list, with values, is in the bundled files.
-Opening the themes folder the first time puts a copy of Fleet there to edit.
+Opening the themes folder the first time puts a copy of Slate there to edit.
 
 | Tokens | What they color |
 | --- | --- |

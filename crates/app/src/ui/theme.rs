@@ -18,8 +18,9 @@ use kernel::blocking;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-pub const DEFAULT: &str = "Fleet";
-const BUNDLED: [&str; 3] = [
+pub const DEFAULT: &str = "Slate";
+const BUNDLED: [&str; 4] = [
+    include_str!("../../themes/slate.json"),
     include_str!("../../themes/fleet.json"),
     include_str!("../../themes/classic.json"),
     include_str!("../../themes/catppuccin.json"),
@@ -205,7 +206,7 @@ fn shadows(m: &Map<String, Value>, key: &str) -> Result<Vec<BoxShadow>, String> 
 
 /// A theme file's light and dark tokens over those of the theme it extends.
 fn pair(v: &Value, bases: &BTreeMap<String, Value>) -> Result<(Theme, Theme), String> {
-    let base = v["extends"].as_str().unwrap_or(DEFAULT);
+    let base = v["extends"].as_str().unwrap_or("Fleet");
     let base = bases
         .get(base)
         .ok_or(format!("extends {base}, which is not a bundled theme"))?;
@@ -678,13 +679,26 @@ mod tests {
                 t.header_bg,
                 t.popover_bg,
                 t.panel_edge,
+                t.active_bg,
+                t.user_bg,
+                t.code_block_bg,
             ]
             .map(hex_of)
         };
-        let fleet = ["#e5e6ea", "#ffffff", "#ededf0", "#ffffff", "#83858b"];
-        assert_eq!(surfaces(&light), fleet);
-        let fleet = ["#070708", "#1a1b1e", "#2e2f32", "#323337", "#696b71"];
-        assert_eq!(surfaces(&dark), fleet);
+        assert_eq!(
+            surfaces(&light),
+            [
+                "#d9dde4", "#ffffff", "#e4e7ec", "#ffffff", "#7f8388", "#dbe6f3", "#e8eff8",
+                "#e5e8ed",
+            ]
+        );
+        assert_eq!(
+            surfaces(&dark),
+            [
+                "#0e1012", "#161a1f", "#2b2e33", "#31343a", "#64676e", "#2e3d50", "#263241",
+                "#111417",
+            ]
+        );
     }
 
     #[test]
@@ -694,29 +708,26 @@ mod tests {
             let (light, dark) = pair(&v, &bundled()).unwrap();
             for (mode, t) in [("light", light), ("dark", dark)] {
                 let ground = black.blend(t.ground);
-                let panel = ground.blend(t.panel);
                 let pb = t.panel_bg;
-                // fg and muted are checked on all of them, the colored inks from `inks` on.
-                let grounds = [
+                let text_grounds = [
                     ("window_bg", t.window_bg),
                     ("ground", ground),
                     ("segment track", t.header_bg.blend(t.hover)),
                     ("user_bg", t.user_bg),
                     ("code_block_bg", t.code_block_bg),
+                ];
+                let ink_grounds = [
                     ("popup", ground.blend(t.popup)),
                     ("popover_bg", t.popover_bg),
                     ("menu hover", t.popover_bg.blend(t.hover)),
-                    ("panel", panel),
                     ("panel_bg", pb),
                     ("header_bg", t.header_bg),
                     ("code", pb.blend(t.code)),
                     ("card", pb.blend(t.hover)),
                     ("input", pb.blend(t.input)),
-                    ("selected", panel.blend(t.selected)),
                     ("active_bg", t.active_bg),
                     ("selected_inactive", pb.blend(t.selected_inactive)),
                 ];
-                let inks = 5;
                 let mut pairs = vec![
                     ("primary_fg", t.primary_fg, "primary", t.primary),
                     ("accent_fg", t.accent_fg, "accent", t.accent),
@@ -728,7 +739,7 @@ mod tests {
                         t.header_bg.blend(t.hover).blend(t.segment_bg),
                     ),
                 ];
-                for (g, bg) in grounds {
+                for (g, bg) in text_grounds.into_iter().chain(ink_grounds) {
                     pairs.push(("fg", t.fg, g, bg));
                     pairs.push(("muted", t.muted, g, bg));
                 }
@@ -745,8 +756,8 @@ mod tests {
                     ("untracked", t.untracked),
                 ];
                 for (k, c) in colored {
-                    for (g, bg) in &grounds[inks..] {
-                        pairs.push((k, c, g, *bg));
+                    for (g, bg) in ink_grounds {
+                        pairs.push((k, c, g, bg));
                     }
                 }
                 for (k, c, g, bg) in pairs {
