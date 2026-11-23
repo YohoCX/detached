@@ -197,8 +197,11 @@ fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppCon
         }
         assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
         assert_eq!(w.find("tool.Project").checked(), Some(true));
-        assert_eq!(w.find("doc.chat").checked(), Some(true), "Chats shows it");
-        assert!(w.try_find("doc.diff.README.md").is_none(), "in Code");
+        assert!(w.try_find("doc.chat").is_none(), "before sessions");
+        assert!(
+            w.try_find("doc.diff.README.md").is_none(),
+            "before sessions"
+        );
     });
 }
 
@@ -768,6 +771,13 @@ fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
             task: "t".into(),
         },
         Doc::CouncilStats { repo: "/r".into() },
+        Doc::SessionArchive,
+        Doc::PastChat {
+            repo: "/r".into(),
+            provider: "claude".into(),
+            id: "id".into(),
+            title: "title".into(),
+        },
     ];
     cx.update(|_, cx| {
         let known: Vec<_> = dock::categories(cx).into_iter().map(|c| c.id).collect();

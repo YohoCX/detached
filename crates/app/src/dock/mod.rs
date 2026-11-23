@@ -242,7 +242,10 @@ pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
         drop_unparsed(&mut area, window, cx);
         let w = Workspace::global(cx);
         cx.subscribe_in(&w, window, |area, _, e: &workspace::Event, window, cx| {
-            if matches!(e, workspace::Event::Switched) {
+            if matches!(
+                e,
+                workspace::Event::Switched | workspace::Event::SessionChanged
+            ) {
                 tabs::apply(area, window, cx);
             }
         })
@@ -395,10 +398,19 @@ pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Co
     }
 }
 
+fn leave_archive_for_live_doc(doc: &Doc, cx: &mut App) {
+    if matches!(doc, Doc::Chat { .. } | Doc::Terminal { .. }) && Workspace::get(cx).archive() {
+        let w = Workspace::global(cx);
+        let id = w.read(cx).session_id().to_string();
+        w.update(cx, |w, cx| w.switch_session(&id, cx));
+    }
+}
+
 /// Brings forward the current workspace's tab holding `doc`, else shows a file or diff in the
 /// preview tab of its category in the center, else opens a new tab there; its category comes
 /// forward.
 pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Context<DockArea>) {
+    leave_archive_for_live_doc(&doc, cx);
     let Some(kind) = doc_kind(doc.kind(), cx) else {
         return;
     };
@@ -418,7 +430,9 @@ pub fn show_doc(area: &mut DockArea, doc: Doc, window: &mut Window, cx: &mut Con
                 let t = t.read(cx);
                 *p == DockPlacement::Center && !t.keep && t.category() == category
             };
-            tabs.iter().find(free).filter(|_| preview)
+            tabs.iter()
+                .find(free)
+                .filter(|_| preview && !Workspace::get(cx).archive())
         })
         .map(|(p, id, t)| (*p, *id, t.clone()));
     match found {
@@ -455,6 +469,7 @@ impl Render for DragDoc {
 
 /// Its kind adopts `doc`, which then gets a tab in the zone of tab strip `node`, else the center.
 pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut App) {
+    leave_archive_for_live_doc(&doc, cx);
     let Some(kind) = doc_kind(doc.kind(), cx) else {
         return;
     };
@@ -486,6 +501,29 @@ pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App
             .collect();
         for (_, _, tab) in tabs {
             a.remove_panel(tab, window, cx);
+        }
+    });
+}
+
+pub(crate) fn show(doc: Doc, window: &mut Window, cx: &mut App) {
+    with(cx, |area, cx| show_doc(area, doc, window, cx));
+}
+
+pub(crate) fn archived_tabs(cx: &App) -> Vec<Entity<DocTab>> {
+    let Some(ws) = Workspace::get(cx).id() else {
+        return vec![];
+    };
+    tabs_of(ws, cx)
+        .into_iter()
+        .filter(|tab| tab.read(cx).legacy())
+        .collect()
+}
+
+pub(crate) fn open_archived_tab(tab: &Entity<DocTab>, window: &mut Window, cx: &mut App) {
+    with(cx, |area, cx| {
+        if let Some((_, id, _)) = docs(area).into_iter().find(|(_, _, t)| t == tab) {
+            tabs::set(tab.read(cx).category(), cx);
+            reveal(area, id, window, cx);
         }
     });
 }

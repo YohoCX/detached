@@ -124,6 +124,8 @@ fn go_to_file_filters_moves_by_keyboard_under_a_resting_mouse_opens_and_ignores_
     assert_eq!(title(cx).as_deref(), Some("Go to File"));
     let query = cx.find("palette.query").unwrap();
     assert_eq!(query.bounds().size.height, px(40.));
+    cx.click("palette.all");
+    assert_eq!(all(cx), Some(false));
     search(cx, "comp", "src/components/comp-01.ts");
     cx.press("up");
     let last = selected(cx).unwrap();
@@ -162,23 +164,27 @@ fn go_to_file_again_toggles_all_repositories(cx: &mut TestAppContext) {
     let (mut app, _) = open(cx);
     let cx = &mut app;
     cx.press("secondary-shift-o");
-    assert_eq!(all(cx), Some(false));
-    assert_eq!(placeholder(cx).as_deref(), Some("Files in app"));
-
-    cx.press("secondary-shift-o");
-    assert_eq!(title(cx).as_deref(), Some("Go to File"));
     assert_eq!(all(cx), Some(true));
-    assert_eq!(placeholder(cx).as_deref(), Some("Type to search"));
+    assert_eq!(
+        placeholder(cx).as_deref(),
+        Some("File name in Main checkouts")
+    );
     search(cx, "readme", "README.md");
     let mut details: Vec<_> = rows(cx).into_iter().map(|r| r.1).collect();
     details.sort();
-    let mut names =
-        cx.workspace(|w, _| w.repos().iter().map(|r| r.name.clone()).collect::<Vec<_>>());
+    let mut names = cx.workspace(|w, _| {
+        w.session_repos()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect::<Vec<_>>()
+    });
     names.sort();
     assert_eq!(details, names);
 
-    cx.click("palette.all");
+    cx.press("secondary-shift-o");
+    assert_eq!(title(cx).as_deref(), Some("Go to File"));
     assert_eq!(all(cx), Some(false));
+    assert_eq!(placeholder(cx).as_deref(), Some("Files in app"));
     wait_until(cx, |cx| rows(cx).len() == 1);
     assert_eq!(rows(cx), [("README.md".into(), "app".into())]);
     // The query field keeps focus after the click.
@@ -197,6 +203,7 @@ fn go_to_file_searches_the_tree_ref_and_lists_recent_files(cx: &mut TestAppConte
         cx.notify();
     });
     cx.press("secondary-shift-o");
+    cx.click("palette.all");
     search(cx, "readme", "README.md");
     assert_eq!(rows(cx)[0].1, "app @ other");
     cx.press("enter");
@@ -262,14 +269,21 @@ fn search_everywhere_lists_files_then_branches_then_actions_and_enter_on_a_branc
     let (mut app, repo) = open(cx);
     let cx = &mut app;
     double_shift(cx);
-    assert_eq!(all(cx), Some(false));
-    search(cx, "i", "src/index.ts");
+    assert_eq!(all(cx), None);
+    cx.input("i");
+    wait_until(cx, |cx| rows(cx).iter().any(|(p, _)| p == "src/index.ts"));
     wait_until(cx, |cx| rows(cx).iter().any(|r| r.1 == "Checkout"));
     let rows = rows(cx);
-    let kind = |detail: &str| match detail {
-        "app" => "file",
-        "Checkout" => "branch",
-        _ => "action",
+    let repos: Vec<_> =
+        cx.workspace(|w, _| w.session_repos().iter().map(|r| r.name.clone()).collect());
+    let kind = |detail: &str| {
+        if repos.iter().any(|name| name == detail) {
+            "file"
+        } else if detail == "Checkout" {
+            "branch"
+        } else {
+            "action"
+        }
     };
     let mut kinds: Vec<_> = rows.iter().map(|r| kind(&r.1)).collect();
     kinds.dedup();
@@ -408,11 +422,10 @@ fn recent_files_persist_and_an_empty_go_to_file_lists_the_current_repos(cx: &mut
     let row = |path: &str, repo: &str| (path.to_string(), repo.to_string());
 
     cx.press("secondary-shift-o");
-    assert_eq!(rows(cx), [row("README.md", "app")]);
-    cx.click("palette.all");
     let both = [row("feature.txt", "lib"), row("README.md", "app")];
     assert_eq!(rows(cx), both, "a repo no longer listed is dropped");
     cx.click("palette.all");
+    assert_eq!(rows(cx), [row("README.md", "app")]);
     cx.press("secondary-e");
     assert_eq!(rows(cx), both);
 
@@ -567,6 +580,7 @@ fn find_in_files_groups_by_file_highlights_and_a_new_query_replaces_the_old_one(
         cx.find("find").and_then(|e| e.label().map(String::from)),
         Some("Find in Files".into())
     );
+    cx.click("find.all");
     let scope = cx.find("find.scope").unwrap();
     assert_eq!(scope.label(), Some("solo"));
     let text = cx.find("find.text").unwrap();
@@ -719,6 +733,7 @@ fn find_at_a_ref_matches_a_regex_on_the_same_lines_as_the_working_tree(cx: &mut 
         cx.notify();
     });
     cx.press("secondary-shift-f");
+    cx.click("find.all");
     let scope = cx.find("find.scope").unwrap();
     assert_eq!(scope.label(), Some("solo @ main"));
     wait_status(cx, "2 matches in 2 files");
@@ -741,6 +756,7 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
     });
     let cx = &mut app;
     cx.press("secondary-shift-f");
+    cx.click("find.all");
     cx.input("gamma");
     wait_status(cx, "3 matches in 1 file");
     cx.click("find.case");
@@ -763,11 +779,11 @@ fn find_options_mask_all_repositories_errors_and_the_cap(cx: &mut TestAppContext
     assert_eq!(cx.find("find.all").unwrap().checked(), Some(true));
     assert!(focused(cx, "find.text"));
     let scope = cx.find("find.scope").unwrap();
-    assert_eq!(scope.label(), Some("All repositories"));
+    assert_eq!(scope.label(), Some("Main checkouts"));
     retype(cx, "upstream");
     let mut want: Vec<String> = cx.workspace(|w, _| {
         let has = |r: &&RepoInfo| Path::new(&r.path).join("CHANGELOG.md").exists();
-        let repos = w.repos().iter().filter(has);
+        let repos = w.session_repos().iter().filter(has);
         repos.map(|r| format!("{} 1", r.name)).collect()
     });
     want.sort();

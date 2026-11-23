@@ -8,7 +8,8 @@ use std::rc::Rc;
 use std::str::Chars;
 
 use detached_core::git::files::{self as git_files, TreeSettings};
-use detached_core::types::FileEntry;
+use detached_core::sessions::MemberState;
+use detached_core::types::{FileChange, FileEntry};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -18,10 +19,10 @@ use gpui_kit::{
     prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::api::{Location, open};
-use super::changes::branch_names;
+use super::api::{DiffDoc, Location, Side, open, show_diff};
+use crate::actions;
 use crate::ui::suggest::{Commit, Focused};
-use crate::ui::{self, Icon, Suggest, text, theme};
+use crate::ui::{self, GAP, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use kernel::repo::Repo;
 use kernel::resource::{self, Interest, On, Policy, Resource};
@@ -30,6 +31,8 @@ use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
 
 /// Main file suffix and the suffixes of the files that nest under it, as in JetBrains.
+const CHANGES: &str = "tree.changes";
+
 const NESTING: [(&str, &[&str]); 13] = [
     (".ts", &[".spec.ts", ".test.ts"]),
     (
@@ -96,20 +99,70 @@ struct Row {
     error: Option<SharedString>,
 }
 
+struct Listing {
+    rev: Option<String>,
+    files: Interest<Dir>,
+    children: HashMap<String, Interest<Dir>>,
+    prev: Option<Entity<Resource<Dir>>>,
+}
+
+impl Listing {
+    fn listed<'a>(&self, cx: &'a App) -> Option<&'a Resource<Dir>> {
+        self.files
+            .loaded(cx)
+            .or_else(|| Some(self.prev.as_ref()?.read(cx)))
+    }
+}
+
+struct TreeRow {
+    repo: String,
+    index: usize,
+    kind: TreeRowKind,
+}
+
+enum TreeRowKind {
+    Root {
+        name: String,
+        detail: String,
+        open: bool,
+        available: bool,
+    },
+    File(Row),
+    Change(FileChange),
+    Clean,
+}
+
+impl TreeRow {
+    fn path(&self) -> &str {
+        match &self.kind {
+            TreeRowKind::Root { .. } | TreeRowKind::Clean => "",
+            TreeRowKind::File(row) => &row.path,
+            TreeRowKind::Change(change) => &change.path,
+        }
+    }
+
+    fn expandable(&self) -> Option<bool> {
+        match &self.kind {
+            TreeRowKind::Root {
+                open,
+                available: true,
+                ..
+            } => Some(*open),
+            TreeRowKind::File(r) if r.dir || r.kids => Some(r.open),
+            _ => None,
+        }
+    }
+}
+
 pub struct Tree {
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     field: Entity<Suggest>,
-    sel: Option<String>,
-    /// The folder expanded last, whose rows fade in until `fade` ends.
-    opened: Option<String>,
+    sel: Option<(String, String)>,
+    opened: Option<(String, String)>,
     fade: Option<Task<()>>,
-    /// The current repo and the ref its tree browses.
     key: Option<(String, Option<String>)>,
-    files: Option<Interest<Dir>>,
-    children: HashMap<String, Interest<Dir>>,
-    /// The listing before, of the same repo, shown until the current one loads.
-    prev: Option<Entity<Resource<Dir>>>,
+    roots: HashMap<String, Listing>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -117,7 +170,20 @@ impl Tree {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace = Workspace::global(cx);
         let field = cx.new(|cx| {
-            let field = Suggest::new(branch_names, window, cx);
+            let field = Suggest::new(
+                |cx| {
+                    Workspace::get(cx)
+                        .session_current()
+                        .and_then(|repo| Repo::get(cx, repo))
+                        .and_then(|r| r.branch_names.as_ref())
+                        .into_iter()
+                        .flatten()
+                        .map(|n| n.clone().into())
+                        .collect()
+                },
+                window,
+                cx,
+            );
             field.set_placeholder("Working tree", window, cx);
             field
         });
@@ -133,7 +199,7 @@ impl Tree {
             cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
             cx.subscribe(&field, |_, _, Commit(value), cx| set_ref(value, cx)),
             cx.subscribe(&field, |_, _, _: &Focused, cx| {
-                if let Some(repo) = Workspace::get(cx).current().map(String::from) {
+                if let Some(repo) = Workspace::get(cx).session_current().map(String::from) {
                     Repo::update(cx, &repo, |r, cx| r.load_branch_names(cx));
                 }
             }),
@@ -146,54 +212,75 @@ impl Tree {
             opened: None,
             fade: None,
             key: None,
-            files: None,
-            children: HashMap::new(),
-            prev: None,
+            roots: HashMap::new(),
             _subscriptions: subscriptions,
         };
         this.sync(window, cx);
         this
     }
 
-    /// Lists the files again when the current repo or its ref changed.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let key = Workspace::get(cx).current().map(|r| {
-            let at = Repo::get(cx, r).and_then(|r| r.tree_ref.clone());
-            (r.to_string(), at)
-        });
-        if key == self.key {
-            return;
+        let w = Workspace::get(cx);
+        let revision = |path: &str| Repo::get(cx, path).and_then(|r| r.tree_ref.clone());
+        let key = w
+            .session_current()
+            .map(|path| (path.to_string(), revision(path)));
+        let roots: Vec<_> = w
+            .session_repos()
+            .iter()
+            .map(|r| (r.path.clone(), revision(&r.path)))
+            .collect();
+        self.roots
+            .retain(|path, _| roots.iter().any(|(repo, _)| repo == path));
+        for (repo, rev) in roots {
+            if self.roots.get(&repo).is_none_or(|r| r.rev != rev) {
+                let file = files(cx, &repo, rev.clone());
+                let prev = self.roots.get(&repo).and_then(|root| {
+                    root.files
+                        .loaded(cx)
+                        .map(|_| root.files.resource().clone())
+                        .or_else(|| root.prev.clone())
+                });
+                self.roots.insert(
+                    repo,
+                    Listing {
+                        rev,
+                        files: Interest::view(file, cx),
+                        children: HashMap::new(),
+                        prev,
+                    },
+                );
+            }
         }
-        let same = key
-            .as_ref()
-            .zip(self.key.as_ref())
-            .is_some_and(|(a, b)| a.0 == b.0);
-        let prev = self.files.take().filter(|f| same && f.loaded(cx).is_some());
-        self.prev = prev.map(|f| f.resource().clone());
-        self.children.clear();
-        self.key = key;
-        let at = self.key.as_ref().and_then(|k| k.1.clone());
-        self.field.update(cx, |f, cx| {
-            f.set_value(at.as_deref().unwrap_or(""), window, cx);
-            f.set_highlighted(at.is_some());
-        });
-        self.files = self
-            .key
-            .clone()
-            .map(|(repo, at)| Interest::view(files(cx, &repo, at), cx));
+        if key != self.key {
+            self.key = key;
+            let at = self.key.as_ref().and_then(|k| k.1.as_deref());
+            self.field.update(cx, |f, cx| {
+                f.set_value(at.unwrap_or(""), window, cx);
+                f.set_highlighted(at.is_some());
+            });
+        }
     }
 
-    /// The current listing once it loaded, else the one before.
-    fn listed<'a>(&self, cx: &'a App) -> Option<&'a Resource<Dir>> {
-        let current = self.files.as_ref()?.loaded(cx);
-        current.or_else(|| Some(self.prev.as_ref()?.read(cx)))
-    }
-
-    fn rows(&self, cx: &App) -> Vec<Row> {
-        let (Some((repo, _)), Some(listed)) = (&self.key, self.listed(cx)) else {
+    fn file_rows(&self, repo: &str, listing: &Listing, cx: &App) -> Vec<Row> {
+        let Some(listed) = listing.listed(cx) else {
             return vec![];
         };
-        let Some(root) = listed.value.as_ref().filter(|_| listed.error.is_none()) else {
+        if let Some(error) = &listed.error {
+            return vec![Row {
+                path: String::new(),
+                depth: 0,
+                dir: false,
+                ignored: false,
+                lazy: false,
+                status: None,
+                open: false,
+                kids: false,
+                parent: None,
+                error: Some(error.clone().into()),
+            }];
+        }
+        let Some(root) = &listed.value else {
             return vec![];
         };
         let nest = ui_state::get("tree.nesting", cx).unwrap_or(true);
@@ -201,7 +288,7 @@ impl Tree {
         let rules = if nest { rules(nesting) } else { vec![] };
         let expanded: HashSet<String> =
             ui_state::get(&format!("tree.expanded.{repo}"), cx).unwrap_or_default();
-        let loaded = self
+        let loaded = listing
             .children
             .iter()
             .filter_map(|(path, interest)| {
@@ -220,77 +307,227 @@ impl Tree {
         flatten(root, &expanded, &rules, &loaded, &hidden)
     }
 
-    fn expand(&mut self, path: &str, on: bool, cx: &mut Context<Self>) {
-        let Some((repo, _)) = &self.key else {
-            return;
-        };
-        let key = format!("tree.expanded.{repo}");
-        let mut set: HashSet<String> = ui_state::get(&key, cx).unwrap_or_default();
-        if on {
-            set.insert(path.into());
-            self.opened = Some(path.into());
-            self.fade = Some(cx.spawn(async |this, cx| {
-                cx.background_executor().timer(ui::motion::FAST).await;
-                _ = this.update(cx, |t, _| t.opened = None);
-            }));
-        } else {
-            set.remove(path);
-        }
-        ui_state::set(&key, set, cx);
-        cx.notify();
-    }
-
-    /// Selects `r`, then opens its file or toggles its directory.
-    fn activate(&mut self, r: &Row, cx: &mut Context<Self>) {
-        self.sel = Some(r.path.clone());
-        if r.dir {
-            self.expand(&r.path, !r.open, cx);
-        } else if let Some((repo, rev)) = self.key.clone().filter(|_| r.error.is_none()) {
-            let path = r.path.clone();
-            open(
-                cx,
-                Location {
-                    repo,
-                    rev,
-                    path,
-                    line: None,
-                    doc: None,
-                },
+    fn rows(&self, cx: &App) -> Vec<TreeRow> {
+        let w = Workspace::get(cx);
+        let mut rows = vec![];
+        let mut file_index = 0;
+        let changes = ui_state::get(CHANGES, cx).unwrap_or(false);
+        let set = w
+            .sessions()
+            .iter()
+            .find(|s| s.id == w.session_id())
+            .filter(|_| !w.archive());
+        let mut roots: Vec<_> = w
+            .session_repos()
+            .iter()
+            .map(|r| {
+                let branch = Repo::get(cx, &r.path)
+                    .and_then(|r| r.status())
+                    .and_then(|s| s.branch.clone());
+                let rev = self.roots.get(&r.path).and_then(|r| r.rev.clone());
+                (
+                    r.path.clone(),
+                    r.name.clone(),
+                    true,
+                    rev.or(branch).unwrap_or_default(),
+                )
+            })
+            .collect();
+        if let Some(set) = set {
+            roots.extend(
+                set.members
+                    .iter()
+                    .filter(|m| m.state != MemberState::Ready)
+                    .map(|m| {
+                        let name = if w.name_of(&m.repo) == m.repo {
+                            crate::util::folder_name(&m.repo)
+                        } else {
+                            w.name_of(&m.repo)
+                        };
+                        let detail = if m.state == MemberState::Missing {
+                            "Missing"
+                        } else {
+                            "Unavailable"
+                        };
+                        (m.path.clone(), name.into(), false, detail.into())
+                    }),
             );
         }
+        for (index, (repo, name, available, detail)) in roots.into_iter().enumerate() {
+            let open = available && ui_state::get(&format!("tree.root.{repo}"), cx).unwrap_or(true);
+            rows.push(TreeRow {
+                repo: repo.clone(),
+                index,
+                kind: TreeRowKind::Root {
+                    name,
+                    detail,
+                    open,
+                    available,
+                },
+            });
+            if open && changes {
+                let status = Repo::get(cx, &repo).and_then(|r| r.status());
+                if let Some(status) = status {
+                    if status.changes.is_empty() {
+                        rows.push(TreeRow {
+                            repo: repo.clone(),
+                            index,
+                            kind: TreeRowKind::Clean,
+                        });
+                    } else {
+                        for change in &status.changes {
+                            rows.push(TreeRow {
+                                repo: repo.clone(),
+                                index: file_index,
+                                kind: TreeRowKind::Change(change.clone()),
+                            });
+                            file_index += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+            if open && let Some(listing) = self.roots.get(&repo) {
+                for mut row in self.file_rows(&repo, listing, cx) {
+                    row.depth += 1;
+                    rows.push(TreeRow {
+                        repo: repo.clone(),
+                        index: file_index,
+                        kind: TreeRowKind::File(row),
+                    });
+                    file_index += 1;
+                }
+            }
+        }
+        rows
+    }
+
+    fn expand(&mut self, repo: &str, path: &str, on: bool, cx: &mut Context<Self>) {
+        if path.is_empty() {
+            ui_state::set(&format!("tree.root.{repo}"), on, cx);
+        } else {
+            let key = format!("tree.expanded.{repo}");
+            let mut set: HashSet<String> = ui_state::get(&key, cx).unwrap_or_default();
+            if on {
+                set.insert(path.into());
+                self.opened = Some((repo.into(), path.into()));
+                self.fade = Some(cx.spawn(async |this, cx| {
+                    cx.background_executor().timer(ui::motion::FAST).await;
+                    _ = this.update(cx, |t, _| t.opened = None);
+                }));
+            } else {
+                set.remove(path);
+            }
+            ui_state::set(&key, set, cx);
+        }
         cx.notify();
     }
 
-    /// Selects the row at `i`, clamped, and scrolls to it.
-    fn go(&mut self, rows: &[Row], i: isize, cx: &mut Context<Self>) {
+    fn activate(&mut self, repo: &str, path: &str, expand: Option<bool>, cx: &mut Context<Self>) {
+        self.sel = Some((repo.into(), path.into()));
+        if let Some(listing) = self.roots.get(repo) {
+            let rev = listing.rev.clone();
+            Workspace::global(cx).update(cx, |w, cx| w.set_current(Some(repo.into()), cx));
+            if path.is_empty() {
+                if let Some(open) = expand {
+                    self.expand(repo, path, !open, cx);
+                }
+            } else if let Some(open) = expand {
+                self.expand(repo, path, !open, cx);
+            } else {
+                open(
+                    cx,
+                    Location {
+                        repo: repo.into(),
+                        rev,
+                        path: path.into(),
+                        line: None,
+                        doc: None,
+                    },
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_change(&mut self, repo: &str, change: &FileChange, cx: &mut Context<Self>) {
+        self.sel = Some((repo.into(), change.path.clone()));
+        show_diff(
+            cx,
+            DiffDoc {
+                repo: repo.into(),
+                path: change.path.clone(),
+                orig_path: change.orig_path.clone(),
+                left: Side::Head,
+                right: Side::Worktree,
+            },
+            false,
+        );
+        cx.notify();
+    }
+
+    fn go(&mut self, rows: &[(usize, &TreeRow)], i: isize, cx: &mut Context<Self>) {
         let Some(last) = rows.len().checked_sub(1) else {
             return;
         };
-        let i = i.clamp(0, last as isize) as usize;
-        self.sel = Some(rows[i].path.clone());
-        self.scroll.scroll_to_item(i, ScrollStrategy::Nearest);
+        let (index, row) = rows[i.clamp(0, last as isize) as usize];
+        self.sel = Some((row.repo.clone(), row.path().into()));
+        self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         cx.notify();
     }
 
     fn key_down(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let rows = self.rows(cx);
-        let at = rows.iter().position(|r| Some(&r.path) == self.sel.as_ref());
+        let selectable: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| match &row.kind {
+                TreeRowKind::Clean => false,
+                TreeRowKind::File(row) => row.error.is_none(),
+                _ => true,
+            })
+            .collect();
+        let at = selectable
+            .iter()
+            .position(|(_, r)| self.selected(&r.repo, r.path()));
         let i = at.map_or(-1, |i| i as isize);
-        match (e.keystroke.key.as_str(), at.map(|i| rows[i].clone())) {
-            ("down", _) => self.go(&rows, i + 1, cx),
-            ("up", _) => self.go(&rows, i - 1, cx),
-            ("right", Some(r)) if r.dir || r.kids => self.expand(&r.path, true, cx),
-            ("left", Some(r)) if (r.dir || r.kids) && r.open => self.expand(&r.path, false, cx),
+        match (e.keystroke.key.as_str(), at.map(|i| selectable[i].1)) {
+            ("down", _) => self.go(&selectable, i + 1, cx),
+            ("up", _) => self.go(&selectable, i - 1, cx),
+            ("right", Some(r)) if r.expandable().is_some() => {
+                self.expand(&r.repo, r.path(), true, cx)
+            }
+            ("left", Some(r)) if r.expandable() == Some(true) => {
+                self.expand(&r.repo, r.path(), false, cx)
+            }
             ("left", Some(r)) => {
-                let up = r.parent.as_deref().unwrap_or(dir_name(&r.path));
-                if let Some(p) = rows.iter().position(|x| x.path == up) {
-                    self.go(&rows, p as isize, cx);
+                let up = match &r.kind {
+                    TreeRowKind::File(row) => row.parent.as_deref().unwrap_or(dir_name(&row.path)),
+                    _ => "",
+                };
+                if let Some(p) = selectable
+                    .iter()
+                    .position(|(_, x)| x.repo == r.repo && x.path() == up)
+                {
+                    self.go(&selectable, p as isize, cx);
                 }
             }
-            ("enter", Some(r)) => self.activate(&r, cx),
+            ("enter", Some(r)) => match &r.kind {
+                TreeRowKind::File(row) => {
+                    self.activate(&r.repo, r.path(), row.dir.then_some(row.open), cx)
+                }
+                TreeRowKind::Change(change) => self.open_change(&r.repo, change, cx),
+                _ => self.activate(&r.repo, r.path(), r.expandable(), cx),
+            },
             _ => return,
         }
         cx.stop_propagation();
+    }
+
+    fn selected(&self, repo: &str, path: &str) -> bool {
+        self.sel
+            .as_ref()
+            .is_some_and(|(r, p)| r == repo && p == path)
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -300,24 +537,55 @@ impl Tree {
         let tip = |tip: &'static str| {
             move |window: &mut Window, cx: &mut App| Tooltip::new(tip).build(window, cx)
         };
+        let changes: bool = ui_state::get(CHANGES, cx).unwrap_or(false);
+        let mode = |id, label, value| {
+            ui::quiet_button(id, label, cx)
+                .test_support()
+                .aria_toggled((changes == value).into())
+                .when(changes == value, |d| d.bg(t.active_bg).text_color(t.fg))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    ui_state::set(CHANGES, value, cx);
+                    this.sel = None;
+                    this.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }))
+        };
+        let modes = ui::band(div(), cx)
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(px(38.))
+            .gap(px(4.))
+            .px(GAP)
+            .child(mode("tree.files", "Files", false))
+            .child(mode("tree.changes", "Changes", true))
+            .child(div().flex_1())
+            .child(
+                ui::titled(
+                    ui::icon_button("tree.find", Icon::Search.size(px(14.)), cx)
+                        .on_click(|_, window, cx| actions::dispatch(window, cx, "find.inFiles")),
+                    "Find in files",
+                )
+                .test_support(),
+            );
         let back = ui::icon_button("tree.back", Icon::Close.size(px(12.)), cx)
             .test_support()
             .aria_label("Back to the working tree")
             .tooltip(tip("Back to the working tree"))
             .on_click(|_, _, cx| set_ref("", cx));
-        ui::band(div(), cx)
+        let ref_bar = ui::band(div(), cx)
             .flex()
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .h(px(44.))
+            .h(px(36.))
             .px(px(12.))
             .child(
                 div()
                     .flex_1()
                     .text_size(text::TITLE)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Project"),
+                    .child("Browse"),
             )
             .child(
                 div()
@@ -327,7 +595,7 @@ impl Tree {
                     .flex_none()
                     .items_center()
                     .gap(px(4.))
-                    .w(px(156.))
+                    .w(px(120.))
                     .tooltip(tip("Browse a branch, tag or commit"))
                     .child(
                         div()
@@ -350,17 +618,100 @@ impl Tree {
                         ui_state::set("tree.nesting", !nest, cx);
                         cx.notify();
                     })),
-            )
+            );
+        div()
+            .flex()
+            .flex_col()
+            .child(modes)
+            .when(!changes && self.key.is_some(), |d| d.child(ref_bar))
     }
 
-    fn row(&self, i: usize, r: &Row, focused: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn row(&self, entry: &TreeRow, focused: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = theme(cx);
-        let on = self.sel.as_ref() == Some(&r.path);
+        let on = self.selected(&entry.repo, entry.path());
+        let i = entry.index;
+        let r = match &entry.kind {
+            TreeRowKind::Clean => {
+                return div()
+                    .flex()
+                    .items_center()
+                    .h(px(26.))
+                    .pl(px(30.))
+                    .text_color(t.muted)
+                    .text_size(text::SMALL)
+                    .child("No changes")
+                    .into_any_element();
+            }
+            TreeRowKind::Change(change) => {
+                let (repo, change) = (entry.repo.clone(), change.clone());
+                return ui::list_row(("tree.change", i), on, focused, cx)
+                    .test_support()
+                    .aria_label(change.path.clone())
+                    .aria_selected(on)
+                    .h(px(26.))
+                    .pl(px(26.))
+                    .pr(px(8.))
+                    .gap(px(5.))
+                    .child(ui::status(status_of(&change), cx))
+                    .child(div().truncate().child(change.path.clone()))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.open_change(&repo, &change, cx)),
+                    )
+                    .into_any_element();
+            }
+            TreeRowKind::File(r) => r,
+            TreeRowKind::Root {
+                name,
+                detail,
+                open,
+                available,
+            } => {
+                let (repo, open, available) = (entry.repo.clone(), *open, *available);
+                return ui::list_row(("tree.root", i), on, focused, cx)
+                    .test_support()
+                    .role(Role::TreeItem)
+                    .aria_label(name.clone())
+                    .aria_description(detail.clone())
+                    .aria_selected(on)
+                    .when(available, |el| el.aria_expanded(open))
+                    .h(px(26.))
+                    .px(px(8.))
+                    .gap(px(5.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate(&repo, "", available.then_some(open), cx)
+                    }))
+                    .child(
+                        div()
+                            .w(px(12.))
+                            .flex_none()
+                            .text_color(t.muted)
+                            .child(if open { Icon::Down } else { Icon::Chevron }.size(px(12.))),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name.clone()),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(ui::theme::mono(cx))
+                            .text_size(text::LABEL)
+                            .text_color(if available { t.muted } else { t.warning })
+                            .child(detail.clone()),
+                    )
+                    .into_any_element();
+            }
+        };
         if let Some(e) = &r.error {
             return ui::list_row(("tree.error", i), on, focused, cx)
                 .test_support()
                 .aria_label(e.clone())
-                .h(px(24.))
+                .h(px(26.))
                 .pl(px(24. + 16. * r.depth as f32))
                 .pr(px(8.))
                 .text_color(t.error)
@@ -378,9 +729,9 @@ impl Tree {
             });
         let chevron = match r.kids {
             true => {
-                let (path, open) = (r.path.clone(), r.open);
+                let (repo, path, open) = (entry.repo.clone(), r.path.clone(), r.open);
                 let toggle = cx.listener(move |this, _, _, cx| {
-                    this.expand(&path, !open, cx);
+                    this.expand(&repo, &path, !open, cx);
                     cx.stop_propagation();
                 });
                 let chevron = chevron.id(("tree.chevron", i)).test_support();
@@ -394,10 +745,14 @@ impl Tree {
         } else {
             r.path.clone().into()
         };
-        let row = r.clone();
-        let fresh = self.opened.as_deref().is_some_and(|o| {
-            r.parent.as_deref() == Some(o)
-                || r.path.strip_prefix(o).is_some_and(|p| p.starts_with('/'))
+        let repo = entry.repo.clone();
+        let (path, expand) = (r.path.clone(), r.dir.then_some(r.open));
+        let fresh = self.opened.as_ref().is_some_and(|(repo, folder)| {
+            *repo == entry.repo
+                && (r.parent.as_deref() == Some(folder)
+                    || r.path
+                        .strip_prefix(folder)
+                        .is_some_and(|p| p.starts_with('/')))
         });
         let el = ui::list_row(("tree.row", i), on, focused, cx)
             .test_support()
@@ -430,13 +785,13 @@ impl Tree {
             .when(r.dir || r.kids, |d| d.aria_expanded(r.open))
             .relative()
             .w_full()
-            .h(px(24.))
+            .h(px(26.))
             .gap(px(4.))
             .pl(px(8. + 16. * r.depth as f32))
             .pr(px(8.))
             .whitespace_nowrap()
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, _, _, cx| this.activate(&row, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.activate(&repo, &path, expand, cx)))
             .children((0..r.depth).map(|d| {
                 let guide = div().absolute().top_0().bottom_0().w(px(1.)).bg(t.line);
                 guide.left(px(14. + 16. * d as f32))
@@ -479,61 +834,63 @@ impl Tree {
 
 impl Render for Tree {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.rows(cx);
-        self.children
-            .retain(|path, _| rows.iter().any(|r| r.path == *path && r.lazy && r.open));
-        for row in rows {
-            if row.lazy
-                && row.open
-                && !self.children.contains_key(&row.path)
-                && let Some((repo, None)) = &self.key
-            {
-                let child = children(cx, repo, &row.path);
-                self.children.insert(row.path, Interest::view(child, cx));
+        let rows = Rc::new(self.rows(cx));
+        for (repo, listing) in &mut self.roots {
+            let visible = rows.iter().filter_map(|entry| match &entry.kind {
+                TreeRowKind::File(row) if entry.repo == *repo && row.lazy && row.open => {
+                    Some(&row.path)
+                }
+                _ => None,
+            });
+            let paths: HashSet<_> = visible.collect();
+            listing.children.retain(|path, _| paths.contains(path));
+            if listing.rev.is_none() {
+                for path in paths {
+                    listing.children.entry(path.clone()).or_insert_with(|| {
+                        let child = children(cx, repo, path);
+                        Interest::view(child, cx)
+                    });
+                }
             }
         }
-        let t = theme(cx);
-        let note = |text: String, error: bool| {
-            let text: SharedString = text.into();
+        let body = if rows.is_empty() {
+            let message = if Workspace::get(cx).archive() {
+                "Archive"
+            } else {
+                "No repositories"
+            };
             div()
                 .id("tree.empty")
                 .test_support()
-                .aria_label(text.clone())
+                .aria_label(message)
                 .p(px(12.))
-                .text_color(if error { t.error } else { t.muted })
-                .child(text)
+                .text_color(theme(cx).muted)
+                .child(message)
                 .into_any_element()
-        };
-        let failed = self.listed(cx).and_then(|l| l.error.clone());
-        let body = match (&self.key, failed) {
-            (None, _) => note("No repository".into(), false),
-            (_, Some(e)) => note(e, true),
-            _ => {
-                let rows = Rc::new(self.rows(cx));
-                let focused = self.focus.contains_focused(window, cx);
-                let list = uniform_list(
-                    "tree.list",
-                    rows.len(),
-                    cx.processor(move |this, range: Range<usize>, _, cx| {
-                        let row =
-                            |i: usize, cx: &mut Context<Self>| this.row(i, &rows[i], focused, cx);
-                        range.map(|i| row(i, cx)).collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.scroll)
-                .size_full()
-                .px(px(6.));
-                div()
-                    .id("tree.rows")
-                    .test_support()
-                    .role(Role::Tree)
-                    .track_focus(&self.focus)
-                    .flex_1()
-                    .min_h_0()
-                    .on_key_down(cx.listener(Self::key_down))
-                    .child(list)
-                    .into_any_element()
-            }
+        } else {
+            let focused = self.focus.contains_focused(window, cx);
+            let list = uniform_list(
+                "tree.list",
+                rows.len(),
+                cx.processor(move |this, range: Range<usize>, _, cx| {
+                    range
+                        .map(|i| this.row(&rows[i], focused, cx))
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .track_scroll(&self.scroll)
+            .size_full()
+            .px(px(6.));
+            div()
+                .id("tree.rows")
+                .test_support()
+                .role(Role::Tree)
+                .track_focus(&self.focus)
+                .flex_1()
+                .min_h_0()
+                .on_key_down(cx.listener(Self::key_down))
+                .child(list)
+                .into_any_element()
         };
         div()
             .id("tree")
@@ -548,7 +905,7 @@ impl Render for Tree {
 
 /// Browses `value`, trimmed, in the current repo's tree; empty goes back to the working tree.
 fn set_ref(value: &str, cx: &mut App) {
-    let Some(repo) = Workspace::get(cx).current().map(String::from) else {
+    let Some(repo) = Workspace::get(cx).session_current().map(String::from) else {
         return;
     };
     let v = value.trim();

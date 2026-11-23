@@ -14,6 +14,7 @@ pub mod owner;
 pub mod processes;
 pub mod repos;
 pub mod search;
+mod sessions;
 pub mod settings;
 pub mod shell;
 pub mod status_bar;
@@ -41,6 +42,7 @@ pub fn register(cx: &mut App) {
         council::register(cx),
         docs::register(cx),
         processes::register(cx),
+        sessions::register(cx),
     ];
     cx.set_global(Kept {
         _actions: kept.into_iter().flatten().collect(),

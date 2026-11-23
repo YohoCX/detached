@@ -73,6 +73,10 @@ pub const ACTIONS: &[Action] = &[
     a("tabs.docs", "Show Docs Tabs", Group::View),
     a("tabs.chats", "Show Chats Tabs", Group::View),
     a("tabs.code", "Show Code Tabs", Group::View),
+    a("session.new", "Adopt Worktrees…", Group::View),
+    a("session.rename", "Rename Session…", Group::View),
+    a("session.archive", "Session Archive", Group::View),
+    a("panel.sessions", "Show or Hide Sessions", Group::View),
 ];
 
 pub fn find(id: &str) -> Option<&'static Action> {

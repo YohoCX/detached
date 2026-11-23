@@ -1256,9 +1256,22 @@ fn selected_row(cx: &mut VisualTestContext) -> Option<String> {
 /// Makes `repo` of the layout current and opens the Project tool with Cmd+1.
 fn open_tree(cx: &mut TestApp, repo: &str) {
     let repo = cx.sb.repo(repo);
-    make_current(cx, &repo);
+    focus_tree_repo(cx, &repo);
     cx.press("secondary-1");
     wait_until(cx, |cx| !tree(cx).is_empty());
+}
+
+fn focus_tree_repo(cx: &mut TestApp, repo: &Path) {
+    cx.workspace(|w, cx| {
+        for r in w.session_repos() {
+            ui_state::set(
+                &format!("tree.root.{}", r.path),
+                Path::new(&r.path) == repo,
+                cx,
+            );
+        }
+    });
+    make_current(cx, repo);
 }
 
 /// The layout, with related files in lib's src.
@@ -1369,8 +1382,9 @@ fn arrows_move_right_expands_left_collapses_or_goes_to_the_parent_and_enter_open
     step(cx, "left", "src");
     step(cx, "left", "src");
     assert_eq!(tree(cx), ["src", "feature.txt", "README.md"]);
-    step(cx, "up", "src");
-    for _ in 0..3 {
+    cx.press("up");
+    assert_eq!(selected_row(cx), None, "the repository root is selected");
+    for _ in 0..4 {
         cx.press("down");
     }
     assert_eq!(selected_row(cx).as_deref(), Some("README.md"), "clamped");
@@ -1410,8 +1424,13 @@ fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cro
 
     cx.input("nope");
     cx.press("enter");
-    wait_until(cx, |cx| cx.find("tree.empty").is_some());
-    let error = label(cx, "tree.empty").unwrap();
+    wait_until(cx, |cx| cx.find(("tree.error", 0usize)).is_some());
+    let error = cx
+        .find(("tree.error", 0usize))
+        .unwrap()
+        .label()
+        .unwrap()
+        .to_string();
     assert!(error.contains("nope"), "{error}");
     assert!(tree(cx).is_empty());
     cx.click("tree.back");
@@ -1506,7 +1525,7 @@ fn expansion_and_the_selection_outlive_the_tool(cx: &mut TestAppContext) {
 
     // Each repo has its own.
     let app = cx.sb.repo("app");
-    make_current(cx, &app);
+    focus_tree_repo(cx, &app);
     wait_until(cx, |cx| tree(cx).contains(&"notes.txt".to_string()));
     assert_eq!(tree(cx), ["src", "CHANGELOG.md", "notes.txt", "README.md"]);
 }
@@ -1610,7 +1629,7 @@ fn ignored_dot_folders_expand_lazily_refresh_and_hide_in_every_repo(cx: &mut Tes
     });
     wait_until(cx, |cx| !tree(cx).contains(&".claude".into()));
     let lib = cx.sb.repo("lib");
-    make_current(cx, &lib);
+    focus_tree_repo(cx, &lib);
     wait_until(cx, |cx| tree(cx).contains(&"feature.txt".into()));
     assert!(!tree(cx).contains(&".claude".into()));
     let saved = detached_core::settings::Settings::load(&cx.sb.state.config_dir);
