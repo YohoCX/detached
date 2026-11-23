@@ -798,6 +798,10 @@ fn switch_branch(cx: &mut VisualTestContext) {
             .expect("current repository is a member")
     });
     cx.click(("overview.switch", index));
+    wait_until(cx, |cx| {
+        cx.find("branches.query")
+            .is_some_and(|query| query.focused() == Some(true))
+    });
 }
 
 fn current_branch(cx: &mut VisualTestContext) -> Option<String> {
