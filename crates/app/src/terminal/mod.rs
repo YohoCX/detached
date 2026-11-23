@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, EmptyView, Entity, EntityId, Global, InteractiveElement,
-    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, Entity, EntityId, Global, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Window, div, prelude::FluentBuilder, px,
 };
 
 pub use ghostty::Rgb;
@@ -305,8 +305,7 @@ impl DocKind for TerminalDocs {
                 *id = s.entity_id().as_u64();
                 s.into()
             }
-            // The shell did not start; the status bar says why.
-            None => cx.new(|_| EmptyView).into(),
+            None => cx.new(|_| UnavailableTerminal).into(),
         }
     }
 
@@ -319,7 +318,13 @@ impl DocKind for TerminalDocs {
 
     fn title(&self, _: &Doc, view: Option<&AnyView>, cx: &App) -> SharedString {
         match view.and_then(|v| v.clone().downcast::<Session>().ok()) {
-            Some(s) => s.read(cx).title().to_string().into(),
+            Some(s) => {
+                let s = s.read(cx);
+                match s.memory.and_then(mb) {
+                    Some(mb) => format!("{} · {mb}", s.title()).into(),
+                    None => s.title().to_string().into(),
+                }
+            }
             None => "Terminal".into(),
         }
     }
@@ -350,6 +355,17 @@ impl DocKind for TerminalDocs {
                 Terminals::global(cx).update(cx, |t, cx| t.close(&s, window, cx))
             });
         }
+    }
+}
+
+struct UnavailableTerminal;
+
+impl Render for UnavailableTerminal {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .p(ui::GAP)
+            .text_color(theme(cx).muted)
+            .child("Cannot start a shell in this worktree.")
     }
 }
 

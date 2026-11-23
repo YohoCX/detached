@@ -138,6 +138,15 @@ impl DocKind for JobDocs {
         name.clone().into()
     }
 
+    fn replace(&self, view: &AnyView, old: &Doc, new: &Doc, _: &mut Window, cx: &mut App) -> bool {
+        if old == new
+            && let Ok(log) = view.clone().downcast::<JobLog>()
+        {
+            log.update(cx, |log, cx| log.start(cx));
+        }
+        old == new
+    }
+
     /// A job with a new name.
     fn same(&self, a: &Doc, b: &Doc) -> bool {
         match (a, b) {

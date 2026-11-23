@@ -171,7 +171,7 @@ impl CommitDetails {
     }
 
     /// Selects file `i` and shows its diff, which takes focus with `focus`.
-    fn open(&mut self, i: usize, focus: bool, cx: &mut Context<Self>) {
+    fn open(&mut self, i: usize, focus: bool, w: &mut Window, cx: &mut Context<Self>) {
         let Some(Ok(d)) = &self.data else { return };
         let Some(c) = d.files.get(i) else { return };
         let doc = DiffDoc {
@@ -183,12 +183,12 @@ impl CommitDetails {
         };
         self.sel = Some(i);
         self.scroll.scroll_to_item(i, ScrollStrategy::Nearest);
-        files::show_diff(cx, doc, focus);
+        files::show_companion_diff(doc, focus, w, cx);
         cx.notify();
     }
 
     /// Arrows select and show the next or previous file, Enter shows the selected one with focus.
-    fn key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+    fn key(&mut self, key: &str, w: &mut Window, cx: &mut Context<Self>) -> bool {
         let n = match &self.data {
             Some(Ok(d)) => d.files.len(),
             _ => 0,
@@ -200,7 +200,7 @@ impl CommitDetails {
             ("enter", Some(i)) => (i, true),
             _ => return false,
         };
-        self.open(i.min(n.saturating_sub(1)), focus, cx);
+        self.open(i.min(n.saturating_sub(1)), focus, w, cx);
         true
     }
 
@@ -346,8 +346,8 @@ impl CommitDetails {
                             .text_color(t.muted)
                             .child(dir_name(&c.path).to_string()),
                     )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                        this.open(i, e.click_count() > 1, cx)
+                    .on_click(cx.listener(move |this, e: &ClickEvent, w, cx| {
+                        this.open(i, e.click_count() > 1, w, cx)
                     }))
             })
             .collect()
@@ -416,8 +416,8 @@ impl Render for CommitDetails {
                 .flex_1()
                 .min_h_0()
                 .pb(px(6.))
-                .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                    if this.key(&e.keystroke.key, cx) {
+                .on_key_down(cx.listener(|this, e: &KeyDownEvent, w, cx| {
+                    if this.key(&e.keystroke.key, w, cx) {
                         cx.stop_propagation();
                     }
                 }))

@@ -84,6 +84,10 @@ fn open_tabs(by: isize, cx: &mut App) {
     }
 }
 
+pub(crate) fn palette_open(cx: &App) -> bool {
+    cx.try_global::<Search>().is_some_and(|s| s.mode.is_some())
+}
+
 fn close(cx: &mut App) {
     cx.global_mut::<Search>().mode = None;
 }

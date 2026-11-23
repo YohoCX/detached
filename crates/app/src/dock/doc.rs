@@ -285,7 +285,13 @@ impl Panel for DocTab {
 
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Another workspace's tab, hidden, can be its group's active one.
-        if !active || !Workspace::get(cx).archive() || !super::tabs::mine(self, cx) {
+        if !active || !super::tabs::mine(self, cx) {
+            return;
+        }
+        if !Workspace::get(cx).archive() {
+            if self.focus.is_focused(window) {
+                self.take_focus(window, cx);
+            }
             return;
         }
         if let Some(v) = &self.view {

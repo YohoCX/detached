@@ -251,7 +251,7 @@ fn without_an_account_pipelines_say_so_open_settings_and_hide_the_badge(cx: &mut
     show(cx, "gitlab");
     cx.update(|w, cx| detached_app::dock::open("log", w, cx));
     settle(cx);
-    cx.click("bottom.Pipelines");
+    open_tab(cx, "bottom.Pipelines");
     let says = |e: &str| e.starts_with("No account for ") && e.ends_with("; add one in Settings.");
     wait_until(cx, |cx| {
         label(cx, "pipelines.setup").is_some_and(|e| says(&e))

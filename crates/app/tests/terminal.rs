@@ -233,10 +233,10 @@ fn a_wide_character_takes_two_columns(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_shell_sees_the_new_size(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
-    zone_size(cx, DockPlacement::Bottom, 500.);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1400.), gpui_kit::px(900.)));
     shell_sees_the_grid(cx);
     let before = session(cx, |s| s.grid.rows);
-    zone_size(cx, DockPlacement::Bottom, 300.);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1400.), gpui_kit::px(640.)));
     wait_until(cx, |cx| {
         cx.update(|w, cx| w.render_frame(cx));
         session(cx, |s| s.grid.rows) < before
@@ -296,9 +296,14 @@ fn a_drag_selects_what_copy_takes(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_tab_shows_the_memory_of_the_shell(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
+    let id = cx.update(|_, cx| {
+        Terminals::global(cx).read(cx).docked[0]
+            .entity_id()
+            .as_u64()
+    });
     wait_until(cx, |cx| {
         let label = cx
-            .find(("terminal.tab", 0usize))
+            .find(gpui_kit::SharedString::from(format!("doc.terminal.{id}")))
             .and_then(|e| e.label().map(String::from));
         label.is_some_and(|l| l.ends_with(" MB"))
     });
