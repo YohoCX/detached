@@ -169,6 +169,12 @@ impl Backend for Direct {
         place(spec, env(core, spec)).past(&spec.repo)
     }
 
+    fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        place(spec, env(core, spec))
+            .read(id)
+            .ok_or_else(|| Error::Other("The transcript is unavailable.".into()))
+    }
+
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
         place(spec, env(core, spec)).delete(id)
     }

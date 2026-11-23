@@ -69,6 +69,13 @@ pub enum Doc {
         #[serde(default)]
         n: u32,
     },
+    SessionArchive,
+    PastChat {
+        repo: String,
+        provider: String,
+        id: String,
+        title: String,
+    },
     /// A shell moved out of the Terminal app; after a restart, a new one in `cwd`.
     Terminal {
         id: u64,
@@ -78,12 +85,14 @@ pub enum Doc {
 
 impl Doc {
     /// Every `kind`.
-    pub const KINDS: [&str; 9] = [
+    pub const KINDS: [&str; 11] = [
         "file",
         "diff",
         "mr",
         "job",
         "chat",
+        "session-archive",
+        "past-chat",
         "terminal",
         "council",
         "council-task",
@@ -101,6 +110,8 @@ impl Doc {
             Doc::Mr { .. } => "mr",
             Doc::Job { .. } => "job",
             Doc::Chat { .. } => "chat",
+            Doc::SessionArchive => "session-archive",
+            Doc::PastChat { .. } => "past-chat",
             Doc::Terminal { .. } => "terminal",
         }
     }

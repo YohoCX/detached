@@ -800,7 +800,7 @@ fn codex_lists_the_host_s_own_sessions_of_the_folder_and_its_delete_archives() {
     let mut all: Vec<Value> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     all.push(json!({"sessionId": "from-the-cli", "cwd": repo, "title": "mine"}));
     std::fs::write(&file, Value::from(all).to_string()).unwrap();
-    sessions::seen(&sb.state, &opened.id).unwrap();
+    chat_index::seen(&sb.state, &opened.id).unwrap();
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
     let past = acp.past(&sb.state, &spec).unwrap();
     let listed: Vec<_> = past

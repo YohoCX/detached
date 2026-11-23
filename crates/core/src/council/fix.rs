@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::record::{End, Gate, Of, State, Subject};
+use super::record::{End, Event, Gate, Of, State, Subject};
 use super::run::{self, Preview};
 use super::{brief, track, tree};
 use crate::env::Env;
@@ -208,6 +208,38 @@ pub fn passed(env: &Env, repo: &Path, head: &str, f: &host::Finding, recheck: &S
         Ok((None, _)) => true,
         Err(_) => false,
     }
+}
+
+pub(crate) fn worktrees(core: &AppState, repo: &Path) -> Result<BTreeSet<PathBuf>> {
+    let common = run::common(core, repo)?;
+    let mut paths = BTreeSet::new();
+    for name in ["detached/council", "detached/panels"] {
+        for task in crate::os::directories(&common.join(name))? {
+            for round in crate::os::directories(&task)? {
+                if !round.join("events.jsonl").try_exists()? {
+                    continue;
+                }
+                let mut latest = std::collections::HashMap::new();
+                for (_, event) in super::record::read(&round)? {
+                    match event {
+                        Event::Fix { finding, tree, .. } => {
+                            let path = PathBuf::from(tree);
+                            let path = crate::os::canonical(&path).unwrap_or(path);
+                            paths.insert(path.clone());
+                            latest.insert(finding, path);
+                        }
+                        Event::FixDiscarded { finding } => {
+                            if let Some(path) = latest.remove(&finding) {
+                                paths.remove(&path);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(paths)
 }
 
 /// Whether the Fix of `finding` in `task`'s `run` passed its latest re-check, as the records read

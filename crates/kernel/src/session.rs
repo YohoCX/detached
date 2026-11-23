@@ -12,12 +12,12 @@ use detached_core::backend::{
     self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
     Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
+use detached_core::chat_index;
 use detached_core::chat_settings::Preset;
 use detached_core::docs::{Docs, Need};
 use detached_core::error::{Error, Result};
 use detached_core::git::snapshot::Restore;
 use detached_core::host::{self as tools, Act, Call};
-use detached_core::sessions;
 use detached_core::skills::Skills;
 use detached_core::state::AppState;
 use detached_core::trust;
@@ -921,7 +921,7 @@ impl Session {
                 // The chat's, which the lists show; an agent may list other clients' sessions too.
                 if self.seat.is_none() {
                     let (core, id) = (crate::core(cx).clone(), o.id.clone());
-                    blocking::run(cx, move || _ = sessions::seen(&core, &id)).detach();
+                    blocking::run(cx, move || _ = chat_index::seen(&core, &id)).detach();
                 }
                 self.id = Some(o.id);
                 self.version = Some(o.version);
@@ -1337,7 +1337,7 @@ pub fn past(spec: Spec, cx: &App) -> Task<Result<Vec<backend::Past>>> {
 
 fn listed(core: &AppState, spec: &Spec) -> Result<Vec<backend::Past>> {
     let mut all = backend(spec.provider).past(core, spec)?;
-    let index = sessions::index(core);
+    let index = chat_index::index(core);
     for p in &mut all {
         p.cwd = Some(spec.repo.clone());
         p.provider = spec.provider.id.into();
@@ -1369,10 +1369,23 @@ pub fn past_of(
     })
 }
 
+pub fn transcript(
+    provider: &'static Provider,
+    repo: String,
+    id: String,
+    cx: &App,
+) -> Task<Result<Vec<backend::Update>>> {
+    let core = crate::core(cx).clone();
+    blocking::run(cx, move || {
+        let spec = Spec::new(provider, &repo, backend::Kind::Chat);
+        backend(provider).transcript(&core, &spec, &id)
+    })
+}
+
 /// Archives or unarchives the past session `id` in the host's index.
 pub fn archive(id: String, archived: bool, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
-    blocking::run(cx, move || sessions::archive(&core, &id, archived))
+    blocking::run(cx, move || chat_index::archive(&core, &id, archived))
 }
 
 /// Removes the past session `id` of the spec's provider, and its entry in the host's index.
@@ -1380,7 +1393,7 @@ pub fn delete(spec: Spec, id: String, cx: &App) -> Task<Result<()>> {
     let core = crate::core(cx).clone();
     blocking::run(cx, move || {
         backend(spec.provider).delete(&core, &spec, &id)?;
-        sessions::forget(&core, &id)
+        chat_index::forget(&core, &id)
     })
 }
 

@@ -53,29 +53,41 @@ pub fn root(data: &Path, main: &Path, folder: &Path) -> PathBuf {
     }
 }
 
-/// `repo`'s linked worktrees as git lists them; bare, gone and the main one left out.
-pub fn linked(env: &Env, repo: &Path) -> Result<Vec<PathBuf>> {
+#[derive(Debug, Default)]
+pub struct Linked {
+    pub path: PathBuf,
+    pub head: String,
+    pub branch: Option<String>,
+    pub locked: Option<String>,
+    pub prunable: Option<String>,
+}
+
+pub fn linked(env: &Env, repo: &Path) -> Result<Vec<Linked>> {
     let text = out(
         env,
         repo,
         &["worktree", "list", "--porcelain", "-z"],
         Kind::Read,
     )?;
-    let mut trees: Vec<(PathBuf, bool)> = vec![];
-    for field in text.split('\0') {
-        if let Some(path) = field.strip_prefix("worktree ") {
-            trees.push((Path::new(path).components().collect(), false));
-        } else if (field == "bare" || field.starts_with("prunable"))
-            && let Some(t) = trees.last_mut()
-        {
-            t.1 = true;
-        }
-    }
-    Ok(trees
-        .into_iter()
+    Ok(text
+        .split("\0\0")
         .skip(1)
-        .filter(|t| !t.1)
-        .map(|t| t.0)
+        .filter_map(|entry| {
+            let mut tree = Linked::default();
+            for field in entry.split('\0') {
+                let (key, value) = field.split_once(' ').unwrap_or((field, ""));
+                match key {
+                    "worktree" => tree.path = Path::new(value).components().collect(),
+                    "HEAD" => tree.head = value.into(),
+                    "branch" => tree.branch = value.strip_prefix("refs/heads/").map(String::from),
+                    "locked" => tree.locked = Some(value.into()),
+                    "prunable" => tree.prunable = Some(value.into()),
+                    "bare" => return None,
+                    _ => {}
+                }
+            }
+            (!tree.path.as_os_str().is_empty()).then_some(tree)
+        })
         .collect())
 }
 
@@ -102,7 +114,8 @@ pub fn add_linked(state: &AppState, repos: &mut Vec<RepoInfo>, excluded: &[Strin
             Path::new(&main.path),
             Path::new(&main.folder),
         ));
-        for tree in trees {
+        for tree in trees.into_iter().filter(|t| t.prunable.is_none()) {
+            let tree = tree.path;
             let real = canon(&tree);
             let below = real.strip_prefix(&root).ok();
             let name = below.map(|p| p.to_string_lossy().into_owned());

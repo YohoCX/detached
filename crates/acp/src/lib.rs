@@ -19,9 +19,9 @@ use detached_core::backend::{
     self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
     Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
+use detached_core::chat_index;
 use detached_core::error::{Error, Result};
 use detached_core::proc::{self, GRACE, Proc};
-use detached_core::sessions;
 use detached_core::state::AppState;
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -58,7 +58,7 @@ impl Backend for Acp {
     /// host's index does not know are hidden.
     fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
         let (live, _) = self.adapter(core, spec)?;
-        let known = sessions::index(core);
+        let known = chat_index::index(core);
         let mut all = vec![];
         let mut cursor = None;
         // A page filtered by folder may be empty with more after it; a bad cursor ends the walk.
@@ -89,6 +89,30 @@ impl Backend for Acp {
         }
         all.sort_by_key(|p| std::cmp::Reverse(p.modified));
         Ok(all)
+    }
+
+    fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        let (live, _) = Acp::default().adapter(core, spec)?;
+        let options = Options {
+            cwd: spec.repo.clone().into(),
+            ..Default::default()
+        };
+        live.adapter.load_session(id, &options)?;
+        let events = live
+            .demux
+            .lock()
+            .unwrap()
+            .early
+            .remove(id)
+            .unwrap_or_default();
+        live.adapter.close_session(id);
+        Ok(events
+            .into_iter()
+            .filter_map(|event| match event {
+                backend::Event::Update(update) => Some(update),
+                _ => None,
+            })
+            .collect())
     }
 
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {

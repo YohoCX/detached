@@ -1,5 +1,7 @@
 //! What differs between Unix and Windows: process groups, local and UTC time, opening a path.
 
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -80,6 +82,22 @@ pub fn canonical(p: &Path) -> std::io::Result<PathBuf> {
         return Ok(PathBuf::from(s));
     }
     Ok(p)
+}
+
+pub(crate) fn directories(path: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let mut dirs = vec![];
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    Ok(dirs)
 }
 
 /// Opens a file or folder with the system's default app (Finder, Explorer, the file manager).

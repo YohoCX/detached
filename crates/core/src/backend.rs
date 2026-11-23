@@ -45,6 +45,11 @@ pub trait Backend: Send + Sync {
     fn past(&self, _core: &AppState, _spec: &Spec) -> Result<Vec<Past>> {
         Err(Error::Other("This agent lists no past sessions.".into()))
     }
+    fn transcript(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<Vec<Update>> {
+        Err(Error::Other(
+            "This agent cannot read a past transcript.".into(),
+        ))
+    }
     /// Removes the past session `id`.
     fn delete(&self, _core: &AppState, _spec: &Spec, _id: &str) -> Result<()> {
         Err(Error::Other("This agent deletes no past sessions.".into()))

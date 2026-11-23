@@ -3,6 +3,7 @@ pub mod adapters;
 pub mod api;
 // A backend's protocol stays in a private module of its crate; only its constructor leaves it.
 pub mod backend;
+pub mod chat_index;
 pub mod chat_settings;
 mod claude;
 pub mod council;
