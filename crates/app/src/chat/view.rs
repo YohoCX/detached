@@ -311,7 +311,7 @@ impl ChatView {
         let t = theme(cx);
         let s = self.session.read(cx);
         let name = super::label(&s.repo, cx);
-        let icon = match Workspace::get(cx).repos().iter().any(|r| r.path == s.repo) {
+        let icon = match s.checkouts.iter().any(|r| r.path == s.repo) {
             true => Icon::Repo,
             false => Icon::Folder,
         };

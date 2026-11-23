@@ -7,11 +7,13 @@ use detached_core::adapters::{CLAUDE, Provider};
 use detached_core::backend::{Kind, Setting, SlashCommand, Spec, StopReason};
 use detached_core::chat_settings::{Choices, Preset};
 use detached_core::trust::{self, Project};
+use detached_core::types::RepoInfo;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
 use kernel::blocking;
 use kernel::session::{Answer, End, Item, Session, State as Run};
 use kernel::settings::Settings;
 use kernel::ui_state;
+use kernel::workspace::Workspace;
 
 /// The last commands each repo's Claude session listed, for `/` before this one's lists them.
 const COMMANDS: &str = "chat.commands";
@@ -32,6 +34,9 @@ pub enum State {
 
 pub struct Chat {
     pub repo: String,
+    pub(super) owner: Option<(String, String)>,
+    // A background conversation may reopen while another session is selected.
+    pub(super) checkouts: Vec<RepoInfo>,
     /// Who answers: picked while nothing is said.
     pub provider: &'static Provider,
     /// The conversation's sessions, oldest first: one that ended goes on in a resume after it.
@@ -66,12 +71,17 @@ impl Chat {
         let mut all: BTreeMap<String, Vec<SlashCommand>> =
             ui_state::get(COMMANDS, cx).unwrap_or_default();
         let (provider, choices) = defaults(cx).unwrap_or((&CLAUDE, Choices::default()));
+        let workspace = Workspace::get(cx);
         Chat {
             cached: all
                 .remove(&repo)
                 .filter(|_| provider.id == CLAUDE.id)
                 .unwrap_or_default(),
             repo,
+            owner: workspace
+                .id()
+                .map(|id| (id.into(), workspace.session_id().into())),
+            checkouts: workspace.session_checkouts().to_vec(),
             provider,
             sessions: vec![],
             topic: None,
@@ -116,7 +126,7 @@ impl Chat {
         spec.model = self.model.clone();
         spec.effort = self.effort.clone();
         spec.validate_choices = !self.resumed;
-        let s = Session::open(spec, past, cx);
+        let s = Session::open_scoped(spec, past, self.checkouts.clone(), cx);
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
         self.sessions.push(s);

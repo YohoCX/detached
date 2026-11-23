@@ -7,6 +7,7 @@ use std::path::Path;
 
 use detached_core::adapters::{CODEX, Provider};
 use detached_core::backend::{Kind, Past, Spec};
+use detached_core::sessions::MAIN;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -180,6 +181,14 @@ fn places(cx: &App) -> Vec<String> {
     let Some(repo) = w.current() else {
         return vec![];
     };
+    if w.session_id() != MAIN {
+        return w
+            .session_checkouts()
+            .iter()
+            .filter(|r| r.path == repo)
+            .map(|r| r.path.clone())
+            .collect();
+    }
     let repos: Vec<&str> = w.repos().iter().map(|r| r.path.as_str()).collect();
     // The tree folds a folder that holds one subfolder and no repo into that subfolder's row.
     let shown = |dir: &str| {
@@ -273,7 +282,7 @@ impl ChatList {
             more: HashSet::new(),
             selected: None,
             deleting: None,
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             scroll: ScrollHandle::new(),
             _work: vec![],
             _subscriptions: vec![
@@ -287,13 +296,20 @@ impl ChatList {
         list
     }
 
-    /// Holds the past conversations of each place in the current workspace, and no other.
+    /// Holds the past conversations of the checkouts in scope.
     fn watch(&mut self, cx: &mut Context<Self>) {
         let w = Workspace::get(cx);
-        let mut places: Vec<String> = w.repos().iter().map(|r| r.path.clone()).collect();
-        for f in folders(cx) {
-            if !places.contains(&f) {
-                places.push(f);
+        let repos = if w.archive() {
+            w.repos()
+        } else {
+            w.session_checkouts()
+        };
+        let mut places: Vec<String> = repos.iter().map(|r| r.path.clone()).collect();
+        if w.archive() || w.session_id() == MAIN {
+            for f in folders(cx) {
+                if !places.contains(&f) {
+                    places.push(f);
+                }
             }
         }
         let providers = super::providers(cx);
@@ -573,16 +589,9 @@ impl ChatList {
         out
     }
 
-    /// Opens the row's chat beside the list, which keeps the keys, as a mail list does.
     fn activate(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
         match key {
-            Key::Open(repo, n) => {
-                let doc = Doc::Chat {
-                    repo: repo.clone(),
-                    n: *n,
-                };
-                Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
-            }
+            Key::Open(repo, n) => super::foreground(repo.clone(), *n, cx),
             Key::Past(id) => {
                 let Some(p) = self.all(cx).into_iter().find(|p| p.owned && p.id == *id) else {
                     return;
@@ -619,9 +628,10 @@ impl ChatList {
             }
             Key::Archived => self.show_archived = !self.show_archived,
         }
-        // Queued after the show, whose chat takes the cursor when its tab comes forward.
-        let focus = self.focus.clone();
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        if Workspace::get(cx).archive() || !matches!(key, Key::Open(..) | Key::Past(_)) {
+            let focus = self.focus.clone();
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
         cx.notify();
     }
 

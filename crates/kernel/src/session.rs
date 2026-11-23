@@ -21,7 +21,7 @@ use detached_core::host::{self as tools, Act, Call};
 use detached_core::skills::Skills;
 use detached_core::state::AppState;
 use detached_core::trust;
-use detached_core::types::{FileChange, Side};
+use detached_core::types::{FileChange, RepoInfo, Side};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
@@ -399,18 +399,37 @@ impl Session {
         Session::open_as(spec, past, None, cx)
     }
 
+    pub fn open_scoped(
+        spec: Spec,
+        past: Option<String>,
+        repos: Vec<RepoInfo>,
+        cx: &mut App,
+    ) -> Entity<Session> {
+        Self::open_with(spec, past, None, Some(repos), cx)
+    }
+
     /// `open` for a council participant in its seat.
     pub fn open_as(
+        spec: Spec,
+        past: Option<String>,
+        seat: Option<Seat>,
+        cx: &mut App,
+    ) -> Entity<Session> {
+        Self::open_with(spec, past, seat, None, cx)
+    }
+
+    fn open_with(
         mut spec: Spec,
         past: Option<String>,
         seat: Option<Seat>,
+        repos: Option<Vec<RepoInfo>>,
         cx: &mut App,
     ) -> Entity<Session> {
         let s = cx.new(|cx| {
             let mut who = seat
                 .as_ref()
                 .map_or_else(|| Identity::of(spec.kind, &spec.repo), |s| s.who.clone());
-            let repos = who.repos(cx).to_vec();
+            let repos = repos.unwrap_or_else(|| who.repos(cx).to_vec());
             let workspace = Workspace::global(cx);
             workspace.update(cx, |w, _| repos.iter().for_each(|r| w.hold(&r.path)));
             let held = cx.on_release(move |s: &mut Session, cx| {
