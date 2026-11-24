@@ -55,7 +55,7 @@ Settings › Agents shows the CLI version and whether it is logged in when the C
   tool call that needs permission asks you; "Always" is kept by Detached for that exact call, never
   written into the repo's settings. Each turn's changes are snapshotted, so you can restore them.
   For Claude, the bar shows what is left of your plan's 5-hour and weekly limits. Past
-  conversations, Claude Code's own from a terminal included, can be resumed, archived or deleted.
+  conversations include chats started from the CLI. Delete is available for chats Detached identifies as its own.
   Images in an agent's reply show as links and never load by themselves.
 - **Trust.** A repo's own agent settings (hooks, permissions, skills, commands) load only once you
   accept them, and a change to them asks again.
