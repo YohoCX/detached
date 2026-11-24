@@ -12,9 +12,9 @@ use gpui_kit::component::diff::{
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    App, AppContext, Context, ElementId, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, ElementId, Entity, EntityId, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 
 use super::api::{Annotation, DiffDoc, DiffOptions, DiffSide, OnAdd, Side};
@@ -73,8 +73,8 @@ pub struct DiffView {
     /// Put the cursor on the first change once loaded.
     reveal: bool,
     target: Option<u32>,
-    /// Focus the diff once loaded.
-    pub(super) focus: bool,
+    /// The dock viewer that requested keyboard focus when this diff is ready.
+    pub(super) focus_viewer: Option<EntityId>,
     hover: Option<DiffLinePosition>,
     /// Made on the first render, since on_add needs the window.
     _numbers: Option<Subscription>,
@@ -144,7 +144,7 @@ impl DiffView {
             at: None,
             reveal: true,
             target: None,
-            focus: false,
+            focus_viewer: None,
             hover: None,
             _numbers: None,
             _load: Task::ready(()),
@@ -166,6 +166,7 @@ impl DiffView {
         if doc != self.doc {
             self.doc = doc;
             self.last = None;
+            self.focus_viewer = None;
             (self.hover, self.at) = (None, None);
         }
         self.reveal = true;
@@ -519,8 +520,10 @@ impl Render for DiffView {
         if self._numbers.is_none() {
             self._numbers = Some(cx.subscribe_in(&self.state, window, Self::number_pressed));
         }
-        if self.focus && matches!(self.body, Body::Diff | Body::Conflict) {
-            self.focus = false;
+        if matches!(self.body, Body::Diff | Body::Conflict)
+            && let Some(viewer) = self.focus_viewer.take()
+            && crate::dock::is_doc_view_shown(viewer, cx)
+        {
             self.focus_body(window, cx);
         }
         let body = match &self.body {

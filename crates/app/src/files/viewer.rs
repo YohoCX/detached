@@ -89,7 +89,10 @@ impl Viewer {
                     _ => cx.new(|cx| DiffView::new(doc, DiffOptions::default(), cx)),
                 };
                 // A show asking for focus wins over one in the same frame that does not.
-                view.update(cx, |v, _| v.focus |= focus);
+                if focus {
+                    let viewer = cx.entity_id();
+                    view.update(cx, |v, _| v.focus_viewer = Some(viewer));
+                }
                 self.shown = Some(Shown::Diff(view));
             }
             _ => return,

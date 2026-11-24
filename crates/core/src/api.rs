@@ -231,6 +231,8 @@ pub fn file_patch(
     left: &Side,
     right: &Side,
 ) -> Result<FilePatch> {
+    #[cfg(feature = "testutil")]
+    crate::testutil::wait_file_read(repo, path);
     patch::file_patch(s, Path::new(repo), path, orig_path, left, right)
 }
 

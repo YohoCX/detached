@@ -102,7 +102,7 @@ pub fn reveal_path(path: &Path) -> Result<()> {
         Command::new("explorer.exe")
             .raw_arg(format!("/select,\"{}\"", path.display()))
             .spawn()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     open_path(path.parent().unwrap_or(path))

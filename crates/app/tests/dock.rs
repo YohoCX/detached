@@ -100,14 +100,34 @@ fn pick_menu_item(cx: &mut VisualTestContext, label: &str) {
     cx.click(("menu.item", i));
 }
 
-fn new_chat(cx: &mut VisualTestContext) {
-    let name = cx.workspace(|w, _| w.name_of(w.session_current().unwrap()).to_string());
+fn open_chat_picker(cx: &mut VisualTestContext) {
     cx.click("pane.new");
     pick_menu_item(cx, "New chat");
-    if cx.find("palette").is_some() {
-        cx.input(&name);
-        cx.press("enter");
-    }
+    assert_eq!(
+        cx.find("palette").unwrap().label(),
+        Some("Choose checkout for new chat")
+    );
+}
+
+fn choose_chat_checkout(cx: &mut VisualTestContext, repo: &str) {
+    let name = cx.workspace(|w, _| w.name_of(repo).to_string());
+    cx.update(|w, cx| w.within("palette").input(&name, cx));
+    settle(cx);
+    assert_eq!(
+        cx.find(("palette.row", 0usize)).unwrap().label(),
+        Some(name.as_str())
+    );
+    cx.update(|w, cx| w.within("palette").press("enter", cx));
+    settle(cx);
+    assert!(cx.find("palette").is_none());
+    assert_eq!(
+        cx.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::Chat {
+            repo: repo.to_owned(),
+            n: 0
+        })
+    );
+    assert_eq!(cx.find("doc.chat").unwrap().checked(), Some(true));
 }
 
 #[gpui_kit::test]
@@ -459,10 +479,22 @@ fn files_share_the_preview_tab_until_one_is_kept_and_f7_steps_the_diff_on_screen
 fn open_documents_come_back_after_a_restart_and_close_on_their_button(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
     let solo = cx.sb.solo().display().to_string();
-    cx.workspace(|w, cx| w.set_current(Some(solo), cx));
+    cx.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
     let readme = diff(cx, "README.md");
+    let (started, release) = detached_core::testutil::hold_file_read(&readme.repo, &readme.path);
     show_diff(cx, &readme);
-    new_chat(cx);
+    wait_until(cx, |_| started.try_recv().is_ok());
+    open_chat_picker(cx);
+    let picker_focus = cx.update(|w, cx| w.focused(cx).unwrap());
+    // Complete the background diff load while the picker owns the keyboard.
+    release.send(()).unwrap();
+    wait_until(cx, |cx| cx.find("diff-body").is_some());
+    assert_eq!(
+        cx.update(|w, cx| w.focused(cx)),
+        Some(picker_focus),
+        "loading the diff must preserve picker focus"
+    );
+    choose_chat_checkout(cx, &solo);
     let again = reopen(cx);
     in_window(cx, again, |w, _| {
         assert_eq!(
@@ -493,19 +525,25 @@ fn a_running_chat_moves_to_another_pane_with_its_turn_going_on(cx: &mut TestAppC
     cx.workspace(|w, cx| w.set_current(Some(solo.clone()), cx));
     let readme = diff(cx, "README.md");
     show_diff(cx, &readme);
-    new_chat(cx);
-    cx.input("say Working; wait never");
-    cx.press("enter");
-    let working = |cx: &mut VisualTestContext| {
+    open_chat_picker(cx);
+    choose_chat_checkout(cx, &solo);
+    cx.update(|w, cx| {
+        w.within("chat.composer")
+            .input("say Working; wait never", cx)
+    });
+    cx.update(|w, cx| w.within("chat.composer").press("enter", cx));
+    settle(cx);
+    let has_message = |cx: &mut VisualTestContext, expected: &str| {
         cx.update(|w, cx| {
             w.render_frame(cx);
             (0usize..)
                 .map_while(|i| w.try_find(("chat.item", i)))
-                .any(|e| e.label().is_some_and(|l| l.contains("Working")))
+                .any(|e| e.label() == Some(expected))
         })
     };
-    wait_until(cx, working);
-    let session = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
+    wait_until(cx, |cx| has_message(cx, "You: say Working; wait never"));
+    wait_until(cx, |cx| has_message(cx, "Working"));
+    let session = cx.update(|_, cx| chat::find(&solo, 0, cx).unwrap().entity_id());
     let original = cx.find("doc.chat").unwrap().bounds();
     let overview = cx.find("doc.session-overview").unwrap().bounds();
     assert_eq!(
@@ -520,9 +558,9 @@ fn a_running_chat_moves_to_another_pane_with_its_turn_going_on(cx: &mut TestAppC
         cx.find("doc.chat").unwrap().bounds().top() > original.bottom(),
         "in the lower pane"
     );
-    assert!(working(cx), "the same feed");
+    assert!(has_message(cx, "Working"), "the same feed");
     assert!(cx.find("chat.stop").is_some(), "the turn goes on");
-    let now = cx.update(|_, cx| chat::session(&solo, 0, cx).entity_id());
+    let now = cx.update(|_, cx| chat::find(&solo, 0, cx).unwrap().entity_id());
     assert_eq!(now, session, "the same session");
     run(cx, "pane.close");
     assert!(cx.cx.has_pending_prompt());

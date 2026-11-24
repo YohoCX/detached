@@ -224,7 +224,9 @@ fn a_pure_rename_shows_one_column(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_binary_side_shows_what_each_side_is(cx: &mut TestAppContext) {
+fn a_binary_side_shows_what_each_side_is_and_the_next_text_diff_takes_focus(
+    cx: &mut TestAppContext,
+) {
     let cx = &mut open_app_with(cx, layout);
     write(&cx.sb.repo("app"), [("bin.dat", b"\0\x01\x02")]);
     let doc = diff(cx, "bin.dat", None);
@@ -234,6 +236,14 @@ fn a_binary_side_shows_what_each_side_is(cx: &mut TestAppContext) {
         label(cx, "diff.placeholder").as_deref(),
         Some("HEAD: No file here. Working tree: Binary file.")
     );
+
+    let doc = readme(cx);
+    let (started, release) = detached_core::testutil::hold_file_read(&doc.repo, &doc.path);
+    show(cx, doc, true);
+    wait_until(cx, |_| started.try_recv().is_ok());
+    assert!(cx.find("diff.placeholder").is_some());
+    release.send(()).unwrap();
+    wait_until(cx, |cx| focused(cx) == Some(true));
 }
 
 #[gpui_kit::test]
