@@ -63,6 +63,7 @@ fn pipeline(p: &Project, v: &Value) -> Pipeline {
     let st = s(&v["status"]);
     Pipeline {
         id: v["id"].as_u64().unwrap_or_default(),
+        workflow_id: None,
         project: p.clone(),
         status: status(&st),
         ref_: s(&v["ref"]),

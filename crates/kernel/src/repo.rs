@@ -3,15 +3,33 @@
 use std::time::Duration;
 
 use detached_core::api;
-use detached_core::types::RepoStatus;
-use gpui::{App, Context};
+use detached_core::types::{RepoStatus, WorkingLineCounts};
+use gpui::{App, Context, Entity};
 
 use crate::activity::Activity;
 use crate::blocking;
+use crate::resource::{self, On, Policy, Resource};
 use crate::workspace::Workspace;
 
 /// How long a successful sync's outcome stays.
 const FADE: Duration = Duration::from_secs(6);
+
+pub fn working_line_counts(cx: &mut App, repo: &str) -> Entity<Resource<WorkingLineCounts>> {
+    let path = repo.to_owned();
+    resource::get(cx, format!("working-line-counts\0{repo}"), || {
+        Resource::new(
+            Policy {
+                fresh_for: None,
+                poll: None,
+            },
+            move |cx| {
+                let (core, path) = (crate::core(cx).clone(), path.clone());
+                move || api::working_line_counts(&core, &path)
+            },
+        )
+        .on(On::Status(repo.into()))
+    })
+}
 
 /// A sync's result.
 #[derive(Clone, Debug, PartialEq)]

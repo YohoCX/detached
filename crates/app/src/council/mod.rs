@@ -7,6 +7,8 @@ mod stats;
 mod task;
 pub mod timeline;
 
+pub(crate) use task::open as show_finding;
+
 use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{

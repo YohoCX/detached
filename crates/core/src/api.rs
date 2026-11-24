@@ -199,8 +199,24 @@ pub fn pull(s: &AppState, repo: &str, op_id: u64, progress: Progress) -> Result<
     s.op(op_id, |c| pulls::pull(s, Path::new(repo), c, progress))
 }
 
+pub fn pull_confirmed(
+    s: &AppState,
+    repo: &str,
+    expected: &RepoStatus,
+    op_id: u64,
+    progress: Progress,
+) -> Result<PullResult> {
+    s.op(op_id, |c| {
+        pulls::pull_with_status(s, Path::new(repo), Some(expected), c, progress)
+    })
+}
+
 pub fn list_changes(s: &AppState, repo: &str, from: &Side, to: &Side) -> Result<Vec<FileChange>> {
     diff::list_changes(&s.env(), Path::new(repo), from, to)
+}
+
+pub fn working_line_counts(s: &AppState, repo: &str) -> Result<WorkingLineCounts> {
+    diff::working_line_counts(&s.env(), Path::new(repo))
 }
 
 pub fn compare_base(s: &AppState, repo: &str, base: Option<&str>) -> Result<CompareBase> {

@@ -11,7 +11,7 @@ use detached_core::host::{Op, ProcAct};
 use detached_core::processes::{self, Agents, Entry, Output, Run};
 use futures::StreamExt;
 use futures::channel::{mpsc, oneshot};
-use gpui::{App, AppContext, Context, Entity, Global, Task};
+use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 
 use crate::activity::{Activity, Level};
 use crate::blocking::{self, FRAME};
@@ -86,6 +86,10 @@ impl Proc {
 struct Procs(Vec<Entity<Proc>>);
 
 impl Global for Procs {}
+
+pub fn observe_runs<V: 'static>(cx: &mut Context<V>) -> Subscription {
+    cx.observe_global::<Procs>(|_, cx| cx.notify())
+}
 
 /// `repo`'s definitions.
 pub fn definitions(cx: &mut App, repo: &str) -> Entity<Resource<Vec<Entry>>> {

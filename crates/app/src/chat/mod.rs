@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Entity, Global, InteractiveElement, IntoElement,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, SystemNotification, Window,
-    div, px,
+    AnyElement, AnyView, App, AppContext, Context, Entity, Global, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    SystemNotification, Window, div, px,
 };
 
 pub use session::{Chat, State};
@@ -126,7 +126,7 @@ fn owned_here(chat: &Chat, cx: &App) -> bool {
         .is_none_or(|(ws, session)| w.id() == Some(ws) && w.session_id() == session)
 }
 
-fn foreground(repo: String, n: u32, cx: &mut App) {
+pub(crate) fn foreground(repo: String, n: u32, cx: &mut App) {
     let Some(chat) = find(&repo, n, cx) else {
         return;
     };
@@ -266,6 +266,10 @@ pub fn open(cx: &App) -> Vec<(String, u32, Entity<Chat>)> {
     });
     all.sort_by_cached_key(|(r, n, _)| (label(r, cx), *n));
     all
+}
+
+pub(crate) fn observe_open<V: 'static>(cx: &mut Context<V>) -> Subscription {
+    cx.observe_global::<Chats>(|_, cx| cx.notify())
 }
 
 /// The open chats with something in them, each as "place · title".

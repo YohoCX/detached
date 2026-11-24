@@ -262,11 +262,11 @@ pub(crate) fn visible(cx: &App) -> bool {
     cx.try_global::<Visible>().is_none_or(|v| v.0)
 }
 
-type Watched = (Vec<RepoInfo>, Option<String>);
+type Watched = (Vec<RepoInfo>, Vec<String>);
 
 struct Watch {
     watcher: Arc<Watcher>,
-    /// The repos and current repo the watcher was last set to.
+    /// The repositories and active worktrees applied to the watcher.
     applied: Option<Watched>,
     busy: bool,
     _workspace: Subscription,
@@ -274,7 +274,7 @@ struct Watch {
 
 impl Global for Watch {}
 
-/// Starts the watcher on the workspace's repos and the current repo's worktree. Without it,
+/// Starts the watcher on the workspace's repositories and active worktrees. Without it,
 /// statuses refresh on activation alone.
 pub fn watch(cx: &mut App) {
     let (tx, mut rx) = mpsc::unbounded();
@@ -303,30 +303,49 @@ pub fn watching(cx: &App) -> bool {
     cx.try_global::<Watch>().is_some_and(|watch| {
         let applied = watch.applied.as_ref();
         !watch.busy
-            && applied
-                .is_some_and(|(r, c)| r.iter().eq(w.listed_repos()) && c.as_deref() == w.current())
+            && applied.is_some_and(|(repos, paths)| {
+                repos.iter().eq(w.listed_repos()) && *paths == worktrees(w)
+            })
     })
+}
+
+fn worktrees(work: &Workspace) -> Vec<String> {
+    if work.archive() {
+        return work.current().map(str::to_owned).into_iter().collect();
+    }
+    work.session_repos()
+        .iter()
+        .map(|r| r.path.clone())
+        .collect()
 }
 
 /// Sets the watcher to the workspace, one set at a time, the last one to what it is by then.
 fn follow(cx: &mut App) {
     let w = Workspace::get(cx);
-    let want = (
-        w.listed_repos().cloned().collect(),
-        w.current().map(String::from),
-    );
+    let want = (w.listed_repos().cloned().collect(), worktrees(w));
     let watch = cx.global_mut::<Watch>();
     if watch.busy || watch.applied.as_ref() == Some(&want) {
         return;
     }
     watch.busy = true;
-    let (watcher, (repos, current)) = (watch.watcher.clone(), want.clone());
-    let set = blocking::run(cx, move || watcher.set(&repos, current.as_deref()));
+    let (watcher, (repos, paths)) = (watch.watcher.clone(), want.clone());
+    let set = blocking::run(cx, move || watcher.set(&repos, &paths));
     cx.spawn(async move |cx| {
         set.await;
         cx.update(|cx| {
             let watch = cx.global_mut::<Watch>();
-            (watch.busy, watch.applied) = (false, Some(want));
+            watch.busy = false;
+            let before = watch.applied.replace(want.clone());
+            if watching(cx) {
+                for path in &want.1 {
+                    if before
+                        .as_ref()
+                        .is_none_or(|(_, paths)| !paths.contains(path))
+                    {
+                        status(cx, path).detach();
+                    }
+                }
+            }
             follow(cx);
         });
     })

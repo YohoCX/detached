@@ -14,7 +14,7 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::SelectState;
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext, Context, Entity, EntityId, FontWeight,
+    AnyElement, AnyView, App, AppContext, Context, Entity, EntityId, FontWeight, Global,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
     px,
@@ -63,6 +63,16 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 
 struct ProcessDoc;
 
+#[derive(Default)]
+struct RevealRun(Option<(String, String)>);
+
+impl Global for RevealRun {}
+
+pub(crate) fn show_run(repo: String, name: String, w: &mut Window, cx: &mut App) {
+    cx.default_global::<RevealRun>().0 = Some((repo.clone(), name));
+    dock::open_doc(Doc::Process { repo }, true, w, cx);
+}
+
 impl DocKind for ProcessDoc {
     fn category(&self, _: &Doc) -> &'static str {
         "code"
@@ -88,6 +98,19 @@ impl DocKind for ProcessDoc {
     fn running(&self, doc: &Doc, _: Option<&AnyView>, cx: &App) -> Option<String> {
         let names = running(doc.repo()?, cx);
         (!names.is_empty()).then(|| format!("Running: {}", names.join(", ")))
+    }
+
+    fn activated(&self, view: &AnyView, _: &mut Window, cx: &mut App) {
+        if let Ok(view) = view.clone().downcast::<Processes>()
+            && let Some((repo, name)) = cx.try_global::<RevealRun>().and_then(|r| r.0.clone())
+            && view.read(cx).fixed.as_ref() == Some(&repo)
+        {
+            cx.default_global::<RevealRun>().0 = None;
+            view.update(cx, |v, cx| {
+                (v.selected, v.form) = (Some(name), None);
+                cx.notify();
+            });
+        }
     }
 
     fn closing(&self, doc: &Doc, cx: &mut App) {

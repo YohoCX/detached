@@ -33,6 +33,7 @@ pub fn status(env: &Env, repo: &Path) -> Result<RepoStatus> {
         "status",
         "--porcelain=v2",
         "--branch",
+        "--ahead-behind",
         "-z",
         "--untracked-files=all",
     ];
@@ -61,6 +62,7 @@ fn parse_status(text: &str) -> RepoStatus {
         branch: None,
         head: None,
         upstream: None,
+        upstream_gone: false,
         ahead: 0,
         behind: 0,
         changes: vec![],
@@ -73,6 +75,7 @@ fn parse_status(text: &str) -> RepoStatus {
         (v.len() == n).then(|| (v[0].to_string(), v[n - 1].to_string()))
     };
     let mut fields = text.split('\0');
+    let mut compared = false;
     while let Some(f) = fields.next() {
         let (xy, path, orig_path, conflicted) = match f.split_once(' ') {
             Some(("#", header)) => {
@@ -81,6 +84,7 @@ fn parse_status(text: &str) -> RepoStatus {
                     Some(("branch.head", v)) => st.branch = (v != "(detached)").then(|| v.into()),
                     Some(("branch.upstream", v)) => st.upstream = Some(v.into()),
                     Some(("branch.ab", v)) => {
+                        compared = true;
                         for n in v.split(' ') {
                             match n.split_at_checked(1) {
                                 Some(("+", a)) => st.ahead = a.parse().unwrap_or(0),
@@ -117,6 +121,7 @@ fn parse_status(text: &str) -> RepoStatus {
             conflicted,
         });
     }
+    st.upstream_gone = st.head.is_some() && st.upstream.is_some() && !compared;
     st
 }
 
@@ -135,12 +140,14 @@ mod tests {
         sb.git(&other, &["push", "-q"]);
         let head = sb.commit(&work, "h", "x\n", "local work");
         sb.git(&work, &["fetch", "-q"]);
+        sb.git(&work, &["config", "status.aheadBehind", "false"]);
 
         let st = status(&sb.state.env(), &work).unwrap();
         assert_eq!(st.branch.as_deref(), Some("main"));
         assert_eq!(st.head.as_deref(), Some(head.as_str()));
         assert_eq!(st.upstream.as_deref(), Some("origin/main"));
         assert_eq!((st.ahead, st.behind), (1, 2));
+        assert!(!st.upstream_gone);
         assert!(st.changes.is_empty());
         let last = st.last_commit.unwrap();
         assert_eq!(
@@ -149,6 +156,11 @@ mod tests {
         );
         assert!(last.time > 1_700_000_000);
         assert_eq!(st.in_progress, None);
+
+        sb.git(&work, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let st = status(&sb.state.env(), &work).unwrap();
+        assert_eq!(st.upstream.as_deref(), Some("origin/main"));
+        assert!(st.upstream_gone);
     }
 
     #[test]

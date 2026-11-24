@@ -51,6 +51,16 @@ struct Fixes(Vec<Entity<Fix>>);
 
 impl Global for Fixes {}
 
+pub fn all(cx: &App) -> impl Iterator<Item = Entity<Fix>> + '_ {
+    cx.try_global::<Fixes>()
+        .into_iter()
+        .flat_map(|f| f.0.iter().cloned())
+}
+
+pub fn observe_runs<V: 'static>(cx: &mut Context<V>) -> Subscription {
+    cx.observe_global::<Fixes>(|_, cx| cx.notify())
+}
+
 /// The live Fix of a run's finding.
 pub fn find(cx: &App, [repo, task, run, finding]: [&str; 4]) -> Option<Entity<Fix>> {
     let all = cx.try_global::<Fixes>()?.0.iter();

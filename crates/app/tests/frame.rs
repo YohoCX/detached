@@ -9,7 +9,7 @@ use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, TestAppContext, VisualTestContext};
 use kernel::invalidate;
 use kernel::repo::Repo;
 
@@ -353,6 +353,188 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         cx.workspace(|w, _| w.current().map(String::from)),
         Some(api)
     );
+}
+
+#[gpui_kit::test]
+fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_ones(
+    cx: &mut TestAppContext,
+) {
+    use detached_core::git::runner::{Kind, Opts, run};
+
+    let cx = &mut open_app_with(cx, |sb| {
+        let conflict = sb.clone_pair("repos/conflict");
+        sb.git(&conflict, &["switch", "-qc", "side"]);
+        sb.commit(&conflict, "f", "side\n", "side");
+        sb.git(&conflict, &["switch", "-q", "main"]);
+        sb.commit(&conflict, "f", "main\n", "main");
+        let merge = run(
+            &sb.state.env(),
+            &conflict,
+            &["merge", "side"],
+            Kind::Write,
+            Opts::default(),
+        )
+        .unwrap();
+        assert_eq!(merge.code, 1);
+        let dirty = sb.clone_pair("repos/dirty");
+        std::fs::write(dirty.join("f"), "local edit\n").unwrap();
+        sb.clone_pair("repos/clean");
+        let detached = sb.clone_pair("repos/detached");
+        sb.git(&detached, &["switch", "-q", "--detach"]);
+        let gone = sb.clone_pair("repos/gone");
+        sb.git(&gone, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        repo(sb, "local");
+    });
+    let [clean, conflict, detached, dirty, gone, local] =
+        ["clean", "conflict", "detached", "dirty", "gone", "local"]
+            .map(|name| checkout_index(cx, name));
+
+    assert_eq!(
+        label(cx, "overview.clean").as_deref(),
+        Some("Up to date · 1")
+    );
+    assert!(cx.find(("overview.repository", clean)).is_none());
+    assert_eq!(
+        label(cx, ("overview.operation", conflict)).as_deref(),
+        Some("Merge in progress")
+    );
+    assert_eq!(
+        label(cx, ("overview.conflict", conflict)).as_deref(),
+        Some("1 conflict")
+    );
+    assert!(cx.find(("overview.switch", conflict)).is_none());
+    assert_eq!(
+        label(cx, ("overview.status", dirty)).as_deref(),
+        Some("1 changed file")
+    );
+    assert_eq!(
+        label(cx, ("overview.sync", dirty)).as_deref(),
+        Some("Up to date with origin/main")
+    );
+    let top =
+        |cx: &mut VisualTestContext, i| cx.find(("overview.repository", i)).unwrap().bounds().top();
+    assert!(top(cx, conflict) < top(cx, dirty));
+    assert!(
+        label(cx, ("overview.branch", detached))
+            .unwrap()
+            .starts_with("Detached HEAD")
+    );
+    assert_eq!(
+        label(cx, ("overview.upstream", local)).as_deref(),
+        Some("No upstream")
+    );
+    assert_eq!(
+        label(cx, ("overview.upstream", gone)).as_deref(),
+        Some("origin/main")
+    );
+    assert!(label(cx, ("overview.sync", gone)).unwrap().contains("gone"));
+
+    let local_path = cx.sb.path("repos/local").display().to_string();
+    for (status, shown) in [
+        (None, "Loading status…"),
+        (
+            Some(Err("Could not read checkout".into())),
+            "Status unavailable",
+        ),
+    ] {
+        cx.repo(&local_path, |repo, cx| {
+            repo.status = status;
+            cx.notify();
+        });
+        assert_eq!(
+            label(cx, ("overview.status", local)).as_deref(),
+            Some(shown)
+        );
+    }
+
+    cx.click("overview.clean");
+    assert!(cx.find(("overview.repository", clean)).is_some());
+    assert_eq!(cx.find("overview.clean").unwrap().expanded(), Some(true));
+    cx.click("overview.clean");
+    assert!(cx.find(("overview.repository", clean)).is_none());
+
+    let path = cx.workspace(|w, _| w.session_repos()[conflict].path.clone());
+    let file = format!("overview.file.{path}/f");
+    assert!(cx.find(file.clone()).is_none());
+    cx.click(("overview.repository", conflict));
+    cx.click(file);
+    wait_until(cx, |cx| cx.find("viewer.conflict").is_some());
+}
+
+#[gpui_kit::test]
+fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut TestAppContext) {
+    let app = &mut open_app_with(cx, |sb| {
+        let checkout = sb.clone_pair("repos/pull");
+        let seed = sb.path("seed");
+        sb.commit(&seed, "new", "incoming\n", "incoming");
+        sb.git(&seed, &["push", "-q"]);
+        sb.git(&checkout, &["fetch", "-q"]);
+        std::fs::write(checkout.join("f"), "local edit\n").unwrap();
+    });
+    let checkout = app.sb.path("repos/pull");
+    let path = checkout.display().to_string();
+    let original = app.sb.git(&checkout, &["rev-parse", "HEAD"]);
+    let ix = checkout_index(app, "pull");
+
+    app.click(("overview.pull", ix));
+    let (_, preview) = cx.pending_prompt().expect("a native Pull confirmation");
+    assert!(preview.contains("main is 1 commit behind origin/main"));
+    assert!(preview.contains("fast-forward"));
+    assert!(preview.contains("local edits"));
+    cx.simulate_prompt_answer("Cancel");
+    settle(app);
+    assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
+
+    app.click(("overview.pull", ix));
+    app.sb.git(&checkout, &["switch", "-qc", "different"]);
+    app.sb.git(&checkout, &["branch", "-u", "origin/main"]);
+    cx.simulate_prompt_answer("Pull");
+    wait_until(app, |cx| {
+        cx.activity(|a, _| {
+            a.message
+                .as_ref()
+                .is_some_and(|m| m.text.contains("checkout changed"))
+        })
+    });
+    assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
+
+    app.sb.git(&checkout, &["switch", "-q", "main"]);
+    app.update(|_, cx| invalidate::status(cx, &path).detach());
+    wait_until(app, |cx| {
+        cx.repo(&path, |r, _| {
+            r.status().and_then(|s| s.branch.as_deref()) == Some("main")
+        })
+    });
+    app.click(("overview.pull", ix));
+    cx.simulate_prompt_answer("Pull");
+    wait_until(app, |cx| {
+        cx.repo(&path, |r, _| {
+            r.outcome
+                .as_ref()
+                .is_some_and(|o| o.ok && o.text.starts_with("Fast-forwarded"))
+        })
+    });
+    assert_eq!(
+        app.sb.git(&checkout, &["rev-parse", "HEAD"]),
+        app.sb.git(&checkout, &["rev-parse", "origin/main"])
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("f")).unwrap(),
+        "local edit\n"
+    );
+}
+
+fn checkout_index(cx: &mut VisualTestContext, name: &str) -> usize {
+    cx.workspace(|w, _| {
+        w.session_repos()
+            .iter()
+            .position(|r| r.name == name)
+            .expect("a listed checkout")
+    })
+}
+
+fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
+    cx.find(id).and_then(|e| e.label().map(String::from))
 }
 
 #[gpui_kit::test]

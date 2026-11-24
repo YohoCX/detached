@@ -797,6 +797,9 @@ fn switch_branch(cx: &mut VisualTestContext) {
             .position(|r| Some(r.path.as_str()) == w.current())
             .expect("current repository is a member")
     });
+    if cx.find(("overview.repository", index)).is_none() {
+        cx.click("overview.clean");
+    }
     cx.click(("overview.switch", index));
     wait_until(cx, |cx| {
         cx.find("branches.query")

@@ -42,7 +42,7 @@ struct TaskView {
     read_only: bool,
 }
 
-fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) {
+pub(crate) fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) {
     if let Some(finding) = finding {
         kernel::ui_state::set(&selection_key(repo, task, round), finding, cx);
         kernel::ui_state::set("council.mode", 2usize, cx);

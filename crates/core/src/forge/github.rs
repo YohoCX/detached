@@ -43,6 +43,7 @@ fn pipeline(p: &Project, v: &Value) -> Pipeline {
     let done = v["status"] == "completed";
     Pipeline {
         id: v["id"].as_u64().unwrap_or_default(),
+        workflow_id: v["workflow_id"].as_u64(),
         project: p.clone(),
         status: status(v),
         ref_: s(&v["head_branch"]),

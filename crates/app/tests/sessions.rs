@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use detached_core::sessions;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, SharedString, TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, Modifiers, SharedString, TestAppContext, VisualTestContext};
 use kernel::doc::{Doc, Location};
 use kernel::ui_state;
 use serde_json::json;
@@ -63,7 +63,7 @@ fn root(cx: &mut VisualTestContext, i: usize) -> Option<String> {
 }
 
 #[gpui_kit::test]
-fn overview_shows_real_changes_and_does_not_repeat_the_shared_branch(cx: &mut TestAppContext) {
+fn overview_previews_live_changes_from_the_sessions_exact_worktrees(cx: &mut TestAppContext) {
     let mut session = None;
     let app = &mut open_app_with(cx, |sb| {
         let api = checkout(sb, "api");
@@ -80,53 +80,199 @@ fn overview_shows_real_changes_and_does_not_repeat_the_shared_branch(cx: &mut Te
     });
     let session = session.unwrap();
     app.click(SharedString::from(format!("sessions.row.{}", session.id)));
-    wait_until(app, |cx| {
-        (0usize..2).all(|i| label(cx, ("overview.status", i)).as_deref() == Some("Clean"))
+    wait_until(app, |app| {
+        label(app, "overview.changeNote").as_deref() == Some("No working changes")
     });
-    assert_eq!(
-        label(app, "overview.repositories").as_deref(),
-        Some("Repositories")
-    );
-    for i in 0usize..2 {
-        assert!(app.find(("overview.branch", i)).is_none());
-        assert!(app.find(("overview.sync", i)).is_none());
-        assert!(app.find(("overview.log", i)).unwrap().visible());
-    }
 
-    let api = session
-        .members
-        .iter()
-        .find(|m| m.path.ends_with("api-topic"))
-        .unwrap();
+    let member = |name: &str| {
+        session
+            .members
+            .iter()
+            .find(|m| m.path.ends_with(name))
+            .unwrap()
+    };
+    let api = member("api-topic");
+    let web = member("web-topic");
     let path = std::path::Path::new(&api.path);
-    let index = (0usize..2)
-        .find(|&i| label(app, ("overview.repository", i)).as_deref() == Some("api"))
-        .unwrap();
-    let file = SharedString::from(format!("overview.file.{}/api-topic.txt", api.path));
-    assert!(app.find(file.clone()).is_none());
+    let other_path = std::path::Path::new(&web.path);
+    let row = |repo: &str, file: &str| SharedString::from(format!("overview.file.{repo}/{file}"));
+    let has_line = |app: &mut VisualTestContext, wanted: &str| {
+        (0usize..)
+            .map_while(|i| label(app, ("overview.preview.line", i)))
+            .any(|line| line == wanted)
+    };
+    let refresh = |app: &mut VisualTestContext, worktree: &str| {
+        app.update(|_, cx| kernel::invalidate::status(cx, worktree).detach());
+    };
+    let api_file = row(&api.path, "api-topic.txt");
+    let outside = row(&api.repo, "api-main.txt");
     app.sb.git(path, &["remote", "add", "origin", "."]);
     app.sb
         .git(path, &["update-ref", "refs/remotes/origin/topic", "HEAD^"]);
     app.sb
         .git(path, &["branch", "--set-upstream-to=origin/topic", "topic"]);
-    std::fs::write(path.join("api-topic.txt"), "Updated content\n").unwrap();
-    app.update(|_, cx| kernel::invalidate::status(cx, &api.path).detach());
-    wait_until(app, |cx| {
-        label(cx, ("overview.status", index)).as_deref() == Some("1 changed file")
+    refresh(app, &api.path);
+    wait_until(app, |app| {
+        label(app, ("overview.changeSync", 0usize)).as_deref() == Some("↑1 ahead of origin/topic")
     });
     assert_eq!(
-        label(app, ("overview.sync", index)).as_deref(),
-        Some("↑1 ahead of origin/topic")
+        label(app, "overview.changeNote").as_deref(),
+        Some("No working changes")
     );
+    std::fs::write(
+        std::path::Path::new(&api.repo).join("api-main.txt"),
+        "Other checkout\n",
+    )
+    .unwrap();
+    refresh(app, &api.repo);
+    wait_until(app, |app| {
+        app.update(|_, cx| {
+            kernel::repo::Repo::get(cx, &api.repo)
+                .and_then(kernel::repo::Repo::status)
+                .is_some_and(|status| {
+                    status
+                        .changes
+                        .iter()
+                        .any(|change| change.path == "api-main.txt")
+                })
+        })
+    });
+    std::fs::write(path.join("api-topic.txt"), "Updated content\n").unwrap();
+    refresh(app, &api.path);
+    wait_until(app, |app| has_line(app, "+Updated content"));
+    assert!(app.find(api_file.clone()).unwrap().visible());
+    assert!(app.find(outside).is_none());
     assert_eq!(
-        label(app, ("overview.status", 1 - index)).as_deref(),
-        Some("Clean")
+        label(app, "overview.lineCounts").as_deref(),
+        Some("1 addition, 1 deletion")
     );
-    assert!(app.find(file.clone()).unwrap().visible());
-    app.click(("overview.repository", index));
-    assert!(app.find(file.clone()).is_none());
-    app.click(("overview.repository", index));
-    assert!(app.find(file).unwrap().visible());
+
+    std::fs::write(path.join("api-topic.txt"), "Updated again\n").unwrap();
+    refresh(app, &api.path);
+    wait_until(app, |app| has_line(app, "+Updated again"));
+
+    std::fs::write(other_path.join("badge.bin"), b"\0binary").unwrap();
+    std::fs::write(other_path.join("added.txt"), "Fresh file\nWith two lines\n").unwrap();
+    std::fs::remove_file(other_path.join("web-topic.txt")).unwrap();
+    refresh(app, &web.path);
+    wait_until(app, |app| {
+        label(app, "overview.changeCount").as_deref()
+            == Some("4 files across 2 repositories · HEAD → working tree")
+    });
+    let deleted_stats = SharedString::from(format!("overview.lines.{}/web-topic.txt", web.path));
+    wait_until(app, |app| {
+        label(app, deleted_stats.clone()).as_deref() == Some("0 additions, 1 deletion")
+    });
+    app.click(row(&web.path, "badge.bin"));
+    wait_until(app, |app| {
+        label(app, "overview.preview.note").as_deref() == Some("New binary file")
+    });
+    assert_eq!(app.find(api_file.clone()).unwrap().selected(), Some(false));
+    app.click(row(&web.path, "added.txt"));
+    wait_until(app, |app| has_line(app, "+With two lines"));
+    app.click(row(&web.path, "web-topic.txt"));
+    wait_until(app, |app| has_line(app, "-Session scope marker"));
+    app.sb.git(path, &["mv", "api-topic.txt", "renamed.txt"]);
+    refresh(app, &api.path);
+    let renamed = row(&api.path, "renamed.txt");
+    wait_until(app, |app| app.find(renamed.clone()).is_some());
+    assert!(app.find(api_file).is_none());
+    app.click(renamed);
+    wait_until(app, |app| has_line(app, "+Updated again"));
+    assert_eq!(
+        label(app, "overview.rename").as_deref(),
+        Some("api-topic.txt → renamed.txt")
+    );
+
+    app.click("overview.fullDiff");
+    wait_until(app, |app| app.find("doc.diff.renamed.txt").is_some());
+    app.click("doc.session-overview");
+    app.click(row(&web.path, "badge.bin"));
+    app.update(|window, cx| {
+        window.click_with_modifiers(
+            "overview.fullDiff",
+            Modifiers {
+                alt: true,
+                ..Modifiers::default()
+            },
+            cx,
+        )
+    });
+    wait_until(app, |app| {
+        let a = app.find("doc.session-overview").unwrap().bounds();
+        app.find("doc.diff.badge.bin")
+            .is_some_and(|tab| tab.bounds().left() > a.right())
+    });
+}
+
+#[gpui_kit::test]
+fn overview_watches_non_current_checkouts_in_main_and_named_sessions(cx: &mut TestAppContext) {
+    let mut session = None;
+    let app = &mut open_app_with(cx, |sb| {
+        let api = checkout(sb, "api");
+        let web = checkout(sb, "web");
+        let web_member = sb.path("repos/web-topic");
+        sb.git(
+            &sb.path("repos/web"),
+            &[
+                "worktree",
+                "move",
+                web.to_str().unwrap(),
+                web_member.to_str().unwrap(),
+            ],
+        );
+        session = Some(
+            sessions::adopt(
+                &sb.state,
+                &workspace(sb),
+                "Maintenance",
+                &[api.display().to_string(), web_member.display().to_string()],
+            )
+            .unwrap(),
+        );
+    });
+    let session = session.unwrap();
+    let web = session
+        .members
+        .iter()
+        .find(|m| m.path.ends_with("web-topic"))
+        .unwrap();
+    let watching =
+        |app: &mut VisualTestContext| app.update(|_, cx| kernel::invalidate::watching(cx));
+    let current_is_other = |app: &mut VisualTestContext, path: &str| {
+        app.update(|_, cx| {
+            kernel::workspace::Workspace::get(cx)
+                .current()
+                .is_some_and(|p| p != path)
+        })
+    };
+    let changed = |app: &mut VisualTestContext, path: &str| {
+        app.update(|_, cx| {
+            kernel::repo::Repo::get(cx, path)
+                .and_then(kernel::repo::Repo::status)
+                .is_some_and(|status| !status.changes.is_empty())
+        })
+    };
+    app.update(|_, cx| kernel::invalidate::watch(cx));
+    wait_watched(app, watching);
+    assert!(current_is_other(app, &web.repo));
+    let main_file = std::path::Path::new(&web.repo).join("web-main.txt");
+    std::fs::write(&main_file, "Changed in Main\n").unwrap();
+    wait_watched(app, |app| changed(app, &web.repo));
+    std::fs::write(main_file, "Main scope marker\n").unwrap();
+    wait_watched(app, |app| !changed(app, &web.repo));
+
+    app.click(SharedString::from(format!("sessions.row.{}", session.id)));
+    wait_watched(app, watching);
+    assert!(current_is_other(app, &web.path));
+    let member_file = std::path::Path::new(&web.path).join("new.txt");
+    let line = |app: &mut VisualTestContext, expected: &str| {
+        label(app, ("overview.preview.line", 0usize)).as_deref() == Some(expected)
+    };
+    std::fs::write(&member_file, "Saved in the session\n").unwrap();
+    wait_watched(app, |app| line(app, "+Saved in the session"));
+    std::fs::write(member_file, "Saved again\n").unwrap();
+    wait_watched(app, |app| line(app, "+Saved again"));
 }
 
 #[gpui_kit::test]
@@ -1300,9 +1446,17 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
         })
     };
     wait_until(&mut app, running);
+    let process = SharedString::from(format!("overview.process.{path}.serve"));
+    wait_until(&mut app, |app| app.find(process.clone()).is_some());
+    app.click(process.clone());
+    wait_until(&mut app, |app| {
+        label(app, "processes.state").is_some_and(|s| s.starts_with("Running"))
+    });
+    app.click("doc.session-overview");
     refused(&mut app, "serve is running");
     app.update(|_, cx| kernel::proc::stop(cx, &path, "serve", false).detach());
     wait_until(&mut app, |cx| !running(cx));
+    wait_until(&mut app, |app| app.find(process.clone()).is_none());
 
     let shell = app.update(|window, cx| {
         Terminals::global(cx).update(cx, |t, cx| {
@@ -1398,4 +1552,110 @@ fn revealing_a_background_document_restores_its_session_and_existing_tab(cx: &mu
     });
     assert!(in_list(&mut app, &named));
     assert_eq!(app.workspace(|w, _| w.shown().cloned()), Some(doc));
+}
+
+#[gpui_kit::test]
+fn a_clean_overview_starts_a_chat_in_the_chosen_member(cx: &mut TestAppContext) {
+    let mut set = None;
+    let app = &mut open_app_with(cx, |sb| {
+        let paths = ["api", "web"].map(|name| checkout(sb, name).display().to_string());
+        repo(sb, "outside");
+        claude(sb, &detached_core::testutil::claude::fake());
+        set = Some(sessions::adopt(&sb.state, &workspace(sb), "Feature", &paths).unwrap());
+    });
+    let set = set.unwrap();
+    app.click(SharedString::from(format!("sessions.row.{}", set.id)));
+    wait_until(app, |cx| cx.find("overview.start").is_some());
+    assert!(app.find("overview.needsYou").is_none());
+    assert!(app.find("overview.running").is_none());
+    app.click("overview.openFile");
+    wait_until(app, |cx| {
+        label(cx, "palette").as_deref() == Some("Go to File")
+    });
+    app.press("escape");
+    app.click("overview.chat");
+    wait_until(app, |cx| cx.find(("palette.row", 1usize)).is_some());
+    assert!(app.find(("palette.row", 2usize)).is_none());
+    app.input("web");
+    wait_until(app, |cx| {
+        label(cx, ("palette.row", 0usize)).as_deref() == Some("web")
+    });
+    app.press("enter");
+    let web = set
+        .members
+        .iter()
+        .find(|m| m.path.ends_with("web-topic"))
+        .unwrap();
+    let shown = app.workspace(|w, _| w.shown().cloned());
+    assert!(
+        matches!(&shown, Some(Doc::Chat { repo, .. }) if repo == &web.path),
+        "expected chat on {}, showing {shown:?}",
+        web.path
+    );
+}
+
+#[gpui_kit::test]
+fn overview_follows_a_chat_permission_only_in_its_own_session(cx: &mut TestAppContext) {
+    let mut sets = vec![];
+    let app = &mut open_app_with(cx, |sb| {
+        claude(sb, &detached_core::testutil::claude::fake());
+        for name in ["api", "web"] {
+            let path = checkout(sb, name);
+            sets.push(
+                sessions::adopt(
+                    &sb.state,
+                    &workspace(sb),
+                    name,
+                    &[path.display().to_string()],
+                )
+                .unwrap(),
+            );
+        }
+    });
+    let [api, web] = sets.as_slice() else {
+        unreachable!()
+    };
+    let repo = api.members[0].path.clone();
+    let api_tab = SharedString::from(format!("sessions.row.{}", api.id));
+    let web_tab = SharedString::from(format!("sessions.row.{}", web.id));
+    let activity = SharedString::from(format!("overview.chat.{repo}.0"));
+    app.click(api_tab.clone());
+    wait_until(app, |app| in_list(app, &api.id));
+    app.update(|_, cx| {
+        detached_app::chat::ask(repo.clone(), "wait overview-allow; ask".into(), cx)
+    });
+    wait_until(app, |app| app.find("doc.chat").is_some());
+    app.click("doc.session-overview");
+    wait_until(app, |app| app.find("overview.running").is_some());
+    std::fs::write(app.sb.path("claude/overview-allow"), "").unwrap();
+    wait_until(app, |app| {
+        label(app, activity.clone()).is_some_and(|s| s.starts_with("Permission requested"))
+    });
+    assert!(app.find("overview.running").is_none());
+    app.click(web_tab);
+    wait_until(app, |app| {
+        in_list(app, &web.id) && app.find("overview.start").is_some()
+    });
+    assert!(app.find("overview.needsYou").is_none());
+    app.click(api_tab);
+    wait_until(app, |app| app.find(activity.clone()).is_some());
+    app.click(activity);
+    assert_eq!(
+        app.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::Chat { repo, n: 0 })
+    );
+    let mut deny = None;
+    wait_until(app, |app| {
+        deny = app.update(|w, cx| {
+            w.render_frame(cx);
+            (0usize..)
+                .take_while(|&i| w.try_find(("chat.item", i)).is_some())
+                .find(|&i| w.try_find(("chat.deny", i)).is_some())
+        });
+        deny.is_some()
+    });
+    app.click(("chat.deny", deny.unwrap()));
+    app.click("doc.session-overview");
+    wait_until(app, |app| app.find("overview.start").is_some());
+    assert!(app.find("overview.needsYou").is_none());
 }

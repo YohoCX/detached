@@ -12,7 +12,7 @@ use crate::git::remotes::lfs_cred;
 use crate::git::runner::{Kind, Opts, out, run};
 use crate::git::{arg, status};
 use crate::state::AppState;
-use crate::types::{CompareBase, Content, FileChange, FileDiff, Side};
+use crate::types::{CompareBase, Content, FileChange, FileDiff, Side, WorkingLineCounts};
 
 const MAX_SIZE: u64 = 5 * 1024 * 1024;
 
@@ -26,6 +26,48 @@ fn tree(side: &Side) -> Option<&str> {
 
 fn literal(path: &str) -> String {
     format!(":(literal){path}")
+}
+
+pub fn working_line_counts(env: &Env, repo: &Path) -> Result<WorkingLineCounts> {
+    let text = out(
+        env,
+        repo,
+        &[
+            "diff",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--diff-algorithm=histogram",
+            "--ignore-submodules=all",
+            "HEAD",
+            "--",
+        ],
+        Kind::Read,
+    )?;
+    let mut fields = text.split_terminator('\0');
+    let mut counts = WorkingLineCounts::new();
+    while let Some(record) = fields.next() {
+        let mut columns = record.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(mut path)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        if path.is_empty() {
+            // A rename has two extra NUL-delimited paths, source then destination.
+            let (Some(_), Some(destination)) = (fields.next(), fields.next()) else {
+                break;
+            };
+            path = destination;
+        }
+        counts.insert(
+            path.to_owned(),
+            added.parse().ok().zip(removed.parse().ok()),
+        );
+    }
+    Ok(counts)
 }
 
 /// `base`, or the remote's default branch, with its merge base against HEAD.
@@ -396,6 +438,23 @@ mod tests {
 
     fn row(path: &str, x: char, y: char) -> (String, char, char, Option<String>) {
         (path.into(), x, y, None)
+    }
+
+    #[test]
+    fn working_counts_distinguish_a_rename_binary_and_untracked_file() {
+        let sb = Sandbox::new();
+        let repo = sb.clone_pair("work");
+        sb.git(&repo, &["mv", "f", "renamed file"]);
+        std::fs::write(repo.join("image.bin"), [0, 42]).unwrap();
+        std::fs::write(repo.join("tracked.txt"), "first\n").unwrap();
+        sb.git(&repo, &["add", "image.bin", "tracked.txt"]);
+        std::fs::write(repo.join("tracked.txt"), "first\nsecond\n").unwrap();
+        std::fs::write(repo.join("untracked"), "new\n").unwrap();
+        let counts = working_line_counts(&sb.state.env(), &repo).unwrap();
+        assert_eq!(counts.len(), 3);
+        assert_eq!(counts["renamed file"], Some((0, 0)));
+        assert_eq!(counts["image.bin"], None);
+        assert_eq!(counts["tracked.txt"], Some((2, 0)));
     }
 
     #[test]

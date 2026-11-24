@@ -5,7 +5,7 @@ covers:
 # core::watch
 
 ## Purpose
-Watches every listed repo's git directories and the current repo's worktree through `notify`, and
+Watches every listed repo's git directories and the active scope's worktrees through `notify`, and
 reports in batches which repos changed and which of them had refs move. It decides nothing about
 reloading: the kernel's `invalidate` turns each batch into status loads.
 
@@ -14,27 +14,26 @@ reloading: the kernel's `invalidate` turns each batch into status loads.
   `refs`, those among them whose refs moved.
 - `Watcher::new(on_batch)` (`crates/core/src/watch.rs:75`): starts a watcher on nothing and a
   thread named `watch` that calls `on_batch` there, never with an empty `repos`.
-- `Watcher::set(repos, current)` (`crates/core/src/watch.rs:93`): replaces the whole watch set with
-  `repos` and the worktree of `current`, and reads the current repo's excludes again. Blocking; the
-  kernel calls it through `blocking::run`.
+- `Watcher::set(repos, worktrees)` replaces the set of listed Git directories and active worktrees
+  and rereads their excludes. The kernel calls it through `blocking::run` (`crates/core/src/watch.rs:93`).
 
 ## Flow
-1. The kernel starts one watcher at launch (`crates/app/src/main.rs:46` calls
-   `invalidate::watch`, `crates/kernel/src/invalidate.rs:227`). `follow`
-   (`crates/kernel/src/invalidate.rs:258`) calls `set` whenever the workspace's repos or current
-   repo change, one `set` at a time, the last one to the state by then.
+1. The kernel starts one watcher at launch. `follow` applies one set at a time and checks the
+   latest workspace and session after each update (`crates/kernel/src/invalidate.rs:323`).
+   Main covers its main checkouts, a live named session covers its active members, and Archive
+   follows the currently browsed checkout (`crates/kernel/src/invalidate.rs:312`).
 2. `set` resolves each repo's `Dirs` (`crates/core/src/watch.rs:301`): the git directory, the
    common directory (through `.git` file `gitdir:` and `commondir`) and `refs`. It watches the git
    and common directories non-recursively and `refs` recursively. `apply`
    (`crates/core/src/watch.rs:139`) only adds and removes the watches that differ.
-3. When the current repo's root or `info/exclude` changed, `walk` (`crates/core/src/watch.rs:154`)
-   sets the worktree watches from `work` (`crates/core/src/watch.rs:368`).
+3. When the selected roots or their `info/exclude` rules change, `walk` updates filesystem
+   subscriptions (`crates/core/src/watch.rs:156`).
 4. `run` (`crates/core/src/watch.rs:386`) takes the first event, gathers everything else that
    comes within `BATCH` (100 ms) and hands the lot to `Inner::mark`
    (`crates/core/src/watch.rs:168`).
 5. `State::mark` (`crates/core/src/watch.rs:238`) marks a repo for `HEAD` or `index` in its git
    directory, and marks its repo and refs for `packed-refs` or any non-`.lock` path under `refs`.
-   Otherwise a path in the current worktree marks the current repo unless git ignores it.
+   Other paths mark the deepest matching active worktree, using that worktree's ignore rules.
 6. The kernel's `changed` (`crates/kernel/src/invalidate.rs:279`) calls `invalidate::status` for
    each repo and reloads branch names for each ref repo that has them loaded. `status` runs one load
    per repo at a time (`crates/kernel/src/invalidate.rs:64`) through `Workspace::refresh`
@@ -45,12 +44,11 @@ reloading: the kernel's `invalidate` turns each batch into status loads.
    changes nothing when the sets match (`crates/core/src/watch.rs:139`).
 
 ## Gotchas
-- Platforms differ for the worktree (`crates/core/src/watch.rs:368`): macOS one recursive watch on
-  the root; Linux one non-recursive watch per directory the gitignore-aware walker yields, and none
-  at all past `CAP` (10,000, 50 in tests); Windows none, because each repo's folder is watched
-  recursively instead (`crates/core/src/watch.rs:97`) so a folder can still be renamed.
-- Only the current repo's worktree is watched. Edits in another repo's worktree mark nothing until
-  git touches its `index`, `HEAD` or refs.
+- macOS subscribes recursively to the outermost active roots. Linux shares a directory budget
+  across roots (10,000 entries, 50 in tests) and skips trees that exceed the remaining budget.
+  Windows uses its recursive workspace folder watches so worktree directories can still be moved.
+  A standalone worktree outside these folders refreshes on activation or rescan
+  (`crates/core/src/watch.rs:156`).
 - `Access` events are skipped (`crates/core/src/watch.rs:181`): inotify reports reads, and core's
   own status opens `HEAD`. A status run must not mark its repo again.
 - `X.lock` under `refs` is skipped: git writes the lock and renames it over the ref
@@ -90,6 +88,8 @@ commits in a `control` repo and waits for its ref, so each check sees exactly wh
 - `events_the_os_dropped_mark_the_repos_near_them_unless_git_ignores_them`.
 - `the_excludes_are_read_again_on_each_set_and_a_change_walks_again`.
 - `switching_the_current_repo_moves_the_worktree_watch`.
+- `overlapping_active_worktrees_use_the_deeper_roots_ignores_and_switch_together` exercises
+  nested roots, per-worktree ignore rules and replacement of the active set.
 - `a_worktree_over_the_cap_is_not_watched_and_its_git_directory_is` (Linux only).
 - `folders_renamed_moved_and_deleted_under_live_watches`: renames, deletes, branch switches and
   worktree removal under live watches, for Windows.

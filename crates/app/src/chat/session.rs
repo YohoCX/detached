@@ -67,6 +67,12 @@ pub struct Chat {
 }
 
 impl Chat {
+    pub(crate) fn owned_by(&self, workspace: &str, session: &str) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|(w, s)| w == workspace && s == session)
+    }
+
     pub fn new(repo: String, cx: &mut Context<Self>) -> Self {
         let mut all: BTreeMap<String, Vec<SlashCommand>> =
             ui_state::get(COMMANDS, cx).unwrap_or_default();

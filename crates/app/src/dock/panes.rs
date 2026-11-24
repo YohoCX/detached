@@ -1043,7 +1043,6 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
     ];
     for (label, title, open) in actions {
         menu = menu.item_if(!repos.is_empty(), label, move |w, cx| {
-            let repos = Workspace::get(cx).session_repos();
             let layout = super::layout_key(cx);
             let run = move |repo, w: &mut Window, cx: &mut App| {
                 if super::layout_key(cx) == layout
@@ -1057,11 +1056,7 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
                     open(repo, w, cx);
                 }
             };
-            match repos {
-                [] => {}
-                [repo] => run(repo.path.clone(), w, cx),
-                _ => crate::search::choose_checkout(title, run, cx),
-            }
+            crate::search::choose_checkout(title, run, w, cx);
         });
     }
     menu = menu

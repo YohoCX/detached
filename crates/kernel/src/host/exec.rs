@@ -858,6 +858,7 @@ mod tests {
             branch: Some("main".into()),
             head: None,
             upstream: None,
+            upstream_gone: false,
             ahead: 1,
             behind: 0,
             changes: vec![file("a.rs", 'M', '.'), file("new", '?', '?')],

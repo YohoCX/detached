@@ -85,11 +85,28 @@ fn open(mode: Mode, cx: &mut App) {
 pub(crate) fn choose_checkout(
     title: &'static str,
     run: impl FnOnce(String, &mut Window, &mut App) + 'static,
+    window: &mut Window,
     cx: &mut App,
 ) {
+    let w = Workspace::get(cx);
+    match w.session_repos() {
+        [] => return,
+        [repo] => return run(repo.path.clone(), window, cx),
+        _ => {}
+    }
+    let owner = (w.id().map(str::to_owned), w.session_id().to_owned());
     let s = cx.global_mut::<Search>();
     s.mode = Some(Mode::Checkout(title));
-    s.checkout = Some(Box::new(run));
+    s.checkout = Some(Box::new(move |repo, window, cx| {
+        let w = Workspace::get(cx);
+        if !w.archive()
+            && w.id() == owner.0.as_deref()
+            && w.session_id() == owner.1
+            && w.session_repos().iter().any(|r| r.path == repo)
+        {
+            run(repo, window, cx);
+        }
+    }));
 }
 
 fn open_tabs(by: isize, cx: &mut App) {
@@ -144,7 +161,7 @@ impl Pill {
 }
 
 impl Render for Pill {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let chord = keymap::chord_for("search.everywhere", cx);
         let archive = Workspace::get(cx).archive();
@@ -154,8 +171,8 @@ impl Render for Pill {
             .aria_label("Search everywhere")
             .aria_description(chord.clone())
             .gap(px(8.))
-            .w(px(if archive { 320. } else { 380. }))
-            .min_w(px(180.))
+            .w(px(if archive { 320. } else { 380. }).min(window.viewport_size().width * 0.28))
+            .min_w_0()
             .h(px(28.))
             .pl(px(12.))
             .pr(px(10.))

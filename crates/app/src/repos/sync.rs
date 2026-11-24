@@ -3,7 +3,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use detached_core::types::PullResult;
+use detached_core::types::{PullResult, RepoStatus};
 use detached_core::{api, error};
 use futures::{FutureExt, StreamExt, stream};
 use gpui_kit::base::TestSupportExt;
@@ -91,7 +91,12 @@ async fn sync_all<E: Display, F: Future<Output = Result<Option<PullResult>, E>>>
     .await
 }
 
-fn run(kind: Kind, repo: String, cx: &mut App) -> Task<error::Result<Option<PullResult>>> {
+fn run(
+    kind: Kind,
+    repo: String,
+    expected: Option<RepoStatus>,
+    cx: &mut App,
+) -> Task<error::Result<Option<PullResult>>> {
     let label = match kind {
         Kind::Fetch => "Fetch",
         Kind::Pull => "Pull",
@@ -103,7 +108,11 @@ fn run(kind: Kind, repo: String, cx: &mut App) -> Task<error::Result<Option<Pull
             label,
             move |core, id, progress| match kind {
                 Kind::Fetch => api::fetch(core, &r, id, progress).map(|()| None),
-                Kind::Pull => api::pull(core, &r, id, progress).map(Some),
+                Kind::Pull => match expected {
+                    Some(expected) => api::pull_confirmed(core, &r, &expected, id, progress),
+                    None => api::pull(core, &r, id, progress),
+                }
+                .map(Some),
             },
             cx,
         )
@@ -114,13 +123,17 @@ fn show_outcome(repo: &str, o: &Outcome, cx: &mut App) {
     Repo::update(cx, repo, |r, cx| r.set_outcome(o.clone(), cx));
 }
 
-pub(crate) fn pull(repo: String, cx: &mut App) {
-    sync_one(Kind::Pull, repo, cx);
+pub(crate) fn pull(repo: String, expected: RepoStatus, cx: &mut App) {
+    sync(Kind::Pull, repo, Some(expected), cx);
 }
 
 /// Fetches or pulls one repo and says how it went; Fetch All and Pull All stay enabled meanwhile.
 pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
-    let done = run(kind, repo.clone(), cx);
+    sync(kind, repo, None, cx);
+}
+
+fn sync(kind: Kind, repo: String, expected: Option<RepoStatus>, cx: &mut App) {
+    let done = run(kind, repo.clone(), expected, cx);
     cx.spawn(async move |cx| {
         let o = outcome(done.await);
         cx.update(|cx| {
@@ -167,7 +180,7 @@ pub fn sync_repos(kind: Kind, repos: Option<Vec<String>>, cx: &mut App) {
                 });
             })
         };
-        let results = sync_all(repos, |r| cx.update(|cx| run(kind, r, cx)), on_done).await;
+        let results = sync_all(repos, |r| cx.update(|cx| run(kind, r, None, cx)), on_done).await;
         cx.update(|cx| {
             state.update(cx, |s, cx| {
                 s.sync = None;
@@ -248,6 +261,7 @@ fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
                 None => "Status unavailable".into(),
                 Some(s) if s.in_progress.is_some() => "Operation in progress".into(),
                 Some(s) if s.upstream.is_none() => "No upstream".into(),
+                Some(s) if s.upstream_gone => "Upstream is gone".into(),
                 Some(s) if s.ahead > 0 && s.behind > 0 => "Diverged".into(),
                 Some(s) if s.behind > 0 => format!("{} commits behind", s.behind),
                 _ => "Up to date".into(),
@@ -299,7 +313,7 @@ struct SyncButtons {
 }
 
 impl Render for SyncButtons {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
         let w = Workspace::get(cx);
         let live = !w.archive();
@@ -312,6 +326,9 @@ impl Render for SyncButtons {
         };
         let t = theme(cx);
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
+        let compact = live
+            && !main
+            && (window.viewport_size().width < px(1100.) || suffix.chars().count() > 24);
         let button = |kind, id: &'static str, icon: Icon, label: &str| {
             let title = format!("{label} Repositories");
             let running = bulk.is_some_and(|b| b.kind == kind);
@@ -319,7 +336,15 @@ impl Render for SyncButtons {
                 Some(b) if b.kind == kind => format!("{}/{}", b.done, b.total),
                 _ => label.to_string(),
             };
-            ui::button(id, label.clone(), cx)
+            let visible = if compact && !running {
+                match kind {
+                    Kind::Fetch => "Fetch",
+                    Kind::Pull => "Pull…",
+                }
+            } else {
+                &label
+            };
+            ui::button(id, visible.to_owned(), cx)
                 .test_support()
                 // The pill's label comes first; the icon goes before it.
                 .flex_row_reverse()

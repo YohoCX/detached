@@ -83,6 +83,10 @@ pub fn all(cx: &App) -> Vec<Entity<Council>> {
     cx.global::<Councils>().all.clone()
 }
 
+pub fn observe_runs<V: 'static>(cx: &mut Context<V>) -> Subscription {
+    cx.observe_global::<Councils>(|_, cx| cx.notify())
+}
+
 pub fn find(cx: &App, repo: &str, task: &str, run: &str) -> Option<Entity<Council>> {
     let one = |p: &Entity<Council>| {
         let p = p.read(cx);

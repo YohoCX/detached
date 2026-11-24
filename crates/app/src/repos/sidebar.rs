@@ -236,7 +236,7 @@ pub(super) fn tone_of(status: Option<&Result<RepoStatus, String>>) -> Option<Ton
         Err(_) => Tone::Error,
         Ok(s) if !s.changes.is_empty() || s.in_progress.is_some() => Tone::Warning,
         Ok(s) if s.ahead > 0 || s.behind > 0 => Tone::Accent,
-        Ok(s) if s.branch.is_some() && s.upstream.is_none() => Tone::Deleted,
+        Ok(s) if s.upstream_gone || (s.branch.is_some() && s.upstream.is_none()) => Tone::Deleted,
         Ok(_) => Tone::Success,
     })
 }
@@ -1008,6 +1008,7 @@ mod tests {
             branch: Some("main".into()),
             head: Some("abc".into()),
             upstream: Some("origin/main".into()),
+            upstream_gone: false,
             ahead: 0,
             behind: 0,
             changes: vec![],

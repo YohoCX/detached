@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use crate::env::Env;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::git::locked;
 use crate::git::remotes::{lfs_cred, network};
 use crate::git::runner::{Kind, Opts, out, run};
+use crate::git::status::status;
 use crate::state::{AppState, Cancel};
-use crate::types::PullResult;
+use crate::types::{PullResult, RepoStatus};
 
 /// The current branch's upstream remote; None when detached or not tracking.
 fn upstream_remote(env: &Env, repo: &Path) -> Result<Option<String>> {
@@ -51,8 +52,42 @@ pub fn pull(
     cancel: &Cancel,
     progress: &(dyn Fn(&str) + Sync),
 ) -> Result<PullResult> {
+    pull_with_status(state, repo, None, cancel, progress)
+}
+
+pub(crate) fn pull_with_status(
+    state: &AppState,
+    repo: &Path,
+    expected: Option<&RepoStatus>,
+    cancel: &Cancel,
+    progress: &(dyn Fn(&str) + Sync),
+) -> Result<PullResult> {
     let env = state.env();
+    let verify = || {
+        let Some(expected) = expected else {
+            return Ok(());
+        };
+        let actual = status(&env, repo)?;
+        if actual.head.is_some()
+            && actual.branch.is_some()
+            && actual.upstream.is_some()
+            && !actual.upstream_gone
+            && actual.in_progress.is_none()
+            && actual.head == expected.head
+            && actual.branch == expected.branch
+            && actual.upstream == expected.upstream
+            && actual.changes == expected.changes
+            && !actual.changes.iter().any(|c| c.conflicted)
+        {
+            Ok(())
+        } else {
+            Err(Error::Other(
+                "The checkout changed. Review its status before pulling again.".into(),
+            ))
+        }
+    };
     locked(state, repo, || {
+        verify()?;
         let Some(remote) = upstream_remote(&env, repo)? else {
             return Ok(PullResult::NoUpstream);
         };
@@ -65,21 +100,23 @@ pub fn pull(
             progress,
         )?;
         let counts = ["rev-list", "--left-right", "--count", "HEAD...@{u}"];
-        // Fails when the upstream ref is gone after the fetch.
         let counts = run(&env, repo, &counts, Kind::Read, Opts::default())?;
-        if counts.code != 0 {
-            return Ok(PullResult::NoUpstream);
-        }
-        let text = counts.text();
-        let mut n = text
-            .split_whitespace()
-            .map(|s| s.parse::<u32>().unwrap_or(0));
-        let (ahead, behind) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
-        if behind == 0 {
-            return Ok(PullResult::UpToDate);
-        }
-        if ahead > 0 {
-            return Ok(PullResult::Diverged { ahead, behind });
+        let result = if counts.code == 0 {
+            let text = counts.text();
+            let mut n = text
+                .split_whitespace()
+                .map(|s| s.parse::<u32>().unwrap_or(0));
+            match (n.next().unwrap_or(0), n.next().unwrap_or(0)) {
+                (_, 0) => Some(PullResult::UpToDate),
+                (ahead, behind) if ahead > 0 => Some(PullResult::Diverged { ahead, behind }),
+                _ => None,
+            }
+        } else {
+            Some(PullResult::NoUpstream)
+        };
+        if let Some(result) = result {
+            verify()?;
+            return Ok(result);
         }
         let head =
             || out(&env, repo, &["rev-parse", "HEAD"], Kind::Read).map(|s| s.trim().to_string());
@@ -89,6 +126,7 @@ pub fn pull(
             cred: cred.as_ref(),
             ..Default::default()
         };
+        verify()?;
         run(
             &env,
             repo,
@@ -103,8 +141,9 @@ pub fn pull(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
-    use crate::error::Error;
     use crate::git::testutil::Sandbox;
 
     fn pull_now(sb: &Sandbox, repo: &Path) -> Result<PullResult> {
@@ -128,6 +167,41 @@ mod tests {
         );
         assert_eq!(sb.git(&work, &["rev-parse", "HEAD"]), to);
         assert_eq!(pull_now(&sb, &work).unwrap(), PullResult::UpToDate);
+    }
+
+    #[test]
+    fn a_confirmed_pull_leaves_both_branches_unchanged_if_checkout_moves_during_fetch() {
+        let sb = Sandbox::new();
+        let work = sb.clone_pair("work");
+        let other = sb.clone_pair("other");
+        let original = sb.git(&work, &["rev-parse", "HEAD"]);
+        sb.git(&work, &["branch", "--track", "alternate", "origin/main"]);
+        sb.commit(&other, "g", "1\n", "first remote change");
+        sb.git(&other, &["push", "-q"]);
+        sb.git(&work, &["fetch", "-q"]);
+        let expected = status(&sb.state.env(), &work).unwrap();
+        assert_eq!(expected.behind, 1);
+        let remote = sb.commit(&other, "g", "2\n", "second remote change");
+        sb.git(&other, &["push", "-q"]);
+
+        let switched = AtomicBool::new(false);
+        let result = pull_with_status(
+            &sb.state,
+            &work,
+            Some(&expected),
+            &Cancel::default(),
+            &|_| {
+                if !switched.swap(true, Ordering::Relaxed) {
+                    sb.git(&work, &["switch", "-q", "alternate"]);
+                }
+            },
+        );
+        assert!(switched.load(Ordering::Relaxed));
+        assert!(matches!(result, Err(Error::Other(e)) if e.contains("checkout changed")));
+        assert_eq!(sb.git(&work, &["branch", "--show-current"]), "alternate");
+        assert_eq!(sb.git(&work, &["rev-parse", "main"]), original);
+        assert_eq!(sb.git(&work, &["rev-parse", "alternate"]), original);
+        assert_eq!(sb.git(&work, &["rev-parse", "origin/main"]), remote);
     }
 
     #[test]

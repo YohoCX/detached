@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Tracked changes by destination path. Binary files have no line counts.
+pub type WorkingLineCounts = std::collections::HashMap<String, Option<(usize, usize)>>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoInfo {
@@ -51,6 +54,8 @@ pub struct RepoStatus {
     pub branch: Option<String>,
     pub head: Option<String>,
     pub upstream: Option<String>,
+    #[serde(default)]
+    pub upstream_gone: bool,
     pub ahead: u32,
     pub behind: u32,
     pub changes: Vec<FileChange>,
@@ -649,6 +654,9 @@ pub struct CreateMr {
 #[serde(rename_all = "camelCase")]
 pub struct Pipeline {
     pub id: u64,
+    /// GitHub Actions workflow that owns this run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<u64>,
     /// Job and pipeline actions address this project.
     pub project: Project,
     pub status: PipelineStatus,

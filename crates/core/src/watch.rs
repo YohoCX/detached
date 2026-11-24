@@ -1,4 +1,4 @@
-//! Watches the repos' git directories and the current repo's worktree, and reports in batches which
+//! Watches the repos' git directories and active worktrees, and reports in batches which
 //! repos changed.
 
 use std::collections::{BTreeSet, HashMap};
@@ -18,7 +18,7 @@ use crate::types::RepoInfo;
 
 /// Events this close to the first of a batch join it.
 const BATCH: Duration = Duration::from_millis(100);
-/// Linux watches each directory of the current worktree, and not one of a worktree with more.
+/// Linux's directory budget. A worktree that does not fit is skipped.
 const CAP: usize = if cfg!(test) { 50 } else { 10_000 };
 
 /// The repos a batch of events changed, by path, and those among them whose refs moved.
@@ -42,12 +42,12 @@ type Watches = HashMap<PathBuf, RecursiveMode>;
 #[derive(Default)]
 struct State {
     repos: Vec<Dirs>,
-    current: Option<Current>,
+    current: Vec<Current>,
     /// The git directories' watches; on Windows the folders' and those outside every folder.
     git: Watches,
-    /// The current worktree's: its root on macOS, each directory on Linux, none on Windows.
+    /// Working tree watches outside the Windows folder watches.
     work: Watches,
-    /// A walk of the worktree is queued.
+    /// A walk of the worktrees is queued.
     walking: bool,
 }
 
@@ -88,9 +88,8 @@ impl Watcher {
         Ok(Watcher(inner))
     }
 
-    /// Watches `repos` and the worktree of `current`, and nothing else; reads the current repo's
-    /// excludes again. A repo whose git directories cannot be resolved is not watched.
-    pub fn set(&self, repos: &[RepoInfo], current: Option<&str>) {
+    /// Watches `repos` and the listed working trees, and reads their excludes again.
+    pub fn set(&self, repos: &[RepoInfo], worktrees: &[String]) {
         let inner = &self.0;
         let _setup = inner.setup.lock().unwrap();
         let dirs: Vec<Dirs> = repos.iter().filter_map(Dirs::of).collect();
@@ -116,17 +115,21 @@ impl Watcher {
                 }
             }
         }
-        let current = current.and_then(|c| {
-            let d = dirs.iter().find(|d| d.repo == c)?;
-            Current::new(c, &d.common)
-        });
+        let current: Vec<_> = worktrees
+            .iter()
+            .filter_map(|path| {
+                let d = dirs.iter().find(|d| &d.repo == path)?;
+                Current::new(path, &d.common)
+            })
+            .collect();
         let old = inner.state.lock().unwrap().git.clone();
         let git = inner.apply(&old, git);
         let mut s = inner.state.lock().unwrap();
-        (s.repos, s.git) = (dirs, git);
-        let key = |c: &Option<Current>| c.as_ref().map(|c| (c.root.clone(), c.exclude.clone()));
-        let changed = key(&s.current) != key(&current);
-        s.current = current;
+        let changed = s.current.len() != current.len()
+            || s.current.iter().zip(&current).any(|(before, after)| {
+                before.root != after.root || before.exclude != after.exclude
+            });
+        (s.repos, s.git, s.current) = (dirs, git, current);
         drop(s);
         if changed {
             inner.walk();
@@ -150,17 +153,25 @@ impl Inner {
         new
     }
 
-    /// Watches the current worktree as it is now. The walk holds no lock the events need.
     fn walk(&self) {
-        let root = self
-            .state
-            .lock()
-            .unwrap()
-            .current
-            .as_ref()
-            .map(|c| c.root.clone());
-        let want = root.map(work).unwrap_or_default();
-        let old = self.state.lock().unwrap().work.clone();
+        let (roots, old) = {
+            let state = self.state.lock().unwrap();
+            let roots: Vec<_> = state.current.iter().map(|c| c.root.clone()).collect();
+            (roots, state.work.clone())
+        };
+        let mut want = Watches::new();
+        if cfg!(target_os = "linux") {
+            for root in roots {
+                want.extend(work(&root, &want));
+            }
+        } else if cfg!(target_os = "macos") {
+            for root in &roots {
+                let covered = roots.iter().any(|r| root != r && root.starts_with(r));
+                if !covered {
+                    want.insert(root.clone(), RecursiveMode::Recursive);
+                }
+            }
+        }
         let work = self.apply(&old, want);
         self.state.lock().unwrap().work = work;
     }
@@ -199,12 +210,19 @@ impl Inner {
 }
 
 impl State {
+    fn working_tree(&mut self, path: &Path) -> Option<&mut Current> {
+        self.current
+            .iter_mut()
+            .filter(|c| path.starts_with(&c.root))
+            .max_by_key(|c| c.root.components().count())
+    }
+
     /// An empty path marks every repo; an ignored path marks none.
     fn dropped(&mut self, p: &Path, b: &mut Batch) {
         if self.detached(p) {
             return;
         }
-        if let Some(c) = &mut self.current
+        if let Some(c) = self.working_tree(p)
             && let Ok(rel) = p.strip_prefix(&c.root)
             && c.ignored(rel)
         {
@@ -274,7 +292,10 @@ impl State {
                 hit = true;
             }
         }
-        let Some(c) = self.current.as_mut().filter(|_| !hit) else {
+        if hit {
+            return false;
+        }
+        let Some(c) = self.working_tree(p) else {
             return false;
         };
         let Ok(rel) = p.strip_prefix(&c.root) else {
@@ -363,21 +384,14 @@ impl Current {
     }
 }
 
-/// The worktree's watches: macOS one recursive on its root; Linux one per directory git does not
-/// ignore, none over the cap; Windows none, since its folder's watch covers it.
-fn work(root: PathBuf) -> Watches {
-    if cfg!(target_os = "macos") {
-        return [(root, RecursiveMode::Recursive)].into();
-    }
+fn work(root: &Path, watched: &Watches) -> Watches {
     let mut dirs = Watches::new();
-    if cfg!(target_os = "linux") {
-        for e in crate::git::files::walker(&root).build().flatten() {
-            if e.file_type().is_some_and(|t| t.is_dir()) {
-                if dirs.len() == CAP {
-                    return Watches::new();
-                }
-                dirs.insert(e.into_path(), RecursiveMode::NonRecursive);
+    for e in crate::git::files::walker(root).build().flatten() {
+        if e.file_type().is_some_and(|t| t.is_dir()) && !watched.contains_key(e.path()) {
+            if watched.len() + dirs.len() == CAP {
+                return Watches::new();
             }
+            dirs.insert(e.into_path(), RecursiveMode::NonRecursive);
         }
     }
     dirs
@@ -469,7 +483,7 @@ mod tests {
         /// Watches what the folder lists, then waits out what came before.
         fn watch(&self, current: Option<&str>) {
             let repos = discover(&[self.sb.path("ws").display().to_string()], &[]);
-            self.w.set(&repos, current.map(|c| self.path(c)).as_deref());
+            self.w.set(&repos, current.map(|c| self.path(c)).as_slice());
             self.after(|| {});
         }
 
@@ -529,7 +543,7 @@ mod tests {
                 git: git.clone(),
                 common: common.clone(),
             }],
-            current: Current::new(&repo, &common),
+            current: Current::new(&repo, &common).into_iter().collect(),
             ..Default::default()
         };
         for path in [
@@ -574,7 +588,9 @@ mod tests {
         };
         let common = canon(t.dir("main").join(".git")).unwrap();
         for current in ["main", "wt"] {
-            state.current = Current::new(&t.path(current), &common);
+            state.current = Current::new(&t.path(current), &common)
+                .into_iter()
+                .collect();
             t.write("main", ".git/detached/local/roles/reviewer.md");
             let path = common.join("detached/local/roles/reviewer.md");
             let mut batch = Batch::default();
@@ -746,6 +762,36 @@ mod tests {
         t.watch(Some("b"));
         assert!(t.after(|| t.write("a", "new")).repos.is_empty());
         assert_eq!(t.after(|| t.write("b", "new")).repos, set(&["b"], &t));
+    }
+
+    #[test]
+    fn overlapping_active_worktrees_use_the_deeper_roots_ignores_and_switch_together() {
+        let t = T::new(&["outer", "outer/inner", "other"]);
+        fs::write(t.dir("outer/inner").join(".gitignore"), "*.log\n").unwrap();
+        let repos = discover(
+            &[t.sb.path("ws").display().to_string(), t.path("outer/inner")],
+            &[],
+        );
+        let mark = |file: &str| {
+            let mut batch = Batch::default();
+            let path = canon(t.dir("")).unwrap().join(file);
+            t.w.0
+                .state
+                .lock()
+                .unwrap()
+                .mark(&path, EventKind::Any, &mut batch);
+            batch.repos
+        };
+        t.w.set(&repos, &[t.path("outer"), t.path("outer/inner")]);
+        assert_eq!(mark("outer/tracked"), set(&["outer"], &t));
+        assert_eq!(mark("outer/inner/tracked"), set(&["outer/inner"], &t));
+        assert!(mark("outer/inner/ignored.log").is_empty());
+        assert!(mark("other/tracked").is_empty());
+
+        t.w.set(&repos, &[t.path("other")]);
+        assert!(mark("outer/tracked").is_empty());
+        assert!(mark("outer/inner/tracked").is_empty());
+        assert_eq!(mark("other/tracked"), set(&["other"], &t));
     }
 
     #[test]
