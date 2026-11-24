@@ -45,6 +45,10 @@ pub trait DocKind {
     }
     /// The tab came forward.
     fn activated(&self, _: &AnyView, _: &mut Window, _: &mut App) {}
+    /// The control that receives keyboard input when the dock focuses a mounted tab.
+    fn input_focus(&self, _: &AnyView, _: &App) -> Option<FocusHandle> {
+        None
+    }
     fn running(&self, _: &Doc, _: Option<&AnyView>, _: &App) -> Option<String> {
         None
     }
@@ -221,8 +225,11 @@ pub fn load(state: &PanelState, cx: &mut App) -> Option<Arc<dyn PanelView>> {
 impl EventEmitter<PanelEvent> for DocTab {}
 
 impl Focusable for DocTab {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.view
+            .as_ref()
+            .and_then(|view| self.kind.input_focus(view, cx))
+            .unwrap_or_else(|| self.focus.clone())
     }
 }
 

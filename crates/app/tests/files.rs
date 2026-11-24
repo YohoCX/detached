@@ -1459,12 +1459,10 @@ fn explorer_roots_leave_the_common_branch_in_the_session_header(cx: &mut TestApp
             .is_some_and(|e| e.description() == Some(branch))
     });
     let explorer = app.find("session.explorer").unwrap().bounds();
-    for (i, name) in ["health-application/api", "health-application/web"]
-        .iter()
-        .enumerate()
-    {
+    for (i, leaf) in ["api", "web"].into_iter().enumerate() {
+        let name = Path::new("health-application").join(leaf);
         let row = app.find(("tree.root", i)).unwrap();
-        assert_eq!(row.label(), Some(*name));
+        assert_eq!(row.label(), name.to_str());
         assert!(row.bounds().left() >= explorer.left() && row.bounds().right() <= explorer.right());
         assert!(app.find(("tree.root.detail", i)).is_none());
     }

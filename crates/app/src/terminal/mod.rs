@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, EntityId, Global, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, Entity, EntityId, FocusHandle, Global, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window, div, prelude::FluentBuilder, px,
 };
 
 pub use ghostty::Rgb;
@@ -330,9 +330,14 @@ impl DocKind for TerminalDocs {
     }
 
     fn activated(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
-        if let Ok(s) = view.clone().downcast::<Session>() {
-            window.focus(&s.read(cx).focus.clone(), cx);
+        if let Some(focus) = self.input_focus(view, cx) {
+            window.focus(&focus, cx);
         }
+    }
+
+    fn input_focus(&self, view: &AnyView, cx: &App) -> Option<FocusHandle> {
+        let session = view.clone().downcast::<Session>().ok()?;
+        Some(session.read(cx).focus.clone())
     }
 
     fn running(&self, _: &Doc, view: Option<&AnyView>, cx: &App) -> Option<String> {

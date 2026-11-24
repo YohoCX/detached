@@ -1814,7 +1814,10 @@ fn a_named_session_s_chat_keeps_its_worktree_scope_in_the_background(cx: &mut Te
     let row = SharedString::from(format!("sessions.row.{session}"));
     cx.click(row.clone());
     new_chat(cx);
-    let repo = cx.sb.root().join("adopted").display().to_string();
+    let repo = detached_core::os::canonical(&cx.sb.root().join("adopted"))
+        .unwrap()
+        .display()
+        .to_string();
     assert_eq!(
         cx.workspace(|w, _| w.shown().cloned()),
         Some(Doc::Chat {

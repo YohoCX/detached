@@ -111,13 +111,31 @@ fn app_chords_go_to_the_shell_except_the_short_list(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn closing_a_terminal_pane_hands_input_to_the_adjacent_shell(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let first = session(cx, |s| s.focus.clone());
+    cx.press("alt-f12");
+    let second = cx.update(|_, cx| Terminals::global(cx).read(cx).docked[1].clone());
+    wait_until(cx, |cx| {
+        cx.update(|w, cx| second.read(cx).focus.is_focused(w))
+    });
+    cx.update(|w, cx| {
+        Terminals::global(cx).update(cx, |t, cx| t.close(&second, w, cx));
+        assert!(first.is_focused(w), "input belongs to the surviving shell");
+    });
+}
+
+#[gpui_kit::test]
 fn exiting_the_shell_closes_its_tab_and_the_last_one_the_panel(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
+    let first = session(cx, |s| s.focus.clone());
     cx.update(|w, cx| detached_app::dock::open("terminal", w, cx));
     wait_until(cx, |cx| sessions(cx) == 2);
+    let second = session(cx, |s| s.focus.clone());
+    wait_until(cx, |cx| cx.update(|w, _| second.is_focused(w)));
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 1);
-    assert!(cx.find("terminal").is_some());
+    assert!(cx.update(|w, _| first.is_focused(w)));
     run(cx, "exit");
     wait_until(cx, |cx| sessions(cx) == 0);
     assert!(cx.find("terminal").is_none());
