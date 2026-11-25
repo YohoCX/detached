@@ -1535,8 +1535,8 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
         w.resize(size(px(1000.), px(700.)));
         w.bounds_changed(cx);
     });
-    wait_until(app, |app| bounds(app, "sessions").size.width == px(44.));
-    assert_eq!(bounds(app, "session.explorer").size.width, px(28.));
+    wait_until(app, |app| bounds(app, "sessions").size.width == px(36.));
+    assert!(app.find("session.explorer").is_none());
     assert!(app.find("sessions.rows").is_none());
     app.press("secondary-b");
     wait_until(app, |app| {

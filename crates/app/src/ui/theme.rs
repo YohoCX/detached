@@ -80,6 +80,16 @@ pub const GAP: Pixels = px(10.);
 /// A tab's title is cut past this, so a long one leaves its close button in the zone.
 pub const TAB_TITLE: Pixels = px(240.);
 
+pub mod rail {
+    use gpui_kit::{Pixels, px};
+
+    pub const WIDTH: Pixels = px(36.);
+    pub const PAD: Pixels = px(8.);
+    pub const GAP: Pixels = px(4.);
+    pub const CONTROL: Pixels = px(28.);
+    pub const ICON: Pixels = px(14.);
+}
+
 pub mod chat {
     use gpui_kit::{Pixels, px};
 

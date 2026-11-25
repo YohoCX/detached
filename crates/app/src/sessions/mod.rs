@@ -19,6 +19,7 @@ use crate::actions::{self, Group, Registration};
 use crate::chat::{self, State};
 use crate::dock;
 use crate::shell::{self, Side};
+use crate::ui::theme::rail;
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -162,7 +163,18 @@ impl Render for List {
                     )
                 })
             });
-        let fold = fold_button(collapsed, cx);
+        if self.live && collapsed {
+            return shell::side_rail("sessions", cx)
+                .role(Role::List)
+                .aria_label("Sessions")
+                .child(fold_button(true, cx))
+                .when(
+                    provision::page(cx).is_none() && !shell::side_open(Side::Explorer, window, cx),
+                    |d| d.child(shell::explorer_fold_button(cx)),
+                )
+                .child(div().flex_1())
+                .child(archive_button.w(rail::CONTROL).px_0().justify_center());
+        }
         let add = ui::button("sessions.new", "New session", cx)
             .test_support()
             .tooltip(|w, cx| {
@@ -188,7 +200,7 @@ impl Render for List {
             .pl(px(8.))
             .h(px(30.))
             .child(title)
-            .child(fold)
+            .child(fold_button(collapsed, cx))
             .child(add);
         let list = div()
             .id("sessions")
@@ -206,15 +218,7 @@ impl Render for List {
                 d.pb(GAP / 2.).border_b_1().border_color(t.line)
             });
         if collapsed {
-            return if self.live {
-                list.px(px(4.))
-                    .items_center()
-                    .child(fold_button(true, cx))
-                    .child(div().flex_1())
-                    .child(archive_button.px(px(8.)))
-            } else {
-                list.child(header.child(archive_button))
-            };
+            return list.child(header.child(archive_button));
         }
         let mut chats = HashMap::<_, Vec<_>>::new();
         for tab in chat::tabs(cx) {
@@ -271,13 +275,9 @@ impl Render for List {
 }
 
 fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
-    let icon = if collapsed {
-        Icon::Branch
-    } else {
-        Icon::PanelLeft
-    };
     ui::titled_action(
-        ui::icon_button("sessions.fold", icon.size(px(14.)), cx).size(px(26.)),
+        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx)
+            .when(!collapsed, |d| d.size(px(26.))),
         if collapsed {
             "Show sessions"
         } else {

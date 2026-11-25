@@ -326,6 +326,14 @@ pub(crate) struct Tab {
 }
 
 pub(crate) fn tabs(cx: &App) -> Vec<Tab> {
+    tabs_in(None, cx)
+}
+
+pub(crate) fn session_tabs(cx: &App) -> Vec<Tab> {
+    tabs_in(Some(Workspace::get(cx).session_id()), cx)
+}
+
+fn tabs_in(only_session: Option<&str>, cx: &App) -> Vec<Tab> {
     let w = Workspace::get(cx);
     let Some(workspace) = w.id() else {
         return vec![];
@@ -333,6 +341,9 @@ pub(crate) fn tabs(cx: &App) -> Vec<Tab> {
     let mut tabs = Vec::new();
     for set in std::iter::once(None).chain(w.sessions().iter().filter(|s| s.visible()).map(Some)) {
         let session = set.map_or(MAIN, |s| s.id.as_str());
+        if only_session.is_some_and(|id| id != session) {
+            continue;
+        }
         for (repo, n) in dock::session_chats(workspace, session, cx) {
             let chat = find(&repo, n, cx).filter(|c| c.read(cx).owned_by(workspace, session));
             let place = place_in(&repo, set, cx);

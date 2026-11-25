@@ -221,7 +221,7 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
     assert_eq!(width(cx), gpui_kit::px(248.));
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Show sessions");
-    assert_eq!(width(cx), gpui_kit::px(44.));
+    assert_eq!(width(cx), gpui_kit::px(36.));
     assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Hide sessions");
