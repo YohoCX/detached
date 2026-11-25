@@ -76,7 +76,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "chats",
         id: "tab.chats",
         title: "Chats",
-        action: None,
+        action: Some("panel.chats"),
         home: (DockPlacement::Left, 280.),
         view: |w, cx| cx.new(|cx| list::ChatList::new(w, cx)).into(),
         shown: None,
@@ -272,6 +272,13 @@ pub(crate) fn observe_open<V: 'static>(cx: &mut Context<V>) -> Subscription {
     cx.observe_global::<Chats>(|_, cx| cx.notify())
 }
 
+pub(crate) fn of(workspace: &str, session: &str, cx: &App) -> Vec<(String, u32, Entity<Chat>)> {
+    open(cx)
+        .into_iter()
+        .filter(|(.., chat)| chat.read(cx).owned_by(workspace, session))
+        .collect()
+}
+
 /// The open chats with something in them, each as "place · title".
 pub fn live(cx: &App) -> Vec<String> {
     let live = open(cx)
@@ -308,7 +315,7 @@ pub fn name_of(id: &str, cx: &App) -> String {
 }
 
 /// How a chat stands: working, waiting for you, done, stopped, or not started.
-fn state_icon(state: State, cx: &App) -> AnyElement {
+pub(crate) fn state_icon(state: State, cx: &App) -> AnyElement {
     let t = theme(cx);
     let (icon, color) = match state {
         State::Working => return ui::spinner(t.accent).into_any_element(),

@@ -31,6 +31,7 @@ use kernel::workspace::Workspace;
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
     "panel.project",
+    "panel.chats",
     "panel.sessions",
     "panel.changes",
     "panel.log",

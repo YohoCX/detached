@@ -3,17 +3,20 @@ mod overview;
 pub(crate) mod provision;
 mod sheet;
 
+use std::collections::HashMap;
+
 use detached_core::sessions::{MAIN, MemberState, Workset};
 use detached_core::types::{InProgress, RepoStatus};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
-    Role, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    AnyElement, App, Context, EntityId, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 
 use crate::actions::{self, Group, Registration};
+use crate::chat::{self, State};
 use crate::dock;
 use crate::shell::{self, Side};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
@@ -103,6 +106,8 @@ fn select(id: &str, _: &mut Window, cx: &mut App) {
 pub(crate) struct List {
     live: bool,
     _workspace: Subscription,
+    _open_chats: Subscription,
+    chat_watches: HashMap<EntityId, Subscription>,
 }
 
 impl List {
@@ -110,12 +115,25 @@ impl List {
         Self {
             live,
             _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
+            _open_chats: chat::observe_open(cx),
+            chat_watches: HashMap::new(),
         }
     }
 }
 
 impl Render for List {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut observed = std::mem::take(&mut self.chat_watches);
+        self.chat_watches = chat::open(cx)
+            .into_iter()
+            .map(|(.., chat)| {
+                let id = chat.entity_id();
+                let watch = observed
+                    .remove(&id)
+                    .unwrap_or_else(|| cx.observe(&chat, |_, _, cx| cx.notify()));
+                (id, watch)
+            })
+            .collect();
         let t = theme(cx);
         let collapsed = if self.live {
             !shell::side_open(Side::Sessions, window, cx)
@@ -381,6 +399,51 @@ fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
     });
     let expanded = !w.archive() && w.session_id() == id;
     let selected = browsing && expanded;
+    let chats: Vec<_> = w
+        .id()
+        .into_iter()
+        .flat_map(|workspace| chat::of(workspace, id, cx))
+        .map(|(repo, n, chat)| {
+            let chat = chat.read(cx);
+            let title = chat
+                .topic(cx)
+                .map_or_else(|| "New chat".into(), crate::util::first_line);
+            (repo, n, title, chat.state(cx))
+        })
+        .collect();
+    let state = [State::Waiting, State::Working, State::Done]
+        .into_iter()
+        .find(|state| {
+            chats
+                .iter()
+                .any(|(_, _, _, chat_state)| chat_state == state)
+        });
+    let active_chat = match w.shown() {
+        Some(Doc::Chat { repo, n }) if expanded => Some((repo, *n)),
+        _ => None,
+    };
+    let has_chats = !chats.is_empty();
+    let chats = chats.into_iter().map(|(repo, n, title, state)| {
+        let active = active_chat == Some((&repo, n));
+        ui::pressable(SharedString::from(format!("sessions.chat.{repo}.{n}")))
+            .test_support()
+            .role(Role::ListItem)
+            .aria_label(title.clone())
+            .aria_description(format!("{state:?} · {}", chat::label(&repo, cx)))
+            .aria_selected(active)
+            .gap(GAP / 2.)
+            .pl(GAP * 1.5)
+            .pr(GAP)
+            .py(GAP / 3.)
+            .rounded(radius::WIDGET)
+            .text_size(text::SMALL)
+            .text_color(t.fg)
+            .when(active, |d| d.bg(t.active_bg))
+            .hover(|d| d.bg(t.hover))
+            .child(div().flex_none().child(chat::state_icon(state, cx)))
+            .child(div().min_w_0().truncate().child(title))
+            .on_click(move |_, _, cx| chat::foreground(repo.clone(), n, cx))
+    });
     let count = set.map_or_else(
         || w.repos().iter().filter(|r| r.worktree_of.is_none()).count(),
         |set| set.members.iter().filter(|m| m.state.usable()).count(),
@@ -425,6 +488,13 @@ fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
     let context_id = id.clone();
     let operations = set.cloned();
     let title = name.to_string();
+    let badge = state.map(|state| {
+        div()
+            .id(SharedString::from(format!("sessions.row.{id}.state")))
+            .test_support()
+            .aria_label(SharedString::from(format!("{state:?}")))
+            .child(chat::state_icon(state, cx))
+    });
     div()
         .flex()
         .flex_col()
@@ -491,6 +561,7 @@ fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(title),
                         )
+                        .children(badge)
                         .when(editable && selected, |d| {
                             d.child(
                                 ui::titled(
@@ -531,8 +602,8 @@ fn row(set: Option<&Workset>, browsing: bool, cx: &App) -> AnyElement {
                         }),
                 ),
         )
-        .when(!members.is_empty(), |d| {
-            d.child(div().pb(GAP / 2.).children(members))
+        .when(!members.is_empty() || has_chats, |d| {
+            d.child(div().pb(GAP / 2.).children(members).children(chats))
         })
         .into_any_element()
 }

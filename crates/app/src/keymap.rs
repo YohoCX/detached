@@ -76,6 +76,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("pane.focusDown", "Cmd+Alt+Down"),
     ("pane.resizeDown", "Ctrl+Cmd+Down"),
     ("tab.moveDown", "Cmd+Alt+Shift+Down"),
+    ("panel.chats", "Cmd+2"),
 ];
 
 /// Chords kept free for actions that do not exist yet.
