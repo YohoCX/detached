@@ -231,7 +231,6 @@ fn without_a_cli_it_says_how_to_get_one(cx: &mut TestAppContext) {
     say(cx, "hello");
     wait_for_item(cx, "has no CLI: see the Agents page");
     wait_until(cx, |cx| composer(cx).value() == Some("hello"));
-    assert_eq!(composer(cx).focused(), Some(true));
     assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
     // One below the floor runs, with a warning that points to the same page.
@@ -1671,19 +1670,105 @@ fn trusting_while_the_session_starts_sends_its_waiting_message_in_the_next(
 fn stopping_a_chat_during_start_puts_its_message_before_new_text(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
     say(cx, "hello");
-    cx.input("more");
+    cx.input("morx");
+    cx.press("shift-left");
     cx.click("chat.stop");
+    wait_until(cx, |cx| composer(cx).value() == Some("hello\nmorx"));
+    cx.input("e");
     wait_until(cx, |cx| composer(cx).value() == Some("hello\nmore"));
     assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
 
     std::fs::write(cx.sb.path("claude/go"), "").unwrap();
     cx.press("enter");
-    wait_for_item(cx, "said hello");
+    wait_for_item(cx, "said hello\nmore");
     assert_eq!(
         items(cx).iter().filter(|i| i.starts_with("You:")).count(),
         1
     );
+}
+
+#[gpui_kit::test]
+fn a_failed_start_restores_the_prompt_without_taking_focus(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go", "init_exit": true}))
+    });
+    say(cx, "hello");
+    cx.click("chat.more");
+    let focus = cx.update(|w, cx| w.focused(cx)).unwrap();
+    assert_eq!(composer(cx).focused(), Some(false));
+    assert_eq!(composer(cx).value(), Some(""));
+
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_until(cx, |cx| composer(cx).value() == Some("hello"));
+    assert_eq!(cx.update(|w, cx| w.focused(cx)), Some(focus));
+}
+
+#[gpui_kit::test]
+fn a_failed_start_keeps_file_completion_on_the_right_word(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go", "init_exit": true}))
+    });
+    say(cx, "hello");
+    cx.input("@READ");
+    let ready = |cx: &mut VisualTestContext| {
+        label(cx, ("chat.suggest", 0usize)).as_deref() == Some("README.md")
+    };
+    wait_until(cx, ready);
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_until(cx, |cx| {
+        composer(cx).value() == Some("hello\n@READ") && ready(cx)
+    });
+    cx.press("tab");
+    assert_eq!(composer(cx).value(), Some("hello\n@README.md "));
+}
+
+#[gpui_kit::test]
+fn opening_past_conversations_keeps_the_recovered_draft_in_its_chat(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go"}));
+        past(sb, &sb.solo(), "recent", "Most recent", 60);
+        past(sb, &sb.solo(), "older", "Older", 120);
+    });
+    let repo = cx.sb.solo().display().to_string();
+    let original = Doc::Chat {
+        repo: repo.clone(),
+        n: 0,
+    };
+    say(cx, "hello");
+    cx.click("chat.stop");
+    wait_until(cx, |cx| composer(cx).value() == Some("hello"));
+    assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
+    assert!(cx.find("chat.provider.pick").is_some());
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+
+    wait_until(cx, |cx| {
+        label(cx, ("chat.past", 0usize)).as_deref() == Some("Most recent")
+    });
+    cx.click(("chat.past", 0usize));
+    wait_for_item(cx, "fixed");
+    assert_eq!(composer(cx).value(), Some(""));
+    cx.workspace(|w, cx| w.show(original.clone(), cx));
+    assert_eq!(composer(cx).value(), Some("hello"));
+
+    show_chats(cx);
+    let older = |cx: &mut VisualTestContext| {
+        (0..2usize).find(|&i| label(cx, ("chats.past", i)).as_deref() == Some("Older"))
+    };
+    wait_until(cx, |cx| older(cx).is_some());
+    let row = older(cx).unwrap();
+    cx.click(("chats.past", row));
+    wait_for_item(cx, "fixed");
+    assert_eq!(composer(cx).value(), Some(""));
+    cx.workspace(|w, cx| w.show(original.clone(), cx));
+    assert_eq!(composer(cx).value(), Some("hello"));
+
+    cx.click("chat.input");
+    cx.press("secondary-a");
+    cx.press("backspace");
+    assert_eq!(composer(cx).value(), Some(""));
+    new_chat(cx);
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), Some(original));
 }
 
 #[gpui_kit::test]
@@ -2419,7 +2504,6 @@ fn a_codex_start_that_crashes_returns_its_message(cx: &mut TestAppContext) {
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
 }
 
-#[cfg(unix)]
 #[gpui_kit::test]
 fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {

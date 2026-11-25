@@ -42,8 +42,8 @@
 //! and the host's wake, `You have new messages`, its `fake-wake: <steps>` line.
 //!
 //! `fake.json` in the config dir sets what `initialize` answers as `account`, the `rate_limits`
-//! and `context` of `get_usage` and `get_context_usage`, the requests it `lacks` from the start, and
-//! `init_wait`, a file in the config dir that `initialize` waits for.
+//! and `context` of `get_usage` and `get_context_usage`, and the requests it `lacks` from the start.
+//! During initialization it waits for the `init_wait` file and exits early if `init_exit` is true.
 //!
 //! It exits 1 on a flag it does not know or a line that is not JSON. A resume without `--model`
 //! runs on `fallback-opus`, and one of a session still open exits 1. Each turn goes to a transcript
@@ -324,6 +324,10 @@ fn initialize(s: &Shared) -> Value {
         while !config_dir().join(name).exists() {
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    if s.fake["init_exit"] == true {
+        eprintln!("fake_claude: died at initialize");
+        quit(3);
     }
     let model = |v: &str| {
         let auto = v != "old";

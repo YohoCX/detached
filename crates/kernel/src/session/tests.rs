@@ -516,18 +516,41 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
 
 fn stopping_a_start_returns_the_queued_prompt(fake: Fake, cx: &mut TestAppContext) {
     let f = boot_fake(cx, fake);
+    let mut spec = f.spec(Kind::Chat);
+    let held = Path::new(&f.repo).join("hold-config");
+    if fake == Fake::Acp {
+        spec.mode = "read-only".into();
+        std::fs::write(&held, "").unwrap();
+    }
     let s = cx.update(|cx| {
-        let s = Session::open(f.spec(Kind::Chat), None, cx);
+        let s = Session::open(spec.clone(), None, cx);
         s.update(cx, |s, cx| s.prompt("hello".into(), cx));
-        crate::inbox::stop(cx, &s);
+        if fake == Fake::Claude {
+            crate::inbox::stop(cx, &s);
+        }
         s
     });
-    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    if fake == Fake::Acp {
+        wait_until(cx, |_| !held.exists());
+        cx.update(|cx| {
+            assert_eq!(s.read(cx).state, State::Starting);
+            crate::inbox::stop(cx, &s);
+        });
+    }
     s.read_with(cx, |s, _| {
         assert_eq!(s.returned.as_deref(), Some("hello"));
         assert!(s.unsent.is_none());
         assert!(!s.items.iter().any(|i| matches!(i, Item::User(_))));
     });
+    if fake == Fake::Acp {
+        assert_eq!(state(&s, cx), State::Ended(End::Closed));
+        let next = open_spec(spec.clone(), None, cx);
+        assert_eq!(turn(&next, "say hello", cx), "hello");
+        // Listing releases the fake's held setting.
+        backend(f.provider).past(&f.core, &spec).unwrap();
+    } else {
+        wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    }
 }
 
 fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(

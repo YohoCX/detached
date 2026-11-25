@@ -44,6 +44,7 @@ pub struct Chat {
     /// The first thing the user said here.
     pub topic: Option<String>,
     pub(super) draft: Option<String>,
+    pub(super) has_draft: bool,
     /// What the next session opens with.
     mode: Option<String>,
     pub model: Option<String>,
@@ -93,6 +94,7 @@ impl Chat {
             sessions: vec![],
             topic: None,
             draft: None,
+            has_draft: false,
             mode: choices.mode,
             model: choices.model,
             effort: choices.effort,
@@ -182,6 +184,7 @@ impl Chat {
             });
             if let Some(text) = returned {
                 self.draft = Some(text);
+                self.has_draft = true;
                 if self.first_user(cx).is_none() {
                     self.topic = None;
                 }
@@ -234,9 +237,7 @@ impl Chat {
         self.current().is_some_and(|s| s.read(cx).busy())
     }
 
-    /// Stops the turn, and every turn of the session's group. A backend that cannot stop a
-    /// background command alone ends the session too, which ends its commands; the next message
-    /// resumes it.
+    /// Stops the group's turns, returns queued prompts, and closes sessions without per-task stop.
     pub fn stop(&self, cx: &mut Context<Self>) {
         if let Some(s) = self.current() {
             kernel::inbox::stop(cx, s);

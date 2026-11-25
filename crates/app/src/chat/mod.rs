@@ -235,10 +235,10 @@ pub fn resume(cwd: String, p: &'static Provider, id: String, cx: &mut App) {
 
 fn fresh(repo: &str, cx: &mut App) -> u32 {
     let mine: Vec<_> = open(cx).into_iter().filter(|(r, ..)| r == repo).collect();
-    if let Some((_, n, _)) = mine
-        .iter()
-        .find(|(.., s)| owned_here(s.read(cx), cx) && s.read(cx).untouched(cx))
-    {
+    if let Some((_, n, _)) = mine.iter().find(|(.., s)| {
+        let s = s.read(cx);
+        owned_here(s, cx) && s.untouched(cx) && !s.has_draft
+    }) {
         return *n;
     }
     mine.iter().map(|(_, n, _)| n + 1).max().unwrap_or(0)
