@@ -1,5 +1,6 @@
 mod activity;
 mod changes;
+mod chats;
 mod checkouts;
 
 use std::collections::HashSet;
@@ -161,6 +162,7 @@ impl Overview {
                     }),
             )
             .when(start, |d| d.child(start_actions(cx)))
+            .child(chats::block(cx))
             .into_any_element()
     }
 }

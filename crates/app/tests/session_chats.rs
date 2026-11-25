@@ -61,6 +61,51 @@ fn adopted(sb: &Sandbox) -> sessions::Workset {
 }
 
 #[gpui_kit::test]
+fn overview_shows_the_latest_chat_message_and_opens_the_chat(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| session = adopted(sb).id);
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| chat::new_chat(repo.clone(), cx));
+    wait_until(cx, |cx| cx.find("chat.composer").is_some());
+    cx.input("wait overview-reply; hi");
+    cx.press("enter");
+    cx.click("doc.session-overview");
+    let row = ("overview.chats.row", 0usize);
+    let preview = ("overview.chats.preview", 0usize);
+    assert!(cx.find(row).unwrap().visible());
+    std::fs::write(cx.sb.path("claude/overview-reply"), "").unwrap();
+    wait_until(cx, |cx| {
+        cx.find(preview)
+            .is_some_and(|e| e.label() == Some("said hi"))
+    });
+    cx.click(row);
+    assert_eq!(
+        cx.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::Chat { repo, n: 0 })
+    );
+}
+
+#[gpui_kit::test]
+fn overview_shows_empty_chats_and_all_chats_opens_twice(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| session = adopted(sb).id);
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| chat::new_chat(repo, cx));
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    assert!(cx.find("overview.chats").unwrap().visible());
+    assert!(cx.find("overview.chats.empty").unwrap().visible());
+    assert!(cx.find(("overview.chats.row", 0usize)).is_none());
+    assert!(cx.find("tab.chats").is_none());
+    cx.click("overview.allChats");
+    assert!(cx.find("chats").unwrap().visible());
+    cx.click("doc.session-overview");
+    cx.click("overview.allChats");
+    assert!(cx.find("tab.chats").unwrap().visible());
+    assert!(cx.find("chats").unwrap().visible());
+}
+
+#[gpui_kit::test]
 fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAppContext) {
     let mut session = String::new();
     let cx = &mut open_app_with(cx, |sb| {
