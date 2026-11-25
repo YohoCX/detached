@@ -9,11 +9,11 @@ pub mod icon;
 pub mod menu;
 pub mod page;
 pub mod popup;
+pub mod segmented;
 pub mod suggest;
 pub mod theme;
 pub mod tree;
 
-use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::base::{TestSupportExt, TestTextExt};
@@ -31,10 +31,12 @@ pub use grip::{Edge, pane};
 pub use icon::{Icon, spinner};
 pub use menu::Menu;
 pub use popup::{DrawnMenu, popup};
+pub use segmented::{segmented, segmented_tips};
 pub use suggest::Suggest;
 pub use theme::{GAP, TAB_TITLE, radius, text, theme};
 
 use crate::util::{self, Status, fuzzy};
+use theme::control;
 
 /// How long motion takes: hover and press, popups and tabs, panes and dialogs.
 pub mod motion {
@@ -155,16 +157,16 @@ pub fn pressable(id: impl Into<ElementId>) -> Stateful<Div> {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-/// A borderless icon, muted until hovered and ringed on keyboard focus; 28px high.
+/// A borderless icon, muted until hovered and ringed on keyboard focus.
 pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
     let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
     pressable(id)
         .justify_center()
         .gap(px(4.))
-        .h(px(28.))
-        .min_w(px(28.))
-        .px(px(6.))
+        .h(control::HEIGHT)
+        .min_w(control::HEIGHT)
+        .px(control::GAP)
         .rounded(radius::ICON_BUTTON)
         .text_color(t.muted)
         .hover(|s| s.bg(t.hover).text_color(t.fg))
@@ -173,7 +175,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl IntoElement, cx: &App) -
         .child(icon)
 }
 
-/// A pill with a label, 28px high.
+/// A pill with a label.
 pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let t = theme(cx);
     pill(id, label)
@@ -228,8 +230,8 @@ pub fn danger_button(
 pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     let label = label.into();
     pressable(id)
-        .h(px(28.))
-        .px(px(14.))
+        .h(control::HEIGHT)
+        .px(control::TEXT_PAD)
         .border_1()
         .rounded(radius::PILL)
         .text_size(text::SMALL)
@@ -355,67 +357,6 @@ pub fn list_row(
         true => r.shadow(vec![marker(cx), ring.inset()]),
         false => r.bg(t.selected_inactive).shadow(vec![marker(cx)]),
     })
-}
-
-/// Mutually exclusive options, the current one tinted.
-pub fn segmented<T: Copy + PartialEq + 'static>(
-    id: impl Into<ElementId>,
-    options: &[(T, &'static str)],
-    value: T,
-    on_change: impl Fn(T, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> Stateful<Div> {
-    let options: Vec<_> = options.iter().map(|&(v, label)| (v, label, None)).collect();
-    segmented_tips(id, &options, value, on_change, cx)
-}
-
-/// `segmented` with a tooltip on the options that have one.
-pub fn segmented_tips<T: Copy + PartialEq + 'static>(
-    id: impl Into<ElementId>,
-    options: &[(T, &'static str, Option<&'static str>)],
-    value: T,
-    on_change: impl Fn(T, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> Stateful<Div> {
-    let t = theme(cx);
-    let on_change = Rc::new(on_change);
-    div()
-        .id(id)
-        .flex()
-        .p(px(2.))
-        .rounded(radius::ITEM)
-        .bg(t.hover)
-        .children(options.iter().enumerate().map(|(i, &(v, label, tip))| {
-            let on = v == value;
-            let on_change = on_change.clone();
-            let chip = BoxShadow::new(px(0.), px(1.), t.scrim).blur_radius(px(2.));
-            pressable(i)
-                .test_support()
-                .h(px(24.))
-                .px(px(10.))
-                .rounded(radius::SEGMENT)
-                .text_size(text::SMALL)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(if on { t.fg } else { t.muted })
-                .map(|b| match on {
-                    true => b.bg(t.segment_bg).shadow(vec![chip]),
-                    false => b.hover(|s| s.text_color(t.fg)),
-                })
-                .role(Role::Button)
-                .aria_label(label)
-                .aria_toggled(on.into())
-                .when_some(tip, |b, tip| {
-                    b.tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
-                })
-                .on_click(move |_, window, cx| on_change(v, window, cx))
-                .child(label)
-                // A new id each time the choice moves, so the chosen chip fades in.
-                .with_animation(
-                    ("segment", i * 2 + on as usize),
-                    Animation::new(motion::FAST),
-                    move |b, f| if on { b.opacity(0.4 + 0.6 * f) } else { b },
-                )
-        }))
 }
 
 /// A change's status letter in a ring of its color; a fill behind it would cost the letter contrast.
