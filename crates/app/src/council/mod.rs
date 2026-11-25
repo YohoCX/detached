@@ -9,7 +9,7 @@ pub mod timeline;
 
 pub(crate) use task::open as show_finding;
 
-use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement,
@@ -35,7 +35,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             id: "tab.council",
             title: "Council",
             action: Some("panel.council"),
-            home: (DockPlacement::Left, 280.),
             view: |_, cx| cx.new(List::new).into(),
             shown: None,
         },

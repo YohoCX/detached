@@ -15,7 +15,6 @@ use gpui_kit::{
 };
 
 use super::State;
-use crate::keymap;
 use crate::ui::{self, Icon, theme};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::repo::{Outcome, Repo};
@@ -243,10 +242,6 @@ pub fn prune(repo: String, cx: &mut App) {
 
 fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
     let w = Workspace::get(cx);
-    if w.archive() {
-        sync_repos(kind, None, cx);
-        return;
-    }
     let repos: Vec<_> = w.session_repos().iter().map(|r| r.path.clone()).collect();
     if kind == Kind::Fetch {
         sync_repos(kind, Some(repos), cx);
@@ -293,7 +288,7 @@ pub struct Bulk {
     pub total: usize,
 }
 
-/// Sync targets the current session in live views and the whole workspace in Archive.
+/// Sync buttons for the current session.
 pub fn sync_buttons(cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let (workspace, state) = (Workspace::global(cx), State::global(cx));
@@ -314,27 +309,16 @@ impl Render for SyncButtons {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
         let w = Workspace::get(cx);
-        let live = !w.archive();
-        let idle = bulk.is_none() && !(if live { w.session_repos() } else { w.repos() }).is_empty();
-        let scope = if live {
-            "the session's repositories"
-        } else {
-            "all repositories"
-        };
+        let idle = bulk.is_none() && !w.session_repos().is_empty();
         let t = theme(cx);
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
         let button = |kind, id: &'static str, icon: Icon, verb: &str| {
-            let title = format!("{verb} {scope}");
+            let title = format!("{verb} the session's repositories");
             let progress = bulk.filter(|b| b.kind == kind);
             let label = match progress {
                 Some(b) => format!("{}/{}", b.done, b.total),
-                None if !live => format!("{verb} All"),
                 None if kind == Kind::Pull => "Pull…".into(),
                 None => verb.into(),
-            };
-            let action = match kind {
-                Kind::Pull => "vcs.pullAll",
-                Kind::Fetch => "vcs.fetchAll",
             };
             ui::button(id, label.clone(), cx)
                 .test_support()
@@ -344,14 +328,7 @@ impl Render for SyncButtons {
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_description(title.clone())
-                .tooltip(move |window, cx| {
-                    let tip = if live {
-                        title.clone()
-                    } else {
-                        keymap::tip(&title, action, cx)
-                    };
-                    Tooltip::new(tip).build(window, cx)
-                })
+                .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
                 .when(idle, |b| {
                     b.on_click(move |_, w, cx| sync_session(kind, w, cx))
                 })

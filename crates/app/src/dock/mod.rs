@@ -1,4 +1,4 @@
-//! The window's zones on the kit's dock: a tab per app and per document, the skin, the saved layout.
+//! The live session's tabs and panes on the kit's dock.
 
 mod doc;
 mod panes;
@@ -6,15 +6,16 @@ mod skin;
 mod tabs;
 
 pub use doc::{DocKind, DocTab, ViewPosition, doc_kind, register_doc};
-pub use tabs::{Category, categories, category, register_category, tabs_of};
+pub(crate) use tabs::CATEGORIES;
+pub use tabs::tabs_of;
 
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::{
-    DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, NodeId, PaneNode, PaneRef,
-    Panel, PanelEvent, PanelId, PanelInfo, PanelState, PanelView, register_panel,
+    DockArea, DockAreaState, DockEvent, DockPlacement, NodeId, PaneNode, PaneRef, Panel,
+    PanelEvent, PanelId, PanelInfo, PanelState, PanelView, register_panel,
 };
 use gpui_kit::{
     AnyView, App, AppContext, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
@@ -23,13 +24,12 @@ use gpui_kit::{
 };
 
 use crate::actions::{self, Group, Registration};
-use crate::files::{ExplorerMode, choose_explorer, explorer_mode};
+use crate::files::{ExplorerMode, choose_explorer};
 use crate::ui::theme;
 use kernel::doc::Doc;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-const KEY: &str = "dock.layout";
 const VERSION: usize = 2;
 
 /// An app in the dock, as its feature registers it.
@@ -40,10 +40,7 @@ pub struct AppSpec {
     /// The tab's element id.
     pub id: &'static str,
     pub title: &'static str,
-    /// The action that toggles it, for its chord.
     pub action: Option<&'static str>,
-    /// The zone and size it opens in when a layout does not place it.
-    pub home: (DockPlacement, f32),
     pub view: fn(&mut Window, &mut App) -> AnyView,
     /// What it does each time its tab comes on screen.
     pub shown: Option<fn(&mut Window, &mut App)>,
@@ -61,8 +58,8 @@ impl Global for Apps {}
 pub fn register_app(cx: &mut App, app: AppSpec) {
     if let Some(id) = app.action {
         let title = actions::find(id).map_or(app.title, |a| a.title);
-        let toggle = move |window: &mut Window, cx: &mut App| toggle(app.name, window, cx);
-        let reg = actions::register(cx, id, title, Group::View, toggle);
+        let show = move |window: &mut Window, cx: &mut App| open(app.name, window, cx);
+        let reg = actions::register(cx, id, title, Group::View, show);
         cx.default_global::<Apps>().toggles.push(reg);
     }
     cx.default_global::<Apps>().apps.push(app);
@@ -73,7 +70,7 @@ pub fn apps(cx: &App) -> Vec<AppSpec> {
     cx.try_global::<Apps>().map_or(vec![], |a| a.apps.clone())
 }
 
-/// The zones' actions, the center's categories and theirs.
+/// Pane and tab actions, and categories for the archive.
 pub fn register(cx: &mut App) -> Vec<Registration> {
     register_doc(cx, "tool", ToolDocs);
     let mut all = tabs::register(cx);
@@ -88,42 +85,25 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         "panel.changes",
         "Session Changes",
         Group::View,
-        |w, cx| {
-            if Workspace::get(cx).archive() {
-                open("changes", w, cx);
-            } else {
-                choose_explorer(ExplorerMode::Changes, w, cx);
-            }
-        },
+        |w, cx| choose_explorer(ExplorerMode::Changes, w, cx),
     ));
     all
 }
 
-/// Shows `category` in the current workspace's center.
-pub fn show_category(category: &str, window: &mut Window, cx: &mut App) {
-    tabs::show(category, window, cx);
-}
-
-/// Closes workspace `id`'s tabs and forgets its center's categories.
+/// Closes workspace `id`'s tabs.
 pub fn forget_workspace(id: &str, window: &mut Window, cx: &mut App) {
     tabs::forget(id, window, cx);
 }
 
-/// One app in a zone; the dock moves this entity, so its view and state go with it.
-pub struct Tab {
-    pub app: AppSpec,
+struct Tab {
+    app: AppSpec,
     /// Built when first on screen: a hidden view would load and fetch for nobody.
     view: Option<AnyView>,
-    focus: FocusHandle,
 }
 
 impl Tab {
     pub fn new(app: AppSpec, cx: &mut App) -> Entity<Tab> {
-        cx.new(|cx| Tab {
-            app,
-            view: None,
-            focus: cx.focus_handle(),
-        })
+        cx.new(|_| Tab { app, view: None })
     }
 }
 
@@ -158,6 +138,11 @@ impl DocKind for ToolDocs {
         )
     }
 
+    fn tip(&self, doc: &Doc, cx: &App) -> Option<SharedString> {
+        let app = tool(doc, cx)?;
+        Some(crate::keymap::tip(app.title, app.action?, cx).into())
+    }
+
     fn view(&self, doc: &mut Doc, read_only: bool, _: &mut Window, cx: &mut App) -> AnyView {
         if !read_only && let Some(app) = tool(doc, cx) {
             return Tab::new(app, cx).into();
@@ -184,14 +169,6 @@ impl Render for Unavailable {
     }
 }
 
-impl EventEmitter<PanelEvent> for Tab {}
-
-impl Focusable for Tab {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
-    }
-}
-
 impl Render for Tab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.view.is_none() {
@@ -203,26 +180,6 @@ impl Render for Tab {
             .size_full()
             .min_h_0()
             .children(self.view.clone())
-    }
-}
-
-impl Panel for Tab {
-    fn panel_name(&self) -> &'static str {
-        self.app.name
-    }
-
-    fn closable(&self, _: &App) -> bool {
-        false
-    }
-
-    fn zoomable(&self, _: &App) -> bool {
-        false
-    }
-
-    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let (true, Some(shown)) = (active, self.app.shown) {
-            shown(window, cx);
-        }
     }
 }
 
@@ -299,21 +256,17 @@ fn missing(state: &PanelState, cx: &mut App) -> Arc<dyn PanelView> {
 }
 
 #[derive(Default)]
-struct Zones {
+struct Layouts {
     current: String,
     areas: HashMap<String, Entity<DockArea>>,
     saved_chats: RefCell<HashMap<String, Vec<(String, u32)>>>,
 }
 
-impl Global for Zones {}
+impl Global for Layouts {}
 
 fn layout_key(cx: &App) -> String {
     let w = Workspace::get(cx);
-    if w.archive() {
-        KEY.to_string()
-    } else {
-        session_key(w.id().unwrap_or_default(), w.session_id())
-    }
+    session_key(w.id().unwrap_or_default(), w.session_id())
 }
 
 fn session_key(workspace: &str, session: &str) -> String {
@@ -321,41 +274,35 @@ fn session_key(workspace: &str, session: &str) -> String {
 }
 
 fn areas(cx: &App) -> Vec<Entity<DockArea>> {
-    cx.try_global::<Zones>()
+    cx.try_global::<Layouts>()
         .map_or_else(Vec::new, |z| z.areas.values().cloned().collect())
 }
 
-pub fn zones(cx: &App) -> Option<Entity<DockArea>> {
-    cx.try_global::<Zones>()?
+pub fn current_area(cx: &App) -> Option<Entity<DockArea>> {
+    cx.try_global::<Layouts>()?
         .areas
         .get(&layout_key(cx))
         .cloned()
 }
 
 pub(super) fn new_window(window: &mut Window, cx: &mut App) {
-    if cx.try_global::<Zones>().is_some() {
-        cx.remove_global::<Zones>();
+    if cx.try_global::<Layouts>().is_some() {
+        cx.remove_global::<Layouts>();
     }
     restore(window, cx);
 }
 
 pub fn area(window: &mut Window, cx: &mut App) -> Entity<DockArea> {
-    if let Some(area) = zones(cx) {
+    if let Some(area) = current_area(cx) {
         return area;
     }
-    if cx.try_global::<Zones>().is_none() {
-        for app in apps(cx) {
-            register_panel(cx, app.name, move |_, _, cx| Arc::new(Tab::new(app, cx)));
-        }
+    if cx.try_global::<Layouts>().is_none() {
         register_panel(cx, doc::NAME, |b, _, cx| {
             doc::load(b.state(), cx).unwrap_or_else(|| missing(b.state(), cx))
         });
-        cx.set_global(Zones::default());
+        cx.set_global(Layouts::default());
     }
     let key = layout_key(cx);
-    if key != KEY && !cx.global::<Zones>().areas.contains_key(KEY) {
-        build_area(KEY.to_string(), window, cx);
-    }
     build_area(key, window, cx)
 }
 
@@ -367,21 +314,16 @@ struct SavedLayout {
 
 fn persist(key: &str, area: &Entity<DockArea>, cx: &mut App) {
     let dock = area.read(cx).dump(cx);
-    if key == KEY {
-        ui_state::set(key, dock, cx);
-        cx.global::<Zones>().saved_chats.borrow_mut().clear();
+    let focus = if layout_key(cx) == key {
+        panes::focus_index(area.read(cx), cx)
     } else {
-        let focus = if layout_key(cx) == key {
-            panes::focus_index(area.read(cx), cx)
-        } else {
-            ui_state::get::<SavedLayout>(key, cx).map_or(0, |s| s.focus)
-        };
-        ui_state::set(key, SavedLayout { dock, focus }, cx);
-    }
+        ui_state::get::<SavedLayout>(key, cx).map_or(0, |s| s.focus)
+    };
+    ui_state::set(key, SavedLayout { dock, focus }, cx);
 }
 
 pub fn save_current(cx: &mut App) {
-    if let Some(area) = zones(cx) {
+    if let Some(area) = current_area(cx) {
         persist(&layout_key(cx), &area, cx);
     }
 }
@@ -390,50 +332,8 @@ fn saved_focus(cx: &App) -> usize {
     ui_state::get::<SavedLayout>(&layout_key(cx), cx).map_or(0, |layout| layout.focus)
 }
 
-fn migrate(workspace: &str, session: &str, cx: &App) -> Option<DockAreaState> {
-    let old = ui_state::get::<DockAreaState>(KEY, cx)?;
-    let mut tabs = PanelState {
-        info: PanelInfo::tabs(0),
-        ..PanelState::new("TabPanel")
-    };
-    fn collect(panel: &PanelState, tabs: &mut PanelState, workspace: &str, session: &str) {
-        if panel.panel_name == doc::NAME
-            && let PanelInfo::Panel(value) = &panel.info
-            && value.get("workspace").and_then(serde_json::Value::as_str) == Some(workspace)
-            && value.get("session").and_then(serde_json::Value::as_str) == Some(session)
-        {
-            tabs.add_child(panel.clone());
-        }
-        for child in &panel.children {
-            collect(child, tabs, workspace, session);
-        }
-    }
-    for root in [
-        Some(&old.center),
-        old.left_dock.as_ref().map(|d| d.panel()),
-        old.right_dock.as_ref().map(|d| d.panel()),
-        old.bottom_dock.as_ref().map(|d| d.panel()),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        collect(root, &mut tabs, workspace, session);
-    }
-    (!tabs.children.is_empty()).then(|| DockAreaState {
-        center: tabs,
-        version: Some(VERSION),
-        ..DockAreaState::default()
-    })
-}
-
 fn session_layout(workspace: &str, session: &str, cx: &App) -> Option<SavedLayout> {
     ui_state::get::<SavedLayout>(&session_key(workspace, session), cx)
-        .or_else(|| {
-            Some(SavedLayout {
-                dock: migrate(workspace, session, cx)?,
-                focus: 0,
-            })
-        })
         .filter(|layout| layout.dock.version == Some(VERSION))
 }
 
@@ -442,7 +342,8 @@ fn saved_chat(panel: &PanelState, workspace: &str, session: &str) -> Option<Doc>
         && let PanelInfo::Panel(value) = &panel.info
         && let Ok(saved) = doc::Saved::deserialize(value)
         && saved.workspace.as_deref() == Some(workspace)
-        && saved.session.flatten().as_deref() == Some(session)
+        && !saved.archived
+        && saved.session.as_deref() == Some(session)
         && matches!(saved.doc, Doc::Chat { .. })
     {
         return Some(saved.doc);
@@ -452,17 +353,18 @@ fn saved_chat(panel: &PanelState, workspace: &str, session: &str) -> Option<Doc>
 
 pub(crate) fn session_chats(workspace: &str, session: &str, cx: &App) -> Vec<(String, u32)> {
     let key = session_key(workspace, session);
-    let Some(zones) = cx.try_global::<Zones>() else {
+    let Some(layouts) = cx.try_global::<Layouts>() else {
         return vec![];
     };
-    if let Some(area) = zones.areas.get(&key) {
+    if let Some(area) = layouts.areas.get(&key) {
         return docs(area.read(cx))
             .into_iter()
-            .filter_map(|(_, _, tab)| {
+            .filter_map(|(_, tab)| {
                 let tab = tab.read(cx);
                 match &tab.doc {
                     Doc::Chat { repo, n }
-                        if tab.workspace.as_deref() == Some(workspace)
+                        if !tab.archived()
+                            && tab.workspace.as_deref() == Some(workspace)
                             && tab.session.as_deref() == Some(session) =>
                     {
                         Some((repo.clone(), *n))
@@ -480,7 +382,7 @@ pub(crate) fn session_chats(workspace: &str, session: &str, cx: &App) -> Vec<(St
             collect(child, workspace, session, chats);
         }
     }
-    zones
+    layouts
         .saved_chats
         .borrow_mut()
         .entry(key)
@@ -495,47 +397,21 @@ pub(crate) fn session_chats(workspace: &str, session: &str, cx: &App) -> Vec<(St
 }
 
 fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea> {
-    let archive = key == KEY;
-    let saved = if archive {
-        ui_state::get::<DockAreaState>(&key, cx)
-    } else {
-        let w = Workspace::get(cx);
-        session_layout(w.id().unwrap_or_default(), w.session_id(), cx).map(|s| s.dock)
-    };
+    let w = Workspace::get(cx);
+    let saved = session_layout(w.id().unwrap_or_default(), w.session_id(), cx);
     let area = cx.new(|cx| {
-        let mut area = DockArea::new("dock", Some(VERSION), window, cx)
-            .with_renderer(skin::Skin::new(cx, archive));
-        if let Some(state) = saved.filter(|s| s.version == Some(VERSION)) {
-            let _ = area.load(state, window, cx);
-            if archive {
-                drop_unparsed(&mut area, window, cx);
-            } else {
-                for p in [
-                    DockPlacement::Left,
-                    DockPlacement::Right,
-                    DockPlacement::Bottom,
-                ] {
-                    area.remove_dock(p, window, cx);
-                }
-            }
-        } else if archive {
-            default_layout(&mut area, window, cx);
+        let mut area =
+            DockArea::new("dock", Some(VERSION), window, cx).with_renderer(skin::Skin::new(cx));
+        if let Some(SavedLayout { mut dock, .. }) = saved {
+            dock.left_dock = None;
+            dock.right_dock = None;
+            dock.bottom_dock = None;
+            let _ = area.load(dock, window, cx);
         }
         let shown = active(&area);
-        for app in apps(cx) {
-            if archive && find(&area, app.name, cx).is_none() {
-                let (p, size) = app.home;
-                area.add_panel(Tab::new(app, cx), p, Some(px(size)), window, cx);
-            }
-        }
-        for id in &shown {
-            area.select_panel(*id, window, cx);
-        }
-        if archive {
-            tabs::adopt(&area, cx);
-        } else if !docs(&area)
+        if !docs(&area)
             .iter()
-            .any(|(_, _, t)| t.read(cx).doc == Doc::SessionOverview)
+            .any(|(_, t)| t.read(cx).doc == Doc::SessionOverview)
         {
             panes::initialize(&mut area, window, cx);
             if let Some(id) = shown.first() {
@@ -544,9 +420,9 @@ fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea
         }
         area
     });
-    let zones = cx.global_mut::<Zones>();
-    zones.saved_chats.get_mut().remove(&key);
-    zones.areas.insert(key.clone(), area.clone());
+    let layouts = cx.global_mut::<Layouts>();
+    layouts.saved_chats.get_mut().remove(&key);
+    layouts.areas.insert(key.clone(), area.clone());
     let save = move |area: &Entity<DockArea>, cx: &mut App| {
         persist(&key, area, cx);
         panes::changed(area, cx);
@@ -561,127 +437,30 @@ fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea
     area
 }
 
-/// A saved doc that no longer parses goes, with no placeholder; an unknown app keeps its own.
-fn drop_unparsed(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
-    let ids: Vec<_> = placements()
-        .into_iter()
-        .filter_map(|p| area.layout(p))
-        .flat_map(|t| t.panels().collect::<Vec<_>>())
-        .collect();
-    for id in ids {
-        let gone = area.panel(id).map(|p| p.view().downcast::<Missing>());
-        if let Some(Ok(m)) = gone
-            && m.read(cx).name == doc::NAME
-        {
-            area.remove_panel(m, window, cx);
-        }
-    }
-}
-
-fn default_layout(area: &mut DockArea, window: &mut Window, cx: &mut Context<DockArea>) {
-    for p in [
-        DockPlacement::Left,
-        DockPlacement::Right,
-        DockPlacement::Bottom,
-    ] {
-        let apps = apps(cx).into_iter().filter(|a| a.home.0 == p);
-        let layout = apps.fold(DockLayout::tabs(), |l, a| l.panel(Tab::new(a, cx)));
-        area.set_dock(p, layout, window, cx);
-        area.set_dock_size(p, px(home_size(p, cx)), window, cx);
-    }
-    area.toggle_dock(DockPlacement::Bottom, window, cx);
-}
-
-/// A zone's size until the user drags it: its pane's and the gap beside it.
-pub fn home_size(p: DockPlacement, cx: &App) -> f32 {
-    let pane = apps(cx)
-        .iter()
-        .find(|a| a.home.0 == p)
-        .map_or(280., |a| a.home.1);
-    pane + f32::from(crate::ui::GAP)
-}
-
 fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
-    if let Some(area) = zones(cx) {
+    if let Some(area) = current_area(cx) {
         area.update(cx, f);
     }
 }
 
-/// Shows the app named `name`, opening its zone.
+/// Opens the app in the focused pane.
 pub fn open(name: &str, window: &mut Window, cx: &mut App) {
-    if name == "project" && !Workspace::get(cx).archive() {
-        return choose_explorer(ExplorerMode::Files, window, cx);
-    }
-    if let Some(doc) = live_tool(name, cx) {
-        return open_doc(doc, true, window, cx);
-    }
-    if name == "terminal" && !Workspace::get(cx).archive() {
+    if name == "terminal" {
         if let Some(cwd) =
             bound_repo(cx).or_else(|| std::env::home_dir().map(|p| p.display().to_string()))
         {
             crate::terminal::open_tab(cwd, window, cx);
         }
-        return;
-    }
-    with(cx, |a, cx| {
-        if let Some((_, id)) = find(a, name, cx) {
-            reveal(a, id, window, cx);
-        }
-    });
-}
-
-/// Shows the app, or closes its zone when it is on screen there.
-pub fn toggle(name: &str, window: &mut Window, cx: &mut App) {
-    if name == "project" && !Workspace::get(cx).archive() {
-        use crate::shell::{self, Side::Explorer};
-        if explorer_mode(cx) == ExplorerMode::Files && shell::side_open(Explorer, window, cx) {
-            return shell::set_side(Explorer, false, window, cx);
-        }
-        return choose_explorer(ExplorerMode::Files, window, cx);
-    }
-    match is_shown(name, cx) {
-        true => close(name, window, cx),
-        false => open(name, window, cx),
+    } else if let Some(doc) = tool_doc(name, cx) {
+        open_doc(doc, true, window, cx);
     }
 }
 
-/// Closes the zone the app is on screen in.
-pub fn close(name: &str, window: &mut Window, cx: &mut App) {
-    if let Some(doc) = live_tool(name, cx) {
-        return with(cx, |a, cx| {
-            if let Some((_, _, tab)) = docs(a)
-                .into_iter()
-                .find(|(_, _, tab)| tab.read(cx).doc == doc)
-            {
-                a.remove_panel(tab, window, cx);
-            }
-        });
-    }
-    if !is_shown(name, cx) {
-        return;
-    }
-    with(cx, |a, cx| {
-        if let Some((p, _)) = find(a, name, cx) {
-            set_open(a, p, false, window, cx);
-        }
-    });
-}
-
-/// Whether the app is the tab on screen in an open zone.
 pub fn is_shown(name: &str, cx: &App) -> bool {
-    if name == "project" && !Workspace::get(cx).archive() {
-        return explorer_mode(cx) == ExplorerMode::Files;
-    }
-    if let Some(doc) = live_tool(name, cx) {
-        return Workspace::get(cx).shown() == Some(&doc);
-    }
-    zones(cx).is_some_and(|a| shown(a.read(cx), cx).contains(&name))
+    tool_doc(name, cx).is_some_and(|doc| Workspace::get(cx).shown() == Some(&doc))
 }
 
-fn live_tool(name: &str, cx: &App) -> Option<Doc> {
-    if Workspace::get(cx).archive() || matches!(name, "terminal" | "project") {
-        return None;
-    }
+fn tool_doc(name: &str, cx: &App) -> Option<Doc> {
     apps(cx)
         .into_iter()
         .find(|a| a.name == name)
@@ -695,66 +474,36 @@ pub(crate) fn is_doc_view_shown(view: EntityId, cx: &App) -> bool {
     if crate::search::palette_open(cx) {
         return false;
     }
-    let (Some(area), Some(doc)) = (zones(cx), Workspace::get(cx).shown()) else {
+    let (Some(area), Some(doc)) = (current_area(cx), Workspace::get(cx).shown()) else {
         return false;
     };
     let area = area.read(cx);
-    docs(area).into_iter().any(|(p, id, tab)| {
+    docs(area).into_iter().any(|(id, tab)| {
         let tab = tab.read(cx);
         tab.view.as_ref().is_some_and(|v| v.entity_id() == view)
             && &tab.doc == doc
-            && (if p == DockPlacement::Center {
-                tabs::in_view(tab, cx)
-                    && area.zoomed_group().is_none_or(|node| {
-                        area.layout(p).and_then(|t| t.find_panel_node(id)) == Some(node)
-                    })
-            } else {
-                tabs::mine(tab, cx) && area.is_dock_open(p)
+            && area.zoomed_group().is_none_or(|node| {
+                area.layout(DockPlacement::Center)
+                    .and_then(|t| t.find_panel_node(id))
+                    == Some(node)
             })
-            && tabs_shown(area, p).contains(&id)
+            && active(area).contains(&id)
     })
 }
 
 pub(crate) fn minimum_width(cx: &App) -> gpui_kit::Pixels {
-    zones(cx).map_or(px(320.), |area| panes::minimum_width(area.read(cx)))
+    current_area(cx).map_or(px(320.), |area| panes::minimum_width(area.read(cx)))
 }
 
-pub fn is_open(p: DockPlacement, cx: &App) -> bool {
-    zones(cx).is_some_and(|a| a.read(cx).is_dock_open(p))
-}
-
-pub fn toggle_zone(p: DockPlacement, window: &mut Window, cx: &mut App) {
-    with(cx, |a, cx| a.toggle_dock(p, window, cx));
-    window.refresh();
-}
-
-/// Selects the tab `id` and opens its zone.
 pub fn reveal(area: &mut DockArea, id: PanelId, window: &mut Window, cx: &mut Context<DockArea>) {
     if let Some(node) = area
         .layout(DockPlacement::Center)
         .and_then(|t| t.find_panel_node(id))
-        && !Workspace::get(cx).archive()
     {
-        return panes::focus(area, node, id, window, cx);
-    }
-    area.select_panel(id, window, cx);
-    if let Some(p) = placements()
-        .into_iter()
-        .find(|p| area.layout(*p).is_some_and(|t| t.panels().any(|x| x == id)))
-    {
-        set_open(area, p, true, window, cx);
+        panes::focus(area, node, id, window, cx);
     }
 }
 
-fn leave_archive_for_live_doc(doc: &Doc, cx: &mut App) {
-    if matches!(doc, Doc::Chat { .. } | Doc::Terminal { .. }) && Workspace::get(cx).archive() {
-        Workspace::global(cx).update(cx, |w, cx| w.set_archive(false, cx));
-    }
-}
-
-/// Brings forward the current workspace's tab holding `doc`, else shows a file or diff in the
-/// preview tab of its category in the center, else opens a new tab there; its category comes
-/// forward.
 pub fn show_doc(
     area: &mut DockArea,
     doc: Doc,
@@ -762,52 +511,8 @@ pub fn show_doc(
     window: &mut Window,
     cx: &mut Context<DockArea>,
 ) {
-    leave_archive_for_live_doc(&doc, cx);
-    let Some(kind) = doc_kind(doc.kind(), cx) else {
-        return;
-    };
-    if !Workspace::get(cx).archive() {
-        return panes::show_doc(area, doc, kind, keep, None, window, cx);
-    }
-    let (preview, category) = (kind.preview(), kind.category(&doc));
-    let tabs: Vec<_> = docs(area)
-        .into_iter()
-        .filter(|(_, _, t)| tabs::mine(t.read(cx), cx))
-        .collect();
-    let found = tabs
-        .iter()
-        .find(|(_, _, t)| {
-            let t = &t.read(cx).doc;
-            t.kind() == doc.kind() && kind.same(t, &doc)
-        })
-        .or_else(|| {
-            let free = |(p, _, t): &&(_, _, Entity<DocTab>)| {
-                let t = t.read(cx);
-                *p == DockPlacement::Center && !t.keep && t.category() == category
-            };
-            tabs.iter()
-                .find(free)
-                .filter(|_| preview && !keep && !Workspace::get(cx).archive())
-        })
-        .map(|(p, id, t)| (*p, *id, t.clone()));
-    match found {
-        Some((p, id, tab)) => {
-            if p == DockPlacement::Center {
-                tabs::set(category, cx);
-            }
-            tab.update(cx, |t, cx| {
-                t.set_doc(doc, kind, window, cx);
-                if keep {
-                    t.keep(cx);
-                }
-            });
-            reveal(area, id, window, cx);
-        }
-        None => {
-            tabs::set(category, cx);
-            let tab = DocTab::new(doc, kind, keep || !preview, cx);
-            area.add_panel(tab, DockPlacement::Center, None, window, cx);
-        }
+    if let Some(kind) = doc_kind(doc.kind(), cx) {
+        panes::show_doc(area, doc, kind, panes::Open::live(keep), None, window, cx);
     }
 }
 
@@ -827,15 +532,13 @@ impl Render for DragDoc {
     }
 }
 
-/// Its kind adopts `doc`, which then gets a tab in the zone of tab strip `node`, else the center.
+/// Opens a dropped document in the target pane.
 pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut App) {
-    leave_archive_for_live_doc(&doc, cx);
     let Some(kind) = doc_kind(doc.kind(), cx) else {
         return;
     };
-    if !Workspace::get(cx).archive()
-        && let Some(node) = node
-        && !zones(cx).is_some_and(|a| {
+    if let Some(node) = node
+        && !current_area(cx).is_some_and(|a| {
             a.read(cx)
                 .layout(DockPlacement::Center)
                 .is_some_and(|t| t.find_node(node).is_some())
@@ -844,28 +547,14 @@ pub fn drop_doc(doc: Doc, node: Option<NodeId>, window: &mut Window, cx: &mut Ap
         return;
     }
     kind.adopt(&doc, cx);
-    if !Workspace::get(cx).archive() {
-        return with(cx, |a, cx| {
-            panes::show_doc(a, doc, kind, true, node, window, cx)
-        });
-    }
     with(cx, |a, cx| {
-        let p = node.and_then(|n| {
-            placements()
-                .into_iter()
-                .find(|p| a.layout(*p).is_some_and(|t| t.find_node(n).is_some()))
-        });
-        if p.is_none_or(|p| p == DockPlacement::Center) {
-            tabs::set(kind.category(&doc), cx);
-        }
-        let tab = DocTab::new(doc, kind, true, cx);
-        a.add_panel(tab, p.unwrap_or(DockPlacement::Center), None, window, cx);
+        panes::show_doc(a, doc, kind, panes::Open::Keep, node, window, cx)
     });
 }
 
 pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
     if tab.read(cx).closable(cx)
-        && let Some(area) = zones(cx)
+        && let Some(area) = current_area(cx)
     {
         panes::confirm_close(area, vec![tab.panel_id(cx)], None, window, cx);
     }
@@ -873,7 +562,7 @@ pub fn close_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
 
 fn remove_doc(tab: Entity<DocTab>, window: &mut Window, cx: &mut App) {
     for area in areas(cx) {
-        if docs(area.read(cx)).iter().any(|(_, _, t)| *t == tab) {
+        if docs(area.read(cx)).iter().any(|(_, t)| *t == tab) {
             area.update(cx, |a, cx| a.remove_panel(tab.clone(), window, cx));
             break;
         }
@@ -884,8 +573,8 @@ pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App
     let tabs: Vec<_> = areas(cx)
         .iter()
         .flat_map(|a| docs(a.read(cx)))
-        .filter(|(_, _, t)| !t.read(cx).legacy() && gone(&t.read(cx).doc))
-        .map(|(_, _, t)| t)
+        .filter(|(_, t)| !t.read(cx).archived() && gone(&t.read(cx).doc))
+        .map(|(_, t)| t)
         .collect();
     for tab in tabs {
         remove_doc(tab, window, cx);
@@ -900,15 +589,16 @@ pub(crate) fn close_chat(
     cx: &mut App,
 ) {
     let key = session_key(workspace, session);
-    let Some(zones) = cx.try_global::<Zones>() else {
+    let Some(layouts) = cx.try_global::<Layouts>() else {
         return;
     };
-    if let Some(area) = zones.areas.get(&key).cloned() {
+    if let Some(area) = layouts.areas.get(&key).cloned() {
         let tabs = docs(area.read(cx));
         area.update(cx, |a, cx| {
-            for (_, _, tab) in tabs {
+            for (_, tab) in tabs {
                 let t = tab.read(cx);
-                if t.doc == *doc
+                if !t.archived()
+                    && t.doc == *doc
                     && t.workspace.as_deref() == Some(workspace)
                     && t.session.as_deref() == Some(session)
                 {
@@ -939,7 +629,7 @@ pub(crate) fn close_chat(
     if let Some(mut layout) = session_layout(workspace, session, cx)
         && remove(&mut layout.dock.center, workspace, session, doc)
     {
-        zones.saved_chats.borrow_mut().remove(&key);
+        layouts.saved_chats.borrow_mut().remove(&key);
         ui_state::set(&key, layout, cx);
         cx.refresh_windows();
     }
@@ -950,74 +640,41 @@ pub(crate) fn show(doc: Doc, window: &mut Window, cx: &mut App) {
 }
 
 pub(crate) fn open_doc(doc: Doc, keep: bool, window: &mut Window, cx: &mut App) {
-    leave_archive_for_live_doc(&doc, cx);
     area(window, cx).update(cx, |area, cx| show_doc(area, doc, keep, window, cx));
 }
 
-pub(crate) fn archived_tabs(cx: &App) -> Vec<Entity<DocTab>> {
-    let Some(ws) = Workspace::get(cx).id() else {
+pub(crate) fn archived_tabs(cx: &App) -> Vec<Doc> {
+    let workspace = Workspace::get(cx).id();
+    ui_state::archived_tabs(cx)
+        .into_iter()
+        .filter(|tab| {
+            tab.workspace.as_deref() == workspace && doc_kind(tab.doc.kind(), cx).is_some()
+        })
+        .map(|tab| tab.doc)
+        .collect()
+}
+
+pub(crate) fn open_archived(doc: Doc, window: &mut Window, cx: &mut App) {
+    if let Some(kind) = doc_kind(doc.kind(), cx) {
+        area(window, cx).update(cx, |area, cx| {
+            panes::show_doc(area, doc, kind, panes::Open::Archived, None, window, cx);
+        });
+    }
+}
+
+/// Every document tab in the center.
+pub fn docs(area: &DockArea) -> Vec<(PanelId, Entity<DocTab>)> {
+    let Some(tree) = area.layout(DockPlacement::Center) else {
         return vec![];
     };
-    tabs_of(ws, cx)
-        .into_iter()
-        .filter(|tab| tab.read(cx).legacy())
+    tree.panels()
+        .filter_map(|id| Some((id, area.panel(id)?.view().downcast::<DocTab>().ok()?)))
         .collect()
 }
 
-pub(crate) fn open_archived_tab(tab: &Entity<DocTab>, window: &mut Window, cx: &mut App) {
-    area(window, cx).update(cx, |area, cx| {
-        if let Some((_, id, _)) = docs(area).into_iter().find(|(_, _, t)| t == tab) {
-            tabs::set(tab.read(cx).category(), cx);
-            reveal(area, id, window, cx);
-        }
-    });
-}
-
-/// Every document tab and its zone.
-pub fn docs(area: &DockArea) -> Vec<(DockPlacement, PanelId, Entity<DocTab>)> {
-    placements()
-        .into_iter()
-        .filter_map(|p| Some((p, area.layout(p)?)))
-        .flat_map(|(p, tree)| {
-            let ids: Vec<_> = tree.panels().collect();
-            ids.into_iter().filter_map(move |id| {
-                let tab = area.panel(id)?.view().downcast::<DocTab>().ok()?;
-                Some((p, id, tab))
-            })
-        })
-        .collect()
-}
-
-fn find(area: &DockArea, name: &str, cx: &App) -> Option<(DockPlacement, PanelId)> {
-    placements().into_iter().find_map(|p| {
-        let tree = area.layout(p)?;
-        tree.panels()
-            .find(|id| name_of(area, *id, cx) == Some(name))
-            .map(|id| (p, id))
-    })
-}
-
-/// The app on screen in each open zone.
-fn shown(area: &DockArea, cx: &App) -> Vec<&'static str> {
-    let open = |p: &DockPlacement| *p == DockPlacement::Center || area.is_dock_open(*p);
-    let ids = placements()
-        .into_iter()
-        .filter(open)
-        .flat_map(|p| tabs_shown(area, p));
-    ids.filter_map(|id| name_of(area, id, cx)).collect()
-}
-
-/// The tab shown in each group, open zone or not.
 fn active(area: &DockArea) -> Vec<PanelId> {
-    placements()
-        .into_iter()
-        .flat_map(|p| tabs_shown(area, p))
-        .collect()
-}
-
-fn tabs_shown(area: &DockArea, p: DockPlacement) -> Vec<PanelId> {
     let mut active = vec![];
-    if let Some(tree) = area.layout(p) {
+    if let Some(tree) = area.layout(DockPlacement::Center) {
         tree.root().walk(&mut |n: &PaneNode| {
             if let PaneRef::Tabs { panels, active_ix } = n.kind() {
                 active.extend(panels.get(active_ix).copied());
@@ -1027,38 +684,12 @@ fn tabs_shown(area: &DockArea, p: DockPlacement) -> Vec<PanelId> {
     active
 }
 
-fn set_open(
-    area: &mut DockArea,
-    p: DockPlacement,
-    open: bool,
-    window: &mut Window,
-    cx: &mut Context<DockArea>,
-) {
-    if p != DockPlacement::Center && area.is_dock_open(p) != open {
-        area.toggle_dock(p, window, cx);
-    }
-}
-
-fn name_of(area: &DockArea, id: PanelId, cx: &App) -> Option<&'static str> {
-    let view = area.panel(id)?.view();
-    view.downcast::<Tab>().ok().map(|t| t.read(cx).app.name)
-}
-
-fn placements() -> [DockPlacement; 4] {
-    [
-        DockPlacement::Center,
-        DockPlacement::Left,
-        DockPlacement::Right,
-        DockPlacement::Bottom,
-    ]
-}
-
 pub(crate) fn switchable_tabs(cx: &App) -> Vec<(PanelId, String)> {
-    zones(cx).map_or_else(Vec::new, |area| {
+    current_area(cx).map_or_else(Vec::new, |area| {
         docs(area.read(cx))
             .into_iter()
-            .filter(|(p, _, tab)| *p == DockPlacement::Center && tabs::mine(tab.read(cx), cx))
-            .map(|(_, id, tab)| (id, tab.read(cx).title(cx).to_string()))
+            .filter(|(_, tab)| tabs::mine(tab.read(cx), cx))
+            .map(|(id, tab)| (id, tab.read(cx).title(cx).to_string()))
             .collect()
     })
 }
@@ -1070,26 +701,16 @@ pub(crate) fn select_tab(id: PanelId, w: &mut Window, cx: &mut App) {
 pub(crate) fn restore(w: &mut Window, cx: &mut App) {
     let key = layout_key(cx);
     if let Some((old, area)) = cx
-        .try_global::<Zones>()
-        .filter(|z| z.current != key && z.current != KEY)
+        .try_global::<Layouts>()
+        .filter(|z| z.current != key)
         .and_then(|z| Some((z.current.clone(), z.areas.get(&z.current)?.clone())))
     {
         persist(&old, &area, cx);
     }
-    if let Some(archive) = cx
-        .try_global::<Zones>()
-        .and_then(|z| z.areas.get(KEY))
-        .cloned()
-    {
-        archive.update(cx, |a, cx| tabs::adopt(a, cx));
-    }
     let area = area(w, cx);
-    cx.global_mut::<Zones>().current = key;
-    if Workspace::get(cx).archive() {
-        area.update(cx, |a, cx| tabs::apply(a, w, cx));
-    } else {
-        panes::changed(&area, cx);
-    }
+    cx.global_mut::<Layouts>().current = key;
+    ui_state::assign_archived_tabs(Workspace::get(cx).id().map(String::from), cx);
+    panes::changed(&area, cx);
 }
 
 pub(crate) fn bound_repo(cx: &App) -> Option<String> {
@@ -1120,15 +741,11 @@ pub(crate) fn terminal_below(w: &mut Window, cx: &mut App) {
 }
 
 pub(crate) fn open_history(doc: Doc, w: &mut Window, cx: &mut App) {
-    if Workspace::get(cx).archive() {
-        open_doc(doc, false, w, cx);
-    } else {
-        with(cx, |a, cx| panes::open_history(a, doc, w, cx));
-    }
+    with(cx, |a, cx| panes::open_history(a, doc, w, cx));
 }
 
 pub(crate) fn focused_tabs(cx: &App) -> (Vec<(PanelId, String)>, usize) {
-    zones(cx).map_or_else(Default::default, |area| {
+    current_area(cx).map_or_else(Default::default, |area| {
         panes::focused_tabs(area.read(cx), cx)
     })
 }

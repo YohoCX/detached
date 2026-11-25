@@ -85,7 +85,7 @@ impl Chat {
             owner: workspace
                 .id()
                 .map(|id| (id.into(), workspace.session_id().into())),
-            checkouts: workspace.session_checkouts().to_vec(),
+            checkouts: workspace.session_repos().to_vec(),
             provider,
             sessions: vec![],
             topic: None,

@@ -199,14 +199,10 @@ fn changing_the_mr_remote_updates_the_overview_link_and_reopened_page(cx: &mut T
         label(cx, "mr.title").as_deref() == Some("Parent feature")
     });
 
-    app.workspace(|w, cx| {
-        w.set_archive(true, cx);
-        w.set_current(Some(path.clone()), cx);
-    });
+    app.workspace(|w, cx| w.set_current(Some(path.clone()), cx));
     open_tab(&mut app, "tool.MRs");
     let shows = |cx: &mut VisualTestContext, title: &str| {
-        label(cx, "mr.chip").is_some_and(|s| s.contains(title))
-            && label(cx, ("mr", 1u64)).is_some_and(|s| s.contains(title))
+        label(cx, ("mr", 1u64)).is_some_and(|s| s.contains(title))
     };
     wait_until(&mut app, |cx| shows(cx, "Parent feature"));
     set_remote(&mut app, None);
@@ -298,9 +294,5 @@ fn a_failed_forge_refresh_shows_why_and_hides_cached_results(cx: &mut TestAppCon
     assert!(app.find(("overview.repo.createMr", 0usize)).is_none());
     assert!(app.find(pipeline).is_none());
     assert!(app.find("pipeline.badge").is_none());
-    app.workspace(|w, cx| w.set_archive(true, cx));
-    wait_until(&mut app, |cx| {
-        label(cx, "mr.chip.error").as_deref() == Some("MR unavailable")
-    });
     assert!(app.find("mr.chip").is_none());
 }

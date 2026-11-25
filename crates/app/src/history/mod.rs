@@ -11,7 +11,6 @@ use std::collections::HashSet;
 
 use detached_core::types::LogRow;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyView, App, AppContext, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
@@ -27,7 +26,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "bottom.Log",
         title: "Log",
         action: Some("panel.log"),
-        home: (DockPlacement::Bottom, 280.),
         view: |w, cx| cx.new(|cx| Log::new(w, cx)).into(),
         shown: None,
     };

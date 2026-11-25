@@ -141,14 +141,10 @@ pub fn add(window: &mut Window, cx: &mut App) {
 
 fn selected(cx: &App) -> Option<Workset> {
     let w = Workspace::get(cx);
-    (!w.archive())
-        .then(|| {
-            w.sessions()
-                .iter()
-                .find(|set| set.id == w.session_id())
-                .cloned()
-        })
-        .flatten()
+    w.sessions()
+        .iter()
+        .find(|s| s.id == w.session_id())
+        .cloned()
 }
 
 fn form(set: Option<Workset>, window: &mut Window, cx: &mut App) {
@@ -679,7 +675,11 @@ impl Sheet {
                         save(&ws, set, resume, cx);
                         s.close(cx);
                         if resume {
-                            dock::open("project", window, cx);
+                            crate::files::choose_explorer(
+                                crate::files::ExplorerMode::Files,
+                                window,
+                                cx,
+                            );
                         }
                         if matches!(action, Commit::Archive) {
                             super::open_archive(window, cx);

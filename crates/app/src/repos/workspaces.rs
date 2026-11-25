@@ -112,7 +112,7 @@ impl Workspaces {
         let terminals: Vec<_> = (tabs.iter())
             .filter(|t| {
                 matches!(t.read(cx).doc, kernel::doc::Doc::Terminal { id, .. }
-                if !t.read(cx).legacy() && crate::terminal::docked(id, cx))
+                if !t.read(cx).archived() && crate::terminal::docked(id, cx))
             })
             .map(|t| t.read(cx).title(cx).to_string())
             .collect();

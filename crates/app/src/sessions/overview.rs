@@ -36,9 +36,7 @@ impl DocKind for OverviewDoc {
             _workspace: Workspace::observe(cx, |this: &mut Overview, cx| {
                 let ws = Workspace::get(cx);
                 if this.named.as_ref().is_some_and(|n| {
-                    ws.archive()
-                        || ws.session_id() != n.session
-                        || ws.id() != n.workspace.as_deref()
+                    ws.session_id() != n.session || ws.id() != n.workspace.as_deref()
                 }) {
                     this.named = None;
                 }

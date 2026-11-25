@@ -222,8 +222,10 @@ fn main() {
             // A busy chat drops the next Enter.
             wait_until(cx, |cx| !shows(cx, window, "chat.stop".into(), ""));
         };
-        cx.update_window(window, |_, w, cx| w.click("top.chat", cx))
-            .unwrap();
+        cx.update_window(window, |_, w, cx| {
+            detached_app::actions::dispatch(w, cx, "agent.chat")
+        })
+        .unwrap();
         turn(&mut cx, "tools", "Edit README.md ok");
         let say = "say Done: `add` now saturates, and **the test** still passes.";
         turn(&mut cx, say, "still passes");

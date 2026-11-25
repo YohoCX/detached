@@ -4,7 +4,6 @@ mod api;
 mod branches;
 mod pages;
 mod sidebar;
-mod switcher;
 mod sync;
 mod workspaces;
 
@@ -14,7 +13,6 @@ use detached_core::api as core;
 use detached_core::error::Result;
 use detached_core::state::AppState;
 use detached_core::types::RepoInfo;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -26,7 +24,6 @@ use gpui_kit::{
 pub use api::*;
 use branches::branches;
 use sidebar::sidebar;
-use switcher::switcher;
 use sync::sync_buttons;
 use workspaces::workspaces;
 
@@ -79,14 +76,12 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "repos",
         id: "tab.repos",
         title: "Repositories",
-        action: None,
-        home: (DockPlacement::Left, 280.),
+        action: Some("panel.repositories"),
         view: sidebar,
         shown: None,
     };
     dock::register_app(cx, repos);
     shell::top_bar(cx, TopBar::Workspace, 0, |_, cx| workspaces(cx));
-    shell::top_bar(cx, TopBar::Left, 1, |_, cx| switcher(cx));
     shell::top_bar(cx, TopBar::Branch, 0, branches);
     shell::top_bar(cx, TopBar::Right, 1, |_, cx| sync_buttons(cx));
     pages::register(cx);

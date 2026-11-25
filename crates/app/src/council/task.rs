@@ -43,16 +43,31 @@ struct TaskView {
 }
 
 pub(crate) fn open(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) {
+    let doc = round_doc(repo, task, round, finding, cx);
+    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+}
+
+fn round_doc(repo: &str, task: &str, round: &str, finding: Option<&str>, cx: &mut App) -> Doc {
     if let Some(finding) = finding {
         kernel::ui_state::set(&selection_key(repo, task, round), finding, cx);
         kernel::ui_state::set("council.mode", 2usize, cx);
     }
-    let doc = Doc::Council {
+    Doc::Council {
         repo: repo.into(),
         task: task.into(),
         round: round.into(),
-    };
-    Workspace::global(cx).update(cx, |w, cx| w.show(doc, cx));
+    }
+}
+
+impl TaskView {
+    fn open_round(&self, round: &str, finding: Option<&str>, w: &mut Window, cx: &mut App) {
+        let doc = round_doc(&self.repo, &self.task, round, finding, cx);
+        if self.read_only {
+            crate::dock::open_archived(doc, w, cx);
+        } else {
+            Workspace::global(cx).update(cx, |work, cx| work.show(doc, cx));
+        }
+    }
 }
 
 fn fate(task: &kernel::council::Task, index: usize, finding: &str) -> String {
@@ -299,9 +314,8 @@ impl Render for TaskView {
                 };
                 let counts_text =
                     format!("{}C {}M {}m", counts.critical, counts.major, counts.minor);
-                let (repo, task_name, round) = (self.repo.clone(), self.task.clone(), name.clone());
-                let (open_repo, open_task, open_round) =
-                    (repo.clone(), task_name.clone(), round.clone());
+                let round = name.clone();
+                let open_round = round.clone();
                 let row = ui::row(
                     SharedString::from(format!("council.task.round.{name}")),
                     expanded,
@@ -348,9 +362,9 @@ impl Render for TaskView {
                         .child(time),
                 )
                 .on_click(cx.listener(
-                    move |_, e: &gpui_kit::ClickEvent, _, cx| {
+                    move |view, e: &gpui_kit::ClickEvent, w, cx| {
                         if e.click_count() > 1 {
-                            open(&repo, &task_name, &round, None, cx);
+                            view.open_round(&round, None, w, cx);
                         } else {
                             kernel::ui_state::set(&key, !expanded, cx);
                             cx.notify();
@@ -371,20 +385,15 @@ impl Render for TaskView {
                                 cx,
                             )
                             .test_support()
-                            .on_click(move |_, _, cx| {
-                                open(&open_repo, &open_task, &open_round, None, cx)
-                            }),
+                            .on_click(cx.listener(
+                                move |view, _, w, cx| view.open_round(&open_round, None, w, cx),
+                            )),
                         ),
                 );
                 if expanded {
                     for f in &run.findings {
                         let fate = fate(task, i, &f.id);
-                        let (repo, task_name, round, finding) = (
-                            self.repo.clone(),
-                            self.task.clone(),
-                            name.clone(),
-                            f.id.clone(),
-                        );
+                        let (round, finding) = (name.clone(), f.id.clone());
                         body = body.child(
                             ui::row(
                                 SharedString::from(format!("council.task.finding.{name}.{}", f.id)),
@@ -414,9 +423,11 @@ impl Render for TaskView {
                                     .text_color(theme(cx).muted)
                                     .child(fate),
                             )
-                            .on_click(move |_, _, cx| {
-                                open(&repo, &task_name, &round, Some(&finding), cx)
-                            }),
+                            .on_click(cx.listener(
+                                move |view, _, w, cx| {
+                                    view.open_round(&round, Some(&finding), w, cx)
+                                },
+                            )),
                         );
                     }
                 }

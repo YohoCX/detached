@@ -310,9 +310,6 @@ pub fn watching(cx: &App) -> bool {
 }
 
 fn worktrees(work: &Workspace) -> Vec<String> {
-    if work.archive() {
-        return work.current().map(str::to_owned).into_iter().collect();
-    }
     work.session_repos()
         .iter()
         .map(|r| r.path.clone())

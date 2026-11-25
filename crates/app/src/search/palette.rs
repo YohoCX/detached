@@ -414,7 +414,7 @@ impl Palette {
                         .into_iter()
                         .filter(|id| {
                             *id != "session.addRepo"
-                                || (!w.archive() && w.session_id() != detached_core::sessions::MAIN)
+                                || w.session_id() != detached_core::sessions::MAIN
                         })
                         .filter_map(|id| actions::find(id).map(|a| Item::Action(*a, true))),
                 );

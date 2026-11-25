@@ -953,7 +953,11 @@ impl Sheet {
                     move |window, cx| {
                         save(&ws, set.clone(), true, cx);
                         _ = handle.update(cx, |s, cx| s.close(cx));
-                        dock::open("project", window, cx);
+                        crate::files::choose_explorer(
+                            crate::files::ExplorerMode::Files,
+                            window,
+                            cx,
+                        );
                     }
                 },
                 cx,

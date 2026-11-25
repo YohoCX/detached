@@ -918,9 +918,7 @@ fn make_current(cx: &mut VisualTestContext, repo: &Path) {
     settle(cx);
 }
 
-fn archive_changes(cx: &mut VisualTestContext) {
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
+fn open_changes(cx: &mut VisualTestContext) {
     open_tab(cx, "tool.Changes");
 }
 
@@ -955,7 +953,7 @@ fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_doubl
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    archive_changes(cx);
+    open_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     let want = [
@@ -992,7 +990,7 @@ fn changes_show_a_diff_on_click_the_file_on_cmd_down_and_focus_the_diff_on_doubl
 #[gpui_kit::test]
 fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_changes(cx);
+    open_changes(cx);
     let lib = cx.sb.repo("lib");
     make_current(cx, &lib);
     cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
@@ -1037,10 +1035,7 @@ fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContex
     assert_eq!(label(cx, "changes.ab").as_deref(), Some("↑1 ↓0"));
 
     // Reopened, the tool is still in Compare with the base, as Compare with Base Branch opens it.
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Right, w, cx)
-    });
-    settle(cx);
+    cx.click("doc.session-overview");
     assert!(changes(cx).is_empty());
     open_tab(cx, "tool.Changes");
     wait_until(cx, |cx| changes(cx) == want);
@@ -1059,7 +1054,7 @@ fn compare_lists_the_branchs_changes_since_the_merge_base(cx: &mut TestAppContex
 #[gpui_kit::test]
 fn a_repo_returned_to_compares_again_before_it_lists_changes(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_changes(cx);
+    open_changes(cx);
     let lib = cx.sb.repo("lib");
     make_current(cx, &lib);
     cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
@@ -1080,7 +1075,7 @@ fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selectio
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    archive_changes(cx);
+    open_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     wait_until(cx, |cx| changes(cx).len() == 5);
@@ -1133,10 +1128,12 @@ fn arrows_step_through_files_enter_focuses_the_diff_and_cmd_d_shows_the_selectio
 #[gpui_kit::test]
 fn the_change_of_a_diff_shown_from_elsewhere_is_selected_in_changes(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_changes(cx);
+    open_changes(cx);
     let app = cx.sb.repo("app");
     make_current(cx, &app);
     wait_until(cx, |cx| changes(cx).len() == 5);
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitDown"));
+    settle(cx);
     let doc = readme(cx);
     show(cx, doc, false);
     let selected: Vec<_> = cx.update(|w, cx| {
@@ -1173,7 +1170,7 @@ fn changes_group_conflicts_changes_and_unversioned_files_and_collapse(cx: &mut T
         .unwrap();
         write(&r, [("u.txt", "u\n")]);
     });
-    archive_changes(cx);
+    open_changes(cx);
     let want = [
         "Conflicts: 1 file",
         "README.md conflict",
@@ -1205,7 +1202,7 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
         let r = repo(sb, "solo");
         sb.git(&r, &["branch", "-m", "trunk"]);
     });
-    archive_changes(cx);
+    open_changes(cx);
     wait_until(cx, |cx| cx.find("changes.empty").is_some());
     assert_eq!(
         label(cx, "changes.empty").as_deref(),
@@ -1235,7 +1232,7 @@ fn compare_without_a_default_branch_says_so_and_refresh_reloads(cx: &mut TestApp
 #[gpui_kit::test]
 fn a_file_saved_in_the_current_repo_shows_in_changes_by_itself(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| _ = repo(sb, "solo"));
-    archive_changes(cx);
+    open_changes(cx);
     cx.update(|_, cx| invalidate::watch(cx));
     wait_until(cx, |cx| {
         cx.update(|_, cx| invalidate::watching(cx)) && cx.find("changes.empty").is_some()

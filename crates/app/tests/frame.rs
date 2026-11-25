@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::keymap;
-use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
@@ -21,45 +20,47 @@ fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
 }
 
 #[gpui_kit::test]
-fn the_legacy_tabs_and_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
-    // A closed bottom zone keeps its tabs as a strip, none of them on.
-    assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
-    let (tab, dock) = (cx.find("bottom.Log").unwrap(), cx.find("dock").unwrap());
-    // The kit keeps 29 px of a closed bottom zone.
-    let strip = dock.bounds().bottom() - GAP - gpui_kit::px(29.);
-    let b = tab.bounds();
-    assert!(
-        b.top() >= strip && b.bottom() <= dock.bounds().bottom() - GAP,
-        "{b:?} fits the strip"
-    );
+fn archive_uses_the_live_center_and_keeps_the_shell(cx: &mut TestAppContext) {
+    use kernel::doc::Doc;
 
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert!(cx.find("bottom.Log").unwrap().visible());
-    assert_eq!(on(cx, "bottom.Log"), Some(true));
-    cx.click("bottom.Pipelines");
-    assert_eq!(on(cx, "bottom.Pipelines"), Some(true));
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert_eq!(on(cx, "bottom.Log"), Some(true), "switches back to Log");
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-
-    cx.click("zone.bottom");
+    let app = &mut open_app_with(cx, |sb| drop(repo(sb, "api")));
+    app.simulate_resize(size(px(1400.), px(900.)));
+    app.click("sessions.archive");
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        let center = w.within("shell.center");
+        assert!(center.find("sessions.archive.page").visible());
+        assert!(center.find("archive.tab").checked() == Some(true));
+        assert!(w.find("sessions.archive").selected() == Some(true));
+        for id in [
+            "sessions.rows",
+            "session.explorer",
+            "search.pill",
+            "sync.pull",
+            "top.settings",
+        ] {
+            assert!(w.find(id).visible(), "{id}");
+        }
+        for id in [
+            "zone.left",
+            "zone.right",
+            "zone.bottom",
+            "top.chat",
+            "switcher",
+            "zone.left.pane",
+            "zone.right.pane",
+            "zone.bottom.pane",
+        ] {
+            assert!(w.try_find(id).is_none(), "{id}");
+        }
+    });
     assert_eq!(
-        on(cx, "bottom.Log"),
-        Some(true),
-        "the zone opens on its last tab"
+        app.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::SessionArchive)
     );
-    assert_eq!(on(cx, "zone.bottom"), Some(true));
-    cx.click("zone.bottom");
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-    assert_eq!(on(cx, "zone.bottom"), Some(false));
+    assert_eq!(app.workspace(|w, _| w.session_repos().len()), 1);
+    app.click("doc.session-overview");
+    assert_eq!(on(app, "sessions.archive"), Some(false));
 }
 
 #[gpui_kit::test]
@@ -261,42 +262,6 @@ fn the_explorer_fold_tooltip_shows_the_configured_chord(cx: &mut TestAppContext)
     cx.press("secondary-shift-0");
     cx.click("explorer.fold");
     assert_fold_tip(cx, "explorer.fold", "Show changes", "panel.changes");
-}
-
-#[gpui_kit::test]
-fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_shut(
-    cx: &mut TestAppContext,
-) {
-    use gpui_kit::base::dock::DockPlacement::Left;
-    use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{point, px};
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
-    let width = |cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            detached_app::dock::zones(cx)
-                .unwrap()
-                .read(cx)
-                .dock_size(Left)
-        })
-    };
-    let drag = |cx: &mut VisualTestContext, to: Option<f32>, dx: f32| {
-        let from = cx.find("grip.repos").unwrap().bounds().center();
-        let x = to.map_or(from.x + px(dx), px);
-        cx.update(|w, cx| w.drag(from, point(x, from.y), cx));
-        settle(cx);
-    };
-    assert_eq!(width(cx), Some(px(290.)), "a 280 pane and its gap");
-    drag(cx, None, 100.);
-    assert_eq!(width(cx), Some(px(390.)));
-    cx.update(|w, cx| w.double_click("grip.repos", cx));
-    settle(cx);
-    assert_eq!(width(cx), Some(px(290.)), "back to its default");
-    drag(cx, Some(20.), 0.);
-    assert_eq!(on(cx, "zone.left"), Some(false), "closed");
-    cx.click("zone.left");
-    assert_eq!(width(cx), Some(px(290.)), "reopens at the width it had");
 }
 
 /// The panic hook's reports, in the config dir the app boots from.

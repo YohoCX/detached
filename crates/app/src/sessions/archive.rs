@@ -5,7 +5,7 @@ use detached_core::backend::{History, Kind, Past, Spec, Update};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
     prelude::FluentBuilder,
 };
 
@@ -67,6 +67,7 @@ struct Archive {
     archived: Vec<detached_core::sessions::Workset>,
     summaries: HashMap<String, String>,
     _inspect: Option<gpui_kit::Task<()>>,
+    category: Option<&'static str>,
     confirm_clear: bool,
     clearing: bool,
     _workspace: Subscription,
@@ -81,6 +82,7 @@ impl Archive {
             archived: vec![],
             summaries: HashMap::new(),
             _inspect: None,
+            category: None,
             confirm_clear: false,
             clearing: false,
             _workspace: Workspace::observe(cx, Self::sync),
@@ -92,15 +94,6 @@ impl Archive {
 
     fn sync(&mut self, cx: &mut Context<Self>) {
         let w = Workspace::get(cx);
-        if !w.archive() {
-            self.folders.clear();
-            self.past.clear();
-            self.archived.clear();
-            self.summaries.clear();
-            self._inspect = None;
-            self.confirm_clear = false;
-            return;
-        }
         let archived: Vec<_> = w
             .sessions()
             .iter()
@@ -401,20 +394,49 @@ impl Render for Archive {
         }
         let no_tabs = tabs.is_empty();
         if !tabs.is_empty() {
+            let filters = dock::CATEGORIES.into_iter().map(|(id, title)| {
+                let on = self.category == Some(id);
+                ui::row(SharedString::from(format!("archive.filter.{id}")), on, cx)
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_toggled(on.into())
+                    .px(GAP)
+                    .child(title)
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.category = (!on).then_some(id);
+                        cx.notify();
+                    }))
+            });
             page = page.child(
                 div()
-                    .text_size(text::SMALL)
-                    .text_color(t.muted)
-                    .child("Open tabs"),
+                    .flex()
+                    .items_center()
+                    .gap(GAP)
+                    .child(
+                        div()
+                            .text_size(text::SMALL)
+                            .text_color(t.muted)
+                            .child("Archived tabs"),
+                    )
+                    .children(filters),
             );
-            for (i, tab) in tabs.into_iter().enumerate() {
-                let title = tab.read(cx).title(cx);
+            for (i, doc) in tabs.into_iter().enumerate() {
+                let Some(kind) = dock::doc_kind(doc.kind(), cx) else {
+                    continue;
+                };
+                if self
+                    .category
+                    .is_some_and(|category| category != kind.category(&doc))
+                {
+                    continue;
+                }
+                let title = kind.title(&doc, None, cx);
                 page = page.child(
                     ui::row(("archive.savedTab", i), false, cx)
                         .test_support()
                         .aria_label(title.clone())
                         .p(GAP)
-                        .on_click(move |_, w, cx| dock::open_archived_tab(&tab, w, cx))
+                        .on_click(move |_, w, cx| dock::open_archived(doc.clone(), w, cx))
                         .child(title),
                 );
             }

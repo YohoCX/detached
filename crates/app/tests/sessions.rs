@@ -743,8 +743,18 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
         label(cx, ("archive.savedTab", 0usize)).as_deref(),
         Some("README.md")
     );
+    cx.click("archive.filter.chats");
+    assert!(cx.find(("archive.savedTab", 0usize)).is_none());
+    cx.click("archive.filter.docs");
+    assert!(cx.find(("archive.savedTab", 0usize)).is_some());
     cx.click(("archive.savedTab", 0usize));
     wait_until(cx, |cx| cx.find("markdown").is_some());
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let center = w.within("shell.center");
+        assert_eq!(center.find("doc.file.README.md").checked(), Some(true));
+        assert!(center.find("markdown").visible());
+    });
     cx.update(|w, cx| w.within("viewer.md").click(0usize, cx));
     let source = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
@@ -1054,14 +1064,14 @@ fn a_terminal_moves_live_and_restarts_in_its_pane_and_worktree(cx: &mut TestAppC
 
     let at = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
-            let area = dock::zones(cx).unwrap();
+            let area = dock::current_area(cx).unwrap();
             let area = area.read(cx);
             let tree = area.layout(DockPlacement::Center).unwrap();
             let doc = dock::docs(area)
                 .into_iter()
-                .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
+                .find(|(_, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
                 .unwrap();
-            tree.find_panel_node(doc.1).unwrap()
+            tree.find_panel_node(doc.0).unwrap()
         })
     };
     let moved = at(app);
@@ -1208,7 +1218,7 @@ fn tab_switcher_lists_only_the_focused_pane_and_moves_the_tab_at_a_facing_edge(
 
     run(app, "tab.moveRight");
     let count = app.update(|_, cx| {
-        let area = dock::zones(cx).unwrap();
+        let area = dock::current_area(cx).unwrap();
         let mut count = 0;
         area.read(cx)
             .layout(DockPlacement::Center)
@@ -1237,7 +1247,7 @@ fn dragging_a_splitter_and_shrinking_keep_minimum_pane_widths(cx: &mut TestAppCo
     let panes = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
             w.render_frame(cx);
-            let a = dock::zones(cx).unwrap();
+            let a = dock::current_area(cx).unwrap();
             let mut panes = Vec::new();
             a.read(cx)
                 .layout(DockPlacement::Center)
@@ -1460,7 +1470,9 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
             label(app, "sessions.provision.error").is_some_and(|s| s.contains(reason)),
             "{reason}"
         );
-        assert!(app.workspace(|w, _| w.session_name() == "Active" && !w.archive()));
+        assert!(app.workspace(
+            |w, _| w.session_name() == "Active" && w.shown() != Some(&Doc::SessionArchive)
+        ));
         app.click("sessions.provision.cancel");
     };
 

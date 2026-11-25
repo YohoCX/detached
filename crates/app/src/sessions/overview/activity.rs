@@ -77,10 +77,7 @@ impl OverviewActivity {
     ) -> (Vec<AnyElement>, Vec<AnyElement>, Vec<AnyElement>) {
         let workspace = Workspace::get(cx);
         let session = workspace.session_id();
-        let Some(workspace) = workspace
-            .id()
-            .filter(|_| session != MAIN && !workspace.archive())
-        else {
+        let Some(workspace) = workspace.id().filter(|_| session != MAIN) else {
             self.repos.clear();
             self.observed.clear();
             return (vec![], vec![], vec![]);

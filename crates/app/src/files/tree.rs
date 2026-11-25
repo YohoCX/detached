@@ -355,11 +355,7 @@ impl Tree {
         let mut rows = vec![];
         let mut file_index = 0;
         let changes = explorer_mode(cx) == ExplorerMode::Changes;
-        let set = w
-            .sessions()
-            .iter()
-            .find(|s| s.id == w.session_id())
-            .filter(|_| !w.archive());
+        let set = w.sessions().iter().find(|s| s.id == w.session_id());
         let mut roots: Vec<_> = w
             .session_repos()
             .iter()
@@ -1070,11 +1066,7 @@ impl Render for Tree {
             }
         }
         let body = if rows.is_empty() {
-            let message = if Workspace::get(cx).archive() {
-                "Archive"
-            } else {
-                "No repositories"
-            };
+            let message = "No repositories";
             div()
                 .id("tree.empty")
                 .test_support()

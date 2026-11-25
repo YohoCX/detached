@@ -1,7 +1,6 @@
 //! The Events app: every error and warning the app has shown, newest first.
 
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyView, App, AppContext, ClipboardItem, Context, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
@@ -18,8 +17,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "events",
         id: "bottom.Events",
         title: "Events",
-        action: None,
-        home: (DockPlacement::Bottom, 280.),
+        action: Some("panel.events"),
         view: |_, cx| view(cx),
         shown: Some(|_, cx| shown(cx)),
     };

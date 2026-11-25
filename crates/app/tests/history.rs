@@ -1,7 +1,10 @@
 mod common;
 fn toggle_log(cx: &mut gpui_kit::VisualTestContext) {
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
+    if on_screen(cx, "bottom.Log") {
+        cx.click("doc.session-overview");
+    } else {
+        open_tab(cx, "bottom.Log");
+    }
 }
 
 use std::collections::BTreeSet;
@@ -769,7 +772,6 @@ fn four(sb: &Sandbox) {
 
 /// Opens the Log tall enough for a commit's fields and four files.
 fn open_tall(cx: &mut VisualTestContext) {
-    zone_size(cx, DockPlacement::Bottom, 600.);
     toggle_log(cx);
 }
 

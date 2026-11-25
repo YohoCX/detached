@@ -99,8 +99,7 @@ pub(crate) fn choose_checkout(
     s.mode = Some(Mode::Checkout(title));
     s.checkout = Some(Box::new(move |repo, window, cx| {
         let w = Workspace::get(cx);
-        if !w.archive()
-            && w.id() == owner.0.as_deref()
+        if w.id() == owner.0.as_deref()
             && w.session_id() == owner.1
             && w.session_repos().iter().any(|r| r.path == repo)
         {
@@ -164,19 +163,18 @@ impl Render for Pill {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let chord = keymap::chord_for("search.everywhere", cx);
-        let archive = Workspace::get(cx).archive();
         ui::pressable("search.pill")
             .test_support()
             .role(Role::Button)
             .aria_label("Search everywhere")
             .aria_description(chord.clone())
             .gap(px(8.))
-            .w(px(if archive { 320. } else { 380. }).min(window.viewport_size().width * 0.28))
+            .w(px(380.).min(window.viewport_size().width * 0.28))
             .min_w_0()
             .h(px(28.))
             .pl(px(12.))
             .pr(px(10.))
-            .rounded(if archive { radius::PILL } else { radius::KBD })
+            .rounded(radius::KBD)
             .bg(t.input)
             .border_1()
             .border_color(t.line)
@@ -185,13 +183,12 @@ impl Render for Pill {
             .active(|s| s.opacity(0.75))
             .on_click(|_, window, cx| actions::dispatch(window, cx, "search.everywhere"))
             .child(Icon::Search.size(px(14.)))
-            .child(div().flex_1().truncate().child({
-                if archive {
-                    "Search everywhere".to_string()
-                } else {
-                    format!("Search in {}", Workspace::get(cx).session_name())
-                }
-            }))
+            .child(
+                div()
+                    .flex_1()
+                    .truncate()
+                    .child(format!("Search in {}", Workspace::get(cx).session_name())),
+            )
             .child(ui::kbd(chord, cx))
     }
 }

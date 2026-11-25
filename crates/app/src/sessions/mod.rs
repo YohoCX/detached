@@ -23,10 +23,7 @@ use crate::ui::theme::rail;
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
-use kernel::ui_state;
 use kernel::workspace::Workspace;
-
-const COLLAPSED: &str = "session.list.collapsed";
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     crate::shell::overlay(cx, sheet::overlay);
@@ -80,40 +77,31 @@ fn step(by: isize, window: &mut Window, cx: &mut App) {
 }
 
 fn toggle(window: &mut Window, cx: &mut App) {
-    use gpui_kit::base::dock::DockPlacement::Left;
-    if Workspace::get(cx).archive() {
-        let open = dock::is_open(Left, cx);
-        let old = ui_state::get(COLLAPSED, cx).unwrap_or(false);
-        ui_state::set(COLLAPSED, open && !old, cx);
-        if !open {
-            dock::toggle_zone(Left, window, cx);
-        }
-    } else {
-        shell::toggle_side(Side::Sessions, window, cx);
-    }
-    cx.refresh_windows();
+    shell::toggle_side(Side::Sessions, window, cx);
 }
 
 pub(super) fn open_archive(window: &mut Window, cx: &mut App) {
-    Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx));
     dock::show(Doc::SessionArchive, window, cx);
 }
 
-fn select(id: &str, _: &mut Window, cx: &mut App) {
+fn select(id: &str, window: &mut Window, cx: &mut App) {
     provision::dismiss_new(cx);
-    Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
+    let w = Workspace::get(cx);
+    if w.session_id() == id && w.shown() == Some(&Doc::SessionArchive) {
+        dock::show(Doc::SessionOverview, window, cx);
+    } else {
+        Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
+    }
 }
 
 pub(crate) struct List {
-    live: bool,
     _workspace: Subscription,
     _open_chats: Subscription,
 }
 
 impl List {
-    pub fn new(live: bool, cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            live,
             _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
             _open_chats: chat::observe_open(cx),
         }
@@ -123,20 +111,18 @@ impl List {
 impl Render for List {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let collapsed = if self.live {
-            !shell::side_open(Side::Sessions, window, cx)
-        } else {
-            ui_state::get(COLLAPSED, cx).unwrap_or(false)
-        };
+        let collapsed = !shell::side_open(Side::Sessions, window, cx);
         let w = Workspace::get(cx);
         let count = dock::archived_tabs(cx).len()
             + w.sessions().iter().filter(|s| s.archived.is_some()).count();
+        let archived = w.shown() == Some(&Doc::SessionArchive);
         let archive_button = ui::pressable("sessions.archive")
             .test_support()
             .role(Role::Button)
             .aria_label("Archive")
             .aria_description(format!("{count} archived"))
-            .aria_toggled(w.archive().into())
+            .aria_selected(archived)
+            .aria_toggled(archived.into())
             .when(collapsed, |d| {
                 d.tooltip(move |window, cx| {
                     Tooltip::new(format!("Archive ({count})")).build(window, cx)
@@ -148,9 +134,7 @@ impl Render for List {
             .px(GAP)
             .rounded(radius::WIDGET)
             .hover(|d| d.bg(t.hover))
-            .when(w.archive(), |d| {
-                d.bg(t.active_bg).shadow(vec![ui::marker(cx)])
-            })
+            .when(archived, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
             .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
             .child(Icon::Archive.size(px(15.)))
             .when(!collapsed, |d| {
@@ -163,7 +147,7 @@ impl Render for List {
                     )
                 })
             });
-        if self.live && collapsed {
+        if collapsed {
             return shell::side_rail("sessions", cx)
                 .role(Role::List)
                 .aria_label("Sessions")
@@ -213,13 +197,9 @@ impl Render for List {
             .w_full()
             .min_h_0()
             .bg(t.window_bg)
-            .when(self.live, |d| d.h_full().py(GAP).pl(GAP))
-            .when(!self.live, |d| {
-                d.pb(GAP / 2.).border_b_1().border_color(t.line)
-            });
-        if collapsed {
-            return list.child(header.child(archive_button));
-        }
+            .h_full()
+            .py(GAP)
+            .pl(GAP);
         let mut chats = HashMap::<_, Vec<_>>::new();
         for tab in chat::tabs(cx) {
             if let Some((_, session)) = &tab.owner {
@@ -234,10 +214,7 @@ impl Render for List {
             .test_support()
             .flex()
             .flex_col()
-            .when(self.live, |d| d.flex_1())
-            .when(!self.live, |d| {
-                d.max_h(window.viewport_size().height * 0.22)
-            })
+            .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .gap(px(3.))
@@ -270,21 +247,18 @@ impl Render for List {
                     cx,
                 )
             }));
-        if self.live {
-            return list.child(
-                ui::panel(div(), cx)
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .overflow_hidden()
-                    .p(px(8.))
-                    .gap(px(4.))
-                    .child(header)
-                    .child(rows)
-                    .child(archive_button),
-            );
-        }
-        list.child(header).child(rows).child(archive_button)
+        list.child(
+            ui::panel(div(), cx)
+                .flex()
+                .flex_col()
+                .size_full()
+                .overflow_hidden()
+                .p(px(8.))
+                .gap(px(4.))
+                .child(header)
+                .child(rows)
+                .child(archive_button),
+        )
     }
 }
 
@@ -410,8 +384,8 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
     let (id, name) = set.map_or((MAIN, "Main checkouts"), |set| {
         (set.id.as_str(), set.name.as_str())
     });
-    let expanded = !w.archive() && w.session_id() == id;
-    let selected = browsing && expanded;
+    let expanded = w.session_id() == id;
+    let selected = browsing && expanded && w.shown() != Some(&Doc::SessionArchive);
     let chats: Vec<_> = chats
         .into_iter()
         .map(|tab| {

@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 use detached_core::docs::{Doc, Docs, Kind};
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement,
@@ -26,7 +25,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "tab.docs",
         title: "Docs",
         action: Some("panel.docs"),
-        home: (DockPlacement::Left, 280.),
         view: |_, cx| cx.new(DocsApp::new).into(),
         shown: None,
     };

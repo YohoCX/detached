@@ -576,8 +576,7 @@ fn pullable(s: &RepoStatus) -> bool {
 
 fn pull_context(repo: &str, cx: &App) -> bool {
     let workspace = Workspace::get(cx);
-    !workspace.archive()
-        && workspace.session_id() == MAIN
+    workspace.session_id() == MAIN
         && workspace.session_repos().iter().any(|r| r.path == repo)
         && !Activity::global(cx)
             .read(cx)

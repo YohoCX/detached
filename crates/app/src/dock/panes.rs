@@ -80,7 +80,7 @@ fn mark(node: NodeId, cx: &mut Context<DockArea>) {
 }
 
 pub(super) fn changed(area: &gpui_kit::Entity<DockArea>, cx: &mut App) {
-    if Workspace::get(cx).archive() || super::zones(cx).as_ref() != Some(area) {
+    if super::current_area(cx).as_ref() != Some(area) {
         return;
     }
     if let Some((_, tabs, ix)) = groups(area.read(cx))
@@ -133,9 +133,6 @@ fn select(
 }
 
 pub(super) fn click(node: NodeId, w: &mut Window, cx: &mut App) {
-    if Workspace::get(cx).archive() {
-        return;
-    }
     super::with(cx, |a, cx| {
         if let Some((_, tabs, ix)) = groups(a).into_iter().find(|g| g.0 == node)
             && let Some(id) = tabs.get(ix)
@@ -176,7 +173,7 @@ fn bounds(node: NodeId, cx: &App) -> Option<Bounds<Pixels>> {
 pub(super) fn initialize(a: &mut DockArea, w: &mut Window, cx: &mut Context<DockArea>) {
     if let Some(kind) = super::doc_kind("session-overview", cx) {
         a.add_panel(
-            DocTab::new(Doc::SessionOverview, kind, true, cx),
+            DocTab::new(Doc::SessionOverview, kind, Open::Keep, cx),
             DockPlacement::Center,
             None,
             w,
@@ -185,15 +182,30 @@ pub(super) fn initialize(a: &mut DockArea, w: &mut Window, cx: &mut Context<Dock
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Open {
+    Preview,
+    Keep,
+    Archived,
+}
+
+impl Open {
+    pub(super) fn live(keep: bool) -> Self {
+        if keep { Self::Keep } else { Self::Preview }
+    }
+}
+
 pub(super) fn show_doc(
     a: &mut DockArea,
     doc: Doc,
     kind: Rc<dyn DocKind>,
-    keep: bool,
+    open: Open,
     target: Option<NodeId>,
     w: &mut Window,
     cx: &mut Context<DockArea>,
 ) {
+    let keep = open != Open::Preview;
+    let archived = open == Open::Archived;
     let node = target
         .filter(|node| {
             a.layout(DockPlacement::Center)
@@ -202,21 +214,23 @@ pub(super) fn show_doc(
         .or_else(|| focused(a, cx));
     let tabs: Vec<_> = super::docs(a)
         .into_iter()
-        .filter(|(p, _, tab)| *p == DockPlacement::Center && super::tabs::mine(tab.read(cx), cx))
+        .filter(|(_, tab)| {
+            super::tabs::mine(tab.read(cx), cx) && tab.read(cx).archived() == archived
+        })
         .collect();
     let in_pane = |id| {
         a.layout(DockPlacement::Center)
             .and_then(|t| t.find_panel_node(id))
             == node
     };
-    let matching = tabs.iter().find(|(_, id, tab)| {
-        (!kind.preview() || in_pane(*id)) && kind.same(&tab.read(cx).doc, &doc)
+    let matching = tabs.iter().find(|(id, tab)| {
+        (archived || !kind.preview() || in_pane(*id)) && kind.same(&tab.read(cx).doc, &doc)
     });
-    let preview = tabs.iter().find(|(_, id, tab)| {
+    let preview = tabs.iter().find(|(id, tab)| {
         in_pane(*id)
             && (tab.read(cx).doc == Doc::NewTab || (!keep && kind.preview() && !tab.read(cx).keep))
     });
-    let id = if let Some((_, id, tab)) = matching.or(preview) {
+    let id = if let Some((id, tab)) = matching.or(preview) {
         tab.update(cx, |t, cx| {
             t.set_doc(doc, kind.clone(), w, cx);
             if keep || !kind.preview() {
@@ -227,7 +241,7 @@ pub(super) fn show_doc(
         });
         *id
     } else {
-        let tab = DocTab::new(doc, kind.clone(), keep || !kind.preview(), cx);
+        let tab = DocTab::new(doc, kind.clone(), open, cx);
         let id = tab.panel_id(cx);
         a.add_panel(tab, DockPlacement::Center, None, w, cx);
         if let Some(node) = node {
@@ -284,7 +298,7 @@ pub(super) fn open_history(a: &mut DockArea, doc: Doc, w: &mut Window, cx: &mut 
                 })
                 .map(|(_, node)| *node)
         });
-    show_doc(a, doc, kind, false, at, w, cx);
+    show_doc(a, doc, kind, Open::Preview, at, w, cx);
 }
 
 fn room(
@@ -345,17 +359,25 @@ fn split(side: Placement, doc: Option<Doc>, keyboard: bool, w: &mut Window, cx: 
             .find(|g| g.0 == node)
             .and_then(|(_, tabs, ix)| a.panel(*tabs.get(ix)?))
             .and_then(|p| p.view().downcast::<DocTab>().ok())
-            .map(|t| t.read(cx).doc.clone());
-        let keep = doc.is_none() || keyboard;
-        let doc = doc.unwrap_or(match current {
-            Some(doc @ (Doc::File(_) | Doc::Diff(_))) => doc,
-            _ => Doc::NewTab,
-        });
+            .and_then(|tab| {
+                let tab = tab.read(cx);
+                matches!(tab.doc, Doc::File(_) | Doc::Diff(_)).then(|| {
+                    let open = if tab.archived() {
+                        Open::Archived
+                    } else {
+                        Open::Keep
+                    };
+                    (tab.doc.clone(), open)
+                })
+            });
+        let (doc, open) = doc
+            .map(|doc| (doc, Open::live(keyboard)))
+            .or(current)
+            .unwrap_or((Doc::NewTab, Open::Keep));
         let Some(kind) = super::doc_kind(doc.kind(), cx) else {
             return;
         };
-        let keep = keep || !kind.preview();
-        let tab = DocTab::new(doc, kind, keep, cx);
+        let tab = DocTab::new(doc, kind, open, cx);
         let id = tab.panel_id(cx);
         a.add_panel(tab, DockPlacement::Center, None, w, cx);
         a.move_panel(
@@ -379,11 +401,7 @@ fn split(side: Placement, doc: Option<Doc>, keyboard: bool, w: &mut Window, cx: 
 
 pub(super) fn terminal_below(cwd: String, w: &mut Window, cx: &mut App) {
     let doc = Doc::Terminal { id: 0, cwd };
-    if Workspace::get(cx).archive() {
-        super::open_doc(doc, true, w, cx);
-    } else {
-        split(Placement::Bottom, Some(doc), true, w, cx);
-    }
+    split(Placement::Bottom, Some(doc), true, w, cx);
 }
 
 pub(super) fn open_beside(
@@ -393,10 +411,9 @@ pub(super) fn open_beside(
     w: &mut Window,
     cx: &mut App,
 ) {
-    if Workspace::get(cx).archive() {
-        return super::open_doc(doc, keep, w, cx);
-    }
-    let Some(area) = super::zones(cx) else { return };
+    let Some(area) = super::current_area(cx) else {
+        return;
+    };
     let a = area.read(cx);
     let source = groups(a)
         .into_iter()
@@ -414,7 +431,9 @@ pub(super) fn open_beside(
         return split(side, Some(doc), keep, w, cx);
     }
     if let Some(kind) = super::doc_kind(doc.kind(), cx) {
-        area.update(cx, |a, cx| show_doc(a, doc, kind, keep, other, w, cx));
+        area.update(cx, |a, cx| {
+            show_doc(a, doc, kind, Open::live(keep), other, w, cx)
+        });
     }
 }
 
@@ -703,9 +722,6 @@ pub(super) fn minimum_width(a: &DockArea) -> Pixels {
 }
 
 fn constrain(w: &mut Window, cx: &mut App) {
-    if Workspace::get(cx).archive() {
-        return;
-    }
     super::with(cx, |a, cx| {
         if a.is_zoomed() {
             return;
@@ -979,7 +995,9 @@ pub(super) fn confirm_close(
 }
 
 fn close(pane: bool, w: &mut Window, cx: &mut App) {
-    let Some(a) = super::zones(cx) else { return };
+    let Some(a) = super::current_area(cx) else {
+        return;
+    };
     let area = a.read(cx);
     let all = groups(area);
     if pane && all.len() <= 1 {
@@ -1041,12 +1059,15 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
             },
         ),
     ];
+    if repos.is_empty() {
+        menu = menu.item("Terminal", |w, cx| super::open("terminal", w, cx));
+    }
     for (label, title, open) in actions {
         menu = menu.item_if(!repos.is_empty(), label, move |w, cx| {
             let layout = super::layout_key(cx);
             let run = move |repo, w: &mut Window, cx: &mut App| {
                 if super::layout_key(cx) == layout
-                    && super::zones(cx).is_some_and(|area| {
+                    && super::current_area(cx).is_some_and(|area| {
                         area.read(cx)
                             .layout(DockPlacement::Center)
                             .is_some_and(|tree| tree.find_node(node).is_some())
@@ -1072,6 +1093,9 @@ pub(super) fn new_menu(node: NodeId, w: &mut Window, cx: &mut App) -> impl IntoE
         ("Merge requests", "mrs"),
         ("Pipelines", "pipelines"),
         ("Compare changes", "changes"),
+        ("Project", "project"),
+        ("Docs", "docs"),
+        ("Repositories", "repos"),
         ("Events", "events"),
     ] {
         menu = menu.item(label, move |w, cx| {
@@ -1115,32 +1139,27 @@ pub(super) fn register(cx: &mut App) -> Vec<Registration> {
     ACTIONS
         .iter()
         .map(|&(id, title)| {
-            actions::register(cx, id, title, Group::View, move |w, cx| {
-                if Workspace::get(cx).archive() {
-                    return;
-                }
-                match id {
-                    "pane.splitRight" => split(Placement::Right, None, true, w, cx),
-                    "pane.splitDown" => split(Placement::Bottom, None, true, w, cx),
-                    "pane.next" => next(1, w, cx),
-                    "pane.prev" => next(-1, w, cx),
-                    "pane.focusLeft" => direction(Placement::Left, false, w, cx),
-                    "pane.focusRight" => direction(Placement::Right, false, w, cx),
-                    "pane.focusUp" => direction(Placement::Top, false, w, cx),
-                    "pane.focusDown" => direction(Placement::Bottom, false, w, cx),
-                    "tab.moveLeft" => direction(Placement::Left, true, w, cx),
-                    "tab.moveRight" => direction(Placement::Right, true, w, cx),
-                    "tab.moveUp" => direction(Placement::Top, true, w, cx),
-                    "tab.moveDown" => direction(Placement::Bottom, true, w, cx),
-                    "pane.maximize" => maximize(w, cx),
-                    "pane.close" => close(true, w, cx),
-                    "tab.close" => close(false, w, cx),
-                    "pane.resizeLeft" => resize(Placement::Left, w, cx),
-                    "pane.resizeRight" => resize(Placement::Right, w, cx),
-                    "pane.resizeUp" => resize(Placement::Top, w, cx),
-                    "pane.resizeDown" => resize(Placement::Bottom, w, cx),
-                    _ => {}
-                }
+            actions::register(cx, id, title, Group::View, move |w, cx| match id {
+                "pane.splitRight" => split(Placement::Right, None, true, w, cx),
+                "pane.splitDown" => split(Placement::Bottom, None, true, w, cx),
+                "pane.next" => next(1, w, cx),
+                "pane.prev" => next(-1, w, cx),
+                "pane.focusLeft" => direction(Placement::Left, false, w, cx),
+                "pane.focusRight" => direction(Placement::Right, false, w, cx),
+                "pane.focusUp" => direction(Placement::Top, false, w, cx),
+                "pane.focusDown" => direction(Placement::Bottom, false, w, cx),
+                "tab.moveLeft" => direction(Placement::Left, true, w, cx),
+                "tab.moveRight" => direction(Placement::Right, true, w, cx),
+                "tab.moveUp" => direction(Placement::Top, true, w, cx),
+                "tab.moveDown" => direction(Placement::Bottom, true, w, cx),
+                "pane.maximize" => maximize(w, cx),
+                "pane.close" => close(true, w, cx),
+                "tab.close" => close(false, w, cx),
+                "pane.resizeLeft" => resize(Placement::Left, w, cx),
+                "pane.resizeRight" => resize(Placement::Right, w, cx),
+                "pane.resizeUp" => resize(Placement::Top, w, cx),
+                "pane.resizeDown" => resize(Placement::Bottom, w, cx),
+                _ => {}
             })
         })
         .collect()

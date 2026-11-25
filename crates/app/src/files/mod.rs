@@ -14,10 +14,9 @@ mod viewer;
 
 pub use api::*;
 
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{AnyView, App, AppContext, Window};
 
-use crate::actions::Registration;
+use crate::actions::{self, Group, Registration};
 use crate::dock::{self, AppSpec};
 use changes::Changes;
 use tree::Tree;
@@ -40,8 +39,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "changes",
         id: "tool.Changes",
         title: "Changes",
-        action: None,
-        home: (DockPlacement::Right, 300.),
+        action: Some("panel.compare"),
         view: |w, cx| cx.new(|cx| Changes::new(w, cx)).into(),
         shown: None,
     };
@@ -49,7 +47,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "project",
         id: "tool.Project",
         title: "Project",
-        action: Some("panel.project"),
+        action: Some("panel.projectTab"),
         view: |w, cx| cx.new(|cx| Tree::new(false, w, cx)).into(),
         ..changes
     };
@@ -57,5 +55,18 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
     dock::register_app(cx, project);
     dock::register_doc(cx, "file", ViewerDocs);
     dock::register_doc(cx, "diff", ViewerDocs);
-    vec![]
+    vec![actions::register(
+        cx,
+        "panel.project",
+        "Project Tree",
+        Group::View,
+        |w, cx| {
+            use crate::shell::{self, Side::Explorer};
+            if explorer_mode(cx) == ExplorerMode::Files && shell::side_open(Explorer, w, cx) {
+                shell::set_side(Explorer, false, w, cx);
+            } else {
+                choose_explorer(ExplorerMode::Files, w, cx);
+            }
+        },
+    )]
 }

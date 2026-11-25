@@ -17,15 +17,12 @@ use detached_forge_fake::{Forge, Job, Kind, Mr, MrState, Pipeline, Project, Seed
 use gpui_kit::platform::{current_headless_renderer, current_platform};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
-    AnyWindowHandle, App, Context, ElementId, HeadlessAppContext, TestAppContext,
-    VisualTestContext, px,
+    AnyWindowHandle, App, Context, ElementId, HeadlessAppContext, TestAppContext, VisualTestContext,
 };
 use kernel::activity::Activity;
 use kernel::repo::Repo;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
-
-pub use gpui_kit::base::dock::DockPlacement;
 
 pub use detached_core::git::testutil::Sandbox;
 
@@ -490,21 +487,13 @@ pub fn tick(cx: &mut HeadlessAppContext) {
     cx.foreground_executor().block_test(tick);
 }
 
-/// Sets a zone's size, as dragging its grip would.
-pub fn zone_size(cx: &mut VisualTestContext, zone: DockPlacement, size: f32) {
-    cx.update(|w, cx| {
-        let zones = detached_app::dock::zones(cx).expect("the window's dock");
-        zones.update(cx, |a, cx| a.set_dock_size(zone, px(size), w, cx));
-    });
-}
-
 /// Whether the app with tab id `id` (`tool.Changes`, `bottom.Log`, ...) is on screen.
 pub fn on_screen(cx: &mut VisualTestContext, id: &str) -> bool {
     let name = app_name(cx, id);
     cx.update(|_, cx| detached_app::dock::is_shown(name, cx))
 }
 
-/// Shows the app with tab id `id`, opening its zone.
+/// Shows the app with tab id `id`.
 pub fn open_tab(cx: &mut VisualTestContext, id: &str) {
     let name = app_name(cx, id);
     cx.update(|w, cx| detached_app::dock::open(name, w, cx));

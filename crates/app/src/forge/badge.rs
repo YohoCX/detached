@@ -54,12 +54,7 @@ impl PipelineBadge {
 
     fn sync(&mut self, cx: &mut Context<Self>) {
         let workspace = Workspace::get(cx);
-        let repo = if workspace.archive() {
-            workspace.current()
-        } else {
-            workspace.session_current()
-        }
-        .map(String::from);
+        let repo = workspace.session_current().map(String::from);
         let key = repo.as_deref().and_then(|r| {
             let st = Repo::get(cx, r)?
                 .status()
@@ -86,7 +81,7 @@ impl Render for PipelineBadge {
         else {
             return div().hidden().into_any_element();
         };
-        if !Workspace::get(cx).archive() && p.status != PipelineStatus::Failed {
+        if p.status != PipelineStatus::Failed {
             return div().hidden().into_any_element();
         }
         let t = theme(cx);

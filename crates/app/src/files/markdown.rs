@@ -1032,10 +1032,9 @@ fn open_agent_link(url: &str, folder: &Path, rev: Option<String>, cx: &mut App) 
     let origin = (
         workspace.id().map(str::to_owned),
         workspace.session_id().to_owned(),
-        workspace.archive(),
     );
     let repos: Vec<_> = workspace
-        .session_checkouts()
+        .session_repos()
         .iter()
         .chain(workspace.repos())
         .map(|r| r.path.clone())
@@ -1054,9 +1053,7 @@ fn open_agent_link(url: &str, folder: &Path, rev: Option<String>, cx: &mut App) 
         let result = job.await;
         let external = cx.update(|cx| {
             let current = Workspace::get(cx);
-            if (current.id(), current.session_id(), current.archive())
-                != (origin.0.as_deref(), origin.1.as_str(), origin.2)
-            {
+            if (current.id(), current.session_id()) != (origin.0.as_deref(), origin.1.as_str()) {
                 return None;
             }
             match result {

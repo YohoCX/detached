@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use detached_app::ui::{GAP, radius, theme};
 use detached_app::{actions, dock, shell};
-use gpui_kit::base::dock::PaneRef;
+use gpui_kit::base::dock::{DockPlacement, PaneRef};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, point, px, size,
@@ -27,7 +27,7 @@ fn split_right(app: &mut VisualTestContext) {
 
 fn pane_count(app: &mut VisualTestContext) -> usize {
     app.update(|_, cx| {
-        let area = dock::zones(cx).unwrap();
+        let area = dock::current_area(cx).unwrap();
         let mut count = 0;
         area.read(cx)
             .layout(DockPlacement::Center)

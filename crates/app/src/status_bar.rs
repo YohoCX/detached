@@ -1,5 +1,5 @@
 //! The status bar: the message, then at the right the running ops, an offered update, what Events
-//! holds, and the current repo and branch.
+//! holds.
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
@@ -12,11 +12,10 @@ use gpui_kit::{
 use detached_core::update::Install;
 
 use crate::dock;
+use crate::settings;
 use crate::ui::{self, Icon, radius, text, theme};
-use crate::{actions, keymap, settings};
 use kernel::activity::{Activity, Level};
 use kernel::doc::Doc;
-use kernel::repo::Repo;
 use kernel::update::{State, Update};
 use kernel::workspace::Workspace;
 
@@ -66,53 +65,6 @@ impl Render for StatusBar {
             Some(Doc::Diff(diff)) => Some(format!("{}/{}", w.name_of(&diff.repo), diff.path)),
             _ => None,
         };
-        let repo = w.current().filter(|_| w.archive()).map(|repo| {
-            let st = Repo::get(cx, repo).and_then(Repo::status);
-            let branch = st.map(|st| {
-                let head = st.head.as_deref().unwrap_or("?");
-                let head = head.get(..8).unwrap_or(head);
-                st.branch.clone().unwrap_or(format!("{head} (detached)"))
-            });
-            let ab: Vec<_> = st
-                .into_iter()
-                .flat_map(|st| [("↑", st.ahead), ("↓", st.behind)])
-                .filter(|(_, n)| *n > 0)
-                .map(|(arrow, n)| format!("{arrow}{n}"))
-                .collect();
-            let name = w.name_of(repo).to_string();
-            let mut said = vec![name.clone()];
-            said.extend(branch.clone().into_iter().chain(ab.clone()));
-            let tip = keymap::tip("Checkout Branch…", "vcs.checkout", cx);
-            ui::pressable("status.repo")
-                .test_support()
-                .aria_label(SharedString::from(said.join(" ")))
-                .min_w_0()
-                .max_w(relative(0.5))
-                .gap(px(4.))
-                .px(px(6.))
-                .h(px(20.))
-                .rounded(radius::ICON_BUTTON)
-                .hover(|s| s.bg(t.hover).text_color(t.fg))
-                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                .on_click(|_, window, cx| actions::dispatch(window, cx, "vcs.checkout"))
-                .child(
-                    div()
-                        .flex_none()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(t.fg)
-                        .child(name),
-                )
-                .children(branch.map(|b| {
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .items_center()
-                        .gap(px(3.))
-                        .child(Icon::Branch.size(px(11.)))
-                        .child(div().min_w_0().truncate().child(b))
-                }))
-                .children(ab.into_iter().map(|ab| div().flex_none().child(ab)))
-        });
         let ops = a.ops.iter().map(|op| {
             let (id, line) = (op.id, op.line.clone());
             let row = div()
@@ -186,8 +138,7 @@ impl Render for StatusBar {
         });
         let councils = crate::council::live::status(cx);
         let update = update(cx);
-        if !w.archive()
-            && focused.is_none()
+        if focused.is_none()
             && message.is_none()
             && a.ops.is_empty()
             && councils.is_empty()
@@ -203,13 +154,12 @@ impl Render for StatusBar {
             .flex_none()
             .min_w_0()
             .h(px(24.))
-            .when(w.archive(), |d| d.border_t_1().border_color(t.line))
             .items_center()
             .gap(px(12.))
             .px(px(8.))
             .text_size(text::SMALL)
             .text_color(t.muted)
-            .when(message.is_none() && !w.archive(), |d| {
+            .when(message.is_none(), |d| {
                 d.children(focused.map(|label| {
                     div()
                         .truncate()
@@ -225,7 +175,6 @@ impl Render for StatusBar {
             .children(ops)
             .children(update)
             .children(events)
-            .children(repo)
             .into_any_element()
     }
 }
