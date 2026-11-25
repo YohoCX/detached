@@ -18,27 +18,41 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::FluentBuilder, px, uniform_list,
 };
+use serde::{Deserialize, Serialize};
 
 use super::api::{DiffDoc, Location, Side, show_diff};
-use crate::actions;
 use crate::shell::{self, Side as Column};
 use crate::ui::suggest::{Commit, Focused};
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
+use crate::{actions, chat};
 use kernel::repo::Repo;
 use kernel::resource::{self, Interest, On, Policy, Resource};
 use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::{Event, Workspace};
 
-const CHANGES: &str = "tree.changes";
+const MODE: &str = "tree.mode";
 
-pub(crate) fn showing_changes(cx: &App) -> bool {
-    ui_state::get(CHANGES, cx).unwrap_or(false)
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
+pub(crate) enum ExplorerMode {
+    Files,
+    Changes,
+    Chats,
 }
 
-pub(crate) fn choose_explorer(changes: bool, window: &mut Window, cx: &mut App) {
-    ui_state::set(CHANGES, changes, cx);
+pub(crate) fn explorer_mode(cx: &App) -> ExplorerMode {
+    ui_state::get(MODE, cx).unwrap_or_else(|| {
+        if ui_state::get("tree.changes", cx).unwrap_or(false) {
+            ExplorerMode::Changes
+        } else {
+            ExplorerMode::Files
+        }
+    })
+}
+
+pub(crate) fn choose_explorer(mode: ExplorerMode, window: &mut Window, cx: &mut App) {
+    ui_state::set(MODE, mode, cx);
     shell::set_side(Column::Explorer, true, window, cx);
     cx.refresh_windows();
 }
@@ -210,6 +224,7 @@ impl Tree {
                 cx.notify();
             }),
             cx.observe(&Settings::global(cx), |_, _, cx| cx.notify()),
+            chat::observe_open(cx),
             cx.subscribe(&field, |_, _, Commit(value), cx| set_ref(value, cx)),
             cx.subscribe(&field, |_, _, _: &Focused, cx| {
                 if let Some(repo) = Workspace::get(cx).session_current().map(String::from) {
@@ -339,7 +354,7 @@ impl Tree {
         let current = w.session_current();
         let mut rows = vec![];
         let mut file_index = 0;
-        let changes = showing_changes(cx);
+        let changes = explorer_mode(cx) == ExplorerMode::Changes;
         let set = w
             .sessions()
             .iter()
@@ -573,90 +588,83 @@ impl Tree {
             .is_some_and(|(r, p)| r == repo && p == path)
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn header(
+        &self,
+        current: ExplorerMode,
+        chats: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        use ExplorerMode::{Changes, Chats, Files};
         let t = theme(cx);
         let at = self.key.as_ref().is_some_and(|k| k.1.is_some());
         let nest = ui_state::get("tree.nesting", cx).unwrap_or(true);
         let tip = |tip: &'static str| {
             move |window: &mut Window, cx: &mut App| Tooltip::new(tip).build(window, cx)
         };
-        let changes = showing_changes(cx);
-        let mode = |id, label, value| {
+        let mode = |id, label: &'static str, value, count: Option<usize>| {
             ui::quiet_button(id, label, cx)
+                .when(self.live, |d| d.px(ui::GAP / 3.).border_0())
                 .test_support()
-                .aria_toggled((changes == value).into())
-                .when(changes == value, |d| d.bg(t.active_bg).text_color(t.fg))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    ui_state::set(CHANGES, value, cx);
-                    this.sel = None;
-                    this.scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    cx.notify();
-                }))
-        };
-        let changes_mode = mode("tree.changes", "Changes", true)
-            .aria_label("Changes")
-            .when(self.live, |d| {
-                let mut seen = HashSet::new();
-                let count = Workspace::get(cx)
-                    .session_repos()
-                    .iter()
-                    .try_fold(0, |total, repo| {
-                        let repo = Repo::get(cx, &repo.path)?;
-                        if seen.insert(repo.path.as_str()) {
-                            Some(total + repo.status()?.changes.len())
-                        } else {
-                            Some(total)
-                        }
-                    });
-                d.when_some(count, |d, count| {
+                .role(Role::Button)
+                .aria_label(label)
+                .aria_toggled((current == value).into())
+                .when(current == value, |d| d.bg(t.active_bg).text_color(t.fg))
+                .when_some(count, |d, count| {
                     let count = count.to_string();
-                    d.aria_description(count.clone()).gap(ui::GAP / 2.).child(
+                    d.aria_description(count.clone()).gap(ui::GAP / 3.).child(
                         div()
                             .text_color(t.muted)
                             .child(count.clone().test_text(count)),
                     )
                 })
-            });
-        let modes = div()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    ui_state::set(MODE, value, cx);
+                    this.sel = None;
+                    this.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }))
+        };
+        let changes = if self.live {
+            let mut seen = HashSet::new();
+            Workspace::get(cx)
+                .session_repos()
+                .iter()
+                .try_fold(0, |total, repo| {
+                    let repo = Repo::get(cx, &repo.path)?;
+                    if seen.insert(repo.path.as_str()) {
+                        Some(total + repo.status()?.changes.len())
+                    } else {
+                        Some(total)
+                    }
+                })
+        } else {
+            None
+        };
+        let tools = div()
             .flex()
             .flex_none()
             .items_center()
-            .h(px(40.))
-            .gap(px(3.))
-            .px(px(8.))
-            .when(!self.live, |d| ui::band(d, cx))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.))
-                    .p(px(2.))
-                    .when(self.live, |d| {
-                        d.bg(t.segment_bg).rounded(ui::radius::SEGMENT)
-                    })
-                    .child(mode("tree.files", "Files", false))
-                    .child(changes_mode),
-            )
-            .child(div().flex_1())
+            .ml_auto()
+            .gap(ui::GAP / 3.)
             .child(
                 ui::titled(
-                    ui::icon_button("tree.find", Icon::Search.size(px(14.)), cx)
+                    ui::icon_button("tree.find", Icon::Search.size(text::TITLE), cx)
                         .on_click(|_, window, cx| actions::dispatch(window, cx, "find.inFiles")),
                     "Find in files",
                 )
                 .test_support(),
             )
             .when(self.live, |d| {
-                let fold = ui::icon_button("explorer.fold", Icon::PanelLeft.size(px(14.)), cx);
-                let fold = if changes {
-                    ui::titled(fold, "Hide explorer")
-                } else {
+                let fold = ui::icon_button("explorer.fold", Icon::PanelLeft.size(text::TITLE), cx);
+                let fold = if current == Files {
                     ui::titled_action(fold, "Hide files", "panel.project")
+                } else {
+                    ui::titled(fold, "Hide explorer")
                 };
-                d.when(self.key.is_some() && !changes, |d| {
+                d.when(self.key.is_some() && current == Files, |d| {
                     d.child(
                         ui::titled(
-                            ui::icon_button("tree.browse", Icon::Branch.size(px(14.)), cx),
+                            ui::icon_button("tree.browse", Icon::Branch.size(text::TITLE), cx),
                             "Browse a branch, tag or commit",
                         )
                         .test_support()
@@ -672,6 +680,34 @@ impl Tree {
                         .on_click(|_, w, cx| shell::toggle_side(Column::Explorer, w, cx)),
                 )
             });
+        let modes = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(ui::GAP / 3.)
+            .when(self.live, |d| {
+                d.flex_wrap().px(ui::GAP / 2.).py(ui::GAP * 0.4)
+            })
+            .when(!self.live, |d| {
+                ui::band(d, cx).h(ui::GAP * 4.).px(ui::GAP * 0.8)
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(ui::GAP / 5.)
+                    .p(ui::GAP / 5.)
+                    .when(self.live, |d| {
+                        d.bg(t.segment_bg).rounded(ui::radius::SEGMENT)
+                    })
+                    .child(mode("tree.files", "Files", Files, None))
+                    .child(mode("tree.changes", "Changes", Changes, changes))
+                    .when(self.live, |d| {
+                        d.child(mode("tree.chats", "Chats", Chats, Some(chats)))
+                    }),
+            )
+            .child(tools);
         let back = ui::icon_button("tree.back", Icon::Close.size(px(12.)), cx)
             .test_support()
             .aria_label("Back to the working tree")
@@ -726,7 +762,7 @@ impl Tree {
                         cx.notify();
                     })),
             );
-        let editing = self.live && self.browse && !changes && self.key.is_some();
+        let editing = self.live && self.browse && current == Files && self.key.is_some();
         let ref_bar = ref_bar.when(self.live, |d| {
             d.child(
                 ui::quiet_button("tree.browse.done", "Done", cx)
@@ -743,10 +779,10 @@ impl Tree {
             .flex_col()
             .when(!editing, |d| d.child(modes))
             .when(
-                editing || (!self.live && !changes && self.key.is_some()),
+                editing || (!self.live && current == Files && self.key.is_some()),
                 |d| d.child(ref_bar),
             )
-            .when(self.live && changes, |d| {
+            .when(self.live && current == Changes, |d| {
                 d.child(
                     div()
                         .px(px(12.))
@@ -994,6 +1030,26 @@ impl Tree {
 
 impl Render for Tree {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mode = match explorer_mode(cx) {
+            ExplorerMode::Chats if !self.live => ExplorerMode::Files,
+            mode => mode,
+        };
+        let tabs = if self.live {
+            chat::session_tabs(cx)
+        } else {
+            vec![]
+        };
+        let panel = div()
+            .id("tree")
+            .test_support()
+            .flex()
+            .flex_col()
+            .size_full()
+            .pb(ui::GAP / 2.)
+            .child(self.header(mode, tabs.len(), cx));
+        if mode == ExplorerMode::Chats {
+            return panel.child(super::chats::list(tabs, cx));
+        }
         let rows = Rc::new(self.rows(cx));
         for (repo, listing) in &mut self.roots {
             let visible = rows.iter().filter_map(|entry| match &entry.kind {
@@ -1052,15 +1108,7 @@ impl Render for Tree {
                 .child(list)
                 .into_any_element()
         };
-        div()
-            .id("tree")
-            .test_support()
-            .flex()
-            .flex_col()
-            .size_full()
-            .pb(px(6.))
-            .child(self.header(cx))
-            .child(body)
+        panel.child(body)
     }
 }
 

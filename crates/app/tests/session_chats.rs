@@ -8,6 +8,7 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Keystroke, SharedString, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
 use kernel::session::Item;
+use kernel::ui_state;
 use serde_json::json;
 
 fn toggle_chats(cx: &mut VisualTestContext) {
@@ -59,6 +60,113 @@ fn adopted(sb: &Sandbox) -> sessions::Workset {
     sb.git(&sb.solo(), &["worktree", "add", "-b", "topic", &path]);
     let workspace = &sb.state.get_settings().workspaces[0].id;
     sessions::adopt(&sb.state, workspace, "Topic", &[path]).unwrap()
+}
+
+#[gpui_kit::test]
+fn explorer_lists_and_opens_only_the_current_sessions_chats(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| {
+        session = adopted(sb).id;
+        write(
+            &sb.state.config_dir,
+            [("ui.json", r#"{"size.session.explorer":248}"#)],
+        );
+    });
+    let count = |cx: &mut VisualTestContext| {
+        cx.find("tree.chats")
+            .unwrap()
+            .description()
+            .unwrap()
+            .to_string()
+    };
+    let row = ("tree.chats.row", 0usize);
+    assert_eq!(count(cx), "0");
+    let explorer = cx.find("session.explorer").unwrap().bounds();
+    for id in ["tree.chats", "tree.find", "tree.browse", "explorer.fold"] {
+        assert!(
+            cx.find(id).unwrap().bounds().right() <= explorer.right(),
+            "{id}"
+        );
+    }
+    cx.click("tree.chats");
+    cx.click("tree.chats.new");
+    cx.input("solo");
+    wait_until(cx, |cx| {
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|row| row.label() == Some("solo"))
+    });
+    cx.press("enter");
+    assert!(cx.find("chat.composer").unwrap().visible());
+    assert_eq!(count(cx), "1");
+    assert_eq!(cx.find(row).unwrap().description(), Some("Idle · solo"));
+
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    assert_eq!(count(cx), "0");
+    assert!(cx.find(row).is_none());
+    assert!(cx.find("tree.rows").is_none());
+    cx.click("tree.chats.new");
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    let doc = Doc::Chat { repo, n: 0 };
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), Some(doc.clone()));
+    assert_eq!(cx.find(row).unwrap().label(), Some("New chat"));
+    cx.input("wait finish-explorer; hi");
+    cx.press("enter");
+    cx.click("doc.session-overview");
+    assert_eq!(
+        cx.find(row).unwrap().label(),
+        Some("wait finish-explorer; hi")
+    );
+    assert_eq!(cx.find(row).unwrap().description(), Some("Working · solo"));
+    std::fs::write(cx.sb.path("claude/finish-explorer"), "").unwrap();
+    wait_until(cx, |cx| {
+        cx.find(row)
+            .is_some_and(|row| row.description() == Some("Done · solo"))
+    });
+    cx.click(row);
+    assert_eq!(cx.workspace(|w, _| w.shown().cloned()), Some(doc.clone()));
+    assert_eq!(cx.find(row).unwrap().selected(), Some(true));
+    cx.update(|w, cx| dock::close_docs(|d| d == &doc, w, cx));
+    assert_eq!(count(cx), "0");
+    assert!(cx.find(row).is_none());
+
+    cx.click("sessions.row.main");
+    assert_eq!(count(cx), "1");
+    assert_eq!(cx.find(row).unwrap().label(), Some("New chat"));
+    cx.click("tree.chats.all");
+    assert!(cx.find("chats").unwrap().visible());
+}
+
+#[gpui_kit::test]
+fn explorer_remembers_chats_and_keeps_the_existing_shortcuts(cx: &mut TestAppContext) {
+    let app = &mut open_app_with(cx, |sb| {
+        write(
+            &sb.state.config_dir,
+            [("ui.json", r#"{"tree.changes":true}"#)],
+        );
+    });
+    assert_eq!(app.find("tree.changes").unwrap().checked(), Some(true));
+    app.click("tree.chats");
+    app.click("explorer.fold");
+    assert_eq!(
+        app.find("explorer.fold").unwrap().label(),
+        Some("Show chats")
+    );
+    app.click("explorer.fold");
+    assert_eq!(app.find("tree.chats").unwrap().checked(), Some(true));
+
+    let (saved, problem) = ui_state::load(&app.sb.state.config_dir);
+    assert!(problem.is_none());
+    let window = app.update(|_, cx| {
+        ui_state::install(saved, cx);
+        detached_app::shell::open(cx).unwrap()
+    });
+    let reopened = &mut VisualTestContext::from_window(window, cx);
+    assert_eq!(reopened.find("tree.chats").unwrap().checked(), Some(true));
+    toggle_chats(reopened);
+    reopened.press("secondary-1");
+    assert_eq!(reopened.find("tree.files").unwrap().checked(), Some(true));
+    reopened.press("secondary-0");
+    assert_eq!(reopened.find("tree.changes").unwrap().checked(), Some(true));
 }
 
 #[gpui_kit::test]

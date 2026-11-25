@@ -23,6 +23,7 @@ use gpui_kit::{
 };
 
 use crate::actions::{self, Group, Registration};
+use crate::files::{ExplorerMode, choose_explorer, explorer_mode};
 use crate::ui::theme;
 use kernel::doc::Doc;
 use kernel::ui_state;
@@ -91,7 +92,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             if Workspace::get(cx).archive() {
                 open("changes", w, cx);
             } else {
-                crate::files::choose_explorer(true, w, cx);
+                choose_explorer(ExplorerMode::Changes, w, cx);
             }
         },
     ));
@@ -609,7 +610,7 @@ fn with(cx: &mut App, f: impl FnOnce(&mut DockArea, &mut Context<DockArea>)) {
 /// Shows the app named `name`, opening its zone.
 pub fn open(name: &str, window: &mut Window, cx: &mut App) {
     if name == "project" && !Workspace::get(cx).archive() {
-        return crate::files::choose_explorer(false, window, cx);
+        return choose_explorer(ExplorerMode::Files, window, cx);
     }
     if let Some(doc) = live_tool(name, cx) {
         return open_doc(doc, true, window, cx);
@@ -633,10 +634,10 @@ pub fn open(name: &str, window: &mut Window, cx: &mut App) {
 pub fn toggle(name: &str, window: &mut Window, cx: &mut App) {
     if name == "project" && !Workspace::get(cx).archive() {
         use crate::shell::{self, Side::Explorer};
-        if !crate::files::showing_changes(cx) && shell::side_open(Explorer, window, cx) {
+        if explorer_mode(cx) == ExplorerMode::Files && shell::side_open(Explorer, window, cx) {
             return shell::set_side(Explorer, false, window, cx);
         }
-        return crate::files::choose_explorer(false, window, cx);
+        return choose_explorer(ExplorerMode::Files, window, cx);
     }
     match is_shown(name, cx) {
         true => close(name, window, cx),
@@ -669,7 +670,7 @@ pub fn close(name: &str, window: &mut Window, cx: &mut App) {
 /// Whether the app is the tab on screen in an open zone.
 pub fn is_shown(name: &str, cx: &App) -> bool {
     if name == "project" && !Workspace::get(cx).archive() {
-        return !crate::files::showing_changes(cx);
+        return explorer_mode(cx) == ExplorerMode::Files;
     }
     if let Some(doc) = live_tool(name, cx) {
         return Workspace::get(cx).shown() == Some(&doc);

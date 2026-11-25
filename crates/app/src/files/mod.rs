@@ -2,6 +2,7 @@
 
 mod api;
 mod changes;
+mod chats;
 mod code;
 mod diff;
 mod file;
@@ -20,7 +21,7 @@ use crate::actions::Registration;
 use crate::dock::{self, AppSpec};
 use changes::Changes;
 use tree::Tree;
-pub(crate) use tree::{choose_explorer, showing_changes};
+pub(crate) use tree::{ExplorerMode, choose_explorer, explorer_mode};
 use viewer::ViewerDocs;
 
 pub(crate) fn explorer(window: &mut Window, cx: &mut App) -> AnyView {

@@ -12,6 +12,7 @@ use gpui_kit::{
 };
 
 use crate::dock;
+use crate::files::{ExplorerMode, explorer_mode};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
@@ -437,19 +438,20 @@ impl Render for Shell {
             let panel = if files.is_some() {
                 panel.child(self.explorer.clone())
             } else {
-                let (title, action) = if crate::files::showing_changes(cx) {
-                    ("Show changes", "panel.changes")
-                } else {
-                    ("Show files", "panel.project")
+                let (icon, title, action) = match explorer_mode(cx) {
+                    ExplorerMode::Files => (Icon::Folder, "Show files", Some("panel.project")),
+                    ExplorerMode::Changes => (Icon::Folder, "Show changes", Some("panel.changes")),
+                    ExplorerMode::Chats => (Icon::Chat, "Show chats", None),
                 };
+                let button = ui::icon_button("explorer.fold", icon.size(text::TITLE), cx)
+                    .h(px(26.))
+                    .min_w(px(26.));
                 panel.pt(px(8.)).child(
-                    ui::titled_action(
-                        ui::icon_button("explorer.fold", Icon::Folder.size(px(14.)), cx)
-                            .h(px(26.))
-                            .min_w(px(26.)),
-                        title,
-                        action,
-                    )
+                    if let Some(action) = action {
+                        ui::titled_action(button, title, action)
+                    } else {
+                        ui::titled(button, title)
+                    }
                     .test_support()
                     .on_click(|_, w, cx| toggle_side(Side::Explorer, w, cx)),
                 )
