@@ -7,7 +7,8 @@ use detached_app::settings;
 use detached_core::processes::{self, Agents, Definition};
 use detached_core::secrets;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{TestAppContext, VisualTestContext, point, px, size};
+use kernel::doc::Doc;
 
 fn label(cx: &mut VisualTestContext, id: &str) -> String {
     let e = cx.find(id.to_string());
@@ -41,25 +42,88 @@ fn type_in(cx: &mut VisualTestContext, id: &str, text: &str) {
 }
 
 #[gpui_kit::test]
-fn dragging_the_process_list_resizes_its_rows_and_saves_the_width(cx: &mut TestAppContext) {
-    let cx = &mut open(cx, |sb, main| {
-        let def = Definition {
-            name: "web".into(),
-            command: "echo up".into(),
-            ..Default::default()
-        };
-        processes::save(&sb.state, main, &def).unwrap();
-    });
+fn the_process_list_fits_a_narrow_split_and_keeps_its_saved_width(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| define(sb, "main", "web"));
+    let repo = cx.sb.path("repos/main").display().to_string();
+    cx.workspace(|w, cx| w.show(Doc::Process { repo }, cx));
     wait_until(cx, |cx| cx.find("processes.row.web").is_some());
+    cx.click("processes.row.web");
     let row = cx.find("processes.row.web").unwrap().bounds();
     let grip = cx.find("grip.processes.list").unwrap().bounds().center();
-    cx.update(|w, cx| w.drag(grip, grip + point(px(80.), px(0.)), cx));
+    cx.update(|w, cx| w.drag(grip, grip + point(px(160.), px(0.)), cx));
     settle(cx);
     let resized = cx.find("processes.row.web").unwrap().bounds();
-    assert_eq!(resized.size.width, row.size.width + px(80.));
+    assert_eq!(resized.size.width, row.size.width + px(160.));
+
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
+    let narrow = size(px(740.), px(900.));
+    cx.simulate_resize(narrow);
+    wait_until(cx, |cx| {
+        cx.find("processes").unwrap().bounds().size.width < px(380.)
+    });
+    let pane = cx.find("processes").unwrap().bounds();
+    let grip = cx.find("grip.processes.list").unwrap().bounds();
+    let start = cx.find("processes.start").unwrap();
+    assert!(grip.right() < pane.right());
+    assert!(start.visible() && start.bounds().left() >= grip.right());
     let file = std::fs::read(cx.sb.state.config_dir.join("ui.json")).unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&file).unwrap();
-    assert_eq!(saved["size.processes.list"], 320.);
+    assert_eq!(saved["size.processes.list"], 400.);
+
+    cx.simulate_resize(size(px(1800.), px(900.)));
+    assert_eq!(
+        cx.find("processes.row.web").unwrap().bounds().size.width,
+        resized.size.width
+    );
+
+    cx.simulate_resize(narrow);
+    let grip = cx.find("grip.processes.list").unwrap().bounds().center();
+    cx.update(|w, cx| w.drag(grip, grip - point(px(32.), px(0.)), cx));
+    let moved = cx.find("grip.processes.list").unwrap().bounds().center();
+    assert!((grip.x - moved.x - px(32.)).abs() <= px(1.));
+}
+
+#[gpui_kit::test]
+fn dragging_one_process_list_leaves_the_other_split_alone(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        define(sb, "main", "web");
+        define(sb, "other", "worker");
+    });
+    cx.simulate_resize(size(px(2400.), px(900.)));
+    let main = cx.sb.path("repos/main").display().to_string();
+    let other = cx.sb.path("repos/other").display().to_string();
+    cx.workspace(|w, cx| w.show(Doc::Process { repo: main }, cx));
+    wait_until(cx, |cx| cx.find("processes.row.web").is_some());
+    cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
+    cx.workspace(|w, cx| w.show(Doc::Process { repo: other }, cx));
+    wait_until(cx, |cx| cx.find("processes.row.worker").is_some());
+    let web = cx.find("processes.row.web").unwrap().bounds();
+    let worker = cx.find("processes.row.worker").unwrap().bounds();
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let grips = w.find_all("grip.processes.list");
+        assert_eq!(grips.len(), 2);
+        let grip = grips
+            .iter()
+            .map(|g| g.bounds().center())
+            .max_by_key(|p| p.x)
+            .unwrap();
+        w.drag(grip, grip + point(px(80.), px(0.)), cx);
+    });
+    assert_eq!(cx.find("processes.row.web").unwrap().bounds(), web);
+    assert_eq!(
+        cx.find("processes.row.worker").unwrap().bounds().size.width,
+        worker.size.width + px(80.)
+    );
+}
+
+fn define(sb: &Sandbox, checkout: &str, name: &str) {
+    let def = Definition {
+        name: name.into(),
+        command: "echo up".into(),
+        ..Default::default()
+    };
+    processes::save(&sb.state, &repo(sb, checkout), &def).unwrap();
 }
 
 #[gpui_kit::test]
