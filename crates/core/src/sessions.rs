@@ -72,6 +72,17 @@ pub enum Stage {
 }
 
 impl Member {
+    pub fn base_ref(&self, core: &AppState) -> Result<String> {
+        if let Some(base) = &self.base {
+            return Ok(base.clone());
+        }
+        let repo = Path::new(&self.repo);
+        match worktree::recipe(core, repo)?.base {
+            Some(base) => worktree::recipe_base(&core.env(), repo, &base),
+            None => Ok("origin/HEAD".into()),
+        }
+    }
+
     fn bind(&mut self, registration: PathBuf) -> Result<()> {
         self.generation = Some(worktree::bind_generation(&registration)?);
         self.registration = Some(registration);

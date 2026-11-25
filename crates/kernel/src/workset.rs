@@ -1,8 +1,32 @@
+use detached_core::api::{self, SessionBase};
 use detached_core::error::Result;
-use detached_core::sessions::{self, Job, Workset};
-use gpui::{App, Task};
+use detached_core::sessions::{self, Job, Member, Workset};
+use gpui::{App, Entity, Task};
 
 use crate::activity::Activity;
+use crate::resource::{self, On, Policy, Resource};
+
+pub fn compare_base(cx: &mut App, member: &Member) -> Entity<Resource<SessionBase>> {
+    let key = format!(
+        "session-base\0{}\0{}\0{:?}",
+        member.repo, member.path, member.base
+    );
+    resource::get(cx, key, || {
+        let member = member.clone();
+        let on = On::Status(member.path.clone());
+        Resource::new(
+            Policy {
+                fresh_for: None,
+                poll: None,
+            },
+            move |cx| {
+                let (core, member) = (crate::core(cx).clone(), member.clone());
+                move || api::compare_session_base(&core, &member)
+            },
+        )
+        .on(on)
+    })
+}
 
 #[derive(Clone)]
 pub enum Change {

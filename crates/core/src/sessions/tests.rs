@@ -34,6 +34,57 @@ fn adopts_without_touching_the_checkout_and_renames_by_id() {
 }
 
 #[test]
+fn session_base_reads_the_current_recipe_and_prefers_the_member_override() {
+    use crate::store::{Kind, RepoStore};
+
+    let (sb, ws, repo, path) = setup();
+    let mut set = adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();
+    let saved = set.clone();
+    sb.commit(Path::new(&path), "work", "checkout\n", "checkout work");
+    let release = sb.commit(&repo, "release", "release\n", "release work");
+    sb.git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &release],
+    );
+
+    let check = |member: &Member, reference: &str, counts: (u32, u32)| {
+        let base = crate::api::compare_session_base(&sb.state, member).unwrap();
+        assert_eq!(base.reference, reference);
+        let cmp = base.comparison.unwrap();
+        assert_eq!(cmp.base, reference);
+        assert_eq!((cmp.ahead, cmp.behind), counts);
+    };
+    let member = &mut set.members[0];
+    check(member, "origin/HEAD", (1, 0));
+    RepoStore::open(&sb.state, &repo)
+        .unwrap()
+        .write(
+            &sb.state,
+            Kind::Recipes,
+            worktree::RECIPE,
+            &[(PathBuf::new(), b"base = \"release\"\n".to_vec())].into(),
+        )
+        .unwrap();
+    check(member, "origin/release", (1, 1));
+    member.base = Some("origin/main".into());
+    check(member, "origin/main", (1, 0));
+    assert_eq!(list(&sb.state, &ws).unwrap().sets, [saved]);
+}
+
+#[test]
+fn session_base_keeps_its_ref_when_origin_head_is_missing() {
+    let (sb, ws, repo, path) = setup();
+    let set = adopt(&sb.state, &ws, "Renewal", &[path]).unwrap();
+    sb.git(
+        &repo,
+        &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
+    );
+    let base = crate::api::compare_session_base(&sb.state, &set.members[0]).unwrap();
+    assert_eq!(base.reference, "origin/HEAD");
+    assert!(base.comparison.is_err());
+}
+
+#[test]
 fn ownership_survives_reloading_and_applies_across_workspaces() {
     let (sb, ws, repo, path) = setup();
     adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();

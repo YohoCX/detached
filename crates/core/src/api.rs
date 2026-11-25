@@ -223,6 +223,20 @@ pub fn compare_base(s: &AppState, repo: &str, base: Option<&str>) -> Result<Comp
     diff::compare_base(&s.env(), Path::new(repo), base)
 }
 
+pub struct SessionBase {
+    pub reference: String,
+    pub comparison: Result<CompareBase>,
+}
+
+pub fn compare_session_base(s: &AppState, member: &crate::sessions::Member) -> Result<SessionBase> {
+    let reference = member.base_ref(s)?;
+    let comparison = compare_base(s, &member.path, Some(&reference));
+    Ok(SessionBase {
+        reference,
+        comparison,
+    })
+}
+
 pub fn file_patch(
     s: &AppState,
     repo: &str,

@@ -362,12 +362,19 @@ fn start(
     }
     let base = match (base, recipe.base.as_deref()) {
         (Some(b), _) => arg(b)?.to_string(),
-        (None, Some(b)) if has(&format!("refs/remotes/origin/{b}")) => format!("origin/{b}"),
-        (None, Some(b)) => arg(b)?.to_string(),
+        (None, Some(b)) => recipe_base(env, repo, b)?,
         (None, None) => "HEAD".into(),
     };
     let decision = format!("New branch from {base}");
     Ok((base, true, decision))
+}
+
+pub(crate) fn recipe_base(env: &Env, repo: &Path, base: &str) -> Result<String> {
+    let remote = format!("origin/{base}");
+    if sha(env, repo, &format!("refs/remotes/{remote}")).is_ok() {
+        return Ok(remote);
+    }
+    Ok(arg(base)?.to_owned())
 }
 
 pub(crate) fn sha(env: &Env, repo: &Path, reference: &str) -> Result<String> {
