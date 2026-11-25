@@ -1413,12 +1413,123 @@ fn a_past_conversation_shows_and_the_next_message_resumes_it(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn a_failed_resume_keeps_history_visible_through_a_retry(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        past(sb, &sb.solo(), "old1", "Fix the build", 60);
+        fake(sb, json!({"init_wait": "go"}));
+    });
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo, &CLAUDE, "old1".into(), cx));
+    wait_for_item(cx, "fixed");
+    set_cli(cx, Path::new("/nowhere/claude"));
+    say(cx, "session; more");
+    wait_until(cx, |cx| composer(cx).value() == Some("session; more"));
+    wait_for_item(cx, "has no CLI");
+    assert_eq!(items(cx)[..2], ["You: fix it", "fixed"]);
+
+    set_cli(cx, &detached_core::testutil::claude::fake());
+    cx.press("enter");
+    assert_eq!(items(cx)[..2], ["You: fix it", "fixed"]);
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_for_item(cx, "said more");
+    idle(cx);
+    let shown = items(cx);
+    for text in ["You: fix it", "fixed", "resumed old1"] {
+        assert_eq!(shown.iter().filter(|item| item.as_str() == text).count(), 1);
+    }
+}
+
+#[gpui_kit::test]
+fn a_resume_without_replay_keeps_the_history_already_shown(cx: &mut TestAppContext) {
+    let mut file = None;
+    let cx = &mut open_seeded(cx, |sb| {
+        file = Some(past(sb, &sb.solo(), "old1", "Fix the build", 60));
+    });
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo, &CLAUDE, "old1".into(), cx));
+    wait_for_item(cx, "fixed");
+    std::fs::remove_file(file.unwrap()).unwrap();
+    say(cx, "session; more");
+    wait_for_item(cx, "said more");
+    idle(cx);
+    assert_eq!(items(cx)[..2], ["You: fix it", "fixed"]);
+}
+
+#[gpui_kit::test]
 fn a_missing_transcript_shows_an_error_without_starting_the_agent(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     let repo = cx.sb.solo().display().to_string();
     cx.update(|_, cx| chat::resume(repo, &CLAUDE, "missing".into(), cx));
     wait_for_item(cx, "The transcript is unavailable.");
     cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+}
+
+#[gpui_kit::test]
+fn a_past_chat_can_join_a_group_but_can_only_enable_wake_once_live(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        past(sb, &sb.solo(), "old1", "Fix the build", 60);
+    });
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo, &CLAUDE, "old1".into(), cx));
+    wait_for_item(cx, "fixed");
+    pick(cx, "chat.more", "New group: Group 1");
+    pick(cx, "chat.more", "Wake on messages");
+    cx.update(|_, cx| {
+        let messages = kernel::inbox::Messages::get(cx);
+        assert_eq!(messages.group("old1").unwrap().name, "Group 1");
+        assert!(!messages.wake.contains("old1"));
+    });
+    cx.press("escape");
+    cx.click("chat.input");
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    pick(cx, "chat.more", "Wake on messages");
+    cx.update(|_, cx| {
+        let messages = kernel::inbox::Messages::get(cx);
+        assert_eq!(messages.group("old1").unwrap().name, "Group 1");
+        assert!(messages.wake.contains("old1"));
+    });
+}
+
+#[gpui_kit::test]
+fn past_tools_with_unknown_outcomes_show_a_neutral_status(cx: &mut TestAppContext) {
+    use detached_core::adapters::CODEX;
+    let id = "38d60b10-15d8-4def-a954-2ffb285421d1";
+    let cx = &mut open_seeded(cx, |sb| {
+        codex(sb);
+        let dir = sb.path("codex-home/sessions/2026/11/23");
+        std::fs::create_dir_all(&dir).unwrap();
+        let rows = [
+            json!({"type":"session_meta", "payload":{"id":id, "cwd":sb.solo()}}),
+            json!({"type":"response_item", "payload":{"type":"function_call", "name":"lookup", "call_id":"a"}}),
+            json!({"type":"response_item", "payload":{"type":"function_call_output", "call_id":"a", "output":"recorded output"}}),
+            json!({"type":"response_item", "payload":{"type":"message", "role":"assistant", "content":[{"text":"Found it"}]}}),
+            json!({"type":"response_item", "payload":{"type":"function_call", "name":"check", "call_id":"b"}}),
+            json!({"type":"response_item", "payload":{"type":"function_call", "name":"verify", "call_id":"c"}}),
+        ];
+        std::fs::write(
+            dir.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+            rows.iter()
+                .map(|row| format!("{row}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    });
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo, &CODEX, id.into(), cx));
+    wait_for_item(cx, "Found it");
+    assert!(items(cx)[0].contains("lookup outcome unknown"));
+    cx.click(("chat.item", 0usize));
+    assert_eq!(
+        label(cx, ("chat.output", 0usize)).as_deref(),
+        Some("recorded output")
+    );
+    let group = ("chat.group", 2usize);
+    assert_eq!(description(cx, group).as_deref(), Some("outcome unknown"));
+    assert!(cx.find(("chat.item", 2usize)).is_none());
+    cx.click(group);
+    assert!(items(cx)[2].contains("check outcome unknown"));
 }
 
 #[gpui_kit::test]

@@ -1,5 +1,6 @@
 //! A chat's conversation and the repo's settings for the user to trust.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
 use detached_core::adapters::{CLAUDE, Provider};
@@ -40,7 +41,7 @@ pub struct Chat {
     pub(super) checkouts: Vec<RepoInfo>,
     /// Who answers: picked while nothing is said.
     pub provider: &'static Provider,
-    /// The conversation's sessions, oldest first: one that ended goes on in a resume after it.
+    /// Oldest first, with the passive transcript kept until a live replay replaces it.
     pub sessions: Vec<Entity<Session>>,
     /// The first thing the user said here.
     pub topic: Option<String>,
@@ -144,7 +145,7 @@ impl Chat {
         cx.notify();
     }
 
-    fn live(&self, cx: &App) -> Option<Entity<Session>> {
+    pub(super) fn live(&self, cx: &App) -> Option<Entity<Session>> {
         let s = self.current()?;
         (!matches!(s.read(cx).state, Run::Ended(_))).then(|| s.clone())
     }
@@ -160,10 +161,6 @@ impl Chat {
             s
         } else {
             let past = self.conversation(cx).map(String::from);
-            if self.current().is_some_and(|s| s.read(cx).is_passive()) {
-                self._watch.pop();
-                self.sessions.pop();
-            }
             self.open(past, cx)
         };
         self.topic.get_or_insert_with(|| text.clone());
@@ -173,6 +170,17 @@ impl Chat {
 
     fn changed(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         if Some(&s) == self.current() {
+            let run = s.read(cx);
+            if !run.is_passive()
+                && self.sessions[0].read(cx).is_passive()
+                && has_messages(&run.items[..run.history])
+                && self.sessions[1..self.sessions.len() - 1]
+                    .iter()
+                    .all(|s| !has_messages(&s.read(cx).items))
+            {
+                drop(self._watch.remove(0));
+                self.sessions.remove(0);
+            }
             let (commands, returned, unsent, ended, kept) = s.update(cx, |s, _| {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
                 let kept = std::mem::take(&mut s.refused)
@@ -378,9 +386,21 @@ impl Chat {
     ) -> impl DoubleEndedIterator<Item = ((usize, usize), &'a Item)> + 'a {
         self.sessions.iter().enumerate().flat_map(move |(k, s)| {
             let s = s.read(cx);
+            let history = if s.history == 0 && s.state == Run::Starting {
+                s.items.len()
+            } else {
+                s.history
+            };
+            let earlier = OnceCell::new();
             s.items.iter().enumerate().filter_map(move |(i, it)| {
-                let shown =
-                    k == 0 || i >= s.history || matches!(it, Item::Note(_) | Item::Error(_));
+                let shown = k == 0
+                    || i >= history
+                    || matches!(it, Item::Note(_) | Item::Error(_))
+                    || !earlier.get_or_init(|| {
+                        self.sessions[..k]
+                            .iter()
+                            .any(|s| has_messages(&s.read(cx).items))
+                    });
                 (shown && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty()))
                     .then_some(((k, i), it))
             })
@@ -578,11 +598,9 @@ impl Chat {
     }
 
     fn first_user<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
-        self.sessions.iter().find_map(|s| {
-            s.read(cx).items.iter().find_map(|i| match i {
-                Item::User(t) => Some(t.as_str()),
-                _ => None,
-            })
+        self.feed(cx).find_map(|(_, i)| match i {
+            Item::User(t) => Some(t.as_str()),
+            _ => None,
         })
     }
 
@@ -610,6 +628,14 @@ impl Chat {
         }
         self.check_trust(cx);
     }
+}
+
+fn has_messages(items: &[Item]) -> bool {
+    items.iter().any(|it| match it {
+        Item::Note(_) | Item::Error(_) => false,
+        Item::Text(t) | Item::Thought(t) => !t.trim().is_empty(),
+        _ => true,
+    })
 }
 
 fn defaults(cx: &App) -> Option<(&'static Provider, Choices)> {
