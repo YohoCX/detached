@@ -320,3 +320,25 @@ Not in 0.7.1:
     - Sessions open: rail + Sessions card + Explorer card + center; folded: rail + Explorer card + center. The
       width math in `shell.rs` reserves the rail always; `tests/panels.rs` numbers follow.
     - Tests: the Sessions button keeps the same bounds open and folded; Cmd+2 and a click toggle Sessions.
+
+## Added 2026-11-25, interface pass (the owner: "do all of it")
+
+From a `make drive` look at main 8d24dce. One branch each, in parallel; each merges into local main after its
+own check by eye through `make drive`.
+
+25. **`071/status-loading`**: the bottom path line shows only for a document that has a file (editor, viewer,
+    diff) and goes on pages without one (New session, Overview, Archive); a diff, file or log tab that is still
+    loading shows a quiet loading state instead of an empty body.
+26. **`071/dark-cards`**: in dark themes the cards stand apart from the window (panel fill and edge tokens in
+    `ui::theme`, every bundled theme checked); a segment tooltip opens where it does not cover the row below.
+27. **`071/rows`**: Explorer's selected row fills the row's full width like a Sessions row, not an outline
+    around the label; the change counter beside a repo in the Sessions list has a tooltip ("1 changed file").
+28. **`071/center-header`**: the center's header is one row: the tabs, then `+`, split and `…` on the right; the
+    session's name row goes (the Sessions list shows it). The active tab is a quiet fill like the active segment,
+    not a blue outlined button.
+29. **`071/rail-titlebar`**: Settings moves from the title bar to the rail's bottom; Archive sits on the rail
+    always (the Sessions card loses its footer); Fetch and Pull in the title bar become icon buttons with
+    tooltips and their chords.
+30. **`071/overview`**: Checkout status drops its "New session…" button (the Sessions header has one); its type
+    and row height follow the sidebars' scale (`ui::theme` text sizes, compact rows); a row's action icons show
+    on hover or selection, each with a tooltip.
