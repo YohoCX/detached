@@ -111,7 +111,7 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
 pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
     resource::input(cx, Input::On(On::Status(repo.into())));
     if moved {
-        resource::input(cx, Input::On(On::Head(repo.into())));
+        resource::input(cx, Input::Reset(On::Head(repo.into())));
     }
 }
 

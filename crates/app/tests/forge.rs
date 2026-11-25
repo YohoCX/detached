@@ -322,6 +322,8 @@ fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     };
     wait_until(cx, |cx| shows(cx, "●"));
     let count = || requested(&forge, "/gitlab/api/v4/projects/group/app/pipelines");
+    assert_eq!(count(), 1);
+    assert!(cx.find("pipeline.badge").is_none());
     // The slack is for the request itself.
     let tick = |cx: &mut VisualTestContext| {
         let (n, start) = (count(), cx.executor().now());
@@ -347,10 +349,13 @@ fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     window(cx, WindowVisibility::Visible);
     tick(cx);
 
-    seed.projects[0].pipelines[0].status = Status::Success;
+    seed.projects[0].pipelines[0].status = Status::Failed;
     forge.reset(seed);
     cx.executor().advance_clock(Duration::from_secs(5));
-    wait_until(cx, |cx| shows(cx, "✓"));
+    wait_until(cx, |cx| {
+        shows(cx, "✕") && label(cx, "pipeline.badge").as_deref() == Some("✕failed")
+    });
+    assert_eq!(count(), 1);
     quiet(cx);
 }
 
@@ -984,7 +989,15 @@ fn the_pipelines_tab_lists_the_mr_heads_pipelines(cx: &mut TestAppContext) {
         "main's pipeline is not the MR's"
     );
     assert!(cx.find("pipelines.run").is_none() && cx.find("pipelines.scope").is_none());
-    assert!(requested(&forge, &format!("{GL_MR}/pipelines")) > 0);
+    let requests = || requested(&forge, &format!("{GL_MR}/pipelines"));
+    assert_eq!(requests(), 1);
+    cx.click(("pipeline", 100u64));
+    wait_until(cx, |cx| cx.find(("job", 101u64)).is_some());
+    open_tab(cx, "bottom.Pipelines");
+    click_in(cx, "pipelines.scope", 1usize);
+    cx.click("doc.mr.1");
+    assert!(cx.find(("job", 101u64)).is_some());
+    assert_eq!(requests(), 1);
     click_in(cx, "mr.tabs", 0usize);
     assert!(cx.find(("pipeline", 100u64)).is_none());
     assert!(cx.find("mr.description").is_some());

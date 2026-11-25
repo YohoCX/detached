@@ -374,7 +374,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let status = status.await;
             this.update(cx, |w, cx| {
-                let head = |s: Option<&RepoStatus>| s.map(|s| (s.head.clone(), s.branch.clone()));
+                let head = |s: Option<&RepoStatus>| {
+                    s.map(|s| (s.head.clone(), s.branch.clone(), s.upstream.clone()))
+                };
                 let new = head(status.as_ref().ok());
                 let moved = w.repo(&repo).cloned().is_some_and(|r| {
                     r.update(cx, |r, cx| {

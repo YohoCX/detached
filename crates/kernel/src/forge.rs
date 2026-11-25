@@ -31,14 +31,6 @@ pub const PIPELINES: Policy<Vec<Pipeline>> = Policy {
     })),
 };
 
-pub const LATEST: Policy<Option<Pipeline>> = Policy {
-    fresh_for: Some(FRESH),
-    poll: Some((Duration::from_secs(5), |p| {
-        p.and_then(Option::as_ref)
-            .is_some_and(|p| active(&p.status))
-    })),
-};
-
 pub const MR: Policy<Option<MergeRequest>> = Policy {
     fresh_for: Some(FRESH),
     poll: None,
@@ -86,6 +78,7 @@ pub fn pipelines(
     mr: Option<u64>,
     all: bool,
 ) -> Entity<Resource<Vec<Pipeline>>> {
+    let all = mr.is_none() && all;
     let key = format!("pipelines\0{repo}\0{mr:?}\0{all}");
     let r = repo.to_string();
     resource::get(cx, key, || {
@@ -102,17 +95,6 @@ pub fn pipelines(
         } else {
             list
         }
-    })
-}
-
-/// The latest pipeline of `repo`'s branch; `head` names the commit and the branch, so each has
-/// its own.
-pub fn latest_pipeline(cx: &mut App, repo: &str, head: &str) -> Entity<Resource<Option<Pipeline>>> {
-    let key = format!("latest\0{repo}\0{head}");
-    resource::get(cx, key, || {
-        from_core(LATEST, repo, |core, repo| {
-            Ok(api::list_pipelines(core, repo, false)?.into_iter().next())
-        })
     })
 }
 

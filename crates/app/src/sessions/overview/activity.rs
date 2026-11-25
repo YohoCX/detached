@@ -45,9 +45,9 @@ struct Base {
 }
 
 struct TrackedBranch {
-    key: (String, String),
+    key: (String, Option<String>),
     mr: Interest<Option<MergeRequest>>,
-    latest: Interest<Option<Pipeline>>,
+    latest: Interest<Vec<Pipeline>>,
 }
 
 struct MrPipelines {
@@ -285,19 +285,16 @@ impl MonitoredRepo {
         let key = (|| {
             let status = Repo::get(cx, &repo.path)?.status()?;
             let (branch, upstream) = (status.branch.as_ref()?, status.upstream.as_ref()?);
-            Some((
-                format!("{branch}\0{upstream}"),
-                format!("{:?} {:?}", status.head, status.branch),
-            ))
+            Some((format!("{branch}\0{upstream}"), status.head.clone()))
         })();
         if self.branch.as_ref().map(|b| &b.key) != key.as_ref() {
             self.branch = key.map(|key| {
                 let mr = forge::current_mr(cx, &repo.path, &key.0);
-                let latest = forge::latest_pipeline(cx, &repo.path, &key.1);
+                let latest = forge::pipelines(cx, &repo.path, None, false);
                 TrackedBranch {
                     key,
                     mr: Interest::view(mr, cx),
-                    latest: Interest::view(latest, cx),
+                    latest: Interest::shared_view(latest, cx),
                 }
             });
             self.pipelines = None;
@@ -311,11 +308,16 @@ impl MonitoredRepo {
                 let (number, project, head) =
                     (mr.number, mr.target_project.clone(), mr.head_sha.clone());
                 let resource = forge::pipelines(cx, &repo.path, Some(number), false);
+                let list = if self.pipelines.as_ref().is_some_and(|p| p.number == number) {
+                    Interest::view(resource, cx)
+                } else {
+                    Interest::shared_view(resource, cx)
+                };
                 Some(MrPipelines {
                     project,
                     number,
                     head,
-                    list: Interest::view(resource, cx),
+                    list,
                 })
             }
             Some(_) => self.pipelines.take(),
@@ -337,7 +339,7 @@ impl MonitoredRepo {
         Some(value.as_ref().filter(|m| m.state == MrState::Open))
     }
 
-    pub(super) fn latest<'a>(&self, cx: &'a App) -> Option<&'a Resource<Option<Pipeline>>> {
+    pub(super) fn latest<'a>(&self, cx: &'a App) -> Option<&'a Resource<Vec<Pipeline>>> {
         Some(self.branch.as_ref()?.latest.read(cx))
     }
 

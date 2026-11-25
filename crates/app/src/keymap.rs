@@ -541,10 +541,15 @@ mod tests {
         let md = include_str!("../../../docs/KEYMAP.md");
         for a in actions::ACTIONS {
             let id = format!("`{}`", a.id);
-            let row = md.lines().find(|l| l.starts_with("| `") && l.contains(&id));
+            let row = md
+                .lines()
+                .find(|l| l.split('|').nth(1).is_some_and(|ids| ids.contains(&id)));
             let row = row.unwrap_or_else(|| panic!("{} is not in docs/KEYMAP.md", a.id));
+            let keys = row.split('|').nth(3).unwrap().trim();
             if let Some((_, chord)) = DEFAULTS.iter().find(|(i, _)| *i == a.id) {
-                assert!(row.contains(chord), "{}: {chord}", a.id);
+                assert!(keys.contains(chord), "{}: {chord}", a.id);
+            } else {
+                assert!(matches!(keys, "" | "—"), "{}: {keys}", a.id);
             }
         }
     }

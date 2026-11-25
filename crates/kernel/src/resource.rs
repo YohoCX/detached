@@ -151,6 +151,14 @@ impl<T: Send + 'static> Resource<T> {
         Rc::strong_count(&self.held) > 1
     }
 
+    fn stale(&self, cx: &App) -> bool {
+        self.loading.is_none()
+            && self.policy.fresh_for.is_some_and(|fresh| {
+                self.at
+                    .is_none_or(|at| cx.background_executor().now() - at >= fresh)
+            })
+    }
+
     /// Loads now, whatever its age; while a load runs, once it is done, every refresh meanwhile
     /// served by that one load. Dropping the running one instead would let refreshes that come
     /// faster than a load keep any from finishing.
@@ -198,11 +206,7 @@ impl<T: Send + 'static> Resource<T> {
 
     fn input(&mut self, input: &Input, cx: &mut Context<Self>) {
         let stale = match input {
-            Input::Activated => {
-                let now = cx.background_executor().now();
-                let old = |f| self.at.is_none_or(|at| now.duration_since(at) >= f);
-                self.loading.is_none() && self.policy.fresh_for.is_some_and(old)
-            }
+            Input::Activated => self.stale(cx),
             Input::On(on) => self.on.contains(on),
             Input::Reset(on) => {
                 if !self.on.contains(on) {
@@ -251,8 +255,14 @@ impl<T: Send + 'static> Resource<T> {
 impl<T: Send + 'static> Interest<T> {
     /// Refreshes `resource`; activation and its poll reload it while this lives.
     pub fn new(resource: Entity<Resource<T>>, cx: &mut App) -> Self {
+        Self::attach(resource, true, cx)
+    }
+
+    fn attach(resource: Entity<Resource<T>>, refresh: bool, cx: &mut App) -> Self {
         let (held, due) = resource.update(cx, |r, cx| {
-            r.refresh(cx);
+            if refresh || !r.held() || r.stale(cx) {
+                r.refresh(cx);
+            }
             r.poll(cx);
             (r.held.clone(), r.due)
         });
@@ -266,10 +276,23 @@ impl<T: Send + 'static> Interest<T> {
 
     /// An interest of the view `cx`, which redraws when the resource changes.
     pub fn view<V: 'static>(resource: Entity<Resource<T>>, cx: &mut Context<V>) -> Self {
+        Self::view_with(resource, true, cx)
+    }
+
+    /// Joins a held resource, refreshing it if stale.
+    pub fn shared_view<V: 'static>(resource: Entity<Resource<T>>, cx: &mut Context<V>) -> Self {
+        Self::view_with(resource, false, cx)
+    }
+
+    fn view_with<V: 'static>(
+        resource: Entity<Resource<T>>,
+        refresh: bool,
+        cx: &mut Context<V>,
+    ) -> Self {
         let redraw = cx.observe(&resource, |_, _, cx| cx.notify());
         Interest {
             _redraw: Some(redraw),
-            ..Interest::new(resource, cx)
+            ..Self::attach(resource, refresh, cx)
         }
     }
 
@@ -382,6 +405,47 @@ mod tests {
         assert_eq!(
             cx.read(|cx| late.loaded(cx).map(|r| r.value)),
             Some(Some(3))
+        );
+    }
+
+    #[gpui::test]
+    fn a_shared_interest_joins_the_running_load(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let (r, n, _) = counter(
+            cx,
+            Policy {
+                fresh_for: Some(Duration::from_secs(30)),
+                poll: None,
+            },
+        );
+        let (first, second) = cx.update(|cx| {
+            (
+                cx.new(|cx| Interest::shared_view(r.clone(), cx)),
+                cx.new(|cx| Interest::shared_view(r.clone(), cx)),
+            )
+        });
+        settle(cx, &r);
+        assert_eq!(n.load(SeqCst), 1);
+        assert_eq!(
+            cx.read(|cx| second.read(cx).loaded(cx).unwrap().value),
+            Some(1)
+        );
+
+        cx.executor().advance_clock(Duration::from_secs(30));
+        let third = cx.new(|cx| Interest::shared_view(r.clone(), cx));
+        settle(cx, &r);
+        assert_eq!(
+            cx.read(|cx| third.read(cx).loaded(cx).unwrap().value),
+            Some(2)
+        );
+
+        drop((first, second, third));
+        cx.update(|_| {});
+        let fourth = cx.new(|cx| Interest::shared_view(r.clone(), cx));
+        settle(cx, &r);
+        assert_eq!(
+            cx.read(|cx| fourth.read(cx).loaded(cx).unwrap().value),
+            Some(3)
         );
     }
 

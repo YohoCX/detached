@@ -460,6 +460,21 @@ pub fn is_shown(name: &str, cx: &App) -> bool {
     tool_doc(name, cx).is_some_and(|doc| Workspace::get(cx).shown() == Some(&doc))
 }
 
+pub(crate) fn toggle_tool(name: &str, window: &mut Window, cx: &mut App) {
+    if let Some(doc) = tool_doc(name, cx)
+        && Workspace::get(cx).shown() == Some(&doc)
+        && let Some(area) = current_area(cx)
+        && let Some((_, tab)) = docs(area.read(cx)).into_iter().find(|(_, tab)| {
+            let tab = tab.read(cx);
+            tab.doc == doc && !tab.archived()
+        })
+    {
+        close_doc(tab, window, cx);
+    } else {
+        open(name, window, cx);
+    }
+}
+
 fn tool_doc(name: &str, cx: &App) -> Option<Doc> {
     apps(cx)
         .into_iter()

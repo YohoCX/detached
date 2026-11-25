@@ -144,7 +144,7 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
                             )
                             .text_color(t.error),
                         )
-                    } else if let Some(Some(p)) = &r.value {
+                    } else if let Some(p) = r.value.as_ref().and_then(|list| list.first()) {
                         let label = format!("Pipeline #{} · {}", p.id, forge::name(&p.status));
                         d.child(
                             labeled(("overview.repo.pipeline", index), label)

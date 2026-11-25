@@ -102,7 +102,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         ),
         actions::register(cx, "panel.chats", "Chats", actions::Group::View, |w, cx| {
             if crate::sessions::provision::dismiss_new(cx) {
-                dock::open("chats", w, cx);
+                dock::toggle_tool("chats", w, cx);
             }
         }),
     ]

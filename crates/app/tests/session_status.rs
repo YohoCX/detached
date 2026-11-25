@@ -274,6 +274,14 @@ fn a_failed_forge_refresh_shows_why_and_hides_cached_results(cx: &mut TestAppCon
             && label(cx, pipeline).as_deref() == Some("Pipeline #100 · failed")
             && label(cx, "pipeline.badge").is_some()
     });
+    assert_eq!(
+        forge
+            .requests()
+            .iter()
+            .filter(|r| r.path == "/gitlab/api/v4/projects/group/app/pipelines")
+            .count(),
+        1
+    );
 
     let core = app.update(|_, cx| kernel::core(cx).clone());
     let account = api::list_accounts(&core)

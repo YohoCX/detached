@@ -18,6 +18,10 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
 | `panel.project` | Session files | Cmd+1 | M1 | F |
 | `panel.chats` | Chats app | — | 0.7.1 | H11 |
+| `panel.compare` | Compare Changes | — | 0.7.1 | V2 |
+| `panel.projectTab` | Project app | — | 0.7.1 | V2 |
+| `panel.events` | Events app | — | 0.7.1 | F |
+| `panel.repositories` | Repositories app | — | 0.7.1 | V1 |
 | `session.new` | New Session… | Cmd+N | Sessions | F |
 | `session.adopt` | Adopt Worktrees… | — | Sessions | F |
 | `session.addRepo` | Add Repository… | — | Sessions | F |

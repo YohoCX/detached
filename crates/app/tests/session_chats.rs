@@ -42,10 +42,19 @@ fn the_palette_opens_chats_without_an_agent_provider(cx: &mut TestAppContext) {
             .is_some_and(|row| row.label() == Some("Chats"))
     });
     cx.press("enter");
-    assert!(cx.find("tab.chats").is_some());
+    assert!(cx.find("chats").unwrap().visible());
     assert!(cx.find("sessions.provisional").is_none());
+    cx.press("secondary-2");
+    assert!(cx.find("sessions.row.main").is_none());
+    assert!(cx.find("chats").unwrap().visible());
+    cx.press("secondary-2");
+    assert!(cx.find("sessions.row.main").unwrap().visible());
+    cx.click("doc.session-overview");
+    toggle_chats(cx);
+    assert!(cx.find("chats").unwrap().visible());
     toggle_chats(cx);
     assert!(cx.find("tab.chats").is_none());
+    assert!(cx.find("session.overview").unwrap().visible());
 }
 
 fn adopted(sb: &Sandbox) -> sessions::Workset {
@@ -439,6 +448,7 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
         Some("solo")
     );
     toggle_chats(cx);
+    assert!(cx.find("tab.chats").is_none());
 
     cx.click(row(1));
     assert_eq!(cx.find(row(1)).unwrap().selected(), Some(true));
@@ -451,6 +461,7 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
     assert_eq!(cx.find(row(0)).unwrap().selected(), Some(true));
 
     cx.click("sessions.row.main");
+    assert!(cx.find("chats").is_none());
     cx.click("sessions.fold");
     cx.update(|w, cx| {
         // The background chat is borrowed to catch any reads while the sidebar is folded.
