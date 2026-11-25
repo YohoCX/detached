@@ -5,9 +5,9 @@ use detached_core::types::{InProgress, RepoInfo, RepoStatus};
 use gpui_kit::base::{ElementExt, ObservedElement, TestSupportExt, TestTextExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, PromptLevel, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    Window, div, prelude::FluentBuilder,
+    AnyElement, App, BoxShadow, Context, Div, ElementId, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, PromptLevel, Role, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use kernel::activity::{Activity, Op};
 use kernel::{doc::Doc, repo::Repo, workspace::Workspace};
@@ -99,19 +99,13 @@ impl Overview {
         let compact = self.checkout_compact;
         let this = cx.weak_entity();
         let t = theme(cx);
-        let action = if empty {
+        let action = empty.then(|| {
             button(
                 ui::primary_button("overview.addFolder", "Add a folder…", cx),
                 "Add a folder",
             )
             .on_click(|_, _, cx| repos::add_folders(cx))
-        } else {
-            button(
-                ui::primary_button("overview.new", "New session…", cx),
-                "New session",
-            )
-            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"))
-        };
+        });
         let mut summary = Vec::new();
         if rows.iter().all(|row| row.status().is_some()) {
             let mut seen = HashSet::new();
@@ -145,7 +139,7 @@ impl Overview {
                 )
             });
         let header = columns(
-            line("overview.column.repository", "Repository").pl(text::HEADING + GAP / 2.),
+            line("overview.column.repository", "Repository").pl(text::TITLE + GAP / 2.),
             line("overview.column.local", "Local changes"),
             line("overview.column.upstream", "Upstream"),
             div(),
@@ -181,7 +175,7 @@ impl Overview {
                     .justify_between()
                     .gap(GAP)
                     .child(title)
-                    .child(action),
+                    .children(action),
             )
             .when(empty, |d| {
                 let name = workspace.name(cx).unwrap_or("This workspace");
@@ -259,12 +253,14 @@ impl Overview {
         let pull_path = info.path.clone();
         let switch_path = info.path.clone();
         let log_path = info.path.clone();
+        let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
+        let ring = ring.inset();
         let action = |id, icon: Icon, title| {
-            ui::titled(
-                ui::icon_button((id, ix), icon.size(text::HEADING), cx),
-                title,
-            )
-            .test_support()
+            ui::titled(ui::icon_button((id, ix), icon.size(text::TITLE), cx), title)
+                .test_support()
+                .opacity(0.)
+                .group_hover(ui::HOVER, |s| s.opacity(1.))
+                .focus_visible(|s| s.opacity(1.).shadow(vec![ring.clone()]))
         };
         let actions = div()
             .flex()
@@ -322,10 +318,10 @@ impl Overview {
                 div()
                     .flex()
                     .flex_none()
-                    .w(text::HEADING)
+                    .w(text::TITLE)
                     .text_color(t.muted)
                     .when(!changes.is_empty(), |d| {
-                        d.child(disclosure(open).size(text::HEADING))
+                        d.child(disclosure(open).size(text::TITLE))
                     }),
             )
             .child(
@@ -337,15 +333,20 @@ impl Overview {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(info.name.clone()),
             );
-        let repository = div().min_w_0().child(name).when_some(status, |d, status| {
-            d.child(
-                ref_line(("overview.branch", ix), branch_label(status))
-                    .pl(text::HEADING + GAP / 2.)
-                    .font_family(theme::mono(cx))
-                    .text_size(text::BODY)
-                    .text_color(t.muted),
-            )
-        });
+        let repository = div()
+            .flex()
+            .items_baseline()
+            .gap(GAP)
+            .min_w_0()
+            .child(name)
+            .when_some(status, |d, status| {
+                d.child(
+                    ref_line(("overview.branch", ix), branch_label(status))
+                        .font_family(theme::mono(cx))
+                        .text_size(text::SMALL)
+                        .text_color(t.muted),
+                )
+            });
         let (local, upstream) = match status {
             Some(status) => checkout_status(ix, status, row.conflicts, compact, cx),
             None => {
@@ -392,7 +393,7 @@ impl Overview {
                         .flex()
                         .flex_wrap()
                         .gap(GAP)
-                        .pl(text::HEADING + GAP / 2.)
+                        .pl(text::TITLE + GAP / 2.)
                         .child(local.flex_1().min_w_0().flex_basis(GAP * 13.))
                         .when(status.is_some(), |d| {
                             d.child(upstream.flex_1().min_w_0().flex_basis(GAP * 11.))
@@ -402,16 +403,17 @@ impl Overview {
         div()
             .flex()
             .flex_col()
+            .group(ui::HOVER)
             .gap(GAP / 3.)
-            .py(GAP * 0.65)
+            .py(GAP / 3.)
             .border_b_1()
             .border_color(t.line.opacity(0.6))
-            .text_size(text::HEADING)
+            .text_size(text::BODY)
             .child(summary)
             .when_some(row.error(), |d, error| {
                 d.child(
                     div()
-                        .pl(text::HEADING + GAP)
+                        .pl(text::TITLE + GAP)
                         .whitespace_normal()
                         .text_color(t.error)
                         .child(error.clone()),
@@ -420,7 +422,7 @@ impl Overview {
             .when_some(row.repo.and_then(|r| r.outcome.as_ref()), |d, o| {
                 d.child(
                     div()
-                        .pl(text::HEADING + GAP)
+                        .pl(text::TITLE + GAP)
                         .whitespace_normal()
                         .text_color(if o.ok { t.success } else { t.warning })
                         .child(o.text.clone()),
@@ -529,7 +531,7 @@ fn checkout_status(
             ref_line(("overview.upstream", ix), upstream)
                 .text_color(t.muted)
                 .when(s.upstream.is_some(), |d| d.font_family(theme::mono(cx)))
-                .when(has_sync, |d| d.text_size(text::BODY)),
+                .when(has_sync, |d| d.text_size(text::SMALL)),
         );
     (local, upstream)
 }
@@ -556,7 +558,7 @@ fn button(el: Stateful<Div>, label: &'static str) -> ObservedElement<Stateful<Di
     el.test_support()
         .role(Role::Button)
         .aria_label(label)
-        .text_size(text::HEADING)
+        .text_size(text::BODY)
 }
 
 fn disclosure(open: bool) -> Icon {

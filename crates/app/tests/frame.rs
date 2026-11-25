@@ -229,6 +229,11 @@ fn cmd_2_folds_the_sessions_list(cx: &mut TestAppContext) {
     assert_eq!(bounds(cx), fold);
 }
 
+fn reveal(cx: &mut VisualTestContext, ix: usize) {
+    cx.update(|w, cx| w.hover(("overview.repository", ix), cx));
+    settle(cx);
+}
+
 fn assert_fold_tip(cx: &mut VisualTestContext, id: &'static str, title: &str, action: &str) {
     cx.update(|w, cx| w.hover(id, cx));
     settle(cx);
@@ -349,6 +354,7 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
     ] {
         assert_eq!(label(cx, (id, ix)).as_deref(), Some(title));
         assert!(painted(cx, title).is_none());
+        reveal(cx, ix);
         cx.update(|w, cx| w.hover((id, ix), cx));
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(500));
@@ -360,6 +366,7 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         cx.find("status.message")
             .is_some_and(|message| message.visible())
     );
+    reveal(cx, ix);
     cx.click(("overview.switch", ix));
     assert!(cx.find("branches.popup").is_some());
     assert_eq!(
@@ -510,6 +517,7 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     let original = app.sb.git(&checkout, &["rev-parse", "HEAD"]);
     let ix = checkout_index(app, "pull");
 
+    reveal(app, ix);
     app.click(("overview.pull", ix));
     let (_, preview) = cx.pending_prompt().expect("a native Pull confirmation");
     assert!(preview.contains("main is 1 commit behind origin/main"));
@@ -519,6 +527,7 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     settle(app);
     assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
 
+    reveal(app, ix);
     app.click(("overview.pull", ix));
     app.sb.git(&checkout, &["switch", "-qc", "different"]);
     app.sb.git(&checkout, &["branch", "-u", "origin/main"]);
@@ -539,6 +548,7 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
             r.status().and_then(|s| s.branch.as_deref()) == Some("main")
         })
     });
+    reveal(app, ix);
     app.click(("overview.pull", ix));
     cx.simulate_prompt_answer("Pull");
     wait_until(app, |cx| {

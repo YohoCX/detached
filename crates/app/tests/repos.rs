@@ -767,6 +767,8 @@ fn switch_branch(cx: &mut VisualTestContext) {
     if cx.find(("overview.repository", index)).is_none() {
         cx.click("overview.clean");
     }
+    cx.update(|w, cx| w.hover(("overview.repository", index), cx));
+    settle(cx);
     cx.click(("overview.switch", index));
     wait_until(cx, |cx| {
         cx.find("branches.query")
