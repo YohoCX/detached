@@ -52,10 +52,7 @@ fn the_live_center_card_has_a_gap_on_all_sides(cx: &mut TestAppContext) {
         assert_eq!(center.top(), explorer.top() + GAP);
         assert_eq!(center.right(), viewport.width - GAP);
         assert_eq!(center.bottom(), viewport.height - GAP);
-        assert_eq!(
-            w.find("session.header").bounds().top(),
-            center.top() + px(1.)
-        );
+        assert!(w.find("session.more").bounds().top() < center.top() + px(16.));
         assert_eq!(
             w.find("status.bar").bounds().bottom(),
             center.bottom() - px(1.)

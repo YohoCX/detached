@@ -601,38 +601,26 @@ fn tab_steps_target_the_focused_pane(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn only_the_focused_panes_active_tab_is_outlined(cx: &mut TestAppContext) {
+fn the_active_tab_is_a_quiet_fill_without_an_outline(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    let overview = "doc.session-overview";
-    let new_tab = "doc.new-tab";
-    let check_outline = |cx: &mut VisualTestContext, focused| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            let quads = w.painted_quads();
-            for id in [overview, new_tab] {
-                let tab = w.find(id);
-                assert_eq!(tab.checked(), Some(true), "{id} stays selected");
-                let bounds = tab.bounds().scale(w.scale_factor());
-                let outline = quads.iter().find(|q| {
-                    q.border_widths.top.as_f32() > 0.
-                        && q.border_widths.bottom.as_f32() > 0.
-                        && (q.bounds.left() - bounds.left()).as_f32().abs() < 1.
-                        && (q.bounds.top() - bounds.top()).as_f32().abs() < 1.
-                        && (q.bounds.right() - bounds.right()).as_f32().abs() < 1.
-                        && (q.bounds.bottom() - bounds.bottom()).as_f32().abs() < 1.
-                });
-                assert_eq!(
-                    outline.map(|q| q.border_color),
-                    (id == focused).then_some(theme(cx).selected_ring),
-                    "outline of {id} with {focused} focused"
-                );
-            }
-        });
-    };
     run(cx, "pane.splitDown");
-    check_outline(cx, new_tab);
-    run(cx, "pane.prev");
-    check_outline(cx, overview);
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let quads = w.painted_quads();
+        for id in ["doc.session-overview", "doc.new-tab"] {
+            let tab = w.find(id);
+            assert_eq!(tab.checked(), Some(true), "{id} stays selected");
+            let bounds = tab.bounds().scale(w.scale_factor());
+            let outlined = quads.iter().any(|q| {
+                q.border_widths.top.as_f32() > 0.
+                    && (q.bounds.left() - bounds.left()).as_f32().abs() < 1.
+                    && (q.bounds.top() - bounds.top()).as_f32().abs() < 1.
+                    && (q.bounds.right() - bounds.right()).as_f32().abs() < 1.
+                    && (q.bounds.bottom() - bounds.bottom()).as_f32().abs() < 1.
+            });
+            assert!(!outlined, "{id} has no outline");
+        }
+    });
 }
 
 #[gpui_kit::test]

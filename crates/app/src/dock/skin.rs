@@ -13,10 +13,10 @@ use gpui_kit::base::dock::{
 use gpui_kit::base::{ElementExt, ResizeHandleContext, ResizeHandleState, TestSupportExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, AnyView, App, AppContext, Context, Div, Empty, Entity,
-    FontWeight, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, Role,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    Animation, AnimationExt, AnyElement, AnyView, App, AppContext, BoxShadow, Context, Div, Empty,
+    Entity, FontWeight, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div, prelude::FluentBuilder, px,
 };
 
 use super::{DocTab, DragDoc, Missing, missing, panes};
@@ -240,15 +240,6 @@ impl TabGroupRenderer for Group {
             })
             .collect();
         let node = group.node();
-        let focused = self
-            .0
-            .upgrade()
-            .is_some_and(|a| panes::is_focused(a.read(cx), node, cx));
-        let tab_fill = if focused {
-            t.tab_active
-        } else {
-            t.tab_unfocused
-        };
         let shown = 0..count;
         let widths: Vec<f32> = shown
             .clone()
@@ -320,17 +311,10 @@ impl TabGroupRenderer for Group {
                     .font_weight(FontWeight::MEDIUM)
                     .map(|d| match on {
                         true => d
-                            .bg(tab_fill)
-                            .when(focused, |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .rounded(radius::KBD)
-                                        .border_1()
-                                        .border_color(t.selected_ring),
-                                )
-                            })
+                            .bg(t.segment_bg)
+                            .shadow(vec![
+                                BoxShadow::new(px(0.), px(1.), t.scrim).blur_radius(px(2.)),
+                            ])
                             .text_color(t.fg)
                             .font_weight(FontWeight::SEMIBOLD),
                         false => d
@@ -460,6 +444,12 @@ impl TabGroupRenderer for Group {
             })
             .child(panes::new_menu(node, window, cx))
             .child(panes::menu(node, window, cx))
+            .when(
+                self.0
+                    .upgrade()
+                    .is_some_and(|a| panes::is_first(a.read(cx), node)),
+                |d| d.child(crate::sessions::more(window, cx)),
+            )
             .into_any_element()
     }
 

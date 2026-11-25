@@ -237,14 +237,9 @@ pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {
         .then_some(branch)
 }
 
-pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
-    let t = theme(cx);
+pub(crate) fn more(window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
     let w = Workspace::get(cx);
     let main = w.session_id() == MAIN;
-    let set = w.sessions().iter().find(|s| s.id == w.session_id());
-    let count = set.map_or(w.session_repos().len(), |s| s.members.len());
-    let branch = set.and_then(shared_branch).map(String::from);
-    let name = w.session_name().to_string();
     let mut menu = ui::DrawnMenu::default().item("Overview", |w, cx| {
         dock::open_doc(Doc::SessionOverview, true, w, cx)
     });
@@ -254,13 +249,18 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         menu = menu.item("Rename session…", |w, cx| {
             actions::dispatch(w, cx, "session.rename")
         });
+        if actions::find("session.addRepo").is_some() {
+            menu = menu.item("Add repository…", |w, cx| {
+                actions::dispatch(w, cx, "session.addRepo")
+            });
+        }
         if actions::find("session.archiveCurrent").is_some() {
             menu = menu.item("Archive session…", |w, cx| {
                 actions::dispatch(w, cx, "session.archiveCurrent")
             });
         }
     }
-    let more = menu.item("Session archive", open_archive).button(
+    menu.item("Session archive", open_archive).button(
         "session.actions",
         ui::titled(
             ui::icon_button("session.more", Icon::More, cx),
@@ -269,58 +269,7 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         .test_support(),
         window,
         cx,
-    );
-    div()
-        .id("session.header")
-        .test_support()
-        .aria_label(name.clone())
-        .flex()
-        .flex_none()
-        .h(px(36.))
-        .min_w_0()
-        .items_center()
-        .gap(px(8.))
-        .px(px(12.))
-        .child(
-            div()
-                .flex_none()
-                .max_w(px(240.))
-                .truncate()
-                .text_size(text::TITLE)
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(name),
-        )
-        .when_some(branch, |d, branch| {
-            d.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .bg(t.segment_bg)
-                    .px(px(5.))
-                    .rounded(radius::BADGE)
-                    .text_size(text::LABEL)
-                    .font_family(theme::mono(cx))
-                    .child(branch),
-            )
-        })
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(text::SMALL)
-                .text_color(t.muted)
-                .children((count == 0).then_some("No repositories yet")),
-        )
-        .when(!main && actions::find("session.addRepo").is_some(), |d| {
-            d.child(
-                ui::quiet_button("sessions.addRepo", "Add repository…", cx)
-                    .rounded(radius::PILL)
-                    .test_support()
-                    .on_click(|_, w, cx| actions::dispatch(w, cx, "session.addRepo")),
-            )
-        })
-        .child(div().flex_none().child(more))
+    )
 }
 
 fn repo_count(count: usize) -> String {

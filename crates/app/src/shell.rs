@@ -437,7 +437,6 @@ impl Render for Shell {
                             .min_w_0()
                             .min_h_0()
                             .map(|d| ui::panel(d, cx).m(GAP).overflow_hidden())
-                            .when(!creating, |d| d.child(crate::sessions::header(window, cx)))
                             .child(div().flex_1().min_h_0().min_w_0().child(dock))
                             .child(self.status.clone()),
                     ),
