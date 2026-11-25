@@ -380,3 +380,15 @@ fn the_tab_shows_the_memory_of_the_shell(cx: &mut TestAppContext) {
         label.is_some_and(|l| l.ends_with(" MB"))
     });
 }
+
+#[gpui_kit::test]
+fn a_missing_worktree_opens_the_terminal_in_the_workspace_folder(cx: &mut TestAppContext) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+    });
+    let folder = cx.sb.state.get_settings().workspaces[0].folders[0].clone();
+    std::fs::remove_dir_all(cx.sb.path("repos/api")).unwrap();
+    cx.press("secondary-t");
+    session(cx, |s| assert_eq!(s.cwd, std::path::Path::new(&folder)));
+}

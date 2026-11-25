@@ -747,11 +747,22 @@ pub(crate) fn open_beside(doc: Doc, split: bool, keep: bool, w: &mut Window, cx:
     );
 }
 
+/// In the current repo, else the workspace's first folder; a missing worktree is skipped.
 pub(crate) fn terminal_below(w: &mut Window, cx: &mut App) {
-    if let Some(repo) =
-        bound_repo(cx).or_else(|| std::env::home_dir().map(|p| p.display().to_string()))
+    let id = Workspace::get(cx).id();
+    let folders = kernel::settings::Settings::get(cx)
+        .workspaces
+        .iter()
+        .filter(|ws| Some(ws.id.as_str()) == id)
+        .flat_map(|ws| ws.folders.clone());
+    let home = std::env::home_dir().map(|p| p.display().to_string());
+    if let Some(cwd) = bound_repo(cx)
+        .into_iter()
+        .chain(folders)
+        .find(|p| std::path::Path::new(p).is_dir())
+        .or(home)
     {
-        panes::terminal_below(repo, w, cx);
+        panes::terminal_below(cwd, w, cx);
     }
 }
 
