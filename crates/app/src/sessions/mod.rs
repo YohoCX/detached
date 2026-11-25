@@ -19,7 +19,7 @@ use crate::actions::{self, Group, Registration};
 use crate::chat::{self, State};
 use crate::dock;
 use crate::shell::{self, Side};
-use crate::ui::theme::rail;
+use crate::ui::theme::{control, rail};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -159,17 +159,16 @@ impl Render for List {
                 .child(div().flex_1())
                 .child(archive_button.w(rail::CONTROL).px_0().justify_center());
         }
-        let add = ui::button("sessions.new", "New session", cx)
-            .test_support()
-            .tooltip(|w, cx| {
-                Tooltip::new(crate::keymap::tip("New session", "session.new", cx)).build(w, cx)
-            })
-            .flex_row_reverse()
-            .gap(px(5.))
-            .h(px(24.))
-            .px(px(7.))
-            .child(Icon::Plus.size(px(12.)))
-            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"));
+        let add = ui::titled_action(
+            ui::button("sessions.new", "New session", cx),
+            "New session",
+            "session.new",
+        )
+        .test_support()
+        .flex_row_reverse()
+        .gap(control::GAP)
+        .child(Icon::Plus.size(control::ICON))
+        .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"));
         let title = div()
             .flex_1()
             .text_size(text::LABEL)
@@ -264,8 +263,7 @@ impl Render for List {
 
 fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
     ui::titled_action(
-        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx)
-            .when(!collapsed, |d| d.size(px(26.))),
+        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx),
         if collapsed {
             "Show sessions"
         } else {
@@ -363,7 +361,7 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         .when(!main && actions::find("session.addRepo").is_some(), |d| {
             d.child(
                 ui::quiet_button("sessions.addRepo", "Add repository…", cx)
-                    .flex_none()
+                    .rounded(radius::PILL)
                     .test_support()
                     .on_click(|_, w, cx| actions::dispatch(w, cx, "session.addRepo")),
             )

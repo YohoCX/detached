@@ -2,13 +2,11 @@
 
 use gpui_kit::base::{ObservedElement, Root, TestSupportExt};
 use gpui_kit::component::TitleBar;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, AnyWindowHandle, App, AppContext, Context, Div, Entity, FocusHandle, FontWeight,
-    Global, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px,
-    relative, size,
+    Global, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
+    WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px, relative, size,
 };
 
 use crate::dock;
@@ -16,8 +14,8 @@ use crate::files::{ExplorerMode, explorer_mode};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
-use crate::ui::theme::rail;
-use crate::ui::{self, GAP, Icon, radius, text, theme};
+use crate::ui::theme::{control, rail};
+use crate::ui::{self, GAP, Icon, text, theme};
 use crate::{actions, keymap};
 use kernel::workspace::{Event, Workspace};
 use kernel::{invalidate, ui_state};
@@ -348,22 +346,13 @@ impl Shell {
 }
 
 fn bar_button(cx: &App) -> impl IntoElement + use<> {
-    let t = theme(cx);
-    let tip: SharedString = keymap::tip("Settings", "app.settings", cx).into();
-    ui::pressable("top.settings")
-        .test_support()
-        .justify_center()
-        .flex_none()
-        .size(px(28.))
-        .rounded(radius::WIDGET)
-        .role(Role::Button)
-        .aria_label(tip.clone())
-        .text_color(t.muted)
-        .hover(|s| s.bg(t.hover).text_color(t.fg))
-        .active(|s| s.opacity(0.75))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-        .on_click(move |_, window, cx| actions::dispatch(window, cx, "app.settings"))
-        .child(Icon::Gear)
+    ui::titled_action(
+        ui::icon_button("top.settings", Icon::Gear.size(control::ICON), cx),
+        "Settings",
+        "app.settings",
+    )
+    .test_support()
+    .on_click(|_, window, cx| actions::dispatch(window, cx, "app.settings"))
 }
 
 impl Render for Shell {

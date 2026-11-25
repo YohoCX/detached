@@ -10,7 +10,7 @@ use std::str::Chars;
 use detached_core::git::files::{self as git_files, TreeSettings};
 use detached_core::sessions::MemberState;
 use detached_core::types::{FileChange, FileEntry};
-use gpui_kit::base::{TestSupportExt, TestTextExt};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use super::api::{DiffDoc, Location, Side, show_diff};
 use crate::shell::{self, Side as Column};
 use crate::ui::suggest::{Commit, Focused};
-use crate::ui::{self, Icon, Suggest, text, theme};
+use crate::ui::{self, Icon, Suggest, segmented, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
 use crate::{actions, chat};
 use kernel::repo::Repo;
@@ -597,22 +597,9 @@ impl Tree {
         let tip = |tip: &'static str| {
             move |window: &mut Window, cx: &mut App| Tooltip::new(tip).build(window, cx)
         };
-        let mode = |id, label: &'static str, value, count: Option<usize>| {
-            ui::quiet_button(id, label, cx)
-                .when(self.live, |d| d.px(ui::GAP / 3.).border_0())
+        let mode = |id, label, icon, value, count, action| {
+            segmented::icon(id, label, icon, count, action, current == value, cx)
                 .test_support()
-                .role(Role::Button)
-                .aria_label(label)
-                .aria_toggled((current == value).into())
-                .when(current == value, |d| d.bg(t.active_bg).text_color(t.fg))
-                .when_some(count, |d, count| {
-                    let count = count.to_string();
-                    d.aria_description(count.clone()).gap(ui::GAP / 3.).child(
-                        div()
-                            .text_color(t.muted)
-                            .child(count.clone().test_text(count)),
-                    )
-                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     ui_state::set(MODE, value, cx);
                     this.sel = None;
@@ -688,19 +675,33 @@ impl Tree {
                 ui::band(d, cx).h(ui::GAP * 4.).px(ui::GAP * 0.8)
             })
             .child(
-                div()
-                    .flex()
+                segmented::group("tree.modes", cx)
                     .flex_none()
-                    .items_center()
-                    .gap(ui::GAP / 5.)
-                    .p(ui::GAP / 5.)
+                    .child(mode(
+                        "tree.files",
+                        "Files",
+                        Icon::Folder,
+                        Files,
+                        None,
+                        Some("panel.project"),
+                    ))
+                    .child(mode(
+                        "tree.changes",
+                        "Changes",
+                        Icon::Changes,
+                        Changes,
+                        changes,
+                        Some("panel.changes"),
+                    ))
                     .when(self.live, |d| {
-                        d.bg(t.segment_bg).rounded(ui::radius::SEGMENT)
-                    })
-                    .child(mode("tree.files", "Files", Files, None))
-                    .child(mode("tree.changes", "Changes", Changes, changes))
-                    .when(self.live, |d| {
-                        d.child(mode("tree.chats", "Chats", Chats, Some(chats)))
+                        d.child(mode(
+                            "tree.chats",
+                            "Chats",
+                            Icon::Chat,
+                            Chats,
+                            Some(chats),
+                            None,
+                        ))
                     }),
             )
             .child(tools);

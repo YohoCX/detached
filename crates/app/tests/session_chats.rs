@@ -1,9 +1,12 @@
 mod common;
 
+use std::time::Duration;
+
 use common::*;
 use detached_app::{actions, chat, dock};
 use detached_core::{adapters, sessions};
 use gpui_kit::base::dock::{DockAreaState, PanelInfo, PanelState};
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Keystroke, SharedString, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
@@ -64,6 +67,36 @@ fn adopted(sb: &Sandbox) -> sessions::Workset {
     sb.git(&sb.solo(), &["worktree", "add", "-b", "topic", &path]);
     let workspace = &sb.state.get_settings().workspaces[0].id;
     sessions::adopt(&sb.state, workspace, "Topic", &[path]).unwrap()
+}
+
+#[gpui_kit::test]
+fn explorer_modes_keep_their_labels_and_show_their_shortcuts_on_hover(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    let (files, changes) = if cfg!(target_os = "macos") {
+        ("Files  ⌘1", "Changes  ⌘0")
+    } else {
+        ("Files  Ctrl+1", "Changes  Ctrl+0")
+    };
+    for (id, label, tooltip) in [
+        ("tree.files", "Files", files),
+        ("tree.changes", "Changes", changes),
+        ("tree.chats", "Chats", "Chats"),
+    ] {
+        let button = app.find(id).unwrap();
+        assert_eq!(button.label(), Some(label));
+        assert_eq!(button.checked(), Some(id == "tree.files"));
+        app.update(|w, cx| w.within("tree.modes").hover(id, cx));
+        settle(app);
+        app.executor().advance_clock(Duration::from_millis(500));
+        settle(app);
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            assert!(
+                texts(w).iter().any(|t| t.visible() && t.text() == tooltip),
+                "{tooltip}"
+            );
+        });
+    }
 }
 
 #[gpui_kit::test]

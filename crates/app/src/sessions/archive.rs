@@ -5,12 +5,12 @@ use detached_core::backend::{History, Kind, Past, Spec, Update};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
     prelude::FluentBuilder,
 };
 
 use crate::dock::{self, DocKind};
-use crate::ui::{self, GAP, text, theme};
+use crate::ui::{self, GAP, segmented, text, theme};
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::doc::Doc;
@@ -393,15 +393,12 @@ impl Render for Archive {
                         .on_click(cx.listener(move |s, _, window, cx| s.clear(clearable.clone(), window, cx))))));
         }
         let no_tabs = tabs.is_empty();
-        if !tabs.is_empty() {
+        if !no_tabs {
             let filters = dock::CATEGORIES.into_iter().map(|(id, title)| {
                 let on = self.category == Some(id);
-                ui::row(SharedString::from(format!("archive.filter.{id}")), on, cx)
+                let button = SharedString::from(format!("archive.filter.{id}"));
+                segmented::label(button, title, on, cx)
                     .test_support()
-                    .role(Role::Button)
-                    .aria_toggled(on.into())
-                    .px(GAP)
-                    .child(title)
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.category = (!on).then_some(id);
                         cx.notify();
@@ -418,7 +415,7 @@ impl Render for Archive {
                             .text_color(t.muted)
                             .child("Archived tabs"),
                     )
-                    .children(filters),
+                    .child(segmented::group("archive.filters", cx).children(filters)),
             );
             for (i, doc) in tabs.into_iter().enumerate() {
                 let Some(kind) = dock::doc_kind(doc.kind(), cx) else {

@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use detached_app::ui::theme::control;
 use detached_app::ui::{GAP, radius, theme};
 use detached_app::{actions, dock, shell};
 use gpui_kit::base::dock::{DockPlacement, PaneRef};
@@ -301,7 +302,23 @@ fn the_explorer_header_fits_one_row_at_its_default_width(cx: &mut TestAppContext
     let app = &mut open_app(cx);
     let row = |app: &mut VisualTestContext, id| app.find(id).unwrap().bounds().center().y;
     let modes = row(app, "tree.files");
-    for id in ["tree.find", "explorer.fold"] {
+    for id in ["tree.changes", "tree.chats", "tree.find", "explorer.fold"] {
         assert_eq!(row(app, id), modes, "{id}");
+    }
+    for id in ["sessions.new", "sync.fetch", "sync.pull"] {
+        assert_eq!(
+            app.find(id).unwrap().bounds().size.height,
+            control::HEIGHT,
+            "{id}"
+        );
+    }
+    for id in [
+        "sessions.fold",
+        "tree.find",
+        "explorer.fold",
+        "top.settings",
+    ] {
+        let expected = size(control::HEIGHT, control::HEIGHT);
+        assert_eq!(app.find(id).unwrap().bounds().size, expected, "{id}");
     }
 }

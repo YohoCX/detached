@@ -364,8 +364,6 @@ impl Render for DocsApp {
                             ui::icon_button("docs.refresh", Icon::Refresh, cx),
                             "Refresh docs",
                         )
-                        .h(px(24.))
-                        .min_w(px(24.))
                         .test_support()
                         .on_click(cx.listener(|v, _, _, cx| {
                             if let Some(i) = &v.docs {

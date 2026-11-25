@@ -248,15 +248,11 @@ impl Render for List {
                     )
                     .child(
                         ui::primary_button("council.new", "New run", cx)
-                            .h(px(24.))
-                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, window, cx| v.toggle_form(window, cx))),
                     )
                     .child(
                         ui::button("council.list.stats", "Stats", cx)
-                            .h(px(24.))
-                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, _, cx| {
                                 if let Some(repo) = &v.repo {
@@ -269,8 +265,6 @@ impl Render for List {
                             ui::icon_button("council.refresh", ui::Icon::Refresh, cx),
                             "Refresh rounds",
                         )
-                        .h(px(24.))
-                        .min_w(px(24.))
                         .test_support()
                         .on_click(cx.listener(|v, _, _, cx| {
                             if let Some(r) = &v.rounds {

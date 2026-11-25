@@ -11,10 +11,10 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, Context, FontFeatures, IntoElement, ParentElement, Render, Role,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
 };
 
 use super::State;
+use crate::ui::theme::control;
 use crate::ui::{self, Icon, theme};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::repo::{Outcome, Repo};
@@ -323,7 +323,7 @@ impl Render for SyncButtons {
             ui::button(id, label.clone(), cx)
                 .test_support()
                 .flex_row_reverse()
-                .gap(px(6.))
+                .gap(control::GAP)
                 .font_features(tnum.clone())
                 .role(Role::Button)
                 .aria_label(label)
@@ -338,19 +338,19 @@ impl Render for SyncButtons {
                         div()
                             .flex()
                             .flex_none()
-                            .size(px(14.))
+                            .size(control::ICON)
                             .items_center()
                             .justify_center()
                             .child(ui::spinner(t.accent)),
                     ),
-                    false => b.child(icon.size(px(14.))),
+                    false => b.child(icon.size(control::ICON)),
                 })
         };
         div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(6.))
+            .gap(control::GAP)
             .child(button(Kind::Fetch, "sync.fetch", Icon::Fetch, "Fetch"))
             .child(button(Kind::Pull, "sync.pull", Icon::Pull, "Pull"))
     }
