@@ -440,7 +440,9 @@ fn start_in(
         config,
         note,
         models,
-        commands: commands(&init["commands"]),
+        commands: init["commands"]
+            .is_array()
+            .then(|| commands(&init["commands"])),
         account: init.get("account").map(account),
         unread: history.as_ref().is_some_and(Option::is_none),
     };

@@ -5,12 +5,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapters::CLAUDE;
-use crate::backend::Model;
-use crate::error::Result;
+use crate::backend::{Account, Model, SlashCommand};
+use crate::error::{Error, Result};
 use crate::settings::Settings;
 use crate::state::AppState;
 
 pub const BLOCK: &str = "chat";
+static SAVE: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -37,9 +38,17 @@ pub struct Choices {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub mode: Option<String>,
-    /// The models the provider last reported.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<Model>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
+    /// Commands reported outside any project.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<SlashCommand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<Account>,
     #[serde(flatten)]
     other: BTreeMap<String, Value>,
 }
@@ -57,20 +66,48 @@ impl Preset {
         self.providers.get(provider).map_or(&[], |c| &c.models)
     }
 
-    /// Keeps `models` as the provider's list, writing only when it differs; an empty list is not one.
-    pub fn remember(core: &AppState, provider: &str, models: &[Model]) -> Result<()> {
-        if models.is_empty() || Self::read(&core.get_settings()).models(provider) == models {
-            return Ok(());
+    pub fn efforts(&self, provider: &str) -> &[String] {
+        self.providers.get(provider).map_or(&[], |c| &c.efforts)
+    }
+
+    /// Nonempty models replace models and efforts. For account-only updates, pass empty models and `None` for efforts.
+    pub fn remember(
+        core: &AppState,
+        provider: &str,
+        models: Vec<Model>,
+        efforts: Option<Vec<String>>,
+        account: Option<Account>,
+    ) -> Result<()> {
+        let _guard = SAVE.lock().map_err(|e| Error::Other(e.to_string()))?;
+        let has_models = !models.is_empty();
+        let edit = |cached: &mut Choices| {
+            if has_models {
+                cached.models.clone_from(&models);
+            }
+            if has_models || efforts.is_some() {
+                cached.efforts = efforts
+                    .as_ref()
+                    .filter(|_| cached.models.iter().all(|m| m.efforts.is_empty()))
+                    .cloned()
+                    .unwrap_or_default();
+            }
+            if account.is_some() {
+                cached.account.clone_from(&account);
+            }
+        };
+        let mut preset = Self::read(&core.get_settings());
+        let cached = preset.choices(provider);
+        let previous = cached.clone();
+        edit(cached);
+        if *cached != previous {
+            core.change_block(BLOCK, |p: &mut Self| edit(p.choices(provider)))?;
         }
-        Self::save(core, |p| p.choices(provider).models = models.to_vec()).map(drop)
+        Ok(())
     }
 
     pub fn save(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
-        static SAVE: Mutex<()> = Mutex::new(());
-        let _guard = SAVE.lock().unwrap();
-        let mut preset = Self::read(&core.get_settings());
-        edit(&mut preset);
-        core.set_block(BLOCK, preset)
+        let _guard = SAVE.lock().map_err(|e| Error::Other(e.to_string()))?;
+        core.change_block(BLOCK, edit)
     }
 }
 
@@ -103,6 +140,9 @@ mod tests {
         assert_eq!(preset.providers["claude"].effort.as_deref(), Some("high"));
         assert_eq!(preset.providers["claude"].mode, None);
         assert_eq!(preset.providers["codex"].mode.as_deref(), Some("agent"));
+        let claude = &preset.providers["claude"];
+        assert!(claude.efforts.is_empty() && claude.commands.is_empty());
+        assert!(claude.cli.is_none() && claude.account.is_none());
         let raw: Value = saved.block(BLOCK).unwrap();
         assert_eq!(raw["future"], true);
         assert_eq!(raw["providers"]["claude"]["future"], 7);
@@ -119,10 +159,10 @@ mod tests {
         }];
         let models = |s: &Settings| Preset::read(s).models("claude").to_vec();
         assert!(models(&sb.state.get_settings()).is_empty());
-        Preset::remember(&sb.state, "claude", &opus).unwrap();
+        Preset::remember(&sb.state, "claude", opus.clone(), None, None).unwrap();
         let revision = sb.state.revision();
-        Preset::remember(&sb.state, "claude", &opus).unwrap();
-        Preset::remember(&sb.state, "claude", &[]).unwrap();
+        Preset::remember(&sb.state, "claude", opus.clone(), None, None).unwrap();
+        Preset::remember(&sb.state, "claude", vec![], None, None).unwrap();
         assert_eq!(sb.state.revision(), revision);
         let saved = Settings::load(&sb.state.config_dir);
         assert_eq!(models(&saved), opus);
@@ -131,8 +171,67 @@ mod tests {
             value: "sonnet".into(),
             ..opus[0].clone()
         }];
-        Preset::remember(&sb.state, "claude", &sonnet).unwrap();
+        Preset::remember(&sb.state, "claude", sonnet.clone(), None, None).unwrap();
         assert_ne!(sb.state.revision(), revision);
         assert_eq!(models(&sb.state.get_settings()), sonnet);
+    }
+
+    #[test]
+    fn session_efforts_are_cached_only_if_every_model_lacks_its_own() {
+        let sb = Sandbox::new();
+        let plain = Model {
+            value: "plain".into(),
+            ..Model::default()
+        };
+        let tuned = Model {
+            value: "tuned".into(),
+            efforts: vec!["low".into()],
+            ..Model::default()
+        };
+        let efforts = Some(vec!["high".into()]);
+        Preset::remember(
+            &sb.state,
+            "codex",
+            vec![plain.clone()],
+            efforts.clone(),
+            None,
+        )
+        .unwrap();
+        let saved = || Settings::load(&sb.state.config_dir);
+        assert_eq!(Preset::read(&saved()).efforts("codex"), ["high"]);
+        Preset::remember(&sb.state, "codex", vec![plain, tuned], efforts, None).unwrap();
+        let raw: Value = saved().block(BLOCK).unwrap();
+        assert!(raw["providers"]["codex"].get("efforts").is_none());
+    }
+
+    #[test]
+    fn an_account_only_report_keeps_the_cached_models_and_efforts() {
+        let sb = Sandbox::new();
+        let models = vec![Model {
+            value: "plain".into(),
+            ..Model::default()
+        }];
+        Preset::remember(
+            &sb.state,
+            "codex",
+            models.clone(),
+            Some(vec!["high".into()]),
+            None,
+        )
+        .unwrap();
+        let account = Account {
+            plan: "Pro".into(),
+            email: None,
+        };
+        Preset::remember(&sb.state, "codex", vec![], None, Some(account.clone())).unwrap();
+        let preset = Preset::read(&Settings::load(&sb.state.config_dir));
+        assert_eq!(preset.models("codex"), models);
+        assert_eq!(preset.efforts("codex"), ["high"]);
+        assert_eq!(preset.providers["codex"].account.as_ref(), Some(&account));
+
+        Preset::remember(&sb.state, "codex", models, None, None).unwrap();
+        let preset = Preset::read(&Settings::load(&sb.state.config_dir));
+        assert!(preset.efforts("codex").is_empty());
+        assert_eq!(preset.providers["codex"].account, Some(account));
     }
 }

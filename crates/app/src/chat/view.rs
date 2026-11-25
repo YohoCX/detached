@@ -89,7 +89,6 @@ pub struct ChatView {
     /// The provider the box's placeholder names.
     named: &'static str,
     me: WeakEntity<ChatView>,
-    /// A `/` typed before any session listed its commands.
     unlisted: bool,
     /// Entries before this one were there on open and do not animate in.
     seen: usize,
@@ -136,6 +135,8 @@ impl ChatView {
                         }
                     });
                     this.composer_changed(cx);
+                } else {
+                    this.refresh_slash(cx);
                 }
                 let scroll = &this.scroll;
                 if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
@@ -159,6 +160,7 @@ impl ChatView {
                         }
                     });
                 }
+                this.refresh_slash(cx);
                 cx.notify();
             }),
             cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
@@ -236,37 +238,24 @@ impl ChatView {
 
     fn composer_changed(&mut self, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
-        let (value, cursor) = (input.value(), input.cursor());
-        self.session
-            .update(cx, |s, _| s.has_draft = !value.is_empty());
-        let before = &value[..cursor.min(value.len())];
+        let has_draft = !input.value().is_empty();
+        self.session.update(cx, |s, _| s.has_draft = has_draft);
+        self._files = None;
+        if self.refresh_slash(cx) {
+            cx.notify();
+            return;
+        }
+        self.suggest = None;
+        self.unlisted = false;
+        let input = self.input.read(cx);
+        let value = input.value();
+        let before = &value[..input.cursor().min(value.len())];
         let at = before
             .char_indices()
             .rfind(|(_, c)| c.is_whitespace())
             .map_or(0, |(i, c)| i + c.len_utf8());
         let word = before[at..].to_string();
-        self.suggest = None;
-        self._files = None;
-        self.unlisted = false;
-        if at == 0 && word.starts_with('/') {
-            let q = word[1..].to_lowercase();
-            let commands = self.session.read(cx).commands(cx);
-            self.unlisted = commands.is_empty();
-            let mut items: Vec<_> = commands
-                .iter()
-                .filter(|c| c.name.to_lowercase().contains(&q))
-                .map(|c| {
-                    let hint = [c.hint.as_str(), c.description.as_str()].join(" ");
-                    (
-                        format!("/{} {}", c.name, hint.trim()),
-                        format!("/{} ", c.name),
-                    )
-                })
-                .collect();
-            items.sort_by_key(|(_, name)| !name[1..].to_lowercase().starts_with(&q));
-            items.truncate(SUGGESTIONS as usize);
-            self.show(at, word, items, cx);
-        } else if let Some(q) = word.strip_prefix('@') {
+        if let Some(q) = word.strip_prefix('@') {
             let core = kernel::core(cx).clone();
             let (repo, q) = (self.session.read(cx).repo.clone(), q.to_string());
             let found = blocking::run(cx, move || {
@@ -283,6 +272,56 @@ impl ChatView {
             }));
         }
         cx.notify();
+    }
+
+    fn refresh_slash(&mut self, cx: &App) -> bool {
+        let input = self.input.read(cx);
+        let value = input.value();
+        let word = &value[..input.cursor().min(value.len())];
+        let Some(q) = word
+            .strip_prefix('/')
+            .filter(|q| !q.contains(char::is_whitespace))
+        else {
+            if self
+                .suggest
+                .as_ref()
+                .is_some_and(|s| s.word.starts_with('/'))
+            {
+                self.suggest = None;
+            }
+            self.unlisted = false;
+            return false;
+        };
+        let q = q.to_lowercase();
+        let commands = self.session.read(cx).commands(cx);
+        self.unlisted = commands.is_none();
+        let mut items: Vec<_> = commands
+            .into_iter()
+            .flatten()
+            .filter(|c| c.name.to_lowercase().contains(&q))
+            .map(|c| {
+                let hint = format!("{} {}", c.hint, c.description);
+                (
+                    format!("/{} {}", c.name, hint.trim()),
+                    format!("/{} ", c.name),
+                )
+            })
+            .collect();
+        items.sort_by_key(|(_, name)| !name[1..].to_lowercase().starts_with(&q));
+        items.truncate(SUGGESTIONS as usize);
+        if self
+            .suggest
+            .as_ref()
+            .is_none_or(|s| s.word != word || s.items != items)
+        {
+            self.suggest = (!items.is_empty()).then(|| Suggest {
+                at: 0,
+                word: word.to_string(),
+                items,
+                hi: 0,
+            });
+        }
+        true
     }
 
     fn show(
@@ -420,10 +459,8 @@ impl ChatView {
             _ => preset.models(p.id),
         };
         let has_auto = p.modes.iter().any(|(m, ..)| *m == AUTO);
-        let current = match s {
-            Some(s) if s.version.is_some() => s.option("model"),
-            _ => chat.model.as_deref(),
-        };
+        let opened = s.filter(|s| s.version.is_some());
+        let current = opened.map_or(chat.model.as_deref(), |s| s.option("model"));
         let model = current
             .filter(|m| *m != "default")
             .map_or("Default".into(), |m| {
@@ -440,16 +477,19 @@ impl ChatView {
                 menu.item(label, pick(setting)).checked(chosen == Some(m))
             })
         };
-        // An agent that lists efforts as an option of the session, not per model.
-        let listed = s.and_then(|s| s.config.iter().find(|c| c.id == "effort"));
-        let efforts = match (chosen.map_or(&[][..], |m| &m.efforts), listed) {
-            ([], Some(c)) => &c.values[..],
-            (e, _) => e,
+        let efforts = if let Some(s) = opened {
+            s.config
+                .iter()
+                .find(|c| c.id == "effort")
+                .map_or(&[][..], |c| c.values.as_slice())
+        } else if models.iter().all(|m| m.efforts.is_empty()) {
+            preset.efforts(p.id)
+        } else {
+            chosen.map_or(&[][..], |m| &m.efforts)
         };
-        let effort = match s {
-            Some(s) if s.version.is_some() => s.option("effort").filter(|e| !e.is_empty()),
-            _ => chat.effort.as_deref(),
-        };
+        let effort = opened.map_or(chat.effort.as_deref(), |s| {
+            s.option("effort").filter(|e| !e.is_empty())
+        });
         let add_efforts = |menu: DrawnMenu| {
             efforts.iter().fold(menu, |menu, e| {
                 let setting = Setting::Effort(e.clone());
@@ -603,7 +643,7 @@ impl ChatView {
             "More",
         )
         .test_support();
-        let provider = self.provider(window, cx);
+        let provider = self.provider(&preset, window, cx);
         let pickers: Vec<_> = (inline.into_iter().chain([modes]))
             .map(|(id, title, value, tip, menu)| picker(id, title, value, tip, menu, window, cx))
             .collect();
@@ -630,11 +670,14 @@ impl ChatView {
             .child(send)
     }
 
-    fn provider(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn provider(&self, preset: &Preset, window: &Window, cx: &Context<Self>) -> AnyElement {
         let t = theme(cx);
         let chat = self.session.read(cx);
         let p = chat.provider;
-        let account = chat.current().and_then(|s| s.read(cx).account.as_ref());
+        let account = chat
+            .current()
+            .and_then(|s| s.read(cx).account.as_ref())
+            .or_else(|| preset.providers.get(p.id)?.account.as_ref());
         let name = div()
             .id("chat.name")
             .test_support()

@@ -138,6 +138,14 @@ fn main() {
                     effort: "medium".into(),
                     ..Session::default()
                 };
+                let git = PathBuf::from(&s.cwd).join(".git");
+                if let Ok(gate) = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(git.join("hold-open"))
+                {
+                    let _ = gate.lock();
+                }
                 if !load {
                     listed(|all| all.push(json!({"sessionId": sid, "cwd": s.cwd})));
                     if let Some(path) = rollout(&sid, "sessions")
@@ -159,6 +167,14 @@ fn main() {
                         update(&out, &sid, chunk);
                     }
                     reply(json!({"configOptions": config}));
+                }
+                if !git.join("no-commands").exists() {
+                    update(
+                        &out,
+                        &sid,
+                        json!({"sessionUpdate": "available_commands_update",
+                        "availableCommands": [{"name": "compact", "description": "Compact the conversation"}]}),
+                    );
                 }
             }
             "session/close" => {
@@ -219,7 +235,11 @@ fn main() {
                         s.mode = v
                     }
                     Some("model") if MODELS.iter().any(|m| m.0 == v) => s.model = v,
-                    Some("reasoning_effort") if EFFORTS.contains(&v.as_str()) => s.effort = v,
+                    Some("reasoning_effort")
+                        if !s.effort.is_empty() && EFFORTS.contains(&v.as_str()) =>
+                    {
+                        s.effort = v
+                    }
                     _ => {
                         send(
                             &out,
@@ -366,11 +386,14 @@ fn config(s: &Session) -> Value {
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
     let pairs = |all: &[&'static str]| all.iter().map(|m| (*m, *m)).collect::<Vec<_>>();
-    json!([
+    let mut options = vec![
         select("mode", &s.mode, &pairs(MODES)),
         select("model", &s.model, MODELS),
-        select("reasoning_effort", &s.effort, &pairs(EFFORTS)),
-    ])
+    ];
+    if !s.effort.is_empty() {
+        options.push(select("reasoning_effort", &s.effort, &pairs(EFFORTS)));
+    }
+    Value::from(options)
 }
 
 enum Stop {
@@ -549,6 +572,22 @@ impl Turn<'_> {
             }
             "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
             "effort" => self.say(&self.session(|s| s.effort.clone())),
+            "no-effort" => {
+                let config = {
+                    let mut all = self.sessions.lock().map_err(err)?;
+                    let s = all.get_mut(self.sid).ok_or_else(|| err("session closed"))?;
+                    s.effort.clear();
+                    config(s)
+                };
+                self.update(
+                    json!({"sessionUpdate": "config_option_update", "configOptions": config}),
+                );
+                self.say("effort withdrawn");
+            }
+            "clear-commands" => self.update(json!({
+                "sessionUpdate": "available_commands_update", "availableCommands": []
+            })),
+            "/clear" => self.say("ordinary /clear prompt"),
             "home" => {
                 let home = std::env::var_os("CODEX_HOME").unwrap_or_default();
                 let all = std::fs::read_dir(home).into_iter().flatten().flatten();

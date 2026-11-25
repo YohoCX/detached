@@ -26,6 +26,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
 
+use crate::activity::Activity;
 use crate::blocking::{self, FRAME};
 use crate::host::Identity;
 use crate::resource::{self, Policy, Resource};
@@ -168,7 +169,7 @@ pub struct Session {
     /// The agent's version, from `Opened`.
     pub version: Option<String>,
     pub models: Vec<Model>,
-    pub commands: Vec<SlashCommand>,
+    pub commands: Option<Vec<SlashCommand>>,
     pub account: Option<Account>,
     /// The tasks running now.
     pub tasks: Vec<backend::Task>,
@@ -456,7 +457,7 @@ impl Session {
                 cost: None,
                 version: None,
                 models: vec![],
-                commands: vec![],
+                commands: None,
                 account: None,
                 tasks: vec![],
                 parts: vec![],
@@ -957,12 +958,23 @@ impl Session {
                 self.version = Some(o.version);
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
-                let (core, id, models) = (
-                    crate::core(cx).clone(),
-                    self.spec.provider.id,
-                    self.models.clone(),
-                );
-                blocking::run(cx, move || _ = Preset::remember(&core, id, &models)).detach();
+                let (core, id) = (crate::core(cx).clone(), self.spec.provider.id);
+                let (models, account) = (self.models.clone(), self.account.clone());
+                let efforts = self.config.iter().find(|c| c.id == "effort");
+                let efforts = efforts.map(|c| c.values.clone());
+                let saved = blocking::run(cx, move || {
+                    Preset::remember(&core, id, models, efforts, account)
+                });
+                cx.spawn(async move |_, cx| {
+                    if let Err(e) = saved.await {
+                        cx.update(|cx| {
+                            Activity::global(cx).update(cx, |a, cx| {
+                                a.say(format!("Could not cache {id} capabilities: {e}"), true, cx)
+                            });
+                        });
+                    }
+                })
+                .detach();
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
                     self.note(HISTORY_UNAVAILABLE.into());
@@ -1051,7 +1063,7 @@ impl Session {
                 (self.usage, self.parts) = (Some((used, size)), parts);
                 self.cost = cost.or(self.cost);
             }
-            (Update::Commands(c), _) => self.commands = c,
+            (Update::Commands(c), _) => self.commands = Some(c),
             (Update::Tasks(t), _) => self.tasks = t,
             (Update::Limits(l), _) => self.limits = Some(l),
             (Update::Lacks(p), _) => self.lacks.push(p),

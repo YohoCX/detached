@@ -212,14 +212,15 @@ pub struct Opened {
     /// What the user should know of this open, such as a CLI with known problems.
     pub note: Option<String>,
     pub models: Vec<Model>,
-    pub commands: Vec<SlashCommand>,
+    /// None when the agent has yet to report commands.
+    pub commands: Option<Vec<SlashCommand>>,
     pub account: Option<Account>,
     /// A resume whose history could not be read: it goes on without it.
     pub unread: bool,
 }
 
 /// Who the session runs as and what it draws from: "Claude Max", "Anthropic API", "Amazon Bedrock".
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Account {
     pub plan: String,
     pub email: Option<String>,
