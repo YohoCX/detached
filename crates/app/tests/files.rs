@@ -873,7 +873,10 @@ fn agent_markdown_links_every_image_and_fetches_none(cx: &mut TestAppContext) {
     let text = "![a](https://x.invalid/a.png)\n\n![b](http://x.invalid/b.png)\n\n![c][r]\n\n\
         <img src=\"https://x.invalid/d.png\" alt=\"d\">\n\n<img alt=e src='https://x.invalid/e.png'> inline\n\n\
         ![f](//x.invalid/f.png)\n\n[r]: https://x.invalid/c.png\n";
-    let links = Links::Agent(app.sb.root());
+    let links = Links::Agent {
+        folder: app.sb.root(),
+        rev: None,
+    };
     let agent = app
         .cx
         .add_window_view(|_, cx| Markdown::new(text, links, true, cx))

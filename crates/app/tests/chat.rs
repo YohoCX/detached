@@ -2399,18 +2399,13 @@ fn an_agent_reply_s_images_are_links_and_nothing_is_fetched(cx: &mut TestAppCont
     assert_eq!(*asked.lock().unwrap(), Vec::<String>::new());
 }
 
-#[gpui_kit::test]
-fn clicking_an_agent_reply_s_file_link_opens_its_tab_on_the_linked_line(cx: &mut TestAppContext) {
-    let cx = &mut open(cx);
-    let repo = cx.sb.solo().display().to_string();
-    say(cx, "say [Open the readme](README.md#L2)");
-    idle(cx);
+fn click_agent_link(cx: &mut VisualTestContext, label: &str) {
     let link = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
             w.render_frame(cx);
             texts(w)
                 .into_iter()
-                .find(|t| t.visible() && t.text() == "Open the readme")
+                .find(|t| t.visible() && t.text() == label)
                 .map(|t| t.bounds())
         })
     };
@@ -2419,9 +2414,40 @@ fn clicking_an_agent_reply_s_file_link_opens_its_tab_on_the_linked_line(cx: &mut
     let origin = cx.find("markdown").unwrap().bounds().origin;
     let at = point(b.left() + px(3.), b.center().y) - origin;
     cx.update(|w, cx| w.click_at("markdown", at, cx));
+}
+
+#[gpui_kit::test]
+fn clicking_an_agent_reply_s_file_link_opens_its_tab_on_the_linked_line(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let repo = cx.sb.solo().display().to_string();
+    say(cx, "say [Open the readme](README.md#L2)");
+    idle(cx);
+    click_agent_link(cx, "Open the readme");
     wait_until(cx, |cx| cx.find("doc.file.README.md").is_some());
     assert!(cx.workspace(|w, _| matches!(w.shown(), Some(Doc::File(loc))
         if loc.repo == repo && loc.path == "README.md" && loc.line == Some(2))));
+}
+
+#[gpui_kit::test]
+fn clicking_a_missing_agent_file_link_shows_an_error_notice(cx: &mut TestAppContext) {
+    use kernel::activity::{Activity, Level};
+
+    let cx = &mut open(cx);
+    say(cx, "say [Open the report](missing.json)");
+    idle(cx);
+    click_agent_link(cx, "Open the report");
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            Activity::global(cx).read(cx).notices.iter().any(|notice| {
+                notice.level == Level::Error
+                    && notice.title == "Could not open file link"
+                    && notice
+                        .body
+                        .as_deref()
+                        .is_some_and(|body| body.contains("missing.json"))
+            })
+        })
+    });
 }
 
 #[gpui_kit::test]

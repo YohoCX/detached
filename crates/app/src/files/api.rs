@@ -57,7 +57,10 @@ pub struct DiffOptions {
 /// Where a markdown text's relative links and images resolve.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Links {
-    Agent(PathBuf),
+    Agent {
+        folder: PathBuf,
+        rev: Option<String>,
+    },
     /// A file at `rev` (None is the working tree).
     Repo {
         repo: String,
