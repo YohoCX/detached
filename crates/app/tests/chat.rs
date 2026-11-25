@@ -7,7 +7,7 @@ use common::*;
 use detached_app::chat;
 use detached_app::ui::menu;
 use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
-use detached_core::adapters::{BLOCK, CLAUDE, Config};
+use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config};
 use detached_core::backend::{Model, Tool};
 use detached_core::chat_settings::{self, Preset};
 use gpui_kit::base::test_support::texts;
@@ -250,6 +250,45 @@ fn turning_off_a_provider_keeps_its_open_chat_and_blocks_new_ones(cx: &mut TestA
     cx.click("chat.input");
     say(cx, "say After disabling");
     wait_for_item(cx, "After disabling");
+}
+
+#[gpui_kit::test]
+fn disabling_the_selected_provider_keeps_the_first_message_in_the_composer(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_seeded(cx, codex);
+    cx.click("chat.provider.pick");
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 1usize)).as_deref() == Some("Logged in")
+    });
+    cx.click(("chat.agent", 1usize));
+    cx.input("hello");
+
+    cx.update(|_, cx| detached_app::settings::open(cx, "agents"));
+    cx.click("agents.codex.enabled");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Config>(BLOCK)
+                .is_some_and(|config| !config.shows(&CODEX))
+        })
+    });
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    assert_eq!(label(cx, "chat.name").as_deref(), Some("Codex"));
+    cx.click("chat.input");
+    cx.press("enter");
+    assert_eq!(composer(cx).value(), Some("hello"));
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+    assert!(cx.activity(|a, _| {
+        a.message
+            .as_ref()
+            .is_some_and(|m| m.text.contains("Select an enabled provider"))
+    }));
+
+    cx.click("chat.provider.pick");
+    cx.click(("chat.agent", 0usize));
+    assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+    cx.click("chat.send");
+    wait_for_item(cx, "said hello");
 }
 
 /// A catalog whose floor for `claude` is `min`, as the last fetch stored it.
@@ -1226,6 +1265,26 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn saving_a_blank_chat_as_default_drops_effort_the_model_does_not_support(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        warm(sb);
+        Preset::save(&sb.state, |p| {
+            p.choices(CLAUDE.id).effort = Some("high".into());
+        })
+        .unwrap();
+    });
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
+    pick(cx, "chat.model", "old (no auto)");
+    assert!(cx.find("chat.effort").is_none());
+    pick(cx, "chat.more", "Save as default");
+    wait_until(cx, |cx| {
+        cx.settings(|s| Preset::read(s).providers[CLAUDE.id].model.as_deref() == Some("old"))
+    });
+    assert!(cx.settings(|s| Preset::read(s).providers[CLAUDE.id].effort.is_none()));
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+}
+
+#[gpui_kit::test]
 fn new_chat_entries_use_the_preset_without_copying_the_current_chat(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
         sb.state
@@ -1295,6 +1354,7 @@ fn settings_chat_applies_to_an_untouched_blank_tab(cx: &mut TestAppContext) {
     wait_until(cx, |cx| {
         description(cx, "chat.model").as_deref() == Some("opus")
     });
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
     assert!(cx.find("doc.chat.1").is_none());
     cx.click("chat.input");
     say(cx, "model; effort");
@@ -1780,6 +1840,26 @@ fn a_restore_the_files_moved_on_from_restores_nothing_and_plans_again(cx: &mut T
 }
 
 const HOOK: &str = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#;
+
+#[gpui_kit::test]
+fn a_trust_save_failure_before_send_reports_a_status_error(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let settings = sb.solo().join(".claude");
+        std::fs::create_dir_all(&settings).unwrap();
+        std::fs::write(settings.join("settings.json"), HOOK).unwrap();
+        std::fs::create_dir_all(sb.state.config_dir.join("agent-trust.json.tmp")).unwrap();
+    });
+    wait_until(cx, |cx| cx.find("chat.trust.accept").is_some());
+    cx.click("chat.trust.accept");
+    wait_until(cx, |cx| {
+        cx.activity(|a, _| {
+            a.message
+                .as_ref()
+                .is_some_and(|m| m.error && m.text.starts_with("Cannot save the trust"))
+        })
+    });
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+}
 
 #[gpui_kit::test]
 fn the_repo_s_settings_load_once_trusted_and_a_change_asks_again(cx: &mut TestAppContext) {

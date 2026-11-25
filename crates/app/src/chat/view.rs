@@ -21,7 +21,7 @@ use detached_core::git::snapshot::Skip;
 use detached_core::host::Act;
 use detached_core::types::Side;
 
-use super::session::Chat;
+use super::session::{Chat, cached_efforts};
 use crate::files::{Links, Markdown};
 use crate::ui::theme::chat as size;
 use crate::ui::{self, DrawnMenu, Icon, radius, text, theme};
@@ -216,13 +216,11 @@ impl ChatView {
         if text.is_empty() || self.session.read(cx).busy(cx) {
             return;
         }
-        if self.session.read(cx).current().is_none() && !super::can_start(cx) {
-            return;
+        if self.session.update(cx, |s, cx| s.send(text, cx)) {
+            self.input.update(cx, |s, cx| s.set_value("", window, cx));
+            self.composer_changed(cx);
+            self.scroll.scroll_to_bottom();
         }
-        self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        self.composer_changed(cx);
-        self.scroll.scroll_to_bottom();
-        self.session.update(cx, |s, cx| s.send(text, cx));
     }
 
     fn composer_changed(&mut self, cx: &mut Context<Self>) {
@@ -471,10 +469,8 @@ impl ChatView {
                 .iter()
                 .find(|c| c.id == "effort")
                 .map_or(&[][..], |c| c.values.as_slice())
-        } else if models.iter().all(|m| m.efforts.is_empty()) {
-            preset.efforts(p.id)
         } else {
-            chosen.map_or(&[][..], |m| &m.efforts)
+            cached_efforts(&preset, p.id, current).unwrap_or_default()
         };
         let effort = opened.map_or(chat.effort.as_deref(), |s| {
             s.option("effort").filter(|e| !e.is_empty())
@@ -1751,7 +1747,9 @@ impl ChatView {
         let ask = (!chat.read(cx).busy(cx)).then(|| {
             ui::button(("chat.docs.ask", i), "Ask to update them", cx)
                 .test_support()
-                .on_click(move |_, _, cx| chat.update(cx, |c, cx| c.send(prompt.clone(), cx)))
+                .on_click(move |_, _, cx| {
+                    chat.update(cx, |c, cx| c.send(prompt.clone(), cx));
+                })
         });
         self.row(i, label)
             .flex()
