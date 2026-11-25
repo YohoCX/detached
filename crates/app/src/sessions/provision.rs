@@ -109,14 +109,19 @@ pub fn new(window: &mut Window, cx: &mut App) {
     form(None, window, cx);
 }
 
-pub(crate) fn dismiss_new(cx: &mut App) {
-    if let Some(sheet) = sheet(cx) {
-        sheet.update(cx, |s, cx| {
-            if s.new_form() && !s.busy {
-                s.close(cx);
+pub(crate) fn dismiss_new(cx: &mut App) -> bool {
+    if let Some(sheet) = sheet(cx)
+        && sheet.read(cx).page_mode()
+    {
+        return sheet.update(cx, |s, cx| {
+            if s.busy {
+                return false;
             }
+            s.close(cx);
+            true
         });
     }
+    true
 }
 
 pub(super) fn focus_new(window: &mut Window, cx: &mut App) {

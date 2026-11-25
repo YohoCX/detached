@@ -211,14 +211,7 @@ impl Chat {
             }
             let state = self.state(cx);
             if self.was.0 == State::Working && state != State::Working {
-                let topic = self.topic(cx).map(String::from);
-                super::alert(
-                    (&self.repo, self.provider.name),
-                    state,
-                    topic,
-                    &cx.entity(),
-                    cx,
-                );
+                super::alert(self, state, &cx.entity(), cx);
             }
             self.was = (state, busy);
         }

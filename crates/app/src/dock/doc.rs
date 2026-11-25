@@ -106,14 +106,14 @@ pub struct DocTab {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Saved {
-    doc: Doc,
+pub(super) struct Saved {
+    pub(super) doc: Doc,
     keep: bool,
     #[serde(default)]
-    workspace: Option<String>,
+    pub(super) workspace: Option<String>,
     // Archive tabs need an explicit null to distinguish them from old layouts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    session: Option<Option<String>>,
+    pub(super) session: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     position: Option<ViewPosition>,
 }

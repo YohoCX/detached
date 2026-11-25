@@ -9,7 +9,7 @@ pub use doc::{DocKind, DocTab, ViewPosition, doc_kind, register_doc};
 pub use tabs::{Category, categories, category, register_category, tabs_of};
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::{
@@ -301,6 +301,7 @@ fn missing(state: &PanelState, cx: &mut App) -> Arc<dyn PanelView> {
 struct Zones {
     current: String,
     areas: HashMap<String, Entity<DockArea>>,
+    saved_chats: RefCell<HashMap<String, Vec<(String, u32)>>>,
 }
 
 impl Global for Zones {}
@@ -310,12 +311,12 @@ fn layout_key(cx: &App) -> String {
     if w.archive() {
         KEY.to_string()
     } else {
-        format!(
-            "session.{}.{}.layout",
-            w.id().unwrap_or_default(),
-            w.session_id()
-        )
+        session_key(w.id().unwrap_or_default(), w.session_id())
     }
+}
+
+fn session_key(workspace: &str, session: &str) -> String {
+    format!("session.{workspace}.{session}.layout")
 }
 
 fn areas(cx: &App) -> Vec<Entity<DockArea>> {
@@ -367,6 +368,7 @@ fn persist(key: &str, area: &Entity<DockArea>, cx: &mut App) {
     let dock = area.read(cx).dump(cx);
     if key == KEY {
         ui_state::set(key, dock, cx);
+        cx.global::<Zones>().saved_chats.borrow_mut().clear();
     } else {
         let focus = if layout_key(cx) == key {
             panes::focus_index(area.read(cx), cx)
@@ -387,10 +389,7 @@ fn saved_focus(cx: &App) -> usize {
     ui_state::get::<SavedLayout>(&layout_key(cx), cx).map_or(0, |layout| layout.focus)
 }
 
-fn migrate(cx: &App) -> Option<DockAreaState> {
-    let w = Workspace::get(cx);
-    let workspace = w.id()?;
-    let session = w.session_id();
+fn migrate(workspace: &str, session: &str, cx: &App) -> Option<DockAreaState> {
     let old = ui_state::get::<DockAreaState>(KEY, cx)?;
     let mut tabs = PanelState {
         info: PanelInfo::tabs(0),
@@ -426,14 +425,81 @@ fn migrate(cx: &App) -> Option<DockAreaState> {
     })
 }
 
+fn session_layout(workspace: &str, session: &str, cx: &App) -> Option<SavedLayout> {
+    ui_state::get::<SavedLayout>(&session_key(workspace, session), cx)
+        .or_else(|| {
+            Some(SavedLayout {
+                dock: migrate(workspace, session, cx)?,
+                focus: 0,
+            })
+        })
+        .filter(|layout| layout.dock.version == Some(VERSION))
+}
+
+fn saved_chat(panel: &PanelState, workspace: &str, session: &str) -> Option<Doc> {
+    if panel.panel_name == doc::NAME
+        && let PanelInfo::Panel(value) = &panel.info
+        && let Ok(saved) = doc::Saved::deserialize(value)
+        && saved.workspace.as_deref() == Some(workspace)
+        && saved.session.flatten().as_deref() == Some(session)
+        && matches!(saved.doc, Doc::Chat { .. })
+    {
+        return Some(saved.doc);
+    }
+    None
+}
+
+pub(crate) fn session_chats(workspace: &str, session: &str, cx: &App) -> Vec<(String, u32)> {
+    let key = session_key(workspace, session);
+    let Some(zones) = cx.try_global::<Zones>() else {
+        return vec![];
+    };
+    if let Some(area) = zones.areas.get(&key) {
+        return docs(area.read(cx))
+            .into_iter()
+            .filter_map(|(_, _, tab)| {
+                let tab = tab.read(cx);
+                match &tab.doc {
+                    Doc::Chat { repo, n }
+                        if tab.workspace.as_deref() == Some(workspace)
+                            && tab.session.as_deref() == Some(session) =>
+                    {
+                        Some((repo.clone(), *n))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+    }
+    fn collect(panel: &PanelState, workspace: &str, session: &str, chats: &mut Vec<(String, u32)>) {
+        if let Some(Doc::Chat { repo, n }) = saved_chat(panel, workspace, session) {
+            chats.push((repo, n));
+        }
+        for child in &panel.children {
+            collect(child, workspace, session, chats);
+        }
+    }
+    zones
+        .saved_chats
+        .borrow_mut()
+        .entry(key)
+        .or_insert_with(|| {
+            let mut chats = vec![];
+            if let Some(layout) = session_layout(workspace, session, cx) {
+                collect(&layout.dock.center, workspace, session, &mut chats);
+            }
+            chats
+        })
+        .clone()
+}
+
 fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea> {
     let archive = key == KEY;
     let saved = if archive {
         ui_state::get::<DockAreaState>(&key, cx)
     } else {
-        ui_state::get::<SavedLayout>(&key, cx)
-            .map(|layout| layout.dock)
-            .or_else(|| migrate(cx))
+        let w = Workspace::get(cx);
+        session_layout(w.id().unwrap_or_default(), w.session_id(), cx).map(|s| s.dock)
     };
     let area = cx.new(|cx| {
         let mut area = DockArea::new("dock", Some(VERSION), window, cx)
@@ -477,9 +543,9 @@ fn build_area(key: String, window: &mut Window, cx: &mut App) -> Entity<DockArea
         }
         area
     });
-    cx.global_mut::<Zones>()
-        .areas
-        .insert(key.clone(), area.clone());
+    let zones = cx.global_mut::<Zones>();
+    zones.saved_chats.get_mut().remove(&key);
+    zones.areas.insert(key.clone(), area.clone());
     let save = move |area: &Entity<DockArea>, cx: &mut App| {
         persist(&key, area, cx);
         panes::changed(area, cx);
@@ -822,6 +888,59 @@ pub fn close_docs(gone: impl Fn(&Doc) -> bool, window: &mut Window, cx: &mut App
         .collect();
     for tab in tabs {
         remove_doc(tab, window, cx);
+    }
+}
+
+pub(crate) fn close_chat(
+    workspace: &str,
+    session: &str,
+    doc: &Doc,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let key = session_key(workspace, session);
+    let Some(zones) = cx.try_global::<Zones>() else {
+        return;
+    };
+    if let Some(area) = zones.areas.get(&key).cloned() {
+        let tabs = docs(area.read(cx));
+        area.update(cx, |a, cx| {
+            for (_, _, tab) in tabs {
+                let t = tab.read(cx);
+                if t.doc == *doc
+                    && t.workspace.as_deref() == Some(workspace)
+                    && t.session.as_deref() == Some(session)
+                {
+                    a.remove_panel(tab, window, cx);
+                }
+            }
+        });
+        return;
+    }
+    fn remove(panel: &mut PanelState, workspace: &str, session: &str, doc: &Doc) -> bool {
+        if let PanelInfo::Tabs { active_index } = &mut panel.info
+            && let Some(i) = panel
+                .children
+                .iter()
+                .position(|p| saved_chat(p, workspace, session).as_ref() == Some(doc))
+        {
+            panel.children.remove(i);
+            *active_index = active_index
+                .saturating_sub(usize::from(i < *active_index))
+                .min(panel.children.len().saturating_sub(1));
+            return true;
+        }
+        panel
+            .children
+            .iter_mut()
+            .any(|p| remove(p, workspace, session, doc))
+    }
+    if let Some(mut layout) = session_layout(workspace, session, cx)
+        && remove(&mut layout.dock.center, workspace, session, doc)
+    {
+        zones.saved_chats.borrow_mut().remove(&key);
+        ui_state::set(&key, layout, cx);
+        cx.refresh_windows();
     }
 }
 
