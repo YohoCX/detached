@@ -42,13 +42,15 @@ pub(super) fn list(tabs: Vec<chat::Tab>, cx: &App) -> impl IntoElement + use<> {
         .min_h_0()
         .px(GAP / 2.)
         .child(
-            ui::quiet_button("tree.chats.new", "New chat", cx)
+            ui::row("tree.chats.new", false, cx)
                 .test_support()
                 .role(Role::Button)
-                .flex_row_reverse()
-                .justify_end()
-                .gap(GAP / 2.)
+                .aria_label("New chat")
+                .flex_none()
+                .py(GAP / 3.)
+                .text_size(text::SMALL)
                 .child(Icon::Plus.size(text::SMALL))
+                .child("New chat")
                 .on_click(|_, w, cx| {
                     search::choose_checkout(
                         "Choose checkout for new chat",
