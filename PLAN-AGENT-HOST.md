@@ -903,10 +903,10 @@ Later steps add to the SDL:
 
 On Claude's direct backend. Codex (H13b) differs where its adapter does: modes, model and effort
 are its config options (`agent` to start, `reasoning_effort` as effort); a command's output comes in
-pieces beside the call's updates; Stop ends the session, and the next message resumes it with a
-`session/load`; the list is `session/list` narrowed to the sessions the host's index knows, so the
-CLI's and other clients' are hidden; delete archives the conversation in Codex's own history, and
-the confirm says so; no plan limits, context breakdown, questions or per-task stop; a Codex chat
+pieces beside the call's updates. Stop ends the session, and the next message resumes it with
+`session/load`. The chat picker reads active rollouts from disk and lists the sessions in the host's
+index for that checkout. The delete confirmation explains that Codex archives the conversation in
+its own history. Codex has no plan limits, context breakdown, questions or per-task stop. A Codex chat
 starts only in a repo whose trust files, `.codex/config.toml` and `.agents/skills` among them, are
 trusted.
 

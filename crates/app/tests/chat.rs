@@ -1354,6 +1354,12 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
     let cx = &mut open_seeded(cx, |sb| {
         fake(sb, json!({"init_wait": "go"}));
         sb.state
+            .env
+            .write()
+            .unwrap()
+            .vars
+            .push(("CODEX_HOME".into(), sb.path("codex").display().to_string()));
+        sb.state
             .change_block::<Config>(BLOCK, |c| c.codex = true)
             .unwrap();
     });
@@ -1374,10 +1380,15 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
         label(cx, ("chat.suggest", 0usize)).as_deref(),
         Some("/review <pr> Reviews a change")
     );
-    // Switching providers drops the first provider's cached commands.
     let solo = cx.sb.solo().display().to_string();
+    let home = cx.sb.path("codex");
     let codex = &detached_core::adapters::CODEX;
     cx.update(|_, cx| {
+        let env = kernel::core(cx).env();
+        assert_eq!(
+            detached_core::proc::parent(&env)("CODEX_HOME"),
+            Some(home.into_os_string())
+        );
         let chat = chat::find(&solo, 1, cx).unwrap();
         chat.update(cx, |c, cx| c.set_provider(codex, cx));
         assert_eq!(chat.read(cx).provider.id, codex.id);
