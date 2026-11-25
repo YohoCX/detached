@@ -101,22 +101,45 @@ pub struct ChatView {
 
 impl ChatView {
     pub fn new(session: Entity<Chat>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let p = session.read(cx).provider;
+        let (p, draft) = session.update(cx, |s, _| {
+            s.has_draft = s.draft.is_some();
+            (s.provider, s.draft.take())
+        });
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .placeholder(placeholder(p.name))
+                .default_value(draft.unwrap_or_default())
         });
         input.update(cx, |s, cx| s.focus(window, cx));
         let composer_focus = cx.focus_handle();
         let agents = Agents::global(cx);
         agents.update(cx, |a, cx| a.ensure_loaded(cx));
         let scroll = ScrollHandle::new();
-        let follow = scroll.clone();
         let subscriptions = vec![
-            cx.observe(&session, move |_, _, cx| {
-                if f32::from(follow.max_offset().y + follow.offset().y) < FOLLOW {
-                    follow.scroll_to_bottom();
+            cx.observe_in(&session, window, |this, session, window, cx| {
+                if let Some(text) = session.update(cx, |s, _| s.draft.take()) {
+                    this.input.update(cx, |s, cx| {
+                        let input = s.value();
+                        if input.is_empty() {
+                            s.set_value(&text, window, cx);
+                        } else {
+                            let offset = text.len() + 1;
+                            let range = s.selected_range();
+                            let reversed = s.is_selection_reversed();
+                            s.set_value(format!("{text}\n{input}"), window, cx);
+                            s.set_selected_range_with_direction(
+                                range.start + offset..range.end + offset,
+                                reversed,
+                                cx,
+                            );
+                        }
+                    });
+                    this.composer_changed(cx);
+                }
+                let scroll = &this.scroll;
+                if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
+                    scroll.scroll_to_bottom();
                 }
                 cx.notify();
             }),
@@ -140,7 +163,7 @@ impl ChatView {
             }),
             cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
-                    this.suggest(cx);
+                    this.composer_changed(cx);
                 }
             }),
         ];
@@ -206,15 +229,16 @@ impl ChatView {
             return;
         }
         self.input.update(cx, |s, cx| s.set_value("", window, cx));
-        self.suggest = None;
+        self.composer_changed(cx);
         self.scroll.scroll_to_bottom();
         self.session.update(cx, |s, cx| s.send(text, cx));
     }
 
-    /// Suggests commands for a `/` at the start and files for an `@`.
-    fn suggest(&mut self, cx: &mut Context<Self>) {
+    fn composer_changed(&mut self, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
         let (value, cursor) = (input.value(), input.cursor());
+        self.session
+            .update(cx, |s, _| s.has_draft = !value.is_empty());
         let before = &value[..cursor.min(value.len())];
         let at = before
             .char_indices()
@@ -1965,17 +1989,19 @@ impl ChatView {
                     .aria_label(SharedString::from(p.title.clone()))
                     .h(px(28.))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        // Another chat that shows it comes forward; else it opens here.
-                        let open = super::open(cx);
-                        match open.iter().any(|(.., s)| s.read(cx).shows(&id, cx)) {
-                            true => super::resume(cwd.clone(), provider, id.clone(), cx),
-                            false if super::provider_config(cx).shows(provider) => {
-                                let id = id.clone();
-                                this.session
-                                    .update(cx, |s, cx| s.open_past(provider, id, cx));
-                                this.focus(window, cx);
-                            }
-                            false => (),
+                        let chat = this.session.read(cx);
+                        if chat.has_draft
+                            || !chat.is_new(cx)
+                            || super::open(cx)
+                                .iter()
+                                .any(|(.., s)| s.read(cx).shows(&id, cx))
+                        {
+                            super::resume(cwd.clone(), provider, id.clone(), cx);
+                        } else if super::provider_config(cx).shows(provider) {
+                            let id = id.clone();
+                            this.session
+                                .update(cx, |s, cx| s.open_past(provider, id, cx));
+                            this.focus(window, cx);
                         }
                     }))
                     .child(div().flex_1().min_w_0().truncate().child(p.title.clone()))

@@ -43,6 +43,8 @@ pub struct Chat {
     pub sessions: Vec<Entity<Session>>,
     /// The first thing the user said here.
     pub topic: Option<String>,
+    pub(super) draft: Option<String>,
+    pub(super) has_draft: bool,
     /// What the next session opens with.
     mode: Option<String>,
     pub model: Option<String>,
@@ -91,6 +93,8 @@ impl Chat {
             provider,
             sessions: vec![],
             topic: None,
+            draft: None,
+            has_draft: false,
             mode: choices.mode,
             model: choices.model,
             effort: choices.effort,
@@ -166,13 +170,25 @@ impl Chat {
 
     fn changed(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         if Some(&s) == self.current() {
-            let (commands, unsent, ended, kept) = s.update(cx, |s, _| {
+            let (commands, returned, unsent, ended, kept) = s.update(cx, |s, _| {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
-                // What the agent kept after a refused switch, for the next session too.
                 let kept = std::mem::take(&mut s.refused)
                     .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
-                (s.commands.clone(), s.unsent.take(), ended, kept)
+                (
+                    s.commands.clone(),
+                    s.returned.take(),
+                    s.unsent.take(),
+                    ended,
+                    kept,
+                )
             });
+            if let Some(text) = returned {
+                self.draft = Some(text);
+                self.has_draft = true;
+                if self.first_user(cx).is_none() {
+                    self.topic = None;
+                }
+            }
             if let Some([mode, model, effort]) = kept {
                 self.mode = mode.or(self.mode.take());
                 (self.model, self.effort) =
@@ -186,7 +202,6 @@ impl Chat {
                 ui_state::set(COMMANDS, all, cx);
                 self.cached = commands;
             }
-            // The prompt goes on in a new session, without what the trust check refused.
             if let Some(text) = unsent {
                 self.send(text, cx);
             }
@@ -222,9 +237,7 @@ impl Chat {
         self.current().is_some_and(|s| s.read(cx).busy())
     }
 
-    /// Stops the turn, and every turn of the session's group. A backend that cannot stop a
-    /// background command alone ends the session too, which ends its commands; the next message
-    /// resumes it.
+    /// Stops the group's turns, returns queued prompts, and closes sessions without per-task stop.
     pub fn stop(&self, cx: &mut Context<Self>) {
         if let Some(s) = self.current() {
             kernel::inbox::stop(cx, s);
@@ -543,13 +556,16 @@ impl Chat {
 
     /// The first thing the user said, to tell chats apart.
     pub fn topic<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
-        let first = self.sessions.iter().find_map(|s| {
+        self.first_user(cx).or(self.topic.as_deref())
+    }
+
+    fn first_user<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        self.sessions.iter().find_map(|s| {
             s.read(cx).items.iter().find_map(|i| match i {
                 Item::User(t) => Some(t.as_str()),
                 _ => None,
             })
-        });
-        first.or(self.topic.as_deref())
+        })
     }
 
     /// Ends its sessions for good, out of any group: the chat is going away, or shows another

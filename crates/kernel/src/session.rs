@@ -182,8 +182,10 @@ pub struct Session {
     pub history: usize,
     /// A prompt given while the session starts, sent once it has.
     pub queued: Option<String>,
-    /// A prompt the session ended on before it went out.
+    /// A prompt to send in the next session.
     pub unsent: Option<String>,
+    /// A prompt to put back in the composer.
+    pub returned: Option<String>,
     /// The agent refused a switch since this was last taken: what it kept is in `config`.
     pub refused: bool,
     /// Settings picked while the session starts or woken turns run, applied once it has or they
@@ -463,6 +465,7 @@ impl Session {
                 history: 0,
                 queued: None,
                 unsent: None,
+                returned: None,
                 refused: false,
                 picked: vec![],
                 open: None,
@@ -561,10 +564,9 @@ impl Session {
         let s = match started {
             Ok(s) => s,
             Err(e) => {
-                self.state = State::Ended(End::Failed(e.to_string()));
-                self.items.extend(self.queued.take().map(Item::User));
-                self.items.push(Item::Error(e.to_string()));
-                return cx.notify();
+                let why = e.to_string();
+                self.fail(why.clone());
+                return self.close(End::Failed(why), cx);
             }
         };
         (self.open, self.trust, self.spec.trusted) = (Some(s.session), s.trust, s.trusted);
@@ -797,12 +799,11 @@ impl Session {
         cx.notify();
     }
 
-    /// Ends the running turn and its foreground command, and answers its asks `cancelled`; a
-    /// queued prompt goes.
+    /// Cancels the running turn or returns a queued prompt.
     pub fn cancel(&mut self) {
         self.wake_due = false;
         if let Some(text) = self.queued.take() {
-            self.items.push(Item::User(text));
+            self.returned = Some(text);
         }
         let (Some(o), State::Running) = (&self.open, &self.state) else {
             return;
@@ -916,11 +917,10 @@ impl Session {
         {
             o.cancel();
         }
-        // A prompt the host's end kept from going out goes on in the next session.
         if let Some(text) = self.queued.take() {
             match end {
                 End::Closed | End::Trust => self.unsent = self.unsent.take().or(Some(text)),
-                _ => self.items.push(Item::User(text)),
+                _ => self.returned = Some(text),
             }
         }
         (self._watch, self.turn, self.ending) = (None, None, None);

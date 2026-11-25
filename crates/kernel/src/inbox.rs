@@ -233,9 +233,14 @@ pub fn stop(cx: &mut App, s: &Entity<Session>) {
     }
     for s in all {
         s.update(cx, |s, cx| {
-            match crate::session::caps(s.spec.provider).stop_task {
-                true => s.cancel(),
-                false => s.cancel_and_end(cx),
+            if session::caps(s.spec.provider).stop_task {
+                s.cancel();
+                cx.notify();
+            } else {
+                if s.state == State::Starting {
+                    s.cancel();
+                }
+                s.cancel_and_end(cx);
             }
         });
     }
