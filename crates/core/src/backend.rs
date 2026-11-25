@@ -520,7 +520,13 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            let words = WORDS.iter().filter(|w| text.contains(*w));
+            // Whole words only: `symlink_metadata` is no `_meta`.
+            let ident = |c: char| c.is_alphanumeric() || c == '_';
+            let words = WORDS.iter().filter(|w| {
+                text.match_indices(*w).any(|(at, _)| {
+                    !text[..at].ends_with(ident) && !text[at + w.len()..].starts_with(ident)
+                })
+            });
             found.extend(words.map(|w| format!("{}: {w}", path.display())));
         }
         found
