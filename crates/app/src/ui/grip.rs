@@ -1,7 +1,7 @@
 //! Panes resized by a grip on one edge, their size kept as `size.<key>` in ui.json.
 
 use gpui_kit::{
-    Along, App, AppContext, Axis, Div, DragMoveEvent, ElementId, Empty, EntityId,
+    Along, App, AppContext, Axis, Div, DragMoveEvent, ElementId, Empty, Entity, EntityId,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, RenderOnce,
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
     relative,
@@ -26,6 +26,7 @@ pub struct Pane {
     size: f32,
     min: f32,
     max: f32,
+    state: Option<(Entity<Size>, Pixels, bool)>,
     base: Div,
 }
 
@@ -37,6 +38,7 @@ pub fn pane(key: &'static str, edge: Edge, size: f32, min: f32, max: f32) -> Pan
         size,
         min,
         max: max.max(min),
+        state: None,
         base: div(),
     }
 }
@@ -51,9 +53,33 @@ impl Render for Dragging {
     }
 }
 
-struct Size {
+pub(crate) struct Size {
     preferred: f32,
+    pub(crate) fit_to_room: bool,
     grab: (Pixels, Option<Pixels>),
+}
+
+impl Size {
+    pub(crate) fn load(key: &str, default: f32, cx: &App) -> Self {
+        Self {
+            preferred: ui_state::get::<f32>(&format!("size.{key}"), cx)
+                .filter(|s| *s > 0.)
+                .unwrap_or(default),
+            fit_to_room: false,
+            grab: (px(0.), None),
+        }
+    }
+
+    pub(crate) fn pixels(&self, min: f32, max: f32) -> Pixels {
+        px(self.preferred.clamp(min, max))
+    }
+}
+
+impl Pane {
+    pub(crate) fn with_size(mut self, state: Entity<Size>, width: Pixels, open: bool) -> Self {
+        self.state = Some((state, width, open));
+        self
+    }
 }
 
 impl RenderOnce for Pane {
@@ -65,15 +91,12 @@ impl RenderOnce for Pane {
             max,
             ..
         } = self;
-        let stored = format!("size.{key}");
-        let size = window.use_keyed_state(key, cx, |_, cx| Size {
-            preferred: ui_state::get::<f32>(&stored, cx)
-                .filter(|s| *s > 0.)
-                .unwrap_or(self.size),
-            grab: (px(0.), None),
+        let (size, extent, show_grip) = self.state.unwrap_or_else(|| {
+            let size = window.use_keyed_state(key, cx, |_, cx| Size::load(key, self.size, cx));
+            let extent = size.read(cx).pixels(min, max);
+            (size, extent, true)
         });
         let id = size.entity_id();
-        let preferred = px(size.read(cx).preferred.clamp(min, max));
         let axis = if edge == Edge::Top {
             Axis::Vertical
         } else {
@@ -123,8 +146,8 @@ impl RenderOnce for Pane {
             .relative()
             .flex_none()
             .map(|p| match edge {
-                Edge::Top => p.h(preferred).max_h(limit),
-                _ => p.w(preferred).max_w(limit),
+                Edge::Top => p.h(extent).max_h(limit),
+                _ => p.w(extent).max_w(limit),
             })
             .on_drag_move(move |e: &DragMoveEvent<Resize>, _, cx| {
                 if e.drag(cx).0 != id {
@@ -135,10 +158,11 @@ impl RenderOnce for Pane {
                     let from = *from.get_or_insert(e.bounds.size.along(axis));
                     let delta = e.event.position.along(axis) - *at;
                     s.preferred = f32::from(from + delta * sign).round().clamp(min, max);
+                    s.fit_to_room = false;
                     cx.notify();
                 });
             })
-            .child(grip)
+            .children(show_grip.then_some(grip))
     }
 }
 
