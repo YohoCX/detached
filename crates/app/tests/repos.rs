@@ -9,10 +9,12 @@ use common::*;
 use detached_app::ui::menu;
 use detached_app::{actions, settings, shell};
 use detached_core::api;
+use detached_core::sessions;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px, size};
 use kernel::activity::{Activity, Level, Message, Notice};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -168,6 +170,26 @@ fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_main_checkouts_menu_adds_a_folder(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "app");
+        sb.clone_pair("extra");
+    });
+    cx.click("session.more");
+    let item = (0usize..)
+        .map_while(|i| cx.find(("menu.item", i)))
+        .position(|row| row.label() == Some("Add a folder…"))
+        .expect("the Add a folder menu item");
+    cx.click(("menu.item", item));
+    let extra = cx.sb.path("extra");
+    cx.simulate_path_prompt_response(|o| {
+        assert!(o.directories && o.multiple && !o.files);
+        Some(vec![extra])
+    });
+    wait_until(cx, |cx| cx.workspace(|w, _| w.session_repos().len() == 2));
+}
+
+#[gpui_kit::test]
 fn forge_repos_listed_with_the_seeded_upstreams(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
@@ -247,9 +269,15 @@ fn a_folded_folder_sums_its_changes_and_stays_folded_after_a_reopen(cx: &mut Tes
         layout(sb);
         write(&sb.repo("group/api"), [("a.txt", "a"), ("b.txt", "b")]);
         write(&sb.repo("group/web"), [("c.txt", "c")]);
+        api::add_folder(&sb.state, None, path(sb.repo("group/../group/api"))).unwrap();
     });
     archive_sidebar(cx);
     let [api, lib, group] = ["group/api", "lib", "group"].map(|n| path(cx.sb.repo(n)));
+    let alias = path(cx.sb.repo("group/../group/api"));
+    cx.workspace(|w, _| {
+        assert!(w.repos().iter().any(|r| r.path == alias));
+        assert_eq!(w.repo(&alias), w.repo(&api));
+    });
     let id = row_named(cx, "group").id;
     let inside = |cx: &mut VisualTestContext, el: &'static str| {
         cx.update(|w, cx| {
@@ -441,6 +469,37 @@ fn fetch_update_and_prune_run_on_the_current_repo_and_say_how_it_went(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn sync_labels_stay_short_in_a_named_session_and_show_all_in_archive(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "app");
+        let tree = path(sb.path("work"));
+        sb.git(&repo, &["worktree", "add", "-b", "work", &tree]);
+        let workspace = &sb.state.get_settings().workspaces[0].id;
+        session = sessions::adopt(&sb.state, workspace, "Work", &[tree])
+            .unwrap()
+            .id;
+    });
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    let assert_labels = |cx: &mut VisualTestContext, fetch, pull| {
+        for (id, expected) in [("sync.fetch", fetch), ("sync.pull", pull)] {
+            assert_eq!(label(cx, id), expected);
+            cx.update(|w, cx| {
+                w.render_frame(cx);
+                assert!(texts(w).iter().any(|t| {
+                    t.visible() && t.path().contains(&id.into()) && t.text() == expected
+                }));
+            });
+        }
+    };
+    cx.workspace(|w, cx| w.switch_session(&session, cx));
+    assert!(cx.workspace(|w, _| w.session_name() == "Work"));
+    assert_labels(cx, "Fetch", "Pull…");
+    archive_sidebar(cx);
+    assert_labels(cx, "Fetch All", "Pull All");
+}
+
+#[gpui_kit::test]
 fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut TestAppContext) {
     // Takes connections and never answers, so a fetch from it runs until cancelled.
     let silent = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -454,10 +513,10 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
     let label = |cx: &mut VisualTestContext, id: &'static str| {
         cx.find(id).unwrap().label().unwrap().to_string()
     };
-    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    assert_eq!(label(cx, "sync.fetch"), "Fetch");
     cx.click("sync.fetch");
     wait_until(cx, |cx| label(cx, "sync.fetch") == "1/2");
-    assert_eq!(label(cx, "sync.pull"), "Pull All…");
+    assert_eq!(label(cx, "sync.pull"), "Pull…");
     cx.click("sync.pull");
     cx.click("sync.fetch");
     let ops = cx.activity(|s, _| s.ops.iter().map(|o| o.id).collect::<Vec<_>>());
@@ -466,7 +525,7 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
 
     cx.activity(|_, cx| Activity::cancel_op(ops[0], cx));
     says(cx, "Fetched 1 of 2 repositories", true);
-    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    assert_eq!(label(cx, "sync.fetch"), "Fetch");
     let n = cx.activity(|s, _| s.notices.last().cloned()).unwrap();
     let text = (n.title.as_str(), n.body.as_deref());
     assert_eq!(text, ("Fetch all: 1 not updated", Some("hang: cancelled")));

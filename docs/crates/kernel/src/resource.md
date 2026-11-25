@@ -7,20 +7,21 @@ covers:
 ## Purpose
 A `Resource<T>` is a value loaded through core once per key and kept for the session, with its
 last error and load time. An `Interest<T>` holds it; while at least one is alive, the resource's
-`Policy` and its `On` input decide when it reloads. Views never schedule reloads themselves.
+`Policy` and its `On` inputs decide when it reloads. Views never schedule reloads themselves.
 
 ## Public API
 - `Policy<T>` (`crates/kernel/src/resource.rs:13`): `fresh_for`, the age past which window
   activation reloads it; `poll`, a period and a `When<T>` condition for timed reloads.
 - `When<T>` (`crates/kernel/src/resource.rs:22`): `fn(Option<&T>) -> bool`, sees `None` before a
   load succeeded.
-- `On` (`crates/kernel/src/resource.rs:26`): `Status(repo)`, the repo's status loaded;
-  `Head(repo)`, its head or branch moved.
+- `On` (`crates/kernel/src/resource.rs:26`) includes `Status(repo)` when the repo's status loads,
+  `Head(repo)` when its head or branch moves, and `RecipeTrust` when recipe trust changes.
 - `get(cx, key, make)` (`crates/kernel/src/resource.rs:82`): the resource under `key`, made by
   `make` the first time and registered in the `Resources` global. Loads nothing.
 - `Resource::new(policy, load)` (`crates/kernel/src/resource.rs:111`): `load` runs on the UI thread
   and returns the blocking job, which runs through `blocking::run`.
-- `Resource::on(on)` (`crates/kernel/src/resource.rs:135`): also reload on that `On` input.
+- `Resource::on(on)` (`crates/kernel/src/resource.rs:135`) adds a reload input. Chain calls to
+  subscribe to several inputs.
 - `Resource::value`, `error`, `at` (pub fields), `loading()`, and `refresh(cx)`
   (`crates/kernel/src/resource.rs:153`), which loads now whatever the age.
 - `Resource::edit(f, cx)`: changes the value at once, ahead of the write it stands for; a load
@@ -50,8 +51,8 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
 4. The shell's window activation observer (`crates/app/src/shell.rs:119`) calls
    `invalidate::activated`, which sends `Input::Activated`
    (`crates/kernel/src/invalidate.rs:190`).
-5. `Resource::input` (`crates/kernel/src/resource.rs:193`) reloads when the input matches: `On`
-   equal to the resource's own, or activation with `fresh_for` set, no load running and the value
+5. `Resource::input` (`crates/kernel/src/resource.rs:193`) reloads for any subscribed `On` input,
+   or on activation with `fresh_for` set, no load running and the value
    at least that old (or never loaded). Either way only while an interest holds it.
 6. The poll (`crates/kernel/src/resource.rs:208`) ticks every period on the background clock and
    reloads while an interest is held, `When` holds for the value, no load runs and the window shows
@@ -69,7 +70,6 @@ last error and load time. An `Interest<T>` holds it; while at least one is alive
   came meanwhile; activation skips a resource whose load runs, a poll tick skips one too.
 - A failed load keeps the last value and sets `error`; a later success clears it.
 - `held()` counts `Rc` clones: the resource keeps one, each interest one more.
-- `on` takes a single `On`; a resource reacts to one repo's status or head, not both.
 - Without `fresh_for` activation never reloads it; without `poll` nothing times it.
 - `at` and the poll use the background executor's clock, so tests drive them with
   `advance_clock`.

@@ -28,7 +28,7 @@ use kernel::workspace::Workspace;
 use crate::actions::{self, Group, Registration};
 use crate::dock::{self, AppSpec, DocKind};
 use crate::ui::page::{Opt, Pick, button, labeled, muted, row, select};
-use crate::ui::{self, text, theme};
+use crate::ui::{self, Edge, text, theme};
 use kernel::doc::Doc;
 
 /// The lines of the log drawn.
@@ -347,17 +347,18 @@ impl Processes {
                 cx.notify();
             }))
         });
-        div()
+        let list = div()
             .id("processes.list")
+            .size_full()
             .flex()
             .flex_col()
-            .flex_none()
-            .w(px(240.))
             .p(px(4.))
+            .overflow_y_scroll()
+            .children(rows);
+        ui::pane("processes.list", Edge::Right, 240., 160., 400.)
             .border_r_1()
             .border_color(theme(cx).line)
-            .overflow_y_scroll()
-            .children(rows)
+            .child(list)
     }
 
     fn detail(&self, e: &Row, cx: &mut Context<Self>) -> AnyElement {

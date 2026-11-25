@@ -29,11 +29,12 @@
 //! `agent` on `gpt-5.5`, a load replays one prior turn (`earlier`, `replayed`) on `gpt-5.5-mini`; a
 //! close ends the turn first. Set to the model `die`, it exits with code 3 before it answers. On
 //! stdin's EOF it exits 1 with `EPIPE`. Its version is its folder's name. With `CODEX_HOME` set it
-//! keeps its sessions in `fake-sessions.json` there, which `session/list` reads, titled by their
-//! first prompt, and `session/delete` archives.
+//! writes rollouts and keeps an index in `fake-sessions.json` for `session/list`.
 
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -121,14 +122,14 @@ fn main() {
                 "authMethods": [],
             })),
             "session/new" | "session/load" => {
-                let sid = match params["sessionId"].as_str() {
+                let load = method == "session/load";
+                let sid = match params["sessionId"].as_str().filter(|_| load) {
                     Some(s) => s.to_string(),
                     None => {
                         next += 1;
-                        format!("fake-{}-{next}", std::process::id())
+                        format!("{:08x}-0000-4000-8000-{next:012x}", std::process::id())
                     }
                 };
-                let load = method == "session/load";
                 let s = Session {
                     cwd: params["cwd"].as_str().unwrap_or_default().into(),
                     params: params.clone(),
@@ -137,13 +138,36 @@ fn main() {
                     effort: "medium".into(),
                     ..Session::default()
                 };
+                let git = PathBuf::from(&s.cwd).join(".git");
+                if let Ok(gate) = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(git.join("hold-open"))
+                {
+                    let _ = gate.lock();
+                }
                 if !load {
                     listed(|all| all.push(json!({"sessionId": sid, "cwd": s.cwd})));
+                    if let Some(path) = rollout(&sid, "sessions")
+                        && path.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
+                    {
+                        let meta =
+                            json!({"type": "session_meta", "payload": {"id": sid, "cwd": s.cwd}});
+                        let _ = fs::write(path, format!("{meta}\n"));
+                    }
                 }
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
+                let home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
                 if method == "session/new" {
-                    reply(json!({"sessionId": sid, "configOptions": config}));
+                    let mut opened = json!({"sessionId": sid});
+                    if !home
+                        .as_ref()
+                        .is_some_and(|p| p.join("fake-no-config").exists())
+                    {
+                        opened["configOptions"] = config;
+                    }
+                    reply(opened);
                 } else {
                     for (kind, text) in [("user", "earlier"), ("agent", "replayed")] {
                         let chunk = json!({"sessionUpdate": format!("{kind}_message_chunk"),
@@ -151,6 +175,20 @@ fn main() {
                         update(&out, &sid, chunk);
                     }
                     reply(json!({"configOptions": config}));
+                }
+                let report = home.and_then(|p| fs::read_to_string(p.join("fake-commands")).ok());
+                if !git.join("no-commands").exists() && report.as_deref() != Some("missing") {
+                    let commands = if report.as_deref() == Some("empty") {
+                        json!([])
+                    } else {
+                        json!([{"name": "compact", "description": "Compact the conversation"}])
+                    };
+                    update(
+                        &out,
+                        &sid,
+                        json!({"sessionUpdate": "available_commands_update",
+                        "availableCommands": commands}),
+                    );
                 }
             }
             "session/close" => {
@@ -182,10 +220,16 @@ fn main() {
                 reply(json!({"sessions": mine.collect::<Vec<_>>()}));
             }
             "session/delete" => {
-                let sid = params["sessionId"].clone();
+                let sid = params["sessionId"].as_str().unwrap_or_default();
                 listed(|all| {
                     for s in all.iter_mut().filter(|s| s["sessionId"] == sid) {
                         s["archived"] = json!(true);
+                        if let (Some(from), Some(to)) =
+                            (rollout(sid, "sessions"), rollout(sid, "archived_sessions"))
+                            && to.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
+                        {
+                            let _ = fs::rename(from, to);
+                        }
                     }
                 });
                 reply(json!({}));
@@ -205,7 +249,11 @@ fn main() {
                         s.mode = v
                     }
                     Some("model") if MODELS.iter().any(|m| m.0 == v) => s.model = v,
-                    Some("reasoning_effort") if EFFORTS.contains(&v.as_str()) => s.effort = v,
+                    Some("reasoning_effort")
+                        if !s.effort.is_empty() && EFFORTS.contains(&v.as_str()) =>
+                    {
+                        s.effort = v
+                    }
                     _ => {
                         send(
                             &out,
@@ -228,6 +276,14 @@ fn main() {
                 }
             }
             "session/prompt" => {
+                if let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty())
+                    && let Ok(mut log) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(PathBuf::from(home).join("fake.log"))
+                {
+                    let _ = writeln!(log, "session/prompt");
+                }
                 if let Some(id) = held.take() {
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
                 }
@@ -254,6 +310,13 @@ fn main() {
                     if let Some(s) = s.filter(|s| s["title"].is_null()) {
                         s["title"] = json!(text);
                         s["updatedAt"] = json!("2026-11-17T10:00:00.000Z");
+                        if let Some(path) = rollout(&sid, "sessions")
+                            && let Ok(mut file) = OpenOptions::new().append(true).open(path)
+                        {
+                            let event = json!({"type": "event_msg", "payload": {
+                                "type": "user_message", "message": text}});
+                            let _ = writeln!(file, "{event}");
+                        }
                     }
                 });
                 let (cancel, cancelled) = mpsc::channel();
@@ -305,11 +368,24 @@ fn next_request(next: &mut u64) -> u64 {
 
 const MODES: &[&str] = &["read-only", "workspace-write", "agent", "agent-full-access"];
 /// Each model's value and name.
-const MODELS: &[(&str, &str)] = &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-5.5 mini")];
+const MODELS: &[(&str, &str)] = &[
+    ("gpt-5.5", "GPT-5.5"),
+    ("gpt-5.5-mini", "GPT-5.5 mini"),
+    ("die", "Die"),
+];
 
 const EFFORTS: &[&str] = &["low", "medium", "high"];
 /// The host's line for a woken turn.
 const WAKE: &str = "You have new messages";
+
+fn rollout(id: &str, folder: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(folder)
+            .join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+    )
+}
 
 /// Runs `f` on the sessions `CODEX_HOME` keeps, and keeps what it leaves.
 fn listed(f: impl FnOnce(&mut Vec<Value>)) {
@@ -332,11 +408,14 @@ fn config(s: &Session) -> Value {
         json!({"id": id, "name": id, "type": "select", "currentValue": value, "options": options})
     };
     let pairs = |all: &[&'static str]| all.iter().map(|m| (*m, *m)).collect::<Vec<_>>();
-    json!([
+    let mut options = vec![
         select("mode", &s.mode, &pairs(MODES)),
         select("model", &s.model, MODELS),
-        select("reasoning_effort", &s.effort, &pairs(EFFORTS)),
-    ])
+    ];
+    if !s.effort.is_empty() {
+        options.push(select("reasoning_effort", &s.effort, &pairs(EFFORTS)));
+    }
+    Value::from(options)
 }
 
 enum Stop {
@@ -515,6 +594,22 @@ impl Turn<'_> {
             }
             "model" => self.say(&self.session(|s| format!("{} {}", s.model, s.mode))),
             "effort" => self.say(&self.session(|s| s.effort.clone())),
+            "no-effort" => {
+                let config = {
+                    let mut all = self.sessions.lock().map_err(err)?;
+                    let s = all.get_mut(self.sid).ok_or_else(|| err("session closed"))?;
+                    s.effort.clear();
+                    config(s)
+                };
+                self.update(
+                    json!({"sessionUpdate": "config_option_update", "configOptions": config}),
+                );
+                self.say("effort withdrawn");
+            }
+            "clear-commands" => self.update(json!({
+                "sessionUpdate": "available_commands_update", "availableCommands": []
+            })),
+            "/clear" => self.say("ordinary /clear prompt"),
             "home" => {
                 let home = std::env::var_os("CODEX_HOME").unwrap_or_default();
                 let all = std::fs::read_dir(home).into_iter().flatten().flatten();

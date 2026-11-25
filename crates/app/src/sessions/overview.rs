@@ -1,6 +1,8 @@
 mod activity;
 mod changes;
+mod chats;
 mod checkouts;
+mod status;
 
 use std::collections::HashSet;
 
@@ -103,7 +105,7 @@ impl Overview {
             changes: cx.new(WorkingChanges::new),
             activity: OverviewActivity::new(cx),
         });
-        let (mut waiting, running) = named.activity.rows(cx);
+        let (mut waiting, running, statuses) = named.activity.rows(cx);
         let w = Workspace::get(cx);
         if let Some(set) = w.sessions().iter().find(|s| s.id == w.session_id())
             && let Some(row) = worktree_problems(set, cx)
@@ -161,6 +163,10 @@ impl Overview {
                     }),
             )
             .when(start, |d| d.child(start_actions(cx)))
+            .when(!statuses.is_empty(), |d| {
+                d.child(status::block(statuses, cx))
+            })
+            .child(chats::block(cx))
             .into_any_element()
     }
 }

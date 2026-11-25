@@ -1,21 +1,23 @@
-//! One chat: its conversation's sessions on `kernel::Session`, the first opened when the chat shows,
-//! and the repo's settings for the user to trust.
+//! A chat's conversation and the repo's settings for the user to trust.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
 use detached_core::adapters::{CLAUDE, Provider};
-use detached_core::backend::{Kind, Setting, SlashCommand, Spec, StopReason};
+use detached_core::backend::{Kind, Model, Setting, SlashCommand, Spec, StopReason};
 use detached_core::chat_settings::{Choices, Preset};
 use detached_core::trust::{self, Project};
 use detached_core::types::RepoInfo;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::session::{Answer, End, Item, Session, State as Run};
 use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
+use serde::Deserialize;
+use serde_json::Value;
 
-/// The last commands each repo's Claude session listed, for `/` before this one's lists them.
 const COMMANDS: &str = "chat.commands";
 
 /// A trust check's number, what it read, and whether that is trusted.
@@ -39,10 +41,12 @@ pub struct Chat {
     pub(super) checkouts: Vec<RepoInfo>,
     /// Who answers: picked while nothing is said.
     pub provider: &'static Provider,
-    /// The conversation's sessions, oldest first: one that ended goes on in a resume after it.
+    /// Oldest first, with the passive transcript kept until a live replay replaces it.
     pub sessions: Vec<Entity<Session>>,
     /// The first thing the user said here.
     pub topic: Option<String>,
+    pub(super) draft: Option<String>,
+    pub(super) has_draft: bool,
     /// What the next session opens with.
     mode: Option<String>,
     pub model: Option<String>,
@@ -55,8 +59,7 @@ pub struct Chat {
     /// Checks begun, and the latest whose answer is shown: an older one may finish later.
     checks: u64,
     seen: u64,
-    /// The commands this repo's last session listed.
-    cached: Vec<SlashCommand>,
+    remembered: Option<Vec<SlashCommand>>,
     configured: bool,
     /// It shows a past conversation.
     resumed: bool,
@@ -74,15 +77,10 @@ impl Chat {
     }
 
     pub fn new(repo: String, cx: &mut Context<Self>) -> Self {
-        let mut all: BTreeMap<String, Vec<SlashCommand>> =
-            ui_state::get(COMMANDS, cx).unwrap_or_default();
         let (provider, choices) = defaults(cx).unwrap_or((&CLAUDE, Choices::default()));
         let workspace = Workspace::get(cx);
         Chat {
-            cached: all
-                .remove(&repo)
-                .filter(|_| provider.id == CLAUDE.id)
-                .unwrap_or_default(),
+            remembered: None,
             repo,
             owner: workspace
                 .id()
@@ -91,6 +89,8 @@ impl Chat {
             provider,
             sessions: vec![],
             topic: None,
+            draft: None,
+            has_draft: false,
             mode: choices.mode,
             model: choices.model,
             effort: choices.effort,
@@ -111,82 +111,116 @@ impl Chat {
         self.sessions.last()
     }
 
-    /// Opens the first session, unless one is there.
-    pub fn ensure(&mut self, cx: &mut Context<Self>) {
-        if !self.sessions.is_empty() || !Settings::ready(cx) {
-            return;
-        }
-        if !super::provider_config(cx).shows(self.provider) {
-            let Some((p, choices)) = defaults(cx) else {
-                return;
-            };
-            self.apply(p, choices);
-        }
-        self.open(None, cx);
+    pub(crate) fn queued<'a>(&self, cx: &'a App) -> Option<&'a str> {
+        self.current()?.read(cx).queued.as_deref()
     }
 
-    /// Opens a session after the ones there, resuming `past` when given.
-    fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
+    fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) -> Entity<Session> {
+        self.remembered = None;
         let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
         spec.mode = self.mode().into();
         spec.model = self.model.clone();
         spec.effort = self.effort.clone();
         spec.validate_choices = !self.resumed;
         let s = Session::open_scoped(spec, past, self.checkouts.clone(), cx);
+        self.track(s.clone(), cx);
+        s
+    }
+
+    fn track(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
         self.sessions.push(s);
         cx.notify();
     }
 
-    fn live(&self, cx: &App) -> Option<Entity<Session>> {
+    pub(super) fn live(&self, cx: &App) -> Option<Entity<Session>> {
         let s = self.current()?;
         (!matches!(s.read(cx).state, Run::Ended(_))).then(|| s.clone())
     }
 
     /// Sends `text` to the session, or to a new one that resumes the conversation.
-    pub fn send(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
-            self.ensure(cx);
-            if self.sessions.is_empty() {
-                return;
+    pub fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        if self.is_new(cx) {
+            if !super::can_start(cx) {
+                return false;
+            }
+            if !super::provider_config(cx).shows(self.provider) {
+                Activity::global(cx).update(cx, |a, cx| {
+                    a.say(
+                        format!(
+                            "{} is disabled. Select an enabled provider to send this message.",
+                            self.provider.name
+                        ),
+                        false,
+                        cx,
+                    )
+                });
+                return false;
             }
         }
+        let s = self
+            .live(cx)
+            .unwrap_or_else(|| self.open(self.conversation(cx).map(String::from), cx));
         self.topic.get_or_insert_with(|| text.clone());
-        let s = match self.live(cx) {
-            Some(s) => s,
-            None => {
-                self.open(self.conversation(cx).map(String::from), cx);
-                self.sessions.last().unwrap().clone()
-            }
-        };
         s.update(cx, |s, cx| s.prompt(text, cx));
         cx.notify();
+        true
     }
 
     fn changed(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         if Some(&s) == self.current() {
-            let (commands, unsent, ended, kept) = s.update(cx, |s, _| {
+            let run = s.read(cx);
+            if !run.is_passive()
+                && self.sessions[0].read(cx).is_passive()
+                && has_messages(&run.items[..run.history])
+                && self.sessions[1..self.sessions.len() - 1]
+                    .iter()
+                    .all(|s| !has_messages(&s.read(cx).items))
+            {
+                drop(self._watch.remove(0));
+                self.sessions.remove(0);
+            }
+            let (commands, returned, unsent, ended, kept) = s.update(cx, |s, _| {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
-                // What the agent kept after a refused switch, for the next session too.
                 let kept = std::mem::take(&mut s.refused)
                     .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
-                (s.commands.clone(), s.unsent.take(), ended, kept)
+                let commands = s
+                    .commands
+                    .as_ref()
+                    .filter(|c| Some(*c) != self.remembered.as_ref());
+                (
+                    commands.cloned(),
+                    s.returned.take(),
+                    s.unsent.take(),
+                    ended,
+                    kept,
+                )
             });
+            if let Some(text) = returned {
+                self.draft = Some(text);
+                self.has_draft = true;
+                if self.first_user(cx).is_none() {
+                    self.topic = None;
+                }
+            }
             if let Some([mode, model, effort]) = kept {
                 self.mode = mode.or(self.mode.take());
                 (self.model, self.effort) =
                     (model.or(self.model.take()), effort.or(self.effort.take()));
             }
-            // Kept for Claude's, the chat's first provider.
-            if !commands.is_empty() && commands != self.cached && self.provider.id == CLAUDE.id {
-                let mut all: BTreeMap<String, Vec<SlashCommand>> =
-                    ui_state::get(COMMANDS, cx).unwrap_or_default();
-                all.insert(self.repo.clone(), commands.clone());
-                ui_state::set(COMMANDS, all, cx);
-                self.cached = commands;
+            if let Some(commands) = commands {
+                let key = self.command_key();
+                let saved = ui_state::value(COMMANDS, cx).and_then(Value::as_object);
+                if let Ok(value) = serde_json::to_value(&commands)
+                    && saved.and_then(|all| all.get(&key)) != Some(&value)
+                {
+                    let mut all = saved.cloned().unwrap_or_default();
+                    all.insert(key, value);
+                    ui_state::set(COMMANDS, all, cx);
+                }
+                self.remembered = Some(commands);
             }
-            // The prompt goes on in a new session, without what the trust check refused.
             if let Some(text) = unsent {
                 self.send(text, cx);
             }
@@ -196,42 +230,50 @@ impl Chat {
             }
             let state = self.state(cx);
             if self.was.0 == State::Working && state != State::Working {
-                let topic = self.topic(cx).map(String::from);
-                super::alert(
-                    (&self.repo, self.provider.name),
-                    state,
-                    topic,
-                    &cx.entity(),
-                    cx,
-                );
+                super::alert(self, state, &cx.entity(), cx);
             }
             self.was = (state, busy);
         }
         cx.notify();
     }
 
-    /// The commands of the session, or the last ones listed here before it lists them.
-    pub fn commands<'a>(&'a self, cx: &'a App) -> &'a [SlashCommand] {
-        match self.current().map(|s| &s.read(cx).commands) {
-            Some(c) if !c.is_empty() => c,
-            _ => &self.cached,
+    fn command_key(&self) -> String {
+        format!("{}\0{}", self.provider.id, self.repo)
+    }
+
+    pub fn commands(&self, cx: &App) -> Option<Vec<SlashCommand>> {
+        if let Some(commands) = self.current().and_then(|s| s.read(cx).commands.as_ref()) {
+            return Some(commands.clone());
         }
+        let cached = ui_state::value(COMMANDS, cx);
+        let project = |key: &str| Vec::deserialize(cached?.get(key)?).ok();
+        project(&self.command_key())
+            .or_else(|| {
+                if self.provider.id == CLAUDE.id {
+                    project(&self.repo)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                let choices = Preset::read(Settings::get(cx))
+                    .providers
+                    .remove(self.provider.id)?;
+                choices.commands.or_else(|| choices.cli.map(|_| Vec::new()))
+            })
     }
 
     pub fn busy(&self, cx: &App) -> bool {
         self.current().is_some_and(|s| s.read(cx).busy())
     }
 
-    /// Stops the turn, and every turn of the session's group. A backend that cannot stop a
-    /// background command alone ends the session too, which ends its commands; the next message
-    /// resumes it.
+    /// Stops the group's turns, returns queued prompts, and closes sessions without per-task stop.
     pub fn stop(&self, cx: &mut Context<Self>) {
         if let Some(s) = self.current() {
             kernel::inbox::stop(cx, s);
         }
     }
 
-    /// Hands a chat with nothing in it to `p` with its preset.
     pub fn set_provider(&mut self, p: &'static Provider, cx: &mut Context<Self>) {
         if self.provider.id == p.id || !self.is_new(cx) || !super::provider_config(cx).shows(p) {
             return;
@@ -239,14 +281,10 @@ impl Chat {
         self.end(cx);
         self.apply(p, choices(&Preset::read(Settings::get(cx)), p));
         self.configured = true;
-        self.open(None, cx);
         self.check_trust(cx);
     }
 
     fn apply(&mut self, p: &'static Provider, choices: Choices) {
-        if self.provider.id != p.id {
-            self.cached.clear();
-        }
         (self.provider, self.mode, self.model, self.effort) =
             (p, choices.mode, choices.model, choices.effort);
     }
@@ -258,9 +296,10 @@ impl Chat {
     pub fn save_defaults(&self, cx: &mut Context<Self>) {
         let p = self.provider.id;
         let session = self.current().map(|s| s.read(cx));
+        let opened = session.filter(|s| s.version.is_some());
         let choice = |key, fallback: &Option<String>| {
-            match session {
-                Some(s) if s.version.is_some() => s.option(key).map(String::from),
+            match opened {
+                Some(s) => s.option(key).map(String::from),
                 _ => fallback.clone(),
             }
             .filter(|v| !v.is_empty())
@@ -270,7 +309,11 @@ impl Chat {
             .map_or_else(|| self.mode().to_string(), String::from);
         let model = choice("model", &self.model).filter(|m| m != "default");
         let effort = choice("effort", &self.effort);
+        let opened = opened.is_some();
         super::settings::save(cx, move |preset| {
+            let effort = effort.filter(|e| {
+                opened || cached_efforts(preset, p, model.as_deref()).is_none_or(|v| v.contains(e))
+            });
             preset.provider = p.into();
             let choices = preset.choices(p);
             (choices.model, choices.effort, choices.mode) = (model, effort, Some(mode));
@@ -289,13 +332,8 @@ impl Chat {
         {
             return;
         }
-        let reopen = self.current().is_some();
         self.end(cx);
         self.apply(p, choices);
-        if reopen {
-            self.ensure(cx);
-            self.check_trust(cx);
-        }
     }
 
     /// Switches the mode, model or effort, for this session and the next.
@@ -346,28 +384,41 @@ impl Chat {
         }
     }
 
-    /// The feed: each session's items by session and index, a resume's history left out but its
-    /// notes, and blank text left out.
-    pub fn feed<'a>(&'a self, cx: &'a App) -> Vec<((usize, usize), &'a Item)> {
-        let mut out = vec![];
-        for (k, s) in self.sessions.iter().enumerate() {
+    pub fn feed<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> impl DoubleEndedIterator<Item = ((usize, usize), &'a Item)> + 'a {
+        self.sessions.iter().enumerate().flat_map(move |(k, s)| {
             let s = s.read(cx);
-            let shown = s.items.iter().enumerate().filter(|(i, it)| {
-                (k == 0 || *i >= s.history || matches!(it, Item::Note(_) | Item::Error(_)))
-                    && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
-            });
-            out.extend(shown.map(|(i, it)| ((k, i), it)));
-        }
-        out
+            let history = if s.history == 0 && s.state == Run::Starting {
+                s.items.len()
+            } else {
+                s.history
+            };
+            let earlier = OnceCell::new();
+            s.items.iter().enumerate().filter_map(move |(i, it)| {
+                let shown = k == 0
+                    || i >= history
+                    || matches!(it, Item::Note(_) | Item::Error(_))
+                    || !earlier.get_or_init(|| {
+                        self.sessions[..k]
+                            .iter()
+                            .any(|s| has_messages(&s.read(cx).items))
+                    });
+                (shown && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty()))
+                    .then_some(((k, i), it))
+            })
+        })
     }
 
     /// Where in `feed` the agent last cleared its context: a `/clear` its session lists, whose
     /// turn ended well.
     pub fn cleared(&self, feed: &[((usize, usize), &Item)], cx: &App) -> Option<usize> {
         let lists = |k: usize| {
-            let own = &self.sessions[k].read(cx).commands;
-            let listed = if own.is_empty() { &self.cached } else { own };
-            listed.iter().any(|c| c.name == "clear")
+            self.sessions
+                .get(k)
+                .and_then(|s| s.read(cx).commands.as_deref())
+                .is_some_and(|commands| commands.iter().any(|c| c.name == "clear"))
         };
         let ended = |i: usize| {
             let end = feed[i + 1..].iter().find_map(|(_, it)| match it {
@@ -445,8 +496,11 @@ impl Chat {
                     }
                     Err(e) => {
                         c.accepted = None;
+                        let message = format!("Cannot save the trust: {e}");
                         if let Some(s) = live {
-                            s.update(cx, |s, _| s.fail(format!("Cannot save the trust: {e}")));
+                            s.update(cx, |s, _| s.fail(message));
+                        } else {
+                            Activity::global(cx).update(cx, |a, cx| a.say(message, true, cx));
                         }
                     }
                 }
@@ -476,7 +530,8 @@ impl Chat {
         self.end(cx);
         self.apply(p, Choices::default());
         self.resumed = true;
-        self.open(Some(id), cx);
+        let s = Session::past(Spec::new(p, &self.repo, Kind::Chat), id, cx);
+        self.track(s, cx);
     }
 
     /// Where the chat stands, for its icon in the lists.
@@ -543,13 +598,14 @@ impl Chat {
 
     /// The first thing the user said, to tell chats apart.
     pub fn topic<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
-        let first = self.sessions.iter().find_map(|s| {
-            s.read(cx).items.iter().find_map(|i| match i {
-                Item::User(t) => Some(t.as_str()),
-                _ => None,
-            })
-        });
-        first.or(self.topic.as_deref())
+        self.first_user(cx).or(self.topic.as_deref())
+    }
+
+    fn first_user<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        self.feed(cx).find_map(|(_, i)| match i {
+            Item::User(t) => Some(t.as_str()),
+            _ => None,
+        })
     }
 
     /// Ends its sessions for good, out of any group: the chat is going away, or shows another
@@ -569,16 +625,35 @@ impl Chat {
         cx.notify();
     }
 
-    /// Forgets the conversation: a new session takes its place.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.end(cx);
         if let Some((p, choices)) = defaults(cx) {
             self.apply(p, choices);
-            self.open(None, cx);
-            self.check_trust(cx);
         }
-        cx.notify();
+        self.check_trust(cx);
     }
+}
+
+pub(super) fn cached_efforts<'a>(
+    preset: &'a Preset,
+    provider: &str,
+    model: Option<&str>,
+) -> Option<&'a [String]> {
+    let models = preset.models(provider);
+    let efforts = preset.efforts(provider);
+    if !efforts.is_empty() && models.iter().all(|m| m.efforts.is_empty()) {
+        Some(efforts)
+    } else {
+        Model::find(models, model.unwrap_or("default")).map(|m| m.efforts.as_slice())
+    }
+}
+
+fn has_messages(items: &[Item]) -> bool {
+    items.iter().any(|it| match it {
+        Item::Note(_) | Item::Error(_) => false,
+        Item::Text(t) | Item::Thought(t) => !t.trim().is_empty(),
+        _ => true,
+    })
 }
 
 fn defaults(cx: &App) -> Option<(&'static Provider, Choices)> {

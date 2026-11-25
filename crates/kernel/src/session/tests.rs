@@ -46,6 +46,7 @@ both!(
     a_turn_keeps_the_model_and_effort_that_ran,
     an_opened_session_remembers_its_provider_s_models_when_they_differ,
     cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks,
+    stopping_a_start_returns_the_queued_prompt,
     a_load_runs_on_the_session_s_model,
     a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone,
     a_load_of_a_closing_session_waits_for_its_close,
@@ -119,6 +120,22 @@ fn an_opened_session_remembers_its_provider_s_models_when_they_differ(
     wait_until(cx, |cx| loaded(cx) && remembered(cx) == models[..1]);
     open(&f, Kind::Chat, cx);
     wait_until(cx, |cx| loaded(cx) && remembered(cx) == models);
+}
+
+#[gpui::test]
+fn a_failed_capability_cache_save_is_reported_and_the_session_continues(cx: &mut TestAppContext) {
+    let f = boot_fake(cx, Fake::Claude);
+    let settings = f.core.config_dir.join("settings.json");
+    std::fs::remove_file(&settings).unwrap();
+    std::fs::create_dir(&settings).unwrap();
+    let s = open(&f, Kind::Chat, cx);
+    wait_until(cx, |cx| {
+        Activity::global(cx).read(cx).log.iter().any(|e| {
+            e.level == crate::activity::Level::Error
+                && e.text.contains("Could not cache claude capabilities")
+        })
+    });
+    assert_eq!(turn(&s, "say still here", cx), "still here");
 }
 
 /// A real adapter and `claude` may take this long to start or answer.
@@ -305,6 +322,25 @@ fn state(s: &Entity<Session>, cx: &mut TestAppContext) -> State {
     s.read_with(cx, |s, _| s.state.clone())
 }
 
+#[gpui::test]
+fn a_start_that_fails_hands_back_its_prompt(cx: &mut TestAppContext) {
+    let f = boot_on(cx, Path::new("/nowhere"), &[], &CLAUDE, |_| {});
+    let s = cx.update(|cx| {
+        let s = Session::open(f.spec(Kind::Chat), None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        s
+    });
+    wait_until(cx, |cx| {
+        matches!(s.read(cx).state, State::Ended(End::Failed(_)))
+    });
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(s.queued.is_none());
+        assert!(s.unsent.is_none());
+        assert!(matches!(s.items.as_slice(), [Item::Error(_)]));
+    });
+}
+
 fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestAppContext) {
     let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
@@ -366,11 +402,15 @@ fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_the
     let path = other.display().to_string();
     f.core.add_folder(Some(id.clone()), path).unwrap();
     let s = open(&f, Kind::Chat, cx);
+    let passive = cx.update(|cx| Session::past(f.spec(Kind::Chat), "missing".into(), cx));
     let workspace = cx.read(Workspace::global);
     workspace.update(cx, |w, cx| w.switch(id.clone(), cx));
     wait_until(cx, |cx| {
         Workspace::get(cx).id() == Some(id.as_str()) && !crate::invalidate::rescanning(cx)
     });
+    wait_until(cx, |cx| !passive.read(cx).items.is_empty());
+    drop(passive);
+    cx.update(|_| {});
     cx.read(|cx| {
         let w = Workspace::get(cx);
         assert!(w.repos().iter().all(|r| r.path != f.repo));
@@ -411,6 +451,65 @@ fn a_chat_after_a_switch_snapshots_its_own_repos_and_its_proc_and_watch_find_the
     // Its release, and so the workspace's, runs on the next flush of effects.
     cx.update(|_| {});
     assert!(cx.read(|cx| Workspace::get(cx).repo(&f.repo).is_none()));
+}
+
+#[test]
+fn a_tool_heavy_transcript_indexes_calls_and_updates_them_in_place() {
+    let (mut items, mut whole, mut tools) = (vec![], 0, HashMap::new());
+    let count = 10_000;
+    for i in 0..count {
+        let call = Tool {
+            id: i.to_string(),
+            title: Some("lookup".into()),
+            ..Tool::default()
+        };
+        record(
+            &mut items,
+            &mut whole,
+            &mut tools,
+            Update::Tool(Box::new(call)),
+        );
+    }
+    for i in (0..count).rev() {
+        let id = i.to_string();
+        assert_eq!(tools[&id], i);
+        let result = Tool {
+            id,
+            output: Some(json!(i)),
+            ..Tool::default()
+        };
+        record(
+            &mut items,
+            &mut whole,
+            &mut tools,
+            Update::Tool(Box::new(result)),
+        );
+    }
+    assert_eq!(items.len(), count);
+    for (i, item) in items.iter().enumerate() {
+        assert!(
+            matches!(item, Item::Tool(t) if t.title.as_deref() == Some("lookup") && t.output == Some(json!(i)))
+        );
+    }
+}
+
+#[gpui::test]
+fn a_start_that_ends_during_replay_keeps_only_its_diagnostics(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let spec = Spec::new(&CLAUDE, ".", Kind::Chat);
+        let who = Identity::of(spec.kind, &spec.repo);
+        let s = cx.new(|_| Session::new(spec, Some("past".into()), who, None));
+        s.update(cx, |s, cx| {
+            s.prompt("retry me".into(), cx);
+            s.version = Some("test".into());
+            s.update(Update::User("earlier".into()));
+            s.update(Update::Text("replayed".into()));
+            s.fail("agent exited".into());
+            s.close(End::Crashed("agent exited".into()), cx);
+            assert_eq!(s.items, [Item::Error("agent exited".into())]);
+            assert_eq!(s.returned.as_deref(), Some("retry me"));
+        });
+    });
 }
 
 #[gpui::test]
@@ -494,6 +593,43 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
     assert_eq!(said(&s, from, cx), picked);
 }
 
+fn stopping_a_start_returns_the_queued_prompt(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
+    let mut spec = f.spec(Kind::Chat);
+    let held = Path::new(&f.repo).join("hold-config");
+    if fake == Fake::Acp {
+        spec.mode = "read-only".into();
+        std::fs::write(&held, "").unwrap();
+    }
+    let s = cx.update(|cx| {
+        let s = Session::open(spec.clone(), None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        if fake == Fake::Claude {
+            crate::inbox::stop(cx, &s);
+        }
+        s
+    });
+    if fake == Fake::Acp {
+        wait_until(cx, |_| !held.exists());
+        cx.update(|cx| {
+            assert_eq!(s.read(cx).state, State::Starting);
+            crate::inbox::stop(cx, &s);
+        });
+    }
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(s.unsent.is_none());
+        assert!(!s.items.iter().any(|i| matches!(i, Item::User(_))));
+    });
+    if fake == Fake::Acp {
+        assert_eq!(state(&s, cx), State::Ended(End::Closed));
+        let next = open_spec(spec.clone(), None, cx);
+        assert_eq!(turn(&next, "say hello", cx), "hello");
+    } else {
+        wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    }
+}
+
 fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(
     fake: Fake,
     cx: &mut TestAppContext,
@@ -529,13 +665,21 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     let mut spec = f.spec(Kind::Chat);
     // The fake exits with code 3 when it is set to this model.
     spec.model = Some("die".into());
-    let s = cx.update(|cx| Session::open(spec, None, cx));
+    let s = cx.update(|cx| {
+        let s = Session::open(spec, None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        s
+    });
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     let State::Ended(End::Crashed(why)) = state(&s, cx) else {
         panic!("{:?}", state(&s, cx));
     };
     assert!(why.contains("code 3"), "{why}");
-    assert_eq!(s.read_with(cx, |s, _| s.version.clone()), None);
+    s.read_with(cx, |s, _| {
+        assert!(s.version.is_none());
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(matches!(s.items.as_slice(), [Item::Error(_)]));
+    });
     let next = open(&f, Kind::Chat, cx);
     assert_eq!(turn(&next, "say anew", cx), "anew");
 }

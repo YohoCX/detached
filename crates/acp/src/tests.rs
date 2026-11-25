@@ -29,12 +29,13 @@ fn spec(cwd: &Path) -> proc::Spec {
         args: vec![],
         cwd: cwd.into(),
         env: proc::env(&[], |k| std::env::var_os(k)),
+        temporary_dir: None,
     }
 }
 
 fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec(cwd), move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&spec(cwd), None, move |e| _ = tx.send(e)).unwrap();
     let options = Options {
         cwd: cwd.into(),
         ..Default::default()
@@ -277,8 +278,7 @@ fn closed(rx: &Receiver<backend::Event>) {
     until(rx, |e| matches!(e, backend::Event::Closed).then_some(()));
 }
 
-#[test]
-fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
+fn history_home() -> (Sandbox, PathBuf) {
     let sb = Sandbox::new();
     let home = sb.path("codex");
     sb.state
@@ -287,6 +287,12 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
         .unwrap()
         .vars
         .push(("CODEX_HOME".into(), home.display().to_string()));
+    (sb, home)
+}
+
+#[test]
+fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
+    let (sb, home) = history_home();
     let dir = home.join("sessions/2026/11/23");
     std::fs::create_dir_all(&dir).unwrap();
     let repo = sb.dir.path().display().to_string();
@@ -329,14 +335,7 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
 
 #[test]
 fn archive_scans_both_folders_and_reports_bad_rollouts_once() {
-    let sb = Sandbox::new();
-    let home = sb.path("codex");
-    sb.state
-        .env
-        .write()
-        .unwrap()
-        .vars
-        .push(("CODEX_HOME".into(), home.display().to_string()));
+    let (sb, home) = history_home();
     let dir = home.join("archived_sessions");
     std::fs::create_dir_all(&dir).unwrap();
     let folders = ["one", "two"].map(|p| sb.path(p).display().to_string());
@@ -463,6 +462,21 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly() {
         .got(Event::Exited(exit, true));
     let e = new_rx.recv_timeout(wait()).unwrap();
     assert!(matches!(e, backend::Event::Closed));
+}
+
+#[test]
+fn a_capability_probe_uses_a_private_adapter() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (chat, _rx) = open(&acp, &sb, None);
+    let dir = Arc::new(backend::probe_dir().unwrap());
+    let mut spec = Spec::new(&CODEX, dir.path().to_str().unwrap(), Kind::Chat);
+    spec.open_deadline = Some(Instant::now() + wait());
+    spec.trusted = true;
+    spec.temporary_dir = Some(dir);
+    let probe = acp.start(&sb.state, &spec, None, Box::new(|_| {})).unwrap();
+    let (next, _rx) = open(&acp, &sb, None);
+    assert!(!Arc::ptr_eq(&chat.live, &probe.live));
+    assert!(Arc::ptr_eq(&chat.live, &next.live));
 }
 
 /// A chat with the host's tools, which record each call, and its tools' URL as its agent got it.
@@ -828,7 +842,7 @@ fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_opt
     assert_eq!(option(&opened.config, "mode"), "agent");
     assert_eq!(option(&opened.config, "effort"), "medium");
     let models: Vec<_> = opened.models.iter().map(|m| m.label.as_str()).collect();
-    assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini"]);
+    assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini", "Die"]);
     for (setting, id, value) in [
         (Setting::Mode("read-only".into()), "mode", "read-only"),
         (Setting::Effort("high".into()), "effort", "high"),
@@ -897,27 +911,148 @@ fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
 }
 
 #[test]
-fn codex_lists_the_host_s_own_sessions_of_the_folder_and_its_delete_archives() {
+fn codex_past_lists_rollouts_without_an_adapter() {
+    let (sb, home) = history_home();
+    let repo = sb.dir.path().display().to_string();
+    let other = sb.path("other").display().to_string();
+    let id = |n| format!("00000000-0000-0000-0000-{n:012}");
+    for (n, folder, cwd, known) in [
+        (1, "sessions/2026/11/23", &repo, true),
+        (2, "sessions/2026/11/23", &repo, true),
+        (3, "sessions/2026/11/23", &repo, false),
+        (4, "sessions/2026/11/23", &other, true),
+        (5, "archived_sessions", &repo, true),
+    ] {
+        let sid = id(n);
+        let dir = home.join(folder);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file =
+            std::fs::File::create(dir.join(format!("rollout-2026-11-23T12-00-00-{sid}.jsonl")))
+                .unwrap();
+        let meta = json!({"type":"session_meta", "payload":{"id":sid, "cwd":cwd}});
+        let event =
+            json!({"type":"event_msg", "payload":{"type":"user_message", "message":"Earlier"}});
+        writeln!(file, "{meta}\n{event}").unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + n))
+            .unwrap();
+        if known {
+            chat_index::created(&sb.state, &sid, CODEX.id).unwrap();
+        }
+    }
+
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    assert!(
+        adapters::installed(&sb.state.data_dir, CODEX.adapter)
+            .current
+            .is_none()
+    );
+    let past = acp.past(&sb.state, &spec).unwrap();
+    let ids: Vec<_> = past.iter().map(|chat| chat.id.clone()).collect();
+    assert_eq!(ids, [id(2), id(1)]);
+    assert_eq!(past[0].title, "Earlier");
+    assert_eq!(past[0].cwd.as_deref(), Some(repo.as_str()));
+    assert!(past[0].modified > past[1].modified);
+    let archived = acp.transcript(&sb.state, &spec, &id(5)).unwrap();
+    assert!(matches!(&archived[..], [Update::User(text), Update::Break] if text == "Earlier"));
+    assert!(acp.adapters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn codex_past_reports_failed_scans_and_keeps_partial_results() {
+    let (sb, home) = history_home();
+    let repo = sb.dir.path().display().to_string();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let good = "00000000-0000-0000-0000-000000000001";
+    let bad = "00000000-0000-0000-0000-000000000002";
+    let sessions = home.join("sessions");
+    let rollout = |id| sessions.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl"));
+    let past = || acp.past(&sb.state, &spec);
+    chat_index::created(&sb.state, good, CODEX.id).unwrap();
+
+    assert!(past().unwrap().is_empty());
+    std::fs::write(&home, "").unwrap();
+    assert!(past().unwrap_err().to_string().contains("not a directory"));
+    std::fs::remove_file(&home).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(&sessions, "").unwrap();
+    assert!(past().unwrap_err().to_string().contains("sessions"));
+    std::fs::remove_file(&sessions).unwrap();
+    std::fs::create_dir(&sessions).unwrap();
+
+    std::fs::write(rollout(bad).with_extension("jsonl.zst"), "bad frame").unwrap();
+    assert!(past().unwrap().is_empty());
+    let archived = acp.archive_past(&sb.state, &CODEX, std::slice::from_ref(&repo));
+    assert!(archived.errors[0].contains(bad));
+    chat_index::created(&sb.state, bad, CODEX.id).unwrap();
+    assert!(past().unwrap_err().to_string().contains(bad));
+    let meta = json!({"type": "session_meta", "payload": {"cwd": repo}});
+    std::fs::write(rollout(good), format!("{meta}\n")).unwrap();
+    let chats = past().unwrap();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].id, good);
+}
+
+#[test]
+fn codex_past_keeps_a_chat_when_title_lookup_hits_the_record_limit() {
+    let (sb, home) = history_home();
+    let repo = sb.dir.path().display().to_string();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let id = "00000000-0000-0000-0000-000000000001";
+    chat_index::created(&sb.state, id, CODEX.id).unwrap();
+    let dir = home.join("sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let meta = json!({"type": "session_meta", "payload": {"cwd": repo}});
+    let event = json!({"type": "event_msg", "payload": {"type": "user_message",
+        "message": "x".repeat(8 * 1024 * 1024)}});
+    std::fs::write(
+        dir.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+        format!("{meta}\n{event}\n"),
+    )
+    .unwrap();
+
+    let chats = acp.past(&sb.state, &spec).unwrap();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(
+        (chats[0].id.as_str(), chats[0].title.as_str()),
+        (id, "Untitled")
+    );
+    let archived = acp.archive_past(&sb.state, &CODEX, &[repo]);
+    assert!(archived.chats.is_empty());
+    assert_eq!(archived.errors.len(), 1);
+    assert!(archived.errors[0].contains("8 MiB"));
+    assert!(
+        acp.transcript(&sb.state, &spec, id)
+            .unwrap_err()
+            .to_string()
+            .contains("8 MiB")
+    );
+}
+
+#[test]
+fn codex_delete_archives_its_session() {
     let (acp, sb) = (Acp::default(), codex());
     let (open, rx, opened) = codex_chat(&acp, &sb);
     open.prompt("say hello").unwrap();
-    said(&rx);
+    assert_eq!(said(&rx), "hello");
     let repo = sb.dir.path().display().to_string();
-    let file = sb.path("codex-home/fake-sessions.json");
-    let mut all: Vec<Value> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    all.push(json!({"sessionId": "from-the-cli", "cwd": repo, "title": "mine"}));
-    std::fs::write(&file, Value::from(all).to_string()).unwrap();
-    chat_index::created(&sb.state, &opened.id, CODEX.id).unwrap();
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    chat_index::created(&sb.state, &opened.id, CODEX.id).unwrap();
     let past = acp.past(&sb.state, &spec).unwrap();
-    let listed: Vec<_> = past
-        .iter()
-        .map(|p| (p.id.as_str(), p.title.as_str()))
-        .collect();
-    assert_eq!(listed, [(opened.id.as_str(), "say hello")]);
-    assert!(past[0].modified > 0);
+    assert_eq!(
+        (&past[0].id, past[0].title.as_str()),
+        (&opened.id, "say hello")
+    );
     acp.delete(&sb.state, &spec, &opened.id).unwrap();
     assert!(acp.past(&sb.state, &spec).unwrap().is_empty());
+    let archived = acp.transcript(&sb.state, &spec, &opened.id).unwrap();
+    assert!(matches!(&archived[..], [Update::User(text), Update::Break] if text == "say hello"));
+    let file = sb.path("codex-home/fake-sessions.json");
+    let sessions: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    assert_eq!(sessions[0]["sessionId"], opened.id);
+    assert_eq!(sessions[0]["archived"], true);
 }
 
 #[test]

@@ -26,6 +26,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{App, AppContext, Context, Entity, Global, Task, WeakEntity};
 
+use crate::activity::Activity;
 use crate::blocking::{self, FRAME};
 use crate::host::Identity;
 use crate::resource::{self, Policy, Resource};
@@ -168,7 +169,7 @@ pub struct Session {
     /// The agent's version, from `Opened`.
     pub version: Option<String>,
     pub models: Vec<Model>,
-    pub commands: Vec<SlashCommand>,
+    pub commands: Option<Vec<SlashCommand>>,
     pub account: Option<Account>,
     /// The tasks running now.
     pub tasks: Vec<backend::Task>,
@@ -182,8 +183,10 @@ pub struct Session {
     pub history: usize,
     /// A prompt given while the session starts, sent once it has.
     pub queued: Option<String>,
-    /// A prompt the session ended on before it went out.
+    /// A prompt to send in the next session.
     pub unsent: Option<String>,
+    /// A prompt to put back in the composer.
+    pub returned: Option<String>,
     /// The agent refused a switch since this was last taken: what it kept is in `config`.
     pub refused: bool,
     /// Settings picked while the session starts or woken turns run, applied once it has or they
@@ -207,6 +210,7 @@ pub struct Session {
     cancelled: bool,
     /// Items before this are whole: the last `Break` came after them.
     whole: usize,
+    tools: HashMap<String, usize>,
     /// The running turn reported `done`.
     done: bool,
     /// Woken turns run, one after another: the owner's mode comes back after the last.
@@ -218,7 +222,7 @@ pub struct Session {
     /// Taken by the recheck loop once the session started.
     changes: Option<mpsc::UnboundedReceiver<()>>,
     _watch: Option<trust::Watch>,
-    _held: gpui::Subscription,
+    _held: Option<gpui::Subscription>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -418,6 +422,45 @@ impl Session {
         Self::open_with(spec, past, seat, None, cx)
     }
 
+    /// Stays closed and notifies when its transcript or read error is ready.
+    pub fn past(mut spec: Spec, id: String, cx: &mut App) -> Entity<Session> {
+        spec.tools = None;
+        let read = transcript(
+            spec.provider,
+            spec.repo.clone(),
+            id.clone(),
+            |updates| {
+                let (mut items, mut whole, mut tools) = (vec![], 0, HashMap::new());
+                for update in updates {
+                    record(&mut items, &mut whole, &mut tools, update);
+                }
+                items
+            },
+            cx,
+        );
+        cx.new(|cx| {
+            let who = Identity::of(spec.kind, &spec.repo);
+            let mut s = Self::new(spec, Some(id), who, None);
+            s.state = State::Ended(End::Closed);
+            s.task(cx, async move |this, cx| {
+                let read = read.await;
+                this.update(cx, |s, cx| {
+                    match read {
+                        Ok(items) => (s.history, s.items) = (items.len(), items),
+                        Err(e) => s.fail(e.to_string()),
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+            s
+        })
+    }
+
+    pub fn is_passive(&self) -> bool {
+        self._held.is_none()
+    }
+
     fn open_with(
         mut spec: Spec,
         past: Option<String>,
@@ -439,50 +482,8 @@ impl Session {
             who.repos = Some(repos);
             let tx = cx.global::<Sessions>().tx.clone();
             spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
-            let (changed, changes) = mpsc::unbounded();
-            let mut s = Session {
-                spec: spec.clone(),
-                who,
-                seat,
-                tokens: 0,
-                failure: None,
-                state: State::Starting,
-                items: vec![],
-                id: past.clone(),
-                config: vec![],
-                usage: None,
-                cost: None,
-                version: None,
-                models: vec![],
-                commands: vec![],
-                account: None,
-                tasks: vec![],
-                parts: vec![],
-                limits: None,
-                lacks: vec![],
-                history: 0,
-                queued: None,
-                unsent: None,
-                refused: false,
-                picked: vec![],
-                open: None,
-                trust: String::new(),
-                blocks: backend(spec.provider).caps().blocks,
-                rules: vec![],
-                replies: HashMap::new(),
-                turn: None,
-                ending: None,
-                cancelled: false,
-                whole: 0,
-                done: false,
-                woken: false,
-                wake_due: false,
-                changed,
-                changes: Some(changes),
-                _watch: None,
-                _held: held,
-                _tasks: vec![],
-            };
+            let mut s = Self::new(spec, past, who, seat);
+            s._held = Some(held);
             s.start(cx);
             s
         });
@@ -490,6 +491,55 @@ impl Session {
         all.retain(|s| s.upgrade().is_some());
         all.push(s.downgrade());
         s
+    }
+
+    fn new(spec: Spec, id: Option<String>, who: Identity, seat: Option<Seat>) -> Self {
+        let (changed, changes) = mpsc::unbounded();
+        Self {
+            blocks: backend(spec.provider).caps().blocks,
+            spec,
+            who,
+            seat,
+            tokens: 0,
+            failure: None,
+            state: State::Starting,
+            items: vec![],
+            id,
+            config: vec![],
+            usage: None,
+            cost: None,
+            version: None,
+            models: vec![],
+            commands: None,
+            account: None,
+            tasks: vec![],
+            parts: vec![],
+            limits: None,
+            lacks: vec![],
+            history: 0,
+            queued: None,
+            unsent: None,
+            returned: None,
+            refused: false,
+            picked: vec![],
+            open: None,
+            trust: String::new(),
+            rules: vec![],
+            replies: HashMap::new(),
+            turn: None,
+            ending: None,
+            cancelled: false,
+            whole: 0,
+            tools: HashMap::new(),
+            done: false,
+            woken: false,
+            wake_due: false,
+            changed,
+            changes: Some(changes),
+            _watch: None,
+            _held: None,
+            _tasks: vec![],
+        }
     }
 
     /// Starts or resumes the session; a resume of an id still loading or open waits for that to
@@ -561,10 +611,9 @@ impl Session {
         let s = match started {
             Ok(s) => s,
             Err(e) => {
-                self.state = State::Ended(End::Failed(e.to_string()));
-                self.items.extend(self.queued.take().map(Item::User));
-                self.items.push(Item::Error(e.to_string()));
-                return cx.notify();
+                let why = e.to_string();
+                self.fail(why.clone());
+                return self.close(End::Failed(why), cx);
             }
         };
         (self.open, self.trust, self.spec.trusted) = (Some(s.session), s.trust, s.trusted);
@@ -756,6 +805,7 @@ impl Session {
                 .rposition(|i| matches!(i, Item::User(t) if *t == text))
             {
                 self.items.remove(i);
+                self.reindex_tools(i);
             }
             self.unsent = Some(text);
         }
@@ -797,12 +847,11 @@ impl Session {
         cx.notify();
     }
 
-    /// Ends the running turn and its foreground command, and answers its asks `cancelled`; a
-    /// queued prompt goes.
+    /// Cancels the running turn or returns a queued prompt.
     pub fn cancel(&mut self) {
         self.wake_due = false;
         if let Some(text) = self.queued.take() {
-            self.items.push(Item::User(text));
+            self.returned = Some(text);
         }
         let (Some(o), State::Running) = (&self.open, &self.state) else {
             return;
@@ -907,6 +956,13 @@ impl Session {
         if matches!(self.state, State::Ended(_)) {
             return;
         }
+        if self.state == State::Starting && self.version.is_some() {
+            // An opened backend can replay before startup finishes.
+            self.items
+                .retain(|i| matches!(i, Item::Note(_) | Item::Error(_)));
+            self.tools.clear();
+            self.whole = 0;
+        }
         if end == End::Trust {
             self.note(TRUST_CHANGED.into());
         }
@@ -916,11 +972,10 @@ impl Session {
         {
             o.cancel();
         }
-        // A prompt the host's end kept from going out goes on in the next session.
         if let Some(text) = self.queued.take() {
             match end {
                 End::Closed | End::Trust => self.unsent = self.unsent.take().or(Some(text)),
-                _ => self.items.push(Item::User(text)),
+                _ => self.returned = Some(text),
             }
         }
         (self._watch, self.turn, self.ending) = (None, None, None);
@@ -957,12 +1012,23 @@ impl Session {
                 self.version = Some(o.version);
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
-                let (core, id, models) = (
-                    crate::core(cx).clone(),
-                    self.spec.provider.id,
-                    self.models.clone(),
-                );
-                blocking::run(cx, move || _ = Preset::remember(&core, id, &models)).detach();
+                let (core, id) = (crate::core(cx).clone(), self.spec.provider.id);
+                let (models, account) = (self.models.clone(), self.account.clone());
+                let efforts = self.config.iter().find(|c| c.id == "effort");
+                let efforts = efforts.map(|c| c.values.clone());
+                let saved = blocking::run(cx, move || {
+                    Preset::remember(&core, id, models, efforts, account)
+                });
+                cx.spawn(async move |_, cx| {
+                    if let Err(e) = saved.await {
+                        cx.update(|cx| {
+                            Activity::global(cx).update(cx, |a, cx| {
+                                a.say(format!("Could not cache {id} capabilities: {e}"), true, cx)
+                            });
+                        });
+                    }
+                })
+                .detach();
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
                     self.note(HISTORY_UNAVAILABLE.into());
@@ -1018,45 +1084,28 @@ impl Session {
     }
 
     pub(crate) fn update(&mut self, u: Update) {
-        let items = &mut self.items;
-        let open = items.len() > self.whole;
-        match (u, items.last_mut().filter(|_| open)) {
-            (Update::User(t), Some(Item::User(was)))
-            | (Update::Text(t), Some(Item::Text(was)))
-            | (Update::Thought(t), Some(Item::Thought(was))) => was.push_str(&t),
-            (Update::User(t), _) => items.push(Item::User(t)),
-            (Update::Text(t), _) => items.push(Item::Text(t)),
-            (Update::Thought(t), _) => items.push(Item::Thought(t)),
-            (Update::Break, _) => self.whole = items.len(),
-            (Update::PastTurn(config), _) => items.push(Item::PastTurn(config)),
-            (Update::Tool(t), _) => {
-                let known = items.iter_mut().rev().find_map(|i| match i {
-                    Item::Tool(was) if was.id == t.id => Some(was),
-                    _ => None,
-                });
-                match known {
-                    Some(was) => was.update(*t),
-                    None => items.push(Item::Tool(*t)),
-                }
-            }
-            (
-                Update::Usage {
-                    used,
-                    size,
-                    cost,
-                    parts,
-                },
-                _,
-            ) => {
+        match u {
+            Update::User(_)
+            | Update::Text(_)
+            | Update::Thought(_)
+            | Update::Break
+            | Update::PastTurn(_)
+            | Update::Tool(_) => record(&mut self.items, &mut self.whole, &mut self.tools, u),
+            Update::Usage {
+                used,
+                size,
+                cost,
+                parts,
+            } => {
                 (self.usage, self.parts) = (Some((used, size)), parts);
                 self.cost = cost.or(self.cost);
             }
-            (Update::Commands(c), _) => self.commands = c,
-            (Update::Tasks(t), _) => self.tasks = t,
-            (Update::Limits(l), _) => self.limits = Some(l),
-            (Update::Lacks(p), _) => self.lacks.push(p),
-            (Update::Trust, _) => _ = self.changed.unbounded_send(()),
-            (Update::Refused(why), _) => {
+            Update::Commands(c) => self.commands = Some(c),
+            Update::Tasks(t) => self.tasks = t,
+            Update::Limits(l) => self.limits = Some(l),
+            Update::Lacks(p) => self.lacks.push(p),
+            Update::Trust => _ = self.changed.unbounded_send(()),
+            Update::Refused(why) => {
                 self.note(format!("The agent kept its setting: {why}"));
                 // A woken turn that cannot ask first does not run.
                 if self.woken && self.state == State::Running {
@@ -1068,8 +1117,8 @@ impl Session {
                 }
                 self.refused = true;
             }
-            (Update::Config(c), _) => self.config = c,
-            (Update::Mode(m), _) => {
+            Update::Config(c) => self.config = c,
+            Update::Mode(m) => {
                 if self.woken && m != self.spec.provider.ask {
                     self.note(format!(
                         "The woken turn ran in {m}, not asking first, so it stopped."
@@ -1079,6 +1128,14 @@ impl Session {
                 if let Some(c) = self.config.iter_mut().find(|c| c.id == "mode") {
                     c.value = m;
                 }
+            }
+        }
+    }
+
+    fn reindex_tools(&mut self, from: usize) {
+        for (i, item) in self.items.iter().enumerate().skip(from) {
+            if let Item::Tool(t) = item {
+                self.tools.insert(t.id.clone(), i);
             }
         }
     }
@@ -1161,6 +1218,7 @@ impl Session {
                                 back,
                             };
                             s.items.insert(at, changes);
+                            s.reindex_tools(at);
                         }
                         Err(e) => s.fail(format!(
                             "No snapshot of {} after the turn: {e}",
@@ -1292,6 +1350,33 @@ impl Session {
     ) {
         self._tasks.retain(|t| !t.is_ready());
         self._tasks.push(cx.spawn(f));
+    }
+}
+
+fn record(
+    items: &mut Vec<Item>,
+    whole: &mut usize,
+    tools: &mut HashMap<String, usize>,
+    update: Update,
+) {
+    let open = items.len() > *whole;
+    match (update, items.last_mut().filter(|_| open)) {
+        (Update::User(t), Some(Item::User(was)))
+        | (Update::Text(t), Some(Item::Text(was)))
+        | (Update::Thought(t), Some(Item::Thought(was))) => was.push_str(&t),
+        (Update::User(t), _) => items.push(Item::User(t)),
+        (Update::Text(t), _) => items.push(Item::Text(t)),
+        (Update::Thought(t), _) => items.push(Item::Thought(t)),
+        (Update::Break, _) => *whole = items.len(),
+        (Update::PastTurn(config), _) => items.push(Item::PastTurn(config)),
+        (Update::Tool(t), _) => match tools.get(&t.id).and_then(|&i| items.get_mut(i)) {
+            Some(Item::Tool(was)) => was.update(*t),
+            _ => {
+                tools.insert(t.id.clone(), items.len());
+                items.push(Item::Tool(*t));
+            }
+        },
+        _ => {}
     }
 }
 
@@ -1484,6 +1569,8 @@ fn backend(p: &Provider) -> &'static dyn Backend {
         backend::Name::Direct => backend::direct(),
     }
 }
+
+pub mod probe;
 
 #[cfg(test)]
 pub(crate) mod tests;

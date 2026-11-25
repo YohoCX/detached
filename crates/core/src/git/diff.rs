@@ -82,21 +82,21 @@ pub fn compare_base(env: &Env, repo: &Path, base: Option<&str>) -> Result<Compar
         );
         o.is_ok_and(|o| o.code == 0)
     };
-    let base = match base {
+    let reference = match base {
         Some(b) => arg(b)?.to_string(),
         None => {
-            let head = ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"];
+            let head = ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"];
             let origin = run(env, repo, &head, Kind::Read, Opts::default())?;
             Some(origin.text().trim().to_string())
                 .filter(|b| !b.is_empty())
                 .or_else(|| {
                     [
-                        "origin/dev",
-                        "origin/main",
-                        "origin/master",
-                        "dev",
-                        "main",
-                        "master",
+                        "refs/remotes/origin/dev",
+                        "refs/remotes/origin/main",
+                        "refs/remotes/origin/master",
+                        "refs/heads/dev",
+                        "refs/heads/main",
+                        "refs/heads/master",
                     ]
                     .into_iter()
                     .find(|b| exists(b))
@@ -107,10 +107,10 @@ pub fn compare_base(env: &Env, repo: &Path, base: Option<&str>) -> Result<Compar
                 })?
         }
     };
-    let merge_base = out(env, repo, &["merge-base", &base, "HEAD"], Kind::Read)?
+    let merge_base = out(env, repo, &["merge-base", &reference, "HEAD"], Kind::Read)?
         .trim()
         .to_string();
-    let range = format!("{base}...HEAD");
+    let range = format!("{reference}...HEAD");
     let counts = out(
         env,
         repo,
@@ -120,7 +120,14 @@ pub fn compare_base(env: &Env, repo: &Path, base: Option<&str>) -> Result<Compar
     let mut n = counts.split_whitespace().map(|n| n.parse().unwrap_or(0));
     let (behind, ahead) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
     Ok(CompareBase {
-        base,
+        base: base
+            .unwrap_or_else(|| {
+                reference
+                    .strip_prefix("refs/remotes/")
+                    .or_else(|| reference.strip_prefix("refs/heads/"))
+                    .unwrap_or(&reference)
+            })
+            .to_owned(),
         merge_base,
         ahead,
         behind,
@@ -673,8 +680,29 @@ mod tests {
         std::fs::write(work.join("a"), "2\n").unwrap();
 
         let env = sb.state.env();
+        sb.git(&work, &["branch", "origin/dev"]);
+        sb.git(&work, &["tag", "origin/main"]);
+        sb.git(
+            &work,
+            &[
+                "update-ref",
+                "refs/remotes/origin/release",
+                "refs/heads/main",
+            ],
+        );
+        sb.git(
+            &work,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/release",
+            ],
+        );
         let c = compare_base(&env, &work, None).unwrap();
-        assert_eq!((c.base.as_str(), c.ahead, c.behind), ("origin/main", 2, 1));
+        assert_eq!(
+            (c.base.as_str(), c.ahead, c.behind),
+            ("origin/release", 2, 0)
+        );
         let rev = Side::Rev { rev: c.merge_base };
         let mut paths: Vec<String> = list_changes(&env, &work, &rev, &Side::Worktree)
             .unwrap()
@@ -683,6 +711,12 @@ mod tests {
             .collect();
         paths.sort();
         assert_eq!(paths, ["a", "b"]);
+        sb.git(
+            &work,
+            &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
+        );
+        let c = compare_base(&env, &work, None).unwrap();
+        assert_eq!((c.base.as_str(), c.ahead, c.behind), ("origin/main", 2, 1));
         assert!(compare_base(&env, &work, Some("-x")).is_err());
         assert!(compare_base(&env, &work, Some("nope")).is_err());
     }

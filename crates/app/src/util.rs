@@ -7,10 +7,13 @@ pub fn base_name(p: &str) -> &str {
 
 /// The first line, cut to fit a tab.
 pub fn first_line(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default();
-    match line.char_indices().nth(24) {
-        Some((i, _)) => format!("{}…", line[..i].trim_end()),
-        None => line.to_string(),
+    clip(text.lines().next().unwrap_or_default(), 24)
+}
+
+pub(crate) fn clip(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((i, _)) => format!("{}…", text[..i].trim_end()),
+        None => text.to_owned(),
     }
 }
 

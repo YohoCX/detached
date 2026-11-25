@@ -903,10 +903,10 @@ Later steps add to the SDL:
 
 On Claude's direct backend. Codex (H13b) differs where its adapter does: modes, model and effort
 are its config options (`agent` to start, `reasoning_effort` as effort); a command's output comes in
-pieces beside the call's updates; Stop ends the session, and the next message resumes it with a
-`session/load`; the list is `session/list` narrowed to the sessions the host's index knows, so the
-CLI's and other clients' are hidden; delete archives the conversation in Codex's own history, and
-the confirm says so; no plan limits, context breakdown, questions or per-task stop; a Codex chat
+pieces beside the call's updates. Stop ends the session, and the next message resumes it with
+`session/load`. The chat picker reads active rollouts from disk and lists the sessions in the host's
+index for that checkout. The delete confirmation explains that Codex archives the conversation in
+its own history. Codex has no plan limits, context breakdown, questions or per-task stop. A Codex chat
 starts only in a repo whose trust files, `.codex/config.toml` and `.agents/skills` among them, are
 trusted.
 
@@ -1794,8 +1794,9 @@ The owner checks: the same, through H4c's `make agent-login`. The in-chat check 
 
 ### Step H11. The chat on `kernel::Session`
 
-**Status (2026-11-16): items 1 to 4 are built.** The chat
-holds its conversation's `kernel::Session`s, the first opened when it shows; one that ended goes on
+**Status (2026-11-25): items 1 to 4 are built. The first Send in a blank chat opens its agent
+session. See `docs/decisions/2026-11-24-chat-starts-on-send.md`.** The chat
+holds its conversation's `kernel::Session`s. One that ended goes on
 in a resume after it, its history left out of the feed. `kernel::Session` takes a prompt while it
 starts and hands it to the next session when it ends meanwhile, keeps one a trust change refused for
 the next session, applies a mode, model or effort picked while it starts once it has, snapshots each
@@ -1824,8 +1825,9 @@ Tests:
   These change in what they assert:
   - `without_a_cli_it_says_how_to_get_one`: no `claude`, or one below `min_cli`, points to the
     Agents page;
-  - `the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open`: limits from `get_usage`,
-    and unknown when it has none or the CLI lacks the request;
+  - `the_bar_shows_the_cached_plan_and_live_limits_after_send`: the account plan from the cache
+    before Send, then live limits from `get_usage` or unknown when the CLI has none or lacks the
+    request;
   - `a_model_without_auto_is_marked_and_the_mode_drop_reported`: `initialize.models` and the
     re-arm;
   - `a_permission_prompt_is_answered_or_goes_with_a_stop`: "Always" records a host rule, the agent

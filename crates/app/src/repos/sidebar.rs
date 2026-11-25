@@ -386,8 +386,11 @@ impl Sidebar {
         let open = !self.collapsed.contains(path);
         let inside = Workspace::get(cx).repos().iter();
         let inside = inside.filter(|r| !open && in_folder(&r.path, path));
+        let mut seen = HashSet::new();
         let statuses: Vec<_> = inside
-            .filter_map(|r| Repo::get(cx, &r.path)?.status.as_ref())
+            .filter_map(|r| Repo::get(cx, &r.path))
+            .filter(|r| seen.insert(r.path.as_str()))
+            .filter_map(|r| r.status.as_ref())
             .collect();
         let changes: usize = statuses
             .iter()

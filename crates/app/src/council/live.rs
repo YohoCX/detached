@@ -21,7 +21,7 @@ use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
 use crate::ui::theme::{GAP, text};
-use crate::ui::{self, theme};
+use crate::ui::{self, Edge, theme};
 
 /// What a run can be over, and the modes each takes, the first the default.
 const SUBJECTS: [(&str, &[(&str, &str)]); 5] = [
@@ -616,13 +616,12 @@ pub(super) fn participants(council: &Entity<Council>, cx: &App) -> AnyElement {
                 )
             })
     });
-    div()
+    let list = div()
         .id("council.participants")
         .test_support()
+        .size_full()
         .flex()
         .flex_col()
-        .flex_none()
-        .w(px(260.))
         .gap(GAP)
         .overflow_y_scroll()
         .when(p.offline.is_some(), |d| {
@@ -632,7 +631,9 @@ pub(super) fn participants(council: &Entity<Council>, cx: &App) -> AnyElement {
                     .child(p.state.paused.clone().unwrap_or_default()),
             )
         })
-        .children(rows)
+        .children(rows);
+    ui::pane("council.participants", Edge::Right, 260., 180., 440.)
+        .child(list)
         .into_any_element()
 }
 

@@ -104,7 +104,12 @@ fn skills_the_cli_does_not_read_itself_reach_it_as_a_plugin_and_an_untrusted_sha
     let skills = |kind: Kind, cx: &mut TestAppContext| {
         let s = open(&f, kind, cx);
         let names: Vec<String> = s.read_with(cx, |s, _| {
-            s.commands.iter().map(|c| c.name.clone()).collect()
+            s.commands
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
         });
         s.update(cx, |s, cx| s.end(cx));
         names
@@ -146,7 +151,12 @@ fn a_skill_the_cli_reads_itself_loads_only_where_it_wins_and_each_kind_gets_the_
     let skills = |kind: Kind, cx: &mut TestAppContext| {
         let s = open(&f, kind, cx);
         let names: Vec<String> = s.read_with(cx, |s, _| {
-            s.commands.iter().map(|c| c.name.clone()).collect()
+            s.commands
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
         });
         s.update(cx, |s, cx| s.end(cx));
         names
@@ -269,7 +279,7 @@ fn a_session_keeps_what_its_cli_reports(cx: &mut TestAppContext) {
     s.read_with(cx, |s, _| {
         let models: Vec<&str> = s.models.iter().map(|m| m.value.as_str()).collect();
         assert_eq!(models, ["default", "haiku", "sonnet", "opus", "old"]);
-        assert_eq!(s.commands[0].name, "review");
+        assert_eq!(s.commands.as_ref().unwrap()[0].name, "review");
         assert_eq!(
             s.account.as_ref().map(|a| a.plan.as_str()),
             Some("Anthropic API")

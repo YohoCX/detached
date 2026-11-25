@@ -1,4 +1,4 @@
-//! Fetch and pull, one repo or many, with an outcome in each repo's row; prune; Fetch All and Pull All.
+//! Fetch, pull and prune, with per-repository outcomes.
 
 use std::fmt::Display;
 use std::sync::Arc;
@@ -127,7 +127,6 @@ pub(crate) fn pull(repo: String, expected: RepoStatus, cx: &mut App) {
     sync(Kind::Pull, repo, Some(expected), cx);
 }
 
-/// Fetches or pulls one repo and says how it went; Fetch All and Pull All stay enabled meanwhile.
 pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
     sync(kind, repo, None, cx);
 }
@@ -287,7 +286,6 @@ fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// A running Fetch All or Pull All, or one of a folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bulk {
     pub kind: Kind,
@@ -295,7 +293,7 @@ pub struct Bulk {
     pub total: usize,
 }
 
-/// Fetch All and Pull All, for the top bar's right slot.
+/// Sync targets the current session in live views and the whole workspace in Archive.
 pub fn sync_buttons(cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let (workspace, state) = (Workspace::global(cx), State::global(cx));
@@ -313,58 +311,52 @@ struct SyncButtons {
 }
 
 impl Render for SyncButtons {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
         let w = Workspace::get(cx);
         let live = !w.archive();
-        let main = w.session_id() == detached_core::sessions::MAIN;
         let idle = bulk.is_none() && !(if live { w.session_repos() } else { w.repos() }).is_empty();
-        let suffix = if live && !main {
-            w.session_name()
+        let scope = if live {
+            "the session's repositories"
         } else {
-            "All"
+            "all repositories"
         };
         let t = theme(cx);
         let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
-        let compact = live
-            && !main
-            && (window.viewport_size().width < px(1100.) || suffix.chars().count() > 24);
-        let button = |kind, id: &'static str, icon: Icon, label: &str| {
-            let title = format!("{label} Repositories");
-            let running = bulk.is_some_and(|b| b.kind == kind);
-            let label = match bulk {
-                Some(b) if b.kind == kind => format!("{}/{}", b.done, b.total),
-                _ => label.to_string(),
+        let button = |kind, id: &'static str, icon: Icon, verb: &str| {
+            let title = format!("{verb} {scope}");
+            let progress = bulk.filter(|b| b.kind == kind);
+            let label = match progress {
+                Some(b) => format!("{}/{}", b.done, b.total),
+                None if !live => format!("{verb} All"),
+                None if kind == Kind::Pull => "Pull…".into(),
+                None => verb.into(),
             };
-            let visible = if compact && !running {
-                match kind {
-                    Kind::Fetch => "Fetch",
-                    Kind::Pull => "Pull…",
-                }
-            } else {
-                &label
+            let action = match kind {
+                Kind::Pull => "vcs.pullAll",
+                Kind::Fetch => "vcs.fetchAll",
             };
-            ui::button(id, visible.to_owned(), cx)
+            ui::button(id, label.clone(), cx)
                 .test_support()
-                // The pill's label comes first; the icon goes before it.
                 .flex_row_reverse()
                 .gap(px(6.))
                 .font_features(tnum.clone())
                 .role(Role::Button)
-                .aria_label(label.clone())
+                .aria_label(label)
                 .aria_description(title.clone())
                 .tooltip(move |window, cx| {
-                    let id = match kind {
-                        Kind::Pull => "vcs.pullAll",
-                        Kind::Fetch => "vcs.fetchAll",
+                    let tip = if live {
+                        title.clone()
+                    } else {
+                        keymap::tip(&title, action, cx)
                     };
-                    Tooltip::new(keymap::tip(&title, id, cx)).build(window, cx)
+                    Tooltip::new(tip).build(window, cx)
                 })
-                .map(|b| match idle {
-                    true => b.on_click(move |_, w, cx| sync_session(kind, w, cx)),
-                    false => b.when(!running, |b| b.opacity(0.5)),
+                .when(idle, |b| {
+                    b.on_click(move |_, w, cx| sync_session(kind, w, cx))
                 })
-                .map(|b| match running {
+                .when(!idle && progress.is_none(), |b| b.opacity(0.5))
+                .map(|b| match progress.is_some() {
                     true => b.child(
                         div()
                             .flex()
@@ -382,18 +374,8 @@ impl Render for SyncButtons {
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .child(button(
-                Kind::Fetch,
-                "sync.fetch",
-                Icon::Fetch,
-                &format!("Fetch {suffix}"),
-            ))
-            .child(button(
-                Kind::Pull,
-                "sync.pull",
-                Icon::Pull,
-                &format!("Pull {suffix}{}", if live { "…" } else { "" }),
-            ))
+            .child(button(Kind::Fetch, "sync.fetch", Icon::Fetch, "Fetch"))
+            .child(button(Kind::Pull, "sync.pull", Icon::Pull, "Pull"))
     }
 }
 

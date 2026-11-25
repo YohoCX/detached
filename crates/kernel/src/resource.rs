@@ -25,6 +25,8 @@ pub type When<T> = fn(Option<&T>) -> bool;
 #[derive(Clone, PartialEq)]
 pub enum On {
     ChatHistory,
+    RecipeTrust,
+    MrRemote(String),
     /// The repo's status loaded: its worktree may have changed.
     Status(String),
     /// The repo's head or branch moved.
@@ -46,13 +48,14 @@ pub struct Resource<T> {
     /// when it came read before it.
     due: u64,
     policy: Policy<T>,
-    on: Option<On>,
+    on: Vec<On>,
     load: Load<T>,
     loading: Option<Task<()>>,
     /// A refresh came while a load ran: another follows it.
     again: bool,
     /// The value was edited while a load ran, which read before the edit: its value is dropped.
     edited: bool,
+    discard_load: bool,
     held: Rc<()>,
     polling: bool,
 }
@@ -70,6 +73,7 @@ pub struct Interest<T> {
 pub(crate) enum Input {
     Activated,
     On(On),
+    Reset(On),
 }
 
 type Apply = fn(AnyEntity, &Input, &mut App);
@@ -120,7 +124,7 @@ impl<T: Send + 'static> Resource<T> {
             loads: 0,
             due: 0,
             policy,
-            on: None,
+            on: Vec::new(),
             load: Box::new(move |cx| {
                 let f = load(cx);
                 Box::new(move || f().map_err(|e| e.to_string()))
@@ -128,16 +132,15 @@ impl<T: Send + 'static> Resource<T> {
             loading: None,
             again: false,
             edited: false,
+            discard_load: false,
             held: Rc::default(),
             polling: false,
         }
     }
 
-    pub fn on(self, on: On) -> Self {
-        Resource {
-            on: Some(on),
-            ..self
-        }
+    pub fn on(mut self, on: On) -> Self {
+        self.on.push(on);
+        self
     }
 
     pub fn loading(&self) -> bool {
@@ -162,12 +165,14 @@ impl<T: Send + 'static> Resource<T> {
             let r = done.await;
             this.update(cx, |this, cx| {
                 this.loading = None;
-                this.at = Some(cx.background_executor().now());
                 this.loads += 1;
-                match r {
-                    Ok(_) if this.edited => {}
-                    Ok(v) => (this.value, this.error) = (Some(v), None),
-                    Err(e) => this.error = Some(e),
+                if !std::mem::take(&mut this.discard_load) {
+                    this.at = Some(cx.background_executor().now());
+                    match r {
+                        Ok(_) if this.edited => {}
+                        Ok(v) => (this.value, this.error) = (Some(v), None),
+                        Err(e) => this.error = Some(e),
+                    }
                 }
                 this.edited = false;
                 if std::mem::take(&mut this.again) {
@@ -198,7 +203,16 @@ impl<T: Send + 'static> Resource<T> {
                 let old = |f| self.at.is_none_or(|at| now.duration_since(at) >= f);
                 self.loading.is_none() && self.policy.fresh_for.is_some_and(old)
             }
-            Input::On(on) => self.on.as_ref() == Some(on),
+            Input::On(on) => self.on.contains(on),
+            Input::Reset(on) => {
+                if !self.on.contains(on) {
+                    return;
+                }
+                (self.value, self.error, self.at) = (None, None, None);
+                self.discard_load = self.loading();
+                cx.notify();
+                true
+            }
         };
         if stale && self.held() {
             self.refresh(cx);
@@ -482,5 +496,35 @@ mod tests {
         settle(cx, &r);
         let got = r.read_with(cx, |r, _| (r.value, r.error.clone()));
         assert_eq!(got, (Some(2), None));
+    }
+
+    #[gpui::test]
+    fn resetting_a_held_resource_discards_the_cache_and_in_flight_load(cx: &mut TestAppContext) {
+        let _dir = crate::boot(cx);
+        let (r, ..) = counter(
+            cx,
+            Policy {
+                fresh_for: None,
+                poll: None,
+            },
+        );
+        let on = On::MrRemote("/r".into());
+        r.update(cx, |r, _| r.on.push(on.clone()));
+        let _held = interest(cx, &r);
+        settle(cx, &r);
+        assert_eq!(value(cx, &r), Some(1));
+
+        let seen = Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        let _watch =
+            cx.update(|cx| cx.observe(&r, move |r, cx| log.borrow_mut().push(r.read(cx).value)));
+        cx.update(|cx| {
+            r.update(cx, |r, cx| r.refresh(cx));
+            input(cx, Input::Reset(on));
+            assert!(r.read(cx).value.is_none());
+        });
+        settle(cx, &r);
+        assert!(!seen.borrow().contains(&Some(2)));
+        assert_eq!(value(cx, &r), Some(3));
     }
 }

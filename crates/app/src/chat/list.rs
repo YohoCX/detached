@@ -18,10 +18,10 @@ use gpui_kit::{
     Window, div, prelude::FluentBuilder, px,
 };
 
-use super::{Chat, State, label, open};
+use super::{State, label};
 use crate::ui::tree::chevron;
 use crate::ui::{self, DrawnMenu, Icon, Menu, text, theme};
-use crate::util::{age, in_folder, now};
+use crate::util::{age, clip, in_folder, now};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -48,7 +48,7 @@ enum Filter {
 /// What a row stands for, which stays when the list is rebuilt.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Key {
-    Open(String, u32),
+    Open(String, u32, Option<(String, String)>),
     Past(String),
     /// A place's group, among the archived ones or not.
     Group(String, bool),
@@ -68,7 +68,9 @@ enum Line {
     Open {
         repo: String,
         n: u32,
-        chat: Entity<Chat>,
+        owner: Option<(String, String)>,
+        state: State,
+        place: String,
         title: String,
         /// When its conversation was last written, from the history.
         at: Option<u64>,
@@ -87,7 +89,7 @@ impl Line {
     fn key(&self) -> Key {
         match self {
             Line::Group { path, archived, .. } => Key::Group(path.clone(), *archived),
-            Line::Open { repo, n, .. } => Key::Open(repo.clone(), *n),
+            Line::Open { repo, n, owner, .. } => Key::Open(repo.clone(), *n, owner.clone()),
             Line::Past(p, _) => Key::Past(p.id.clone()),
             Line::More { path, archived, .. } => Key::More(path.clone(), *archived),
             Line::Archived(_) => Key::Archived,
@@ -149,15 +151,14 @@ fn stored(path: &str, archived: bool, cx: &App) -> Option<bool> {
 }
 
 /// Each place's label, with its parent folder's name before one another place shares.
-fn names(paths: &[&str], cx: &App) -> Vec<String> {
-    let base: Vec<String> = paths.iter().map(|p| label(p, cx)).collect();
+fn names(paths: &[(&str, String)]) -> Vec<String> {
     let parts = |p: &str| -> Vec<String> {
         let all = p.split(['/', '\\']).filter(|s| !s.is_empty());
         all.map(String::from).collect()
     };
-    let named = paths.iter().zip(&base).map(|(p, b)| {
+    let named = paths.iter().map(|(p, b)| {
         let (p, k) = (parts(p), parts(b).len());
-        let shared = base.iter().filter(|x| *x == b).count() > 1;
+        let shared = paths.iter().filter(|(_, name)| name == b).count() > 1;
         match p.len().checked_sub(k + 1) {
             Some(i) if shared => format!("{}/{b}", p[i]),
             _ => b.clone(),
@@ -288,6 +289,7 @@ impl ChatList {
             _subscriptions: vec![
                 cx.observe(&Workspace::global(cx), |l, _, cx| l.watch(cx)),
                 cx.observe(&Settings::global(cx), |l, _, cx| l.watch(cx)),
+                super::observe_open(cx),
                 cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify()),
             ],
             query,
@@ -384,8 +386,11 @@ impl ChatList {
     /// The conversation a row stands for, its folder and its provider.
     fn conversation(&self, key: &Key, cx: &App) -> Option<(String, String, &'static Provider)> {
         match key {
-            Key::Open(repo, n) => {
+            Key::Open(repo, n, owner) => {
                 let s = super::find(repo, *n, cx)?.read(cx);
+                if &s.owner != owner {
+                    return None;
+                }
                 let id = s.conversation(cx)?.to_string();
                 Some((repo.clone(), id, s.provider))
             }
@@ -401,11 +406,11 @@ impl ChatList {
 
     /// Ends an open chat; its conversation stays with the past ones.
     fn end(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
-        if let Key::Open(repo, n) = key {
+        if let Key::Open(repo, n, owner) = key {
             if self.selected.as_ref() == Some(key) {
                 self.selected = self.next(key, cx);
             }
-            super::end(repo, *n, window, cx);
+            super::end(repo, *n, owner.as_ref(), window, cx);
             self.refresh(cx);
         }
     }
@@ -431,7 +436,7 @@ impl ChatList {
             self.selected = next;
         }
         match key {
-            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            Key::Open(repo, n, owner) => super::end(repo, *n, owner.as_ref(), window, cx),
             _ => super::forget(&id, cx),
         }
         let done = kernel::session::archive(id, archived, cx);
@@ -446,7 +451,7 @@ impl ChatList {
         self.selected = self.next(key, cx);
         self.edit(&cwd, provider, |all| all.retain(|p| p.id != id), cx);
         match key {
-            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            Key::Open(repo, n, owner) => super::end(repo, *n, owner.as_ref(), window, cx),
             _ => super::forget(&id, cx),
         }
         let spec = Spec::new(provider, &cwd, Kind::Chat);
@@ -454,15 +459,37 @@ impl ChatList {
         self.then(cwd, done, cx);
     }
 
+    fn open_tabs(cx: &App) -> Vec<super::Tab> {
+        let mut tabs = super::tabs(cx);
+        let workspace = Workspace::get(cx).id();
+        for (repo, n, chat) in super::registered(cx) {
+            let s = chat.read(cx);
+            if s.owner
+                .as_ref()
+                .is_none_or(|(ws, _)| Some(ws.as_str()) != workspace)
+            {
+                tabs.push(super::Tab {
+                    owner: s.owner.clone(),
+                    place: super::chat_place(s, cx),
+                    repo: repo.clone(),
+                    n,
+                    chat: Some(chat.clone()),
+                });
+            }
+        }
+        tabs.sort_by_key(|tab| tab.n);
+        tabs
+    }
+
     /// The conversations `archived` or not that the filter and the search keep, by place: its
     /// open chats, then the past ones no open chat goes on with, newest first. Places with an
     /// open chat lead, then the newest.
-    fn groups(&self, archived: bool, cx: &App) -> Vec<(String, Group)> {
+    fn groups(&self, archived: bool, open: &[super::Tab], cx: &App) -> Vec<(String, Group)> {
         let q = self.query(cx);
-        let open = open(cx);
-        let ids: Vec<(&str, String)> = (open.iter())
-            .filter_map(|(.., s)| {
-                let s = s.read(cx);
+        let ids: Vec<(&str, String)> = open
+            .iter()
+            .filter_map(|tab| {
+                let s = tab.chat.as_ref()?.read(cx);
                 Some((s.provider.id, s.conversation(cx)?.to_string()))
             })
             .collect();
@@ -484,32 +511,34 @@ impl ChatList {
             }
         }
         if !archived && self.filter != Filter::Inactive {
-            for (repo, n, chat) in open {
-                let (title, at, hit) = {
-                    let s = chat.read(cx);
-                    let past = s.conversation(cx).and_then(|id| seen.get(id));
-                    let topic = (s.topic(cx).into_iter())
-                        .find_map(|t| t.lines().map(str::trim).find(|l| !l.is_empty()));
-                    // As the past row it stands for, which a resume would rename otherwise.
-                    let title = past
-                        .map(|p| p.title.trim())
-                        .filter(|t| !t.is_empty())
-                        .or(topic);
-                    let title = title.unwrap_or("New chat").to_string();
-                    let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
-                    let hit = has(&q, &title)
-                        || has(&q, &label(&repo, cx))
-                        || s.feed(cx).iter().any(|(_, i)| said(i));
-                    (title, past.map(|p| p.modified), hit)
-                };
-                if hit {
-                    let g = groups.entry(repo.clone()).or_default();
+            for tab in open {
+                let chat = tab.chat.as_ref().map(|s| s.read(cx));
+                let past = chat.and_then(|s| seen.get(s.conversation(cx)?));
+                let topic = chat
+                    .and_then(|s| s.topic(cx))
+                    .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()));
+                let title = past
+                    .map(|p| p.title.trim())
+                    .filter(|t| !t.is_empty())
+                    .or(topic)
+                    .unwrap_or("New chat");
+                let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
+                if has(&q, title)
+                    || has(&q, &tab.place)
+                    || chat.is_some_and(|s| {
+                        s.queued(cx).is_some_and(|t| has(&q, t)) || s.feed(cx).any(|(_, i)| said(i))
+                    })
+                {
+                    let at = past.map(|p| p.modified);
+                    let g = groups.entry(tab.repo.clone()).or_default();
                     g.newest = g.newest.max(at.unwrap_or(0));
                     g.open.push(Line::Open {
-                        repo,
-                        n,
-                        chat,
-                        title,
+                        repo: tab.repo.clone(),
+                        n: tab.n,
+                        owner: tab.owner.clone(),
+                        state: chat.map_or(State::Idle, |s| s.state(cx)),
+                        place: tab.place.clone(),
+                        title: clip(title, 256),
                         at,
                     });
                 }
@@ -535,8 +564,17 @@ impl ChatList {
         let mut ranked: Vec<_> = groups.iter().filter(|(_, g)| !g.past.is_empty()).collect();
         ranked.sort_by_key(|(_, g)| Reverse(g.past[0].modified));
         let recent: HashSet<String> = ranked.iter().take(RECENT).map(|(p, _)| p.clone()).collect();
-        let paths: Vec<&str> = groups.iter().map(|(p, _)| p.as_str()).collect();
-        let names = names(&paths, cx);
+        let paths: Vec<_> = groups
+            .iter()
+            .map(|(path, group)| {
+                let name = match group.open.first() {
+                    Some(Line::Open { place, .. }) => place.clone(),
+                    _ => label(path, cx),
+                };
+                (path.as_str(), name)
+            })
+            .collect();
+        let names = names(&paths);
         for ((path, g), name) in groups.into_iter().zip(names) {
             let fresh = !g.open.is_empty() || recent.contains(&path);
             let open = searching || stored(&path, archived, cx).unwrap_or(fresh);
@@ -577,8 +615,9 @@ impl ChatList {
     /// The rows in order: the groups, then behind Archived the archived ones.
     fn lines(&self, cx: &App) -> Vec<Line> {
         let mut out = vec![];
-        self.push(&mut out, self.groups(false, cx), false, cx);
-        let archived = self.groups(true, cx);
+        let open = Self::open_tabs(cx);
+        self.push(&mut out, self.groups(false, &open, cx), false, cx);
+        let archived = self.groups(true, &open, cx);
         let n: usize = archived.iter().map(|(_, g)| g.past.len()).sum();
         if n > 0 {
             out.push(Line::Archived(n));
@@ -591,7 +630,14 @@ impl ChatList {
 
     fn activate(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
         match key {
-            Key::Open(repo, n) => super::foreground(repo.clone(), *n, cx),
+            Key::Open(repo, n, owner) => super::show_owned(
+                owner.clone(),
+                Doc::Chat {
+                    repo: repo.clone(),
+                    n: *n,
+                },
+                cx,
+            ),
             Key::Past(id) => {
                 let Some(p) = self.all(cx).into_iter().find(|p| p.owned && p.id == *id) else {
                     return;
@@ -756,8 +802,8 @@ impl ChatList {
                     .into_any_element()
             }
             Line::Open {
-                repo,
-                chat,
+                state,
+                place,
                 title,
                 at,
                 ..
@@ -766,7 +812,6 @@ impl ChatList {
                 if self.deleting.as_ref() == Some(&key) {
                     return self.confirm(i, key, title, ground, cx);
                 }
-                let state = chat.read(cx).state(cx);
                 let end = self.button(("chats.open.end", i), Icon::Close, "End chat", &key, cx);
                 let ink = match state {
                     State::Working => t.accent,
@@ -774,7 +819,6 @@ impl ChatList {
                     State::Done => t.success,
                     State::Idle | State::Stopped => t.muted,
                 };
-                let place = label(repo, cx);
                 let row = row(("chats.open", i).into(), title.clone(), cx)
                     .aria_description(SharedString::from(format!("{state:?} · {place}")));
                 let meta = div()
@@ -802,7 +846,7 @@ impl ChatList {
                 let k = tick(&mut n[2]);
                 let title = match p.title.trim() {
                     "" => "Untitled".to_string(),
-                    t => t.to_string(),
+                    t => clip(t, 256),
                 };
                 if self.deleting.as_ref() == Some(&key) {
                     return self.confirm(k, key, &title, ground, cx);
@@ -1025,7 +1069,7 @@ fn two_lines(
 }
 
 fn has(q: &str, text: &str) -> bool {
-    text.to_lowercase().contains(q)
+    q.is_empty() || text.to_lowercase().contains(q)
 }
 
 impl Render for ChatList {

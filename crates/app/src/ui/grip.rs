@@ -1,9 +1,10 @@
 //! Panes resized by a grip on one edge, their size kept as `size.<key>` in ui.json.
 
 use gpui_kit::{
-    App, AppContext, Div, DragMoveEvent, ElementId, Empty, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Pixels, Point, Render, RenderOnce, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
+    Along, App, AppContext, Axis, Div, DragMoveEvent, ElementId, Empty, Entity, EntityId,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, RenderOnce,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
+    relative,
 };
 
 use gpui_kit::base::TestSupportExt;
@@ -25,10 +26,11 @@ pub struct Pane {
     size: f32,
     min: f32,
     max: f32,
+    state: Option<(Entity<Size>, Pixels, bool)>,
     base: Div,
 }
 
-/// A pane `size` px wide (tall for `Edge::Top`) until the user drags it within `min..=max`.
+/// The layout can constrain this pane without changing its saved size.
 pub fn pane(key: &'static str, edge: Edge, size: f32, min: f32, max: f32) -> Pane {
     Pane {
         key,
@@ -36,11 +38,12 @@ pub fn pane(key: &'static str, edge: Edge, size: f32, min: f32, max: f32) -> Pan
         size,
         min,
         max: max.max(min),
+        state: None,
         base: div(),
     }
 }
 
-struct Resize(&'static str);
+struct Resize(EntityId);
 
 struct Dragging;
 
@@ -50,10 +53,33 @@ impl Render for Dragging {
     }
 }
 
-struct Size {
-    now: f32,
-    /// The pointer's coordinate and the size when the grip was pressed.
-    grab: (f32, f32),
+pub(crate) struct Size {
+    preferred: f32,
+    pub(crate) fit_to_room: bool,
+    grab: (Pixels, Option<Pixels>),
+}
+
+impl Size {
+    pub(crate) fn load(key: &str, default: f32, cx: &App) -> Self {
+        Self {
+            preferred: ui_state::get::<f32>(&format!("size.{key}"), cx)
+                .filter(|s| *s > 0.)
+                .unwrap_or(default),
+            fit_to_room: false,
+            grab: (px(0.), None),
+        }
+    }
+
+    pub(crate) fn pixels(&self, min: f32, max: f32) -> Pixels {
+        px(self.preferred.clamp(min, max))
+    }
+}
+
+impl Pane {
+    pub(crate) fn with_size(mut self, state: Entity<Size>, width: Pixels, open: bool) -> Self {
+        self.state = Some((state, width, open));
+        self
+    }
 }
 
 impl RenderOnce for Pane {
@@ -65,15 +91,17 @@ impl RenderOnce for Pane {
             max,
             ..
         } = self;
-        let stored = format!("size.{key}");
-        let size = window.use_keyed_state(key, cx, |_, cx| Size {
-            now: ui_state::get::<f32>(&stored, cx)
-                .filter(|s| *s > 0.)
-                .unwrap_or(self.size),
-            grab: (0., 0.),
+        let (size, extent, show_grip) = self.state.unwrap_or_else(|| {
+            let size = window.use_keyed_state(key, cx, |_, cx| Size::load(key, self.size, cx));
+            let extent = size.read(cx).pixels(min, max);
+            (size, extent, true)
         });
-        let now = size.read(cx).now.clamp(min, max);
-        let along = move |at: Point<Pixels>| f32::from(if edge == Edge::Top { at.y } else { at.x });
+        let id = size.entity_id();
+        let axis = if edge == Edge::Top {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
         let sign = if edge == Edge::Right { 1. } else { -1. };
         let t = theme(cx);
         let (pressed, saved) = (size.clone(), size.clone());
@@ -101,39 +129,40 @@ impl RenderOnce for Pane {
                     }),
             })
             .on_mouse_down(MouseButton::Left, move |e, _, cx| {
-                pressed.update(cx, |s, _| s.grab = (along(e.position), now));
+                pressed.update(cx, |s, _| s.grab = (e.position.along(axis), None));
             })
-            .on_drag(Resize(key), move |_, _, _, cx| {
+            .on_drag(Resize(id), move |_, _, _, cx| {
                 let view = cx.new(|_| Dragging);
                 let size = saved.clone();
                 // The drag's view goes when the drag ends, wherever the mouse is released.
                 cx.observe_release(&view, move |_, cx| {
-                    let now = size.read(cx).now;
-                    ui_state::set(&format!("size.{key}"), now, cx);
+                    ui_state::set(&format!("size.{key}"), size.read(cx).preferred, cx);
                 })
                 .detach();
                 view
             });
+        let limit = relative(0.8);
         self.base
             .relative()
             .flex_none()
             .map(|p| match edge {
-                Edge::Top => p.h(px(now)),
-                _ => p.w(px(now)),
+                Edge::Top => p.h(extent).max_h(limit),
+                _ => p.w(extent).max_w(limit),
             })
             .on_drag_move(move |e: &DragMoveEvent<Resize>, _, cx| {
-                if e.drag(cx).0 != key {
+                if e.drag(cx).0 != id {
                     return;
                 }
                 size.update(cx, |s, cx| {
-                    let (at, from) = s.grab;
-                    s.now = (from + sign * (along(e.event.position) - at))
-                        .round()
-                        .clamp(min, max);
+                    let (at, from) = &mut s.grab;
+                    let from = *from.get_or_insert(e.bounds.size.along(axis));
+                    let delta = e.event.position.along(axis) - *at;
+                    s.preferred = f32::from(from + delta * sign).round().clamp(min, max);
+                    s.fit_to_room = false;
                     cx.notify();
                 });
             })
-            .child(grip)
+            .children(show_grip.then_some(grip))
     }
 }
 

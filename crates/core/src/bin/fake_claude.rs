@@ -42,8 +42,8 @@
 //! and the host's wake, `You have new messages`, its `fake-wake: <steps>` line.
 //!
 //! `fake.json` in the config dir sets what `initialize` answers as `account`, the `rate_limits`
-//! and `context` of `get_usage` and `get_context_usage`, the requests it `lacks` from the start, and
-//! `init_wait`, a file in the config dir that `initialize` waits for.
+//! and `context` of `get_usage` and `get_context_usage`, and the requests it `lacks` from the start.
+//! During initialization it waits for the `init_wait` file and exits early if `init_exit` is true.
 //!
 //! It exits 1 on a flag it does not know or a line that is not JSON. A resume without `--model`
 //! runs on `fallback-opus`, and one of a session still open exits 1. Each turn goes to a transcript
@@ -117,7 +117,19 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
-        Some("--version") => return println!(concat!("{} (Claude", " Code)"), VERSION),
+        Some("--version") => {
+            let config = config_dir();
+            let log = config.join("fake-version-env");
+            if log.is_file() {
+                let names = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned());
+                std::fs::write(log, names.collect::<Vec<_>>().join("\n")).unwrap();
+            }
+            let version = std::fs::read_to_string(config.join("fake-version"));
+            return println!(
+                concat!("{} (Claude", " Code)"),
+                version.as_deref().map_or(VERSION, str::trim)
+            );
+        }
         Some("auth") if args[1..] == ["status", "--json"] => {
             let logged_out = config_dir().join("fake-logged-out").is_file();
             println!("{}", json!({"loggedIn": !logged_out}));
@@ -197,6 +209,7 @@ fn main() {
         };
         match v["type"].as_str().unwrap_or_default() {
             "user" => {
+                log("user");
                 if let Some(ack) = effort_ack.take() {
                     send(&out, ack);
                 }
@@ -232,6 +245,7 @@ fn main() {
                 let ok = match subtype {
                     _ if s.lacks.iter().any(|l| l == subtype) => None,
                     "initialize" => {
+                        log("initialize");
                         s.hooks = r["hooks"]["ConfigChange"].is_array();
                         s.mcp = r["sdkMcpServers"].is_array();
                         Some(initialize(&s))
@@ -319,11 +333,26 @@ fn main() {
     quit(0);
 }
 
+fn log(event: &str) {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty())
+        && let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(dir).join("fake.log"))
+    {
+        let _ = writeln!(log, "{event}");
+    }
+}
+
 fn initialize(s: &Shared) -> Value {
     if let Some(name) = s.fake["init_wait"].as_str() {
         while !config_dir().join(name).exists() {
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+    if s.fake["init_exit"] == true {
+        eprintln!("fake_claude: died at initialize");
+        quit(3);
     }
     let model = |v: &str| {
         let auto = v != "old";

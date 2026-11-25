@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use common::*;
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use kernel::doc::Doc;
@@ -169,6 +170,18 @@ fn finding_diff_shows_the_reviewed_commits_once_they_resolve(cx: &mut TestAppCon
         sb.commit(&repo, "crates/core/src/watch.rs", &text, "later");
         fs::write(repo.join("crates/core/src/watch.rs"), "working tree\n").unwrap();
         copy_round(&repo, "foundation-8-watcher/03-after-fix-retry");
+        let findings =
+            repo.join(".revmux/tasks/foundation-8-watcher/03-after-fix-retry/findings.json");
+        let mut data: serde_json::Value =
+            serde_json::from_slice(&fs::read(&findings).unwrap()).unwrap();
+        let finding = data["findings"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|f| f["id"] == "bugs+impl-2")
+            .unwrap();
+        finding["body"] = "[Open reviewed code](crates/core/src/watch.rs#L228)".into();
+        fs::write(findings, serde_json::to_vec(&data).unwrap()).unwrap();
         fs::write(
             repo.join(".revmux/tasks/foundation-8-watcher/03-after-fix-retry/input/scope.md"),
             "git diff reviewed-a..reviewed-b",
@@ -211,6 +224,35 @@ fn finding_diff_shows_the_reviewed_commits_once_they_resolve(cx: &mut TestAppCon
         Some("reviewed line 228")
     );
     switch_diff_modes(&mut app, 229);
+    let link = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            texts(w)
+                .into_iter()
+                .find(|t| t.visible() && t.text() == "Open reviewed code")
+                .map(|t| t.bounds())
+        })
+    };
+    wait_until(&mut app, |cx| link(cx).is_some());
+    let bounds = link(&mut app).unwrap();
+    let at = point(bounds.left() + px(3.), bounds.center().y)
+        - app.find("markdown").unwrap().bounds().origin;
+    app.update(|w, cx| w.click_at("markdown", at, cx));
+    wait_until(&mut app, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.find_all("input-state").into_iter().any(|e| {
+                e.path().contains(&ElementId::from("viewer.code"))
+                    && e.value()
+                        .is_some_and(|text| text.contains("reviewed line 228"))
+            })
+        })
+    });
+    assert!(
+        app.workspace(|w, _| matches!(w.shown(), Some(Doc::File(loc))
+        if loc.rev.as_deref() == Some(&b) && loc.path == "crates/core/src/watch.rs"
+            && loc.line == Some(228)))
+    );
 }
 
 #[gpui_kit::test]

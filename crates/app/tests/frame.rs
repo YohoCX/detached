@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
+use detached_app::keymap;
 use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
+use gpui_kit::base::test_support::{TextSnapshot, texts};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, TestAppContext, VisualTestContext, px, size};
 use kernel::invalidate;
 use kernel::repo::Repo;
 
@@ -215,13 +217,50 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
         "the live frame has no dock toggle"
     );
     assert_eq!(folding(cx), "Hide sessions");
+    assert_fold_tip(cx, "sessions.fold", "Hide sessions", "panel.sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Show sessions");
     assert_eq!(width(cx), gpui_kit::px(44.));
+    assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Hide sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
+}
+
+fn assert_fold_tip(cx: &mut VisualTestContext, id: &'static str, title: &str, action: &str) {
+    cx.update(|w, cx| w.hover(id, cx));
+    settle(cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    settle(cx);
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let chord = keymap::chord_for(action, cx);
+        assert!(!chord.is_empty());
+        assert!(
+            texts(w).iter().any(|t| {
+                t.visible()
+                    && t.path().contains(&"tooltip-popup".into())
+                    && t.text().starts_with(title)
+                    && t.text().contains(&chord)
+            }),
+            "missing tooltip for {title} with {chord}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn the_explorer_fold_tooltip_shows_the_configured_chord(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let keymap = r#"{"panel.project":"Cmd+Shift+1","panel.changes":"Cmd+Shift+0"}"#;
+        std::fs::write(sb.state.config_dir.join("keymap.json"), keymap).unwrap();
+    });
+    assert_fold_tip(cx, "explorer.fold", "Hide files", "panel.project");
+    cx.click("explorer.fold");
+    assert_fold_tip(cx, "explorer.fold", "Show files", "panel.project");
+    cx.press("secondary-shift-0");
+    cx.click("explorer.fold");
+    assert_fold_tip(cx, "explorer.fold", "Show changes", "panel.changes");
 }
 
 #[gpui_kit::test]
@@ -338,10 +377,19 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         .map_while(|i| cx.find(("overview.repository", i)).map(|row| (i, row)))
         .find(|(_, row)| row.label() == Some(name.as_str()))
         .expect("the Overview lists the repository");
-    assert!(
-        cx.find(("overview.pull", ix)).is_some(),
-        "the repository is behind"
-    );
+    for (id, title) in [
+        ("overview.pull", "Preview pull"),
+        ("overview.switch", "Switch branch"),
+        ("overview.log", "Open repository log"),
+    ] {
+        assert_eq!(label(cx, (id, ix)).as_deref(), Some(title));
+        assert!(painted(cx, title).is_none());
+        cx.update(|w, cx| w.hover((id, ix), cx));
+        settle(cx);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        settle(cx);
+        assert!(painted(cx, title).is_some(), "missing {title} tooltip");
+    }
     cx.activity(|s, cx| s.say("Fetched", false, cx));
     assert!(
         cx.find("status.message")
@@ -378,6 +426,7 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         assert_eq!(merge.code, 1);
         let dirty = sb.clone_pair("repos/dirty");
         std::fs::write(dirty.join("f"), "local edit\n").unwrap();
+        std::fs::write(dirty.join("new"), "new file\n").unwrap();
         sb.clone_pair("repos/clean");
         let detached = sb.clone_pair("repos/detached");
         sb.git(&detached, &["switch", "-q", "--detach"]);
@@ -389,6 +438,7 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         ["clean", "conflict", "detached", "dirty", "gone", "local"]
             .map(|name| checkout_index(cx, name));
 
+    assert!(cx.find("overview.addFolder").is_none());
     assert_eq!(
         label(cx, "overview.clean").as_deref(),
         Some("Up to date · 1")
@@ -403,10 +453,21 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         Some("1 conflict")
     );
     assert!(cx.find(("overview.switch", conflict)).is_none());
-    assert_eq!(
-        label(cx, ("overview.status", dirty)).as_deref(),
-        Some("1 changed file")
-    );
+    assert!(cx.find("overview.column.local").is_some());
+    let counts = [
+        (conflict, "1 file", "1 changed file"),
+        (dirty, "2 files", "2 changed files"),
+    ];
+    for (ix, short, full) in counts {
+        assert_eq!(label(cx, ("overview.status", ix)).as_deref(), Some(full));
+        assert!(painted(cx, short).is_some());
+    }
+    let line_height = cx
+        .find(("overview.status", detached))
+        .unwrap()
+        .bounds()
+        .size
+        .height;
     assert_eq!(
         label(cx, ("overview.sync", dirty)).as_deref(),
         Some("Up to date with origin/main")
@@ -429,6 +490,8 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
     );
     assert!(label(cx, ("overview.sync", gone)).unwrap().contains("gone"));
 
+    cx.simulate_resize(size(px(400.), px(900.)));
+    wait_until(cx, |cx| cx.find("overview.column.local").is_none());
     let local_path = cx.sb.path("repos/local").display().to_string();
     for (status, shown) in [
         (None, "Loading status…"),
@@ -445,6 +508,12 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
             label(cx, ("overview.status", local)).as_deref(),
             Some(shown)
         );
+        for (ix, _, full) in counts {
+            assert_eq!(label(cx, ("overview.status", ix)).as_deref(), Some(full));
+            let bounds = painted(cx, full).expect(full).bounds();
+            assert_eq!(bounds.size.height, line_height);
+            assert!(bounds.right() <= cx.find(("overview.upstream", ix)).unwrap().bounds().left());
+        }
     }
 
     cx.click("overview.clean");
@@ -535,6 +604,15 @@ fn checkout_index(cx: &mut VisualTestContext, name: &str) -> usize {
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))
+}
+
+fn painted(cx: &mut VisualTestContext, text: &str) -> Option<TextSnapshot> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        texts(w)
+            .into_iter()
+            .find(|t| t.visible() && t.text() == text)
+    })
 }
 
 #[gpui_kit::test]

@@ -20,7 +20,7 @@ use gpui_kit::{
 };
 
 use crate::actions::Registration;
-use crate::ui::{self, Icon, page, radius, text, theme};
+use crate::ui::{self, Edge, Icon, page, radius, text, theme};
 use crate::{keymap, shell};
 
 #[derive(Clone)]
@@ -166,16 +166,12 @@ impl Dialog {
         let mut nav = div()
             .id("settings.nav")
             .overflow_y_scroll()
+            .size_full()
             .flex()
             .flex_col()
-            .flex_none()
             .gap(px(2.))
-            .w(px(200.))
             .py(px(18.))
             .px(px(10.))
-            .bg(t.header_bg)
-            .border_r_1()
-            .border_color(t.line)
             .child(
                 div()
                     .px(px(10.))
@@ -215,7 +211,11 @@ impl Dialog {
                     .child(title),
             );
         }
-        nav
+        ui::pane("settings.nav", Edge::Right, 200., 160., 320.)
+            .bg(t.header_bg)
+            .border_r_1()
+            .border_color(t.line)
+            .child(nav)
     }
 }
 

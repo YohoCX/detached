@@ -390,6 +390,12 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
     std::fs::create_dir(&folder).unwrap();
     api::add_folder(&sb.state, None, folder.display().to_string()).unwrap();
     seed(&sb);
+    let cx = boot_app(cx, &sb);
+    TestApp { cx, sb }
+}
+
+#[track_caller]
+pub fn boot_app(cx: &mut TestAppContext, sb: &Sandbox) -> VisualTestContext {
     let s = &sb.state;
     let dir = s.config_dir.clone();
     let core = AppState::new(dir.clone(), Settings::load(&dir), s.env(), s.tokens.clone());
@@ -432,7 +438,7 @@ pub fn open_app_with(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> Te
                 && loaded
         })
     });
-    TestApp { cx, sb }
+    cx
 }
 
 /// The app over `sb` in a headless window that draws, for pictures (macOS); `ui` runs once the UI
