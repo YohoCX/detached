@@ -16,7 +16,7 @@ pub mod tree;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -245,7 +245,10 @@ pub fn titled(b: Stateful<Div>, title: impl Into<SharedString>) -> Stateful<Div>
     let title = title.into();
     b.role(Role::Button)
         .aria_label(title.clone())
-        .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            let title = title.clone();
+            Tooltip::element(move |_, _| title.clone().test_text(title.clone())).build(window, cx)
+        })
 }
 
 /// An 18px titled icon button, shown only while its `HOVER` group is hovered; in a `hover_slot` it

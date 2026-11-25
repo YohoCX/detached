@@ -8,8 +8,9 @@ use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
+use gpui_kit::base::test_support::{TextSnapshot, texts};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, TestAppContext, VisualTestContext};
+use gpui_kit::{ElementId, TestAppContext, VisualTestContext, px, size};
 use kernel::invalidate;
 use kernel::repo::Repo;
 
@@ -344,6 +345,12 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         ("overview.log", "Open repository log"),
     ] {
         assert_eq!(label(cx, (id, ix)).as_deref(), Some(title));
+        assert!(painted(cx, title).is_none());
+        cx.update(|w, cx| w.hover((id, ix), cx));
+        settle(cx);
+        cx.executor().advance_clock(Duration::from_millis(500));
+        settle(cx);
+        assert!(painted(cx, title).is_some(), "missing {title} tooltip");
     }
     cx.activity(|s, cx| s.say("Fetched", false, cx));
     assert!(
@@ -381,6 +388,7 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         assert_eq!(merge.code, 1);
         let dirty = sb.clone_pair("repos/dirty");
         std::fs::write(dirty.join("f"), "local edit\n").unwrap();
+        std::fs::write(dirty.join("new"), "new file\n").unwrap();
         sb.clone_pair("repos/clean");
         let detached = sb.clone_pair("repos/detached");
         sb.git(&detached, &["switch", "-q", "--detach"]);
@@ -407,13 +415,21 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
         Some("1 conflict")
     );
     assert!(cx.find(("overview.switch", conflict)).is_none());
-    let changed = cx.find(("overview.status", dirty)).unwrap();
-    assert_eq!(changed.label(), Some("1 file"));
-    let clean_cell = cx.find(("overview.status", detached)).unwrap();
-    assert_eq!(
-        changed.bounds().size.height,
-        clean_cell.bounds().size.height
-    );
+    assert!(cx.find("overview.column.local").is_some());
+    let counts = [
+        (conflict, "1 file", "1 changed file"),
+        (dirty, "2 files", "2 changed files"),
+    ];
+    for (ix, short, full) in counts {
+        assert_eq!(label(cx, ("overview.status", ix)).as_deref(), Some(full));
+        assert!(painted(cx, short).is_some());
+    }
+    let line_height = cx
+        .find(("overview.status", detached))
+        .unwrap()
+        .bounds()
+        .size
+        .height;
     assert_eq!(
         label(cx, ("overview.sync", dirty)).as_deref(),
         Some("Up to date with origin/main")
@@ -436,6 +452,8 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
     );
     assert!(label(cx, ("overview.sync", gone)).unwrap().contains("gone"));
 
+    cx.simulate_resize(size(px(400.), px(900.)));
+    wait_until(cx, |cx| cx.find("overview.column.local").is_none());
     let local_path = cx.sb.path("repos/local").display().to_string();
     for (status, shown) in [
         (None, "Loading status…"),
@@ -452,6 +470,12 @@ fn the_overview_keeps_checkout_problems_visible_and_folds_only_verified_clean_on
             label(cx, ("overview.status", local)).as_deref(),
             Some(shown)
         );
+        for (ix, _, full) in counts {
+            assert_eq!(label(cx, ("overview.status", ix)).as_deref(), Some(full));
+            let bounds = painted(cx, full).expect(full).bounds();
+            assert_eq!(bounds.size.height, line_height);
+            assert!(bounds.right() <= cx.find(("overview.upstream", ix)).unwrap().bounds().left());
+        }
     }
 
     cx.click("overview.clean");
@@ -542,6 +566,15 @@ fn checkout_index(cx: &mut VisualTestContext, name: &str) -> usize {
 
 fn label(cx: &mut VisualTestContext, id: impl Into<ElementId>) -> Option<String> {
     cx.find(id).and_then(|e| e.label().map(String::from))
+}
+
+fn painted(cx: &mut VisualTestContext, text: &str) -> Option<TextSnapshot> {
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        texts(w)
+            .into_iter()
+            .find(|t| t.visible() && t.text() == text)
+    })
 }
 
 #[gpui_kit::test]

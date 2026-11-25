@@ -1,6 +1,6 @@
 use detached_core::sessions::MAIN;
 use detached_core::types::{InProgress, RepoInfo, RepoStatus};
-use gpui_kit::base::{ElementExt, ObservedElement, TestSupportExt};
+use gpui_kit::base::{ElementExt, ObservedElement, TestSupportExt, TestTextExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
@@ -337,7 +337,7 @@ impl Overview {
             )
         });
         let (local, upstream) = match status {
-            Some(status) => checkout_status(ix, status, row.conflicts, cx),
+            Some(status) => checkout_status(ix, status, row.conflicts, compact, cx),
             None => {
                 let (label, color) = if row.error().is_some() {
                     ("Status unavailable", t.error)
@@ -383,7 +383,7 @@ impl Overview {
                         .flex_wrap()
                         .gap(GAP)
                         .pl(text::HEADING + GAP / 2.)
-                        .child(local.flex_1().min_w_0().flex_basis(GAP * 11.))
+                        .child(local.flex_1().min_w_0().flex_basis(GAP * 13.))
                         .when(status.is_some(), |d| {
                             d.child(upstream.flex_1().min_w_0().flex_basis(GAP * 11.))
                         }),
@@ -457,12 +457,25 @@ fn branch_label(s: &RepoStatus) -> String {
     }
 }
 
-fn checkout_status(ix: usize, s: &RepoStatus, conflicts: usize, cx: &App) -> (Div, Div) {
+fn checkout_status(
+    ix: usize,
+    s: &RepoStatus,
+    conflicts: usize,
+    compact: bool,
+    cx: &App,
+) -> (Div, Div) {
     let t = theme(cx);
-    let changed = match s.changes.len() {
-        0 => "Clean".into(),
-        1 => "1 file".into(),
-        n => format!("{n} files"),
+    let count = s.changes.len();
+    let unit = if count == 1 { "file" } else { "files" };
+    let label: SharedString = if count == 0 {
+        "Clean".into()
+    } else {
+        format!("{count} changed {unit}").into()
+    };
+    let changed: SharedString = if compact || count == 0 {
+        label.clone()
+    } else {
+        format!("{count} {unit}").into()
     };
     let sync = match (s.upstream.as_deref(), s.upstream_gone, s.ahead, s.behind) {
         (None, _, _, _) => None,
@@ -478,12 +491,9 @@ fn checkout_status(ix: usize, s: &RepoStatus, conflicts: usize, cx: &App) -> (Di
     let local = div()
         .child(
             line(("overview.status", ix), changed)
+                .aria_label(label)
                 .whitespace_nowrap()
-                .text_color(if s.changes.is_empty() {
-                    t.muted
-                } else {
-                    t.modified
-                }),
+                .text_color(if count == 0 { t.muted } else { t.modified }),
         )
         .when(conflicts > 0, |d| {
             let label = if conflicts == 1 {
@@ -523,7 +533,7 @@ fn line(
         .id(id)
         .test_support()
         .aria_label(label.clone())
-        .child(label)
+        .child(label.clone().test_text(label))
 }
 
 fn ref_line(id: impl Into<ElementId>, label: String) -> ObservedElement<Stateful<Div>> {
