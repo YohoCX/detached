@@ -378,12 +378,26 @@ fn split(side: Placement, doc: Option<Doc>, keyboard: bool, w: &mut Window, cx: 
 }
 
 pub(super) fn terminal_below(cwd: String, w: &mut Window, cx: &mut App) {
-    let doc = Doc::Terminal { id: 0, cwd };
     if Workspace::get(cx).archive() {
-        super::open_doc(doc, true, w, cx);
-    } else {
-        split(Placement::Bottom, Some(doc), true, w, cx);
+        return super::open_doc(Doc::Terminal { id: 0, cwd }, true, w, cx);
     }
+    let Some(area) = super::zones(cx) else { return };
+    let existing = super::docs(area.read(cx)).into_iter().find(|(p, _, tab)| {
+        let tab = tab.read(cx);
+        *p == DockPlacement::Center
+            && super::tabs::mine(tab, cx)
+            && matches!(&tab.doc, Doc::Terminal { cwd: path, .. } if path == &cwd)
+    });
+    if let Some((_, id, _)) = existing {
+        return area.update(cx, |a, cx| super::reveal(a, id, w, cx));
+    }
+    split(
+        Placement::Bottom,
+        Some(Doc::Terminal { id: 0, cwd }),
+        true,
+        w,
+        cx,
+    );
 }
 
 pub(super) fn open_beside(

@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use detached_app::terminal::{Rgb, Session, Terminals};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{Modifiers, MouseButton, TestAppContext, VisualTestContext, point};
+use gpui_kit::{Modifiers, MouseButton, Role, TestAppContext, VisualTestContext, point};
 
 /// A plain shell, so no rc file slows the tests or changes the prompt.
 fn plain_shell() {
@@ -19,7 +19,7 @@ fn open(cx: &mut TestAppContext) -> TestApp {
     let mut app = open_app_with(cx, layout);
     let solo = app.sb.solo().display().to_string();
     app.workspace(|w, cx| w.set_current(Some(solo), cx));
-    app.press("alt-f12");
+    app.press("secondary-t");
     app
 }
 
@@ -72,6 +72,58 @@ fn a_terminal_tab_runs_what_is_typed(cx: &mut TestAppContext) {
     wait_for_line(cx, "answer-42");
 }
 
+#[gpui_kit::test]
+fn cmd_t_opens_a_terminal_below_and_refocuses_it(cx: &mut TestAppContext) {
+    plain_shell();
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+        claude(sb, &detached_core::testutil::claude::fake());
+    });
+    let repo = cx.sb.path("repos/api");
+    cx.update(|_, cx| detached_app::chat::new_chat(repo.display().to_string(), cx));
+    wait_until(cx, |cx| cx.find("chat.composer").is_some());
+    cx.click("chat.input");
+    cx.press("secondary-2");
+    assert_eq!(
+        cx.find("sessions.fold").unwrap().label(),
+        Some("Show sessions")
+    );
+    cx.input("draft");
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let inputs = w
+            .within("chat.composer")
+            .find_all_by_role(Role::MultilineTextInput);
+        assert!(inputs.iter().any(|input| input.value() == Some("draft")));
+    });
+
+    cx.press("secondary-t");
+    let focus = session(cx, |s| {
+        assert_eq!(s.cwd, repo);
+        s.focus.clone()
+    });
+    let focused = |cx: &mut VisualTestContext| cx.update(|w, _| focus.is_focused(w));
+    assert!(focused(cx));
+    assert!(
+        cx.find("chat.composer").unwrap().bounds().bottom()
+            <= cx.find("terminal").unwrap().bounds().top()
+    );
+
+    cx.click("doc.session-overview");
+    assert!(!focused(cx));
+    cx.press("secondary-t");
+    assert!(focused(cx));
+    cx.press("secondary-2");
+    assert_eq!(
+        cx.find("sessions.fold").unwrap().label(),
+        Some("Hide sessions")
+    );
+    assert!(focused(cx));
+    cx.press("secondary-t");
+    assert!(focused(cx));
+    assert_eq!(sessions(cx), 1);
+}
+
 #[cfg(unix)]
 #[gpui_kit::test]
 fn the_shell_starts_in_the_current_repo(cx: &mut TestAppContext) {
@@ -114,7 +166,10 @@ fn app_chords_go_to_the_shell_except_the_short_list(cx: &mut TestAppContext) {
 fn closing_a_terminal_pane_hands_input_to_the_adjacent_shell(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     let first = session(cx, |s| s.focus.clone());
-    cx.press("alt-f12");
+    cx.update(|w, cx| {
+        detached_app::actions::dispatch(w, cx, "pane.splitDown");
+        detached_app::dock::open("terminal", w, cx);
+    });
     let second = cx.update(|_, cx| Terminals::global(cx).read(cx).docked[1].clone());
     wait_until(cx, |cx| {
         cx.update(|w, cx| second.read(cx).focus.is_focused(w))

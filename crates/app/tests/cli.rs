@@ -40,7 +40,7 @@ fn open(cx: &mut TestAppContext) -> (TestApp, Arc<Mutex<Vec<String>>>) {
     app.foreground_executor()
         .block_test(listening)
         .expect("the socket listens");
-    app.press("alt-f12");
+    app.press("secondary-t");
     (app, seen)
 }
 

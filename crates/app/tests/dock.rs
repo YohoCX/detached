@@ -969,7 +969,7 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     plain_shell();
     let cx = &mut open_app_with(cx, two_workspaces);
     switch(cx, "Other");
-    cx.press("alt-f12");
+    cx.press("secondary-t");
     wait_until(cx, |cx| {
         cx.update(|_, cx| !Terminals::global(cx).read(cx).docked.is_empty())
     });
