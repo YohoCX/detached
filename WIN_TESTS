@@ -1,0 +1,1 @@
+check -p detached-app --test session_status
