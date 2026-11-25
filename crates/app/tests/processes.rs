@@ -7,7 +7,7 @@ use detached_app::settings;
 use detached_core::processes::{self, Agents, Definition};
 use detached_core::secrets;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext, point, px};
 
 fn label(cx: &mut VisualTestContext, id: &str) -> String {
     let e = cx.find(id.to_string());
@@ -38,6 +38,28 @@ fn core(cx: &mut VisualTestContext) -> std::sync::Arc<detached_core::state::AppS
 fn type_in(cx: &mut VisualTestContext, id: &str, text: &str) {
     cx.click(id.to_string());
     cx.input(text);
+}
+
+#[gpui_kit::test]
+fn dragging_the_process_list_resizes_its_rows_and_saves_the_width(cx: &mut TestAppContext) {
+    let cx = &mut open(cx, |sb, main| {
+        let def = Definition {
+            name: "web".into(),
+            command: "echo up".into(),
+            ..Default::default()
+        };
+        processes::save(&sb.state, main, &def).unwrap();
+    });
+    wait_until(cx, |cx| cx.find("processes.row.web").is_some());
+    let row = cx.find("processes.row.web").unwrap().bounds();
+    let grip = cx.find("grip.processes.list").unwrap().bounds().center();
+    cx.update(|w, cx| w.drag(grip, grip + point(px(80.), px(0.)), cx));
+    settle(cx);
+    let resized = cx.find("processes.row.web").unwrap().bounds();
+    assert_eq!(resized.size.width, row.size.width + px(80.));
+    let file = std::fs::read(cx.sb.state.config_dir.join("ui.json")).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&file).unwrap();
+    assert_eq!(saved["size.processes.list"], 320.);
 }
 
 #[gpui_kit::test]

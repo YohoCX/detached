@@ -8,7 +8,7 @@ use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render, TestAppContext,
-    Window, div,
+    Window, div, point, px,
 };
 
 struct Stub;
@@ -26,6 +26,27 @@ fn nav(cx: &mut TestApp) -> Vec<String> {
             .filter_map(|e| e.label().map(String::from))
             .collect()
     })
+}
+
+#[gpui_kit::test]
+fn dragging_settings_navigation_keeps_its_width_when_reopened(cx: &mut TestAppContext) {
+    let cx = &mut open_app(cx);
+    cx.update(|_, cx| settings::open(cx, "appearance"));
+    let body = cx.find("settings.body").unwrap().bounds();
+    let grip = cx.find("grip.settings.nav").unwrap().bounds().center();
+    cx.update(|w, cx| w.drag(grip, grip + point(px(80.), px(0.)), cx));
+    settle(cx);
+    let resized = cx.find("settings.body").unwrap().bounds();
+    assert_eq!(resized.left(), body.left() + px(80.));
+    cx.press("escape");
+    assert!(cx.find("settings.body").is_none());
+    let (saved, problem) = kernel::ui_state::load(&cx.sb.state.config_dir);
+    assert!(problem.is_none());
+    cx.update(|_, cx| {
+        kernel::ui_state::install(saved, cx);
+        settings::open(cx, "appearance");
+    });
+    assert_eq!(cx.find("settings.body").unwrap().bounds(), resized);
 }
 
 #[gpui_kit::test]
