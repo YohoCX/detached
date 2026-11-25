@@ -79,7 +79,7 @@ impl Member {
         let repo = Path::new(&self.repo);
         match worktree::recipe(core, repo)?.base {
             Some(base) => worktree::recipe_base(&core.env(), repo, &base),
-            None => Ok("origin/HEAD".into()),
+            None => Ok("refs/remotes/origin/HEAD".into()),
         }
     }
 

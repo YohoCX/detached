@@ -2,12 +2,15 @@
 //! after core's revision moved reloads it on a worker.
 
 use std::ops::Deref;
+use std::path::Path;
 
-use detached_core::{api, settings};
+use detached_core::git::worktree::RECIPE;
+use detached_core::{api, settings, store};
 use gpui::{App, AppContext, Entity, Global};
 
 use crate::activity::{Activity, Level, Notice};
 use crate::blocking;
+use crate::resource::{self, Input, On};
 
 pub struct Settings {
     value: settings::Settings,
@@ -100,6 +103,12 @@ pub(crate) fn refresh(cx: &mut App) {
                     });
                 }
             }
+            let recipes = |s: &settings::Settings| {
+                let mut items = store::accepted_items(s);
+                items.retain(|path, _| Path::new(path).file_name().is_some_and(|n| n == RECIPE));
+                items
+            };
+            let trust_changed = recipes(snapshot.read(cx)) != recipes(&value);
             snapshot.update(cx, |s, cx| {
                 *s = Settings {
                     value,
@@ -108,6 +117,9 @@ pub(crate) fn refresh(cx: &mut App) {
                 };
                 cx.notify();
             });
+            if trust_changed {
+                resource::input(cx, Input::On(On::RecipeTrust));
+            }
             refresh(cx);
         })
     })

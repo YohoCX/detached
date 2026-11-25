@@ -229,8 +229,15 @@ pub struct SessionBase {
 }
 
 pub fn compare_session_base(s: &AppState, member: &crate::sessions::Member) -> Result<SessionBase> {
-    let reference = member.base_ref(s)?;
-    let comparison = compare_base(s, &member.path, Some(&reference));
+    let base = member.base_ref(s)?;
+    let reference = base.trim_start_matches("refs/remotes/").to_owned();
+    let env = s.env();
+    let comparison = worktree::sha(&env, Path::new(&member.repo), &base)
+        .and_then(|sha| diff::compare_base(&env, Path::new(&member.path), Some(&sha)))
+        .map(|mut comparison| {
+            comparison.base.clone_from(&reference);
+            comparison
+        });
     Ok(SessionBase {
         reference,
         comparison,

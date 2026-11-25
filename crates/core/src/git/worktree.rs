@@ -233,15 +233,11 @@ pub fn preview(
     let bases = out(
         &env,
         repo,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/remotes/origin",
-        ],
+        &["for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
         Kind::Read,
     )?
     .lines()
-    .filter(|r| *r != "origin/HEAD")
+    .filter(|r| *r != "refs/remotes/origin/HEAD")
     .map(String::from)
     .collect();
     Ok(Preview {
@@ -349,7 +345,7 @@ fn start(
     recipe: &Recipe,
 ) -> Result<(String, bool, String)> {
     let has = |r: &str| sha(env, repo, r).is_ok();
-    let remote = format!("origin/{branch}");
+    let remote = format!("refs/remotes/origin/{branch}");
     if has(&format!("refs/heads/{branch}")) {
         return Ok((
             branch.into(),
@@ -357,21 +353,24 @@ fn start(
             format!("Checks out the local branch {branch}"),
         ));
     }
-    if has(&format!("refs/remotes/{remote}")) {
-        return Ok((remote.clone(), false, format!("Tracks {remote}")));
+    if has(&remote) {
+        return Ok((remote, false, format!("Tracks origin/{branch}")));
     }
     let base = match (base, recipe.base.as_deref()) {
         (Some(b), _) => arg(b)?.to_string(),
         (None, Some(b)) => recipe_base(env, repo, b)?,
         (None, None) => "HEAD".into(),
     };
-    let decision = format!("New branch from {base}");
+    let decision = format!(
+        "New branch from {}",
+        base.trim_start_matches("refs/remotes/")
+    );
     Ok((base, true, decision))
 }
 
 pub(crate) fn recipe_base(env: &Env, repo: &Path, base: &str) -> Result<String> {
-    let remote = format!("origin/{base}");
-    if sha(env, repo, &format!("refs/remotes/{remote}")).is_ok() {
+    let remote = format!("refs/remotes/origin/{base}");
+    if sha(env, repo, &remote).is_ok() {
         return Ok(remote);
     }
     Ok(arg(base)?.to_owned())
@@ -431,10 +430,8 @@ pub(crate) fn add(
         if existing && (new || start != branch) {
             return Err(Error::Other(format!("The local branch {branch} is gone")));
         }
-        let head = if new {
+        let head = if new || start != branch {
             sha(&env, repo, &start)?
-        } else if start != branch {
-            sha(&env, repo, &format!("refs/remotes/{start}"))?
         } else {
             sha(&env, repo, &format!("refs/heads/{branch}"))?
         };

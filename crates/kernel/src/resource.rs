@@ -25,6 +25,7 @@ pub type When<T> = fn(Option<&T>) -> bool;
 #[derive(Clone, PartialEq)]
 pub enum On {
     ChatHistory,
+    RecipeTrust,
     /// The repo's status loaded: its worktree may have changed.
     Status(String),
     /// The repo's head or branch moved.
@@ -46,7 +47,7 @@ pub struct Resource<T> {
     /// when it came read before it.
     due: u64,
     policy: Policy<T>,
-    on: Option<On>,
+    on: Vec<On>,
     load: Load<T>,
     loading: Option<Task<()>>,
     /// A refresh came while a load ran: another follows it.
@@ -120,7 +121,7 @@ impl<T: Send + 'static> Resource<T> {
             loads: 0,
             due: 0,
             policy,
-            on: None,
+            on: Vec::new(),
             load: Box::new(move |cx| {
                 let f = load(cx);
                 Box::new(move || f().map_err(|e| e.to_string()))
@@ -133,11 +134,9 @@ impl<T: Send + 'static> Resource<T> {
         }
     }
 
-    pub fn on(self, on: On) -> Self {
-        Resource {
-            on: Some(on),
-            ..self
-        }
+    pub fn on(mut self, on: On) -> Self {
+        self.on.push(on);
+        self
     }
 
     pub fn loading(&self) -> bool {
@@ -198,7 +197,7 @@ impl<T: Send + 'static> Resource<T> {
                 let old = |f| self.at.is_none_or(|at| now.duration_since(at) >= f);
                 self.loading.is_none() && self.policy.fresh_for.is_some_and(old)
             }
-            Input::On(on) => self.on.as_ref() == Some(on),
+            Input::On(on) => self.on.contains(on),
         };
         if stale && self.held() {
             self.refresh(cx);

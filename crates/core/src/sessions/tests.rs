@@ -35,17 +35,14 @@ fn adopts_without_touching_the_checkout_and_renames_by_id() {
 
 #[test]
 fn session_base_reads_the_current_recipe_and_prefers_the_member_override() {
-    use crate::store::{Kind, RepoStore};
+    use crate::store::{Kind, RepoStore, Scope};
 
     let (sb, ws, repo, path) = setup();
     let mut set = adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();
     let saved = set.clone();
-    sb.commit(Path::new(&path), "work", "checkout\n", "checkout work");
-    let release = sb.commit(&repo, "release", "release\n", "release work");
-    sb.git(
-        &repo,
-        &["update-ref", "refs/remotes/origin/release", &release],
-    );
+    let head = sb.commit(Path::new(&path), "work", "checkout\n", "checkout work");
+    sb.git(&repo, &["branch", "origin/HEAD", &head]);
+    sb.git(&repo, &["tag", "origin/release", &head]);
 
     let check = |member: &Member, reference: &str, counts: (u32, u32)| {
         let base = crate::api::compare_session_base(&sb.state, member).unwrap();
@@ -56,8 +53,20 @@ fn session_base_reads_the_current_recipe_and_prefers_the_member_override() {
     };
     let member = &mut set.members[0];
     check(member, "origin/HEAD", (1, 0));
-    RepoStore::open(&sb.state, &repo)
-        .unwrap()
+    member.base = Some("HEAD".into());
+    check(member, "HEAD", (1, 0));
+    let release = sb.commit(&repo, "release", "release\n", "release work");
+    check(member, "HEAD", (1, 1));
+    sb.git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &release],
+    );
+
+    let store = RepoStore::open(&sb.state, &repo).unwrap();
+    store
+        .set_default(&sb.state, Kind::Recipes, Scope::Shared)
+        .unwrap();
+    store
         .write(
             &sb.state,
             Kind::Recipes,
@@ -65,6 +74,11 @@ fn session_base_reads_the_current_recipe_and_prefers_the_member_override() {
             &[(PathBuf::new(), b"base = \"release\"\n".to_vec())].into(),
         )
         .unwrap();
+    let item = store
+        .item(&sb.state, Kind::Recipes, Scope::Shared, worktree::RECIPE)
+        .unwrap();
+    store.accept(&sb.state, &item).unwrap();
+    member.base = None;
     check(member, "origin/release", (1, 1));
     member.base = Some("origin/main".into());
     check(member, "origin/main", (1, 0));
@@ -79,6 +93,7 @@ fn session_base_keeps_its_ref_when_origin_head_is_missing() {
         &repo,
         &["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"],
     );
+    sb.git(&repo, &["tag", "origin/HEAD"]);
     let base = crate::api::compare_session_base(&sb.state, &set.members[0]).unwrap();
     assert_eq!(base.reference, "origin/HEAD");
     assert!(base.comparison.is_err());
@@ -362,6 +377,8 @@ fn preview_uses_local_refs_and_create_tracks_a_branch_found_during_fetch() {
     let origin = sb.git(&repo, &["remote", "get-url", "origin"]);
     let head = sb.git(&repo, &["rev-parse", "HEAD"]);
     sb.git(Path::new(&origin), &["branch", "feature/arriving", &head]);
+    let other = sb.commit(&repo, "other", "other\n", "other");
+    sb.git(&repo, &["branch", "origin/feature/arriving", &other]);
     assert!(preview(&sb.state, &ws, &request).unwrap().new_branch);
     let set = begin(
         &sb.state,
@@ -381,9 +398,9 @@ fn preview_uses_local_refs_and_create_tracks_a_branch_found_during_fetch() {
     assert_eq!(
         sb.git(
             Path::new(&member.path),
-            &["rev-parse", "--abbrev-ref", "@{upstream}"]
+            &["rev-parse", "--symbolic-full-name", "@{upstream}"]
         ),
-        "origin/feature/arriving"
+        "refs/remotes/origin/feature/arriving"
     );
     assert!(
         member
@@ -395,6 +412,45 @@ fn preview_uses_local_refs_and_create_tracks_a_branch_found_during_fetch() {
     request.branch = "renewal".into();
     let error = preview(&sb.state, &ws, &request).unwrap_err().to_string();
     assert!(error.contains("already checked out"), "{error}");
+}
+
+#[test]
+fn session_base_provisions_from_the_remote_recipe_ref() {
+    use crate::store::{Kind, RepoStore};
+
+    let (sb, ws, repo, _) = setup();
+    sb.git(&repo, &["tag", "origin/release"]);
+    let release = sb.commit(&repo, "release", "release\n", "release work");
+    sb.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/release"]);
+    RepoStore::open(&sb.state, &repo)
+        .unwrap()
+        .write(
+            &sb.state,
+            Kind::Recipes,
+            worktree::RECIPE,
+            &[(PathBuf::new(), b"base = \"release\"\n".to_vec())].into(),
+        )
+        .unwrap();
+    let request = request(&repo, "next", None);
+    let preview = preview(&sb.state, &ws, &request).unwrap();
+    assert_eq!(preview.decision, "New branch from origin/release");
+    assert!(
+        preview
+            .bases
+            .iter()
+            .any(|r| r == "refs/remotes/origin/release")
+    );
+    let set = begin(
+        &sb.state,
+        &ws,
+        "Next",
+        "next",
+        std::slice::from_ref(&request),
+    )
+    .unwrap();
+    let cancel = crate::state::Cancel::default();
+    let set = provision(&sb.state, job(&ws, &set.id, &request.repo, &cancel), None).unwrap();
+    assert_eq!(set.members[0].base_sha, release);
 }
 
 #[test]

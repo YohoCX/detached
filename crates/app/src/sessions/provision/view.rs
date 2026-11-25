@@ -468,7 +468,7 @@ impl Sheet {
                     p.decision.trim_start_matches("New branch from ")
                 )
             },
-            |b| format!("{b} · chosen"),
+            |b| format!("{} · chosen", b.trim_start_matches("refs/remotes/")),
         );
         button(
             ("sessions.basePicker", i),
@@ -482,8 +482,11 @@ impl Sheet {
                     ("The main checkout’s HEAD".into(), "HEAD".into()),
                 ]
                 .into_iter()
-                .chain(options.iter().map(|b| (b.clone(), b.clone())))
-                {
+                .chain(
+                    options
+                        .iter()
+                        .map(|b| (b.trim_start_matches("refs/remotes/").to_owned(), b.clone())),
+                ) {
                     let base = base.clone();
                     menu = menu.item(label, move |window, cx| {
                         base.update(cx, |input, cx| input.set_value(&value, window, cx));

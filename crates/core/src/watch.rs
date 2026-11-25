@@ -13,6 +13,7 @@ use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
 use crate::error::{Error, Result};
+use crate::git::worktree::RECIPE;
 use crate::store::Kind;
 use crate::types::RepoInfo;
 
@@ -43,8 +44,8 @@ type Watches = HashMap<PathBuf, RecursiveMode>;
 struct State {
     repos: Vec<Dirs>,
     current: Vec<Current>,
-    /// The git directories' watches; on Windows the folders' and those outside every folder.
-    git: Watches,
+    folders: Vec<PathBuf>,
+    watched: Watches,
     /// Working tree watches outside the Windows folder watches.
     work: Watches,
     /// A walk of the worktrees is queued.
@@ -57,6 +58,7 @@ struct Dirs {
     git: PathBuf,
     common: PathBuf,
     refs: PathBuf,
+    recipes: [PathBuf; 2],
 }
 
 struct Current {
@@ -99,22 +101,6 @@ impl Watcher {
         } else {
             vec![]
         };
-        let mut git: Watches = folders
-            .iter()
-            .map(|f| (f.clone(), RecursiveMode::Recursive))
-            .collect();
-        for d in &dirs {
-            let each = [
-                (&d.git, RecursiveMode::NonRecursive),
-                (&d.common, RecursiveMode::NonRecursive),
-                (&d.refs, RecursiveMode::Recursive),
-            ];
-            for (p, mode) in each {
-                if !folders.iter().any(|f| p.starts_with(f)) {
-                    git.insert(p.clone(), mode);
-                }
-            }
-        }
         let current: Vec<_> = worktrees
             .iter()
             .filter_map(|path| {
@@ -122,18 +108,14 @@ impl Watcher {
                 Current::new(path, &d.common)
             })
             .collect();
-        let old = inner.state.lock().unwrap().git.clone();
-        let git = inner.apply(&old, git);
         let mut s = inner.state.lock().unwrap();
         let changed = s.current.len() != current.len()
             || s.current.iter().zip(&current).any(|(before, after)| {
                 before.root != after.root || before.exclude != after.exclude
             });
-        (s.repos, s.git, s.current) = (dirs, git, current);
+        (s.repos, s.folders, s.current) = (dirs, folders, current);
         drop(s);
-        if changed {
-            inner.walk();
-        }
+        inner.sync(changed);
     }
 }
 
@@ -153,27 +135,40 @@ impl Inner {
         new
     }
 
-    fn walk(&self) {
-        let (roots, old) = {
+    fn sync(&self, walk: bool) {
+        let (mut want, old, mut work, roots) = {
             let state = self.state.lock().unwrap();
-            let roots: Vec<_> = state.current.iter().map(|c| c.root.clone()).collect();
-            (roots, state.work.clone())
+            (
+                state.git_watches(),
+                state.watched.clone(),
+                state.work.clone(),
+                state
+                    .current
+                    .iter()
+                    .map(|c| c.root.clone())
+                    .collect::<Vec<_>>(),
+            )
         };
-        let mut want = Watches::new();
-        if cfg!(target_os = "linux") {
-            for root in roots {
-                want.extend(work(&root, &want));
-            }
-        } else if cfg!(target_os = "macos") {
-            for root in &roots {
-                let covered = roots.iter().any(|r| root != r && root.starts_with(r));
-                if !covered {
-                    want.insert(root.clone(), RecursiveMode::Recursive);
+        if walk {
+            work.clear();
+            if cfg!(target_os = "linux") {
+                for root in roots {
+                    work.extend(work_watches(&root, &work));
+                }
+            } else if cfg!(target_os = "macos") {
+                for root in &roots {
+                    let covered = roots.iter().any(|r| root != r && root.starts_with(r));
+                    if !covered {
+                        work.insert(root.clone(), RecursiveMode::Recursive);
+                    }
                 }
             }
         }
-        let work = self.apply(&old, want);
-        self.state.lock().unwrap().work = work;
+        want.extend(work.clone());
+        let watched = self.apply(&old, want);
+        work.retain(|p, _| watched.contains_key(p));
+        let mut state = self.state.lock().unwrap();
+        (state.watched, state.work) = (watched, work);
     }
 
     fn mark(self: &Arc<Self>, events: Vec<notify::Result<Event>>) -> Batch {
@@ -196,13 +191,13 @@ impl Inner {
                 }
             }
         }
-        if cfg!(target_os = "linux") && again && !s.walking {
+        if again && !s.walking {
             s.walking = true;
             let inner = self.clone();
             thread::spawn(move || {
                 let _setup = inner.setup.lock().unwrap();
                 inner.state.lock().unwrap().walking = false;
-                inner.walk();
+                inner.sync(true);
             });
         }
         b
@@ -210,6 +205,32 @@ impl Inner {
 }
 
 impl State {
+    fn git_watches(&self) -> Watches {
+        let mut watches: Watches = self
+            .folders
+            .iter()
+            .map(|p| (p.clone(), RecursiveMode::Recursive))
+            .collect();
+        for d in &self.repos {
+            let mut add = |p: &Path, mode| {
+                if !self.folders.iter().any(|f| p.starts_with(f)) {
+                    watches.entry(p.to_owned()).or_insert(mode);
+                }
+            };
+            add(&d.git, RecursiveMode::NonRecursive);
+            add(&d.common, RecursiveMode::NonRecursive);
+            add(&d.refs, RecursiveMode::Recursive);
+            for (file, root) in d.recipes.iter().zip([&d.common, &d.work]) {
+                for p in file.ancestors().skip(1).take_while(|p| p.starts_with(root)) {
+                    if p.is_dir() {
+                        add(p, RecursiveMode::NonRecursive);
+                    }
+                }
+            }
+        }
+        watches
+    }
+
     fn working_tree(&mut self, path: &Path) -> Option<&mut Current> {
         self.current
             .iter_mut()
@@ -219,6 +240,12 @@ impl State {
 
     /// An empty path marks every repo; an ignored path marks none.
     fn dropped(&mut self, p: &Path, b: &mut Batch) {
+        b.repos.extend(
+            self.repos
+                .iter()
+                .filter(|d| d.recipe_event(p).is_some())
+                .map(|d| d.repo.clone()),
+        );
         if self.detached(p) {
             return;
         }
@@ -252,9 +279,22 @@ impl State {
         })
     }
 
-    /// True when an ignore file or a new directory needs another worktree walk.
+    /// True when a change needs the directory watches updated.
     fn mark(&mut self, p: &Path, kind: EventKind, b: &mut Batch) -> bool {
-        if self.detached(p) {
+        let mut recipe = None;
+        let dir = p.is_dir();
+        // Windows reports a directory modified when a child changes, and the child too.
+        let touched = matches!(kind, EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
+        if dir && touched {
+            return false;
+        }
+        for d in &self.repos {
+            if let Some(ancestor) = d.recipe_event(p) {
+                b.repos.insert(d.repo.clone());
+                recipe = Some(ancestor);
+            }
+        }
+        if recipe.is_none() && self.detached(p) {
             return false;
         }
         let Some(name) = p.file_name().map(|n| n.to_string_lossy()) else {
@@ -267,14 +307,11 @@ impl State {
         // inotify drops the watch of a directory that went, so one made again there is new; it may
         // exist again by now.
         if cfg!(target_os = "linux") && gone {
-            self.git.retain(|k, _| !k.starts_with(p));
+            self.watched.retain(|k, _| !k.starts_with(p));
             self.work.retain(|k, _| !k.starts_with(p));
         }
-        let dir = p.is_dir();
-        // Windows reports a directory modified when a child changes, and the child too.
-        let touched = matches!(kind, EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
-        if dir && touched {
-            return false;
+        if let Some(ancestor) = recipe {
+            return ancestor;
         }
         let mut hit = false;
         for d in &self.repos {
@@ -312,11 +349,38 @@ impl State {
             return false;
         }
         b.repos.insert(c.repo.clone());
-        ignores || (dir && !self.work.contains_key(p))
+        cfg!(target_os = "linux") && (ignores || (dir && !self.work.contains_key(p)))
     }
 }
 
 impl Dirs {
+    fn new(repo: String, work: PathBuf, git: PathBuf, common: PathBuf) -> Self {
+        Self {
+            repo,
+            recipes: [
+                common
+                    .join("detached/local")
+                    .join(Kind::Recipes.dir())
+                    .join(RECIPE),
+                work.join(".detached")
+                    .join(Kind::Recipes.dir())
+                    .join(RECIPE),
+            ],
+            work,
+            refs: common.join("refs"),
+            git,
+            common,
+        }
+    }
+
+    fn recipe_event(&self, p: &Path) -> Option<bool> {
+        self.recipes
+            .iter()
+            .zip([&self.common, &self.work])
+            .find(|(file, root)| p != *root && p.starts_with(root) && file.starts_with(p))
+            .map(|(file, _)| p != file)
+    }
+
     /// A main repo's git and common directory are both `.git`; any other `.git` is a file whose
     /// `gitdir:` names the git directory, and that directory's `commondir` the common one.
     fn of(r: &RepoInfo) -> Option<Dirs> {
@@ -332,13 +396,7 @@ impl Dirs {
             Ok(c) => canon(git.join(c.trim()))?,
             Err(_) => git.clone(),
         };
-        Some(Dirs {
-            repo: r.path.clone(),
-            work: canon(work)?,
-            refs: common.join("refs"),
-            git,
-            common,
-        })
+        Some(Dirs::new(r.path.clone(), canon(work)?, git, common))
     }
 }
 
@@ -384,7 +442,7 @@ impl Current {
     }
 }
 
-fn work(root: &Path, watched: &Watches) -> Watches {
+fn work_watches(root: &Path, watched: &Watches) -> Watches {
     let mut dirs = Watches::new();
     for e in crate::git::files::walker(root).build().flatten() {
         if e.file_type().is_some_and(|t| t.is_dir()) && !watched.contains_key(e.path()) {
@@ -536,13 +594,12 @@ mod tests {
         let git = root.join(".git");
         let common = root.join("common");
         let mut state = State {
-            repos: vec![Dirs {
-                repo: repo.clone(),
-                work: root.clone(),
-                refs: common.join("refs"),
-                git: git.clone(),
-                common: common.clone(),
-            }],
+            repos: vec![Dirs::new(
+                repo.clone(),
+                root.clone(),
+                git.clone(),
+                common.clone(),
+            )],
             current: Current::new(&repo, &common).into_iter().collect(),
             ..Default::default()
         };
@@ -604,6 +661,33 @@ mod tests {
                 .join(".detached/roles/shared.md");
             state.mark(&shared, EventKind::Any, &mut batch);
             assert_eq!(batch.repos, set(&[current], &t));
+        }
+    }
+
+    #[test]
+    fn recipe_changes_mark_the_owning_repo_even_when_its_worktree_is_inactive() {
+        let t = T::new(&["main"]);
+        let repos = discover(&[t.sb.path("ws").display().to_string()], &[]);
+        let mut state = State {
+            repos: repos.iter().filter_map(Dirs::of).collect(),
+            ..Default::default()
+        };
+        let root = canon(t.dir("main")).unwrap();
+        assert!(state.git_watches().contains_key(&root));
+        for folder in [".git/detached/local/recipes", ".detached/recipes"] {
+            let file = format!("{folder}/{RECIPE}");
+            t.write("main", &file);
+            let path = root.join(folder);
+            let mut batch = Batch::default();
+            assert!(state.mark(&path, EventKind::Any, &mut batch));
+            assert_eq!(batch.repos, set(&["main"], &t));
+            assert!(state.git_watches().contains_key(&path));
+            let file = root.join(file);
+            fs::remove_file(&file).unwrap();
+            let mut batch = Batch::default();
+            assert!(!state.mark(&file, EventKind::Any, &mut batch));
+            assert_eq!(batch.repos, set(&["main"], &t));
+            assert!(batch.refs.is_empty());
         }
     }
 
