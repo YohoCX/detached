@@ -51,6 +51,7 @@ pub fn active(s: &PipelineStatus) -> bool {
 /// `repo`'s MRs by `filter`.
 pub fn mrs(cx: &mut App, repo: &str, filter: MrFilter) -> Entity<Resource<Listed>> {
     let key = format!("mrs\0{repo}\0{filter:?}");
+    let remote = On::MrRemote(repo.into());
     let repo = repo.to_string();
     resource::get(cx, key, || {
         Resource::new(MRS, move |cx| {
@@ -62,6 +63,7 @@ pub fn mrs(cx: &mut App, repo: &str, filter: MrFilter) -> Entity<Resource<Listed
                 })
             }
         })
+        .on(remote)
     })
 }
 
@@ -72,7 +74,9 @@ pub fn current_mr(
     branch: &str,
 ) -> Entity<Resource<Option<MergeRequest>>> {
     let key = format!("mr\0{repo}\0{branch}");
-    on_core(cx, key, MR, repo, api::current_mr)
+    resource::get(cx, key, || {
+        from_core(MR, repo, api::current_mr).on(On::MrRemote(repo.into()))
+    })
 }
 
 /// `repo`'s pipelines, every branch's with `all`, or MR `mr`'s; a moved head reloads them.
@@ -92,7 +96,12 @@ pub fn pipelines(
                 None => api::list_pipelines(&core, &repo, all),
             }
         };
-        Resource::new(PIPELINES, load).on(On::Head(repo.into()))
+        let list = Resource::new(PIPELINES, load).on(On::Head(repo.into()));
+        if mr.is_some() {
+            list.on(On::MrRemote(repo.into()))
+        } else {
+            list
+        }
     })
 }
 
@@ -100,24 +109,22 @@ pub fn pipelines(
 /// its own.
 pub fn latest_pipeline(cx: &mut App, repo: &str, head: &str) -> Entity<Resource<Option<Pipeline>>> {
     let key = format!("latest\0{repo}\0{head}");
-    on_core(cx, key, LATEST, repo, |core, repo| {
-        Ok(api::list_pipelines(core, repo, false)?.into_iter().next())
+    resource::get(cx, key, || {
+        from_core(LATEST, repo, |core, repo| {
+            Ok(api::list_pipelines(core, repo, false)?.into_iter().next())
+        })
     })
 }
 
-fn on_core<T: Send + 'static>(
-    cx: &mut App,
-    key: String,
+fn from_core<T: Send + 'static>(
     policy: Policy<T>,
     repo: &str,
     f: fn(&AppState, &str) -> Result<T>,
-) -> Entity<Resource<T>> {
+) -> Resource<T> {
     let repo = repo.to_string();
-    resource::get(cx, key, || {
-        Resource::new(policy, move |cx| {
-            let (core, repo) = (crate::core(cx).clone(), repo.clone());
-            move || f(&core, &repo)
-        })
+    Resource::new(policy, move |cx| {
+        let (core, repo) = (crate::core(cx).clone(), repo.clone());
+        move || f(&core, &repo)
     })
 }
 

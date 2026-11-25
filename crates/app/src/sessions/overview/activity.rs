@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use detached_core::api::SessionBase;
 use detached_core::council::record::{Of, Subject};
 use detached_core::council::track::Fate;
 use detached_core::sessions::MAIN;
@@ -14,12 +15,12 @@ use gpui_kit::{
 use kernel::council::{self, fixes, live};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
-use kernel::resource::Interest;
+use kernel::resource::{Interest, Resource};
 use kernel::session::{Answer, Item, Session, State};
 use kernel::workspace::Workspace;
-use kernel::{forge, proc};
+use kernel::{forge, proc, workset};
 
-use super::Overview;
+use super::{Overview, status};
 use crate::ui::{self, GAP, Icon, text, theme};
 use crate::{chat, dock, util};
 
@@ -29,15 +30,24 @@ pub(super) struct OverviewActivity {
     _registries: [Subscription; 4],
 }
 
-struct MonitoredRepo {
-    rounds: Interest<council::Rounds>,
-    mr: Option<CurrentMr>,
+#[derive(Default)]
+pub(super) struct MonitoredRepo {
+    rounds: Option<Interest<council::Rounds>>,
+    base: Option<Base>,
+    branch: Option<TrackedBranch>,
     pipelines: Option<MrPipelines>,
 }
 
-struct CurrentMr {
-    key: (String, Option<String>),
-    record: Interest<Option<MergeRequest>>,
+struct Base {
+    repo: String,
+    reference: Option<String>,
+    comparison: Interest<SessionBase>,
+}
+
+struct TrackedBranch {
+    key: (String, String),
+    mr: Interest<Option<MergeRequest>>,
+    latest: Interest<Option<Pipeline>>,
 }
 
 struct MrPipelines {
@@ -64,7 +74,7 @@ impl OverviewActivity {
     pub(super) fn rows(
         &mut self,
         cx: &mut Context<Overview>,
-    ) -> (Vec<AnyElement>, Vec<AnyElement>) {
+    ) -> (Vec<AnyElement>, Vec<AnyElement>, Vec<AnyElement>) {
         let workspace = Workspace::get(cx);
         let session = workspace.session_id();
         let Some(workspace) = workspace
@@ -73,7 +83,7 @@ impl OverviewActivity {
         else {
             self.repos.clear();
             self.observed.clear();
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![]);
         };
         let repos = Workspace::get(cx).session_repos().to_vec();
         let in_session = |repo: &str| repos.iter().find(|r| r.path == repo);
@@ -86,7 +96,7 @@ impl OverviewActivity {
         let councils = live::all(cx);
         let fixes = fixes::all(cx).collect::<Vec<_>>();
         let mut seen = HashSet::new();
-        let (mut needs, mut running) = (vec![], vec![]);
+        let (mut needs, mut running, mut statuses) = (vec![], vec![], vec![]);
         let colors = theme(cx);
         let (warning, active, error) = (colors.warning, colors.accent, colors.error);
         for (repo, n, chat) in chats {
@@ -180,7 +190,7 @@ impl OverviewActivity {
             }
         }
         self.repos.retain(|r, _| in_session(r).is_some());
-        for repo in &repos {
+        for (index, repo) in repos.iter().enumerate() {
             let processes = proc::runs(cx, &repo.path).collect::<Vec<_>>();
             for p in processes {
                 self.watch(&p, &mut seen, cx);
@@ -197,15 +207,9 @@ impl OverviewActivity {
                     ));
                 }
             }
-            let monitor = self
-                .repos
-                .entry(repo.path.clone())
-                .or_insert_with(|| MonitoredRepo {
-                    rounds: Interest::view(council::rounds(cx, &repo.path), cx),
-                    mr: None,
-                    pipelines: None,
-                });
+            let monitor = self.repos.entry(repo.path.clone()).or_default();
             monitor.follow(repo, cx);
+            statuses.push(status::row(index, repo, monitor, cx));
             monitor.findings(repo, &mut needs, warning, cx);
             for (mr, p) in monitor.failed(cx) {
                 let Ok(url) = url::Url::parse(&p.web_url) else {
@@ -236,7 +240,7 @@ impl OverviewActivity {
             }
         }
         self.observed.retain(|id, _| seen.contains(id));
-        (needs, running)
+        (needs, running, statuses)
     }
 
     fn watch<T: 'static>(
@@ -255,22 +259,53 @@ impl OverviewActivity {
 
 impl MonitoredRepo {
     fn follow(&mut self, repo: &RepoInfo, cx: &mut Context<Overview>) {
+        if self.rounds.is_none() {
+            self.rounds = Some(Interest::view(council::rounds(cx, &repo.path), cx));
+        }
+        let workspace = Workspace::get(cx);
+        let member = workspace
+            .sessions()
+            .iter()
+            .find(|set| set.id == workspace.session_id())
+            .and_then(|set| set.members.iter().find(|m| m.path == repo.path));
+        match member {
+            Some(m)
+                if self
+                    .base
+                    .as_ref()
+                    .is_none_or(|b| b.repo != m.repo || b.reference != m.base) =>
+            {
+                let m = m.clone();
+                self.base = Some(Base {
+                    comparison: Interest::view(workset::compare_base(cx, &m), cx),
+                    repo: m.repo,
+                    reference: m.base,
+                });
+            }
+            Some(_) => {}
+            None => self.base = None,
+        }
         let key = (|| {
             let status = Repo::get(cx, &repo.path)?.status()?;
             let (branch, upstream) = (status.branch.as_ref()?, status.upstream.as_ref()?);
-            Some((format!("{branch}\0{upstream}"), status.head.clone()))
+            Some((
+                format!("{branch}\0{upstream}"),
+                format!("{:?} {:?}", status.head, status.branch),
+            ))
         })();
-        if self.mr.as_ref().map(|mr| &mr.key) != key.as_ref() {
-            self.mr = key.map(|key| {
+        if self.branch.as_ref().map(|b| &b.key) != key.as_ref() {
+            self.branch = key.map(|key| {
                 let mr = forge::current_mr(cx, &repo.path, &key.0);
-                CurrentMr {
+                let latest = forge::latest_pipeline(cx, &repo.path, &key.1);
+                TrackedBranch {
                     key,
-                    record: Interest::view(mr, cx),
+                    mr: Interest::view(mr, cx),
+                    latest: Interest::view(latest, cx),
                 }
             });
             self.pipelines = None;
         }
-        self.pipelines = match self.current_mr(cx) {
+        self.pipelines = match self.mr(cx).flatten() {
             Some(mr)
                 if self.pipelines.as_ref().is_none_or(|p| {
                     p.number != mr.number || p.project != mr.target_project || p.head != mr.head_sha
@@ -291,16 +326,26 @@ impl MonitoredRepo {
         };
     }
 
-    fn current_mr<'a>(&self, cx: &'a App) -> Option<&'a MergeRequest> {
-        let r = self.mr.as_ref()?.record.loaded(cx)?;
-        r.value
-            .as_ref()?
-            .as_ref()
-            .filter(|m| r.error.is_none() && m.state == MrState::Open)
+    pub(super) fn base<'a>(&self, cx: &'a App) -> Option<&'a Resource<SessionBase>> {
+        self.base.as_ref()?.comparison.loaded(cx)
+    }
+
+    pub(super) fn mr_lookup<'a>(&self, cx: &'a App) -> Option<&'a Resource<Option<MergeRequest>>> {
+        self.branch.as_ref()?.mr.loaded(cx)
+    }
+
+    pub(super) fn mr<'a>(&self, cx: &'a App) -> Option<Option<&'a MergeRequest>> {
+        let r = self.mr_lookup(cx)?;
+        let value = r.value.as_ref().filter(|_| r.error.is_none())?;
+        Some(value.as_ref().filter(|m| m.state == MrState::Open))
+    }
+
+    pub(super) fn latest<'a>(&self, cx: &'a App) -> Option<&'a Resource<Option<Pipeline>>> {
+        Some(self.branch.as_ref()?.latest.read(cx))
     }
 
     fn failed<'a>(&self, cx: &'a App) -> Vec<(&'a MergeRequest, &'a Pipeline)> {
-        let Some(mr) = self.current_mr(cx) else {
+        let Some(mr) = self.mr(cx).flatten() else {
             return Vec::new();
         };
         let Some(runs) = self
@@ -319,7 +364,7 @@ impl MonitoredRepo {
     }
 
     fn findings(&self, repo: &RepoInfo, needs: &mut Vec<AnyElement>, color: Hsla, cx: &App) {
-        let Some(r) = self.rounds.loaded(cx) else {
+        let Some(r) = self.rounds.as_ref().and_then(|rounds| rounds.loaded(cx)) else {
             return;
         };
         let Some(rounds) = r.value.as_ref().filter(|_| r.error.is_none()) else {
@@ -328,7 +373,7 @@ impl MonitoredRepo {
         let branch = Repo::get(cx, &repo.path)
             .and_then(Repo::status)
             .and_then(|s| s.branch.as_deref());
-        let mr = self.current_mr(cx);
+        let mr = self.mr(cx).flatten();
         for (task, entry) in &rounds.tasks {
             let Some(track) = entry.track.as_ref().filter(|t| !t.running) else {
                 continue;

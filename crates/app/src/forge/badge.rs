@@ -80,7 +80,10 @@ impl PipelineBadge {
 impl Render for PipelineBadge {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let latest = self.latest.as_ref().map(|l| l.read(cx));
-        let Some(p) = latest.and_then(|l| l.value.clone().flatten()) else {
+        let Some(p) = latest
+            .filter(|l| l.error.is_none())
+            .and_then(|l| l.value.as_ref()?.as_ref())
+        else {
             return div().hidden().into_any_element();
         };
         if !Workspace::get(cx).archive() && p.status != PipelineStatus::Failed {

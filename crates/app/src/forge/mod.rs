@@ -25,6 +25,7 @@ use gpui_kit::{
 pub use badge::PipelineBadge;
 pub use chip::MrChip;
 pub use job_log::JobLog;
+pub(crate) use mr::{bare_title, number, show_mr};
 pub use mr_list::MrList;
 pub use mr_page::MrPage;
 pub use pipelines::Pipelines;
@@ -111,6 +112,14 @@ impl DocKind for MrDocs {
             mr.read(cx).raise(cx);
         }
     }
+
+    fn replace(&self, view: &AnyView, old: &Doc, new: &Doc, _: &mut Window, cx: &mut App) -> bool {
+        old == new
+            && view
+                .clone()
+                .downcast::<MrPage>()
+                .is_ok_and(|mr| mr.read(cx).matches_remote(cx))
+    }
 }
 
 /// A job's log.
@@ -181,8 +190,7 @@ pub fn color(s: &PipelineStatus, cx: &App) -> Hsla {
     }
 }
 
-/// `success`, `failed`, ... as the forges spell them.
-fn name(s: &PipelineStatus) -> String {
+pub(crate) fn name(s: &PipelineStatus) -> String {
     format!("{s:?}").to_lowercase()
 }
 

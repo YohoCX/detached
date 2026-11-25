@@ -458,7 +458,7 @@ fn columns(
         .child(div().flex_none().w(GAP * 9.).child(actions))
 }
 
-fn branch_label(s: &RepoStatus) -> String {
+pub(super) fn branch_label(s: &RepoStatus) -> String {
     match (&s.branch, &s.head) {
         (Some(branch), Some(_)) => branch.clone(),
         (Some(branch), None) => format!("{branch} · No commits"),

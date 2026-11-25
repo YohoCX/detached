@@ -109,6 +109,13 @@ pub(crate) fn refresh(cx: &mut App) {
                 items
             };
             let trust_changed = recipes(snapshot.read(cx)) != recipes(&value);
+            let before = &snapshot.read(cx).mr_remotes;
+            let remotes = before
+                .keys()
+                .filter(|repo| before.get(*repo) != value.mr_remotes.get(*repo))
+                .chain(value.mr_remotes.keys().filter(|repo| !before.contains_key(*repo)))
+                .cloned()
+                .collect::<Vec<_>>();
             snapshot.update(cx, |s, cx| {
                 *s = Settings {
                     value,
@@ -119,6 +126,9 @@ pub(crate) fn refresh(cx: &mut App) {
             });
             if trust_changed {
                 resource::input(cx, Input::On(On::RecipeTrust));
+            }
+            for repo in remotes {
+                resource::input(cx, Input::Reset(On::MrRemote(repo)));
             }
             refresh(cx);
         })
