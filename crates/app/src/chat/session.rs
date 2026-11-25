@@ -115,6 +115,10 @@ impl Chat {
         self.sessions.last()
     }
 
+    pub(crate) fn queued<'a>(&self, cx: &'a App) -> Option<&'a str> {
+        self.current()?.read(cx).queued.as_deref()
+    }
+
     /// Opens the first session, unless one is there.
     pub fn ensure(&mut self, cx: &mut Context<Self>) {
         if !self.sessions.is_empty() || !Settings::ready(cx) {
@@ -352,19 +356,19 @@ impl Chat {
         }
     }
 
-    /// The feed: each session's items by session and index, a resume's history left out but its
-    /// notes, and blank text left out.
-    pub fn feed<'a>(&'a self, cx: &'a App) -> Vec<((usize, usize), &'a Item)> {
-        let mut out = vec![];
-        for (k, s) in self.sessions.iter().enumerate() {
+    pub fn feed<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> impl DoubleEndedIterator<Item = ((usize, usize), &'a Item)> + 'a {
+        self.sessions.iter().enumerate().flat_map(move |(k, s)| {
             let s = s.read(cx);
-            let shown = s.items.iter().enumerate().filter(|(i, it)| {
-                (k == 0 || *i >= s.history || matches!(it, Item::Note(_) | Item::Error(_)))
-                    && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty())
-            });
-            out.extend(shown.map(|(i, it)| ((k, i), it)));
-        }
-        out
+            s.items.iter().enumerate().filter_map(move |(i, it)| {
+                let shown =
+                    k == 0 || i >= s.history || matches!(it, Item::Note(_) | Item::Error(_));
+                (shown && !matches!(it, Item::Text(t) | Item::Thought(t) if t.trim().is_empty()))
+                    .then_some(((k, i), it))
+            })
+        })
     }
 
     /// Where in `feed` the agent last cleared its context: a `/clear` its session lists, whose

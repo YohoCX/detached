@@ -1,12 +1,13 @@
 mod common;
 
 use common::*;
-use detached_app::{chat, terminal::Terminals};
+use detached_app::{chat, dock, terminal::Terminals};
 use detached_core::{adapters, sessions};
 use gpui_kit::base::dock::{DockAreaState, PanelInfo, PanelState};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Keystroke, SharedString, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
+use kernel::session::Item;
 use serde_json::json;
 
 fn toggle_chats(cx: &mut VisualTestContext) {
@@ -61,6 +62,203 @@ fn adopted(sb: &Sandbox) -> sessions::Workset {
 }
 
 #[gpui_kit::test]
+fn overview_shows_the_latest_chat_message_and_opens_the_chat(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| {
+        session = adopted(sb).id;
+        std::fs::write(
+            sb.path("claude/fake.json"),
+            r#"{"init_wait":"overview-start"}"#,
+        )
+        .unwrap();
+    });
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| chat::new_chat(repo.clone(), cx));
+    wait_until(cx, |cx| cx.find("chat.composer").is_some());
+    let prompt = "wait overview-reply; hi; wait overview-done";
+    cx.input(prompt);
+    cx.press("enter");
+    cx.click("doc.session-overview");
+    let row = ("overview.chats.row", 0usize);
+    let preview = ("overview.chats.preview", 0usize);
+    let chat = cx.update(|_, cx| chat::find(&repo, 0, cx).unwrap());
+    let key = Keystroke::parse("f24").unwrap();
+    cx.update(|w, cx| {
+        let run = chat.read(cx).current().unwrap().read(cx);
+        assert_eq!(run.queued.as_deref(), Some(prompt));
+        w.dispatch_keystroke(key.clone(), cx);
+        assert!(w.find(row).visible());
+        assert_eq!(w.find(preview).label(), Some(prompt));
+        assert_eq!(w.find(row).description(), Some("Working · solo"));
+    });
+    std::fs::write(cx.sb.path("claude/overview-start"), "").unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| chat.read(cx).current().unwrap().read(cx).queued.is_none())
+    });
+    cx.update(|w, cx| {
+        w.dispatch_keystroke(key.clone(), cx);
+        assert_eq!(w.find(row).description(), Some("Working · solo"));
+    });
+    std::fs::write(cx.sb.path("claude/overview-reply"), "").unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            chat.read(cx)
+                .feed(cx)
+                .rev()
+                .any(|(_, item)| matches!(item, Item::Text(t) if t == "said hi"))
+        })
+    });
+    cx.update(|w, cx| {
+        w.dispatch_keystroke(key.clone(), cx);
+        assert_eq!(w.find(preview).label(), Some("said hi"));
+        assert_eq!(w.find(row).description(), Some("Working · solo"));
+    });
+    std::fs::write(cx.sb.path("claude/overview-done"), "").unwrap();
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| chat.read(cx).state(cx) == chat::State::Done)
+    });
+    cx.update(|w, cx| {
+        w.dispatch_keystroke(key, cx);
+        assert_eq!(w.find(row).description(), Some("Done · solo"));
+    });
+    cx.click(row);
+    assert_eq!(
+        cx.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::Chat { repo, n: 0 })
+    );
+}
+
+#[gpui_kit::test]
+fn overview_shows_empty_chats_and_all_chats_opens_twice(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| session = adopted(sb).id);
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| chat::new_chat(repo, cx));
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| chat::ask(repo.clone(), "saved chat".into(), cx));
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| chat::find(&repo, 0, cx).unwrap().read(cx).state(cx) == chat::State::Done)
+    });
+    cx.update(|w, cx| {
+        dock::close_docs(
+            |doc| matches!(doc, Doc::Chat { repo: path, .. } if *path == repo),
+            w,
+            cx,
+        )
+    });
+    assert!(cx.find("overview.chats").unwrap().visible());
+    let empty = cx.find("overview.chats.empty").unwrap();
+    assert!(empty.visible());
+    assert_eq!(empty.label(), Some("No open chats in this session."));
+    assert!(cx.find(("overview.chats.row", 0usize)).is_none());
+    assert!(cx.find("tab.chats").is_none());
+    cx.click("overview.allChats");
+    assert!(cx.find("chats").unwrap().visible());
+    wait_until(cx, |cx| {
+        cx.find(("chats.past", 0usize))
+            .is_some_and(|row| row.label() == Some("saved chat"))
+    });
+    cx.click("doc.session-overview");
+    cx.click("overview.allChats");
+    assert!(cx.find("tab.chats").unwrap().visible());
+    assert!(cx.find("chats").unwrap().visible());
+}
+
+#[gpui_kit::test]
+fn overview_and_chats_limit_long_multibyte_snippets(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| {
+        session = adopted(sb).id;
+        std::fs::write(
+            sb.path("claude/fake.json"),
+            r#"{"init_wait":"long-preview"}"#,
+        )
+        .unwrap();
+    });
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    let head = format!("{}界", "a".repeat(255));
+    let prompt = format!("{head}{} last-token\nfake: hi", "界".repeat(4096));
+    cx.update(|_, cx| chat::ask(repo, prompt, cx));
+    cx.click("doc.session-overview");
+    let want = format!("{head}…");
+    assert_eq!(
+        cx.find(("overview.chats.preview", 0usize)).unwrap().label(),
+        Some(want.as_str())
+    );
+    cx.click("overview.allChats");
+    assert_eq!(
+        cx.find(("chats.open", 0usize)).unwrap().label(),
+        Some(want.as_str())
+    );
+    cx.click("chats.search");
+    cx.input("last-token");
+    assert!(cx.find(("chats.open", 0usize)).unwrap().visible());
+    std::fs::write(cx.sb.path("claude/long-preview"), "").unwrap();
+}
+
+#[gpui_kit::test]
+fn resumed_chats_skip_replay_and_show_the_queued_prompt(cx: &mut TestAppContext) {
+    let mut session = String::new();
+    let cx = &mut open_app_with(cx, |sb| {
+        session = adopted(sb).id;
+        std::fs::write(sb.path("claude/fake.json"), r#"{"init_wait":"hold"}"#).unwrap();
+    });
+    cx.click(SharedString::from(format!("sessions.row.{session}")));
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    cx.update(|_, cx| {
+        chat::new_chat(repo.clone(), cx);
+        let chat = chat::find(&repo, 0, cx).unwrap();
+        let older = chat.update(cx, |chat, cx| {
+            chat.ensure(cx);
+            chat.current().unwrap().clone()
+        });
+        let first = Item::User("first prompt".into());
+        older.update(cx, |run, cx| {
+            run.items.push(first.clone());
+            run.end(cx);
+        });
+        chat.update(cx, |chat, cx| chat.send("queued-search".into(), cx));
+        let note = Item::Note("resume note".into());
+        let reply = Item::Text("new reply".into());
+        let run = chat.read(cx).current().unwrap().clone();
+        run.update(cx, |run, _| {
+            run.items = vec![
+                Item::User("replay-only".into()),
+                note.clone(),
+                reply.clone(),
+                Item::Text(" \n".into()),
+            ];
+            run.history = 2;
+        });
+        older.update(cx, |_, cx| {
+            let mut feed = chat.read(cx).feed(cx).rev();
+            assert_eq!(feed.next(), Some(((1, 2), &reply)));
+            assert_eq!(feed.next(), Some(((1, 1), &note)));
+        });
+        assert_eq!(chat.read(cx).feed(cx).rev().nth(2), Some(((0, 0), &first)));
+    });
+    cx.click("doc.session-overview");
+    assert_eq!(
+        cx.find(("overview.chats.preview", 0usize)).unwrap().label(),
+        Some("queued-search")
+    );
+    cx.click("overview.allChats");
+    cx.click("chats.search");
+    cx.input("queued-search");
+    assert_eq!(
+        cx.find(("chats.open", 0usize)).unwrap().label(),
+        Some("first prompt")
+    );
+    cx.press("escape");
+    cx.input("replay-only");
+    assert!(cx.find(("chats.open", 0usize)).is_none());
+    std::fs::write(cx.sb.path("claude/hold"), "").unwrap();
+}
+
+#[gpui_kit::test]
 fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAppContext) {
     let mut session = String::new();
     let cx = &mut open_app_with(cx, |sb| {
@@ -79,48 +277,53 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
     assert_eq!(cx.find(row(0)).unwrap().description(), Some("Idle · solo"));
     assert!(cx.find(badge.clone()).is_none());
 
+    let key = Keystroke::parse("f24").unwrap();
     let send = |cx: &mut VisualTestContext, n, prompt: &str| {
-        cx.update(|_, cx| {
+        cx.update(|w, cx| {
+            w.dispatch_keystroke(key.clone(), cx);
             chat::find(&repo, n, cx)
                 .unwrap()
                 .update(cx, |chat, cx| chat.send(prompt.into(), cx));
         });
     };
+    let wait_state = |cx: &mut VisualTestContext, n, state| {
+        wait_until(cx, |cx| {
+            cx.update(|_, cx| chat::find(&repo, n, cx).unwrap().read(cx).state(cx) == state)
+        });
+    };
     let status = |cx: &mut VisualTestContext, want| {
-        cx.find(badge.clone())
-            .is_some_and(|e| e.label() == Some(want))
+        cx.update(|w, cx| {
+            w.dispatch_keystroke(key.clone(), cx);
+            assert_eq!(w.find(badge.clone()).label(), Some(want));
+        });
     };
     send(cx, 0, "hi");
-    wait_until(cx, |cx| status(cx, "Done"));
+    wait_state(cx, 0, chat::State::Done);
+    status(cx, "Done");
     new_chat(cx);
     wait_until(cx, |cx| cx.find(row(1)).is_some());
     send(cx, 1, "wait allow; ask");
-    wait_until(cx, |cx| status(cx, "Working"));
+    wait_state(cx, 1, chat::State::Working);
+    status(cx, "Working");
     assert_eq!(cx.find(row(0)).unwrap().description(), Some("Done · solo"));
     cx.click("sessions.row.main");
     cx.workspace(|w, cx| w.show(Doc::NewTab, cx));
     settle(cx);
-    assert!(status(cx, "Working"));
+    status(cx, "Working");
     assert_eq!(cx.find(row(0)).unwrap().description(), Some("Done · solo"));
     std::fs::write(cx.sb.path("claude/allow"), "").unwrap();
-    wait_until(cx, |cx| {
-        cx.update(|_, cx| {
-            chat::find(&repo, 1, cx).unwrap().read(cx).state(cx) == chat::State::Waiting
-        })
-    });
-    cx.update(|w, cx| {
-        // Input draws the window only if a view invalidated it.
-        w.dispatch_keystroke(Keystroke::parse("f24").unwrap(), cx);
-        assert_eq!(w.find(badge.clone()).label(), Some("Waiting"));
-    });
+    wait_state(cx, 1, chat::State::Waiting);
+    status(cx, "Waiting");
     assert!(cx.shown_system_notifications().iter().any(|notice| {
         notice.title.ends_with("is waiting for you") && notice.body == "solo · wait allow; ask"
     }));
     send(cx, 0, "wait never");
-    wait_until(cx, |cx| {
-        cx.find(row(0)).unwrap().description() == Some("Working · solo")
+    wait_state(cx, 0, chat::State::Working);
+    cx.update(|w, cx| {
+        w.dispatch_keystroke(key.clone(), cx);
+        assert_eq!(w.find(row(0)).description(), Some("Working · solo"));
     });
-    assert!(status(cx, "Waiting"));
+    status(cx, "Waiting");
     assert!(cx.find("sessions.row.main.state").is_none());
     assert_eq!(
         cx.find(row(1)).unwrap().description(),
@@ -153,7 +356,7 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
     });
     assert!(cx.find(row(0)).is_none());
     cx.click("sessions.fold");
-    assert!(status(cx, "Waiting"));
+    status(cx, "Waiting");
 }
 
 #[gpui_kit::test]

@@ -21,7 +21,7 @@ use gpui_kit::{
 use super::{State, label};
 use crate::ui::tree::chevron;
 use crate::ui::{self, DrawnMenu, Icon, Menu, text, theme};
-use crate::util::{age, in_folder, now};
+use crate::util::{age, clip, in_folder, now};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -525,7 +525,9 @@ impl ChatList {
                 let said = |i: &Item| matches!(i, Item::User(t) if has(&q, t));
                 if has(&q, title)
                     || has(&q, &tab.place)
-                    || chat.is_some_and(|s| s.feed(cx).iter().any(|(_, i)| said(i)))
+                    || chat.is_some_and(|s| {
+                        s.queued(cx).is_some_and(|t| has(&q, t)) || s.feed(cx).any(|(_, i)| said(i))
+                    })
                 {
                     let at = past.map(|p| p.modified);
                     let g = groups.entry(tab.repo.clone()).or_default();
@@ -536,7 +538,7 @@ impl ChatList {
                         owner: tab.owner.clone(),
                         state: chat.map_or(State::Idle, |s| s.state(cx)),
                         place: tab.place.clone(),
-                        title: title.to_string(),
+                        title: clip(title, 256),
                         at,
                     });
                 }
@@ -844,7 +846,7 @@ impl ChatList {
                 let k = tick(&mut n[2]);
                 let title = match p.title.trim() {
                     "" => "Untitled".to_string(),
-                    t => t.to_string(),
+                    t => clip(t, 256),
                 };
                 if self.deleting.as_ref() == Some(&key) {
                     return self.confirm(k, key, &title, ground, cx);
@@ -1067,7 +1069,7 @@ fn two_lines(
 }
 
 fn has(q: &str, text: &str) -> bool {
-    text.to_lowercase().contains(q)
+    q.is_empty() || text.to_lowercase().contains(q)
 }
 
 impl Render for ChatList {
