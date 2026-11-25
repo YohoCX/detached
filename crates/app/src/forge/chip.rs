@@ -53,7 +53,11 @@ impl MrChip {
             "Create Merge Request…",
             Group::Vcs,
             move |window, cx| {
-                this.update(cx, |this, cx| this.open_form(window, cx)).ok();
+                this.update(cx, |this, cx| {
+                    this.sync(cx);
+                    this.open_form(window, cx);
+                })
+                .ok();
             },
         );
         let subscriptions = vec![Workspace::observe(cx, |this, cx| this.sync(cx))];
