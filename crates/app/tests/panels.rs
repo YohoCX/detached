@@ -134,11 +134,14 @@ fn the_activity_rail_keeps_its_position_as_the_columns_fold(cx: &mut TestAppCont
     let fold = bounds(app, "sessions.fold");
     let sessions = bounds(app, "sessions");
     let archive = bounds(app, "sessions.archive");
+    let settings = bounds(app, "rail.settings");
     assert_eq!(rail.size.width, px(36.));
     assert_eq!(rail.left(), px(0.));
     assert_eq!(fold.center().x, rail.center().x);
     assert_eq!(rail.right(), sessions.left());
-    assert!(archive.left() >= sessions.left());
+    assert_eq!(archive.center().x, rail.center().x);
+    assert!(archive.bottom() <= settings.top());
+    assert!(settings.bottom() <= rail.bottom());
 
     app.click("explorer.fold");
     let explorer = bounds(app, "explorer.fold");
@@ -152,12 +155,12 @@ fn the_activity_rail_keeps_its_position_as_the_columns_fold(cx: &mut TestAppCont
     assert!(app.find("session.explorer").is_none());
 
     app.click("sessions.fold");
-    let archive = bounds(app, "sessions.archive");
     assert!(app.find("sessions").is_none());
+    assert_eq!(bounds(app, "sessions.archive"), archive);
+    assert_eq!(bounds(app, "rail.settings"), settings);
     assert_eq!(bounds(app, "shell.rail"), rail);
     assert_eq!(bounds(app, "sessions.fold"), fold);
     assert_eq!(bounds(app, "explorer.fold"), explorer);
-    assert_eq!(archive.center().x, rail.center().x);
     assert!(archive.top() > explorer.bottom());
     assert_eq!(bounds(app, "shell.center").left(), rail.right() + GAP);
 
@@ -325,7 +328,7 @@ fn the_explorer_header_fits_one_row_at_its_default_width(cx: &mut TestAppContext
         "sessions.fold",
         "tree.find",
         "explorer.fold",
-        "top.settings",
+        "rail.settings",
     ] {
         let expected = size(control::HEIGHT, control::HEIGHT);
         assert_eq!(app.find(id).unwrap().bounds().size, expected, "{id}");

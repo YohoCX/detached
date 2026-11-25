@@ -1134,11 +1134,11 @@ fn settings_opens_from_its_chord_and_the_strip_and_closes_on_escape_close_and_th
     assert!(cx.find("settings").unwrap().visible());
     cx.press("escape");
     assert!(cx.find("settings").is_none());
-    cx.click("top.settings");
+    cx.click("rail.settings");
     assert!(cx.find("settings").is_some());
     cx.click("settings.close");
     assert!(cx.find("settings").is_none());
-    cx.click("top.settings");
+    cx.click("rail.settings");
     cx.update(|w, cx| w.click_at("settings.scrim", point(px(4.), px(4.)), cx));
     settle(cx);
     assert!(cx.find("settings").is_none());

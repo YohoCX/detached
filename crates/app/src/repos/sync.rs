@@ -1,7 +1,6 @@
 //! Fetch, pull and prune, with per-repository outcomes.
 
 use std::fmt::Display;
-use std::sync::Arc;
 
 use detached_core::types::{PullResult, RepoStatus};
 use detached_core::{api, error};
@@ -9,7 +8,7 @@ use futures::{FutureExt, StreamExt, stream};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, FontFeatures, IntoElement, ParentElement, Render, Role,
+    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Role,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 
@@ -311,20 +310,28 @@ impl Render for SyncButtons {
         let w = Workspace::get(cx);
         let idle = bulk.is_none() && !w.session_repos().is_empty();
         let t = theme(cx);
-        let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
-        let button = |kind, id: &'static str, icon: Icon, verb: &str| {
-            let title = format!("{verb} the session's repositories");
+        let button = |kind, id: &'static str, icon: Icon, verb: &str, action: &str| {
+            let title =
+                crate::keymap::tip(&format!("{verb} the session's repositories"), action, cx);
             let progress = bulk.filter(|b| b.kind == kind);
             let label = match progress {
                 Some(b) => format!("{}/{}", b.done, b.total),
                 None if kind == Kind::Pull => "Pull…".into(),
                 None => verb.into(),
             };
-            ui::button(id, label.clone(), cx)
+            let face = match progress {
+                Some(_) => div()
+                    .flex()
+                    .flex_none()
+                    .size(control::ICON)
+                    .items_center()
+                    .justify_center()
+                    .child(ui::spinner(t.accent))
+                    .into_any_element(),
+                None => icon.size(control::ICON).into_any_element(),
+            };
+            ui::icon_button(id, face, cx)
                 .test_support()
-                .flex_row_reverse()
-                .gap(control::GAP)
-                .font_features(tnum.clone())
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_description(title.clone())
@@ -333,26 +340,26 @@ impl Render for SyncButtons {
                     b.on_click(move |_, w, cx| sync_session(kind, w, cx))
                 })
                 .when(!idle && progress.is_none(), |b| b.opacity(0.5))
-                .map(|b| match progress.is_some() {
-                    true => b.child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .size(control::ICON)
-                            .items_center()
-                            .justify_center()
-                            .child(ui::spinner(t.accent)),
-                    ),
-                    false => b.child(icon.size(control::ICON)),
-                })
         };
         div()
             .flex()
             .flex_none()
             .items_center()
             .gap(control::GAP)
-            .child(button(Kind::Fetch, "sync.fetch", Icon::Fetch, "Fetch"))
-            .child(button(Kind::Pull, "sync.pull", Icon::Pull, "Pull"))
+            .child(button(
+                Kind::Fetch,
+                "sync.fetch",
+                Icon::Fetch,
+                "Fetch",
+                "vcs.fetchAll",
+            ))
+            .child(button(
+                Kind::Pull,
+                "sync.pull",
+                Icon::Pull,
+                "Pull",
+                "vcs.pullAll",
+            ))
     }
 }
 

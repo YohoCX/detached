@@ -206,50 +206,27 @@ impl Render for List {
                 .p(px(8.))
                 .gap(px(4.))
                 .child(header)
-                .child(rows)
-                .child(archive_button(false, cx)),
+                .child(rows),
         )
     }
 }
 
-pub(crate) fn archive_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
+pub(crate) fn archive_button(cx: &App) -> impl IntoElement + use<> {
     let t = theme(cx);
     let w = Workspace::get(cx);
     let count = dock::archived_tabs(cx).len()
         + w.sessions().iter().filter(|s| s.archived.is_some()).count();
     let archived = w.shown() == Some(&Doc::SessionArchive);
-    ui::pressable("sessions.archive")
+    ui::icon_button("sessions.archive", Icon::Archive.size(rail::ICON), cx)
         .test_support()
         .role(Role::Button)
         .aria_label("Archive")
         .aria_description(format!("{count} archived"))
         .aria_selected(archived)
         .aria_toggled(archived.into())
-        .when(collapsed, |d| {
-            d.tooltip(move |window, cx| {
-                Tooltip::new(format!("Archive ({count})")).build(window, cx)
-            })
-        })
-        .h(px(32.))
-        .flex_none()
-        .gap(GAP)
-        .px(GAP)
-        .rounded(radius::WIDGET)
-        .hover(|d| d.bg(t.hover))
+        .tooltip(move |window, cx| Tooltip::new(format!("Archive ({count})")).build(window, cx))
         .when(archived, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
         .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
-        .child(Icon::Archive.size(px(15.)))
-        .when(!collapsed, |d| {
-            d.child("Archive").when(count > 0, |d| {
-                d.child(
-                    div()
-                        .font_family(ui::theme::mono(cx))
-                        .text_color(t.muted)
-                        .child(count.to_string()),
-                )
-            })
-        })
-        .when(collapsed, |d| d.w(rail::CONTROL).px_0().justify_center())
 }
 
 pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {
