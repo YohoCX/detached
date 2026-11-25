@@ -14,7 +14,6 @@ testutil = ["detached-core/testutil"]
 detached-core.workspace = true
 # The fields of the unstable features read here would vanish from the typed values without them.
 agent-client-protocol = { version = "=5.2.0", features = ["unstable_session_options", "unstable_end_turn_token_usage"] }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
 futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
 serde.workspace = true
 serde_json.workspace = true

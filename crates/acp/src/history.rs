@@ -23,9 +23,13 @@ fn home(core: &AppState) -> Option<PathBuf> {
         })
 }
 
-fn rollouts(home: &Path, errors: &mut Vec<String>) -> BTreeMap<String, PathBuf> {
+fn rollouts(
+    home: &Path,
+    errors: &mut Vec<String>,
+    include_archived: bool,
+) -> BTreeMap<String, PathBuf> {
     let mut all = BTreeMap::<String, PathBuf>::new();
-    for name in ["sessions", "archived_sessions"] {
+    for name in std::iter::once("sessions").chain(include_archived.then_some("archived_sessions")) {
         let dir = home.join(name);
         match dir.try_exists() {
             Ok(true) => {}
@@ -126,7 +130,7 @@ fn real(path: &Path) -> PathBuf {
     os::canonical(path).unwrap_or_else(|_| path.into())
 }
 
-pub(super) fn past(core: &AppState, folders: &[String]) -> History {
+pub(super) fn past(core: &AppState, folders: &[String], include_archived: bool) -> History {
     let mut history = History::default();
     let Some(home) = home(core) else {
         return history;
@@ -158,7 +162,7 @@ pub(super) fn past(core: &AppState, folders: &[String]) -> History {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(error) => history.errors.push(format!("{}: {error}", index.display())),
     }
-    for (id, path) in rollouts(&home, &mut history.errors) {
+    for (id, path) in rollouts(&home, &mut history.errors, include_archived) {
         let title = titles.remove(&id);
         match metadata(id, &path, &places, title) {
             Ok(chat) => history.chats.extend(chat),
@@ -232,7 +236,7 @@ fn user(row: &Value) -> Option<&str> {
 
 pub(super) fn transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
     let missing = || Error::Other("The transcript is unavailable.".into());
-    let path = rollouts(&home(core).ok_or_else(missing)?, &mut vec![])
+    let path = rollouts(&home(core).ok_or_else(missing)?, &mut vec![], true)
         .remove(id)
         .ok_or_else(missing)?;
     let mut out = vec![];

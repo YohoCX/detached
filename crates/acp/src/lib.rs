@@ -31,8 +31,6 @@ use serde_json::{Value, json};
 mod history;
 mod mcp;
 
-/// Pages of a session list read at most.
-const PAGES: usize = 20;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 
@@ -55,42 +53,14 @@ struct Acp {
 type Adapters = Mutex<HashMap<Key, Arc<Mutex<Weak<Live>>>>>;
 
 impl Backend for Acp {
-    /// The agent lists every session of the folder, the CLI's and other clients' too: those the
-    /// host's index does not know are hidden.
     fn past(&self, core: &AppState, spec: &Spec) -> Result<Vec<Past>> {
-        let (live, _) = self.adapter(core, spec)?;
         let known = chat_index::index(core);
-        let mut all = vec![];
-        let mut cursor = None;
-        // A page filtered by folder may be empty with more after it; a bad cursor ends the walk.
-        for _ in 0..PAGES {
-            let list = ListSessionsRequest::new()
-                .cwd(PathBuf::from(&spec.repo))
-                .cursor(cursor);
-            let r = live.adapter.call(list)?;
-            let mine =
-                (r.sessions.into_iter()).filter(|s| known.contains_key(&s.session_id.to_string()));
-            all.extend(mine.map(|s| {
-                Past {
-                    id: s.session_id.to_string(),
-                    title: s.title.unwrap_or_else(|| "Untitled".into()),
-                    modified: (s.updated_at.as_deref())
-                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                        .map_or(0, |t| t.timestamp_millis() as u64),
-                    cwd: Some(s.cwd.display().to_string()),
-                    tag: None,
-                    model: None,
-                    provider: String::new(),
-                    owned: false,
-                }
-            }));
-            cursor = r.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
+        if known.is_empty() {
+            return Ok(vec![]);
         }
-        all.sort_by_key(|p| std::cmp::Reverse(p.modified));
-        Ok(all)
+        let mut chats = history::past(core, std::slice::from_ref(&spec.repo), false).chats;
+        chats.retain(|chat| known.contains_key(&chat.id));
+        Ok(chats)
     }
 
     fn archive_past(
@@ -99,7 +69,7 @@ impl Backend for Acp {
         _provider: &'static detached_core::adapters::Provider,
         folders: &[String],
     ) -> backend::History {
-        history::past(core, folders)
+        history::past(core, folders, true)
     }
 
     fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {

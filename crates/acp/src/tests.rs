@@ -897,27 +897,69 @@ fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
 }
 
 #[test]
-fn codex_lists_the_host_s_own_sessions_of_the_folder_and_its_delete_archives() {
-    let (acp, sb) = (Acp::default(), codex());
-    let (open, rx, opened) = codex_chat(&acp, &sb);
-    open.prompt("say hello").unwrap();
-    said(&rx);
+fn codex_past_lists_rollouts_without_an_adapter() {
+    let sb = Sandbox::new();
+    let home = sb.path("codex");
+    sb.state
+        .env
+        .write()
+        .unwrap()
+        .vars
+        .push(("CODEX_HOME".into(), home.display().to_string()));
     let repo = sb.dir.path().display().to_string();
-    let file = sb.path("codex-home/fake-sessions.json");
-    let mut all: Vec<Value> = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    all.push(json!({"sessionId": "from-the-cli", "cwd": repo, "title": "mine"}));
-    std::fs::write(&file, Value::from(all).to_string()).unwrap();
-    chat_index::created(&sb.state, &opened.id, CODEX.id).unwrap();
+    let other = sb.path("other").display().to_string();
+    let id = |n| format!("00000000-0000-0000-0000-{n:012}");
+    for (n, folder, cwd, known) in [
+        (1, "sessions/2026/11/23", &repo, true),
+        (2, "sessions/2026/11/23", &repo, true),
+        (3, "sessions/2026/11/23", &repo, false),
+        (4, "sessions/2026/11/23", &other, true),
+        (5, "archived_sessions", &repo, true),
+    ] {
+        let sid = id(n);
+        let dir = home.join(folder);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file =
+            std::fs::File::create(dir.join(format!("rollout-2026-11-23T12-00-00-{sid}.jsonl")))
+                .unwrap();
+        let meta = json!({"type":"session_meta", "payload":{"id":sid, "cwd":cwd}});
+        let event =
+            json!({"type":"event_msg", "payload":{"type":"user_message", "message":"Earlier"}});
+        writeln!(file, "{meta}\n{event}").unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + n))
+            .unwrap();
+        if known {
+            chat_index::created(&sb.state, &sid, CODEX.id).unwrap();
+        }
+    }
+
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    assert!(
+        adapters::installed(&sb.state.data_dir, CODEX.adapter)
+            .current
+            .is_none()
+    );
     let past = acp.past(&sb.state, &spec).unwrap();
-    let listed: Vec<_> = past
-        .iter()
-        .map(|p| (p.id.as_str(), p.title.as_str()))
-        .collect();
-    assert_eq!(listed, [(opened.id.as_str(), "say hello")]);
-    assert!(past[0].modified > 0);
+    let ids: Vec<_> = past.iter().map(|chat| chat.id.clone()).collect();
+    assert_eq!(ids, [id(2), id(1)]);
+    assert_eq!(past[0].title, "Earlier");
+    assert_eq!(past[0].cwd.as_deref(), Some(repo.as_str()));
+    assert!(past[0].modified > past[1].modified);
+    assert!(acp.adapters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn codex_delete_archives_its_session() {
+    let (acp, sb) = (Acp::default(), codex());
+    let (_open, _rx, opened) = codex_chat(&acp, &sb);
+    let repo = sb.dir.path().display().to_string();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
     acp.delete(&sb.state, &spec, &opened.id).unwrap();
-    assert!(acp.past(&sb.state, &spec).unwrap().is_empty());
+    let file = sb.path("codex-home/fake-sessions.json");
+    let sessions: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    assert_eq!(sessions[0]["sessionId"], opened.id);
+    assert_eq!(sessions[0]["archived"], true);
 }
 
 #[test]
