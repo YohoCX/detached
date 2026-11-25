@@ -133,11 +133,15 @@ impl Chat {
         spec.effort = self.effort.clone();
         spec.validate_choices = !self.resumed;
         let s = Session::open_scoped(spec, past, self.checkouts.clone(), cx);
+        self.track(s.clone(), cx);
+        s
+    }
+
+    fn track(&mut self, s: Entity<Session>, cx: &mut Context<Self>) {
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
-        self.sessions.push(s.clone());
+        self.sessions.push(s);
         cx.notify();
-        s
     }
 
     fn live(&self, cx: &App) -> Option<Entity<Session>> {
@@ -155,7 +159,12 @@ impl Chat {
         } else if let Some(s) = self.live(cx) {
             s
         } else {
-            self.open(self.conversation(cx).map(String::from), cx)
+            let past = self.conversation(cx).map(String::from);
+            if self.current().is_some_and(|s| s.read(cx).is_passive()) {
+                self._watch.pop();
+                self.sessions.pop();
+            }
+            self.open(past, cx)
         };
         self.topic.get_or_insert_with(|| text.clone());
         s.update(cx, |s, cx| s.prompt(text, cx));
@@ -497,7 +506,8 @@ impl Chat {
         self.end(cx);
         self.apply(p, Choices::default());
         self.resumed = true;
-        self.open(Some(id), cx);
+        let s = Session::past(Spec::new(p, &self.repo, Kind::Chat), id, cx);
+        self.track(s, cx);
     }
 
     /// Where the chat stands, for its icon in the lists.

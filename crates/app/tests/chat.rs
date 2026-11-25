@@ -1393,17 +1393,32 @@ fn a_past_conversation_shows_and_the_next_message_resumes_it(cx: &mut TestAppCon
     let cx = &mut open_seeded(cx, |sb| {
         _ = past(sb, &sb.solo(), "old1", "Fix the build", 60)
     });
-    wait_until(cx, |cx| cx.find(("chat.past", 0usize)).is_some());
-    assert_eq!(
-        label(cx, ("chat.past", 0usize)).as_deref(),
-        Some("Fix the build")
-    );
-    cx.click(("chat.past", 0usize));
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo.clone(), &CLAUDE, "old1".into(), cx));
     wait_for_item(cx, "fixed");
     assert_eq!(items(cx), ["You: fix it", "fixed"]);
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
     say(cx, "session; more");
     wait_for_item(cx, "resumed old1");
     wait_for_item(cx, "said more");
+    idle(cx);
+    cx.update(|_, cx| {
+        assert_eq!(kernel::session::all(cx).count(), 1);
+        assert_eq!(chat::find(&repo, 0, cx).unwrap().read(cx).sessions.len(), 1);
+    });
+    let shown = items(cx);
+    for text in ["You: fix it", "fixed", "resumed old1"] {
+        assert_eq!(shown.iter().filter(|item| item.as_str() == text).count(), 1);
+    }
+}
+
+#[gpui_kit::test]
+fn a_missing_transcript_shows_an_error_without_starting_the_agent(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let repo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| chat::resume(repo, &CLAUDE, "missing".into(), cx));
+    wait_for_item(cx, "The transcript is unavailable.");
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
 }
 
 #[gpui_kit::test]

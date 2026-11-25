@@ -221,7 +221,7 @@ pub struct Session {
     /// Taken by the recheck loop once the session started.
     changes: Option<mpsc::UnboundedReceiver<()>>,
     _watch: Option<trust::Watch>,
-    _held: gpui::Subscription,
+    _held: Option<gpui::Subscription>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -421,6 +421,43 @@ impl Session {
         Self::open_with(spec, past, seat, None, cx)
     }
 
+    pub fn past(mut spec: Spec, id: String, cx: &mut App) -> Entity<Session> {
+        spec.tools = None;
+        let read = transcript(
+            spec.provider,
+            spec.repo.clone(),
+            id.clone(),
+            std::convert::identity,
+            cx,
+        );
+        cx.new(|cx| {
+            let who = Identity::of(spec.kind, &spec.repo);
+            let mut s = Self::new(spec, Some(id), who, None);
+            s.state = State::Ended(End::Closed);
+            s.task(cx, async move |this, cx| {
+                let read = read.await;
+                this.update(cx, |s, cx| {
+                    match read {
+                        Ok(updates) => {
+                            for update in updates {
+                                s.update(update);
+                            }
+                            s.history = s.items.len();
+                        }
+                        Err(e) => s.fail(e.to_string()),
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+            s
+        })
+    }
+
+    pub fn is_passive(&self) -> bool {
+        self._held.is_none()
+    }
+
     fn open_with(
         mut spec: Spec,
         past: Option<String>,
@@ -442,51 +479,8 @@ impl Session {
             who.repos = Some(repos);
             let tx = cx.global::<Sessions>().tx.clone();
             spec.tools = Some(host_tools(who.clone(), cx.weak_entity(), tx));
-            let (changed, changes) = mpsc::unbounded();
-            let mut s = Session {
-                spec: spec.clone(),
-                who,
-                seat,
-                tokens: 0,
-                failure: None,
-                state: State::Starting,
-                items: vec![],
-                id: past.clone(),
-                config: vec![],
-                usage: None,
-                cost: None,
-                version: None,
-                models: vec![],
-                commands: None,
-                account: None,
-                tasks: vec![],
-                parts: vec![],
-                limits: None,
-                lacks: vec![],
-                history: 0,
-                queued: None,
-                unsent: None,
-                returned: None,
-                refused: false,
-                picked: vec![],
-                open: None,
-                trust: String::new(),
-                blocks: backend(spec.provider).caps().blocks,
-                rules: vec![],
-                replies: HashMap::new(),
-                turn: None,
-                ending: None,
-                cancelled: false,
-                whole: 0,
-                done: false,
-                woken: false,
-                wake_due: false,
-                changed,
-                changes: Some(changes),
-                _watch: None,
-                _held: held,
-                _tasks: vec![],
-            };
+            let mut s = Self::new(spec, past, who, seat);
+            s._held = Some(held);
             s.start(cx);
             s
         });
@@ -494,6 +488,54 @@ impl Session {
         all.retain(|s| s.upgrade().is_some());
         all.push(s.downgrade());
         s
+    }
+
+    fn new(spec: Spec, id: Option<String>, who: Identity, seat: Option<Seat>) -> Self {
+        let (changed, changes) = mpsc::unbounded();
+        Self {
+            blocks: backend(spec.provider).caps().blocks,
+            spec,
+            who,
+            seat,
+            tokens: 0,
+            failure: None,
+            state: State::Starting,
+            items: vec![],
+            id,
+            config: vec![],
+            usage: None,
+            cost: None,
+            version: None,
+            models: vec![],
+            commands: None,
+            account: None,
+            tasks: vec![],
+            parts: vec![],
+            limits: None,
+            lacks: vec![],
+            history: 0,
+            queued: None,
+            unsent: None,
+            returned: None,
+            refused: false,
+            picked: vec![],
+            open: None,
+            trust: String::new(),
+            rules: vec![],
+            replies: HashMap::new(),
+            turn: None,
+            ending: None,
+            cancelled: false,
+            whole: 0,
+            done: false,
+            woken: false,
+            wake_due: false,
+            changed,
+            changes: Some(changes),
+            _watch: None,
+            _held: None,
+            _tasks: vec![],
+        }
     }
 
     /// Starts or resumes the session; a resume of an id still loading or open waits for that to
