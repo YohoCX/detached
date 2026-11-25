@@ -17,7 +17,7 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
 use crate::ui::theme::rail;
-use crate::ui::{self, Icon, radius, text, theme};
+use crate::ui::{self, GAP, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
 use kernel::workspace::{Event, Workspace};
@@ -304,7 +304,7 @@ impl Shell {
         let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
         let creating = crate::sessions::provision::page(cx).is_some();
         let reserve = if creating { px(0.) } else { rail::WIDTH };
-        let room = width - minimum;
+        let room = width - minimum - (GAP + px(1.)) * 2.;
         let list = prefers(Side::Sessions)
             .then_some(room - reserve)
             .and_then(|room| Side::Sessions.open_width(list_size.read(cx), room));
@@ -503,15 +503,20 @@ impl Render for Shell {
                     })
                     .child(
                         div()
+                            .id("shell.center")
+                            .test_support()
                             .flex()
                             .flex_col()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
                             .when(live, |d| {
-                                d.overflow_hidden().bg(t.panel_bg).when(!creating, |d| {
-                                    d.child(crate::sessions::header(window, cx))
-                                })
+                                ui::panel(d, cx)
+                                    .m(GAP)
+                                    .overflow_hidden()
+                                    .when(!creating, |d| {
+                                        d.child(crate::sessions::header(window, cx))
+                                    })
                             })
                             .child(div().flex_1().min_h_0().min_w_0().child(dock))
                             .when(live, |d| d.child(self.status.clone())),

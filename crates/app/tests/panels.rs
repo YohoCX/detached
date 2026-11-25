@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use detached_app::ui::{GAP, radius, theme};
 use detached_app::{actions, dock, shell};
 use gpui_kit::base::dock::PaneRef;
 use gpui_kit::test::TestWindowExt;
@@ -35,6 +36,49 @@ fn pane_count(app: &mut VisualTestContext) -> usize {
             .walk(&mut |node| count += usize::from(matches!(node.kind(), PaneRef::Tabs { .. })));
         count
     })
+}
+
+#[gpui_kit::test]
+fn the_live_center_card_has_a_gap_on_all_sides(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    app.activity(|a, cx| a.say("Ready", false, cx));
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        let center = w.find("shell.center").bounds();
+        let explorer = w.find("session.explorer").bounds();
+        let viewport = w.viewport_size();
+        assert_eq!(center.left(), explorer.right() + GAP);
+        assert_eq!(center.top(), explorer.top() + GAP);
+        assert_eq!(center.right(), viewport.width - GAP);
+        assert_eq!(center.bottom(), viewport.height - GAP);
+        assert_eq!(
+            w.find("session.header").bounds().top(),
+            center.top() + px(1.)
+        );
+        assert_eq!(
+            w.find("status.bar").bounds().bottom(),
+            center.bottom() - px(1.)
+        );
+        let scale = w.scale_factor();
+        for mode in [theme::Mode::Light, theme::Mode::Dark] {
+            theme::set_mode(mode, w, cx);
+            w.render_frame(cx);
+            assert_eq!(theme::is_dark(cx), mode == theme::Mode::Dark);
+            let t = theme(cx);
+            let quads = w.painted_quads();
+            assert!(
+                quads.iter().any(|q| {
+                    q.bounds == center.scale(scale) && q.background == t.panel_bg.into()
+                })
+            );
+            assert!(quads.iter().any(|q| {
+                q.bounds == center.scale(scale)
+                    && q.corner_radii.top_left == radius::PANEL.scale(scale)
+                    && q.border_widths.left == px(1.).scale(scale)
+                    && q.border_color == t.panel_edge
+            }));
+        }
+    });
 }
 
 #[gpui_kit::test]
@@ -101,7 +145,7 @@ fn folded_columns_share_a_rail_and_keep_their_buttons_aligned(cx: &mut TestAppCo
     assert_eq!(bounds(app, "sessions.archive"), archive);
     assert_eq!(archive.center().x, rail.center().x);
     assert!(archive.top() > explorer.bottom());
-    assert_eq!(bounds(app, "session.header").left(), rail.right());
+    assert_eq!(bounds(app, "shell.center").left(), rail.right() + GAP);
     assert!(app.find("session.explorer").is_none());
 
     app.click("sessions.fold");
@@ -140,7 +184,7 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
     app.simulate_resize(size(px(1200.), px(900.)));
     assert_eq!(width(app, "session.explorer"), px(36.));
     app.click("explorer.fold");
-    assert_eq!(width(app, "session.explorer"), px(311.));
+    assert_eq!(width(app, "session.explorer"), px(289.));
     assert!(app.find("grip.session.explorer").is_some());
 
     app.simulate_resize(size(px(1300.), px(900.)));
@@ -151,9 +195,9 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
     drag(app, "grip.session.explorer", 40.);
     assert_eq!(width(app, "session.explorer"), px(36.));
     app.update(|w, cx| actions::dispatch(w, cx, "panel.project"));
-    assert_eq!(width(app, "session.explorer"), px(311.));
+    assert_eq!(width(app, "session.explorer"), px(289.));
     app.simulate_resize(size(px(1300.), px(900.)));
-    assert_eq!(width(app, "session.explorer"), px(351.));
+    assert_eq!(width(app, "session.explorer"), px(329.));
 }
 
 #[gpui_kit::test]
@@ -176,7 +220,7 @@ fn sessions_shows_its_folded_rail_during_a_drag_and_can_reopen(cx: &mut TestAppC
     app.simulate_mouse_up(to, MouseButton::Left, modifiers);
 
     app.click("sessions.fold");
-    assert_eq!(width(app, "sessions"), px(423.));
+    assert_eq!(width(app, "sessions"), px(401.));
     assert!(app.find("sessions.rows").is_some());
     app.simulate_resize(size(px(1200.), px(900.)));
     assert_eq!(width(app, "sessions"), px(464.));
@@ -210,7 +254,7 @@ fn an_explorer_drag_can_continue_after_it_joins_the_sessions_rail(cx: &mut TestA
 #[gpui_kit::test]
 fn new_session_can_use_the_space_of_the_hidden_explorer(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
-    app.simulate_resize(size(px(1100.), px(900.)));
+    app.simulate_resize(size(px(1122.), px(900.)));
     split_right(app);
     assert_eq!(pane_count(app), 2);
     app.click("sessions.new");
@@ -224,7 +268,7 @@ fn new_session_can_use_the_space_of_the_hidden_explorer(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn a_new_split_can_use_the_full_width_freed_by_folding_the_explorer(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
-    app.simulate_resize(size(px(1300.), px(900.)));
+    app.simulate_resize(size(px(1322.), px(900.)));
     drag(app, "grip.session.explorer", 136.);
     split_right(app);
     assert_eq!(pane_count(app), 2);
@@ -238,7 +282,7 @@ fn a_new_split_can_use_the_full_width_freed_by_folding_the_explorer(cx: &mut Tes
 #[gpui_kit::test]
 fn a_new_split_can_use_the_explorer_width_when_sessions_is_folded(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
-    app.simulate_resize(size(px(998.), px(900.)));
+    app.simulate_resize(size(px(1020.), px(900.)));
     app.click("explorer.fold");
     split_right(app);
     assert_eq!(pane_count(app), 2);
