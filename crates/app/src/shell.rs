@@ -460,10 +460,14 @@ impl Render for Shell {
                         .id("session.explorer")
                         .test_support()
                         .size_full()
-                        .overflow_hidden()
-                        .border_l_1()
-                        .border_color(t.line)
-                        .child(self.explorer.clone()),
+                        .py(GAP)
+                        .pl(GAP)
+                        .child(
+                            ui::panel(div(), cx)
+                                .size_full()
+                                .overflow_hidden()
+                                .child(self.explorer.clone()),
+                        ),
                 )
             } else if shared {
                 pane

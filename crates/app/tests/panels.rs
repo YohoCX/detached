@@ -96,9 +96,11 @@ fn the_sidebar_grips_resize_independently_and_restore_their_widths(cx: &mut Test
         let sessions = w.find("sessions").bounds();
         let explorer = w.find("session.explorer").bounds();
         assert_eq!(sessions.right(), explorer.left());
+        let card = explorer.left() + GAP;
         assert!(w.painted_quads().iter().any(|q| {
-            q.bounds == explorer.scale(w.scale_factor())
+            q.bounds.origin.x == card.scale(w.scale_factor())
                 && q.border_widths.left > Default::default()
+                && q.corner_radii.top_left > Default::default()
         }));
     });
 
