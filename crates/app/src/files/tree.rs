@@ -810,6 +810,7 @@ impl Tree {
             TreeRowKind::Change(change) => {
                 let (repo, change) = (entry.repo.clone(), change.clone());
                 return ui::list_row(("tree.change", i), on, focused, cx)
+                    .w_full()
                     .test_support()
                     .aria_label(change.path.clone())
                     .aria_selected(on)

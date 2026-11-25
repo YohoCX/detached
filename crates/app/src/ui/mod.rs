@@ -343,8 +343,8 @@ pub fn row(id: impl Into<ElementId>, selected: bool, cx: &App) -> Stateful<Div> 
         })
 }
 
-/// A row of a focusable list: a selected one is ringed while the list has focus and faintly tinted
-/// otherwise.
+/// A row of a focusable list: a selected one is filled like a Sessions row, fainter while the list
+/// lacks focus.
 pub fn list_row(
     id: impl Into<ElementId>,
     selected: bool,
@@ -352,11 +352,7 @@ pub fn list_row(
     cx: &App,
 ) -> Stateful<Div> {
     let t = theme(cx);
-    let ring = BoxShadow::new(px(0.), px(0.), t.selected_ring).spread_radius(px(1.));
-    row(id, selected, cx).when(selected, |r| match focused {
-        true => r.shadow(vec![marker(cx), ring.inset()]),
-        false => r.bg(t.selected_inactive).shadow(vec![marker(cx)]),
-    })
+    row(id, selected, cx).when(selected && !focused, |r| r.bg(t.selected_inactive))
 }
 
 /// A change's status letter in a ring of its color; a fill behind it would cost the letter contrast.

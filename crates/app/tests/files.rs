@@ -1820,3 +1820,18 @@ fn the_session_pane_opens_the_compare_tool(cx: &mut TestAppContext) {
     cx.update(|w, cx| w.within("changes.mode").click(1usize, cx));
     wait_until(cx, |cx| cx.find("changes.ab").is_some());
 }
+
+#[gpui_kit::test]
+fn a_change_row_spans_the_explorer(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "app");
+        write(&repo, [("dirty.txt", "dirty\n")]);
+    });
+    cx.click("tree.changes");
+    wait_until(cx, |cx| cx.find(("tree.change", 0usize)).is_some());
+    let (rows, row) = (
+        cx.find("tree.rows").unwrap(),
+        cx.find(("tree.change", 0usize)).unwrap(),
+    );
+    assert!(row.bounds().size.width > rows.bounds().size.width - px(16.));
+}

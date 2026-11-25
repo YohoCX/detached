@@ -644,9 +644,14 @@ fn member(
         .when(changed > 0, |d| {
             d.child(
                 div()
+                    .id("changed")
                     .flex_none()
                     .font_family(theme::mono(cx))
                     .text_color(t.modified)
+                    .tooltip(move |window, cx| {
+                        let s = if changed == 1 { "" } else { "s" };
+                        Tooltip::new(format!("{changed} changed file{s}")).build(window, cx)
+                    })
                     .child(format!("●{changed}")),
             )
         })
