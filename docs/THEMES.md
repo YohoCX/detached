@@ -26,7 +26,8 @@ The bundled themes:
 
 | Theme | Light | Dark |
 | --- | --- | --- |
-| [Slate](../crates/app/themes/slate.json) (default) | cool blue-grays, azure accent | the same at night |
+| [Indigo](../crates/app/themes/indigo.json) (default) | white cards, indigo accent | near-black with an indigo tint |
+| [Slate](../crates/app/themes/slate.json) | cool blue-grays, azure accent | the same at night |
 | [Fleet](../crates/app/themes/fleet.json) | neutral grays, blue accent | the same at night |
 | [Classic](../crates/app/themes/classic.json) | translucent glass panes, indigo accent | the same at night |
 | [Catppuccin](../crates/app/themes/catppuccin.json) | Latte, mauve accent | Mocha, mauve accent |
@@ -38,8 +39,8 @@ A unit test in `ui/theme.rs` checks at least 4.5:1 contrast for text and status 
 bundled theme, including on derived surfaces and selected popover rows.
 
 The full token list, with values, is in the bundled files.
-Opening the themes folder the first time puts an editable copy of Slate there with `extends` set to
-`"Slate"`.
+Opening the themes folder the first time puts an editable copy of Indigo there with `extends` set to
+`"Indigo"`.
 
 | Tokens | What they color |
 | --- | --- |

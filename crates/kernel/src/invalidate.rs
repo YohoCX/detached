@@ -111,7 +111,7 @@ pub fn status(cx: &mut App, repo: &str) -> Task<()> {
 pub(crate) fn status_loaded(cx: &mut App, repo: &str, moved: bool) {
     resource::input(cx, Input::On(On::Status(repo.into())));
     if moved {
-        resource::input(cx, Input::On(On::Head(repo.into())));
+        resource::input(cx, Input::Reset(On::Head(repo.into())));
     }
 }
 
@@ -310,9 +310,6 @@ pub fn watching(cx: &App) -> bool {
 }
 
 fn worktrees(work: &Workspace) -> Vec<String> {
-    if work.archive() {
-        return work.current().map(str::to_owned).into_iter().collect();
-    }
     work.session_repos()
         .iter()
         .map(|r| r.path.clone())

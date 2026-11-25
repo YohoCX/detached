@@ -1,7 +1,6 @@
 //! Fetch, pull and prune, with per-repository outcomes.
 
 use std::fmt::Display;
-use std::sync::Arc;
 
 use detached_core::types::{PullResult, RepoStatus};
 use detached_core::{api, error};
@@ -9,13 +8,12 @@ use futures::{FutureExt, StreamExt, stream};
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, FontFeatures, IntoElement, ParentElement, Render, Role,
+    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Role,
     StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
 };
 
 use super::State;
-use crate::keymap;
+use crate::ui::theme::control;
 use crate::ui::{self, Icon, theme};
 use kernel::activity::{Activity, Level, Notice};
 use kernel::repo::{Outcome, Repo};
@@ -243,10 +241,6 @@ pub fn prune(repo: String, cx: &mut App) {
 
 fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
     let w = Workspace::get(cx);
-    if w.archive() {
-        sync_repos(kind, None, cx);
-        return;
-    }
     let repos: Vec<_> = w.session_repos().iter().map(|r| r.path.clone()).collect();
     if kind == Kind::Fetch {
         sync_repos(kind, Some(repos), cx);
@@ -293,7 +287,7 @@ pub struct Bulk {
     pub total: usize,
 }
 
-/// Sync targets the current session in live views and the whole workspace in Archive.
+/// Sync buttons for the current session.
 pub fn sync_buttons(cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let (workspace, state) = (Workspace::global(cx), State::global(cx));
@@ -314,68 +308,58 @@ impl Render for SyncButtons {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bulk = State::global(cx).read(cx).sync;
         let w = Workspace::get(cx);
-        let live = !w.archive();
-        let idle = bulk.is_none() && !(if live { w.session_repos() } else { w.repos() }).is_empty();
-        let scope = if live {
-            "the session's repositories"
-        } else {
-            "all repositories"
-        };
+        let idle = bulk.is_none() && !w.session_repos().is_empty();
         let t = theme(cx);
-        let tnum = FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
-        let button = |kind, id: &'static str, icon: Icon, verb: &str| {
-            let title = format!("{verb} {scope}");
+        let button = |kind, id: &'static str, icon: Icon, verb: &str, action: &str| {
+            let title =
+                crate::keymap::tip(&format!("{verb} the session's repositories"), action, cx);
             let progress = bulk.filter(|b| b.kind == kind);
             let label = match progress {
                 Some(b) => format!("{}/{}", b.done, b.total),
-                None if !live => format!("{verb} All"),
                 None if kind == Kind::Pull => "Pull…".into(),
                 None => verb.into(),
             };
-            let action = match kind {
-                Kind::Pull => "vcs.pullAll",
-                Kind::Fetch => "vcs.fetchAll",
+            let face = match progress {
+                Some(_) => div()
+                    .flex()
+                    .flex_none()
+                    .size(control::ICON)
+                    .items_center()
+                    .justify_center()
+                    .child(ui::spinner(t.accent))
+                    .into_any_element(),
+                None => icon.size(control::ICON).into_any_element(),
             };
-            ui::button(id, label.clone(), cx)
+            ui::icon_button(id, face, cx)
                 .test_support()
-                .flex_row_reverse()
-                .gap(px(6.))
-                .font_features(tnum.clone())
                 .role(Role::Button)
                 .aria_label(label)
                 .aria_description(title.clone())
-                .tooltip(move |window, cx| {
-                    let tip = if live {
-                        title.clone()
-                    } else {
-                        keymap::tip(&title, action, cx)
-                    };
-                    Tooltip::new(tip).build(window, cx)
-                })
+                .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
                 .when(idle, |b| {
                     b.on_click(move |_, w, cx| sync_session(kind, w, cx))
                 })
                 .when(!idle && progress.is_none(), |b| b.opacity(0.5))
-                .map(|b| match progress.is_some() {
-                    true => b.child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .size(px(14.))
-                            .items_center()
-                            .justify_center()
-                            .child(ui::spinner(t.accent)),
-                    ),
-                    false => b.child(icon.size(px(14.))),
-                })
         };
         div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(6.))
-            .child(button(Kind::Fetch, "sync.fetch", Icon::Fetch, "Fetch"))
-            .child(button(Kind::Pull, "sync.pull", Icon::Pull, "Pull"))
+            .gap(control::GAP)
+            .child(button(
+                Kind::Fetch,
+                "sync.fetch",
+                Icon::Fetch,
+                "Fetch",
+                "vcs.fetchAll",
+            ))
+            .child(button(
+                Kind::Pull,
+                "sync.pull",
+                Icon::Pull,
+                "Pull",
+                "vcs.pullAll",
+            ))
     }
 }
 

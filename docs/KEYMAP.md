@@ -17,7 +17,11 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `editor.gotoLine` | Go to line | Cmd+L | M1 | V2 |
 | `nav.back` / `nav.forward` | Back / forward | Cmd+[ / Cmd+] | M1 | F |
 | `panel.project` | Session files | Cmd+1 | M1 | F |
-| `panel.chats` | Chats app | Cmd+2 | 0.7.1 | H11 |
+| `panel.chats` | Chats app | — | 0.7.1 | H11 |
+| `panel.compare` | Compare Changes | — | 0.7.1 | V2 |
+| `panel.projectTab` | Project app | — | 0.7.1 | V2 |
+| `panel.events` | Events app | — | 0.7.1 | F |
+| `panel.repositories` | Repositories app | — | 0.7.1 | V1 |
 | `session.new` | New Session… | Cmd+N | Sessions | F |
 | `session.adopt` | Adopt Worktrees… | — | Sessions | F |
 | `session.addRepo` | Add Repository… | — | Sessions | F |
@@ -28,7 +32,7 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `panel.council` | Council app | — | P1 | P1 |
 | `panel.docs` | Docs app | — | H7 | H7 |
 | `panel.processes` | Processes app | — | H9 | H9 |
-| `vcs.update` | Update project (pull) | Cmd+T | M1 | V1 |
+| `vcs.update` | Update project (pull) | — | M1 | V1 |
 | `vcs.fetch` | Fetch the current repo | | M1 | V1 |
 | `vcs.fetchAll` / `vcs.pullAll` | Fetch / pull all repos | | M1 | V1 |
 | `vcs.checkout` / `vcs.newBranch` / `vcs.deleteBranch` | Checkout, new, delete branch | | M1 | V1 |
@@ -44,10 +48,10 @@ parse unbinds the action. M3 rows keep their chords free until their actions exi
 | `mr.create` | Create a merge request from the current branch | | M2 | V5 |
 | `pipeline.run` | Run a pipeline for a branch | | M2 | V5 |
 | `markdown.preview` | Toggle the preview of an open markdown file | | M2 | V2 |
-| `panel.terminal` | Terminal in a pane below | Alt+F12 | M2 | V7 |
+| `panel.terminal` | Open a terminal below for the current repo, or focus its open terminal | Cmd+T | M2 | V7 |
 | `agent.chat` | A new chat about the current repo, or its empty one, in a tab | | M2 | H11 |
 | `tabs.next` / `tabs.prev` | Next / previous tab in the focused pane | Cmd+Shift+] / Cmd+Shift+[ | W4 | F |
-| `panel.sessions` | Show or Hide Sessions | Cmd+B | Sessions | F |
+| `panel.sessions` | Show or Hide Sessions | Cmd+2 | Sessions | F |
 | `panel.changes` | Session Changes | Cmd+0 | Sessions | F |
 | `session.switch` | Switch Session or Tab | Cmd+K / Ctrl+Shift+K on Windows and Linux | Sessions | F |
 | `session.next` | Next Session | Cmd+Alt+] | Sessions | F |

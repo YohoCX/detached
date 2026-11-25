@@ -98,6 +98,10 @@ pub const ACTIONS: &[Action] = &[
     a("pane.resizeDown", "Resize Pane Down", Group::View),
     a("tab.moveDown", "Move Tab Down", Group::View),
     a("panel.chats", "Chats", Group::View),
+    a("panel.compare", "Compare Changes", Group::View),
+    a("panel.projectTab", "Project", Group::View),
+    a("panel.events", "Events", Group::View),
+    a("panel.repositories", "Repositories", Group::View),
 ];
 
 pub fn find(id: &str) -> Option<&'static Action> {

@@ -184,7 +184,7 @@ fn places(cx: &App) -> Vec<String> {
     };
     if w.session_id() != MAIN {
         return w
-            .session_checkouts()
+            .session_repos()
             .iter()
             .filter(|r| r.path == repo)
             .map(|r| r.path.clone())
@@ -301,13 +301,8 @@ impl ChatList {
     /// Holds the past conversations of the checkouts in scope.
     fn watch(&mut self, cx: &mut Context<Self>) {
         let w = Workspace::get(cx);
-        let repos = if w.archive() {
-            w.repos()
-        } else {
-            w.session_checkouts()
-        };
-        let mut places: Vec<String> = repos.iter().map(|r| r.path.clone()).collect();
-        if w.archive() || w.session_id() == MAIN {
+        let mut places: Vec<_> = w.session_repos().iter().map(|r| r.path.clone()).collect();
+        if w.session_id() == MAIN {
             for f in folders(cx) {
                 if !places.contains(&f) {
                     places.push(f);
@@ -674,7 +669,7 @@ impl ChatList {
             }
             Key::Archived => self.show_archived = !self.show_archived,
         }
-        if Workspace::get(cx).archive() || !matches!(key, Key::Open(..) | Key::Past(_)) {
+        if !matches!(key, Key::Open(..) | Key::Past(_)) {
             let focus = self.focus.clone();
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }

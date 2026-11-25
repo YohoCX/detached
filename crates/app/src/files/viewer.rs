@@ -114,7 +114,10 @@ impl Render for Viewer {
 /// Show Diff: the selected change, or the shown file against its ref, or against HEAD from where
 /// the status says it was.
 fn diff_shown(window: &mut Window, cx: &mut App) {
-    if let Some(doc) = changes::selected_diff(window, cx) {
+    if let Some((doc, from_changes)) = changes::selected_diff(window, cx) {
+        if from_changes {
+            return super::api::show_companion_diff(doc, false, window, cx);
+        }
         return show_diff(cx, doc, false);
     }
     let Some(Doc::File(loc)) = Workspace::get(cx).shown() else {

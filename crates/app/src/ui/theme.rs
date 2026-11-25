@@ -18,8 +18,9 @@ use kernel::blocking;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-pub const DEFAULT: &str = "Slate";
-const BUNDLED: [&str; 4] = [
+pub const DEFAULT: &str = "Indigo";
+const BUNDLED: [&str; 5] = [
+    include_str!("../../themes/indigo.json"),
     include_str!("../../themes/slate.json"),
     include_str!("../../themes/fleet.json"),
     include_str!("../../themes/classic.json"),
@@ -80,14 +81,34 @@ pub const GAP: Pixels = px(10.);
 /// A tab's title is cut past this, so a long one leaves its close button in the zone.
 pub const TAB_TITLE: Pixels = px(240.);
 
+pub mod control {
+    use gpui_kit::{Pixels, px};
+
+    pub const HEIGHT: Pixels = px(28.);
+    pub const GAP: Pixels = px(6.);
+    pub const ICON: Pixels = px(14.);
+    pub const TEXT_PAD: Pixels = px(14.);
+}
+
+pub mod segment {
+    use gpui_kit::{Pixels, px};
+
+    pub const HEIGHT: Pixels = px(24.);
+    pub const INSET: Pixels = px(2.);
+    pub const PAD: Pixels = px(10.);
+    pub const GAP: Pixels = px(4.);
+    pub const ICON: Pixels = px(14.);
+    pub const TIP_RISE: Pixels = px(-40.);
+}
+
 pub mod rail {
     use gpui_kit::{Pixels, px};
 
     pub const WIDTH: Pixels = px(36.);
     pub const PAD: Pixels = px(8.);
     pub const GAP: Pixels = px(4.);
-    pub const CONTROL: Pixels = px(28.);
-    pub const ICON: Pixels = px(14.);
+    pub const CONTROL: Pixels = super::control::HEIGHT;
+    pub const ICON: Pixels = super::control::ICON;
 }
 
 pub mod chat {
@@ -495,7 +516,7 @@ impl Theme {
         let (f, a, u) = (p.blend(self.fg), p.blend(self.accent), g.blend(self.popup));
         self.panel_bg = p;
         if dark {
-            self.window_bg = mix(g, black, 0.6);
+            self.window_bg = mix(g, black, 0.8);
             self.header_bg = mix(p, f, 0.10);
             self.popover_bg = mix(mix(self.header_bg, u, 0.25), f, 0.04);
             self.segment_bg = f.opacity(0.12);
@@ -710,21 +731,21 @@ mod tests {
         assert_eq!(
             surfaces(&light),
             [
-                "#d9dde4", "#ffffff", "#e4e7ec", "#ffffff", "#dbe6f3", "#7f8388", "#dbe6f3",
-                "#e8eff8", "#e5e8ed",
+                "#dddee6", "#ffffff", "#e7e8ed", "#ffffff", "#e4e3f8", "#80828d", "#e4e3f8",
+                "#eeedfa", "#e8e9ee",
             ]
         );
         assert_eq!(
             surfaces(&dark),
             [
-                "#0e1012", "#161a1f", "#2b2e33", "#31353a", "#373e48", "#64676e", "#2e3d50",
-                "#263241", "#111317",
+                "#0a0a0d", "#18181f", "#2e2e35", "#33333b", "#323340", "#62626f", "#202752",
+                "#2b2c40", "#0f0f13",
             ]
         );
     }
 
     #[test]
-    fn slate_focused_tab_outline_contrasts_with_the_tab_and_strip() {
+    fn the_focused_tab_outline_contrasts_with_the_tab_and_strip() {
         let (light, dark) = pair(&bundled()[DEFAULT], &bundled()).unwrap();
         for (mode, t) in [("light", light), ("dark", dark)] {
             for bg in [t.tab_active, t.panel_bg] {

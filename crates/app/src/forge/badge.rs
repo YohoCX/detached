@@ -18,9 +18,7 @@ use kernel::workspace::Workspace;
 /// The current branch's latest pipeline; a click opens Pipelines. It also runs `pipeline.run`.
 pub struct PipelineBadge {
     repo: Option<String>,
-    /// None without an upstream: then the forge lists every branch's pipelines.
-    key: Option<String>,
-    latest: Option<Interest<Option<Pipeline>>>,
+    latest: Option<Interest<Vec<Pipeline>>>,
     _run: Registration,
     _subscriptions: Vec<Subscription>,
 }
@@ -43,7 +41,6 @@ impl PipelineBadge {
         })];
         let mut this = PipelineBadge {
             repo: None,
-            key: None,
             latest: None,
             _run: run,
             _subscriptions: subscriptions,
@@ -53,26 +50,20 @@ impl PipelineBadge {
     }
 
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let workspace = Workspace::get(cx);
-        let repo = if workspace.archive() {
-            workspace.current()
-        } else {
-            workspace.session_current()
-        }
-        .map(String::from);
-        let key = repo.as_deref().and_then(|r| {
-            let st = Repo::get(cx, r)?
-                .status()
-                .filter(|st| st.upstream.is_some())?;
-            Some(format!("{:?} {:?}", st.head, st.branch))
-        });
-        if (&repo, &key) != (&self.repo, &self.key) {
-            (self.repo, self.key) = (repo, key);
+        let repo = Workspace::get(cx)
+            .session_current()
+            .filter(|r| {
+                Repo::get(cx, r)
+                    .and_then(Repo::status)
+                    .is_some_and(|st| st.upstream.is_some())
+            })
+            .map(String::from);
+        if repo != self.repo {
+            self.repo = repo;
             self.latest = self
                 .repo
                 .as_ref()
-                .zip(self.key.as_ref())
-                .map(|(repo, key)| Interest::view(forge::latest_pipeline(cx, repo, key), cx));
+                .map(|repo| Interest::shared_view(forge::pipelines(cx, repo, None, false), cx));
         }
     }
 }
@@ -82,11 +73,11 @@ impl Render for PipelineBadge {
         let latest = self.latest.as_ref().map(|l| l.read(cx));
         let Some(p) = latest
             .filter(|l| l.error.is_none())
-            .and_then(|l| l.value.as_ref()?.as_ref())
+            .and_then(|l| l.value.as_ref()?.first())
         else {
             return div().hidden().into_any_element();
         };
-        if !Workspace::get(cx).archive() && p.status != PipelineStatus::Failed {
+        if p.status != PipelineStatus::Failed {
             return div().hidden().into_any_element();
         }
         let t = theme(cx);

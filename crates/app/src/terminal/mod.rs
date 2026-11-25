@@ -1,5 +1,4 @@
-//! The Terminal app: tabs of shells, each started in the current repo; a shell dragged out of it
-//! becomes a tab of its own.
+//! Shells in live session tabs.
 
 mod ghostty;
 mod keys;
@@ -9,24 +8,20 @@ mod view;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
-    AnyView, App, AppContext, Context, Entity, EntityId, FocusHandle, Global, InteractiveElement,
-    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px,
+    AnyView, App, AppContext, Context, Entity, EntityId, FocusHandle, Global, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
 
 pub use ghostty::Rgb;
 pub use session::Session;
 
 use crate::actions::{self, Group, Registration};
-use crate::dock::{self, AppSpec, DocKind, DragDoc};
+use crate::dock::{self, DocKind};
 use crate::keymap;
-use crate::ui::{self, Icon, radius, text, theme};
+use crate::ui::{self, theme};
 use kernel::activity::Activity;
 use kernel::doc::Doc;
-use kernel::workspace::Workspace;
 
 /// Chords that reach the app from inside a terminal; every other key goes to the shell.
 const PASS: &[&str] = &[
@@ -47,10 +42,6 @@ const PASS: &[&str] = &[
 
 #[derive(Default)]
 pub struct Terminals {
-    /// The Terminal app's tabs.
-    pub sessions: Vec<Entity<Session>>,
-    pub active: usize,
-    /// Shells moved out to tabs of their own.
     pub docked: Vec<Entity<Session>>,
     subscriptions: HashMap<EntityId, Subscription>,
 }
@@ -68,25 +59,6 @@ impl Terminals {
         cx.set_global(Global_(this.clone()));
         intercept(cx);
         this
-    }
-
-    pub fn active(&self) -> Option<&Entity<Session>> {
-        self.sessions.get(self.active)
-    }
-
-    /// A shell in the current repo, or home without one.
-    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<Session>> {
-        let cwd = Workspace::get(cx)
-            .current()
-            .map(PathBuf::from)
-            .or_else(std::env::home_dir);
-        let session = self.start(cwd.unwrap_or_default(), window, cx)?;
-        self.sessions.push(session.clone());
-        self.active = self.sessions.len() - 1;
-        let focus = session.read(cx).focus.clone();
-        window.focus(&focus, cx);
-        cx.notify();
-        Some(session)
     }
 
     /// A shell in `cwd` for a tab of its own, as one restored after a restart.
@@ -124,21 +96,6 @@ impl Terminals {
         Some(session)
     }
 
-    /// Moves shell `id` out of the Terminal app, for a tab of its own.
-    pub fn undock(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(i) = self
-            .sessions
-            .iter()
-            .position(|s| s.entity_id().as_u64() == id)
-        {
-            self.docked.push(self.sessions.remove(i));
-            if self.active >= i && self.active > 0 {
-                self.active -= 1;
-            }
-            cx.notify();
-        }
-    }
-
     pub fn close(
         &mut self,
         session: &Entity<Session>,
@@ -151,36 +108,12 @@ impl Terminals {
             let id = session.entity_id().as_u64();
             let gone = move |d: &Doc| matches!(d, Doc::Terminal { id: i, .. } if *i == id);
             dock::close_docs(gone, window, cx);
-            return cx.notify();
-        }
-        let Some(i) = self.sessions.iter().position(|s| s == session) else {
-            return;
-        };
-        self.sessions.remove(i);
-        if self.active >= i && self.active > 0 {
-            self.active -= 1;
-        }
-        match self.active() {
-            Some(s) => {
-                let focus = s.read(cx).focus.clone();
-                window.focus(&focus, cx);
-            }
-            None => dock::close("terminal", window, cx),
-        }
-        cx.notify();
-    }
-
-    pub fn select(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(s) = self.sessions.get(i) {
-            let focus = s.read(cx).focus.clone();
-            self.active = i;
-            window.focus(&focus, cx);
             cx.notify();
         }
     }
 }
 
-/// Types `line` into a new shell of the Terminal app and shows it.
+/// Types `line` into a shell in a new tab.
 pub fn run(line: &str, window: &mut Window, cx: &mut App) {
     let cwd =
         dock::bound_repo(cx).or_else(|| std::env::home_dir().map(|p| p.display().to_string()));
@@ -206,22 +139,23 @@ pub(crate) fn open_tab(cwd: String, window: &mut Window, cx: &mut App) -> Option
     Some(session)
 }
 
-/// The titles of the shells, in the Terminal app and in tabs of their own.
+/// The titles of the open shells.
 pub fn live(cx: &App) -> Vec<String> {
     let Some(t) = cx.try_global::<Global_>() else {
         return vec![];
     };
     let t = t.0.read(cx);
-    let shells = t.sessions.iter().chain(&t.docked);
-    shells.map(|s| s.read(cx).title().to_string()).collect()
+    t.docked
+        .iter()
+        .map(|s| s.read(cx).title().to_string())
+        .collect()
 }
 
 pub(crate) fn live_in(paths: &[&str], cx: &App) -> Option<String> {
     let terminals = cx.try_global::<Global_>()?.0.read(cx);
     terminals
-        .sessions
+        .docked
         .iter()
-        .chain(&terminals.docked)
         .map(|s| s.read(cx))
         .find(|s| paths.iter().any(|p| s.cwd.starts_with(p)))
         .map(|s| s.title().to_owned())
@@ -237,16 +171,6 @@ pub(crate) fn docked(id: u64, cx: &App) -> bool {
 }
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
-    let terminal = AppSpec {
-        name: "terminal",
-        id: "bottom.Terminal",
-        title: "Terminal",
-        action: Some("panel.terminal"),
-        home: (DockPlacement::Bottom, 280.),
-        view: |_, cx| panel(cx),
-        shown: Some(shown),
-    };
-    dock::register_app(cx, terminal);
     dock::register_doc(cx, "terminal", TerminalDocs);
     vec![actions::register(
         cx,
@@ -255,29 +179,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         Group::View,
         dock::terminal_below,
     )]
-}
-
-/// The tabs over the active terminal; the first shell starts when it is shown.
-fn panel(cx: &mut App) -> AnyView {
-    let terminals = Terminals::global(cx);
-    cx.new(|cx| Panel {
-        terminals: terminals.clone(),
-        _subscription: cx.observe(&terminals, |_, _, cx| cx.notify()),
-    })
-    .into()
-}
-
-/// Focuses the active terminal, starting one when there is none.
-fn shown(window: &mut Window, cx: &mut App) {
-    Terminals::global(cx).update(cx, |t, cx| match t.active() {
-        Some(s) => {
-            let focus = s.read(cx).focus.clone();
-            window.focus(&focus, cx)
-        }
-        None => {
-            t.open(window, cx);
-        }
-    });
 }
 
 /// A shell in a tab of its own.
@@ -348,12 +249,6 @@ impl DocKind for TerminalDocs {
             .then(|| format!("A foreground command is running in {}.", s.title()))
     }
 
-    fn adopt(&self, doc: &Doc, cx: &mut App) {
-        if let Doc::Terminal { id, .. } = doc {
-            Terminals::global(cx).update(cx, |t, cx| t.undock(*id, cx));
-        }
-    }
-
     /// Closing the tab ends its shell, once the dock is done removing it.
     fn removed(&self, view: &AnyView, window: &mut Window, cx: &mut App) {
         if let Ok(s) = view.clone().downcast::<Session>() {
@@ -375,93 +270,6 @@ impl Render for UnavailableTerminal {
     }
 }
 
-struct Panel {
-    terminals: Entity<Terminals>,
-    _subscription: Subscription,
-}
-
-impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = theme(cx);
-        let terminals = self.terminals.read(cx);
-        let active = terminals.active().cloned();
-        let tabs = terminals.sessions.iter().enumerate().map(|(i, s)| {
-            let s = s.read(cx);
-            let label = match s.memory.and_then(mb) {
-                Some(mb) => format!("{} · {mb}", s.title()),
-                None => s.title().to_string(),
-            };
-            let on = i == terminals.active;
-            let (select, close) = (self.terminals.clone(), self.terminals.clone());
-            let session = terminals.sessions[i].clone();
-            let drag = DragDoc {
-                doc: Doc::Terminal {
-                    id: session.entity_id().as_u64(),
-                    cwd: s.cwd.display().to_string(),
-                },
-                title: s.title().to_string().into(),
-            };
-            div()
-                .id(("terminal.tab", i))
-                .test_support()
-                .role(Role::Tab)
-                .aria_label(SharedString::from(label.clone()))
-                .aria_toggled(on.into())
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .pl(px(10.))
-                .pr(px(4.))
-                .py(px(2.))
-                .max_w(px(260.))
-                .rounded(radius::ICON_BUTTON)
-                .text_size(text::SMALL)
-                .when(on, |d| d.bg(t.selected))
-                .hover(|d| d.bg(t.hover))
-                .on_click(move |_, window, cx| select.update(cx, |t, cx| t.select(i, window, cx)))
-                .on_drag(drag, |d: &DragDoc, _, _, cx| cx.new(|_| d.clone()))
-                .child(div().truncate().child(label))
-                .child(
-                    ui::icon_button(("terminal.close", i), Icon::Close.size(px(10.)), cx)
-                        .test_support()
-                        .aria_label("Close Terminal")
-                        .on_click(move |_, window, cx| {
-                            cx.stop_propagation();
-                            close.update(cx, |t, cx| t.close(&session, window, cx))
-                        }),
-                )
-        });
-        let terminals = self.terminals.clone();
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(4.))
-                    .px(px(8.))
-                    .py(px(4.))
-                    .border_b_1()
-                    .border_color(t.line)
-                    .children(tabs)
-                    .child(
-                        ui::icon_button("terminal.new", Icon::Plus, cx)
-                            .test_support()
-                            .aria_label("New Terminal")
-                            .on_click(move |_, window, cx| {
-                                terminals.update(cx, |t, cx| {
-                                    t.open(window, cx);
-                                })
-                            }),
-                    ),
-            )
-            .child(div().flex_1().min_h_0().children(active))
-    }
-}
-
 /// None without a reading; a small shell reads as 1 MB.
 fn mb(bytes: u64) -> Option<String> {
     (bytes > 0).then(|| format!("{} MB", ((bytes + (1 << 19)) >> 20).max(1)))
@@ -479,9 +287,8 @@ fn intercept(cx: &mut App) {
         };
         let t = g.0.read(cx);
         let focused = t
-            .sessions
+            .docked
             .iter()
-            .chain(&t.docked)
             .find(|s| s.read(cx).focus.is_focused(window));
         let Some(session) = focused.cloned() else {
             return;

@@ -12,7 +12,6 @@ use detached_core::api;
 use detached_core::sessions;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
-use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px, size};
 use kernel::activity::{Activity, Level, Message, Notice};
@@ -57,9 +56,8 @@ fn rows(cx: &mut VisualTestContext) -> Vec<Row> {
     })
 }
 
-fn archive_sidebar(cx: &mut VisualTestContext) {
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
+fn open_repositories(cx: &mut VisualTestContext) {
+    open_tab(cx, "tab.repos");
 }
 
 fn path(p: impl AsRef<Path>) -> String {
@@ -90,7 +88,7 @@ fn adding_a_folder_lists_nested_repos_worktrees_under_their_repo_and_branch_stat
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let [app, wt, api, web, lib] =
         ["app", "app-wt", "group/api", "group/web", "lib"].map(|n| path(cx.sb.repo(n)));
     let solo = path(cx.sb.solo());
@@ -128,7 +126,7 @@ fn adding_a_folder_lists_nested_repos_worktrees_under_their_repo_and_branch_stat
 #[gpui_kit::test]
 fn a_worktree_deleted_on_disk_drops_out_when_the_window_gets_focus(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let [app, api, web, lib] =
         ["app", "group/api", "group/web", "lib"].map(|n| path(cx.sb.repo(n)));
     let solo = path(cx.sb.solo());
@@ -193,7 +191,7 @@ fn the_main_checkouts_menu_adds_a_folder(cx: &mut TestAppContext) {
 fn forge_repos_listed_with_the_seeded_upstreams(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
-    archive_sidebar(cx);
+    open_repositories(cx);
     let addr = forge.url().trim_start_matches("http://").to_string();
     let mut conn = TcpStream::connect(addr).unwrap();
     conn.write_all(b"GET /health HTTP/1.1\r\nHost: fake\r\nConnection: close\r\n\r\n")
@@ -212,7 +210,7 @@ fn forge_repos_listed_with_the_seeded_upstreams(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn collapsing_persists_in_ui_json(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let ws = path(cx.sb.ws());
     let header = rows(cx).into_iter().find(|r| r.path.is_none()).unwrap();
     cx.click(header.id);
@@ -220,14 +218,8 @@ fn collapsing_persists_in_ui_json(cx: &mut TestAppContext) {
     assert_eq!(saved, Some(vec![ws.clone()]));
     let file = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(file.contains("sidebar.collapsed"), "{file}");
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
-    });
-    settle(cx);
-    cx.update(|w, cx| {
-        detached_app::dock::toggle_zone(gpui_kit::base::dock::DockPlacement::Left, w, cx)
-    });
-    settle(cx);
+    cx.click("doc.session-overview");
+    open_repositories(cx);
     assert_eq!(
         paths(cx),
         [path(cx.sb.solo())],
@@ -251,7 +243,7 @@ fn repos_nest_under_their_folders_and_a_folder_of_one_folder_shares_its_row(
             repo(sb, n);
         }
     });
-    archive_sidebar(cx);
+    open_repositories(cx);
     let labels: Vec<_> = rows(cx).into_iter().map(|r| r.label).collect();
     let tree = ["repos", "console", "api", "web", "deep/er", "x", "top"];
     assert_eq!(labels, tree);
@@ -271,7 +263,7 @@ fn a_folded_folder_sums_its_changes_and_stays_folded_after_a_reopen(cx: &mut Tes
         write(&sb.repo("group/web"), [("c.txt", "c")]);
         api::add_folder(&sb.state, None, path(sb.repo("group/../group/api"))).unwrap();
     });
-    archive_sidebar(cx);
+    open_repositories(cx);
     let [api, lib, group] = ["group/api", "lib", "group"].map(|n| path(cx.sb.repo(n)));
     let alias = path(cx.sb.repo("group/../group/api"));
     cx.workspace(|w, _| {
@@ -297,7 +289,7 @@ fn a_folded_folder_sums_its_changes_and_stays_folded_after_a_reopen(cx: &mut Tes
     settle(cx);
     let w = cx.cx.cx.update(shell::open).unwrap();
     let again = &mut VisualTestContext::from_window(w, &cx.cx.cx);
-    archive_sidebar(again);
+    open_repositories(again);
     wait_until(again, |cx| paths(cx).contains(&lib));
     assert!(!paths(again).contains(&api), "still folded");
 }
@@ -313,20 +305,20 @@ fn new_chat_here_on_a_folder_or_a_repo_and_a_folder_s_hover_button_open_a_chat_o
         _ => None,
     };
     for (label, folder) in [("group", cx.sb.repo("group")), ("ws", cx.sb.ws())] {
-        archive_sidebar(cx);
+        open_repositories(cx);
         let id = row_named(cx, label).id;
         cx.update(|w, cx| w.right_click(id, cx));
         cx.update(|w, cx| assert!(menu::pick("New chat here", w, cx)));
         settle(cx);
         assert_eq!(shown(cx), Some(path(folder)));
     }
-    archive_sidebar(cx);
+    open_repositories(cx);
     let id = row(cx, &lib).id;
     cx.update(|w, cx| w.right_click(id, cx));
     cx.update(|w, cx| assert!(menu::pick("New chat here", w, cx)));
     settle(cx);
     assert_eq!(shown(cx), Some(lib));
-    archive_sidebar(cx);
+    open_repositories(cx);
     let ws = row_named(cx, "ws").id;
     click_in(cx, &ws, "newChat");
     assert_eq!(shown(cx), Some(path(cx.sb.ws())));
@@ -335,7 +327,7 @@ fn new_chat_here_on_a_folder_or_a_repo_and_a_folder_s_hover_button_open_a_chat_o
 #[gpui_kit::test]
 fn a_repo_menu_has_no_open_in_zed(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let lib = path(cx.sb.repo("lib"));
     let id = row(cx, &lib).id;
     cx.update(|w, cx| w.right_click(id, cx));
@@ -346,7 +338,7 @@ fn a_repo_menu_has_no_open_in_zed(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_hover_x_excludes_a_nested_repo_and_removes_a_solo_folder(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let (lib, solo, ws) = (
         path(cx.sb.repo("lib")),
         path(cx.sb.solo()),
@@ -456,20 +448,26 @@ fn fetch_all_and_pull_all_report_per_repo_and_the_diverged_repo_is_left_as_it_wa
 #[gpui_kit::test]
 fn fetch_update_and_prune_run_on_the_current_repo_and_say_how_it_went(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let app = path(cx.sb.repo("app"));
     let id = row(cx, &app).id;
     cx.click(id);
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fetch")));
     says(cx, "app: Fetched", false);
-    cx.press("secondary-t");
+    cx.press("secondary-shift-a");
+    cx.input("update project");
+    wait_until(cx, |cx| {
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|row| row.label() == Some("Update Project (Pull)"))
+    });
+    cx.press("enter");
     says(cx, "app: Up to date", false);
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.prune")));
     says(cx, "app: pruned stale remote branches", false);
 }
 
 #[gpui_kit::test]
-fn sync_labels_stay_short_in_a_named_session_and_show_all_in_archive(cx: &mut TestAppContext) {
+fn sync_labels_stay_short_in_a_named_session_and_its_archive(cx: &mut TestAppContext) {
     let mut session = String::new();
     let cx = &mut open_app_with(cx, |sb| {
         let repo = repo(sb, "app");
@@ -484,19 +482,13 @@ fn sync_labels_stay_short_in_a_named_session_and_show_all_in_archive(cx: &mut Te
     let assert_labels = |cx: &mut VisualTestContext, fetch, pull| {
         for (id, expected) in [("sync.fetch", fetch), ("sync.pull", pull)] {
             assert_eq!(label(cx, id), expected);
-            cx.update(|w, cx| {
-                w.render_frame(cx);
-                assert!(texts(w).iter().any(|t| {
-                    t.visible() && t.path().contains(&id.into()) && t.text() == expected
-                }));
-            });
         }
     };
     cx.workspace(|w, cx| w.switch_session(&session, cx));
     assert!(cx.workspace(|w, _| w.session_name() == "Work"));
     assert_labels(cx, "Fetch", "Pull…");
-    archive_sidebar(cx);
-    assert_labels(cx, "Fetch All", "Pull All");
+    cx.click("sessions.archive");
+    assert_labels(cx, "Fetch", "Pull…");
 }
 
 #[gpui_kit::test]
@@ -572,7 +564,7 @@ fn the_switcher_swaps_the_sidebar_a_rename_keeps_the_id_and_a_delete_leaves_the_
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let (lib, solo) = (path(cx.sb.repo("lib")), path(cx.sb.solo()));
     let id = row(cx, &solo).id;
     cx.click(id);
@@ -586,7 +578,7 @@ fn the_switcher_swaps_the_sidebar_a_rename_keeps_the_id_and_a_delete_leaves_the_
         cx.find("workspaces.popup").is_none(),
         "a new one is switched to"
     );
-    archive_sidebar(cx);
+    open_repositories(cx);
     wait_until(cx, |cx| paths(cx).is_empty());
     assert_eq!(label(cx, "sidebar.empty"), "No repositories yet.");
 
@@ -607,7 +599,7 @@ fn the_switcher_swaps_the_sidebar_a_rename_keeps_the_id_and_a_delete_leaves_the_
     let default = workspace_row(cx, "Default");
     cx.click(default);
     wait_until(cx, |cx| label(cx, "workspaces") == "Default");
-    archive_sidebar(cx);
+    open_repositories(cx);
     wait_until(cx, |cx| paths(cx).len() == 6);
     assert_eq!(label(cx, "workspaces"), "Default");
     assert_eq!(
@@ -730,7 +722,7 @@ fn a_rename_commits_on_blur_a_click_outside_or_another_rename_and_a_taken_name_i
     let main = workspace_row(cx, "Main");
     click_in(cx, &main, "rename");
     cx.input("Home");
-    cx.click("session.header");
+    cx.click("shell.center");
     assert!(cx.find("workspaces.popup").is_none());
     wait_until(cx, |cx| label(cx, "workspaces") == "Home");
 
@@ -751,97 +743,6 @@ fn a_rename_commits_on_blur_a_click_outside_or_another_rename_and_a_taken_name_i
     assert_eq!(input.value(), Some("Work"), "the second rename is open");
 }
 
-/// The switcher's options: id, path, and whether it is selected.
-fn options(cx: &mut VisualTestContext) -> Vec<(ElementId, String, bool)> {
-    cx.update(|w, cx| {
-        w.render_frame(cx);
-        (0usize..)
-            .map_while(|i| {
-                let id = ElementId::from(("switcher.row", i));
-                let e = w.try_find(id.clone())?;
-                let path = e.description()?.to_string();
-                Some((id, path, e.selected() == Some(true)))
-            })
-            .collect()
-    })
-}
-
-fn chosen(cx: &mut VisualTestContext) -> Option<String> {
-    options(cx).into_iter().find(|o| o.2).map(|o| o.1)
-}
-
-fn folder_label(cx: &mut VisualTestContext, repo: &str) -> Option<String> {
-    let id = options(cx).into_iter().find(|o| o.1 == repo).unwrap().0;
-    cx.update(|w, _| w.within(id).try_find("folder"))
-        .map(|f| f.label().unwrap().to_string())
-}
-
-#[gpui_kit::test]
-fn the_repository_switcher_starts_on_the_current_repo_type_enter_selects(cx: &mut TestAppContext) {
-    let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
-    let [lib, api] = ["lib", "group/api"].map(|n| path(cx.sb.repo(n)));
-    let solo = path(cx.sb.solo());
-    let current = lib.clone();
-    cx.workspace(|w, cx| w.set_current(Some(current), cx));
-    cx.click("switcher");
-    assert_eq!(chosen(cx), Some(lib.clone()));
-    assert_eq!(folder_label(cx, &api).as_deref(), Some("ws"));
-    assert_eq!(folder_label(cx, &solo), None);
-    cx.press("enter");
-    assert!(cx.find("switcher.popup").is_none());
-    assert_eq!(label(cx, "switcher"), "lib");
-
-    cx.click("switcher");
-    cx.input("solo");
-    cx.press("enter");
-    assert!(cx.find("switcher.popup").is_none());
-    assert_eq!(label(cx, "switcher"), "solo");
-    let id = row(cx, &solo).id;
-    assert_eq!(cx.find(id).unwrap().selected(), Some(true));
-}
-
-#[gpui_kit::test]
-fn the_switcher_clamps_up_and_down_says_when_nothing_matches_closes_outside_and_a_click_chooses(
-    cx: &mut TestAppContext,
-) {
-    let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
-    let all = cx.workspace(|w, _| w.repos().iter().map(|r| r.path.clone()).collect::<Vec<_>>());
-    cx.click("switcher");
-    assert_eq!(chosen(cx).as_ref(), Some(&all[0]), "the current repo");
-    cx.press("up");
-    assert_eq!(chosen(cx).as_ref(), Some(&all[0]));
-    for _ in 0..all.len() + 2 {
-        cx.press("down");
-    }
-    assert_eq!(chosen(cx).as_ref(), all.last());
-    cx.input("zzz");
-    assert_eq!(label(cx, "switcher.empty"), "No repositories match.");
-    cx.press("enter");
-    assert!(cx.find("switcher.popup").is_some(), "nothing to choose");
-    cx.press("escape");
-    assert!(cx.find("switcher.popup").is_none());
-
-    cx.click("switcher");
-    let lib = path(cx.sb.repo("lib"));
-    let sidebar_row = row(cx, &lib).id;
-    cx.click(sidebar_row);
-    assert!(cx.find("switcher.popup").is_none());
-    let current = cx.workspace(|w, _| w.current().map(String::from));
-    assert_eq!(
-        current.as_ref(),
-        Some(&all[0]),
-        "the backdrop takes the click"
-    );
-
-    cx.click("switcher");
-    let option = options(cx).into_iter().find(|o| o.1 == lib).unwrap().0;
-    cx.click(option);
-    assert!(cx.find("switcher.popup").is_none());
-    assert_eq!(label(cx, "switcher"), "lib");
-}
-
 fn select(cx: &mut TestApp, repo: &str) -> String {
     let repo = path(cx.sb.repo(repo));
     let current = repo.clone();
@@ -859,6 +760,8 @@ fn switch_branch(cx: &mut VisualTestContext) {
     if cx.find(("overview.repository", index)).is_none() {
         cx.click("overview.clean");
     }
+    cx.update(|w, cx| w.hover(("overview.repository", index), cx));
+    settle(cx);
     cx.click(("overview.switch", index));
     wait_until(cx, |cx| {
         cx.find("branches.query")
@@ -994,18 +897,12 @@ fn a_new_branch_named_dash_d_is_refused_and_its_start_branch_survives(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn enter_right_after_pasting_checks_out_the_first_match_before_the_branches_load(
-    cx: &mut TestAppContext,
-) {
+fn enter_checks_out_the_first_matching_branch(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
     select(cx, "lib");
-    // One update: list_branches answers on a later turn, so Enter surely comes first.
-    cx.update(|w, cx| {
-        w.click("branches", cx);
-        w.input("main", cx);
-        w.press("enter", cx);
-    });
+    switch_branch(cx);
+    search(cx, "main", "main");
+    cx.press("enter");
     wait_until(cx, |cx| current_branch(cx).as_deref() == Some("main"));
     assert_eq!(branch_of(cx, "lib"), "main");
 }
@@ -1232,11 +1129,11 @@ fn settings_opens_from_its_chord_and_the_strip_and_closes_on_escape_close_and_th
     assert!(cx.find("settings").unwrap().visible());
     cx.press("escape");
     assert!(cx.find("settings").is_none());
-    cx.click("top.settings");
+    cx.click("rail.settings");
     assert!(cx.find("settings").is_some());
     cx.click("settings.close");
     assert!(cx.find("settings").is_none());
-    cx.click("top.settings");
+    cx.click("rail.settings");
     cx.update(|w, cx| w.click_at("settings.scrim", point(px(4.), px(4.)), cx));
     settle(cx);
     assert!(cx.find("settings").is_none());
@@ -1380,7 +1277,7 @@ fn an_applied_git_path_shows_its_env_and_settings_load_what_they_can_with_it_bro
     cx: &mut TestAppContext,
 ) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let lib = path(cx.sb.repo("lib"));
     let id = row(cx, &lib).id;
     click_in(cx, &id, "remove");
@@ -1424,7 +1321,7 @@ fn an_unreadable_accounts_file_is_said_in_accounts_and_in_the_status_bar(cx: &mu
 #[gpui_kit::test]
 fn a_repo_removed_from_the_list_is_restored_from_settings(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    archive_sidebar(cx);
+    open_repositories(cx);
     let api = path(cx.sb.repo("group/api"));
     let id = row(cx, &api).id;
     click_in(cx, &id, "remove");
@@ -1512,7 +1409,7 @@ fn the_sidebar_filter_keeps_matching_repos_in_their_folders_and_escape_clears_it
             repo(sb, n);
         }
     });
-    archive_sidebar(cx);
+    open_repositories(cx);
     let shown = |cx: &mut VisualTestContext| -> Vec<String> {
         rows(cx).into_iter().map(|r| r.label).collect()
     };

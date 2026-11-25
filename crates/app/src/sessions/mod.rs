@@ -19,14 +19,11 @@ use crate::actions::{self, Group, Registration};
 use crate::chat::{self, State};
 use crate::dock;
 use crate::shell::{self, Side};
-use crate::ui::theme::rail;
+use crate::ui::theme::{control, rail};
 use crate::ui::{self, GAP, Icon, radius, text, theme};
 use kernel::doc::Doc;
 use kernel::repo::Repo;
-use kernel::ui_state;
 use kernel::workspace::Workspace;
-
-const COLLAPSED: &str = "session.list.collapsed";
 
 pub fn register(cx: &mut App) -> Vec<Registration> {
     crate::shell::overlay(cx, sheet::overlay);
@@ -80,40 +77,31 @@ fn step(by: isize, window: &mut Window, cx: &mut App) {
 }
 
 fn toggle(window: &mut Window, cx: &mut App) {
-    use gpui_kit::base::dock::DockPlacement::Left;
-    if Workspace::get(cx).archive() {
-        let open = dock::is_open(Left, cx);
-        let old = ui_state::get(COLLAPSED, cx).unwrap_or(false);
-        ui_state::set(COLLAPSED, open && !old, cx);
-        if !open {
-            dock::toggle_zone(Left, window, cx);
-        }
-    } else {
-        shell::toggle_side(Side::Sessions, window, cx);
-    }
-    cx.refresh_windows();
+    shell::toggle_side(Side::Sessions, window, cx);
 }
 
 pub(super) fn open_archive(window: &mut Window, cx: &mut App) {
-    Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx));
     dock::show(Doc::SessionArchive, window, cx);
 }
 
-fn select(id: &str, _: &mut Window, cx: &mut App) {
+fn select(id: &str, window: &mut Window, cx: &mut App) {
     provision::dismiss_new(cx);
-    Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
+    let w = Workspace::get(cx);
+    if w.session_id() == id && w.shown() == Some(&Doc::SessionArchive) {
+        dock::show(Doc::SessionOverview, window, cx);
+    } else {
+        Workspace::global(cx).update(cx, |w, cx| w.switch_session(id, cx));
+    }
 }
 
 pub(crate) struct List {
-    live: bool,
     _workspace: Subscription,
     _open_chats: Subscription,
 }
 
 impl List {
-    pub fn new(live: bool, cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            live,
             _workspace: Workspace::observe(cx, |_, cx| cx.notify()),
             _open_chats: chat::observe_open(cx),
         }
@@ -121,71 +109,18 @@ impl List {
 }
 
 impl Render for List {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let collapsed = if self.live {
-            !shell::side_open(Side::Sessions, window, cx)
-        } else {
-            ui_state::get(COLLAPSED, cx).unwrap_or(false)
-        };
-        let w = Workspace::get(cx);
-        let count = dock::archived_tabs(cx).len()
-            + w.sessions().iter().filter(|s| s.archived.is_some()).count();
-        let archive_button = ui::pressable("sessions.archive")
-            .test_support()
-            .role(Role::Button)
-            .aria_label("Archive")
-            .aria_description(format!("{count} archived"))
-            .aria_toggled(w.archive().into())
-            .when(collapsed, |d| {
-                d.tooltip(move |window, cx| {
-                    Tooltip::new(format!("Archive ({count})")).build(window, cx)
-                })
-            })
-            .h(px(32.))
-            .flex_none()
-            .gap(GAP)
-            .px(GAP)
-            .rounded(radius::WIDGET)
-            .hover(|d| d.bg(t.hover))
-            .when(w.archive(), |d| {
-                d.bg(t.active_bg).shadow(vec![ui::marker(cx)])
-            })
-            .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
-            .child(Icon::Archive.size(px(15.)))
-            .when(!collapsed, |d| {
-                d.child("Archive").when(count > 0, |d| {
-                    d.child(
-                        div()
-                            .font_family(ui::theme::mono(cx))
-                            .text_color(t.muted)
-                            .child(count.to_string()),
-                    )
-                })
-            });
-        if self.live && collapsed {
-            return shell::side_rail("sessions", cx)
-                .role(Role::List)
-                .aria_label("Sessions")
-                .child(fold_button(true, cx))
-                .when(
-                    provision::page(cx).is_none() && !shell::side_open(Side::Explorer, window, cx),
-                    |d| d.child(shell::explorer_fold_button(cx)),
-                )
-                .child(div().flex_1())
-                .child(archive_button.w(rail::CONTROL).px_0().justify_center());
-        }
-        let add = ui::button("sessions.new", "New session", cx)
-            .test_support()
-            .tooltip(|w, cx| {
-                Tooltip::new(crate::keymap::tip("New session", "session.new", cx)).build(w, cx)
-            })
-            .flex_row_reverse()
-            .gap(px(5.))
-            .h(px(24.))
-            .px(px(7.))
-            .child(Icon::Plus.size(px(12.)))
-            .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"));
+        let add = ui::titled_action(
+            ui::button("sessions.new", "New session", cx),
+            "New session",
+            "session.new",
+        )
+        .test_support()
+        .flex_row_reverse()
+        .gap(control::GAP)
+        .child(Icon::Plus.size(control::ICON))
+        .on_click(|_, w, cx| actions::dispatch(w, cx, "session.new"));
         let title = div()
             .flex_1()
             .text_size(text::LABEL)
@@ -200,7 +135,6 @@ impl Render for List {
             .pl(px(8.))
             .h(px(30.))
             .child(title)
-            .child(fold_button(collapsed, cx))
             .child(add);
         let list = div()
             .id("sessions")
@@ -213,13 +147,9 @@ impl Render for List {
             .w_full()
             .min_h_0()
             .bg(t.window_bg)
-            .when(self.live, |d| d.h_full().py(GAP).pl(GAP))
-            .when(!self.live, |d| {
-                d.pb(GAP / 2.).border_b_1().border_color(t.line)
-            });
-        if collapsed {
-            return list.child(header.child(archive_button));
-        }
+            .h_full()
+            .py(GAP)
+            .pl(GAP);
         let mut chats = HashMap::<_, Vec<_>>::new();
         for tab in chat::tabs(cx) {
             if let Some((_, session)) = &tab.owner {
@@ -234,10 +164,7 @@ impl Render for List {
             .test_support()
             .flex()
             .flex_col()
-            .when(self.live, |d| d.flex_1())
-            .when(!self.live, |d| {
-                d.max_h(window.viewport_size().height * 0.22)
-            })
+            .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .gap(px(3.))
@@ -270,37 +197,36 @@ impl Render for List {
                     cx,
                 )
             }));
-        if self.live {
-            return list.child(
-                ui::panel(div(), cx)
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .overflow_hidden()
-                    .p(px(8.))
-                    .gap(px(4.))
-                    .child(header)
-                    .child(rows)
-                    .child(archive_button),
-            );
-        }
-        list.child(header).child(rows).child(archive_button)
+        list.child(
+            ui::panel(div(), cx)
+                .flex()
+                .flex_col()
+                .size_full()
+                .overflow_hidden()
+                .p(px(8.))
+                .gap(px(4.))
+                .child(header)
+                .child(rows),
+        )
     }
 }
 
-fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
-    ui::titled_action(
-        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx)
-            .when(!collapsed, |d| d.size(px(26.))),
-        if collapsed {
-            "Show sessions"
-        } else {
-            "Hide sessions"
-        },
-        "panel.sessions",
-    )
-    .test_support()
-    .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"))
+pub(crate) fn archive_button(cx: &App) -> impl IntoElement + use<> {
+    let t = theme(cx);
+    let w = Workspace::get(cx);
+    let count = dock::archived_tabs(cx).len()
+        + w.sessions().iter().filter(|s| s.archived.is_some()).count();
+    let archived = w.shown() == Some(&Doc::SessionArchive);
+    ui::icon_button("sessions.archive", Icon::Archive.size(rail::ICON), cx)
+        .test_support()
+        .role(Role::Button)
+        .aria_label("Archive")
+        .aria_description(format!("{count} archived"))
+        .aria_selected(archived)
+        .aria_toggled(archived.into())
+        .tooltip(move |window, cx| Tooltip::new(format!("Archive ({count})")).build(window, cx))
+        .when(archived, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
+        .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
 }
 
 pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {
@@ -311,14 +237,9 @@ pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {
         .then_some(branch)
 }
 
-pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
-    let t = theme(cx);
+pub(crate) fn more(window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
     let w = Workspace::get(cx);
     let main = w.session_id() == MAIN;
-    let set = w.sessions().iter().find(|s| s.id == w.session_id());
-    let count = set.map_or(w.session_repos().len(), |s| s.members.len());
-    let branch = set.and_then(shared_branch).map(String::from);
-    let name = w.session_name().to_string();
     let mut menu = ui::DrawnMenu::default().item("Overview", |w, cx| {
         dock::open_doc(Doc::SessionOverview, true, w, cx)
     });
@@ -328,13 +249,18 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         menu = menu.item("Rename session…", |w, cx| {
             actions::dispatch(w, cx, "session.rename")
         });
+        if actions::find("session.addRepo").is_some() {
+            menu = menu.item("Add repository…", |w, cx| {
+                actions::dispatch(w, cx, "session.addRepo")
+            });
+        }
         if actions::find("session.archiveCurrent").is_some() {
             menu = menu.item("Archive session…", |w, cx| {
                 actions::dispatch(w, cx, "session.archiveCurrent")
             });
         }
     }
-    let more = menu.item("Session archive", open_archive).button(
+    menu.item("Session archive", open_archive).button(
         "session.actions",
         ui::titled(
             ui::icon_button("session.more", Icon::More, cx),
@@ -343,58 +269,7 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
         .test_support(),
         window,
         cx,
-    );
-    div()
-        .id("session.header")
-        .test_support()
-        .aria_label(name.clone())
-        .flex()
-        .flex_none()
-        .h(px(36.))
-        .min_w_0()
-        .items_center()
-        .gap(px(8.))
-        .px(px(12.))
-        .child(
-            div()
-                .flex_none()
-                .max_w(px(240.))
-                .truncate()
-                .text_size(text::TITLE)
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(name),
-        )
-        .when_some(branch, |d, branch| {
-            d.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .bg(t.segment_bg)
-                    .px(px(5.))
-                    .rounded(radius::BADGE)
-                    .text_size(text::LABEL)
-                    .font_family(theme::mono(cx))
-                    .child(branch),
-            )
-        })
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(text::SMALL)
-                .text_color(t.muted)
-                .children((count == 0).then_some("No repositories yet")),
-        )
-        .when(!main && actions::find("session.addRepo").is_some(), |d| {
-            d.child(
-                ui::quiet_button("sessions.addRepo", "Add repository…", cx)
-                    .flex_none()
-                    .test_support()
-                    .on_click(|_, w, cx| actions::dispatch(w, cx, "session.addRepo")),
-            )
-        })
-        .child(div().flex_none().child(more))
+    )
 }
 
 fn repo_count(count: usize) -> String {
@@ -410,8 +285,8 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
     let (id, name) = set.map_or((MAIN, "Main checkouts"), |set| {
         (set.id.as_str(), set.name.as_str())
     });
-    let expanded = !w.archive() && w.session_id() == id;
-    let selected = browsing && expanded;
+    let expanded = w.session_id() == id;
+    let selected = browsing && expanded && w.shown() != Some(&Doc::SessionArchive);
     let chats: Vec<_> = chats
         .into_iter()
         .map(|tab| {
@@ -695,9 +570,14 @@ fn member(
         .when(changed > 0, |d| {
             d.child(
                 div()
+                    .id("changed")
                     .flex_none()
                     .font_family(theme::mono(cx))
                     .text_color(t.modified)
+                    .tooltip(move |window, cx| {
+                        let s = if changed == 1 { "" } else { "s" };
+                        Tooltip::new(format!("{changed} changed file{s}")).build(window, cx)
+                    })
                     .child(format!("●{changed}")),
             )
         })

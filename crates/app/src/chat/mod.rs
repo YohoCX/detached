@@ -9,7 +9,6 @@ mod view;
 use std::collections::BTreeMap;
 
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Context, Entity, Global, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, Subscription,
@@ -60,7 +59,7 @@ pub fn find(repo: &str, n: u32, cx: &App) -> Option<Entity<Chat>> {
 /// A chat's place by name: the repo's, or the folder's with a slash.
 pub fn label(path: &str, cx: &App) -> String {
     Workspace::get(cx)
-        .session_checkouts()
+        .session_repos()
         .iter()
         .find(|r| r.path == path)
         .map_or_else(|| repo_label(path, path, cx), |r| r.name.clone())
@@ -73,7 +72,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "tab.chats",
         title: "Chats",
         action: None,
-        home: (DockPlacement::Left, 280.),
         view: |w, cx| cx.new(|cx| list::ChatList::new(w, cx)).into(),
         shown: None,
     };
@@ -104,7 +102,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         ),
         actions::register(cx, "panel.chats", "Chats", actions::Group::View, |w, cx| {
             if crate::sessions::provision::dismiss_new(cx) {
-                dock::toggle("chats", w, cx);
+                dock::toggle_tool("chats", w, cx);
             }
         }),
     ]
@@ -164,7 +162,7 @@ pub(crate) fn show_owned(owner: Option<(String, String)>, doc: Doc, cx: &mut App
 
 fn can_open_here(repo: &str, cx: &mut App) -> bool {
     let w = Workspace::get(cx);
-    if w.session_id() == MAIN || w.session_checkouts().iter().any(|r| r.path == repo) {
+    if w.session_id() == MAIN || w.session_repos().iter().any(|r| r.path == repo) {
         return true;
     }
     Activity::global(cx).update(cx, |a, cx| {

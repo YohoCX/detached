@@ -16,7 +16,7 @@ use gpui_kit::{
     Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::api::{DiffDoc, Location, Side, open, show_diff};
+use super::api::{DiffDoc, Location, Side, show_companion_diff};
 use crate::ui::suggest::Commit;
 use crate::ui::{self, Icon, Suggest, text, theme};
 use crate::util::{Status, base_name, dir_name, status_of};
@@ -179,7 +179,7 @@ impl Changes {
     }
 
     /// Selects `c` and shows its diff against HEAD, or the merge base in Compare.
-    fn select(&mut self, c: FileChange, focus: bool, cx: &mut Context<Self>) {
+    fn select(&mut self, c: FileChange, focus: bool, w: &mut Window, cx: &mut Context<Self>) {
         let Some(repo) = Workspace::get(cx).current().map(String::from) else {
             return;
         };
@@ -194,11 +194,11 @@ impl Changes {
             left,
             right: Side::Worktree,
         };
-        show_diff(cx, doc, focus);
+        show_companion_diff(doc, focus, w, cx);
         cx.notify();
     }
 
-    fn key_down(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, e: &KeyDownEvent, w: &mut Window, cx: &mut Context<Self>) {
         let rows = self.rows(cx);
         let files: Vec<(usize, &FileChange)> = rows
             .iter()
@@ -224,18 +224,19 @@ impl Changes {
                         line: None,
                         doc: None,
                     };
-                    open(cx, loc);
+                    kernel::nav::visit(cx, &loc);
+                    crate::dock::open_companion(loc.into(), false, w, cx);
                 }
             }
             "down" | "up" if !files.is_empty() => {
                 let step = if k.key == "down" { 1 } else { -1 };
                 let next = at.map_or(0, |i| i as isize + step);
                 let (row, c) = files[next.clamp(0, files.len() as isize - 1) as usize];
-                self.select(c.clone(), false, cx);
+                self.select(c.clone(), false, w, cx);
                 self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
             }
             "enter" => match at {
-                Some(i) => self.select(files[i].1.clone(), true, cx),
+                Some(i) => self.select(files[i].1.clone(), true, w, cx),
                 None => return,
             },
             _ => return,
@@ -397,8 +398,8 @@ impl Changes {
             .pr(px(8.))
             .whitespace_nowrap()
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                this.select(change.clone(), e.click_count() > 1, cx);
+            .on_click(cx.listener(move |this, e: &ClickEvent, w, cx| {
+                this.select(change.clone(), e.click_count() > 1, w, cx);
             }))
             .child(ui::status(st, cx))
             .child(
@@ -514,16 +515,19 @@ pub(super) fn branch_names(cx: &App) -> Vec<SharedString> {
 
 /// Show Diff's first case: the selected change against HEAD, when focus is in Changes or no file
 /// is shown.
-pub(super) fn selected_diff(window: &Window, cx: &App) -> Option<DiffDoc> {
+pub(super) fn selected_diff(window: &Window, cx: &App) -> Option<(DiffDoc, bool)> {
     let Selected(repo, c) = cx.try_global::<Selected>()?;
     let inside = window.context_stack().iter().any(|k| k.contains(CONTEXT));
     let file = matches!(Workspace::get(cx).shown(), Some(Doc::File(_)));
-    (inside || !file).then(|| DiffDoc {
-        repo: repo.clone(),
-        path: c.path.clone(),
-        orig_path: c.orig_path.clone(),
-        left: Side::Head,
-        right: Side::Worktree,
+    (inside || !file).then(|| {
+        let doc = DiffDoc {
+            repo: repo.clone(),
+            path: c.path.clone(),
+            orig_path: c.orig_path.clone(),
+            left: Side::Head,
+            right: Side::Worktree,
+        };
+        (doc, inside)
     })
 }
 

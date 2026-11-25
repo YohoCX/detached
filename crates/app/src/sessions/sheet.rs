@@ -11,7 +11,6 @@ use gpui_kit::{
     px,
 };
 
-use crate::dock;
 use crate::ui::{self, GAP, text, theme};
 use kernel::activity::Activity;
 use kernel::blocking;
@@ -42,9 +41,7 @@ pub(super) fn adopt_from_new(name: String, window: &mut Window, cx: &mut App) {
 
 pub(super) fn rename(window: &mut Window, cx: &mut App) {
     let w = Workspace::get(cx);
-    if !w.archive()
-        && let Some(set) = w.sessions().iter().find(|s| s.id == w.session_id())
-    {
+    if let Some(set) = w.sessions().iter().find(|s| s.id == w.session_id()) {
         open(Some((set.id.clone(), set.name.clone())), None, window, cx);
     }
 }
@@ -172,7 +169,11 @@ impl Sheet {
                             Workspace::global(cx)
                                 .update(cx, |w, cx| w.session_adopted(&ws, set, cx));
                             if Workspace::get(cx).id() == Some(&ws) {
-                                dock::open("project", window, cx);
+                                crate::files::choose_explorer(
+                                    crate::files::ExplorerMode::Files,
+                                    window,
+                                    cx,
+                                );
                             }
                         }
                         invalidate::rescan(cx);

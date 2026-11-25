@@ -9,7 +9,6 @@ use detached_core::error::Result;
 use detached_core::processes::{self, Agents, Definition, Entry};
 use detached_core::secrets;
 use gpui_kit::base::TestSupportExt;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::select::SelectState;
@@ -42,7 +41,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             id: "bottom.Processes",
             title: "Processes",
             action: Some("panel.processes"),
-            home: (DockPlacement::Bottom, 280.),
             view: |w, cx| cx.new(|cx| Processes::new(w, None, cx)).into(),
             shown: None,
         },

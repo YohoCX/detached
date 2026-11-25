@@ -9,7 +9,7 @@ pub mod timeline;
 
 pub(crate) use task::open as show_finding;
 
-use gpui_kit::base::{TestSupportExt, dock::DockPlacement};
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyView, App, AppContext, ClickEvent, Context, Entity, FontWeight, InteractiveElement,
@@ -35,7 +35,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             id: "tab.council",
             title: "Council",
             action: Some("panel.council"),
-            home: (DockPlacement::Left, 280.),
             view: |_, cx| cx.new(List::new).into(),
             shown: None,
         },
@@ -249,15 +248,11 @@ impl Render for List {
                     )
                     .child(
                         ui::primary_button("council.new", "New run", cx)
-                            .h(px(24.))
-                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, window, cx| v.toggle_form(window, cx))),
                     )
                     .child(
                         ui::button("council.list.stats", "Stats", cx)
-                            .h(px(24.))
-                            .px(px(10.))
                             .test_support()
                             .on_click(cx.listener(|v, _, _, cx| {
                                 if let Some(repo) = &v.repo {
@@ -270,8 +265,6 @@ impl Render for List {
                             ui::icon_button("council.refresh", ui::Icon::Refresh, cx),
                             "Refresh rounds",
                         )
-                        .h(px(24.))
-                        .min_w(px(24.))
                         .test_support()
                         .on_click(cx.listener(|v, _, _, cx| {
                             if let Some(r) = &v.rounds {

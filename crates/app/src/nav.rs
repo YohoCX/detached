@@ -17,10 +17,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
 fn travel(forward: bool, w: &mut Window, cx: &mut App) {
     while let Some(loc) = nav::step(cx, forward) {
         let work = Workspace::get(cx);
-        if work.archive()
-            || loc.doc.is_some()
-            || work.session_repos().iter().any(|r| r.path == loc.repo)
-        {
+        if loc.doc.is_some() || work.session_repos().iter().any(|r| r.path == loc.repo) {
             crate::dock::open_history(loc.into(), w, cx);
             break;
         }

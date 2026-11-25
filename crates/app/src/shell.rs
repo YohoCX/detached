@@ -1,15 +1,12 @@
 //! The window: the title bar with each vertical's widgets, the dock, the status bar.
 
-use gpui_kit::base::dock::DockPlacement;
-use gpui_kit::base::{ObservedElement, Root, TestSupportExt};
+use gpui_kit::base::{Root, TestSupportExt};
 use gpui_kit::component::TitleBar;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyView, AnyWindowHandle, App, AppContext, Context, Div, Entity, FocusHandle, FontWeight,
-    Global, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Role, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px,
-    relative, size,
+    AnyView, AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement,
+    Styled, Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions,
+    div, point, prelude::FluentBuilder, px, relative, size,
 };
 
 use crate::dock;
@@ -18,9 +15,8 @@ use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
 use crate::ui::theme::rail;
-use crate::ui::{self, GAP, Icon, radius, text, theme};
+use crate::ui::{self, GAP, Icon, text, theme};
 use crate::{actions, keymap};
-use kernel::doc::Doc;
 use kernel::workspace::{Event, Workspace};
 use kernel::{invalidate, ui_state};
 
@@ -29,7 +25,6 @@ const MAC: bool = cfg!(target_os = "macos");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TopBar {
     Workspace,
-    Left,
     Branch,
     /// The MR chip and the pipeline badge, after the branch widget.
     Center,
@@ -126,10 +121,11 @@ impl Side {
         }
     }
 
-    fn pane(self, size: &Entity<Size>, width: Option<Pixels>, folded: Pixels) -> Pane {
+    fn pane(self, size: &Entity<Size>, width: Option<Pixels>) -> Pane {
         let (default, min, max) = self.limits();
+        // A zero-width pane still receives drag events after folding.
         ui::pane(self.size_key(), ui::Edge::Right, default, min, max)
-            .with_size(size.clone(), width.unwrap_or(folded), width.is_some())
+            .with_size(size.clone(), width.unwrap_or_default(), width.is_some())
             .h_full()
     }
 
@@ -157,14 +153,7 @@ fn window_columns(window: &Window, cx: &App, minimum: Pixels) -> [Option<Pixels>
 }
 
 pub(crate) fn explorer_fold_gain(window: &Window, cx: &App, minimum: Pixels) -> Option<Pixels> {
-    let [list, files] = window_columns(window, cx, minimum);
-    files.map(|width| {
-        if list.is_some() {
-            width - rail::WIDTH
-        } else {
-            width
-        }
-    })
+    window_columns(window, cx, minimum)[Side::Explorer as usize]
 }
 
 pub(crate) fn side_open(side: Side, window: &Window, cx: &App) -> bool {
@@ -184,20 +173,40 @@ pub(crate) fn toggle_side(side: Side, window: &mut Window, cx: &mut App) {
     set_side(side, !side_open(side, window, cx), window, cx);
 }
 
-pub(crate) fn side_rail(id: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
+fn activity_rail(sessions_open: bool, explorer_folded: bool, cx: &App) -> impl IntoElement + use<> {
+    let sessions = ui::titled_action(
+        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx),
+        if sessions_open {
+            "Hide sessions"
+        } else {
+            "Show sessions"
+        },
+        "panel.sessions",
+    )
+    .test_support()
+    .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"));
+    let slots = [
+        Some(sessions.into_any_element()),
+        explorer_folded.then(|| explorer_fold_button(cx).into_any_element()),
+        Some(div().flex_1().into_any_element()),
+        Some(crate::sessions::archive_button(cx).into_any_element()),
+        Some(settings_button(cx).into_any_element()),
+    ];
     div()
-        .id(id)
+        .id("shell.rail")
         .test_support()
-        .size_full()
+        .w(rail::WIDTH)
+        .flex_none()
         .flex()
         .flex_col()
         .items_center()
         .py(rail::PAD)
         .gap(rail::GAP)
         .bg(theme(cx).window_bg)
+        .children(slots.into_iter().flatten())
 }
 
-pub(crate) fn explorer_fold_button(cx: &App) -> impl IntoElement + use<> {
+fn explorer_fold_button(cx: &App) -> impl IntoElement + use<> {
     let (icon, title, action) = match explorer_mode(cx) {
         ExplorerMode::Files => (Icon::Folder, "Show files", Some("panel.project")),
         ExplorerMode::Changes => (Icon::Changes, "Show changes", Some("panel.changes")),
@@ -219,7 +228,6 @@ pub struct Shell {
     sessions: Entity<crate::sessions::List>,
     explorer: AnyView,
     side_sizes: [Entity<Size>; 2],
-    left: Vec<AnyView>,
     center: Vec<AnyView>,
     search: Vec<AnyView>,
     right: Vec<AnyView>,
@@ -278,15 +286,14 @@ impl Shell {
             let views = top_bar.iter().filter(|(s, ..)| *s == slot);
             views.map(|(.., view)| view(window, cx)).collect()
         };
-        let (left, center, right) = (bar(TopBar::Left), bar(TopBar::Center), bar(TopBar::Right));
+        let (center, right) = (bar(TopBar::Center), bar(TopBar::Right));
         Shell {
             workspaces: bar(TopBar::Workspace),
             branches: bar(TopBar::Branch),
             search: bar(TopBar::Search),
-            sessions: cx.new(|cx| crate::sessions::List::new(true, cx)),
+            sessions: cx.new(crate::sessions::List::new),
             explorer: crate::files::explorer(window, cx),
             side_sizes,
-            left,
             center,
             right,
             overlays: overlays.iter().map(|view| view(window, cx)).collect(),
@@ -298,46 +305,22 @@ impl Shell {
     }
 
     fn columns(&self, window: &Window, cx: &App, minimum: Pixels) -> [Option<Pixels>; 2] {
-        if Workspace::get(cx).archive() {
-            return [None; 2];
-        }
         let [list_size, files_size] = &self.side_sizes;
         let width = window.viewport_size().width;
         let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
         let creating = crate::sessions::provision::page(cx).is_some();
-        let reserve = if creating { px(0.) } else { rail::WIDTH };
-        let room = width - minimum - (GAP + px(1.)) * 2.;
+        let room = width - rail::WIDTH - minimum - (GAP + px(1.)) * 2.;
         let list = prefers(Side::Sessions)
-            .then_some(room - reserve)
+            .then_some(room)
             .and_then(|room| Side::Sessions.open_width(list_size.read(cx), room));
-        let list_width = list.unwrap_or(rail::WIDTH);
         let files = (!creating && prefers(Side::Explorer))
-            .then_some(room - list_width)
+            .then_some(room - list.unwrap_or_default())
             .and_then(|room| Side::Explorer.open_width(files_size.read(cx), room));
         [list, files]
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = theme(cx);
-        let titled = |title: &str, id: &str| keymap::tip(title, id, cx);
-        let zone = |id: &'static str, icon, title: &str, p: DockPlacement| {
-            let toggle = move |window: &mut Window, cx: &mut App| dock::toggle_zone(p, window, cx);
-            bar_button(
-                id,
-                icon,
-                titled(title, id),
-                dock::is_open(p, cx),
-                toggle,
-                cx,
-            )
-        };
-        let run = |id, icon, title: String, on: bool, action: &'static str| {
-            let run =
-                move |window: &mut Window, cx: &mut App| actions::dispatch(window, cx, action);
-            bar_button(id, icon, title, on, run, cx)
-        };
-        let archive = Workspace::get(cx).archive();
-        let chat_on = matches!(Workspace::get(cx).shown(), Some(Doc::Chat { .. }));
         TitleBar::new()
             .h(px(40.))
             .pl_0()
@@ -359,121 +342,55 @@ impl Shell {
                             .flex()
                             .items_center()
                             .min_w_0()
-                            .when(!archive, |d| d.w(px(if MAC { 156. } else { 234. })))
+                            .w(px(if MAC { 156. } else { 234. }))
                             .children(self.workspaces.iter().cloned()),
                     )
-                    .when(archive, |bar| bar.children(self.left.iter().cloned()))
                     .children(self.branches.iter().cloned())
                     .children(self.center.iter().cloned())
                     .child(div().flex_1())
                     .children(self.search.iter().cloned())
-                    .when(!archive, |bar| bar.child(div().flex_1()))
-                    .children(self.right.iter().cloned())
-                    .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(t.line))
-                    .when(archive, |bar| {
-                        bar.child(run(
-                            "top.chat",
-                            Icon::Chat,
-                            titled("New chat", "agent.chat"),
-                            chat_on,
-                            "agent.chat",
-                        ))
-                    })
-                    .when(archive, |bar| {
-                        bar.child(zone(
-                            "zone.left",
-                            Icon::PanelLeft,
-                            "Left Zone",
-                            DockPlacement::Left,
-                        ))
-                        .child(zone(
-                            "zone.bottom",
-                            Icon::PanelBottom,
-                            "Bottom Zone",
-                            DockPlacement::Bottom,
-                        ))
-                        .child(zone(
-                            "zone.right",
-                            Icon::PanelRight,
-                            "Right Zone",
-                            DockPlacement::Right,
-                        ))
-                    })
-                    .child(run(
-                        "top.settings",
-                        Icon::Gear,
-                        titled("Settings", "app.settings"),
-                        false,
-                        "app.settings",
-                    )),
+                    .child(div().flex_1())
+                    .children(self.right.iter().cloned()),
             )
     }
 }
 
-fn bar_button<F: Fn(&mut Window, &mut App) + 'static>(
-    id: &'static str,
-    icon: Icon,
-    title: String,
-    on: bool,
-    click: F,
-    cx: &App,
-) -> impl IntoElement + use<F> {
-    let t = theme(cx);
-    let tip: SharedString = title.into();
-    ui::pressable(id)
-        .test_support()
-        .justify_center()
-        .flex_none()
-        .size(px(28.))
-        .rounded(radius::WIDGET)
-        .role(Role::Button)
-        .aria_label(tip.clone())
-        .aria_toggled(on.into())
-        .map(|b| match on {
-            true => b.bg(t.selected_inactive).text_color(t.fg),
-            false => b
-                .text_color(t.muted)
-                .hover(|s| s.bg(t.hover).text_color(t.fg)),
-        })
-        .active(|s| s.opacity(0.75))
-        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-        .on_click(move |_, window, cx| click(window, cx))
-        .child(icon)
+fn settings_button(cx: &App) -> impl IntoElement + use<> {
+    ui::titled_action(
+        ui::icon_button("rail.settings", Icon::Gear.size(rail::ICON), cx),
+        "Settings",
+        "app.settings",
+    )
+    .test_support()
+    .on_click(|_, window, cx| actions::dispatch(window, cx, "app.settings"))
 }
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dock = dock::area(window, cx);
-        let live = !Workspace::get(cx).archive();
         let creating = crate::sessions::provision::page(cx).is_some();
         let [list, files] = self.columns(window, cx, dock::minimum_width(cx));
         let [list_size, files_size] = &self.side_sizes;
         let t = theme(cx);
         let explorer = |cx: &App| {
-            let shared = list.is_none() && files.is_none();
-            // Keep receiving grip drag events after Explorer joins the Sessions rail.
-            let folded = if shared { px(0.) } else { rail::WIDTH };
-            let pane = Side::Explorer.pane(files_size, files, folded);
-            if files.is_some() {
-                pane.child(
-                    div()
-                        .id("session.explorer")
-                        .test_support()
-                        .size_full()
-                        .py(GAP)
-                        .pl(GAP)
-                        .child(
-                            ui::panel(div(), cx)
-                                .size_full()
-                                .overflow_hidden()
-                                .child(self.explorer.clone()),
-                        ),
-                )
-            } else if shared {
-                pane
-            } else {
-                pane.child(side_rail("session.explorer", cx).child(explorer_fold_button(cx)))
-            }
+            Side::Explorer
+                .pane(files_size, files)
+                .when(files.is_some(), |pane| {
+                    pane.child(
+                        div()
+                            .id("session.explorer")
+                            .test_support()
+                            .size_full()
+                            .py(GAP)
+                            .pl(GAP)
+                            .child(
+                                ui::panel(div(), cx)
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .child(self.explorer.clone()),
+                            ),
+                    )
+                })
         };
         div()
             .key_context(keymap::CONTEXT)
@@ -499,14 +416,17 @@ impl Render for Shell {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .when(live, |row| {
-                        row.child(
-                            Side::Sessions
-                                .pane(list_size, list, rail::WIDTH)
-                                .child(self.sessions.clone()),
-                        )
-                        .when(!creating, |row| row.child(explorer(cx)))
-                    })
+                    .child(activity_rail(
+                        list.is_some(),
+                        !creating && files.is_none(),
+                        cx,
+                    ))
+                    .child(
+                        Side::Sessions
+                            .pane(list_size, list)
+                            .children(list.map(|_| self.sessions.clone())),
+                    )
+                    .when(!creating, |row| row.child(explorer(cx)))
                     .child(
                         div()
                             .id("shell.center")
@@ -516,19 +436,11 @@ impl Render for Shell {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            .when(live, |d| {
-                                ui::panel(d, cx)
-                                    .m(GAP)
-                                    .overflow_hidden()
-                                    .when(!creating, |d| {
-                                        d.child(crate::sessions::header(window, cx))
-                                    })
-                            })
+                            .map(|d| ui::panel(d, cx).m(GAP).overflow_hidden())
                             .child(div().flex_1().min_h_0().min_w_0().child(dock))
-                            .when(live, |d| d.child(self.status.clone())),
+                            .child(self.status.clone()),
                     ),
             )
-            .when(!live, |d| d.child(self.status.clone()))
             .children(self.overlays.iter().cloned())
             .child(self.notices.clone())
     }
@@ -542,7 +454,7 @@ mod tests {
 
     use detached_core::git::testutil::Sandbox;
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{ElementId, TestAppContext, point};
+    use gpui_kit::{ElementId, TestAppContext};
     use tempfile::TempDir;
 
     use super::*;
@@ -593,44 +505,6 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_title_bar_opens_and_closes_the_zones_and_the_keys_switch_their_apps(
-        cx: &mut TestAppContext,
-    ) {
-        let (_dir, w) = open_shell(cx);
-        act(cx, w, |_, cx| {
-            Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx))
-        });
-        assert_eq!(checked(cx, w, "zone.left"), Some(true));
-        assert_eq!(
-            checked(cx, w, "tool.Changes"),
-            Some(true),
-            "Changes at start"
-        );
-        act(cx, w, |window, cx| window.click("zone.left", cx));
-        assert_eq!(checked(cx, w, "zone.left"), Some(false));
-        act(cx, w, |window, cx| {
-            window.render_frame(cx);
-            assert!(window.try_find("grip.repos").is_none());
-            window.press("secondary-1", cx)
-        });
-        assert_eq!(checked(cx, w, "tool.Project"), Some(true));
-        assert_eq!(checked(cx, w, "tool.Changes"), Some(false));
-        act(cx, w, |window, cx| window.press("secondary-1", cx));
-        assert_eq!(
-            checked(cx, w, "zone.right"),
-            Some(false),
-            "a second press closes it"
-        );
-        act(cx, w, |window, cx| window.click("zone.right", cx));
-        assert_eq!(checked(cx, w, "tool.Project"), Some(true));
-        act(cx, w, |window, cx| window.click("top.settings", cx));
-        act(cx, w, |window, cx| {
-            window.render_frame(cx);
-            assert!(window.find("settings").visible(), "Settings opens");
-        });
-    }
-
-    #[gpui_kit::test]
     fn the_shell_takes_focus_back_so_its_chords_keep_working(cx: &mut TestAppContext) {
         let (_dir, w) = open_shell(cx);
         act(cx, w, |window, cx| {
@@ -640,29 +514,6 @@ mod tests {
         act(cx, w, |window, cx| window.render_frame(cx));
         act(cx, w, |window, cx| window.press("secondary-1", cx));
         assert_eq!(checked(cx, w, "tree.files"), Some(true));
-    }
-
-    #[gpui_kit::test]
-    fn a_dragged_grip_resizes_its_zone_and_the_saved_layout_keeps_it(cx: &mut TestAppContext) {
-        let (dir, w) = open_shell(cx);
-        act(cx, w, |_, cx| {
-            Workspace::global(cx).update(cx, |w, cx| w.set_archive(true, cx))
-        });
-        let grip = |cx: &mut TestAppContext, w| {
-            act(cx, w, |window, cx| {
-                window.render_frame(cx);
-                window.find("grip.repos").bounds().center()
-            })
-        };
-        let from = grip(cx, w);
-        act(cx, w, |window, cx| {
-            window.drag(from, from + point(px(60.), px(0.)), cx)
-        });
-        let moved = grip(cx, w);
-        assert_eq!(moved.x - from.x, px(60.));
-        cx.update(|cx| ui_state::init(dir.path(), cx));
-        let again = cx.update(open).unwrap();
-        assert_eq!(grip(cx, again), moved);
     }
 
     #[gpui_kit::test]

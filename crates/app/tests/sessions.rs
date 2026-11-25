@@ -48,13 +48,17 @@ fn in_list(cx: &mut VisualTestContext, id: &str) -> bool {
         .is_some_and(|e| e.selected() == Some(true))
 }
 
-fn open_archive_menu(cx: &mut VisualTestContext) {
+fn session_menu(cx: &mut VisualTestContext, label: &str) {
     cx.click("session.more");
     let row = (0usize..)
         .map_while(|i| cx.find(("menu.item", i)))
-        .position(|item| item.label() == Some("Archive session…"))
-        .expect("archive menu item");
+        .position(|item| item.label() == Some(label))
+        .expect("menu item");
     cx.click(("menu.item", row));
+}
+
+fn open_archive_menu(cx: &mut VisualTestContext) {
+    session_menu(cx, "Archive session…");
 }
 
 fn root(cx: &mut VisualTestContext, i: usize) -> Option<String> {
@@ -743,8 +747,18 @@ fn archive_keeps_legacy_tabs_and_opens_the_transcript_read_only(cx: &mut TestApp
         label(cx, ("archive.savedTab", 0usize)).as_deref(),
         Some("README.md")
     );
+    cx.click("archive.filter.chats");
+    assert!(cx.find(("archive.savedTab", 0usize)).is_none());
+    cx.click("archive.filter.docs");
+    assert!(cx.find(("archive.savedTab", 0usize)).is_some());
     cx.click(("archive.savedTab", 0usize));
     wait_until(cx, |cx| cx.find("markdown").is_some());
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let center = w.within("shell.center");
+        assert_eq!(center.find("doc.file.README.md").checked(), Some(true));
+        assert!(center.find("markdown").visible());
+    });
     cx.update(|w, cx| w.within("viewer.md").click(0usize, cx));
     let source = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
@@ -903,7 +917,7 @@ fn provisions_repositories_archives_and_resumes_the_session_with_its_file(cx: &m
         cx.workspace(|w, _| w.session_name() == "Banner copy")
     });
 
-    app.click("sessions.addRepo");
+    session_menu(&mut app, "Add repository…");
     wait_until(&mut app, |cx| {
         cx.find(("sessions.repository", 0usize))
             .is_some_and(|e| e.visible())
@@ -1054,14 +1068,14 @@ fn a_terminal_moves_live_and_restarts_in_its_pane_and_worktree(cx: &mut TestAppC
 
     let at = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
-            let area = dock::zones(cx).unwrap();
+            let area = dock::current_area(cx).unwrap();
             let area = area.read(cx);
             let tree = area.layout(DockPlacement::Center).unwrap();
             let doc = dock::docs(area)
                 .into_iter()
-                .find(|(_, _, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
+                .find(|(_, t)| matches!(t.read(cx).doc, Doc::Terminal { .. }))
                 .unwrap();
-            tree.find_panel_node(doc.1).unwrap()
+            tree.find_panel_node(doc.0).unwrap()
         })
     };
     let moved = at(app);
@@ -1208,7 +1222,7 @@ fn tab_switcher_lists_only_the_focused_pane_and_moves_the_tab_at_a_facing_edge(
 
     run(app, "tab.moveRight");
     let count = app.update(|_, cx| {
-        let area = dock::zones(cx).unwrap();
+        let area = dock::current_area(cx).unwrap();
         let mut count = 0;
         area.read(cx)
             .layout(DockPlacement::Center)
@@ -1237,7 +1251,7 @@ fn dragging_a_splitter_and_shrinking_keep_minimum_pane_widths(cx: &mut TestAppCo
     let panes = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
             w.render_frame(cx);
-            let a = dock::zones(cx).unwrap();
+            let a = dock::current_area(cx).unwrap();
             let mut panes = Vec::new();
             a.read(cx)
                 .layout(DockPlacement::Center)
@@ -1460,7 +1474,9 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
             label(app, "sessions.provision.error").is_some_and(|s| s.contains(reason)),
             "{reason}"
         );
-        assert!(app.workspace(|w, _| w.session_name() == "Active" && !w.archive()));
+        assert!(app.workspace(
+            |w, _| w.session_name() == "Active" && w.shown() != Some(&Doc::SessionArchive)
+        ));
         app.click("sessions.provision.cancel");
     };
 
@@ -1503,7 +1519,7 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
+fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::{px, size};
@@ -1528,17 +1544,18 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
     let archive = bounds(app, "sessions.archive");
     assert!(bounds(app, &members[10]).bottom() <= archive.top());
     assert!(bounds(app, "sessions").right() <= bounds(app, "session.explorer").left());
-    assert!(bounds(app, "session.explorer").right() <= bounds(app, "session.header").left());
+    assert!(bounds(app, "session.explorer").right() <= bounds(app, "shell.center").left());
     assert!(app.find("session.overview").unwrap().visible());
 
     app.update(|w, cx| {
         w.resize(size(px(1000.), px(700.)));
         w.bounds_changed(cx);
     });
-    wait_until(app, |app| bounds(app, "sessions").size.width == px(36.));
+    wait_until(app, |app| app.find("sessions").is_none());
+    assert_eq!(bounds(app, "shell.rail").size.width, px(36.));
     assert!(app.find("session.explorer").is_none());
     assert!(app.find("sessions.rows").is_none());
-    app.press("secondary-b");
+    app.press("secondary-2");
     wait_until(app, |app| {
         app.find(SharedString::from(members[10].clone())).is_some()
     });

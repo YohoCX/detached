@@ -1,9 +1,12 @@
 mod common;
 
+use std::time::Duration;
+
 use common::*;
-use detached_app::{chat, dock, terminal::Terminals};
+use detached_app::{actions, chat, dock};
 use detached_core::{adapters, sessions};
 use gpui_kit::base::dock::{DockAreaState, PanelInfo, PanelState};
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Keystroke, SharedString, TestAppContext, VisualTestContext};
 use kernel::doc::Doc;
@@ -12,15 +15,12 @@ use kernel::ui_state;
 use serde_json::json;
 
 fn toggle_chats(cx: &mut VisualTestContext) {
-    assert!(cx.find("tab.chats").is_none());
-    cx.press("secondary-2");
-    assert!(cx.find("tab.chats").is_some());
-    cx.press("secondary-2");
-    assert!(cx.find("tab.chats").is_none());
+    cx.update(|w, cx| actions::dispatch(w, cx, "panel.chats"));
+    settle(cx);
 }
 
 #[gpui_kit::test]
-fn cmd_2_toggles_chats_from_the_session_and_from_a_terminal(cx: &mut TestAppContext) {
+fn the_palette_opens_chats_without_an_agent_provider(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         repo(sb, "shell");
         sb.state
@@ -37,20 +37,27 @@ fn cmd_2_toggles_chats_from_the_session_and_from_a_terminal(cx: &mut TestAppCont
     assert!(cx.update(|_, cx| chat::providers(cx).is_empty()));
     cx.press("secondary-n");
     assert!(cx.find("sessions.provisional").unwrap().visible());
-    toggle_chats(cx);
-    assert!(cx.find("sessions.provisional").is_none());
-
-    cx.press("alt-f12");
+    assert!(cx.find("tab.chats").is_none());
+    cx.press("secondary-shift-a");
+    cx.input("chats");
     wait_until(cx, |cx| {
-        cx.update(|w, cx| {
-            Terminals::global(cx)
-                .read(cx)
-                .docked
-                .iter()
-                .any(|s| s.read(cx).focus.is_focused(w))
-        })
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|row| row.label() == Some("Chats"))
     });
+    cx.press("enter");
+    assert!(cx.find("chats").unwrap().visible());
+    assert!(cx.find("sessions.provisional").is_none());
+    cx.press("secondary-2");
+    assert!(cx.find("sessions.row.main").is_none());
+    assert!(cx.find("chats").unwrap().visible());
+    cx.press("secondary-2");
+    assert!(cx.find("sessions.row.main").unwrap().visible());
+    cx.click("doc.session-overview");
     toggle_chats(cx);
+    assert!(cx.find("chats").unwrap().visible());
+    toggle_chats(cx);
+    assert!(cx.find("tab.chats").is_none());
+    assert!(cx.find("session.overview").unwrap().visible());
 }
 
 fn adopted(sb: &Sandbox) -> sessions::Workset {
@@ -60,6 +67,36 @@ fn adopted(sb: &Sandbox) -> sessions::Workset {
     sb.git(&sb.solo(), &["worktree", "add", "-b", "topic", &path]);
     let workspace = &sb.state.get_settings().workspaces[0].id;
     sessions::adopt(&sb.state, workspace, "Topic", &[path]).unwrap()
+}
+
+#[gpui_kit::test]
+fn explorer_modes_keep_their_labels_and_show_their_shortcuts_on_hover(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    let (files, changes) = if cfg!(target_os = "macos") {
+        ("Files  ⌘1", "Changes  ⌘0")
+    } else {
+        ("Files  Ctrl+1", "Changes  Ctrl+0")
+    };
+    for (id, label, tooltip) in [
+        ("tree.files", "Files", files),
+        ("tree.changes", "Changes", changes),
+        ("tree.chats", "Chats", "Chats"),
+    ] {
+        let button = app.find(id).unwrap();
+        assert_eq!(button.label(), Some(label));
+        assert_eq!(button.checked(), Some(id == "tree.files"));
+        app.update(|w, cx| w.within("tree.modes").hover(id, cx));
+        settle(app);
+        app.executor().advance_clock(Duration::from_millis(500));
+        settle(app);
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            assert!(
+                texts(w).iter().any(|t| t.visible() && t.text() == tooltip),
+                "{tooltip}"
+            );
+        });
+    }
 }
 
 #[gpui_kit::test]
@@ -438,12 +475,13 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
         cx.find(row(1)).unwrap().description(),
         Some("Waiting · solo")
     );
-    cx.press("secondary-2");
+    toggle_chats(cx);
     assert_eq!(
         cx.find(("chats.group", 0usize)).unwrap().label(),
         Some("solo")
     );
-    cx.press("secondary-2");
+    toggle_chats(cx);
+    assert!(cx.find("tab.chats").is_none());
 
     cx.click(row(1));
     assert_eq!(cx.find(row(1)).unwrap().selected(), Some(true));
@@ -456,6 +494,7 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
     assert_eq!(cx.find(row(0)).unwrap().selected(), Some(true));
 
     cx.click("sessions.row.main");
+    assert!(cx.find("chats").is_none());
     cx.click("sessions.fold");
     cx.update(|w, cx| {
         // The background chat is borrowed to catch any reads while the sidebar is folded.
@@ -477,7 +516,7 @@ fn chats_dismiss_the_finished_new_session_page(cx: &mut TestAppContext) {
     let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
     let row = SharedString::from(format!("sessions.chat.{repo}.0"));
     cx.update(|_, cx| chat::new_chat(repo, cx));
-    for name in ["From keyboard", "From sidebar"] {
+    for name in ["From Chats action", "From sidebar"] {
         cx.press("secondary-n");
         cx.input(name);
         cx.click(("sessions.repository", 0usize));
@@ -490,8 +529,8 @@ fn chats_dismiss_the_finished_new_session_page(cx: &mut TestAppContext) {
             cx.find("sessions.openCreated")
                 .is_some_and(|open| open.disabled().is_none())
         });
-        if name == "From keyboard" {
-            cx.press("secondary-2");
+        if name == "From Chats action" {
+            toggle_chats(cx);
             assert!(cx.find("tab.chats").unwrap().visible());
         } else {
             cx.click(row.clone());
@@ -562,7 +601,7 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
         Some(Doc::Chat { repo: main, n: 0 })
     );
 
-    cx.press("secondary-2");
+    toggle_chats(cx);
     let topic = usize::from(cx.sb.solo().display().to_string() < checkout);
     assert_eq!(
         cx.find(("chats.open", topic)).unwrap().description(),

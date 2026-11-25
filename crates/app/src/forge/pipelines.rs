@@ -122,8 +122,8 @@ impl Pipelines {
         this
     }
 
-    fn all(cx: &Context<Self>) -> bool {
-        cx.try_global::<Session>().is_some_and(|s| s.all)
+    fn all(&self, cx: &Context<Self>) -> bool {
+        self.mr.is_none() && cx.try_global::<Session>().is_some_and(|s| s.all)
     }
 
     /// Follows the repo and the scope: a new key collapses all.
@@ -131,7 +131,7 @@ impl Pipelines {
         let current = Workspace::get(cx).current().map(String::from);
         let repo = self.fixed.clone().or(current);
         let at = repo.as_deref().unwrap_or_default();
-        let key = format!("pipes {at} {} {}", self.mr.unwrap_or(0), Self::all(cx));
+        let key = format!("pipes {at} {} {}", self.mr.unwrap_or(0), self.all(cx));
         if repo != self.repo {
             (self.run, self.setup) = (None, None);
             self.github.clear();
@@ -151,10 +151,10 @@ impl Pipelines {
             (self.list, self._list) = (None, None);
             return;
         };
-        let all = Self::all(cx);
+        let all = self.all(cx);
         let list = forge::pipelines(cx, &repo, self.mr, all);
         self._list = Some(cx.observe(&list, |this, list, cx| this.landed(list, cx)));
-        self.list = Some(Interest::view(list, cx));
+        self.list = Some(Interest::shared_view(list, cx));
     }
 
     /// After each load of the list, the expanded pipelines still listed load their jobs again.
@@ -453,7 +453,7 @@ impl Pipelines {
                 d.child(ui::segmented(
                     "pipelines.scope",
                     &scope,
-                    Self::all(cx),
+                    self.all(cx),
                     |all, _, cx| cx.default_global::<Session>().all = all,
                     cx,
                 ))

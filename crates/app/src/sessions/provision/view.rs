@@ -8,7 +8,7 @@ use gpui_kit::{
 };
 use kernel::doc::Doc;
 
-use crate::ui::{self, GAP, text, theme};
+use crate::ui::{self, GAP, segmented, text, theme};
 
 use super::*;
 
@@ -189,33 +189,28 @@ impl Sheet {
         let adding = f.set.is_some();
         let name = self.name.read(cx).value();
         let branch = self.branch.read(cx).value();
-        let t = theme(cx);
         if !adding {
+            let adopt = segmented::label(
+                "sessions.mode.adopt",
+                "Worktrees I already have…",
+                false,
+                cx,
+            )
+            .when(self.busy, |b| b.opacity(0.5))
+            .when(!self.busy, |b| {
+                b.on_click(move |_, window, cx| {
+                    crate::sessions::sheet::adopt_from_new(name.to_string(), window, cx)
+                })
+            });
             d = d
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(GAP)
+                    segmented::group("sessions.mode", cx)
+                        .self_start()
                         .child(
-                            div()
-                                .px(px(8.))
-                                .py(px(4.))
-                                .rounded(ui::radius::SEGMENT)
-                                .bg(t.active_bg)
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("A new branch"),
+                            segmented::label("sessions.mode.branch", "A new branch", true, cx)
+                                .test_support(),
                         )
-                        .child(button(
-                            "sessions.mode.adopt",
-                            "Worktrees I already have…",
-                            Kind::Quiet,
-                            !self.busy,
-                            move |window, cx| {
-                                crate::sessions::sheet::adopt_from_new(name.to_string(), window, cx)
-                            },
-                            cx,
-                        )),
+                        .child(ui::disabled(adopt, self.busy).test_support()),
                 )
                 .child(field("Session name", "sessions.new.name", &self.name, cx));
         }
@@ -953,7 +948,11 @@ impl Sheet {
                     move |window, cx| {
                         save(&ws, set.clone(), true, cx);
                         _ = handle.update(cx, |s, cx| s.close(cx));
-                        dock::open("project", window, cx);
+                        crate::files::choose_explorer(
+                            crate::files::ExplorerMode::Files,
+                            window,
+                            cx,
+                        );
                     }
                 },
                 cx,

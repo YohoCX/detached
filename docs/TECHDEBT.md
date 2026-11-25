@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| A stale status load can overwrite a fresh one | `kernel::invalidate`, `Workspace::refresh` | After a branch switch and `invalidate::status`, a load begun on the old branch (seen in `frame.rs` `the_overview_previews_pull…` when the test settles before its click) lands later and puts the old branch back into `Repo::status`. Loads need an order check, so an older one is dropped. |
 | Session comparisons resolve their base at read time | `core::sessions::Member::base_ref` | There is no dedicated creation-time comparison ref for each member. Changes to the recipe or `origin/HEAD` can change the base of an existing session. |
 | The control mode and its test run on macOS only (`#[cfg(target_os = "macos")]`) | `crates/app` `tests/drive.rs` | It draws through the headless Metal renderer on the main thread, as `tests/shots.rs` does, and listens on a Unix socket. Linux has a headless wgpu renderer it has not been tried on. |
 | A Codex setting with no answer holds the session's prompts | `crates/acp` `dispatch` | A prompt waits for the acks of settings sent before it; an adapter that stays up but never answers a `set_session_config_option` keeps every later prompt queued (Cancel releases only the one). codex-acp answers every request, so only a misbehaving adapter hits it; a timeout that turns a missing ack into a refusal would close it. |

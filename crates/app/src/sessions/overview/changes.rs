@@ -76,9 +76,7 @@ impl WorkingChanges {
 
     fn sync(&mut self, refreshed: Option<&str>, cx: &mut Context<Self>) {
         let work = Workspace::get(cx);
-        let active = work.id() == self.workspace.as_deref()
-            && work.session_id() == self.session
-            && !work.archive();
+        let active = work.id() == self.workspace.as_deref() && work.session_id() == self.session;
         if !active {
             if self.active {
                 self.active = false;

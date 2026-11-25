@@ -70,9 +70,9 @@ fn an_edited_theme_shows_and_a_broken_one_keeps_the_last(cx: &mut TestAppContext
 fn another_theme_is_chosen_and_kept_across_a_restart(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     let (names, chosen) = cx.update(|_, cx| theme::names(cx));
-    assert_eq!(names, ["Slate", "Fleet", "Classic", "Catppuccin"]);
-    assert_eq!(chosen, "Slate");
-    let slate = accent(cx);
+    assert_eq!(names, ["Indigo", "Slate", "Fleet", "Classic", "Catppuccin"]);
+    assert_eq!(chosen, "Indigo");
+    let default = accent(cx);
     let fonts = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
             let k = Kit::global(cx);
@@ -81,7 +81,7 @@ fn another_theme_is_chosen_and_kept_across_a_restart(cx: &mut TestAppContext) {
     };
     assert_eq!(fonts(cx), ("Inter".into(), "JetBrains Mono".into()));
     cx.update(|_, cx| theme::choose("Classic", cx));
-    wait_until(cx, |cx| accent(cx) != slate);
+    wait_until(cx, |cx| accent(cx) != default);
     assert_ne!(fonts(cx).0, "Inter", "Classic keeps the system's");
     let ui = std::fs::read_to_string(cx.sb.state.config_dir.join("ui.json")).unwrap();
     assert!(ui.contains(r#""theme.name": "Classic""#), "{ui}");
@@ -136,7 +136,7 @@ fn opening_the_themes_folder_seeds_a_copy_to_edit(_cx: &mut TestAppContext) {
     let text = std::fs::read_to_string(dir.path().join("my-theme.json")).unwrap();
     let seeded: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(seeded["name"], "My theme");
-    assert_eq!(seeded["extends"], "Slate");
+    assert_eq!(seeded["extends"], "Indigo");
     std::fs::write(dir.path().join("my-theme.json"), "{}").unwrap();
     theme::seed(dir.path()).unwrap();
     assert_eq!(

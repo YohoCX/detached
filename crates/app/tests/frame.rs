@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use common::*;
 use detached_app::keymap;
-use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
 use detached_forge_fake::Seed;
@@ -21,45 +20,47 @@ fn on(cx: &mut VisualTestContext, id: &'static str) -> Option<bool> {
 }
 
 #[gpui_kit::test]
-fn the_legacy_tabs_and_zone_button_open_and_switch_the_bottom_zone(cx: &mut TestAppContext) {
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
-    // A closed bottom zone keeps its tabs as a strip, none of them on.
-    assert_eq!(on(cx, "bottom.Log"), Some(false), "closed at start");
-    let (tab, dock) = (cx.find("bottom.Log").unwrap(), cx.find("dock").unwrap());
-    // The kit keeps 29 px of a closed bottom zone.
-    let strip = dock.bounds().bottom() - GAP - gpui_kit::px(29.);
-    let b = tab.bounds();
-    assert!(
-        b.top() >= strip && b.bottom() <= dock.bounds().bottom() - GAP,
-        "{b:?} fits the strip"
-    );
+fn archive_uses_the_live_center_and_keeps_the_shell(cx: &mut TestAppContext) {
+    use kernel::doc::Doc;
 
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert!(cx.find("bottom.Log").unwrap().visible());
-    assert_eq!(on(cx, "bottom.Log"), Some(true));
-    cx.click("bottom.Pipelines");
-    assert_eq!(on(cx, "bottom.Pipelines"), Some(true));
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert_eq!(on(cx, "bottom.Log"), Some(true), "switches back to Log");
-    cx.update(|w, cx| detached_app::dock::toggle("log", w, cx));
-    settle(cx);
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-
-    cx.click("zone.bottom");
+    let app = &mut open_app_with(cx, |sb| drop(repo(sb, "api")));
+    app.simulate_resize(size(px(1400.), px(900.)));
+    app.click("sessions.archive");
+    app.update(|w, cx| {
+        w.render_frame(cx);
+        let center = w.within("shell.center");
+        assert!(center.find("sessions.archive.page").visible());
+        assert!(center.find("archive.tab").checked() == Some(true));
+        assert!(w.find("sessions.archive").selected() == Some(true));
+        for id in [
+            "sessions.rows",
+            "session.explorer",
+            "search.pill",
+            "sync.pull",
+            "rail.settings",
+        ] {
+            assert!(w.find(id).visible(), "{id}");
+        }
+        for id in [
+            "zone.left",
+            "zone.right",
+            "zone.bottom",
+            "top.chat",
+            "switcher",
+            "zone.left.pane",
+            "zone.right.pane",
+            "zone.bottom.pane",
+        ] {
+            assert!(w.try_find(id).is_none(), "{id}");
+        }
+    });
     assert_eq!(
-        on(cx, "bottom.Log"),
-        Some(true),
-        "the zone opens on its last tab"
+        app.workspace(|w, _| w.shown().cloned()),
+        Some(Doc::SessionArchive)
     );
-    assert_eq!(on(cx, "zone.bottom"), Some(true));
-    cx.click("zone.bottom");
-    assert_eq!(on(cx, "bottom.Log"), Some(false));
-    assert_eq!(on(cx, "zone.bottom"), Some(false));
+    assert_eq!(app.workspace(|w, _| w.session_repos().len()), 1);
+    app.click("doc.session-overview");
+    assert_eq!(on(app, "sessions.archive"), Some(false));
 }
 
 #[gpui_kit::test]
@@ -202,7 +203,7 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
+fn cmd_2_folds_the_sessions_list(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     let folding = |cx: &mut VisualTestContext| {
         cx.find("sessions.fold")
@@ -211,21 +212,26 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
             .unwrap()
             .to_string()
     };
-    let width = |cx: &mut VisualTestContext| cx.find("sessions").unwrap().bounds().size.width;
-    assert!(
-        cx.find("zone.left").is_none(),
-        "the live frame has no dock toggle"
-    );
+    let bounds = |cx: &mut VisualTestContext| cx.find("sessions.fold").unwrap().bounds();
+    let open = |cx: &mut VisualTestContext| cx.find("sessions").is_some();
+    let fold = bounds(cx);
     assert_eq!(folding(cx), "Hide sessions");
     assert_fold_tip(cx, "sessions.fold", "Hide sessions", "panel.sessions");
-    assert_eq!(width(cx), gpui_kit::px(248.));
-    cx.press("secondary-b");
+    assert!(open(cx));
+    cx.press("secondary-2");
     assert_eq!(folding(cx), "Show sessions");
-    assert_eq!(width(cx), gpui_kit::px(36.));
+    assert!(!open(cx));
+    assert_eq!(bounds(cx), fold);
     assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
-    cx.press("secondary-b");
+    cx.press("secondary-2");
     assert_eq!(folding(cx), "Hide sessions");
-    assert_eq!(width(cx), gpui_kit::px(248.));
+    assert!(open(cx));
+    assert_eq!(bounds(cx), fold);
+}
+
+fn reveal(cx: &mut VisualTestContext, ix: usize) {
+    cx.update(|w, cx| w.hover(("overview.repository", ix), cx));
+    settle(cx);
 }
 
 fn assert_fold_tip(cx: &mut VisualTestContext, id: &'static str, title: &str, action: &str) {
@@ -261,42 +267,6 @@ fn the_explorer_fold_tooltip_shows_the_configured_chord(cx: &mut TestAppContext)
     cx.press("secondary-shift-0");
     cx.click("explorer.fold");
     assert_fold_tip(cx, "explorer.fold", "Show changes", "panel.changes");
-}
-
-#[gpui_kit::test]
-fn a_zone_grip_resizes_resets_on_a_double_click_and_closes_when_dragged_nearly_shut(
-    cx: &mut TestAppContext,
-) {
-    use gpui_kit::base::dock::DockPlacement::Left;
-    use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{point, px};
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
-    let width = |cx: &mut VisualTestContext| {
-        cx.update(|_, cx| {
-            detached_app::dock::zones(cx)
-                .unwrap()
-                .read(cx)
-                .dock_size(Left)
-        })
-    };
-    let drag = |cx: &mut VisualTestContext, to: Option<f32>, dx: f32| {
-        let from = cx.find("grip.repos").unwrap().bounds().center();
-        let x = to.map_or(from.x + px(dx), px);
-        cx.update(|w, cx| w.drag(from, point(x, from.y), cx));
-        settle(cx);
-    };
-    assert_eq!(width(cx), Some(px(290.)), "a 280 pane and its gap");
-    drag(cx, None, 100.);
-    assert_eq!(width(cx), Some(px(390.)));
-    cx.update(|w, cx| w.double_click("grip.repos", cx));
-    settle(cx);
-    assert_eq!(width(cx), Some(px(290.)), "back to its default");
-    drag(cx, Some(20.), 0.);
-    assert_eq!(on(cx, "zone.left"), Some(false), "closed");
-    cx.click("zone.left");
-    assert_eq!(width(cx), Some(px(290.)), "reopens at the width it had");
 }
 
 /// The panic hook's reports, in the config dir the app boots from.
@@ -384,6 +354,7 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
     ] {
         assert_eq!(label(cx, (id, ix)).as_deref(), Some(title));
         assert!(painted(cx, title).is_none());
+        reveal(cx, ix);
         cx.update(|w, cx| w.hover((id, ix), cx));
         settle(cx);
         cx.executor().advance_clock(Duration::from_millis(500));
@@ -395,6 +366,7 @@ fn the_overview_opens_branches_for_its_repository_beside_a_status_message(cx: &m
         cx.find("status.message")
             .is_some_and(|message| message.visible())
     );
+    reveal(cx, ix);
     cx.click(("overview.switch", ix));
     assert!(cx.find("branches.popup").is_some());
     assert_eq!(
@@ -545,6 +517,7 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     let original = app.sb.git(&checkout, &["rev-parse", "HEAD"]);
     let ix = checkout_index(app, "pull");
 
+    reveal(app, ix);
     app.click(("overview.pull", ix));
     let (_, preview) = cx.pending_prompt().expect("a native Pull confirmation");
     assert!(preview.contains("main is 1 commit behind origin/main"));
@@ -554,6 +527,7 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     settle(app);
     assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
 
+    reveal(app, ix);
     app.click(("overview.pull", ix));
     app.sb.git(&checkout, &["switch", "-qc", "different"]);
     app.sb.git(&checkout, &["branch", "-u", "origin/main"]);
@@ -567,6 +541,9 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     });
     assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
 
+    // Hovered before the switch: a settle between the wait below and the click lets a status load
+    // begun on `different` land after the fresh one (docs/TECHDEBT.md).
+    reveal(app, ix);
     app.sb.git(&checkout, &["switch", "-q", "main"]);
     app.update(|_, cx| invalidate::status(cx, &path).detach());
     wait_until(app, |cx| {

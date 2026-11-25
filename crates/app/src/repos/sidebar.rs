@@ -8,7 +8,7 @@ use detached_core::api;
 use detached_core::error;
 use detached_core::settings;
 use detached_core::state::AppState;
-use detached_core::types::{InProgress, RepoInfo, RepoStatus};
+use detached_core::types::{InProgress, RepoInfo};
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
@@ -205,40 +205,6 @@ impl<'a> Tree<'a> {
             }
         }
     }
-}
-
-/// The status dot: error, local changes, diverged from upstream, no upstream, in sync; the first is
-/// the worst.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Tone {
-    Error,
-    Warning,
-    Accent,
-    Deleted,
-    Success,
-}
-
-impl Tone {
-    pub(super) fn color(self, t: &Theme) -> Hsla {
-        match self {
-            Tone::Error => t.error,
-            Tone::Warning => t.warning,
-            Tone::Accent => t.accent,
-            Tone::Deleted => t.deleted,
-            Tone::Success => t.success,
-        }
-    }
-}
-
-/// None while the status loads.
-pub(super) fn tone_of(status: Option<&Result<RepoStatus, String>>) -> Option<Tone> {
-    Some(match status? {
-        Err(_) => Tone::Error,
-        Ok(s) if !s.changes.is_empty() || s.in_progress.is_some() => Tone::Warning,
-        Ok(s) if s.ahead > 0 || s.behind > 0 => Tone::Accent,
-        Ok(s) if s.upstream_gone || (s.branch.is_some() && s.upstream.is_none()) => Tone::Deleted,
-        Ok(_) => Tone::Success,
-    })
 }
 
 fn badge_text(p: InProgress) -> &'static str {
@@ -847,7 +813,6 @@ fn repo_menu(workspace: &str, repo: &str, solo: bool) -> Menu {
 
 #[cfg(test)]
 mod tests {
-    use detached_core::types::{CommitSummary, FileChange};
 
     use super::*;
 
@@ -1003,59 +968,5 @@ mod tests {
             panic!("not a repo row")
         };
         assert_eq!(app.worktrees, 2);
-    }
-
-    #[test]
-    fn tones_go_error_none_warning_accent_deleted_success() {
-        let clean = RepoStatus {
-            branch: Some("main".into()),
-            head: Some("abc".into()),
-            upstream: Some("origin/main".into()),
-            upstream_gone: false,
-            ahead: 0,
-            behind: 0,
-            changes: vec![],
-            last_commit: None::<CommitSummary>,
-            in_progress: None,
-        };
-        let tone = |s: RepoStatus| tone_of(Some(&Ok(s)));
-        let change = FileChange {
-            path: "f".into(),
-            orig_path: None,
-            index: '.',
-            worktree: 'M',
-            conflicted: false,
-        };
-        assert_eq!(tone_of(Some(&Err("bad".into()))), Some(Tone::Error));
-        assert_eq!(tone_of(None), None);
-        let dirty = RepoStatus {
-            changes: vec![change],
-            ahead: 1,
-            ..clean.clone()
-        };
-        assert_eq!(tone(dirty), Some(Tone::Warning));
-        let merging = RepoStatus {
-            in_progress: Some(InProgress::Merge),
-            ..clean.clone()
-        };
-        assert_eq!(tone(merging), Some(Tone::Warning));
-        let behind = RepoStatus {
-            behind: 2,
-            upstream: None,
-            ..clean.clone()
-        };
-        assert_eq!(tone(behind), Some(Tone::Accent));
-        let local = RepoStatus {
-            upstream: None,
-            ..clean.clone()
-        };
-        assert_eq!(tone(local), Some(Tone::Deleted));
-        assert_eq!(tone(clean.clone()), Some(Tone::Success));
-        let detached = RepoStatus {
-            branch: None,
-            upstream: None,
-            ..clean
-        };
-        assert_eq!(tone(detached), Some(Tone::Success));
     }
 }

@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 
 use detached_core::settings::{FileProblem, read_json};
 use gpui::{App, Global};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use crate::doc::Doc;
 
 #[derive(Default)]
 pub struct UiState {
@@ -22,7 +24,8 @@ pub fn load(dir: &Path) -> (UiState, Option<FileProblem>) {
     match read_json(&file, true) {
         Ok(values) => {
             let mut values = values.unwrap_or_default();
-            if council(&mut values) {
+            let renamed = council(&mut values);
+            if archive(&mut values) || renamed {
                 let _ = write(&file, &values);
             }
             (
@@ -79,21 +82,103 @@ pub fn set(key: &str, value: impl Serialize, cx: &mut App) {
     }
 }
 
-/// 0.6.0 named Council "Panels": its keys, the dock's app `panels` and the docs `Panel`,
-/// `PanelTask` and `PanelStats` move to Council's names once. True when anything moved.
+const ARCHIVE_TABS: &str = "archive.tabs";
+
+#[derive(Deserialize, Serialize)]
+pub struct ArchivedTab {
+    pub workspace: Option<String>,
+    pub doc: Doc,
+}
+
+pub fn archived_tabs(cx: &App) -> Vec<ArchivedTab> {
+    get(ARCHIVE_TABS, cx).unwrap_or_default()
+}
+
+pub fn assign_archived_tabs(workspace: Option<String>, cx: &mut App) {
+    if let Some(workspace) = workspace {
+        let mut tabs = archived_tabs(cx);
+        if tabs.iter().any(|tab| tab.workspace.is_none()) {
+            for tab in &mut tabs {
+                tab.workspace.get_or_insert_with(|| workspace.clone());
+            }
+            set(ARCHIVE_TABS, tabs, cx);
+        }
+    }
+}
+
+pub fn forget_archived_tabs(workspace: &str, cx: &mut App) {
+    let mut tabs = archived_tabs(cx);
+    let before = tabs.len();
+    tabs.retain(|tab| tab.workspace.as_deref() != Some(workspace));
+    if tabs.len() != before {
+        set(ARCHIVE_TABS, tabs, cx);
+    }
+}
+
+fn archive(values: &mut Map<String, Value>) -> bool {
+    fn collect(panel: &Value, tabs: &mut Vec<ArchivedTab>) {
+        if panel.get("panel_name").and_then(Value::as_str) == Some("doc")
+            && let Some(saved) = panel.pointer("/info/panel")
+            && saved.get("session").is_none()
+        {
+            let mut saved = saved.clone();
+            if let Some(doc) = saved.get_mut("doc").and_then(Value::as_object_mut) {
+                for (old, new) in [
+                    ("Panel", "Council"),
+                    ("PanelTask", "CouncilTask"),
+                    ("PanelStats", "CouncilStats"),
+                ] {
+                    if let Some(value) = doc.remove(old) {
+                        doc.insert(new.into(), value);
+                    }
+                }
+            }
+            if let Ok(tab) = serde_json::from_value::<ArchivedTab>(saved)
+                && !matches!(tab.doc, Doc::SessionArchive | Doc::PastChat { .. })
+            {
+                tabs.push(tab);
+            }
+        }
+        if let Some(children) = panel.get("children").and_then(Value::as_array) {
+            for child in children {
+                collect(child, tabs);
+            }
+        }
+    }
+
+    if values.contains_key(ARCHIVE_TABS) {
+        return false;
+    }
+    let Some(layout) = values.get("dock.layout") else {
+        return false;
+    };
+    let mut tabs = vec![];
+    for path in [
+        "/center",
+        "/left_dock/panel",
+        "/right_dock/panel",
+        "/bottom_dock/panel",
+    ] {
+        if let Some(root) = layout.pointer(path) {
+            collect(root, &mut tabs);
+        }
+    }
+    if let Ok(tabs) = serde_json::to_value(tabs) {
+        values.insert(ARCHIVE_TABS.into(), tabs);
+        return true;
+    }
+    false
+}
+
 fn council(values: &mut Map<String, Value>) -> bool {
     let old: Vec<_> = values
         .keys()
         .filter_map(|k| renamed(k).map(|n| (k.clone(), n)))
         .collect();
-    let mut moved = !old.is_empty();
+    let moved = !old.is_empty();
     for (k, new) in old {
-        let v = values.remove(&k).unwrap();
-        values.entry(new).or_insert(v);
-    }
-    for (k, v) in values.iter_mut() {
-        if k == "dock.layout" || k.starts_with("tabs.") {
-            moved |= rewrite(v);
+        if let Some(v) = values.remove(&k) {
+            values.entry(new).or_insert(v);
         }
     }
     moved
@@ -103,31 +188,6 @@ fn renamed(key: &str) -> Option<String> {
     [("panels.", "council."), ("size.panel.", "size.council.")]
         .into_iter()
         .find_map(|(old, new)| Some(format!("{new}{}", key.strip_prefix(old)?)))
-}
-
-fn rewrite(v: &mut Value) -> bool {
-    match v {
-        Value::Object(m) => {
-            let mut moved = false;
-            for (old, new) in [
-                ("Panel", "Council"),
-                ("PanelTask", "CouncilTask"),
-                ("PanelStats", "CouncilStats"),
-            ] {
-                if let Some(doc) = m.remove(old) {
-                    m.insert(new.into(), doc);
-                    moved = true;
-                }
-            }
-            if m.get("panel_name").and_then(Value::as_str) == Some("panels") {
-                m.insert("panel_name".into(), "council".into());
-                moved = true;
-            }
-            m.values_mut().fold(moved, |a, x| rewrite(x) | a)
-        }
-        Value::Array(a) => a.iter_mut().fold(false, |acc, x| rewrite(x) | acc),
-        _ => false,
-    }
 }
 
 fn write(file: &Path, values: &Map<String, Value>) -> std::io::Result<()> {
@@ -165,7 +225,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn panels_keys_and_saved_tabs_move_to_council_once(cx: &mut TestAppContext) {
+    fn migrates_archived_tabs_once_and_keeps_old_layout_keys(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let doc = serde_json::json!({"Panel": {"repo": "/r", "task": "t", "round": "01"}});
         let tab = |doc| {
@@ -183,6 +243,10 @@ mod tests {
                 tab(doc.clone()),
                 tab(serde_json::json!({"PanelTask": {"repo": "/r", "task": "t"}})),
                 tab(serde_json::json!({"PanelStats": {"repo": "/r"}})),
+                tab(serde_json::json!({"Gone": {"repo": "/r"}})),
+                serde_json::json!({"panel_name": "doc", "info": {"panel": {
+                    "doc": {"PanelStats": {"repo": "/live"}}, "session": "main"
+                }}}),
                 app,
             ]}},
             "tabs.ws1": {"category": "chats", "selected": {"chats": doc}},
@@ -196,18 +260,24 @@ mod tests {
             assert_eq!(get::<f64>("size.council.findings.list", cx), Some(400.0));
             assert_eq!(get::<f64>("size.repos", cx), Some(320.0));
             assert_eq!(get::<u32>("panels.mode", cx), None);
-            let layout = get::<Value>("dock.layout", cx).unwrap().to_string();
-            for name in [
-                r#""Council":"#,
-                r#""CouncilTask":"#,
-                r#""CouncilStats":"#,
-                r#""panel_name":"council""#,
-            ] {
+            let tabs = archived_tabs(cx);
+            assert_eq!(tabs.len(), 3);
+            let layout = get::<Value>(ARCHIVE_TABS, cx).unwrap().to_string();
+            for name in [r#""Council":"#, r#""CouncilTask":"#, r#""CouncilStats":"#] {
                 assert!(layout.contains(name), "{name} in {layout}");
             }
             assert!(!layout.contains("\"Panel") && !layout.contains("\"panels\""));
-            let tabs = get::<Value>("tabs.ws1", cx).unwrap();
-            assert_eq!(tabs["selected"]["chats"]["Council"]["round"], "01");
+            assert_eq!(get::<Value>("dock.layout", cx).unwrap(), old["dock.layout"]);
+            assert_eq!(get::<Value>("tabs.ws1", cx).unwrap(), old["tabs.ws1"]);
+            assign_archived_tabs(Some("ws1".into()), cx);
+            assert!(
+                archived_tabs(cx)
+                    .iter()
+                    .all(|tab| tab.workspace.as_deref() == Some("ws1"))
+            );
+            forget_archived_tabs("ws1", cx);
+            init(dir.path(), cx);
+            assert!(archived_tabs(cx).is_empty());
         });
         let saved: Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("ui.json")).unwrap()).unwrap();

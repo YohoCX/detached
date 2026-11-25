@@ -491,7 +491,7 @@ fn the_bar_shows_the_cached_plan_and_live_limits_after_send(cx: &mut TestAppCont
     cx.press("escape");
 
     // Narrower, Week leaves the bar before Model does and shows in More with its track.
-    cx.simulate_resize(size(px(1270.), px(900.)));
+    cx.simulate_resize(size(px(1306.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.limit.Week").is_none());
     assert!(cx.find("chat.model").is_some());
     cx.click("chat.more");
@@ -592,9 +592,9 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
     wait_for_item(cx, "said hello");
     idle(cx);
     for (width, week, model) in [
-        (1400., true, true),
-        (1270., false, true),
-        (1180., false, false),
+        (1436., true, true),
+        (1306., false, true),
+        (1216., false, false),
     ] {
         cx.simulate_resize(size(px(width), px(900.)));
         wait_until(cx, |cx| {
@@ -672,8 +672,8 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     assert_eq!(composer.size.width, CONVERSATION);
     assert_eq!(new_input.size.width, CONVERSATION);
     assert_eq!(composer.bottom(), new_input.bottom());
-    let last = items(cx).len() - 1;
-    let last = cx.find(("chat.item", last)).unwrap().bounds();
+    let last_ix = items(cx).len() - 1;
+    let last = cx.find(("chat.item", last_ix)).unwrap().bounds();
     assert!(last.bottom() <= composer.top() && composer.top() - last.bottom() < px(96.));
     assert!(pane.bottom() - composer.bottom() < px(20.));
     let outgoing = cx.find(("chat.item", 0usize)).unwrap().bounds();
@@ -686,6 +686,10 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
         cx.find("chat").unwrap().bounds().size.width < px(380.)
     });
     let composer = cx.find("chat.composer").unwrap().bounds();
+    wait_until(cx, |cx| {
+        let last = cx.find(("chat.item", last_ix)).unwrap().bounds();
+        last.bottom() <= composer.top()
+    });
     check_widths(cx);
     for id in ["chat.provider", "chat.mode", "chat.more", "chat.send"] {
         let button = cx.find(id).unwrap();

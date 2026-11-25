@@ -50,7 +50,6 @@ pub struct Workspace {
     session_problems: HashSet<PathBuf>,
     session: String,
     session_repos: Vec<RepoInfo>,
-    archive: bool,
     current: Option<String>,
     shown: Option<Doc>,
     /// How many live sessions hold each repo, and the entities of held repos not listed.
@@ -77,7 +76,6 @@ pub(crate) fn init(cx: &mut App) {
         session_problems: HashSet::new(),
         session: MAIN.into(),
         session_repos: vec![],
-        archive: false,
         current: None,
         shown: None,
         held: HashMap::new(),
@@ -168,14 +166,6 @@ impl Workspace {
     }
 
     pub fn session_repos(&self) -> &[RepoInfo] {
-        if self.archive {
-            &[]
-        } else {
-            self.session_checkouts()
-        }
-    }
-
-    pub fn session_checkouts(&self) -> &[RepoInfo] {
         &self.session_repos
     }
 
@@ -183,18 +173,6 @@ impl Workspace {
         self.current()
             .filter(|p| self.session_repos().iter().any(|r| r.path == *p))
             .or_else(|| self.session_repos().first().map(|r| r.path.as_str()))
-    }
-
-    pub fn archive(&self) -> bool {
-        self.archive
-    }
-
-    pub fn set_archive(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.archive != open {
-            self.archive = open;
-            cx.emit(Event::SessionChanged);
-            cx.notify();
-        }
     }
 
     pub fn switch_session(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -207,23 +185,20 @@ impl Workspace {
                 ui_state::set(&key, id, cx);
             }
         }
-        if self.session == id && !self.archive {
+        if self.session == id {
             return;
         }
-        self.archive = false;
-        if self.session != id {
-            self.session = id.into();
-            self.restore_repo(cx);
-            self.apply_repos(cx);
-            for repo in &self.session_repos {
-                if Some(repo.path.as_str()) == self.current()
-                    || self
-                        .repo(&repo.path)
-                        .is_some_and(|r| r.read(cx).status.is_none())
-                {
-                    let path = repo.path.clone();
-                    cx.defer(move |cx| crate::invalidate::status(cx, &path).detach());
-                }
+        self.session = id.into();
+        self.restore_repo(cx);
+        self.apply_repos(cx);
+        for repo in &self.session_repos {
+            if Some(repo.path.as_str()) == self.current()
+                || self
+                    .repo(&repo.path)
+                    .is_some_and(|r| r.read(cx).status.is_none())
+            {
+                let path = repo.path.clone();
+                cx.defer(move |cx| crate::invalidate::status(cx, &path).detach());
             }
         }
         cx.emit(Event::SessionChanged);
@@ -355,7 +330,7 @@ impl Workspace {
             self.reveal = Some((workspace, session, doc));
             return;
         }
-        if self.session == session && !self.archive {
+        if self.session == session {
             self.show(doc, cx);
             return;
         }
@@ -363,7 +338,7 @@ impl Workspace {
         // Restore the layout before showing its tab. A later switch supersedes the request.
         cx.defer(move |cx| {
             Self::global(cx).update(cx, |w, cx| {
-                if w.wanted().as_deref() == Some(&workspace) && w.session == session && !w.archive {
+                if w.wanted().as_deref() == Some(&workspace) && w.session == session {
                     w.show(doc, cx);
                 }
             })
@@ -399,7 +374,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let status = status.await;
             this.update(cx, |w, cx| {
-                let head = |s: Option<&RepoStatus>| s.map(|s| (s.head.clone(), s.branch.clone()));
+                let head = |s: Option<&RepoStatus>| {
+                    s.map(|s| (s.head.clone(), s.branch.clone(), s.upstream.clone()))
+                };
                 let new = head(status.as_ref().ok());
                 let moved = w.repo(&repo).cloned().is_some_and(|r| {
                     r.update(cx, |r, cx| {
@@ -444,7 +421,6 @@ impl Workspace {
         self.aliases.extend(list.aliases);
         let switched = self.id != id;
         if switched {
-            self.archive = false;
             self.id = id;
             if let Some(id) = &self.id {
                 ui_state::set(CURRENT, id, cx);
@@ -692,13 +668,6 @@ mod tests {
             assert_eq!(w.repo(&alias), w.repo(member));
             assert!(status(cx, member));
             let workspace = Workspace::global(cx);
-            workspace.update(cx, |w, cx| w.set_archive(true, cx));
-            let w = Workspace::get(cx);
-            assert!(w.session_repos().is_empty());
-            assert_eq!(
-                ui_state::get::<String>(&format!("session.current.{ws}"), cx).unwrap(),
-                set.id
-            );
             workspace.update(cx, |w, cx| w.switch_session(MAIN, cx));
             assert_eq!(Workspace::get(cx).session_repos().len(), 2);
             assert_eq!(Workspace::get(cx).current(), Some(a.to_str().unwrap()));

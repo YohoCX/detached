@@ -28,7 +28,7 @@ pub const CONTEXT: &str = "Detached";
 /// Around the viewer's read-only editor, where the app's chords beat the editor's own.
 pub const VIEWER: &str = "Viewer";
 
-/// Append-only, in the order bindings are tried.
+/// Default chords in the order bindings are tried.
 pub const DEFAULTS: &[(&str, &str)] = &[
     ("search.everywhere", "Double Shift"),
     ("file.goto", "Cmd+Shift+O"),
@@ -40,17 +40,16 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("nav.forward", "Cmd+]"),
     ("panel.project", "Cmd+1"),
     ("session.new", "Cmd+N"),
-    ("vcs.update", "Cmd+T"),
     ("vcs.popup", "Ctrl+V"),
     ("diff.show", "Cmd+D"),
     ("diff.next", "F7"),
     ("diff.prev", "Shift+F7"),
     ("app.settings", "Cmd+,"),
     ("panel.log", "Cmd+9"),
-    ("panel.terminal", "Alt+F12"),
+    ("panel.terminal", "Cmd+T"),
     ("tabs.next", "Cmd+Shift+]"),
     ("tabs.prev", "Cmd+Shift+["),
-    ("panel.sessions", "Cmd+B"),
+    ("panel.sessions", "Cmd+2"),
     ("panel.changes", "Cmd+0"),
     ("session.switch", "Cmd+K"),
     ("session.next", "Cmd+Alt+]"),
@@ -76,7 +75,6 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("pane.focusDown", "Cmd+Alt+Down"),
     ("pane.resizeDown", "Ctrl+Cmd+Down"),
     ("tab.moveDown", "Cmd+Alt+Shift+Down"),
-    ("panel.chats", "Cmd+2"),
 ];
 
 /// Chords kept free for actions that do not exist yet.
@@ -543,10 +541,15 @@ mod tests {
         let md = include_str!("../../../docs/KEYMAP.md");
         for a in actions::ACTIONS {
             let id = format!("`{}`", a.id);
-            let row = md.lines().find(|l| l.starts_with("| `") && l.contains(&id));
+            let row = md
+                .lines()
+                .find(|l| l.split('|').nth(1).is_some_and(|ids| ids.contains(&id)));
             let row = row.unwrap_or_else(|| panic!("{} is not in docs/KEYMAP.md", a.id));
+            let keys = row.split('|').nth(3).unwrap().trim();
             if let Some((_, chord)) = DEFAULTS.iter().find(|(i, _)| *i == a.id) {
-                assert!(row.contains(chord), "{}: {chord}", a.id);
+                assert!(keys.contains(chord), "{}: {chord}", a.id);
+            } else {
+                assert!(matches!(keys, "" | "—"), "{}: {keys}", a.id);
             }
         }
     }

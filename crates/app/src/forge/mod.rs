@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use detached_core::state::AppState;
 use detached_core::types::PipelineStatus;
-use gpui_kit::base::dock::DockPlacement;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Div, Hsla, InteractiveElement, IntoElement,
@@ -45,7 +44,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "tool.MRs",
         title: "Merge Requests",
         action: Some("panel.mergeRequests"),
-        home: (DockPlacement::Right, 300.),
         view: |w, cx| cx.new(|cx| MrList::new(w, cx)).into(),
         shown: None,
     };
@@ -54,7 +52,6 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         id: "bottom.Pipelines",
         title: "Pipelines",
         action: Some("panel.pipelines"),
-        home: (DockPlacement::Bottom, 280.),
         view: |w, cx| cx.new(|cx| Pipelines::new(None, None, false, w, cx)).into(),
         shown: None,
     };

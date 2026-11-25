@@ -114,14 +114,9 @@ fn line(i: usize) -> (&'static str, usize) {
     ("line", i)
 }
 
-fn archive(cx: &mut VisualTestContext) {
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    settle(cx);
-}
-
 fn pane_item(cx: &mut VisualTestContext, name: &str) {
     cx.click("pane.new");
-    let item = (0usize..16)
+    let item = (0usize..20)
         .map(|n| ("menu.item", n))
         .find(|&id| label(cx, id).as_deref() == Some(name))
         .expect("tool in New tab");
@@ -317,24 +312,25 @@ fn pipeline_run_opens_the_panel_with_the_form(cx: &mut TestAppContext) {
 fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     let (mut app, forge, mut seed) = open_forge(cx);
     let cx = &mut app;
-    archive(cx);
     seed.projects[0].pipelines[0].status = Status::Running;
     forge.reset(seed.clone());
     show(cx, "gitlab");
     open_tab(cx, "bottom.Pipelines");
     let shows = |cx: &mut VisualTestContext, glyph: &str| {
         let is = |l: Option<String>| l.is_some_and(|l| l.starts_with(glyph));
-        is(label(cx, ("pipeline", 100u64))) && is(label(cx, "pipeline.badge"))
+        is(label(cx, ("pipeline", 100u64)))
     };
     wait_until(cx, |cx| shows(cx, "●"));
     let count = || requested(&forge, "/gitlab/api/v4/projects/group/app/pipelines");
-    // The panel and the badge each ask once, 5 s on; the slack is for the requests themselves.
+    assert_eq!(count(), 1);
+    assert!(cx.find("pipeline.badge").is_none());
+    // The slack is for the request itself.
     let tick = |cx: &mut VisualTestContext| {
         let (n, start) = (count(), cx.executor().now());
         cx.executor().advance_clock(Duration::from_secs(5));
-        wait_until(cx, |_| count() >= n + 2);
+        wait_until(cx, |_| count() > n);
         assert!(cx.executor().now() - start < Duration::from_secs(7));
-        assert_eq!(count(), n + 2);
+        assert_eq!(count(), n + 1);
     };
     // A tick that asks nothing: a Refresh after it is the only request, as the tick's would go first.
     let quiet = |cx: &mut VisualTestContext| {
@@ -353,10 +349,13 @@ fn a_running_pipeline_polls_every_5_s_while_shown(cx: &mut TestAppContext) {
     window(cx, WindowVisibility::Visible);
     tick(cx);
 
-    seed.projects[0].pipelines[0].status = Status::Success;
+    seed.projects[0].pipelines[0].status = Status::Failed;
     forge.reset(seed);
     cx.executor().advance_clock(Duration::from_secs(5));
-    wait_until(cx, |cx| shows(cx, "✓"));
+    wait_until(cx, |cx| {
+        shows(cx, "✕") && label(cx, "pipeline.badge").as_deref() == Some("✕failed")
+    });
+    assert_eq!(count(), 1);
     quiet(cx);
 }
 
@@ -527,18 +526,6 @@ fn the_gitlab_list_row_opens_the_mr(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_chip_opens_the_current_branchs_mr(cx: &mut TestAppContext) {
-    let (mut app, _forge, _) = open_forge(cx);
-    let cx = &mut app;
-    archive(cx);
-    show(cx, "github");
-    wait_until(cx, |cx| label(cx, "mr.chip").is_some());
-    assert_eq!(label(cx, "mr.chip").as_deref(), Some("#1 Add feature"));
-    cx.click("mr.chip");
-    assert_eq!(shown_mr(cx), Some(1));
-}
-
-#[gpui_kit::test]
 fn creates_an_mr_from_the_current_branch(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
@@ -637,17 +624,13 @@ fn an_ambiguous_host_says_so_and_settings_picks_the_account(cx: &mut TestAppCont
 fn the_mr_list_is_one_request_and_a_repo_returned_to_shows_its_cache(cx: &mut TestAppContext) {
     let (mut app, forge, _) = open_forge(cx);
     let cx = &mut app;
-    archive(cx);
     show(cx, "gitlab");
-    wait_until(cx, |cx| label(cx, "mr.chip").is_some());
     let before = forge.requests().len();
     open_tab(cx, "tool.MRs");
     let row = ("mr", 1u64);
     wait_until(cx, |cx| label(cx, row).is_some());
     let lists = forge.requests().split_off(before).into_iter();
-    let lists: Vec<_> = lists
-        .filter(|r| r.path.contains("merge_requests") || r.path.contains("graphql"))
-        .collect();
+    let lists: Vec<_> = lists.filter(|r| r.path == "/gitlab/api/graphql").collect();
     let graphql = Request {
         method: "POST".into(),
         path: "/gitlab/api/graphql".into(),
@@ -680,7 +663,7 @@ fn mr_create_without_an_upstream_says_so(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn panel_merge_requests_toggles_the_list(cx: &mut TestAppContext) {
+fn panel_merge_requests_opens_and_reselects_its_tab(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, |sb| drop(repo(sb, "solo")));
     let cx = &mut app;
     let run = |cx: &mut VisualTestContext| {
@@ -690,7 +673,7 @@ fn panel_merge_requests_toggles_the_list(cx: &mut TestAppContext) {
     };
     assert!(run(cx));
     assert!(cx.find("mrs.refresh").is_some());
-    assert!(!run(cx));
+    assert!(run(cx));
 }
 
 #[gpui_kit::test]
@@ -1006,7 +989,15 @@ fn the_pipelines_tab_lists_the_mr_heads_pipelines(cx: &mut TestAppContext) {
         "main's pipeline is not the MR's"
     );
     assert!(cx.find("pipelines.run").is_none() && cx.find("pipelines.scope").is_none());
-    assert!(requested(&forge, &format!("{GL_MR}/pipelines")) > 0);
+    let requests = || requested(&forge, &format!("{GL_MR}/pipelines"));
+    assert_eq!(requests(), 1);
+    cx.click(("pipeline", 100u64));
+    wait_until(cx, |cx| cx.find(("job", 101u64)).is_some());
+    open_tab(cx, "bottom.Pipelines");
+    click_in(cx, "pipelines.scope", 1usize);
+    cx.click("doc.mr.1");
+    assert!(cx.find(("job", 101u64)).is_some());
+    assert_eq!(requests(), 1);
     click_in(cx, "mr.tabs", 0usize);
     assert!(cx.find(("pipeline", 100u64)).is_none());
     assert!(cx.find("mr.description").is_some());

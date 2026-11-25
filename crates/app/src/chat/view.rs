@@ -139,10 +139,6 @@ impl ChatView {
                 } else {
                     this.refresh_slash(cx);
                 }
-                let scroll = &this.scroll;
-                if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
-                    scroll.scroll_to_bottom();
-                }
                 cx.notify();
             }),
             cx.observe(&Messages::global(cx), |_, _, cx| cx.notify()),
@@ -2276,6 +2272,11 @@ fn tokens(n: u64) -> String {
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
+        // Pinned to the bottom stays pinned when new output or a narrower pane makes it taller.
+        let scroll = &self.scroll;
+        if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
+            scroll.scroll_to_bottom();
+        }
         self.follow(window, cx);
         self.lay_out(cx);
         let items = self.feed(cx);

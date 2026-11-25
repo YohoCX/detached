@@ -315,16 +315,6 @@ fn set_aside_findings_are_folded_and_show_their_verdict(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-fn council_action_toggles_its_zone(cx: &mut TestAppContext) {
-    let mut app = open_app_with(cx, |sb| drop(repo(sb, "reviewed")));
-    for shown in [true, false] {
-        assert!(app.update(|w, cx| detached_app::actions::run(w, cx, "panel.council")));
-        settle(&app);
-        assert_eq!(on_screen(&mut app, "tab.council"), shown);
-    }
-}
-
-#[gpui_kit::test]
 fn failed_refresh_is_shown_beside_cached_rounds_and_findings(cx: &mut TestAppContext) {
     let mut app = open_app_with(cx, |sb| {
         let repo = repo(sb, "reviewed");

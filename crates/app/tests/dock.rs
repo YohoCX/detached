@@ -6,7 +6,6 @@ use detached_app::dock::{self, AppSpec, DocKind};
 use detached_app::files::{self, DiffDoc, Side};
 use detached_app::shell;
 use detached_app::terminal::Terminals;
-use detached_app::ui::theme;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
@@ -20,7 +19,7 @@ use detached_core::api;
 use gpui_kit::SharedString;
 use gpui_kit::base::dock::{DockPlacement, PaneRef};
 use kernel::doc::{Doc, Location};
-use kernel::{ui_state, workspace::Workspace};
+use kernel::workspace::Workspace;
 
 /// A plain shell, so no rc file slows the test or changes the prompt.
 fn plain_shell() {
@@ -65,22 +64,6 @@ fn app<R>(cx: &mut VisualTestContext, f: impl FnOnce(&mut gpui_kit::App) -> R) -
     cx.cx.update(f)
 }
 
-/// A window and side zones wide enough for every tab, none in a `more` menu.
-fn widen(cx: &mut VisualTestContext, w: AnyWindowHandle) {
-    cx.cx
-        .simulate_window_resize(w, gpui_kit::size(px(2000.), px(900.)));
-    cx.update_window(w, |_, window, cx| {
-        let area = dock::zones(cx).unwrap();
-        area.update(cx, |a, cx| {
-            for p in [DockPlacement::Left, DockPlacement::Right] {
-                a.set_dock_size(p, px(450.), window, cx);
-            }
-        });
-    })
-    .unwrap();
-    settle(cx);
-}
-
 fn in_window<R>(
     cx: &mut VisualTestContext,
     w: AnyWindowHandle,
@@ -94,7 +77,7 @@ fn in_window<R>(
 }
 
 fn pick_menu_item(cx: &mut VisualTestContext, label: &str) {
-    let (i, _) = (0usize..14)
+    let (i, _) = (0usize..20)
         .filter_map(|i| cx.find(("menu.item", i)).map(|item| (i, item)))
         .find(|(_, item)| item.label() == Some(label))
         .unwrap_or_else(|| panic!("the pane menu offers {label}"));
@@ -144,7 +127,7 @@ fn new_tab_tools_choose_a_checkout_by_keyboard_and_open_in_the_triggering_pane(
     let checkout = cx.sb.path("repos/checkout-10");
     run(cx, "pane.splitDown");
     let bottom = cx.update(|_, cx| {
-        let area = dock::zones(cx).unwrap();
+        let area = dock::current_area(cx).unwrap();
         let mut last = None;
         area.read(cx)
             .layout(DockPlacement::Center)
@@ -179,6 +162,9 @@ fn new_tab_tools_choose_a_checkout_by_keyboard_and_open_in_the_triggering_pane(
             "Merge requests",
             "Pipelines",
             "Compare changes",
+            "Project",
+            "Docs",
+            "Repositories",
             "Events",
             "Create merge request…",
         ]
@@ -210,12 +196,12 @@ fn new_tab_tools_choose_a_checkout_by_keyboard_and_open_in_the_triggering_pane(
         };
         assert_eq!(Path::new(&path), checkout);
         cx.update(|_, cx| {
-            let area = dock::zones(cx).unwrap();
+            let area = dock::current_area(cx).unwrap();
             let area = area.read(cx);
             let shown = Workspace::get(cx).shown().unwrap();
-            let (_, id, _) = dock::docs(area)
+            let (id, _) = dock::docs(area)
                 .into_iter()
-                .find(|(_, _, tab)| &tab.read(cx).doc == shown)
+                .find(|(_, tab)| &tab.read(cx).doc == shown)
                 .unwrap();
             let node = area
                 .layout(DockPlacement::Center)
@@ -224,6 +210,64 @@ fn new_tab_tools_choose_a_checkout_by_keyboard_and_open_in_the_triggering_pane(
                 .unwrap();
             assert_eq!(node.as_u64() as usize, bottom);
         });
+    }
+}
+
+#[gpui_kit::test]
+fn former_zone_apps_open_as_center_tabs_from_new_tab_and_the_palette(cx: &mut TestAppContext) {
+    plain_shell();
+    let app = &mut open_app_with(cx, |sb| drop(repo(sb, "only")));
+    app.simulate_resize(gpui_kit::size(px(2200.), px(900.)));
+    let tools = [
+        ("Chats", "Chats", "tab.chats", "tool"),
+        ("Council", "Council", "tab.council", "tool"),
+        ("Compare changes", "Compare Changes", "tool.Changes", "tool"),
+        ("Project", "Project", "tool.Project", "tool"),
+        ("Merge requests", "Merge Requests", "tool.MRs", "tool"),
+        ("Pipelines", "Pipelines", "bottom.Pipelines", "tool"),
+        ("Log", "Git Log", "bottom.Log", "log"),
+        ("Events", "Events", "bottom.Events", "tool"),
+        ("Terminal", "Terminal", "", "terminal"),
+        ("Processes", "Processes", "bottom.Processes", "process"),
+        ("Docs", "Docs", "tab.docs", "tool"),
+        ("Repositories", "Repositories", "tab.repos", "tool"),
+    ];
+    let assert_center = |app: &mut VisualTestContext, label, id: &str, kind| {
+        let shown = app.workspace(|w, _| w.shown().cloned()).unwrap();
+        assert_eq!(shown.kind(), kind, "{label}");
+        app.update(|w, cx| {
+            w.render_frame(cx);
+            let area = dock::current_area(cx).unwrap();
+            let (panel, tab) = dock::docs(area.read(cx))
+                .into_iter()
+                .find(|(_, tab)| tab.read(cx).doc == shown)
+                .unwrap();
+            assert!(
+                area.read(cx)
+                    .layout(DockPlacement::Center)
+                    .unwrap()
+                    .find_panel_node(panel)
+                    .is_some()
+            );
+            if !id.is_empty() && matches!(shown, Doc::Tool { .. }) {
+                assert_eq!(tab.read(cx).id().as_ref(), id, "{label}");
+            }
+        });
+    };
+    for (label, _, id, kind) in tools {
+        app.click("pane.new");
+        pick_menu_item(app, label);
+        assert_center(app, label, id, kind);
+    }
+    for (_, title, id, kind) in tools {
+        run(app, "action.find");
+        app.input(title);
+        let row = (0usize..10)
+            .map(|i| ("palette.row", i))
+            .find(|&row| app.find(row).is_some_and(|e| e.label() == Some(title)))
+            .unwrap_or_else(|| panic!("missing palette action {title}"));
+        app.click(row);
+        assert_center(app, title, id, kind);
     }
 }
 
@@ -246,121 +290,6 @@ fn new_tab_opens_directly_for_a_single_checkout(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui_kit::test]
-fn a_saved_app_this_build_lacks_shows_a_placeholder_and_is_saved_back(cx: &mut TestAppContext) {
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
-    let gone = saved
-        .unwrap()
-        .to_string()
-        .replace("\"changes\"", "\"plugin.gone\"");
-    let gone: serde_json::Value = serde_json::from_str(&gone).unwrap();
-    cx.update(|_, cx| ui_state::set("dock.layout", gone, cx));
-
-    let again = reopen(cx);
-    let text = in_window(cx, again, |w, _| {
-        w.find("dock.missing").label().map(String::from)
-    });
-    assert!(text.unwrap().contains("plugin.gone"));
-    // Any change saves the layout again.
-    in_window(cx, again, |w, cx| w.click("bottom.Log", cx));
-    settle(cx);
-    let saved = app(cx, |cx| {
-        ui_state::get::<serde_json::Value>("dock.layout", cx)
-    });
-    assert!(saved.unwrap().to_string().contains("\"plugin.gone\""));
-}
-
-#[gpui_kit::test]
-fn a_layout_saved_by_0_5_0_loads_with_every_app_in_its_place(cx: &mut TestAppContext) {
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    let old: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/dock-0.5.0.json")).unwrap();
-    cx.update(|_, cx| ui_state::set("dock.layout", old.clone(), cx));
-
-    let again = reopen(cx);
-    let (saved, id) = app(cx, |cx| {
-        let id = kernel::workspace::Workspace::get(cx).id().map(String::from);
-        (ui_state::get::<serde_json::Value>("dock.layout", cx), id)
-    });
-    let joined = format!(",\"workspace\":\"{}\"", id.unwrap());
-    let text = saved.unwrap().to_string();
-    assert_eq!(
-        text.matches(&joined).count(),
-        2,
-        "both tabs join the workspace"
-    );
-    let mut saved: serde_json::Value = serde_json::from_str(&text.replace(&joined, "")).unwrap();
-    let left = saved["left_dock"]["panel"]["children"]
-        .as_array_mut()
-        .unwrap();
-    let added = left.split_off(left.len() - 2);
-    let tab =
-        |name| serde_json::json!({"panel_name": name, "children": [], "info": {"panel": null}});
-    assert_eq!(added, [tab("council"), tab("docs")]);
-    let bottom = saved["bottom_dock"]["panel"]["children"]
-        .as_array_mut()
-        .unwrap();
-    assert_eq!(bottom.pop(), Some(tab("processes")));
-    assert_eq!(
-        saved, old,
-        "existing layout preserved, Council, Docs and Processes appended"
-    );
-    widen(cx, again);
-    let apps = app(cx, |cx| dock::apps(cx));
-    in_window(cx, again, |w, _| {
-        assert!(w.try_find("dock.missing").is_none());
-        for a in apps {
-            assert!(w.try_find(a.id).is_some(), "{}", a.id);
-        }
-        assert!(w.find("bottom.Terminal").bounds().origin.x > px(1000.));
-        assert_eq!(w.find("tool.Project").checked(), Some(true));
-        assert!(
-            w.try_find("chat.send").is_none(),
-            "archived tabs are read only"
-        );
-    });
-}
-
-#[gpui_kit::test]
-fn a_layout_saved_by_0_6_0_keeps_its_panels_tabs_as_council_s(cx: &mut TestAppContext) {
-    let cx = &mut open_app_with(cx, layout);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    let stats = Doc::CouncilStats {
-        repo: cx.sb.repo("app").display().to_string(),
-    };
-    show(cx, stats.clone());
-    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
-    let old = saved
-        .unwrap()
-        .to_string()
-        .replace("\"CouncilStats\"", "\"PanelStats\"")
-        .replace("\"panel_name\":\"council\"", "\"panel_name\":\"panels\"");
-    assert!(old.contains("\"PanelStats\"") && old.contains("\"panels\""));
-    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
-    let dir = cx.sb.state.config_dir.clone();
-    cx.update(|_, cx| {
-        ui_state::set("dock.layout", old, cx);
-        ui_state::init(&dir, cx);
-    });
-
-    let again = reopen(cx);
-    widen(cx, again);
-    in_window(cx, again, |w, _| {
-        assert!(w.try_find("dock.missing").is_none(), "no placeholder");
-        assert!(w.try_find("tab.council").is_some());
-    });
-    let kept = app(cx, |cx| {
-        let area = dock::zones(cx).unwrap();
-        dock::docs(area.read(cx))
-            .iter()
-            .any(|(_, _, t)| t.read(cx).doc == stats)
-    });
-    assert!(kept, "the stats tab loads");
-}
-
 struct Stub;
 
 impl Render for Stub {
@@ -377,7 +306,6 @@ fn an_app_registered_by_a_test_alone_can_open_its_tab(cx: &mut TestAppContext) {
         id: "tab.stub",
         title: "Stub",
         action: None,
-        home: (DockPlacement::Bottom, 280.),
         view: |_, cx| cx.new(|_| Stub).into(),
         shown: None,
     };
@@ -643,10 +571,10 @@ fn each_pane_has_its_own_preview_tab(cx: &mut TestAppContext) {
     assert!(cx.find("doc.file.CHANGELOG.md").is_some());
     assert!(cx.find("doc.file.README.md").is_none());
     let copies = cx.update(|_, cx| {
-        let a = dock::zones(cx).unwrap();
+        let a = dock::current_area(cx).unwrap();
         dock::docs(a.read(cx))
             .iter()
-            .filter(|(_, _, t)| t.read(cx).doc == file(&app, "src/index.ts"))
+            .filter(|(_, t)| t.read(cx).doc == file(&app, "src/index.ts"))
             .count()
     });
     assert_eq!(copies, 2);
@@ -672,38 +600,26 @@ fn tab_steps_target_the_focused_pane(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn only_the_focused_panes_active_tab_is_outlined(cx: &mut TestAppContext) {
+fn the_active_tab_is_a_quiet_fill_without_an_outline(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
-    let overview = "doc.session-overview";
-    let new_tab = "doc.new-tab";
-    let check_outline = |cx: &mut VisualTestContext, focused| {
-        cx.update(|w, cx| {
-            w.render_frame(cx);
-            let quads = w.painted_quads();
-            for id in [overview, new_tab] {
-                let tab = w.find(id);
-                assert_eq!(tab.checked(), Some(true), "{id} stays selected");
-                let bounds = tab.bounds().scale(w.scale_factor());
-                let outline = quads.iter().find(|q| {
-                    q.border_widths.top.as_f32() > 0.
-                        && q.border_widths.bottom.as_f32() > 0.
-                        && (q.bounds.left() - bounds.left()).as_f32().abs() < 1.
-                        && (q.bounds.top() - bounds.top()).as_f32().abs() < 1.
-                        && (q.bounds.right() - bounds.right()).as_f32().abs() < 1.
-                        && (q.bounds.bottom() - bounds.bottom()).as_f32().abs() < 1.
-                });
-                assert_eq!(
-                    outline.map(|q| q.border_color),
-                    (id == focused).then_some(theme(cx).selected_ring),
-                    "outline of {id} with {focused} focused"
-                );
-            }
-        });
-    };
     run(cx, "pane.splitDown");
-    check_outline(cx, new_tab);
-    run(cx, "pane.prev");
-    check_outline(cx, overview);
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let quads = w.painted_quads();
+        for id in ["doc.session-overview", "doc.new-tab"] {
+            let tab = w.find(id);
+            assert_eq!(tab.checked(), Some(true), "{id} stays selected");
+            let bounds = tab.bounds().scale(w.scale_factor());
+            let outlined = quads.iter().any(|q| {
+                q.border_widths.top.as_f32() > 0.
+                    && (q.bounds.left() - bounds.left()).as_f32().abs() < 1.
+                    && (q.bounds.top() - bounds.top()).as_f32().abs() < 1.
+                    && (q.bounds.right() - bounds.right()).as_f32().abs() < 1.
+                    && (q.bounds.bottom() - bounds.bottom()).as_f32().abs() < 1.
+            });
+            assert!(!outlined, "{id} has no outline");
+        }
+    });
 }
 
 #[gpui_kit::test]
@@ -742,51 +658,17 @@ fn a_file_of_a_project_in_two_workspaces_gets_a_tab_in_each(cx: &mut TestAppCont
     assert!(cx.find("doc.file.README.md").is_some());
     let mine = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
-            let tabs = dock::zones(cx)
+            let tabs = dock::current_area(cx)
                 .map(|a| dock::docs(a.read(cx)))
                 .unwrap_or_default();
             tabs.iter()
-                .filter(|(_, _, t)| t.read(cx).doc == readme)
+                .filter(|(_, t)| t.read(cx).doc == readme)
                 .count()
         })
     };
     assert_eq!(mine(cx), 1, "only the current workspace's live layout");
     switch(cx, "Default");
     assert_eq!(mine(cx), 1, "the first workspace kept its own preview");
-}
-
-#[gpui_kit::test]
-fn a_saved_center_from_before_workspaces_joins_the_current_one_and_a_doc_that_no_longer_parses_goes(
-    cx: &mut TestAppContext,
-) {
-    let cx = &mut open_app_with(cx, layout);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    let (index, readme) = (
-        file(&cx.sb.repo("app"), "src/index.ts"),
-        diff(cx, "README.md"),
-    );
-    show(cx, index);
-    cx.update(|w, cx| w.double_click("doc.file.src/index.ts", cx));
-    show_diff(cx, &readme);
-    let saved = cx.update(|_, cx| ui_state::get::<serde_json::Value>("dock.layout", cx));
-    let text = saved.unwrap().to_string();
-    let id = cx.workspace(|w, _| w.id().unwrap().to_string());
-    let old = text.replace(&format!("\"workspace\":\"{id}\""), "\"workspace\":null");
-    let old = old.replace("\"Diff\":{", "\"Gone\":{\"x\":1},\"Was\":{");
-    assert!(!old.contains(&id) && old.contains("Gone"));
-    let old: serde_json::Value = serde_json::from_str(&old).unwrap();
-    cx.update(|_, cx| ui_state::set("dock.layout", old, cx));
-
-    let again = reopen(cx);
-    in_window(cx, again, |w, _| {
-        assert!(w.try_find("dock.missing").is_none(), "no placeholder");
-        assert!(
-            w.try_find("doc.file.src/index.ts").is_some(),
-            "an old tab joins the current workspace"
-        );
-        let n = w.find("chip.code").description().map(String::from);
-        assert_eq!(n.as_deref(), Some("1"), "the diff is dropped");
-    });
 }
 
 #[gpui_kit::test]
@@ -857,7 +739,7 @@ fn every_registered_kind_has_a_registered_category(cx: &mut TestAppContext) {
         },
     ];
     cx.update(|_, cx| {
-        let known: Vec<_> = dock::categories(cx).into_iter().map(|c| c.id).collect();
+        let known = ["docs", "chats", "code"];
         for kind in Doc::KINDS {
             assert!(docs.iter().any(|d| d.kind() == kind), "{kind} has a sample");
         }
@@ -969,7 +851,7 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     plain_shell();
     let cx = &mut open_app_with(cx, two_workspaces);
     switch(cx, "Other");
-    cx.press("alt-f12");
+    cx.press("secondary-t");
     wait_until(cx, |cx| {
         cx.update(|_, cx| !Terminals::global(cx).read(cx).docked.is_empty())
     });
@@ -1023,29 +905,10 @@ fn a_workspace_with_a_docked_terminal_is_not_deleted_and_otherwise_its_tabs_go(
     assert!(cx.update(|_, cx| dock::tabs_of(&other, cx).is_empty()));
     let again = reopen(cx);
     let n = in_window(cx, again, |_, cx| {
-        let tabs = dock::zones(cx)
+        let tabs = dock::current_area(cx)
             .map(|a| dock::docs(a.read(cx)))
             .unwrap_or_default();
         tabs.len()
     });
     assert_eq!(n, 1, "only the current workspace overview comes back");
-}
-
-#[gpui_kit::test]
-fn tabs_that_do_not_fit_wait_in_the_more_menu_and_one_picked_there_takes_the_strip(
-    cx: &mut TestAppContext,
-) {
-    let cx = &mut open_app(cx);
-    cx.workspace(|w, cx| w.set_archive(true, cx));
-    assert!(cx.find("tab.docs").is_none(), "not in a 280px strip");
-    cx.update(|w, cx| w.within("zone.left.pane").click("tabs.more", cx));
-    settle(cx);
-    let items = (0usize..).map_while(|i| cx.find(("menu.item", i)));
-    let labels: Vec<_> = items.map(|e| e.label().unwrap().to_string()).collect();
-    assert_eq!(labels.last().map(String::as_str), Some("Docs"), "in order");
-    cx.click(("menu.item", labels.len() - 1));
-    assert_eq!(cx.find("tab.docs").unwrap().checked(), Some(true));
-    assert!(cx.find("tab.repos").is_some(), "the first tabs stay");
-    cx.click("tab.repos");
-    assert!(cx.find("tab.docs").is_none(), "back to the menu");
 }

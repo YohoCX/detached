@@ -5,15 +5,15 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, AppContext, BoxShadow, Context, Entity, FontWeight, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled,
-    Subscription, Window, anchored, deferred, div, point, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription,
+    Window, anchored, deferred, div, point, prelude::FluentBuilder, px,
 };
 
 use super::core;
-use super::mr::{bare_title, number, show_mr};
+use super::mr::show_mr;
 use crate::actions::{self, Group, Registration};
-use crate::ui::{self, Icon, radius, text, theme};
+use crate::ui::{self, Icon, text, theme};
 use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::forge::{self, setup_problem};
@@ -32,8 +32,7 @@ struct Form {
     _changes: [Subscription; 2],
 }
 
-/// The current branch's MR, or a button that creates one. It also runs `mr.create`, being always
-/// mounted.
+/// The Create Merge Request form and its action.
 pub struct MrChip {
     repo: Option<String>,
     /// None without a branch with an upstream.
@@ -172,35 +171,6 @@ impl MrChip {
             .ok();
         })
         .detach();
-    }
-
-    fn chip(&self, m: &MergeRequest, cx: &App) -> AnyElement {
-        let t = theme(cx);
-        let (repo, n, tip) = (
-            self.repo.clone().unwrap_or_default(),
-            m.number,
-            m.title.clone(),
-        );
-        let glow = BoxShadow::new(px(0.), px(0.), t.selected).blur_radius(px(12.));
-        ui::pressable("mr.chip")
-            .test_support()
-            .role(Role::Button)
-            .aria_label(format!("{} {}", number(m), bare_title(m)))
-            .gap(px(6.))
-            .h(px(28.))
-            .max_w(px(260.))
-            .px(px(10.))
-            .border_1()
-            .border_color(t.selected_ring)
-            .rounded(radius::PILL)
-            .bg(t.selected)
-            .hover(|s| s.shadow(vec![glow]))
-            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(move |_, w, cx| show_mr(cx, w, repo.clone(), n))
-            .child(Icon::Mr.size(px(14.)))
-            .child(div().font_weight(FontWeight::BOLD).child(number(m)))
-            .child(div().min_w_0().truncate().child(bare_title(m).to_string()))
-            .into_any_element()
     }
 
     fn popup(&self, f: &Form, window: &Window, cx: &mut Context<Self>) -> [AnyElement; 2] {
@@ -363,37 +333,21 @@ impl Form {
 
 impl Render for MrChip {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !Workspace::get(cx).archive() && self.form.is_none() {
-            return div().hidden().into_any_element();
-        }
-        if let Some(error) = self.mr.as_ref().and_then(|r| r.read(cx).error.clone())
-            && self.form.is_none()
-        {
-            return crate::ui::page::labeled("mr.chip.error", "MR unavailable")
-                .text_color(theme(cx).error)
-                .tooltip(move |w, cx| Tooltip::new(error.clone()).build(w, cx))
-                .into_any_element();
-        }
-        let Some(mr) = self.mr(cx).or_else(|| self.form.as_ref().map(|_| None)) else {
+        let Some(form) = &self.form else {
             return div().hidden().into_any_element();
         };
-        let anchor = match &mr {
-            Some(m) => self.chip(m, cx),
-            None => ui::icon_button("mr.new", Icon::Mr.size(px(14.)), cx)
-                .test_support()
-                .role(Role::Button)
-                .aria_label("Create Merge Request")
-                .tooltip(|window, cx| Tooltip::new("Create Merge Request").build(window, cx))
-                .on_click(cx.listener(|this, _, window, cx| this.open_form(window, cx)))
-                .child(Icon::Plus.size(px(12.)))
-                .into_any_element(),
-        };
-        let popup = self.form.as_ref().map(|f| self.popup(f, window, cx));
         div()
             .relative()
             .min_w_0()
-            .child(anchor)
-            .children(popup.into_iter().flatten())
+            .child(
+                ui::icon_button("mr.new", Icon::Mr.size(px(14.)), cx)
+                    .test_support()
+                    .role(Role::Button)
+                    .aria_label("Create Merge Request")
+                    .tooltip(|window, cx| Tooltip::new("Create Merge Request").build(window, cx))
+                    .child(Icon::Plus.size(px(12.))),
+            )
+            .children(self.popup(form, window, cx))
             .into_any_element()
     }
 }

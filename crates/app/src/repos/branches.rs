@@ -82,7 +82,7 @@ impl Widget {
 
 impl Render for Widget {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.open.is_none() && !Workspace::get(cx).archive() {
+        if self.open.is_none() {
             return div().into_any_element();
         }
         let t = theme(cx);
@@ -304,7 +304,7 @@ impl Popup {
             menu_sel: 0,
             text,
             and_checkout: true,
-            focus_on_mount: !Workspace::get(cx).archive(),
+            focus_on_mount: true,
             busy: false,
             _subscriptions,
         };
