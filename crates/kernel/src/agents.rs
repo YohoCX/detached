@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use detached_core::adapters::{self, Catalog, Cli, Config, Entry, Installed, PROVIDERS, Provider};
 use detached_core::adapters::{BLOCK, LoginStatus, Version};
-use detached_core::backend::Name;
 use detached_core::error::{Error, Result};
 use detached_core::state::{AppState, Cancel};
 use detached_core::update::Progress;
@@ -63,15 +62,15 @@ impl Row {
 
     /// The catalog's entry of the version in use, whose `min_cli` and `blocked_cli` hold.
     pub fn entry<'a>(&self, catalog: Option<&'a Catalog>) -> Option<&'a Entry> {
-        catalog?.entry(self.provider.adapter, self.installed.current.as_ref()?)
+        catalog?.entry(self.provider.adapter()?, self.installed.current.as_ref()?)
     }
 
     /// What the CLI's version allows, once one is found.
     pub fn verdict(&self, catalog: Option<&Catalog>) -> Option<Cli> {
         let version = self.cli.as_ref()?.version.as_ref()?;
-        Some(match self.provider.backend {
-            Name::Direct => adapters::check_own_cli(self.provider, catalog, version),
-            Name::Acp => adapters::check_cli(self.provider, self.entry(catalog), version),
+        Some(match self.provider.has_adapter() {
+            false => adapters::check_own_cli(self.provider, catalog, version),
+            true => adapters::check_cli(self.provider, self.entry(catalog), version),
         })
     }
 }
@@ -138,7 +137,10 @@ fn scan(core: &AppState) -> Scan {
                     login,
                 }
             });
-            (adapters::installed(&core.data_dir, p.adapter), cli)
+            let installed = p.adapter().map_or_else(Installed::default, |a| {
+                adapters::installed(&core.data_dir, a)
+            });
+            (installed, cli)
         })
         .collect()
 }
@@ -158,11 +160,8 @@ impl Agents {
 
     /// The newest entry the provider's adapter can install by hand, cool-down or not.
     pub fn offer(&self, id: &str) -> Option<&Entry> {
-        let row = self.row(id).filter(|r| r.provider.backend == Name::Acp)?;
-        let newest = self
-            .catalog
-            .as_ref()?
-            .entries(row.provider.adapter, &self.app);
+        let adapter = self.row(id)?.provider.adapter()?;
+        let newest = self.catalog.as_ref()?.entries(adapter, &self.app);
         newest.into_iter().next()
     }
 
@@ -223,7 +222,11 @@ impl Agents {
             let catalog = fetched.as_ref().ok().cloned();
             let stored = catalog.or_else(|| adapters::stored(&core.data_dir));
             let config: Config = core.get_settings().block(BLOCK).unwrap_or_default();
-            let installed = PROVIDERS.map(|p| adapters::installed(&core.data_dir, p.adapter));
+            let installed = PROVIDERS.map(|p| {
+                p.adapter().map_or_else(Installed::default, |a| {
+                    adapters::installed(&core.data_dir, a)
+                })
+            });
             (fetched.err(), stored, config, installed)
         });
         cx.spawn(async move |this, cx| {
@@ -237,11 +240,12 @@ impl Agents {
                 }
                 let today = adapters::today();
                 let due: Vec<_> = (a.rows.iter())
-                    .filter(|r| r.provider.backend == Name::Acp && !r.busy())
+                    .filter(|r| !r.busy())
                     .filter(|r| config.shows(r.provider))
                     .filter_map(|r| {
+                        let adapter = r.provider.adapter()?;
                         let catalog = a.catalog.as_ref()?;
-                        let e = catalog.auto(r.provider.adapter, &a.app, &r.installed, today)?;
+                        let e = catalog.auto(adapter, &a.app, &r.installed, today)?;
                         Some((r.provider.id, e.clone()))
                     })
                     .collect();
@@ -328,13 +332,14 @@ impl Agents {
 
     /// Makes the kept version current again.
     pub fn rollback(&mut self, id: &'static str, cx: &mut Context<Self>) {
-        let row = self
+        let Some(name) = self
             .row(id)
-            .filter(|r| r.provider.backend == Name::Acp && !r.busy());
-        let Some(row) = row else {
+            .filter(|r| !r.busy())
+            .and_then(|r| r.provider.adapter())
+        else {
             return;
         };
-        let (data, name) = (crate::core(cx).data_dir.clone(), row.provider.adapter);
+        let data = crate::core(cx).data_dir.clone();
         let done = blocking::run(cx, move || adapters::rollback(&data, name));
         self.finish(id, done, cx);
     }
@@ -432,7 +437,8 @@ mod tests {
         set(true, cx);
         let agents = cx.read(Agents::global);
         agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
-        f.publish(1, &[f.entry(CODEX.adapter, "0.1.0")]);
+        let adapter = CODEX.adapter().unwrap();
+        f.publish(1, &[f.entry(adapter, "0.1.0")]);
         check(cx);
         assert_eq!(version(CODEX.id, cx), None);
         cx.read(|cx| assert!(Agents::global(cx).read(cx).error.is_none()));
@@ -444,9 +450,9 @@ mod tests {
             let a = Agents::global(cx).read(cx);
             a.row(CODEX.id).unwrap().installed.current.is_some()
         });
-        let mut fresh = f.entry(CODEX.adapter, "0.3.0");
+        let mut fresh = f.entry(adapter, "0.3.0");
         fresh.published = adapters::today();
-        f.publish(2, &[f.entry(CODEX.adapter, "0.2.0"), fresh]);
+        f.publish(2, &[f.entry(adapter, "0.2.0"), fresh]);
         check(cx);
         assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
         assert_eq!(version(CLAUDE.id, cx), None);
@@ -457,7 +463,7 @@ mod tests {
             assert_eq!(a.row(CODEX.id).unwrap().cli, None);
         });
         set(false, cx);
-        f.publish(3, &[f.entry(CODEX.adapter, "0.2.5")]);
+        f.publish(3, &[f.entry(adapter, "0.2.5")]);
         check(cx);
         assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
     }
@@ -483,9 +489,10 @@ mod tests {
         };
         assert_eq!(cx.read(stamp).as_deref(), Some("2.1.400:1.0.0"));
         let f = Fixture::new();
-        let exe = format!("{}{}", CODEX.adapter, std::env::consts::EXE_SUFFIX);
+        let adapter_name = CODEX.adapter().unwrap();
+        let exe = format!("{adapter_name}{}", std::env::consts::EXE_SUFFIX);
         let adapter = Member::file(&exe, &std::fs::read(fake).unwrap());
-        f.publish(1, &[f.entry_with(CODEX.adapter, "1.0.1", &[adapter])]);
+        f.publish(1, &[f.entry_with(adapter_name, "1.0.1", &[adapter])]);
         let agents = cx.read(Agents::global);
         agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
         check(cx);

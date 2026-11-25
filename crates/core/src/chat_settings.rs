@@ -55,7 +55,17 @@ pub struct Choices {
 
 impl Preset {
     pub fn read(settings: &Settings) -> Self {
-        settings.block(BLOCK).unwrap_or_default()
+        let mut preset: Self = settings.block(BLOCK).unwrap_or_default();
+        for choices in preset.providers.values_mut() {
+            if let Some(mode) = choices
+                .mode
+                .as_deref()
+                .and_then(crate::backend::Mode::parse)
+            {
+                choices.mode = Some(mode.as_str().into());
+            }
+        }
+        preset
     }
 
     pub fn choices(&mut self, provider: &str) -> &mut Choices {
@@ -183,7 +193,7 @@ mod tests {
         assert_eq!(preset.providers["claude"].model.as_deref(), Some("sonnet"));
         assert_eq!(preset.providers["claude"].effort.as_deref(), Some("high"));
         assert_eq!(preset.providers["claude"].mode, None);
-        assert_eq!(preset.providers["codex"].mode.as_deref(), Some("agent"));
+        assert_eq!(preset.providers["codex"].mode.as_deref(), Some("auto"));
         let claude = &preset.providers["claude"];
         assert!(claude.efforts.is_empty() && claude.commands.is_none());
         assert!(claude.cli.is_none() && claude.account.is_none());

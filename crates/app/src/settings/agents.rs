@@ -2,7 +2,6 @@
 //! ACP provider's adapter, installed from the catalog, updated and rolled back.
 
 use detached_core::adapters::{self, Cli, Config, LoginStatus, PROVIDERS};
-use detached_core::backend::Name;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
@@ -37,7 +36,7 @@ pub fn page(window: &mut Window, cx: &mut App) -> AnyView {
 
 struct Page {
     /// By `PROVIDERS`' order.
-    paths: [Entity<InputState>; 2],
+    paths: [Entity<InputState>; PROVIDERS.len()],
     loaded: bool,
     _watch: [Subscription; 2],
 }
@@ -50,7 +49,7 @@ fn act(
 
 /// The adapter's version and the kept one, or what its install is doing.
 fn adapter(r: &Row) -> String {
-    let name = r.provider.adapter;
+    let name = r.provider.adapter().unwrap_or_default();
     match (&r.state, &r.installed.current) {
         (State::Failed(e), _) => e.clone(),
         (State::Downloading { received, total }, _) => match total {
@@ -94,7 +93,8 @@ impl Page {
                         }),
                 )
                 .children(offer.filter(|_| !r.busy()).map(|e| {
-                    let text = format!("{} {} is available.", p.adapter, e.version);
+                    let name = p.adapter().unwrap_or_default();
+                    let text = format!("{name} {} is available.", e.version);
                     labeled(el("offer"), text)
                         .text_size(text::SMALL)
                         .text_color(t.success)
@@ -152,7 +152,7 @@ impl Page {
                     (s.clone(), s)
                 }
                 Some(Cli::Blocked) => {
-                    let of = if p.backend == Name::Acp {
+                    let of = if p.has_adapter() {
                         " for this adapter"
                     } else {
                         ""
@@ -257,7 +257,7 @@ impl Page {
                 Agents::global(cx).update(cx, |a, cx| a.set_cli(id, path, cx));
             }));
         let mut rows = vec![];
-        if p.backend == Name::Acp {
+        if p.has_adapter() {
             rows.push(adapter_row);
         }
         rows.extend([cli_row, path_row]);

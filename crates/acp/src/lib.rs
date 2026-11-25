@@ -15,10 +15,10 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::*;
 use agent_client_protocol::{Agent, Client, Lines, on_receive_notification, on_receive_request};
-use detached_core::adapters::{self, BLOCK, CODEX, Cli};
+use detached_core::adapters::{self, ANTIGRAVITY, BLOCK, CODEX, Cli, Launch, Provider, RepoTrust};
 use detached_core::backend::{
-    self, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Model, Opened, Past, Reply,
-    Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
+    self, Account, Answer, Ask, Backend, Config, Events, Exit, Failure, Kind, Mode, Model, Opened,
+    Past, Reply, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
 use detached_core::chat_index;
 use detached_core::error::{Error, Result};
@@ -41,13 +41,13 @@ pub fn backend() -> &'static dyn Backend {
     &*ACP
 }
 
-/// An adapter's executable and env.
-type Key = (PathBuf, Vec<(String, OsString)>);
+/// An adapter's executable, arguments and env.
+type Key = (PathBuf, Vec<OsString>, Vec<(String, OsString)>);
 
 #[derive(Default)]
 struct Acp {
-    /// By executable and env: a start holds its slot alone, so a hung adapter blocks only its own
-    /// version, and a participant with a home of its own gets an adapter of its own.
+    /// By executable, args and env: a start holds its slot alone, so a hung adapter blocks only its
+    /// own version, and a participant with a home of its own gets an adapter of its own.
     adapters: Arc<Adapters>,
 }
 
@@ -59,7 +59,12 @@ impl Backend for Acp {
         if known.is_empty() {
             return Ok(vec![]);
         }
-        let history = history::past(core, std::slice::from_ref(&spec.repo), Some(&known));
+        let history = history::past(
+            core,
+            spec.provider,
+            std::slice::from_ref(&spec.repo),
+            Some(&known),
+        );
         if history.chats.is_empty()
             && let Some(error) = history.errors.into_iter().next()
         {
@@ -71,17 +76,21 @@ impl Backend for Acp {
     fn archive_past(
         &self,
         core: &AppState,
-        _provider: &'static detached_core::adapters::Provider,
+        provider: &'static Provider,
         folders: &[String],
     ) -> backend::History {
-        history::past(core, folders, None)
+        history::past(core, provider, folders, None)
     }
 
-    fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {
-        history::transcript(core, id)
+    fn transcript(&self, core: &AppState, spec: &Spec, id: &str) -> Result<Vec<Update>> {
+        history::transcript(core, spec.provider, id)
     }
 
     fn delete(&self, core: &AppState, spec: &Spec, id: &str) -> Result<()> {
+        // Antigravity ACP has no `session/delete`; ownership is dropped in `chat_index`.
+        if spec.provider.id == ANTIGRAVITY.id {
+            return Ok(());
+        }
         let (live, _) = self.adapter(core, spec)?;
         live.adapter
             .call(DeleteSessionRequest::new(id.to_string()))
@@ -119,8 +128,8 @@ impl Acp {
     ) -> Result<Open> {
         let p = spec.provider;
         let codex = p.id == CODEX.id;
-        // Codex trusts its cwd and loads the tree's own config and skills whatever it is told.
-        if codex && spec.kind == Kind::Chat && !spec.trusted {
+        // Providers that self-load repo settings run only once the user trusts them.
+        if p.repo_trust == RepoTrust::RequireTrust && spec.kind == Kind::Chat && !spec.trusted {
             return Err(Error::Other(format!(
                 "{} loads this repo's own agent settings itself, so it runs here only once you \
                  trust them",
@@ -158,16 +167,15 @@ impl Acp {
             cwd: spec.repo.clone().into(),
             config: config_of(spec),
             server,
-            codex,
             validate_choices: spec.validate_choices,
         };
         let opened = match resume {
             Some(id) => live.adapter.load_session(id, &options),
             None => live.adapter.new_session(&options),
         };
-        let opened = opened.and_then(|o| live.adapter.configure(o, &options));
+        let opened = opened.and_then(|(o, wire_ids)| live.adapter.configure(o, wire_ids, &options));
         let opened = match opened {
-            Ok(o) => Some(Opened { note, ..o }),
+            Ok((o, wire_ids)) => Some((Opened { note, ..o }, wire_ids)),
             // Its exit ends the stream.
             Err(_) if live.adapter.gone() => None,
             Err(e) => {
@@ -177,7 +185,7 @@ impl Acp {
                 return Err(e);
             }
         };
-        let id = opened.as_ref().map(|o| o.id.as_str()).or(resume);
+        let id = opened.as_ref().map(|(o, _)| o.id.as_str()).or(resume);
         let id = id.unwrap_or_default().to_string();
         let host = options.server.map(|s| s.0);
         live.demux.lock().unwrap().open(opened, host, events);
@@ -188,26 +196,43 @@ impl Acp {
         Ok(Open {
             live,
             id,
-            codex,
+            provider: p,
             _route: route,
         })
     }
 
-    /// Selects an adapter and checks its CLI. A probe has its own connection deadline.
+    /// Selects an adapter (or built-in ACP CLI) and checks its CLI.
     fn adapter(&self, core: &AppState, spec: &Spec) -> Result<(Arc<Live>, Option<String>)> {
         let p = spec.provider;
         let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
         let env = core.env();
         let missing =
             |what: &str| Error::Other(format!("{} has no {what}: see the Agents page", p.name));
-        let version = adapters::installed(&core.data_dir, p.adapter).current;
-        let version = version.ok_or_else(|| missing("adapter installed"))?;
         let setting = config.cli.get(p.id).map(String::as_str);
         let cli = adapters::find_cli(p, setting, &env).ok_or_else(|| missing("CLI"))?;
         let catalog = adapters::stored(&core.data_dir);
-        let entry = catalog.as_ref().and_then(|c| c.entry(p.adapter, &version));
         let has = adapters::cli_version_until(p, &cli, &env, spec.open_deadline)?;
-        let note = match adapters::check_cli(p, entry, &has) {
+        let mut vars = proc::env(p.env, proc::parent(&env));
+        let (program, args, verdict) = match p.launch {
+            Launch::AcpAdapter { name, cli_var } => {
+                let version = adapters::installed(&core.data_dir, name)
+                    .current
+                    .ok_or_else(|| missing("adapter installed"))?;
+                let entry = catalog.as_ref().and_then(|c| c.entry(name, &version));
+                vars.push((cli_var.into(), cli.into()));
+                let program = adapters::exe(&core.data_dir, name, &version);
+                (program, vec![], adapters::check_cli(p, entry, &has))
+            }
+            Launch::AcpCli { args } => (
+                cli,
+                args.iter().map(OsString::from).collect(),
+                adapters::check_own_cli(p, catalog.as_ref(), &has),
+            ),
+            Launch::Direct => {
+                return Err(Error::Other(format!("{} is not an ACP provider", p.name)));
+            }
+        };
+        let note = match verdict {
             Cli::Ok => None,
             Cli::Old(need) => {
                 let e = format!(
@@ -225,8 +250,6 @@ impl Acp {
                 p.cli, p.name
             )),
         };
-        let mut vars = proc::env(p.env, proc::parent(&env));
-        vars.push((p.cli_var.into(), cli.into()));
         if p.id == CODEX.id {
             let var = |k: &str| {
                 let v = vars.iter().find(|(n, v)| n == k && !v.is_empty());
@@ -243,10 +266,9 @@ impl Acp {
                 vars.push(("CODEX_CONFIG".into(), off.into()));
             }
         }
-        let program = adapters::exe(&core.data_dir, p.adapter, &version);
         let spec_proc = proc::Spec {
             program,
-            args: vec![],
+            args,
             cwd: spec
                 .temporary_dir
                 .as_ref()
@@ -255,15 +277,15 @@ impl Acp {
             temporary_dir: spec.temporary_dir.clone(),
         };
         let live = match spec.open_deadline {
-            Some(deadline) => Arc::new(Live::start(&spec_proc, Some(deadline), None)?),
-            None => self.live(spec_proc)?,
+            Some(deadline) => Arc::new(Live::start(p, &spec_proc, Some(deadline), None)?),
+            None => self.live(p, spec_proc)?,
         };
         Ok((live, note))
     }
 
     /// The adapter running `spec`'s program, or a new one.
-    fn live(&self, spec: proc::Spec) -> Result<Arc<Live>> {
-        let key = (spec.program.clone(), spec.env.clone());
+    fn live(&self, provider: &'static Provider, spec: proc::Spec) -> Result<Arc<Live>> {
+        let key = (spec.program.clone(), spec.args.clone(), spec.env.clone());
         let slot = (self.adapters.lock().unwrap().entry(key.clone()))
             .or_default()
             .clone();
@@ -272,7 +294,7 @@ impl Acp {
             return Ok(live);
         }
         let entry = (Arc::downgrade(&self.adapters), key);
-        let live = Arc::new(Live::start(&spec, None, Some(entry))?);
+        let live = Arc::new(Live::start(provider, &spec, None, Some(entry))?);
         *slot = Arc::downgrade(&live);
         Ok(live)
     }
@@ -282,11 +304,11 @@ impl Acp {
 /// untrusted participant reads in Codex's own sandbox; a trusted finder takes its mode as asked.
 fn config_of(spec: &Spec) -> Vec<(String, String)> {
     let mode = match spec.provider.id == CODEX.id && spec.kind != Kind::Chat {
-        true => "read-only",
-        false => &spec.mode,
+        true => Mode::Ask.as_str().to_string(),
+        false => spec.provider.canonical_mode(&spec.mode),
     };
     let set = [
-        ("mode", Some(mode.to_string())),
+        ("mode", Some(mode)),
         ("model", spec.model.clone()),
         ("effort", spec.effort.clone()),
     ];
@@ -295,17 +317,6 @@ fn config_of(spec: &Spec) -> Vec<(String, String)> {
         .filter_map(|(k, v)| Some((k.to_string(), v?)));
     set.collect()
 }
-
-/// A config option's id on the wire: Codex's effort is `reasoning_effort`, which `configs` reads
-/// back as `effort`.
-fn wire(id: &str, codex: bool) -> String {
-    match (id, codex) {
-        ("effort", true) => EFFORT.into(),
-        _ => id.into(),
-    }
-}
-
-const EFFORT: &str = "reasoning_effort";
 
 /// The adapter's session config turning off, by name, each MCP server of the user's Codex config
 /// and of `cwd`'s project layer: Codex's layers merge, so no override empties `mcp_servers`. Only
@@ -402,13 +413,14 @@ impl Drop for Live {
 
 impl Live {
     fn start(
+        provider: &'static Provider,
         spec: &proc::Spec,
         deadline: Option<Instant>,
         entry: Option<(Weak<Adapters>, Key)>,
     ) -> Result<Self> {
         let demux: Arc<Mutex<Demux>> = Default::default();
         let to = demux.clone();
-        let adapter = Adapter::start(spec, deadline, move |e| to.lock().unwrap().got(e))?;
+        let adapter = Adapter::start(provider, spec, deadline, move |e| to.lock().unwrap().got(e))?;
         Ok(Self {
             adapter,
             demux,
@@ -442,7 +454,7 @@ impl Live {
                     let session = id.to_string();
                     let setting = Arc::new(());
                     let pending = Arc::downgrade(&setting);
-                    let sent = self.adapter.set(id, key, value, move |update| {
+                    let sent = self.adapter.set(id, key, value, move |event| {
                         let Some(live) = live.upgrade() else { return };
                         let mut demux = live.demux.lock().unwrap();
                         let Some(state) = demux
@@ -453,7 +465,7 @@ impl Live {
                             return;
                         };
                         state.setting = None;
-                        demux.got(Event::Update(session.clone(), update));
+                        demux.got(event);
                         if let Err(e) = live.dispatch(&session, &mut demux) {
                             let failure = Failure {
                                 text: e.to_string(),
@@ -480,6 +492,8 @@ impl Live {
 #[derive(Default)]
 struct SessionConfig {
     options: Vec<Config>,
+    /// Canonical option id -> provider wire option id (`effort` -> `reasoning_effort` | `thought_level`).
+    wire_ids: HashMap<String, String>,
     setting: Option<Arc<()>>,
     queue: VecDeque<Request>,
 }
@@ -558,6 +572,13 @@ impl Demux {
                 };
                 (id, backend::Event::Update(Update::Tool(Box::new(t))))
             }
+            Event::Config(id, c, wire_ids) => {
+                if let Some(state) = self.configs.get_mut(&id) {
+                    state.options = c.clone();
+                    state.wire_ids = wire_ids;
+                }
+                (id, backend::Event::Update(Update::Config(c)))
+            }
             Event::Update(id, Update::Config(c)) => {
                 if let Some(state) = self.configs.get_mut(&id) {
                     state.options = c.clone();
@@ -611,11 +632,16 @@ impl Demux {
     }
 
     /// Takes in a session whose open was answered, or None for one its adapter died under.
-    fn open(&mut self, opened: Option<Opened>, host: Option<String>, mut sink: Events) {
+    fn open(
+        &mut self,
+        opened: Option<(Opened, HashMap<String, String>)>,
+        host: Option<String>,
+        mut sink: Events,
+    ) {
         if let Some((x, asked)) = &self.exit {
             return sink(gone(x, *asked));
         }
-        let Some(o) = opened else {
+        let Some((o, wire_ids)) = opened else {
             return self.orphans.push(sink);
         };
         let id = o.id.clone();
@@ -626,6 +652,7 @@ impl Demux {
             id.clone(),
             SessionConfig {
                 options: o.config.clone(),
+                wire_ids,
                 ..Default::default()
             },
         );
@@ -639,9 +666,17 @@ impl Demux {
     }
 }
 
-/// Whether `ask` is for a tool of the host's server `name`: Codex names the server in its input.
+/// Whether `ask` is for a tool of the host's server `name`: Codex puts it in `input["server"]`,
+/// Antigravity prefixes its MCP tool name with `mcp_<name>_`.
 fn host(ask: &Ask, name: &str) -> bool {
-    ask.tool.input.as_ref().is_some_and(|i| i["server"] == name)
+    let by_input = ask.tool.input.as_ref().is_some_and(|i| i["server"] == name);
+    let prefix = format!("mcp_{name}_");
+    let by_title = ask
+        .tool
+        .title
+        .as_deref()
+        .is_some_and(|t| t.starts_with(&prefix) || t.contains(&format!(" {prefix}")));
+    by_input || by_title
 }
 
 fn gone(x: &Exit, asked: bool) -> backend::Event {
@@ -655,7 +690,7 @@ fn gone(x: &Exit, asked: bool) -> backend::Event {
 struct Open {
     live: Arc<Live>,
     id: String,
-    codex: bool,
+    provider: &'static Provider,
     /// Its host tools' path, refused once the session goes.
     _route: Option<mcp::Route>,
 }
@@ -697,10 +732,18 @@ impl backend::Session for Open {
     /// Checked against the options the session last reported; the agent's answer comes as a
     /// config update, or as `Refused` when it keeps what it had.
     fn set(&self, setting: Setting) -> Result<()> {
-        let (k, v) = match setting {
-            Setting::Model(v) => ("model", v),
-            Setting::Effort(v) => ("effort", v),
-            Setting::Mode(v) => ("mode", v),
+        let (k, canonical, wire_value) = match setting {
+            Setting::Model(v) => ("model", v.clone(), v),
+            Setting::Effort(v) => ("effort", v.clone(), v),
+            Setting::Mode(v) => {
+                let canonical = self.provider.canonical_mode(&v);
+                let wire = self
+                    .provider
+                    .wire_mode(&canonical)
+                    .unwrap_or(&v)
+                    .to_string();
+                ("mode", canonical, wire)
+            }
         };
         let mut demux = self.live.demux.lock().unwrap();
         let state = demux
@@ -710,11 +753,18 @@ impl backend::Session for Open {
         if !state
             .options
             .iter()
-            .any(|c| c.id == k && c.values.contains(&v))
+            .any(|c| c.id == k && c.values.contains(&canonical))
         {
-            return Err(Error::Other(format!("This agent offers no {k} {v}")));
+            return Err(Error::Other(format!(
+                "This agent offers no {k} {canonical}"
+            )));
         }
-        state.queue.push_back(Request::Set(wire(k, self.codex), v));
+        let wire_key = state
+            .wire_ids
+            .get(k)
+            .cloned()
+            .unwrap_or_else(|| k.to_string());
+        state.queue.push_back(Request::Set(wire_key, wire_value));
         self.live.dispatch(&self.id, &mut demux)
     }
 
@@ -735,17 +785,18 @@ const OUTPUT: usize = 64 * 1024;
 #[derive(Clone, Debug, Default)]
 struct Options {
     cwd: PathBuf,
-    /// Mode, model and effort, set once the session starts.
+    /// Mode, model and effort, set once the session starts (canonical IDs/values).
     config: Vec<(String, String)>,
     /// The host's tools: a name and its URL.
     server: Option<(String, String)>,
-    codex: bool,
     validate_choices: bool,
 }
 
 /// What the adapter sends, by session id, in the order it sent it.
 enum Event {
     Update(String, Update),
+    /// Normalized config options and their canonical -> wire ID map.
+    Config(String, Vec<Config>, HashMap<String, String>),
     /// A piece of a command's output, by its call's id.
     Output(String, String, String),
     Ask(String, Box<Ask>, Reply),
@@ -762,6 +813,7 @@ enum Event {
 /// `GRACE` to exit before a kill.
 struct Adapter {
     cx: ConnectionTo<Agent>,
+    provider: &'static Provider,
     /// What `initialize` said.
     version: String,
     #[cfg(test)]
@@ -777,6 +829,7 @@ struct Adapter {
 impl Adapter {
     /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
     fn start(
+        provider: &'static Provider,
         spec: &proc::Spec,
         deadline: Option<Instant>,
         on_event: impl Fn(Event) + Send + Sync + 'static,
@@ -831,7 +884,10 @@ impl Adapter {
                             if let Some((call, data)) = output(&n.update) {
                                 on_update(Event::Output(id.clone(), call, data));
                             }
-                            if let Some(u) = update(n.update) {
+                            if let SessionUpdate::ConfigOptionUpdate(c) = n.update {
+                                let (opts, wire_ids) = configs(provider, c.config_options);
+                                on_update(Event::Config(id, opts, wire_ids));
+                            } else if let Some(u) = update(provider, n.update) {
                                 on_update(Event::Update(id, u));
                             }
                             Ok(())
@@ -888,6 +944,7 @@ impl Adapter {
         };
         let mut adapter = Adapter {
             cx,
+            provider,
             version: String::new(),
             #[cfg(test)]
             pid,
@@ -925,20 +982,25 @@ impl Adapter {
             .map_err(error)
     }
 
-    fn new_session(&self, o: &Options) -> Result<Opened> {
+    fn new_session(&self, o: &Options) -> Result<(Opened, HashMap<String, String>)> {
         let r = self.call(NewSessionRequest::new(&o.cwd).mcp_servers(servers(o)))?;
-        Ok(self.opened(r.session_id.to_string(), r.config_options))
+        Ok(self.opened(r.session_id.to_string(), r.config_options, r.meta.as_ref()))
     }
 
     /// Loads a past session; a closed one is made anew from `o`, so it is sent whole.
-    fn load_session(&self, id: &str, o: &Options) -> Result<Opened> {
+    fn load_session(&self, id: &str, o: &Options) -> Result<(Opened, HashMap<String, String>)> {
         let r =
             self.call(LoadSessionRequest::new(id.to_string(), &o.cwd).mcp_servers(servers(o)))?;
-        Ok(self.opened(id.into(), r.config_options))
+        Ok(self.opened(id.into(), r.config_options, r.meta.as_ref()))
     }
 
     /// Sets the session's mode, model and effort, leaving unavailable preset models and efforts at default.
-    fn configure(&self, mut o: Opened, want: &Options) -> Result<Opened> {
+    fn configure(
+        &self,
+        mut o: Opened,
+        mut wire_ids: HashMap<String, String>,
+        want: &Options,
+    ) -> Result<(Opened, HashMap<String, String>)> {
         for (k, v) in &want.config {
             let fallback = want.validate_choices && k != "mode";
             if !o
@@ -948,11 +1010,20 @@ impl Adapter {
             {
                 continue;
             }
-            let value = SessionConfigOptionValue::value_id(v.clone());
-            let id = wire(k, want.codex);
+            let wire_val = if k == "mode" {
+                self.provider.wire_mode(v).unwrap_or(v).to_string()
+            } else {
+                v.clone()
+            };
+            let value = SessionConfigOptionValue::value_id(wire_val);
+            let id = wire_ids.get(k).cloned().unwrap_or_else(|| k.clone());
             let set = SetSessionConfigOptionRequest::new(o.id.clone(), id, value);
             match self.call(set) {
-                Ok(r) => o.config = configs(r.config_options),
+                Ok(r) => {
+                    let (opts, ids) = configs(self.provider, r.config_options);
+                    o.config = opts;
+                    wire_ids = ids;
+                }
                 Err(_) if fallback => {}
                 Err(e) => {
                     self.close_session(&o.id);
@@ -960,18 +1031,27 @@ impl Adapter {
                 }
             }
         }
-        Ok(o)
+        Ok((o, wire_ids))
     }
 
-    fn opened(&self, id: String, config: Option<Vec<SessionConfigOption>>) -> Opened {
+    fn opened(
+        &self,
+        id: String,
+        config: Option<Vec<SessionConfigOption>>,
+        meta: Option<&Meta>,
+    ) -> (Opened, HashMap<String, String>) {
         let config = config.unwrap_or_default();
-        Opened {
+        let models = models(&config);
+        let (config, wire_ids) = configs(self.provider, config);
+        let opened = Opened {
             id,
             version: self.version.clone(),
-            models: models(&config),
-            config: configs(config),
+            models,
+            config,
+            account: account(meta),
             ..Opened::default()
-        }
+        };
+        (opened, wire_ids)
     }
 
     /// Sets a config option; the answer's options come as a config update.
@@ -980,16 +1060,21 @@ impl Adapter {
         session: &str,
         key: String,
         value: String,
-        then: impl FnOnce(Update) + Send + 'static,
+        then: impl FnOnce(Event) + Send + 'static,
     ) -> Result<()> {
+        let sid = session.to_string();
+        let provider = self.provider;
         let value = SessionConfigOptionValue::value_id(value);
-        let req = SetSessionConfigOptionRequest::new(session.to_string(), key, value);
+        let req = SetSessionConfigOptionRequest::new(sid.clone(), key, value);
         self.cx
             .send_request(req)
             .on_receiving_result(async move |r| {
                 then(match r {
-                    Ok(r) => Update::Config(configs(r.config_options)),
-                    Err(e) => Update::Refused(e.to_string()),
+                    Ok(r) => {
+                        let (opts, wire_ids) = configs(provider, r.config_options);
+                        Event::Config(sid, opts, wire_ids)
+                    }
+                    Err(e) => Event::Update(sid, Update::Refused(e.to_string())),
                 });
                 Ok(())
             })
@@ -1052,9 +1137,21 @@ fn servers(o: &Options) -> Vec<McpServer> {
     o.server.iter().map(http).collect()
 }
 
+fn canonical_option(o: &SessionConfigOption) -> String {
+    match o.category {
+        Some(SessionConfigOptionCategory::Model) => "model".into(),
+        Some(SessionConfigOptionCategory::Mode) => "mode".into(),
+        Some(SessionConfigOptionCategory::ThoughtLevel) => "effort".into(),
+        _ => match o.id.to_string().as_str() {
+            "reasoning_effort" | "thought_level" => "effort".into(),
+            id => id.into(),
+        },
+    }
+}
+
 /// The `model` option's choices, with their names; efforts come with the `effort` option.
 fn models(options: &[SessionConfigOption]) -> Vec<Model> {
-    let model = options.iter().find(|o| o.id.to_string() == "model");
+    let model = options.iter().find(|o| canonical_option(o) == "model");
     let Some(SessionConfigKind::Select(s)) = model.map(|o| &o.kind) else {
         return vec![];
     };
@@ -1073,28 +1170,60 @@ fn models(options: &[SessionConfigOption]) -> Vec<Model> {
     all.iter().map(model).collect()
 }
 
-fn configs(options: Vec<SessionConfigOption>) -> Vec<Config> {
-    let select = |o: SessionConfigOption| match o.kind {
-        SessionConfigKind::Select(s) => Some(Config {
-            id: match o.id.to_string() {
-                id if id == EFFORT => "effort".into(),
-                id => id,
-            },
-            value: s.current_value.to_string(),
-            values: match s.options {
-                SessionConfigSelectOptions::Ungrouped(v) => {
-                    v.into_iter().map(|o| o.value.to_string()).collect()
-                }
-                SessionConfigSelectOptions::Grouped(g) => (g.into_iter())
-                    .flat_map(|g| g.options)
-                    .map(|o| o.value.to_string())
+fn configs(
+    provider: &Provider,
+    options: Vec<SessionConfigOption>,
+) -> (Vec<Config>, HashMap<String, String>) {
+    let mut out = vec![];
+    let mut wire_ids = HashMap::new();
+    for o in options {
+        let canonical = canonical_option(&o);
+        let wire_id = o.id.to_string();
+        let SessionConfigKind::Select(s) = o.kind else {
+            continue;
+        };
+        wire_ids.insert(canonical.clone(), wire_id);
+        let raw_values: Vec<String> = match s.options {
+            SessionConfigSelectOptions::Ungrouped(v) => {
+                v.into_iter().map(|o| o.value.to_string()).collect()
+            }
+            SessionConfigSelectOptions::Grouped(g) => (g.into_iter())
+                .flat_map(|g| g.options)
+                .map(|o| o.value.to_string())
+                .collect(),
+            _ => vec![],
+        };
+        let (value, values) = if canonical == "mode" {
+            (
+                provider.canonical_mode(&s.current_value.to_string()),
+                raw_values
+                    .into_iter()
+                    .map(|v| provider.canonical_mode(&v))
                     .collect(),
-                _ => vec![],
-            },
-        }),
-        _ => None,
-    };
-    options.into_iter().filter_map(select).collect()
+            )
+        } else {
+            (s.current_value.to_string(), raw_values)
+        };
+        out.push(Config {
+            id: canonical,
+            value,
+            values,
+        });
+    }
+    (out, wire_ids)
+}
+
+fn account(meta: Option<&Meta>) -> Option<Account> {
+    let plan = meta?
+        .get("antigravity")?
+        .get("tier")?
+        .get("name")?
+        .as_str()?
+        .trim();
+    (!plan.is_empty()).then(|| Account {
+        plan: plan.into(),
+        email: None,
+    })
 }
 
 fn stop(s: agent_client_protocol::v1::schema::StopReason) -> StopReason {
@@ -1119,15 +1248,51 @@ fn name(v: impl serde::Serialize) -> Option<String> {
     serde_json::to_value(v).ok()?.as_str().map(String::from)
 }
 
+fn tool_output(raw: Option<Value>, content: Option<&[ToolCallContent]>) -> Option<Value> {
+    if let Some(raw) = raw {
+        if let Some(text) = raw.as_object().and_then(|o| o.get("output")?.as_str()) {
+            return Some(Value::String(text.into()));
+        }
+        return Some(raw);
+    }
+    let text: Vec<&str> = content
+        .into_iter()
+        .flatten()
+        .filter_map(|c| match c {
+            ToolCallContent::Content(c) => match &c.content {
+                ContentBlock::Text(t) if !t.text.is_empty() => Some(t.text.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    (!text.is_empty()).then(|| Value::String(text.join("\n")))
+}
+
+fn tool_lines(content: Option<&[ToolCallContent]>) -> Option<(usize, usize)> {
+    let mut saw = false;
+    let mut totals = (0usize, 0usize);
+    for c in content.into_iter().flatten() {
+        if let ToolCallContent::Diff(d) = c {
+            saw = true;
+            totals.0 += d.new_text.lines().count();
+            totals.1 += d.old_text.as_deref().map_or(0, |s| s.lines().count());
+        }
+    }
+    saw.then_some(totals)
+}
+
 fn tool(id: String, f: ToolCallUpdateFields) -> Tool {
+    let lines = tool_lines(f.content.as_deref());
+    let output = tool_output(f.raw_output, f.content.as_deref());
     Tool {
         id,
         title: f.title,
         kind: f.kind.and_then(name),
         status: f.status.and_then(name),
         input: f.raw_input,
-        output: f.raw_output,
-        lines: None,
+        output,
+        lines,
     }
 }
 
@@ -1138,20 +1303,24 @@ fn text(c: ContentChunk) -> Option<String> {
     }
 }
 
-fn update(u: SessionUpdate) -> Option<Update> {
+fn update(provider: &Provider, u: SessionUpdate) -> Option<Update> {
     Some(match u {
         SessionUpdate::UserMessageChunk(c) => Update::User(text(c)?),
         SessionUpdate::AgentMessageChunk(c) => Update::Text(text(c)?),
         SessionUpdate::AgentThoughtChunk(c) => Update::Thought(text(c)?),
-        SessionUpdate::ToolCall(t) => Update::Tool(Box::new(Tool {
-            id: t.tool_call_id.to_string(),
-            title: Some(t.title),
-            kind: name(t.kind),
-            status: name(t.status),
-            input: t.raw_input,
-            output: t.raw_output,
-            lines: None,
-        })),
+        SessionUpdate::ToolCall(t) => {
+            let lines = tool_lines(Some(&t.content));
+            let output = tool_output(t.raw_output, Some(&t.content));
+            Update::Tool(Box::new(Tool {
+                id: t.tool_call_id.to_string(),
+                title: Some(t.title),
+                kind: name(t.kind),
+                status: name(t.status),
+                input: t.raw_input,
+                output,
+                lines,
+            }))
+        }
         SessionUpdate::ToolCallUpdate(t) => {
             let t = tool(t.tool_call_id.to_string(), t.fields);
             let empty = Tool {
@@ -1181,8 +1350,12 @@ fn update(u: SessionUpdate) -> Option<Update> {
             cost: u.cost.map(|c| c.amount),
             parts: vec![],
         },
-        SessionUpdate::ConfigOptionUpdate(c) => Update::Config(configs(c.config_options)),
-        SessionUpdate::CurrentModeUpdate(m) => Update::Mode(m.current_mode_id.to_string()),
+        SessionUpdate::ConfigOptionUpdate(c) => {
+            Update::Config(configs(provider, c.config_options).0)
+        }
+        SessionUpdate::CurrentModeUpdate(m) => {
+            Update::Mode(provider.canonical_mode(&m.current_mode_id.to_string()))
+        }
         _ => return None,
     })
 }

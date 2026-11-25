@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use detached_core::adapters::Provider;
 use detached_core::api;
 use detached_core::backend::{
-    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Model, Part, Piece,
-    Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
+    self, Account, Backend, Cause, Config, Event, Events, Exit, Failure, Limit, Mode, Model, Part,
+    Piece, Question, Setting, SlashCommand, Spec, StopReason, Tool, Turn, TurnConfig, Update,
 };
 use detached_core::chat_index;
 use detached_core::chat_settings::Preset;
@@ -33,7 +33,7 @@ use crate::resource::{self, Policy, Resource};
 use crate::workspace::Workspace;
 
 /// The mode that `set` takes back after a model without it.
-pub const AUTO: &str = "auto";
+pub const AUTO: &str = Mode::Auto.as_str();
 
 pub const OUT_OF_EXTRA_USAGE: &str = "Claude Agent is out of extra usage: past the plan's limits \
     this session drew from extra usage, and that has run out. Claude in a terminal tab (`claude`) \
@@ -564,10 +564,11 @@ impl Session {
             let mut events = events(me.clone(), past.clone(), tx.clone());
             let owner =
                 (past.is_none() && spec.kind == backend::Kind::Chat).then_some(spec.provider.id);
+            let repo = spec.repo.clone();
             let state = core.clone();
             let events = Box::new(move |mut event| {
                 if let (Some(provider), Event::Opened(o)) = (owner, &mut event)
-                    && let Err(error) = chat_index::created(&state, &o.id, provider)
+                    && let Err(error) = chat_index::created_in(&state, &o.id, provider, Some(&repo))
                 {
                     let note = format!("Could not save chat ownership: {error}");
                     o.note = Some(
@@ -736,7 +737,7 @@ impl Session {
             return cx.notify();
         }
         // Sent before every woken prompt: the kernel's copy of the mode may lag the agent's.
-        if let Err(e) = o.set(Setting::Mode(self.spec.provider.ask.into())) {
+        if let Err(e) = o.set(Setting::Mode(Mode::Ask.as_str().into())) {
             self.fail(format!(
                 "Not woken: the agent cannot switch to asking first: {e}"
             ));
@@ -755,7 +756,7 @@ impl Session {
         }
         let picked = std::mem::take(&mut self.picked);
         let mode = picked.iter().any(|s| matches!(s, Setting::Mode(_)));
-        let back = (!mode && self.spec.mode != self.spec.provider.ask)
+        let back = (!mode && self.spec.mode != Mode::Ask.as_str())
             .then(|| Setting::Mode(self.spec.mode.clone()));
         for setting in back.into_iter().chain(picked) {
             if let Err(e) = self.set(setting) {
@@ -1068,12 +1069,14 @@ impl Session {
         }
         // The agent drops a mode by itself, as `auto` on a model without it.
         let want = match self.woken {
-            true => self.spec.provider.ask.to_string(),
+            true => Mode::Ask.as_str().to_string(),
             false => self.spec.mode.clone(),
         };
         let now = self.option("mode");
         if let Some(now) = now.filter(|m| Some(*m) != mode.as_deref() && *m != want) {
-            let note = format!("Asked for {}, the session runs in {now}.", self.spec.mode);
+            let asked = Mode::parse(&self.spec.mode).map_or(&*self.spec.mode, |m| m.label());
+            let actual = Mode::parse(now).map_or(now, |m| m.label());
+            let note = format!("Asked for {asked}, the session runs in {actual}.");
             self.note(note);
         }
         // After the check: what `ready` applies has not reached the config yet.
@@ -1119,7 +1122,7 @@ impl Session {
             }
             Update::Config(c) => self.config = c,
             Update::Mode(m) => {
-                if self.woken && m != self.spec.provider.ask {
+                if self.woken && m != Mode::Ask.as_str() {
                     self.note(format!(
                         "The woken turn ran in {m}, not asking first, so it stopped."
                     ));
@@ -1564,7 +1567,7 @@ pub fn caps(p: &Provider) -> backend::Caps {
 
 /// The backend the provider's manifest names.
 fn backend(p: &Provider) -> &'static dyn Backend {
-    match p.backend {
+    match p.backend() {
         backend::Name::Acp => detached_acp::backend(),
         backend::Name::Direct => backend::direct(),
     }

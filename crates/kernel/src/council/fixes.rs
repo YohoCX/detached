@@ -159,7 +159,7 @@ impl Fix {
         }));
         let tree = m.tree.display().to_string();
         let mut spec = Spec::new(&CLAUDE, &tree, Kind::Chat);
-        spec.mode = CLAUDE.full.into();
+        spec.mode = detached_core::backend::Mode::Full.as_str().into();
         let seat = Seat {
             who: Identity::of(Kind::Chat, &tree),
             accept: Some(self.repo.clone()),

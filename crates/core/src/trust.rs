@@ -23,9 +23,8 @@ const MARKDOWN: &[&str] = &[
     ".claude/commands",
     ".agents/skills",
 ];
-/// Codex's project layer (config, rules, hooks), which no parser here reads: each file is listed
-/// whole when it says anything.
-const CODEX: &str = ".codex";
+/// Provider project layers whose files no parser here reads: each file is listed whole.
+const OPAQUE: &[&str] = &[".codex", ".agent"];
 /// Settings that run nothing and grant nothing.
 const QUIET: &[&str] = &[
     "$schema",
@@ -45,23 +44,27 @@ pub struct Project {
     pub items: Vec<String>,
     /// The files read, with their git object ids; any change asks again.
     pub fingerprint: String,
-    /// Why Codex's files (`.codex/`, `.agents/`) were not scanned: a link or their size. Only a
-    /// provider that reads them is refused for it.
+    /// Why an optional provider layer (`.codex/`, `.agent/`, `.agents/`) was not scanned: a link
+    /// or its size. Only a provider whose trust globs read that layer is refused for it.
     pub refused: Option<String>,
 }
 
 impl Project {
     /// Why a provider whose trust globs are `globs` may not load this tree.
     pub fn refuses(&self, globs: &[&str]) -> Option<&str> {
-        let reads = globs
-            .iter()
-            .any(|g| CODEX_ONLY.iter().any(|d| g.starts_with(d)));
-        self.refused.as_deref().filter(|_| reads)
+        let why = self.refused.as_deref()?;
+        let reads = globs.iter().any(|g| {
+            PROVIDER_ONLY.iter().any(|d| {
+                g.starts_with(d)
+                    && (why.starts_with(d) || !OPAQUE.iter().any(|o| why.starts_with(o)))
+            })
+        });
+        reads.then_some(why)
     }
 }
 
-/// Codex's alone of the trust files: a problem in them refuses Codex, not every provider.
-const CODEX_ONLY: &[&str] = &[CODEX, ".agents"];
+/// Optional provider trust dirs: a problem in one refuses providers that read it, not Claude.
+const PROVIDER_ONLY: &[&str] = &[".codex", ".agent", ".agents"];
 
 fn refuse_link(p: impl std::fmt::Display) -> String {
     format!("{p} is a link: the scan refuses it")
@@ -78,16 +81,18 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     for dir in MARKDOWN {
         markdown(repo, &repo.join(dir), &mut files);
     }
-    let mut codex = vec![];
     let size = |f: &String| fs::metadata(repo.join(f)).map_or(0, |m| m.len());
-    let refused = match layer(repo, &repo.join(CODEX), &mut codex) {
-        Err(e) => Some(e),
-        Ok(()) if codex.iter().map(size).sum::<u64>() > 1 << 20 => Some(over()),
-        Ok(()) => {
-            files.extend(codex);
-            None
+    let mut refused = None;
+    for dir in OPAQUE {
+        let mut found = vec![];
+        match layer(repo, &repo.join(dir), &mut found) {
+            Err(e) => refused = refused.or(Some(e)),
+            Ok(()) if found.iter().map(size).sum::<u64>() > 1 << 20 => {
+                refused = refused.or_else(|| Some(over(dir)));
+            }
+            Ok(()) => files.extend(found),
         }
-    };
+    }
     files.sort();
     let mut items = vec![];
     for f in &files {
@@ -116,20 +121,21 @@ pub fn project(env: &Env, repo: &Path) -> Result<Project> {
     })
 }
 
-fn over() -> String {
-    format!("{CODEX} is over 1 MiB: the scan refuses it")
+fn over(dir: &str) -> String {
+    format!("{dir} is over 1 MiB: the scan refuses it")
 }
 
 /// What `repo`'s trust files at `sha` would bring in, read as raw blobs: a link among them or more
 /// than 1 MiB of them refuses the scan.
 pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
     use crate::council::tree;
-    let roots = [".claude", ".mcp.json", ".codex", ".agents"];
+    let roots = [".claude", ".mcp.json", ".codex", ".agent", ".agents"];
+    let opaque = |p: &str| OPAQUE.iter().any(|d| p.starts_with(&format!("{d}/")));
     let all = tree::entries(env, repo, sha, &roots)?;
     let wanted = |p: &str| {
         SETTINGS.contains(&p)
             || p == ".mcp.json"
-            || p.starts_with(&format!("{CODEX}/"))
+            || opaque(p)
             || (MARKDOWN.iter().any(|d| p.starts_with(&format!("{d}/"))) && p.ends_with(".md"))
     };
     let link = |p: &str| {
@@ -139,26 +145,30 @@ pub fn at(env: &Env, repo: &Path, sha: &str) -> Result<Project> {
                 .any(|d| d.starts_with(p) || p.starts_with(d))
             || wanted(p)
     };
-    let codex_only = |p: &str| {
-        CODEX_ONLY
+    let provider_only = |p: &str| {
+        PROVIDER_ONLY
             .iter()
             .any(|d| p == *d || p.starts_with(&format!("{d}/")))
     };
     let links = all.iter().filter(|e| e.mode == "120000" && link(&e.path));
-    let (theirs, links): (Vec<_>, Vec<_>) = links.partition(|e| codex_only(&e.path));
+    let (theirs, links): (Vec<_>, Vec<_>) = links.partition(|e| provider_only(&e.path));
     if let Some(e) = links.first() {
         return Err(Error::Other(refuse_link(&e.path)));
     }
     let mut files: Vec<&tree::Entry> = all.iter().filter(|e| wanted(&e.path)).collect();
-    let codex = files
-        .iter()
-        .filter(|e| e.path.starts_with(&format!("{CODEX}/")));
     let refused = match theirs.first() {
         Some(e) => Some(refuse_link(&e.path)),
-        None => (codex.map(|e| e.size).sum::<u64>() > 1 << 20).then(over),
+        None => OPAQUE.iter().find_map(|d| {
+            let total: u64 = files
+                .iter()
+                .filter(|e| e.path.starts_with(&format!("{d}/")))
+                .map(|e| e.size)
+                .sum();
+            (total > 1 << 20).then(|| over(d))
+        }),
     };
     if refused.is_some() {
-        files.retain(|e| !codex_only(&e.path));
+        files.retain(|e| !provider_only(&e.path));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     if files.iter().map(|e| e.size).sum::<u64>() > 1 << 20 {
@@ -268,7 +278,7 @@ fn markdown(repo: &Path, dir: &Path, files: &mut Vec<String>) {
 fn scan(file: &str, text: &str, items: &mut Vec<String>) {
     match file {
         ".mcp.json" => mcp(text, items),
-        f if f.starts_with(&format!("{CODEX}/")) => {
+        f if OPAQUE.iter().any(|d| f.starts_with(&format!("{d}/"))) => {
             if !text.trim().is_empty() {
                 items.push(format!("{f}: unparsed"));
             }

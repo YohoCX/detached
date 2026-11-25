@@ -16,6 +16,8 @@ pub struct Entry {
     pub archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deleted_by: Vec<String>,
     #[serde(flatten)]
@@ -54,11 +56,21 @@ pub fn archive(core: &AppState, id: &str, archived: bool) -> Result<()> {
 }
 
 pub fn created(core: &AppState, id: &str, provider: &str) -> Result<()> {
+    created_in(core, id, provider, None)
+}
+
+pub fn created_in(core: &AppState, id: &str, provider: &str, cwd: Option<&str>) -> Result<()> {
     core.pending_chat_owners
         .lock()
         .unwrap()
         .insert(id.into(), provider.into());
-    edit(core, |_| {}).map(drop)
+    let cwd = cwd.map(String::from);
+    edit(core, |all| {
+        if let Some(cwd) = cwd {
+            all.entry(id.into()).or_default().cwd = Some(cwd);
+        }
+    })
+    .map(drop)
 }
 
 fn set_owner(all: &mut BTreeMap<String, Entry>, id: &str, provider: &str) {

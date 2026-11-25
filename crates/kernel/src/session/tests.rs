@@ -900,13 +900,14 @@ fn the_adapter_gets_only_allowed_names(cx: &mut TestAppContext) {
         ],
     );
     let names = turn(&open(&f, Kind::Chat, cx), "env", cx);
+    let cli_var = CODEX.cli_var().unwrap();
     let allowed: Vec<&str> = (proc::ALLOWED.iter().chain(CODEX.env))
         .copied()
-        .chain([CODEX.cli_var])
+        .chain([cli_var])
         .collect();
     let names: Vec<&str> = names.split(',').collect();
     assert!(names.iter().all(|n| allowed.contains(n)), "{names:?}");
-    assert!(names.contains(&"CODEX_HOME") && names.contains(&CODEX.cli_var));
+    assert!(names.contains(&"CODEX_HOME") && names.contains(&cli_var));
 }
 
 #[gpui::test]
@@ -1100,12 +1101,12 @@ fn boot_codex(cx: &mut TestAppContext) -> Fixture {
 fn a_codex_session_ended_after_a_cancel_ends_its_background_command(cx: &mut TestAppContext) {
     let f = boot_codex(cx);
     let mut spec = f.spec(Kind::Chat);
-    spec.mode = CODEX.chat.into();
+    spec.mode = detached_core::backend::Mode::Auto.as_str().into();
     let s = open_spec(spec.clone(), None, cx);
     assert_eq!(
         s.read_with(cx, |s, _| s.option("mode").map(String::from))
             .unwrap(),
-        "agent"
+        "auto"
     );
     s.update(cx, |s, cx| s.prompt("bg".into(), cx));
     let pid = |cx: &App| {

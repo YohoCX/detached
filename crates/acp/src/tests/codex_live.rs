@@ -11,7 +11,11 @@ use super::*;
 /// The bun build `make codex-live` makes.
 fn adapter() -> PathBuf {
     let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters/codex-acp/out");
-    let program = build.join(format!("{}{}", CODEX.adapter, std::env::consts::EXE_SUFFIX));
+    let program = build.join(format!(
+        "{}{}",
+        CODEX.adapter().unwrap(),
+        std::env::consts::EXE_SUFFIX
+    ));
     assert!(
         program.is_file(),
         "no bun build of the adapter: run `make codex-live`"
@@ -38,7 +42,7 @@ fn codex() -> Sandbox {
     let out = Command::new(adapter()).arg("--version").output().unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
     let version = said.split_whitespace().last().unwrap();
-    testutil::install_as(&sb.state, CODEX.adapter, &adapter(), version);
+    testutil::install_as(&sb.state, CODEX.adapter().unwrap(), &adapter(), version);
     let config = Config {
         codex: true,
         ..Config::default()
@@ -171,7 +175,7 @@ fn an_untrusted_participant_writes_reaches_and_cross_reads_nothing() {
     let prompt = "Run exactly this one shell command, without reading the script first, and \
                   reply with its whole output verbatim: sh probe.sh";
     let (seen, _open) = turn(&sb, &spec, prompt, Answer::Reject, |_, _| {});
-    assert_eq!(mode(&seen), "read-only");
+    assert_eq!(mode(&seen), Mode::Ask.as_str());
     for said in [
         "NO-WRITE",
         "NO-SSH",
@@ -291,17 +295,17 @@ fn a_codex_chat_shows_a_command_s_output_switches_its_mode_and_lists_itself() {
     let sb = codex();
     let repo = std::fs::canonicalize(sb.dir.path()).unwrap();
     let mut spec = Spec::new(&CODEX, &repo.display().to_string(), Kind::Chat);
-    (spec.trusted, spec.mode) = (true, CODEX.chat.into());
+    (spec.trusted, spec.mode) = (true, Mode::Auto.as_str().into());
     let prompt = "Run exactly this shell command and reply with one word, ok: echo H13B-OUT";
     let (seen, open) = turn(&sb, &spec, prompt, Answer::Allow, |_, _| {});
-    assert_eq!(mode(&seen), "agent");
+    assert_eq!(mode(&seen), Mode::Auto.as_str());
     let out = seen.tools.values().filter_map(|t| t.output.as_ref());
     assert!(
         out.map(Value::to_string).any(|o| o.contains("H13B-OUT")),
         "{:?}",
         seen.tools
     );
-    open.set(Setting::Mode("read-only".into())).unwrap();
+    open.set(Setting::Mode(Mode::Ask.as_str().into())).unwrap();
     chat_index::created(&sb.state, &open.id, CODEX.id).unwrap();
     let past = Acp::default().past(&sb.state, &spec).unwrap();
     assert!(past.iter().any(|p| p.id == open.id), "{past:?}");

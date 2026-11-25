@@ -456,8 +456,8 @@ impl Council {
         let mut spec = Spec::new(provider, &l.cwd.display().to_string(), kind);
         (spec.model, spec.effort) = (model.map(String::from), Some(l.effort.clone()));
         spec.mode = match trusted {
-            true => provider.full,
-            false => provider.ask,
+            true => detached_core::backend::Mode::Full.as_str(),
+            false => detached_core::backend::Mode::Ask.as_str(),
         }
         .into();
         spec.sandbox = match kind {

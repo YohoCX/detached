@@ -5,7 +5,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use detached_core::adapters::{CODEX, Provider};
+use detached_core::adapters::{DeletePolicy, Provider};
 use detached_core::backend::{Kind, Past, Spec};
 use detached_core::sessions::MAIN;
 use gpui_kit::base::TestSupportExt;
@@ -963,11 +963,10 @@ impl ChatList {
         ground: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Codex's delete archives the conversation in Codex's own history.
-        let keeps = (self.conversation(&key, cx)).is_some_and(|(.., p)| p.id == CODEX.id);
-        let ask = match keeps {
-            true => "Delete here? Codex keeps it archived",
-            false => "Delete for good?",
+        let provider = self.conversation(&key, cx).map(|(.., p)| p);
+        let ask = match provider.filter(|p| p.delete == DeletePolicy::KeepExternal) {
+            Some(p) => format!("Delete here? {} keeps its copy", p.name),
+            None => "Delete for good?".into(),
         };
         let (row, yes, no) = match key {
             Key::Open(..) => (

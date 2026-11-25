@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use detached_core::adapters::{ANTIGRAVITY, Provider};
 use detached_core::backend::{History, Past, Tool, Update};
 use detached_core::error::{Error, Result};
 use detached_core::state::AppState;
@@ -140,6 +141,18 @@ fn real(path: &Path) -> PathBuf {
 
 pub(super) fn past(
     core: &AppState,
+    provider: &'static Provider,
+    folders: &[String],
+    known: Option<&BTreeMap<String, chat_index::Entry>>,
+) -> History {
+    if provider.id == ANTIGRAVITY.id {
+        return antigravity_past(core, folders, known);
+    }
+    codex_past(core, folders, known)
+}
+
+fn codex_past(
+    core: &AppState,
     folders: &[String],
     known: Option<&BTreeMap<String, chat_index::Entry>>,
 ) -> History {
@@ -264,7 +277,18 @@ fn user(row: &Value) -> Option<&str> {
         .flatten()
 }
 
-pub(super) fn transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
+pub(super) fn transcript(
+    core: &AppState,
+    provider: &'static Provider,
+    id: &str,
+) -> Result<Vec<Update>> {
+    if provider.id == ANTIGRAVITY.id {
+        return antigravity_transcript(core, id);
+    }
+    codex_transcript(core, id)
+}
+
+fn codex_transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
     let missing = || Error::Other("The transcript is unavailable.".into());
     let path = rollouts(&home(core).ok_or_else(missing)?, &mut vec![], true, |sid| {
         sid == id
@@ -321,6 +345,156 @@ pub(super) fn transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
                 }
                 _ => {}
             }
+        }
+    }
+    Ok(out)
+}
+
+fn antigravity_home(core: &AppState) -> Option<PathBuf> {
+    let env = core.env();
+    let var = proc::parent(&env);
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    var(key)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+        .map(|p| p.join(".gemini").join("antigravity-cli"))
+}
+
+fn antigravity_log(home: &Path, id: &str) -> Option<PathBuf> {
+    let logs = home.join("brain").join(id).join(".system_generated/logs");
+    ["transcript_full.jsonl", "transcript.jsonl"]
+        .into_iter()
+        .map(|name| logs.join(name))
+        .find(|p| p.is_file())
+}
+
+fn strip_user_request(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("<USER_REQUEST>")
+        && let Some((body, _)) = rest.split_once("</USER_REQUEST>")
+    {
+        return body.trim();
+    }
+    trimmed
+}
+
+fn antigravity_past(
+    core: &AppState,
+    folders: &[String],
+    known: Option<&BTreeMap<String, chat_index::Entry>>,
+) -> History {
+    let mut history = History::default();
+    let Some(home) = antigravity_home(core) else {
+        return history;
+    };
+    let owned_index;
+    let index = match known {
+        Some(known) => known,
+        None => {
+            owned_index = chat_index::index(core);
+            &owned_index
+        }
+    };
+    let places: HashMap<_, _> = folders.iter().map(|p| (real(Path::new(p)), p)).collect();
+    for (id, entry) in index {
+        if entry.owner.as_deref() != Some(ANTIGRAVITY.id) {
+            continue;
+        }
+        let Some(cwd) = entry
+            .cwd
+            .as_deref()
+            .and_then(|p| places.get(&real(Path::new(p))))
+        else {
+            continue;
+        };
+        let Some(path) = antigravity_log(&home, id) else {
+            continue;
+        };
+        let mut title = None;
+        match open(&path) {
+            Ok(reader) => {
+                for row in records(reader) {
+                    let Ok(row) = row else { break };
+                    if row["type"] == "USER_INPUT"
+                        && let Some(content) = row["content"].as_str()
+                    {
+                        let body = strip_user_request(content);
+                        title = body
+                            .lines()
+                            .find(|l| !l.trim().is_empty())
+                            .map(|l| l.chars().take(200).collect::<String>());
+                        break;
+                    }
+                }
+            }
+            Err(error) => {
+                history.errors.push(format!("{}: {error}", path.display()));
+                continue;
+            }
+        }
+        let modified = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64);
+        history.chats.push(Past {
+            id: id.clone(),
+            title: title
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Untitled".into()),
+            modified,
+            cwd: Some((*cwd).clone()),
+            tag: None,
+            model: None,
+            provider: String::new(),
+            owned: false,
+        });
+    }
+    history.chats.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    history
+}
+
+fn antigravity_transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {
+    let missing = || Error::Other("The transcript is unavailable.".into());
+    let home = antigravity_home(core).ok_or_else(missing)?;
+    let path = antigravity_log(&home, id).ok_or_else(missing)?;
+    let mut out = vec![];
+    let mut seq = 0usize;
+    for row in records(open(&path)?) {
+        let row = row?;
+        match row["type"].as_str() {
+            Some("USER_INPUT") => {
+                if let Some(content) = row["content"].as_str() {
+                    let body = strip_user_request(content);
+                    if !body.is_empty() {
+                        out.extend([Update::User(body.into()), Update::Break]);
+                    }
+                }
+            }
+            Some("PLANNER_RESPONSE") => {
+                if let Some(thinking) = row["thinking"].as_str().filter(|s| !s.trim().is_empty()) {
+                    out.extend([Update::Thought(thinking.trim().into()), Update::Break]);
+                }
+                if let Some(calls) = row["tool_calls"].as_array() {
+                    for call in calls {
+                        seq += 1;
+                        let name = call["name"].as_str().unwrap_or("tool");
+                        out.push(Update::Tool(Box::new(Tool {
+                            id: format!("step-{seq}"),
+                            title: Some(name.into()),
+                            kind: Some(name.into()),
+                            status: Some("completed".into()),
+                            input: call.get("args").cloned(),
+                            ..Tool::default()
+                        })));
+                    }
+                }
+                if let Some(content) = row["content"].as_str().filter(|s| !s.trim().is_empty()) {
+                    out.extend([Update::Text(content.into()), Update::Break]);
+                }
+            }
+            _ => {}
         }
     }
     Ok(out)

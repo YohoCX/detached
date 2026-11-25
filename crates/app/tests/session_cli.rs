@@ -7,8 +7,9 @@ use std::process::{Command, Stdio};
 use detached_core::adapters::{BLOCK, CLAUDE, Config};
 use detached_core::git::testutil::Sandbox;
 
-const USAGE: &str = "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]
-stdin: prompts, y/a/n to an ask, /mode <default|acceptEdits|plan|auto>, /model <name>, /stop <task id>";
+const USAGE: &str =
+    "usage: detached --session <repo> [prompt] [--past | --resume <id> | --delete <id>]
+stdin: prompts, y/a/n to an ask, /mode <ask|edits|plan|auto>, /model <name>, /stop <task id>";
 
 /// A sandbox with a repo and `fake_claude` as Claude's CLI.
 fn sandbox() -> Sandbox {
@@ -114,7 +115,7 @@ fn mode_and_model_switch_between_turns_and_an_unknown_one_is_refused() {
     let (out, code) = session(&sb, &[], stdin);
     assert_eq!(code, 0, "{out}");
     let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s:?} in {out}"));
-    assert!(at("[config] mode default, model default") < at("[config] mode auto, model default"));
+    assert!(at("[config] mode ask, model default") < at("[config] mode auto, model default"));
     assert!(at("> model\ndefault auto\n") < at("[refused] this session offers no model nope"));
     assert!(at("[refused] no mode yolo") < at("[config] mode auto, model haiku"));
     assert!(out.contains("> model\nhaiku auto\n"), "{out}");

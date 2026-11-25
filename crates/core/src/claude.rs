@@ -425,9 +425,14 @@ fn start_in(
     }
     let mode = init["current_permission_mode"]
         .as_str()
-        .unwrap_or(&spec.mode);
+        .map(|m| p.canonical_mode(m))
+        .unwrap_or_else(|| p.canonical_mode(&spec.mode));
     let mut config = vec![
-        select("mode", mode, MODES.iter().map(|m| m.to_string()).collect()),
+        select(
+            "mode",
+            &mode,
+            MODES.iter().map(|m| p.canonical_mode(m)).collect(),
+        ),
         select(
             "model",
             model,
@@ -552,10 +557,11 @@ fn sources(spec: &Spec) -> &'static str {
 /// it would read itself that must not load.
 fn flags(spec: &Spec, id: &str, resume: bool, off: BTreeSet<String>) -> Vec<String> {
     let mut a: Vec<String> = BASE.iter().map(|s| s.to_string()).collect();
+    let mode = spec.provider.wire_mode(&spec.mode).unwrap_or(&spec.mode);
     a.extend(
         [
             "--permission-mode",
-            &spec.mode,
+            mode,
             "--setting-sources",
             sources(spec),
             "--strict-mcp-config",
@@ -756,8 +762,10 @@ impl backend::Session for Live {
                 ("effort", e, body)
             }
             Setting::Mode(m) => {
-                let body = json!({"subtype": "set_permission_mode", "mode": m});
-                ("mode", m, body)
+                let wire = adapters::CLAUDE.wire_mode(&m).unwrap_or(&m).to_string();
+                let canonical = adapters::CLAUDE.canonical_mode(&wire);
+                let body = json!({"subtype": "set_permission_mode", "mode": wire});
+                ("mode", canonical, body)
             }
         };
         st.setting_seq += 1;
@@ -1039,14 +1047,15 @@ impl Client {
         match v["subtype"].as_str().unwrap_or_default() {
             "init" | "status" => {
                 if let Some(m) = v["permissionMode"].as_str() {
+                    let m = adapters::CLAUDE.canonical_mode(m);
                     let mut st = self.state.lock().unwrap();
                     if let Some(c) = st.config.iter_mut().find(|c| c.id == "mode") {
-                        c.value = m.into();
+                        c.value = m.clone();
                     } else {
-                        st.opening_mode = Some(m.into());
+                        st.opening_mode = Some(m.clone());
                     }
                     drop(st);
-                    self.update(Update::Mode(m.into()));
+                    self.update(Update::Mode(m));
                 }
             }
             "commands_changed" => self.update(Update::Commands(commands(&v["commands"]))),
