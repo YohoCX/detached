@@ -46,6 +46,7 @@ both!(
     a_turn_keeps_the_model_and_effort_that_ran,
     an_opened_session_remembers_its_provider_s_models_when_they_differ,
     cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks,
+    stopping_a_start_returns_the_queued_prompt,
     a_load_runs_on_the_session_s_model,
     a_session_closed_or_dropped_mid_turn_reloads_with_its_replay_alone,
     a_load_of_a_closing_session_waits_for_its_close,
@@ -305,6 +306,25 @@ fn state(s: &Entity<Session>, cx: &mut TestAppContext) -> State {
     s.read_with(cx, |s, _| s.state.clone())
 }
 
+#[gpui::test]
+fn a_start_that_fails_hands_back_its_prompt(cx: &mut TestAppContext) {
+    let f = boot_on(cx, Path::new("/nowhere"), &[], &CLAUDE, |_| {});
+    let s = cx.update(|cx| {
+        let s = Session::open(f.spec(Kind::Chat), None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        s
+    });
+    wait_until(cx, |cx| {
+        matches!(s.read(cx).state, State::Ended(End::Failed(_)))
+    });
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(s.queued.is_none());
+        assert!(s.unsent.is_none());
+        assert!(matches!(s.items.as_slice(), [Item::Error(_)]));
+    });
+}
+
 fn a_turn_streams_lists_what_it_changed_and_goes_back(fake: Fake, cx: &mut TestAppContext) {
     let f = boot_fake(cx, fake);
     let s = open(&f, Kind::Chat, cx);
@@ -494,6 +514,22 @@ fn cancel_ends_the_turn_even_before_its_prompt_went_out_and_answers_its_asks(
     assert_eq!(said(&s, from, cx), picked);
 }
 
+fn stopping_a_start_returns_the_queued_prompt(fake: Fake, cx: &mut TestAppContext) {
+    let f = boot_fake(cx, fake);
+    let s = cx.update(|cx| {
+        let s = Session::open(f.spec(Kind::Chat), None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        crate::inbox::stop(cx, &s);
+        s
+    });
+    wait_until(cx, |cx| s.read(cx).state == State::Idle);
+    s.read_with(cx, |s, _| {
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(s.unsent.is_none());
+        assert!(!s.items.iter().any(|i| matches!(i, Item::User(_))));
+    });
+}
+
 fn a_reload_waits_for_a_load_ended_or_dropped_while_it_started(
     fake: Fake,
     cx: &mut TestAppContext,
@@ -529,13 +565,21 @@ fn a_start_answered_after_its_adapter_exited_ends_crashed_and_the_next_starts_an
     let mut spec = f.spec(Kind::Chat);
     // The fake exits with code 3 when it is set to this model.
     spec.model = Some("die".into());
-    let s = cx.update(|cx| Session::open(spec, None, cx));
+    let s = cx.update(|cx| {
+        let s = Session::open(spec, None, cx);
+        s.update(cx, |s, cx| s.prompt("hello".into(), cx));
+        s
+    });
     wait_until(cx, |cx| matches!(s.read(cx).state, State::Ended(_)));
     let State::Ended(End::Crashed(why)) = state(&s, cx) else {
         panic!("{:?}", state(&s, cx));
     };
     assert!(why.contains("code 3"), "{why}");
-    assert_eq!(s.read_with(cx, |s, _| s.version.clone()), None);
+    s.read_with(cx, |s, _| {
+        assert!(s.version.is_none());
+        assert_eq!(s.returned.as_deref(), Some("hello"));
+        assert!(matches!(s.items.as_slice(), [Item::Error(_)]));
+    });
     let next = open(&f, Kind::Chat, cx);
     assert_eq!(turn(&next, "say anew", cx), "anew");
 }

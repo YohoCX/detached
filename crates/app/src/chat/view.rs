@@ -101,22 +101,34 @@ pub struct ChatView {
 
 impl ChatView {
     pub fn new(session: Entity<Chat>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let p = session.read(cx).provider;
+        let (p, draft) = session.update(cx, |s, _| (s.provider, s.draft.take()));
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 8)
                 .placeholder(placeholder(p.name))
+                .default_value(draft.unwrap_or_default())
         });
         input.update(cx, |s, cx| s.focus(window, cx));
         let composer_focus = cx.focus_handle();
         let agents = Agents::global(cx);
         agents.update(cx, |a, cx| a.ensure_loaded(cx));
         let scroll = ScrollHandle::new();
-        let follow = scroll.clone();
         let subscriptions = vec![
-            cx.observe(&session, move |_, _, cx| {
-                if f32::from(follow.max_offset().y + follow.offset().y) < FOLLOW {
-                    follow.scroll_to_bottom();
+            cx.observe_in(&session, window, |this, session, window, cx| {
+                if let Some(text) = session.update(cx, |s, _| s.draft.take()) {
+                    this.input.update(cx, |s, cx| {
+                        let input = s.value();
+                        let text = if input.is_empty() {
+                            text
+                        } else {
+                            format!("{text}\n{input}")
+                        };
+                        s.set_value(&text, window, cx);
+                    });
+                }
+                let scroll = &this.scroll;
+                if f32::from(scroll.max_offset().y + scroll.offset().y) < FOLLOW {
+                    scroll.scroll_to_bottom();
                 }
                 cx.notify();
             }),

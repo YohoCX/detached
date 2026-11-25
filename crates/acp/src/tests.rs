@@ -828,7 +828,7 @@ fn a_codex_chat_starts_in_its_mode_lists_its_models_and_switches_through_its_opt
     assert_eq!(option(&opened.config, "mode"), "agent");
     assert_eq!(option(&opened.config, "effort"), "medium");
     let models: Vec<_> = opened.models.iter().map(|m| m.label.as_str()).collect();
-    assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini"]);
+    assert_eq!(models, ["GPT-5.5", "GPT-5.5 mini", "Die"]);
     for (setting, id, value) in [
         (Setting::Mode("read-only".into()), "mode", "read-only"),
         (Setting::Effort("high".into()), "effort", "high"),

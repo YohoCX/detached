@@ -305,7 +305,11 @@ fn next_request(next: &mut u64) -> u64 {
 
 const MODES: &[&str] = &["read-only", "workspace-write", "agent", "agent-full-access"];
 /// Each model's value and name.
-const MODELS: &[(&str, &str)] = &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-5.5 mini")];
+const MODELS: &[(&str, &str)] = &[
+    ("gpt-5.5", "GPT-5.5"),
+    ("gpt-5.5-mini", "GPT-5.5 mini"),
+    ("die", "Die"),
+];
 
 const EFFORTS: &[&str] = &["low", "medium", "high"];
 /// The host's line for a woken turn.
