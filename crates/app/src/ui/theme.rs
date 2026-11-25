@@ -512,7 +512,6 @@ impl Theme {
         let mix = |a: Hsla, b: Hsla, w: f32| a.blend(b.opacity(w));
         let g = black.blend(self.ground);
         let p = g.blend(self.panel);
-        let p = if dark { mix(p, self.fg, 0.035) } else { p };
         let (f, a, u) = (p.blend(self.fg), p.blend(self.accent), g.blend(self.popup));
         self.panel_bg = p;
         if dark {
@@ -738,8 +737,8 @@ mod tests {
         assert_eq!(
             surfaces(&dark),
             [
-                "#0e1012", "#161a1f", "#2b2e33", "#31353a", "#373e48", "#64676e", "#2e3d50",
-                "#263241", "#111317",
+                "#070809", "#161a1f", "#2b2e33", "#31353a", "#373e48", "#7d8187", "#2e3d50",
+                "#263241", "#0c0e11",
             ]
         );
     }

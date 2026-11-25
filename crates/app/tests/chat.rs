@@ -672,8 +672,8 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     assert_eq!(composer.size.width, CONVERSATION);
     assert_eq!(new_input.size.width, CONVERSATION);
     assert_eq!(composer.bottom(), new_input.bottom());
-    let last = items(cx).len() - 1;
-    let last = cx.find(("chat.item", last)).unwrap().bounds();
+    let last_ix = items(cx).len() - 1;
+    let last = cx.find(("chat.item", last_ix)).unwrap().bounds();
     assert!(last.bottom() <= composer.top() && composer.top() - last.bottom() < px(96.));
     assert!(pane.bottom() - composer.bottom() < px(20.));
     let outgoing = cx.find(("chat.item", 0usize)).unwrap().bounds();
@@ -686,6 +686,10 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
         cx.find("chat").unwrap().bounds().size.width < px(380.)
     });
     let composer = cx.find("chat.composer").unwrap().bounds();
+    wait_until(cx, |cx| {
+        let last = cx.find(("chat.item", last_ix)).unwrap().bounds();
+        last.bottom() <= composer.top()
+    });
     check_widths(cx);
     for id in ["chat.provider", "chat.mode", "chat.more", "chat.send"] {
         let button = cx.find(id).unwrap();

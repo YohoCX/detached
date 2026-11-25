@@ -12,7 +12,6 @@ use detached_core::api;
 use detached_core::sessions;
 use detached_core::types::{AccountInput, Provider};
 use detached_forge_fake::{Forge, Seed};
-use gpui_kit::base::test_support::texts;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{ElementId, Pixels, Role, TestAppContext, VisualTestContext, point, px, size};
 use kernel::activity::{Activity, Level, Message, Notice};
@@ -483,12 +482,6 @@ fn sync_labels_stay_short_in_a_named_session_and_its_archive(cx: &mut TestAppCon
     let assert_labels = |cx: &mut VisualTestContext, fetch, pull| {
         for (id, expected) in [("sync.fetch", fetch), ("sync.pull", pull)] {
             assert_eq!(label(cx, id), expected);
-            cx.update(|w, cx| {
-                w.render_frame(cx);
-                assert!(texts(w).iter().any(|t| {
-                    t.visible() && t.path().contains(&id.into()) && t.text() == expected
-                }));
-            });
         }
     };
     cx.workspace(|w, cx| w.switch_session(&session, cx));

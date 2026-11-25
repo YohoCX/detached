@@ -541,6 +541,9 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
     });
     assert_eq!(app.sb.git(&checkout, &["rev-parse", "HEAD"]), original);
 
+    // Hovered before the switch: a settle between the wait below and the click lets a status load
+    // begun on `different` land after the fresh one (docs/TECHDEBT.md).
+    reveal(app, ix);
     app.sb.git(&checkout, &["switch", "-q", "main"]);
     app.update(|_, cx| invalidate::status(cx, &path).detach());
     wait_until(app, |cx| {
@@ -548,7 +551,6 @@ fn the_overview_previews_pull_and_rechecks_the_checkout_before_updating(cx: &mut
             r.status().and_then(|s| s.branch.as_deref()) == Some("main")
         })
     });
-    reveal(app, ix);
     app.click(("overview.pull", ix));
     cx.simulate_prompt_answer("Pull");
     wait_until(app, |cx| {

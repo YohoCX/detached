@@ -6,7 +6,6 @@ use detached_app::dock::{self, AppSpec, DocKind};
 use detached_app::files::{self, DiffDoc, Side};
 use detached_app::shell;
 use detached_app::terminal::Terminals;
-use detached_app::ui::theme;
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
