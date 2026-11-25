@@ -244,3 +244,31 @@ Not in 0.7.1:
 2. The account plan shows from cache before the first message: `Choices.account` in tasks 3 and 5.
    Limits are never cached.
 3. Splits and dock zones, which already drag and keep their sizes in the layout, count as item 21.
+
+## Added after the merge (2026-11-25, owner's screenshots)
+
+18. **`071/side-rails`**: folded side columns look alike.
+    - When both Sessions and Explorer are folded, one rail holds both buttons, stacked; one folded column alone
+      gets the same rail. One width (36 px), one top padding, icons on one line.
+    - Sessions' folded icon is `PanelLeft` ("Show sessions"), not `Branch` (`app/src/sessions/mod.rs:273`);
+      Explorer's is the folder, or the Changes/Chats icon for the mode it was in. Archive stays at the bottom.
+    - Files: `app/src/shell.rs` (`Side::folded_width`, the explorer column), `app/src/sessions/mod.rs`
+      (`fold_button`, the collapsed list), `app/tests/panels.rs` (both rails' width and icon line).
+19. **`071/explorer-chats`**: a third Explorer mode, Chats, beside Files and Changes.
+    - `Files | Changes | Chats N`: the session's open chats (the same list the sidebar and Overview read,
+      `chat::tabs`), each with its state icon and title; a click shows the chat; a New chat row on top;
+      "All chats…" at the bottom opens the Chats app.
+    - The mode persists like Files/Changes; an action `panel.sessionChats` is not needed (Cmd+2 stays Chats).
+    - Files: `app/src/files/tree.rs` (the mode switch), a new `app/src/files/chats.rs` or reuse of
+      `sessions/overview/chats.rs`'s row; `app/tests/session_chats.rs`.
+    - After 18 (both touch the Explorer column's fold icon).
+20. **`071/side-rails`, second part**: the live session's center is one card again, as in 0.6.
+    - The column with the session header, the dock and the status line is a `ui::panel` (radius `PANEL`, edge,
+      shadow) set off from the side columns and the window edge by the shell's gap, on `window_bg`; the corners
+      clip what is inside (`overflow_hidden`).
+    - Panes inside stay flat (`dock/skin.rs`, `pane` branch) and meet at a 1 px `t.line`; Archive keeps its
+      per-group cards.
+    - 0.7.0 dropped the cards with the splits (581531f) without a decision; the owner chose one card over a card
+      per split (2026-11-25).
+    - Test: `tests/panels.rs` or `tests/frame.rs` checks the center's bounds sit inside the window with the gap
+      on every side; a `shots` look in light and dark.
