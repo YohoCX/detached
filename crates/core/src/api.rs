@@ -223,6 +223,28 @@ pub fn compare_base(s: &AppState, repo: &str, base: Option<&str>) -> Result<Comp
     diff::compare_base(&s.env(), Path::new(repo), base)
 }
 
+pub struct SessionBase {
+    pub reference: String,
+    pub comparison: Result<CompareBase>,
+}
+
+/// Base selection errors return directly. Git comparison errors accompany the selected ref.
+pub fn compare_session_base(s: &AppState, member: &crate::sessions::Member) -> Result<SessionBase> {
+    let base = member.base_ref(s)?;
+    let reference = base.trim_start_matches("refs/remotes/").to_owned();
+    let env = s.env();
+    let comparison = worktree::sha(&env, Path::new(&member.repo), &base)
+        .and_then(|sha| diff::compare_base(&env, Path::new(&member.path), Some(&sha)))
+        .map(|mut comparison| {
+            comparison.base.clone_from(&reference);
+            comparison
+        });
+    Ok(SessionBase {
+        reference,
+        comparison,
+    })
+}
+
 pub fn file_patch(
     s: &AppState,
     repo: &str,

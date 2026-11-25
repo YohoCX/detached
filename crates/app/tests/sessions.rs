@@ -601,6 +601,40 @@ fn empty_and_invalid_branches_cannot_create_a_session(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_base_picker_keeps_the_remote_ref_when_a_tag_has_the_same_name(cx: &mut TestAppContext) {
+    let mut release = String::new();
+    let app = &mut open_app_with(cx, |sb| {
+        let repo = sb.clone_pair("repos/api");
+        release = sb.git(&repo, &["rev-parse", "HEAD"]);
+        sb.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/release"]);
+        sb.commit(&repo, "main", "main\n", "main moves");
+        sb.git(&repo, &["tag", "origin/release"]);
+    });
+    app.press("secondary-n");
+    app.update(|w, cx| w.within("sessions.new.name").click("input-state", cx));
+    app.input("Renewal");
+    app.click(("sessions.repository", 0usize));
+    app.click(("sessions.customize", 0usize));
+    wait_until(app, |cx| cx.find(("sessions.basePicker", 0usize)).is_some());
+    app.click(("sessions.basePicker", 0usize));
+    assert!(app.update(|w, cx| detached_app::ui::menu::pick("origin/release", w, cx)));
+    wait_until(app, |cx| {
+        label(cx, ("sessions.basePicker", 0usize)).as_deref() == Some("origin/release · chosen")
+    });
+    app.click("sessions.create.submit");
+    wait_until(app, |cx| {
+        cx.find("sessions.openCreated")
+            .is_some_and(|button| button.disabled().is_none())
+    });
+    let sets = sessions::list(&app.sb.state, &workspace(&app.sb))
+        .unwrap()
+        .sets;
+    let member = &sets[0].members[0];
+    assert_eq!(member.base.as_deref(), Some("refs/remotes/origin/release"));
+    assert_eq!(member.base_sha, release);
+}
+
+#[gpui_kit::test]
 fn archive_shows_both_repos_despite_a_bad_rollout_and_hides_deleted_chats(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         let home = sb.path("codex");

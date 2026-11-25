@@ -4,6 +4,7 @@ Bugs and shortcuts found after milestone 1, newest first. Features go to [BACKLO
 
 | Issue | Where | Notes |
 | --- | --- | --- |
+| Session comparisons resolve their base at read time | `core::sessions::Member::base_ref` | There is no dedicated creation-time comparison ref for each member. Changes to the recipe or `origin/HEAD` can change the base of an existing session. |
 | The control mode and its test run on macOS only (`#[cfg(target_os = "macos")]`) | `crates/app` `tests/drive.rs` | It draws through the headless Metal renderer on the main thread, as `tests/shots.rs` does, and listens on a Unix socket. Linux has a headless wgpu renderer it has not been tried on. |
 | A Codex setting with no answer holds the session's prompts | `crates/acp` `dispatch` | A prompt waits for the acks of settings sent before it; an adapter that stays up but never answers a `set_session_config_option` keeps every later prompt queued (Cancel releases only the one). codex-acp answers every request, so only a misbehaving adapter hits it; a timeout that turns a missing ack into a refusal would close it. |
 | A timed-out login probe is killed by pid | `adapters::cli_probe` | The group kill runs off the scan thread after the 5 s timeout; a CLI reaped in that instant leaves a freed pid to signal, and where policy blocks `taskkill.exe` a hung CLI and its waiter thread stay until it exits. |
