@@ -431,6 +431,7 @@ impl Render for Shell {
                 .id("session.explorer")
                 .test_support()
                 .size_full()
+                .overflow_hidden()
                 .border_l_1()
                 .border_color(t.line);
             let panel = if files.is_some() {

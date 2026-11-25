@@ -6,12 +6,15 @@ use std::time::{Duration, SystemTime};
 use common::*;
 use detached_app::chat;
 use detached_app::ui::menu;
+use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
 use detached_core::adapters::{BLOCK, CLAUDE, Config};
+use detached_core::backend::Tool;
 use detached_core::chat_settings::{self, Preset};
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
-    AppContext, Role, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext,
-    px, size,
+    AppContext, Role, ScrollDelta, SharedString, SystemNotificationResponse, TestAppContext,
+    VisualTestContext, point, px, size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -454,29 +457,54 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     assert!(pane.bottom() - new_input.bottom() < px(20.));
     assert!(hint.bottom() <= new_input.top() && new_input.top() - hint.bottom() < px(64.));
     assert_eq!(label(cx, "chat.checkout").as_deref(), Some("solo"));
-    let reply = |cx: &mut VisualTestContext, text: &str| {
-        say(cx, &format!("say {text}"));
-        wait_until(cx, |cx| items(cx).iter().any(|item| item == text));
-        idle(cx);
-        items(cx).iter().position(|item| item == text).unwrap()
-    };
-    let prose = reply(cx, "A short answer");
+    let prose = "The checkout is ready to review. ".repeat(8);
+    let prose = prose.trim_end();
     let headings = "Checkout | Branch | Change | Scope | Status | Notes | Owner | Reviewed";
     let table = format!("| {headings} |\n|{}\n| {headings} |", " --- |".repeat(8));
-    let row = reply(cx, &table);
+    let reply = format!("{prose}\n\n{table}");
+    say(cx, &format!("say {reply}"));
+    wait_until(cx, |cx| items(cx).iter().any(|item| item == &reply));
+    idle(cx);
+    let row = items(cx).iter().position(|item| item == &reply).unwrap();
 
-    let markdown = |cx: &mut VisualTestContext, index| {
+    let check_widths = |cx: &mut VisualTestContext| {
         cx.update(|w, cx| {
             w.render_frame(cx);
-            w.within(("chat.item", index)).find("markdown").bounds()
+            let composer = w.find("chat.composer").bounds();
+            let row = ("chat.item", row).into();
+            let drawn = texts(w);
+            let mut reply = drawn.iter().filter(|t| t.path().contains(&row));
+            let paragraph = reply.find(|t| t.text() == prose).unwrap().bounds();
+            assert_eq!(paragraph.left(), composer.left());
+            assert!(paragraph.right() <= (composer.left() + PROSE).min(composer.right()));
+
+            let heading = reply.find(|t| t.text() == "Checkout").unwrap().bounds();
+            let scale = w.scale_factor();
+            let heading = heading.scale(scale);
+            let composer = composer.scale(scale);
+            let table = w
+                .painted_quads()
+                .into_iter()
+                .find(|q| {
+                    q.border_color == detached_app::ui::theme(cx).line
+                        && q.border_widths.left.as_f32() > 0.
+                        && q.border_widths.right.as_f32() > 0.
+                        && q.bounds.top() <= heading.top()
+                        && q.bounds.bottom() >= heading.bottom()
+                        && q.bounds.left() == composer.left()
+                })
+                .unwrap();
+            assert_eq!(table.bounds.right(), composer.right());
         })
     };
     let composer = cx.find("chat.composer").unwrap().bounds();
     let pane = cx.find("chat").unwrap().bounds();
-    let inset = composer.left() - pane.left();
-    assert!(inset > px(0.) && inset < px(32.));
-    assert_eq!(composer.size.width, new_input.size.width);
-    assert!(composer.size.width <= px(840.));
+    assert_eq!(
+        composer.left() - pane.left(),
+        pane.right() - composer.right()
+    );
+    assert_eq!(composer.size.width, CONVERSATION);
+    assert_eq!(new_input.size.width, CONVERSATION);
     assert_eq!(composer.bottom(), new_input.bottom());
     let last = items(cx).len() - 1;
     let last = cx.find(("chat.item", last)).unwrap().bounds();
@@ -484,10 +512,7 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     assert!(pane.bottom() - composer.bottom() < px(20.));
     let outgoing = cx.find(("chat.item", 0usize)).unwrap().bounds();
     assert_eq!(outgoing.right(), composer.right());
-    assert_eq!(markdown(cx, prose).left(), composer.left());
-    assert!(markdown(cx, prose).size.width < px(800.));
-    assert_eq!(markdown(cx, row).left(), composer.left());
-    assert_eq!(markdown(cx, row).right(), pane.right() - inset);
+    check_widths(cx);
 
     cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
     cx.simulate_resize(size(px(740.), px(900.)));
@@ -495,12 +520,37 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
         cx.find("chat").unwrap().bounds().size.width < px(380.)
     });
     let composer = cx.find("chat.composer").unwrap().bounds();
-    assert_eq!(markdown(cx, row).right(), composer.right());
+    check_widths(cx);
     for id in ["chat.provider", "chat.mode", "chat.more", "chat.send"] {
         let button = cx.find(id).unwrap();
         assert!(button.visible(), "{id}");
         assert!(button.bounds().right() <= composer.right(), "{id}");
     }
+}
+
+#[gpui_kit::test]
+fn the_scrolled_transcript_stays_below_the_tab_strip(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    say(cx, &format!("say {}last line", "line\n".repeat(60)));
+    wait_for_item(cx, "last line");
+    idle(cx);
+
+    let scroll = |cx: &mut VisualTestContext, dy| {
+        cx.update(|w, cx| {
+            w.scroll("chat.items", ScrollDelta::Pixels(point(px(0.), px(dy))), cx);
+        });
+    };
+    let first = ("chat.item", 0usize);
+    scroll(cx, 4000.);
+    assert!(cx.find(first).unwrap().visible());
+    scroll(cx, -60.);
+    let item = cx.find(first).unwrap();
+    assert!(item.bounds().top() > px(0.));
+    assert!(item.bounds().bottom() <= cx.find("chat.items").unwrap().bounds().top());
+    assert!(!item.visible());
 }
 
 #[gpui_kit::test]
@@ -573,6 +623,35 @@ fn tools_and_blocks_show_in_the_feed(cx: &mut TestAppContext) {
     idle(cx);
     say(cx, "deny");
     wait_for_item(cx, "Blocked Bash: needs approval");
+}
+
+#[gpui_kit::test]
+fn a_blocked_tool_shows_the_first_nonempty_line(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    let solo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| {
+        let chat = chat::find(&solo, 0, cx).unwrap();
+        let session = chat.read(cx).current().unwrap().clone();
+        session.update(cx, |s, cx| {
+            s.items.push(Item::Tool(Tool {
+                kind: Some("Bash".into()),
+                status: Some("denied".into()),
+                output: Some(json!("\n \t\nneeds approval\nCheck the active policy")),
+                ..Tool::default()
+            }));
+            cx.notify();
+        });
+    });
+    let row = index_of(cx, "Blocked Bash: needs approval");
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        assert!(texts(w).iter().any(|t| {
+            t.path().contains(&("chat.item", row).into()) && t.text() == "needs approval"
+        }));
+    });
 }
 
 #[gpui_kit::test]
@@ -2513,6 +2592,39 @@ fn a_codex_start_that_crashes_returns_its_message(cx: &mut TestAppContext) {
     wait_for_item(cx, "died at its model");
     assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
+}
+
+#[gpui_kit::test]
+fn a_multiline_tool_title_fits_in_one_row(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        codex(sb);
+        sb.state
+            .set_block(chat_settings::BLOCK, json!({"provider": "codex"}))
+            .unwrap();
+    });
+    say(cx, "run cat <<'END'\nbody\nEND; say finished");
+    wait_until(cx, |cx| items(cx).iter().any(|i| i == "finished"));
+    idle(cx);
+    let row = index_of(cx, "execute Run echo cat <<'END'… ok");
+    assert_eq!(items(cx)[row + 1], "finished");
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let bounds = w.find(("chat.item", row)).bounds();
+        assert_eq!(bounds.size.height, px(24.));
+        let drawn = texts(w);
+        let mut detail = drawn
+            .iter()
+            .filter(|t| t.path().contains(&("chat.item", row).into()));
+        let command = detail.next().unwrap();
+        assert_eq!(command.text(), "Run echo cat <<'END'…");
+        assert!(detail.next().is_none());
+        assert!(command.visible() && command.bounds().bottom() <= bounds.bottom());
+        let next = drawn
+            .iter()
+            .find(|t| t.path().contains(&("chat.item", row + 1).into()) && t.text() == "finished")
+            .unwrap();
+        assert!(next.visible() && command.bounds().bottom() <= next.bounds().top());
+    });
 }
 
 #[gpui_kit::test]
