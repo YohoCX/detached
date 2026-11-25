@@ -106,7 +106,7 @@ impl Side {
     fn limits(self) -> (f32, f32, f32) {
         match self {
             Self::Sessions => (248., 208., 480.),
-            Self::Explorer => (264., 248., 520.),
+            Self::Explorer => (288., 248., 520.),
         }
     }
 

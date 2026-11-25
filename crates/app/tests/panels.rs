@@ -86,10 +86,10 @@ fn the_sidebar_grips_resize_independently_and_restore_their_widths(cx: &mut Test
     let mut app = open_app(cx);
     drag(&mut app, "grip.session.list", 72.);
     assert_eq!(width(&mut app, "sessions"), px(320.));
-    assert_eq!(width(&mut app, "session.explorer"), px(264.));
+    assert_eq!(width(&mut app, "session.explorer"), px(288.));
     drag(&mut app, "grip.session.explorer", -12.);
     assert_eq!(width(&mut app, "sessions"), px(320.));
-    assert_eq!(width(&mut app, "session.explorer"), px(252.));
+    assert_eq!(width(&mut app, "session.explorer"), px(276.));
 
     app.update(|w, cx| {
         w.render_frame(cx);
@@ -116,12 +116,12 @@ fn the_sidebar_grips_resize_independently_and_restore_their_widths(cx: &mut Test
     let window = app.update(|_, cx| {
         ui_state::install(saved, cx);
         assert_eq!(ui_state::get("size.session.list", cx), Some(320.));
-        assert_eq!(ui_state::get("size.session.explorer", cx), Some(252.));
+        assert_eq!(ui_state::get("size.session.explorer", cx), Some(276.));
         shell::open(cx).unwrap()
     });
     let mut reopened = VisualTestContext::from_window(window, cx);
     assert_eq!(width(&mut reopened, "sessions"), px(320.));
-    assert_eq!(width(&mut reopened, "session.explorer"), px(252.));
+    assert_eq!(width(&mut reopened, "session.explorer"), px(276.));
 }
 
 #[gpui_kit::test]
@@ -176,13 +176,13 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
     app.simulate_resize(size(px(1200.), px(900.)));
     split_right(app);
     assert_eq!(pane_count(app), 2);
-    assert_eq!(width(app, "session.explorer"), px(264.));
+    assert_eq!(width(app, "session.explorer"), px(288.));
     drag(app, "grip.session.explorer", 80.);
     assert_eq!(width(app, "session.explorer"), px(36.));
     assert_eq!(width(app, "sessions"), px(248.));
 
     app.simulate_resize(size(px(1300.), px(900.)));
-    assert_eq!(width(app, "session.explorer"), px(344.));
+    assert_eq!(width(app, "session.explorer"), px(368.));
     app.simulate_resize(size(px(1200.), px(900.)));
     assert_eq!(width(app, "session.explorer"), px(36.));
     app.click("explorer.fold");
@@ -190,7 +190,7 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
     assert!(app.find("grip.session.explorer").is_some());
 
     app.simulate_resize(size(px(1300.), px(900.)));
-    assert_eq!(width(app, "session.explorer"), px(344.));
+    assert_eq!(width(app, "session.explorer"), px(368.));
     assert_eq!(pane_count(app), 2);
 
     app.simulate_resize(size(px(1200.), px(900.)));
@@ -237,8 +237,8 @@ fn an_explorer_drag_can_continue_after_it_joins_the_sessions_rail(cx: &mut TestA
     assert_eq!(pane_count(app), 2);
 
     let from = app.find("grip.session.explorer").unwrap().bounds().center();
-    let to = from + point(px(176.), px(0.));
-    let back = from + point(px(128.), px(0.));
+    let to = from + point(px(152.), px(0.));
+    let back = from + point(px(104.), px(0.));
     let modifiers = Modifiers::none();
     app.simulate_mouse_down(from, MouseButton::Left, modifiers);
     app.simulate_mouse_move(from + point(px(20.), px(0.)), MouseButton::Left, modifiers);
@@ -271,7 +271,7 @@ fn new_session_can_use_the_space_of_the_hidden_explorer(cx: &mut TestAppContext)
 fn a_new_split_can_use_the_full_width_freed_by_folding_the_explorer(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
     app.simulate_resize(size(px(1322.), px(900.)));
-    drag(app, "grip.session.explorer", 136.);
+    drag(app, "grip.session.explorer", 112.);
     split_right(app);
     assert_eq!(pane_count(app), 2);
     assert_eq!(width(app, "session.explorer"), px(400.));
@@ -288,10 +288,20 @@ fn a_new_split_can_use_the_explorer_width_when_sessions_is_folded(cx: &mut TestA
     app.click("explorer.fold");
     split_right(app);
     assert_eq!(pane_count(app), 2);
-    assert_eq!(width(app, "session.explorer"), px(264.));
+    assert_eq!(width(app, "session.explorer"), px(288.));
 
     split_right(app);
     assert_eq!(pane_count(app), 3);
     assert_eq!(width(app, "sessions"), px(36.));
     assert!(app.find("session.explorer").is_none());
+}
+
+#[gpui_kit::test]
+fn the_explorer_header_fits_one_row_at_its_default_width(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    let row = |app: &mut VisualTestContext, id| app.find(id).unwrap().bounds().center().y;
+    let modes = row(app, "tree.files");
+    for id in ["tree.find", "explorer.fold"] {
+        assert_eq!(row(app, id), modes, "{id}");
+    }
 }

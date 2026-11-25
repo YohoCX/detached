@@ -213,7 +213,7 @@ impl Render for List {
             .w_full()
             .min_h_0()
             .bg(t.window_bg)
-            .when(self.live, |d| d.h_full().p(px(8.)).gap(px(4.)))
+            .when(self.live, |d| d.h_full().py(GAP).pl(GAP))
             .when(!self.live, |d| {
                 d.pb(GAP / 2.).border_b_1().border_color(t.line)
             });
@@ -270,6 +270,20 @@ impl Render for List {
                     cx,
                 )
             }));
+        if self.live {
+            return list.child(
+                ui::panel(div(), cx)
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .overflow_hidden()
+                    .p(px(8.))
+                    .gap(px(4.))
+                    .child(header)
+                    .child(rows)
+                    .child(archive_button),
+            );
+        }
         list.child(header).child(rows).child(archive_button)
     }
 }
