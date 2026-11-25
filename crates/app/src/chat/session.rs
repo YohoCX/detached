@@ -1,5 +1,4 @@
-//! One chat: its conversation's sessions on `kernel::Session`, the first opened when the chat shows,
-//! and the repo's settings for the user to trust.
+//! A chat's conversation and the repo's settings for the user to trust.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +8,7 @@ use detached_core::chat_settings::{Choices, Preset};
 use detached_core::trust::{self, Project};
 use detached_core::types::RepoInfo;
 use gpui_kit::{App, Context, Entity, Subscription, Task};
+use kernel::activity::Activity;
 use kernel::blocking;
 use kernel::session::{Answer, End, Item, Session, State as Run};
 use kernel::settings::Settings;
@@ -114,22 +114,18 @@ impl Chat {
         self.current()?.read(cx).queued.as_deref()
     }
 
-    /// Opens the first session, unless one is there.
-    pub fn ensure(&mut self, cx: &mut Context<Self>) {
-        if !self.sessions.is_empty() || !Settings::ready(cx) {
-            return;
+    fn ensure(&mut self, cx: &mut Context<Self>) -> Option<Entity<Session>> {
+        if !Settings::ready(cx) {
+            return None;
         }
         if !super::provider_config(cx).shows(self.provider) {
-            let Some((p, choices)) = defaults(cx) else {
-                return;
-            };
+            let (p, choices) = defaults(cx)?;
             self.apply(p, choices);
         }
-        self.open(None, cx);
+        Some(self.open(None, cx))
     }
 
-    /// Opens a session after the ones there, resuming `past` when given.
-    fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
+    fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) -> Entity<Session> {
         self.remembered = None;
         let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
         spec.mode = self.mode().into();
@@ -139,8 +135,9 @@ impl Chat {
         let s = Session::open_scoped(spec, past, self.checkouts.clone(), cx);
         self._watch
             .push(cx.observe(&s, |c, s, cx| c.changed(s, cx)));
-        self.sessions.push(s);
+        self.sessions.push(s.clone());
         cx.notify();
+        s
     }
 
     fn live(&self, cx: &App) -> Option<Entity<Session>> {
@@ -150,20 +147,17 @@ impl Chat {
 
     /// Sends `text` to the session, or to a new one that resumes the conversation.
     pub fn send(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
-            self.ensure(cx);
-            if self.sessions.is_empty() {
+        let s = if self.sessions.is_empty() {
+            let Some(s) = self.ensure(cx) else {
                 return;
-            }
-        }
-        self.topic.get_or_insert_with(|| text.clone());
-        let s = match self.live(cx) {
-            Some(s) => s,
-            None => {
-                self.open(self.conversation(cx).map(String::from), cx);
-                self.sessions.last().unwrap().clone()
-            }
+            };
+            s
+        } else if let Some(s) = self.live(cx) {
+            s
+        } else {
+            self.open(self.conversation(cx).map(String::from), cx)
         };
+        self.topic.get_or_insert_with(|| text.clone());
         s.update(cx, |s, cx| s.prompt(text, cx));
         cx.notify();
     }
@@ -264,7 +258,6 @@ impl Chat {
         }
     }
 
-    /// Hands a chat with nothing in it to `p` with its preset.
     pub fn set_provider(&mut self, p: &'static Provider, cx: &mut Context<Self>) {
         if self.provider.id == p.id || !self.is_new(cx) || !super::provider_config(cx).shows(p) {
             return;
@@ -272,7 +265,6 @@ impl Chat {
         self.end(cx);
         self.apply(p, choices(&Preset::read(Settings::get(cx)), p));
         self.configured = true;
-        self.open(None, cx);
         self.check_trust(cx);
     }
 
@@ -319,13 +311,8 @@ impl Chat {
         {
             return;
         }
-        let reopen = self.current().is_some();
         self.end(cx);
         self.apply(p, choices);
-        if reopen {
-            self.ensure(cx);
-            self.check_trust(cx);
-        }
     }
 
     /// Switches the mode, model or effort, for this session and the next.
@@ -476,8 +463,11 @@ impl Chat {
                     }
                     Err(e) => {
                         c.accepted = None;
+                        let message = format!("Cannot save the trust: {e}");
                         if let Some(s) = live {
-                            s.update(cx, |s, _| s.fail(format!("Cannot save the trust: {e}")));
+                            s.update(cx, |s, _| s.fail(message));
+                        } else {
+                            Activity::global(cx).update(cx, |a, cx| a.say(message, true, cx));
                         }
                     }
                 }
@@ -603,15 +593,12 @@ impl Chat {
         cx.notify();
     }
 
-    /// Forgets the conversation: a new session takes its place.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.end(cx);
         if let Some((p, choices)) = defaults(cx) {
             self.apply(p, choices);
-            self.open(None, cx);
-            self.check_trust(cx);
         }
-        cx.notify();
+        self.check_trust(cx);
     }
 }
 

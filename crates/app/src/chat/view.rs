@@ -34,7 +34,7 @@ use kernel::blocking;
 use kernel::doc::{DiffDoc, Doc, Location};
 use kernel::inbox::{self, Messages};
 use kernel::resource::Interest;
-use kernel::session::{AUTO, Answer, Back, Item, Session};
+use kernel::session::{AUTO, Answer, Back, Item, Session, State};
 use kernel::settings::Settings;
 use kernel::workspace::Workspace;
 
@@ -149,16 +149,8 @@ impl ChatView {
             cx.on_focus_in(&composer_focus, window, |_, _, cx| cx.notify()),
             cx.on_focus_out(&composer_focus, window, |_, _, _, cx| cx.notify()),
             cx.observe(&Settings::global(cx), |this: &mut ChatView, _, cx| {
-                if this.session.read(cx).current().is_none() {
-                    this.session.update(cx, |s, cx| {
-                        if s.untouched(cx) {
-                            s.refresh_defaults(cx);
-                        }
-                        s.ensure(cx);
-                        if s.current().is_some() {
-                            s.check_trust(cx);
-                        }
-                    });
+                if this.session.read(cx).untouched(cx) {
+                    this.session.update(cx, |s, cx| s.refresh_defaults(cx));
                 }
                 this.refresh_slash(cx);
                 cx.notify();
@@ -169,10 +161,7 @@ impl ChatView {
                 }
             }),
         ];
-        session.update(cx, |s, cx| {
-            s.ensure(cx);
-            s.check_trust(cx);
-        });
+        session.update(cx, |s, cx| s.check_trust(cx));
         let repo = session.read(cx).repo.clone();
         let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
         scroll.scroll_to_bottom();
@@ -552,11 +541,12 @@ impl ChatView {
                     .children(parts),
             )
         });
-        let limits = s.and_then(|s| s.limits.as_deref()).unwrap_or_default();
+        let live = s.filter(|s| !matches!(s.state, State::Ended(_)));
+        let limits = live.and_then(|s| s.limits.as_deref()).unwrap_or_default();
         let week = (limits.iter())
             .find(|l| l.name == "Week" && self.room == 2)
             .map(|l| limit(l, false, cx));
-        let unknown = (limits.is_empty() && s.is_some_and(|s| s.limits_settled())).then(|| {
+        let unknown = (limits.is_empty() && live.is_some_and(|s| s.limits_settled())).then(|| {
             let said = "No plan limits reported";
             div()
                 .id("chat.limits")
@@ -676,7 +666,9 @@ impl ChatView {
         let p = chat.provider;
         let account = chat
             .current()
-            .and_then(|s| s.read(cx).account.as_ref())
+            .map(|s| s.read(cx))
+            .filter(|s| !matches!(s.state, State::Ended(_)))
+            .and_then(|s| s.account.as_ref())
             .or_else(|| preset.providers.get(p.id)?.account.as_ref());
         let name = div()
             .id("chat.name")
