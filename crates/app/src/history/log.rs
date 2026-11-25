@@ -840,7 +840,9 @@ impl Render for Log {
             );
         let body: AnyElement = if let Some(e) = &self.error {
             message("log.message", e.clone(), t.error).into_any_element()
-        } else if self.rows.is_empty() && !self.loading {
+        } else if self.rows.is_empty() && self.loading {
+            ui::loading(cx).id("log.loading").into_any_element()
+        } else if self.rows.is_empty() {
             message("log.message", "No commits", t.muted).into_any_element()
         } else {
             let list = cx.processor(|this, range, window, cx| this.rows(range, window, cx));

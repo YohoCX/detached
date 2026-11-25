@@ -403,6 +403,17 @@ pub fn highlighted(text: impl Into<SharedString>, indices: &[usize], cx: &App) -
     StyledText::new(text).with_highlights(runs)
 }
 
+/// A quiet spinner centered in the space it is given.
+pub fn loading(cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_1()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child(spinner(theme(cx).muted))
+}
+
 /// Muted text centered in the space it is given.
 pub fn placeholder(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
