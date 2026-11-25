@@ -272,3 +272,39 @@ Not in 0.7.1:
       per split (2026-11-25).
     - Test: `tests/panels.rs` or `tests/frame.rs` checks the center's bounds sit inside the window with the gap
       on every side; a `shots` look in light and dark.
+
+## Added 2026-11-25, second round of the owner's screenshots
+
+21. **`071/archive-page`**: Archive is a page in the live shell; the legacy dock and its zones are removed
+    ([decision](docs/decisions/2026-11-25-archive-page.md)).
+    - `session.archive` and the Archive button show `Doc::SessionArchive` in the live center card; the Archive
+      row in Sessions is selected while it is shown. Sessions, Explorer and the title bar stay the live ones.
+    - The archive page keeps what the archive held: archived sessions, past chats, archived tabs with their
+      Docs/Chats/Code filters; opening an item opens it as a tab in the center.
+    - Remove: the Left/Right/Bottom zones, `zone.left|bottom|right` and `top.chat` in the title bar, the
+      archive-only title bar items (`Shell::left` and whatever only the archive mode drew), the legacy dock
+      layout and its saved state, and `Workspace`'s archive mode if nothing needs it after. Old ui_state keys are
+      left unread, never an error.
+    - Every app a zone held (Chats, Council, Changes, Project, Merge Requests, Pipelines, Log, Events, Terminal,
+      Processes, Docs) opens as a center tab in the live session through the New tab menu and the palette.
+    - CLAUDE.md's "The legacy dock layout and category filters apply to archived tabs" changes to match.
+    - Tests: the Archive button leaves no zone and no zone toggle on screen and shows the page in the center;
+      an archived tab opens in the center; each former zone app opens as a tab. Drop the zone tests
+      (`shell.rs` `the_title_bar_opens_and_closes_the_zones…` and the like) with the zones.
+22. **`071/keys`**: the owner's chords.
+    - Cmd+1 Explorer files (as now), Cmd+2 `panel.sessions` (Cmd+B goes), Cmd+T `panel.terminal`: a terminal for
+      the current repo in a pane below the center's, focused, or the open one focused. Alt+F12 goes.
+    - `vcs.update` loses Cmd+T (the Pull button and the palette stay); `panel.chats` loses Cmd+2.
+    - `keymap.rs`, docs/KEYMAP.md; check the terminal and text fields do not eat Cmd+T or Cmd+2.
+    - Tests: each chord does its action in a live session (`tests/` of the vertical that owns it).
+23. **`071/segments`**: one look for switches and buttons. After 21.
+    - A `ui::segmented` widget (its own commit in `ui/`): segments with an icon or a label, an optional count,
+      a tooltip with the action's chord, `aria_toggled`; one height, radius, padding and active color from
+      `ui::theme`.
+    - Explorer's modes become icons: Files `Folder`, Changes `Changes`, Chats `Chat`, the count beside Changes
+      and Chats; tooltips "Files ⌘1", "Changes ⌘0", "Chats". Ids and aria labels stay (`tree.files`, …).
+    - Every other segmented switch uses it: the Chats app's All/Active/Inactive, the archive page's filters,
+      New session's "A new branch / Worktrees I already have…", the Settings pages' switches.
+    - Header buttons: one height and radius for text buttons ("New session", Fetch, Pull…) and one size for
+      icon buttons, from tokens; fix the ones that differ.
+    - Tests: the mode switch's ids and tooltips in `tests/session_chats.rs`/`tests/panels.rs`; a `shots` look.
