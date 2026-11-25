@@ -4,12 +4,12 @@ use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Animation, AnimationExt, App, BoxShadow, Div, ElementId, FontWeight, InteractiveElement,
-    ParentElement, Role, Stateful, StatefulInteractiveElement, Styled, Window, div,
+    ParentElement, Role, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
 
 use super::theme::segment;
-use super::{Icon, motion, pressable, radius, text, theme, titled, titled_action};
+use super::{Icon, motion, pressable, radius, text, theme};
 
 pub fn group(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
     div()
@@ -40,8 +40,24 @@ fn item(id: impl Into<ElementId>, on: bool, cx: &App) -> Stateful<Div> {
         .when(!on, |b| b.hover(|s| s.text_color(t.fg)))
 }
 
+/// The tooltip opens above the segment: below it, it would cover the row under the group.
+fn tipped(
+    b: Stateful<Div>,
+    title: &'static str,
+    tip: impl Fn(&App) -> SharedString + 'static,
+) -> Stateful<Div> {
+    b.role(Role::Button)
+        .aria_label(title)
+        .tooltip(move |window, cx| {
+            let tip = tip(cx);
+            Tooltip::element(move |_, _| tip.clone().test_text(tip.clone()))
+                .mt(segment::TIP_RISE)
+                .build(window, cx)
+        })
+}
+
 pub fn label(id: impl Into<ElementId>, label: &'static str, on: bool, cx: &App) -> Stateful<Div> {
-    titled(item(id, on, cx), label).child(label)
+    tipped(item(id, on, cx), label, move |_| label.into()).child(label)
 }
 
 pub fn icon(
@@ -60,10 +76,10 @@ pub fn icon(
             b.aria_description(count.clone())
                 .child(count.clone().test_text(count))
         });
-    match action {
-        Some(action) => titled_action(b, label, action),
-        None => titled(b, label),
-    }
+    tipped(b, label, move |cx| match action {
+        Some(action) => crate::keymap::tip(label, action, cx).into(),
+        None => label.into(),
+    })
 }
 
 pub fn segmented<T: Copy + PartialEq + 'static>(
@@ -89,11 +105,7 @@ pub fn segmented_tips<T: Copy + PartialEq + 'static>(
         let on = v == value;
         let on_change = on_change.clone();
         let b = match tip {
-            Some(tip) => item(i, on, cx)
-                .role(Role::Button)
-                .aria_label(title)
-                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
-                .child(title),
+            Some(tip) => tipped(item(i, on, cx), title, move |_| tip.into()).child(title),
             None => label(i, title, on, cx),
         };
         b.test_support()

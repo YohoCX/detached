@@ -97,6 +97,7 @@ pub mod segment {
     pub const PAD: Pixels = px(10.);
     pub const GAP: Pixels = px(4.);
     pub const ICON: Pixels = px(14.);
+    pub const TIP_RISE: Pixels = px(-40.);
 }
 
 pub mod rail {
@@ -511,10 +512,11 @@ impl Theme {
         let mix = |a: Hsla, b: Hsla, w: f32| a.blend(b.opacity(w));
         let g = black.blend(self.ground);
         let p = g.blend(self.panel);
+        let p = if dark { mix(p, self.fg, 0.035) } else { p };
         let (f, a, u) = (p.blend(self.fg), p.blend(self.accent), g.blend(self.popup));
         self.panel_bg = p;
         if dark {
-            self.window_bg = mix(g, black, 0.6);
+            self.window_bg = mix(g, black, 0.8);
             self.header_bg = mix(p, f, 0.10);
             self.popover_bg = mix(mix(self.header_bg, u, 0.25), f, 0.04);
             self.segment_bg = f.opacity(0.12);
@@ -525,7 +527,7 @@ impl Theme {
             self.segment_bg = self.popover_bg;
         }
         let (edge, user, code) = if dark {
-            (0.25, 0.15, 0.65)
+            (0.4, 0.15, 0.65)
         } else {
             (0.37, 0.09, 0.68)
         };
