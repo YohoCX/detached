@@ -18,6 +18,7 @@ pub enum Icon {
     Close,
     Stop,
     Folder,
+    Changes,
     Home,
     File,
     Repo,
@@ -73,6 +74,7 @@ impl Icon {
             Icon::Stop => svg16!("M4.5 4.5h7v7h-7z"),
             Icon::Home => svg16!("M2.5 7 8 2.5 13.5 7M4 6v7.5h8V6M7 13.5V10h2v3.5"),
             Icon::Folder => svg16!("M2 4.5h4l1.5 1.5H14v6.5H2z"),
+            Icon::Changes => svg16!("M2.5 5h5m-2.5-2.5v5M9.5 5h4M2.5 11h5m2 0h4"),
             Icon::Repo => svg16!("M3.5 2.5h9v11h-9zM6 2.5v11"),
             Icon::Tree => svg16!("M3 3h4M5 3v9h3M5 7.5h3M10 7.5h3M10 12h3"),
             Icon::Mr => svg16!(
