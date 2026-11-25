@@ -219,7 +219,7 @@ pub struct Opened {
 }
 
 /// Who the session runs as and what it draws from: "Claude Max", "Anthropic API", "Amazon Bedrock".
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Account {
     pub plan: String,
     pub email: Option<String>,

@@ -160,6 +160,12 @@ fn main() {
                     }
                     reply(json!({"configOptions": config}));
                 }
+                update(
+                    &out,
+                    &sid,
+                    json!({"sessionUpdate": "available_commands_update",
+                    "availableCommands": [{"name": "compact", "description": "Compact the conversation"}]}),
+                );
             }
             "session/close" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();

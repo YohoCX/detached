@@ -15,7 +15,6 @@ use kernel::settings::Settings;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-/// The last commands each repo's Claude session listed, for `/` before this one's lists them.
 const COMMANDS: &str = "chat.commands";
 
 /// A trust check's number, what it read, and whether that is trusted.
@@ -57,8 +56,7 @@ pub struct Chat {
     /// Checks begun, and the latest whose answer is shown: an older one may finish later.
     checks: u64,
     seen: u64,
-    /// The commands this repo's last session listed.
-    cached: Vec<SlashCommand>,
+    remembered: Vec<SlashCommand>,
     configured: bool,
     /// It shows a past conversation.
     resumed: bool,
@@ -76,15 +74,10 @@ impl Chat {
     }
 
     pub fn new(repo: String, cx: &mut Context<Self>) -> Self {
-        let mut all: BTreeMap<String, Vec<SlashCommand>> =
-            ui_state::get(COMMANDS, cx).unwrap_or_default();
         let (provider, choices) = defaults(cx).unwrap_or((&CLAUDE, Choices::default()));
         let workspace = Workspace::get(cx);
         Chat {
-            cached: all
-                .remove(&repo)
-                .filter(|_| provider.id == CLAUDE.id)
-                .unwrap_or_default(),
+            remembered: vec![],
             repo,
             owner: workspace
                 .id()
@@ -131,6 +124,7 @@ impl Chat {
 
     /// Opens a session after the ones there, resuming `past` when given.
     fn open(&mut self, past: Option<String>, cx: &mut Context<Self>) {
+        self.remembered.clear();
         let mut spec = Spec::new(self.provider, &self.repo, Kind::Chat);
         spec.mode = self.mode().into();
         spec.model = self.model.clone();
@@ -174,13 +168,9 @@ impl Chat {
                 let ended = matches!(s.state, Run::Ended(End::Trust));
                 let kept = std::mem::take(&mut s.refused)
                     .then(|| ["mode", "model", "effort"].map(|k| s.option(k).map(String::from)));
-                (
-                    s.commands.clone(),
-                    s.returned.take(),
-                    s.unsent.take(),
-                    ended,
-                    kept,
-                )
+                let commands = (!s.commands.is_empty() && s.commands != self.remembered)
+                    .then(|| s.commands.clone());
+                (commands, s.returned.take(), s.unsent.take(), ended, kept)
             });
             if let Some(text) = returned {
                 self.draft = Some(text);
@@ -194,13 +184,15 @@ impl Chat {
                 (self.model, self.effort) =
                     (model.or(self.model.take()), effort.or(self.effort.take()));
             }
-            // Kept for Claude's, the chat's first provider.
-            if !commands.is_empty() && commands != self.cached && self.provider.id == CLAUDE.id {
+            if let Some(commands) = commands {
                 let mut all: BTreeMap<String, Vec<SlashCommand>> =
                     ui_state::get(COMMANDS, cx).unwrap_or_default();
-                all.insert(self.repo.clone(), commands.clone());
-                ui_state::set(COMMANDS, all, cx);
-                self.cached = commands;
+                let key = self.command_key();
+                if all.get(&key) != Some(&commands) {
+                    all.insert(key, commands.clone());
+                    ui_state::set(COMMANDS, all, cx);
+                }
+                self.remembered = commands;
             }
             if let Some(text) = unsent {
                 self.send(text, cx);
@@ -225,12 +217,37 @@ impl Chat {
         cx.notify();
     }
 
-    /// The commands of the session, or the last ones listed here before it lists them.
-    pub fn commands<'a>(&'a self, cx: &'a App) -> &'a [SlashCommand] {
-        match self.current().map(|s| &s.read(cx).commands) {
-            Some(c) if !c.is_empty() => c,
-            _ => &self.cached,
+    fn command_key(&self) -> String {
+        format!("{}\0{}", self.provider.id, self.repo)
+    }
+
+    pub fn commands(&self, cx: &App) -> Vec<SlashCommand> {
+        self.commands_of(self.current(), cx)
+    }
+
+    fn commands_of(&self, session: Option<&Entity<Session>>, cx: &App) -> Vec<SlashCommand> {
+        if let Some(s) = session.map(|s| s.read(cx))
+            && !s.commands.is_empty()
+        {
+            return s.commands.clone();
         }
+        let mut all: BTreeMap<String, Vec<SlashCommand>> =
+            ui_state::get(COMMANDS, cx).unwrap_or_default();
+        all.remove(&self.command_key())
+            .or_else(|| {
+                if self.provider.id == CLAUDE.id {
+                    all.remove(&self.repo)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                Preset::read(Settings::get(cx))
+                    .providers
+                    .remove(self.provider.id)
+                    .unwrap_or_default()
+                    .commands
+            })
     }
 
     pub fn busy(&self, cx: &App) -> bool {
@@ -257,9 +274,6 @@ impl Chat {
     }
 
     fn apply(&mut self, p: &'static Provider, choices: Choices) {
-        if self.provider.id != p.id {
-            self.cached.clear();
-        }
         (self.provider, self.mode, self.model, self.effort) =
             (p, choices.mode, choices.model, choices.effort);
     }
@@ -378,9 +392,9 @@ impl Chat {
     /// turn ended well.
     pub fn cleared(&self, feed: &[((usize, usize), &Item)], cx: &App) -> Option<usize> {
         let lists = |k: usize| {
-            let own = &self.sessions[k].read(cx).commands;
-            let listed = if own.is_empty() { &self.cached } else { own };
-            listed.iter().any(|c| c.name == "clear")
+            self.commands_of(self.sessions.get(k), cx)
+                .iter()
+                .any(|c| c.name == "clear")
         };
         let ended = |i: usize| {
             let end = feed[i + 1..].iter().find_map(|(_, it)| match it {

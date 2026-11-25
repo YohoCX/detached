@@ -957,12 +957,14 @@ impl Session {
                 self.version = Some(o.version);
                 self.config = o.config;
                 (self.models, self.commands, self.account) = (o.models, o.commands, o.account);
-                let (core, id, models) = (
-                    crate::core(cx).clone(),
-                    self.spec.provider.id,
-                    self.models.clone(),
-                );
-                blocking::run(cx, move || _ = Preset::remember(&core, id, &models)).detach();
+                let (core, id) = (crate::core(cx).clone(), self.spec.provider.id);
+                let (models, account) = (self.models.clone(), self.account.clone());
+                let efforts = self.config.iter().find(|c| c.id == "effort");
+                let efforts = efforts.map(|c| c.values.clone());
+                blocking::run(cx, move || {
+                    _ = Preset::remember(&core, id, models, efforts, account)
+                })
+                .detach();
                 self.items.extend(o.note.map(Item::Note));
                 if o.unread {
                     self.note(HISTORY_UNAVAILABLE.into());

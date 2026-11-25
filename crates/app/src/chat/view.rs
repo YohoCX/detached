@@ -440,10 +440,10 @@ impl ChatView {
                 menu.item(label, pick(setting)).checked(chosen == Some(m))
             })
         };
-        // An agent that lists efforts as an option of the session, not per model.
         let listed = s.and_then(|s| s.config.iter().find(|c| c.id == "effort"));
         let efforts = match (chosen.map_or(&[][..], |m| &m.efforts), listed) {
-            ([], Some(c)) => &c.values[..],
+            ([], Some(c)) => c.values.as_slice(),
+            ([], None) if models.iter().all(|m| m.efforts.is_empty()) => preset.efforts(p.id),
             (e, _) => e,
         };
         let effort = match s {
@@ -603,7 +603,7 @@ impl ChatView {
             "More",
         )
         .test_support();
-        let provider = self.provider(window, cx);
+        let provider = self.provider(&preset, window, cx);
         let pickers: Vec<_> = (inline.into_iter().chain([modes]))
             .map(|(id, title, value, tip, menu)| picker(id, title, value, tip, menu, window, cx))
             .collect();
@@ -630,11 +630,14 @@ impl ChatView {
             .child(send)
     }
 
-    fn provider(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+    fn provider(&self, preset: &Preset, window: &Window, cx: &Context<Self>) -> AnyElement {
         let t = theme(cx);
         let chat = self.session.read(cx);
         let p = chat.provider;
-        let account = chat.current().and_then(|s| s.read(cx).account.as_ref());
+        let account = chat
+            .current()
+            .and_then(|s| s.read(cx).account.as_ref())
+            .or_else(|| preset.providers.get(p.id)?.account.as_ref());
         let name = div()
             .id("chat.name")
             .test_support()

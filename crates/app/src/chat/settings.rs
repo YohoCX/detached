@@ -44,6 +44,7 @@ struct Page {
 struct Fields {
     p: &'static Provider,
     models: Vec<Model>,
+    session_efforts: Vec<String>,
     picks: [Pick; 3],
     saved: [String; 3],
     _picks: Vec<Subscription>,
@@ -77,7 +78,8 @@ impl Fields {
     ) -> Self {
         let choices = preset.providers.get(p.id).cloned().unwrap_or_default();
         let saved = [choices.model, choices.effort, choices.mode].map(Option::unwrap_or_default);
-        let models = preset.models(p.id).to_vec();
+        let models = choices.models;
+        let session_efforts = choices.efforts;
         let listed = models.iter().filter(|m| m.value != "default");
         let modes = p
             .modes
@@ -88,7 +90,7 @@ impl Fields {
                 listed.map(|m| (m.value.clone(), m.label.clone())),
                 &saved[0],
             ),
-            efforts(&models, &saved[0], &saved[1]),
+            efforts(&models, &session_efforts, &saved[0], &saved[1]),
             options(modes, &saved[2]),
         ];
         let picks = opts.map(|(opts, at)| {
@@ -98,7 +100,12 @@ impl Fields {
         let changed =
             move |page: &mut Page, model: bool, window: &mut Window, cx: &mut Context<Page>| {
                 if let Some(f) = page.fields.iter().find(|f| f.p.id == id).filter(|_| model) {
-                    let (opts, _) = efforts(&f.models, &value(&f.picks[0], cx), &f.saved[1]);
+                    let (opts, _) = efforts(
+                        &f.models,
+                        &f.session_efforts,
+                        &value(&f.picks[0], cx),
+                        &f.saved[1],
+                    );
                     f.picks[1].update(cx, |s, cx| {
                         s.set_items(opts, window, cx);
                         if s.selected_value().is_none() {
@@ -124,6 +131,7 @@ impl Fields {
         Self {
             p,
             models,
+            session_efforts,
             picks,
             saved,
             _picks,
@@ -135,10 +143,18 @@ impl Fields {
     }
 }
 
-/// The efforts of `model`, or of the provider's default model when it is empty.
-fn efforts(models: &[Model], model: &str, saved: &str) -> (Vec<Opt<String>>, usize) {
+fn efforts(
+    models: &[Model],
+    session_efforts: &[String],
+    model: &str,
+    saved: &str,
+) -> (Vec<Opt<String>>, usize) {
     let model = Model::find(models, if model.is_empty() { "default" } else { model });
-    let listed = model.map_or(&[][..], |m| &m.efforts);
+    let listed = if models.iter().all(|m| m.efforts.is_empty()) {
+        session_efforts
+    } else {
+        model.map_or(&[][..], |m| &m.efforts)
+    };
     options(listed.iter().map(|e| (e.clone(), e.clone())), saved)
 }
 

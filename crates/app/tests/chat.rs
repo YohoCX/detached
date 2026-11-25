@@ -296,10 +296,30 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
             "seven_day": {"utilization": 17, "resets_at": "2099-01-03T00:00:00Z"},
         });
         let account = json!({"apiProvider": "firstParty", "subscriptionType": "max"});
-        fake(sb, json!({"account": account, "rate_limits": limits}));
+        fake(
+            sb,
+            json!({"account": account, "rate_limits": limits, "init_wait": "go"}),
+        );
+        sb.state
+            .set_block(
+                chat_settings::BLOCK,
+                json!({"providers": {"claude": {"account": {"plan": "Claude Pro"}}}}),
+            )
+            .unwrap();
     });
     wait_until(cx, |cx| {
+        label(cx, "chat.provider").as_deref() == Some("Claude Pro")
+    });
+    assert!(cx.find("chat.limit.Week").is_none());
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+    wait_until(cx, |cx| {
         label(cx, "chat.provider").as_deref() == Some("Claude Max")
+    });
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            let preset = Preset::read(s);
+            preset.providers["claude"].account.as_ref().unwrap().plan == "Claude Max"
+        })
     });
     wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
     let track = cx.update(|w, _| w.within("chat.limit.Week").try_find("chat.meter.fill"));
@@ -1402,6 +1422,14 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
         sb.state
             .change_block::<Config>(BLOCK, |c| c.codex = true)
             .unwrap();
+        sb.state
+            .set_block(
+                chat_settings::BLOCK,
+                json!({"providers": {"codex": {"commands": [
+                    {"name": "help", "description": "Show help", "hint": ""}
+                ]}}}),
+            )
+            .unwrap();
     });
     cx.input("/");
     assert!(
@@ -1409,18 +1437,31 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
         "no session has listed any"
     );
     cx.press("backspace");
+    let solo = cx.sb.solo().display().to_string();
+    cx.update(|_, cx| {
+        kernel::ui_state::set(
+            "chat.commands",
+            json!({(solo.clone()): [{"name": "old", "description": "Legacy", "hint": ""}]}),
+            cx,
+        );
+        let chat = chat::find(&solo, 0, cx).unwrap();
+        assert_eq!(chat.read(cx).commands(cx)[0].name, "old");
+    });
     std::fs::write(cx.sb.path("claude/go"), "").unwrap();
     say(cx, "hello");
     wait_for_item(cx, "said hello");
     idle(cx);
-    // A new conversation's session may not have listed its own yet; the last one's list stands in.
+    cx.update(|_, cx| {
+        let saved: serde_json::Value = kernel::ui_state::get("chat.commands", cx).unwrap();
+        assert_eq!(saved[format!("claude\0{solo}")][0]["name"], "review");
+    });
+    std::fs::remove_file(cx.sb.path("claude/go")).unwrap();
     new_chat(cx);
     cx.input("/rev");
     assert_eq!(
         label(cx, ("chat.suggest", 0usize)).as_deref(),
         Some("/review <pr> Reviews a change")
     );
-    let solo = cx.sb.solo().display().to_string();
     let home = cx.sb.path("codex");
     let codex = &detached_core::adapters::CODEX;
     cx.update(|_, cx| {
@@ -1432,8 +1473,9 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
         let chat = chat::find(&solo, 1, cx).unwrap();
         chat.update(cx, |c, cx| c.set_provider(codex, cx));
         assert_eq!(chat.read(cx).provider.id, codex.id);
-        assert!(chat.read(cx).commands(cx).is_empty());
+        assert_eq!(chat.read(cx).commands(cx)[0].name, "help");
     });
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
 }
 
 #[gpui_kit::test]
@@ -2541,6 +2583,34 @@ fn a_codex_start_that_crashes_returns_its_message(cx: &mut TestAppContext) {
     wait_for_item(cx, "died at its model");
     assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
+}
+
+#[gpui_kit::test]
+fn codex_caches_session_efforts_and_project_commands(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        codex(sb);
+        sb.state
+            .set_block(chat_settings::BLOCK, json!({"provider": "codex"}))
+            .unwrap();
+    });
+    say(cx, "say hello");
+    wait_until(cx, |cx| items(cx).iter().any(|item| item == "hello"));
+    let key = format!("codex\0{}", cx.sb.solo().display());
+    wait_until(cx, |cx| {
+        cx.update(|_, cx| {
+            let preset = Preset::read(kernel::settings::Settings::get(cx));
+            let saved: serde_json::Value =
+                kernel::ui_state::get("chat.commands", cx).unwrap_or_default();
+            preset.efforts("codex") == ["low", "medium", "high"]
+                && saved[&key][0]["name"] == "compact"
+        })
+    });
+    let saved = detached_core::settings::Settings::load(&cx.sb.state.config_dir);
+    let preset = Preset::read(&saved);
+    assert!(preset.providers["codex"].commands.is_empty());
+    cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
+    cx.click("chat.defaults.codex.effort");
+    assert!(cx.find("option:high").is_some());
 }
 
 #[gpui_kit::test]
