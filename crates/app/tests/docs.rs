@@ -4,6 +4,7 @@ use std::path::Path;
 
 use common::*;
 use detached_app::chat;
+use gpui_kit::Role;
 use gpui_kit::test::TestWindowExt;
 use kernel::doc::{Doc, Location};
 
@@ -118,9 +119,17 @@ fn a_repo_with_no_index_offers_a_chat_that_writes_one(cx: &mut gpui_kit::TestApp
             n: 0
         })
     );
-    let topic = cx.update(|_, cx| {
-        let c = chat::find(&repo, 0, cx).unwrap();
-        c.read(cx).topic(cx).map(String::from)
+    // No claude here: the failed start puts the prompt back in the composer.
+    wait_until(cx, |cx| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            w.within("chat.composer")
+                .find_all_by_role(Role::MultilineTextInput)
+                .pop()
+                .and_then(|c| c.value().map(String::from))
+        })
+        .as_deref()
+            == Some(kernel::docs::WRITE_INDEX)
     });
-    assert_eq!(topic.as_deref(), Some(kernel::docs::WRITE_INDEX));
+    assert!(cx.update(|_, cx| chat::find(&repo, 0, cx).is_some()));
 }
