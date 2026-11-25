@@ -3,9 +3,8 @@
 A chat starts its agent on the first sent message, a session's chats where you look for them, each
 session repo's status in Overview, Main checkouts and shell polish, resizable panels.
 
-**Status (2026-11-25): accepted by the owner, from revmux task `plan-0-7-1` (opus and astra,
-cross-examined, judged). All 17 tasks built, reviewed and merged into main; make check green, the Opus
-release gate found no blocker; left: Windows CI, the owner's macOS check, the release. Answers: a past conversation opens without a process (task 6
+**Status (2026-11-26): released as v0.7.1. All 30 tasks merged into main; Check green on macOS, Linux
+and Windows. Answers: a past conversation opens without a process (task 6
 is in), the account plan shows from cache, split and dock sizes in the layout count as item 21.**
 
 Decisions: [chat starts on send](docs/decisions/2026-11-24-chat-starts-on-send.md),

@@ -51,7 +51,8 @@ Codex is optional and off until `settings.json` has `"agents": {"codex": true}`.
 Agents installs from Detached's signed adapter catalog.
 Settings › Agents shows the CLI version and whether it is logged in when the CLI reports its status.
 
-- **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. Each
+- **Chats** on a repo or a whole folder, with the model, effort and permission mode you pick. A
+  chat starts its agent on the first message, and a past conversation opens as history. Each
   tool call that needs permission asks you; "Always" is kept by Detached for that exact call, never
   written into the repo's settings. Each turn's changes are snapshotted, so you can restore them.
   For Claude, the bar shows what is left of your plan's 5-hour and weekly limits. Past
