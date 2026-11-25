@@ -84,7 +84,7 @@ pub fn glass<E: Styled>(e: E, cx: &App) -> E {
 /// A toolbar across the top of a pane's content.
 pub fn band<E: Styled>(e: E, cx: &App) -> E {
     let t = theme(cx);
-    e.bg(t.header_bg).border_b_1().border_color(t.line)
+    e.bg(t.panel_bg).border_b_1().border_color(t.line)
 }
 
 /// The bar on a selected row's leading edge, painted inside so it takes no width.

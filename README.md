@@ -28,7 +28,7 @@ worktrees you already have. Files, Go to File and Find follow the selected sessi
 panes to keep a file, chat or terminal visible side by side. Archive an idle session to keep
 its worktrees and open tabs for later. Earlier chats and tabs are readable from Archive.
 
-Errors and warnings collect in Events. Themes include Slate (the default), Fleet, Classic and Catppuccin, each
+Errors and warnings collect in Events. Themes include Indigo (the default), Slate, Fleet, Classic and Catppuccin, each
 in System, Light or Dark mode. You can edit custom themes in the config folder's `themes` directory
 and see changes as you save.
 

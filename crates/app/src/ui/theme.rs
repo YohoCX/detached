@@ -731,8 +731,8 @@ mod tests {
         assert_eq!(
             surfaces(&light),
             [
-                "#dddee6", "#ffffff", "#e7e8ed", "#ffffff", "#e6e5fb", "#80828d", "#e6e5fb",
-                "#efeefd", "#e8e9ee",
+                "#dddee6", "#ffffff", "#e7e8ed", "#ffffff", "#e4e3f8", "#80828d", "#e4e3f8",
+                "#eeedfa", "#e8e9ee",
             ]
         );
         assert_eq!(
