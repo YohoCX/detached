@@ -48,7 +48,7 @@ enum Filter {
 /// What a row stands for, which stays when the list is rebuilt.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Key {
-    Open(String, u32),
+    Open(String, u32, Option<(String, String)>),
     Past(String),
     /// A place's group, among the archived ones or not.
     Group(String, bool),
@@ -68,6 +68,7 @@ enum Line {
     Open {
         repo: String,
         n: u32,
+        owner: Option<(String, String)>,
         state: State,
         place: String,
         title: String,
@@ -88,7 +89,7 @@ impl Line {
     fn key(&self) -> Key {
         match self {
             Line::Group { path, archived, .. } => Key::Group(path.clone(), *archived),
-            Line::Open { repo, n, .. } => Key::Open(repo.clone(), *n),
+            Line::Open { repo, n, owner, .. } => Key::Open(repo.clone(), *n, owner.clone()),
             Line::Past(p, _) => Key::Past(p.id.clone()),
             Line::More { path, archived, .. } => Key::More(path.clone(), *archived),
             Line::Archived(_) => Key::Archived,
@@ -385,8 +386,11 @@ impl ChatList {
     /// The conversation a row stands for, its folder and its provider.
     fn conversation(&self, key: &Key, cx: &App) -> Option<(String, String, &'static Provider)> {
         match key {
-            Key::Open(repo, n) => {
+            Key::Open(repo, n, owner) => {
                 let s = super::find(repo, *n, cx)?.read(cx);
+                if &s.owner != owner {
+                    return None;
+                }
                 let id = s.conversation(cx)?.to_string();
                 Some((repo.clone(), id, s.provider))
             }
@@ -402,11 +406,11 @@ impl ChatList {
 
     /// Ends an open chat; its conversation stays with the past ones.
     fn end(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
-        if let Key::Open(repo, n) = key {
+        if let Key::Open(repo, n, owner) = key {
             if self.selected.as_ref() == Some(key) {
                 self.selected = self.next(key, cx);
             }
-            super::end(repo, *n, window, cx);
+            super::end(repo, *n, owner.as_ref(), window, cx);
             self.refresh(cx);
         }
     }
@@ -432,7 +436,7 @@ impl ChatList {
             self.selected = next;
         }
         match key {
-            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            Key::Open(repo, n, owner) => super::end(repo, *n, owner.as_ref(), window, cx),
             _ => super::forget(&id, cx),
         }
         let done = kernel::session::archive(id, archived, cx);
@@ -447,7 +451,7 @@ impl ChatList {
         self.selected = self.next(key, cx);
         self.edit(&cwd, provider, |all| all.retain(|p| p.id != id), cx);
         match key {
-            Key::Open(repo, n) => super::end(repo, *n, window, cx),
+            Key::Open(repo, n, owner) => super::end(repo, *n, owner.as_ref(), window, cx),
             _ => super::forget(&id, cx),
         }
         let spec = Spec::new(provider, &cwd, Kind::Chat);
@@ -456,36 +460,21 @@ impl ChatList {
     }
 
     fn open_tabs(cx: &App) -> Vec<super::Tab> {
-        let w = Workspace::get(cx);
-        let mut tabs: Vec<_> = super::registered(cx)
-            .map(|(repo, n, chat)| super::Tab {
-                place: super::chat_place(chat.read(cx), cx),
-                repo: repo.clone(),
-                n,
-                chat: Some(chat.clone()),
-            })
-            .collect();
-        if let Some(workspace) = w.id() {
-            for tab in crate::dock::tabs_of(workspace, cx) {
-                let tab = tab.read(cx);
-                let (Some(session), Doc::Chat { repo, n }) = (&tab.session, &tab.doc) else {
-                    continue;
-                };
-                if super::find(repo, *n, cx).is_some() {
-                    continue;
-                }
-                let set = w
-                    .sessions()
-                    .iter()
-                    .find(|s| s.id == *session && s.visible());
-                if session == MAIN || set.is_some() {
-                    tabs.push(super::Tab {
-                        place: super::place_in(repo, set, cx),
-                        repo: repo.clone(),
-                        n: *n,
-                        chat: None,
-                    });
-                }
+        let mut tabs = super::tabs(cx);
+        let workspace = Workspace::get(cx).id();
+        for (repo, n, chat) in super::registered(cx) {
+            let s = chat.read(cx);
+            if s.owner
+                .as_ref()
+                .is_none_or(|(ws, _)| Some(ws.as_str()) != workspace)
+            {
+                tabs.push(super::Tab {
+                    owner: s.owner.clone(),
+                    place: super::chat_place(s, cx),
+                    repo: repo.clone(),
+                    n,
+                    chat: Some(chat.clone()),
+                });
             }
         }
         tabs.sort_by_key(|tab| tab.n);
@@ -544,6 +533,7 @@ impl ChatList {
                     g.open.push(Line::Open {
                         repo: tab.repo.clone(),
                         n: tab.n,
+                        owner: tab.owner.clone(),
                         state: chat.map_or(State::Idle, |s| s.state(cx)),
                         place: tab.place.clone(),
                         title: title.to_string(),
@@ -638,7 +628,14 @@ impl ChatList {
 
     fn activate(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) {
         match key {
-            Key::Open(repo, n) => super::foreground(repo.clone(), *n, cx),
+            Key::Open(repo, n, owner) => super::show_owned(
+                owner.clone(),
+                Doc::Chat {
+                    repo: repo.clone(),
+                    n: *n,
+                },
+                cx,
+            ),
             Key::Past(id) => {
                 let Some(p) = self.all(cx).into_iter().find(|p| p.owned && p.id == *id) else {
                     return;

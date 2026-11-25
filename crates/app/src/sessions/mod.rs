@@ -217,8 +217,10 @@ impl Render for List {
             };
         }
         let mut chats = HashMap::<_, Vec<_>>::new();
-        for (session, tab) in chat::tabs(cx) {
-            chats.entry(session).or_default().push(tab);
+        for tab in chat::tabs(cx) {
+            if let Some((_, session)) = &tab.owner {
+                chats.entry(session.clone()).or_default().push(tab);
+            }
         }
         let w = Workspace::get(cx);
         let draft = provision::provisional(cx);
@@ -415,6 +417,7 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
     let has_chats = !chats.is_empty();
     let chats = chats.into_iter().map(|(tab, state)| {
         let chat::Tab {
+            owner,
             repo,
             n,
             place,
@@ -425,7 +428,6 @@ fn row(set: Option<&Workset>, chats: Vec<chat::Tab>, browsing: bool, cx: &App) -
             n,
         };
         let active = selected && w.shown() == Some(&doc);
-        let owner = w.id().map(|ws| (ws.to_string(), id.to_string()));
         let title = chat
             .as_ref()
             .and_then(|c| c.read(cx).topic(cx))

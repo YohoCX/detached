@@ -72,7 +72,7 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
         name: "chats",
         id: "tab.chats",
         title: "Chats",
-        action: Some("panel.chats"),
+        action: None,
         home: (DockPlacement::Left, 280.),
         view: |w, cx| cx.new(|cx| list::ChatList::new(w, cx)).into(),
         shown: None,
@@ -89,18 +89,25 @@ pub fn register(cx: &mut App) -> Vec<Registration> {
             cx.activate(true);
         }
     });
-    vec![actions::register(
-        cx,
-        "agent.chat",
-        "New chat",
-        actions::Group::View,
-        |_, cx| match Workspace::get(cx).current().map(String::from) {
-            Some(repo) => new_chat(repo, cx),
-            None => Activity::global(cx).update(cx, |a, cx| {
-                a.say("Select a repository to chat about", false, cx)
-            }),
-        },
-    )]
+    vec![
+        actions::register(
+            cx,
+            "agent.chat",
+            "New chat",
+            actions::Group::View,
+            |_, cx| match Workspace::get(cx).current().map(String::from) {
+                Some(repo) => new_chat(repo, cx),
+                None => Activity::global(cx).update(cx, |a, cx| {
+                    a.say("Select a repository to chat about", false, cx)
+                }),
+            },
+        ),
+        actions::register(cx, "panel.chats", "Chats", actions::Group::View, |w, cx| {
+            if crate::sessions::provision::dismiss_new(cx) {
+                dock::toggle("chats", w, cx);
+            }
+        }),
+    ]
 }
 
 /// Shows `repo`'s first open chat, or a new one.
@@ -133,23 +140,19 @@ pub(crate) fn foreground(repo: String, n: u32, cx: &mut App) {
     let owner = match find(&repo, n, cx) {
         Some(chat) => chat.read(cx).owner.clone(),
         None => {
-            let Some(workspace) = Workspace::get(cx).id() else {
+            let Some(tab) = tabs(cx).into_iter().find(|t| t.repo == repo && t.n == n) else {
                 return;
             };
-            let Some((session, _)) = tabs(cx)
-                .into_iter()
-                .find(|(_, t)| t.repo == repo && t.n == n)
-            else {
-                return;
-            };
-            Some((workspace.to_string(), session))
+            tab.owner
         }
     };
     show_owned(owner, Doc::Chat { repo, n }, cx);
 }
 
 pub(crate) fn show_owned(owner: Option<(String, String)>, doc: Doc, cx: &mut App) {
-    crate::sessions::provision::dismiss_new(cx);
+    if !crate::sessions::provision::dismiss_new(cx) {
+        return;
+    }
     Workspace::global(cx).update(cx, |w, cx| {
         if let Some((workspace, session)) = owner {
             w.show_in_session(workspace, session, doc, cx);
@@ -257,25 +260,38 @@ fn fresh(repo: &str, cx: &mut App) -> u32 {
     {
         return *n;
     }
+    let w = Workspace::get(cx);
+    let tabs: Vec<_> = tabs(cx).into_iter().filter(|t| t.repo == repo).collect();
+    if let Some(tab) = tabs.iter().find(|t| {
+        t.owner
+            .as_ref()
+            .is_some_and(|(_, session)| *session == w.session_id())
+            && mine.iter().all(|(_, n, _)| *n != t.n)
+    }) {
+        return tab.n;
+    }
     mine.iter()
         .map(|(_, n, _)| *n)
-        .chain(
-            tabs(cx)
-                .into_iter()
-                .filter(|(_, t)| t.repo == repo)
-                .map(|(_, t)| t.n),
-        )
+        .chain(tabs.iter().map(|t| t.n))
         .max()
         .map_or(0, |n| n + 1)
 }
 
-/// Ends chat `n` on `repo`: its sessions end and its tab closes.
-pub fn end(repo: &str, n: u32, window: &mut Window, cx: &mut App) {
-    if let Some(s) = cx.default_global::<Chats>().0.remove(&(repo.into(), n)) {
+fn end(repo: &str, n: u32, owner: Option<&(String, String)>, window: &mut Window, cx: &mut App) {
+    if find(repo, n, cx).is_some_and(|s| s.read(cx).owner.as_ref() == owner)
+        && let Some(s) = cx.default_global::<Chats>().0.remove(&(repo.into(), n))
+    {
         s.update(cx, |s, cx| s.end(cx));
     }
+    if let Some((workspace, session)) = owner {
+        let doc = Doc::Chat {
+            repo: repo.into(),
+            n,
+        };
+        return dock::close_chat(workspace, session, &doc, window, cx);
+    }
     let (repo, gone) = (repo.to_string(), n);
-    crate::dock::close_docs(
+    dock::close_docs(
         move |d| matches!(d, Doc::Chat { repo: r, n } if *r == repo && *n == gone),
         window,
         cx,
@@ -302,13 +318,14 @@ pub(crate) fn observe_open<V: 'static>(cx: &mut Context<V>) -> Subscription {
 }
 
 pub(crate) struct Tab {
+    pub owner: Option<(String, String)>,
     pub repo: String,
     pub n: u32,
     pub place: String,
     pub chat: Option<Entity<Chat>>,
 }
 
-pub(crate) fn tabs(cx: &App) -> Vec<(String, Tab)> {
+pub(crate) fn tabs(cx: &App) -> Vec<Tab> {
     let w = Workspace::get(cx);
     let Some(workspace) = w.id() else {
         return vec![];
@@ -319,18 +336,16 @@ pub(crate) fn tabs(cx: &App) -> Vec<(String, Tab)> {
         for (repo, n) in dock::session_chats(workspace, session, cx) {
             let chat = find(&repo, n, cx).filter(|c| c.read(cx).owned_by(workspace, session));
             let place = place_in(&repo, set, cx);
-            tabs.push((
-                session.into(),
-                Tab {
-                    repo,
-                    n,
-                    place,
-                    chat,
-                },
-            ));
+            tabs.push(Tab {
+                owner: Some((workspace.into(), session.into())),
+                repo,
+                n,
+                place,
+                chat,
+            });
         }
     }
-    tabs.sort_by(|(_, a), (_, b)| (&a.place, a.n, &a.repo).cmp(&(&b.place, b.n, &b.repo)));
+    tabs.sort_by(|a, b| (&a.place, a.n, &a.repo).cmp(&(&b.place, b.n, &b.repo)));
     tabs
 }
 

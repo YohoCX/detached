@@ -33,7 +33,10 @@ fn cmd_2_toggles_chats_from_the_session_and_from_a_terminal(cx: &mut TestAppCont
             .unwrap();
     });
     assert!(cx.update(|_, cx| chat::providers(cx).is_empty()));
+    cx.press("secondary-n");
+    assert!(cx.find("sessions.provisional").unwrap().visible());
     toggle_chats(cx);
+    assert!(cx.find("sessions.provisional").is_none());
 
     cx.press("alt-f12");
     wait_until(cx, |cx| {
@@ -154,6 +157,40 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn chats_dismiss_the_finished_new_session_page(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "api");
+        claude(sb, &detached_core::testutil::claude::fake());
+    });
+    let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
+    let row = SharedString::from(format!("sessions.chat.{repo}.0"));
+    cx.update(|_, cx| chat::new_chat(repo, cx));
+    for name in ["From keyboard", "From sidebar"] {
+        cx.press("secondary-n");
+        cx.input(name);
+        cx.click(("sessions.repository", 0usize));
+        wait_until(cx, |cx| {
+            cx.find("sessions.create.submit")
+                .is_some_and(|submit| submit.disabled().is_none())
+        });
+        cx.click("sessions.create.submit");
+        wait_until(cx, |cx| {
+            cx.find("sessions.openCreated")
+                .is_some_and(|open| open.disabled().is_none())
+        });
+        if name == "From keyboard" {
+            cx.press("secondary-2");
+            assert!(cx.find("tab.chats").unwrap().visible());
+        } else {
+            cx.click(row.clone());
+            assert!(cx.find("chat.composer").unwrap().visible());
+            assert_eq!(cx.find(row.clone()).unwrap().selected(), Some(true));
+        }
+        assert!(cx.find("sessions.provisional").is_none());
+    }
+}
+
+#[gpui_kit::test]
 fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut TestAppContext) {
     let mut session = String::new();
     let mut checkout = String::new();
@@ -162,7 +199,7 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
         session = set.id;
         checkout = set.members[0].path.clone();
         let workspace = sb.state.get_settings().workspaces[0].id.clone();
-        let saved = |session: &str, repo: String| {
+        let saved = |session: &str, repo: String, count| {
             let panel = |doc| PanelState {
                 info: PanelInfo::panel(
                     json!({"doc": doc, "keep": true, "workspace": workspace, "session": session}),
@@ -173,7 +210,14 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
                 version: Some(2),
                 center: PanelState {
                     info: PanelInfo::tabs(0),
-                    children: vec![panel(Doc::SessionOverview), panel(Doc::Chat { repo, n: 0 })],
+                    children: std::iter::once(panel(Doc::SessionOverview))
+                        .chain((0..count).map(|n| {
+                            panel(Doc::Chat {
+                                repo: repo.clone(),
+                                n,
+                            })
+                        }))
+                        .collect(),
                     ..PanelState::new("TabPanel")
                 },
                 ..DockAreaState::default()
@@ -181,8 +225,8 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
             json!({"dock": dock, "focus": 0})
         };
         write(&sb.state.config_dir, [("ui.json", json!({
-            format!("session.{workspace}.main.layout"): saved("main", sb.solo().display().to_string()),
-            format!("session.{workspace}.{session}.layout"): saved(&session, checkout.clone()),
+            format!("session.{workspace}.main.layout"): saved("main", sb.solo().display().to_string(), 1),
+            format!("session.{workspace}.{session}.layout"): saved(&session, checkout.clone(), 2),
         }).to_string())]);
     });
     let main = cx.sb.solo().display().to_string();
@@ -190,7 +234,7 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
     let topic_row = SharedString::from(format!("sessions.chat.{checkout}.0"));
     assert!(cx.find("session.overview").unwrap().visible());
     assert_eq!(cx.find("doc.chat").unwrap().checked(), Some(false));
-    for row in [main_row, topic_row.clone()] {
+    for row in [main_row.clone(), topic_row.clone()] {
         let row = cx.find(row).unwrap();
         assert_eq!(row.label(), Some("New chat"));
         assert_eq!(row.description(), Some("Idle · solo"));
@@ -198,20 +242,29 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
     assert!(cx.update(|_, cx| chat::open(cx).is_empty()));
 
     cx.update(|_, cx| chat::new_chat(main.clone(), cx));
-    assert!(cx.find("doc.chat.1").is_some());
-    assert!(cx.update(|_, cx| chat::find(&main, 0, cx).is_none()));
-    cx.press("secondary-2");
-    let row = cx.find(("chats.open", 0usize)).unwrap();
-    assert_eq!(row.description(), Some("Idle · solo"));
-    cx.click(("chats.open", 0usize));
+    assert!(cx.find("doc.chat.1").is_none());
+    assert_eq!(cx.find(main_row).unwrap().selected(), Some(true));
+    assert!(cx.update(|_, cx| chat::find(&main, 0, cx).is_some()));
     assert_eq!(
         cx.workspace(|w, _| w.shown().cloned()),
         Some(Doc::Chat { repo: main, n: 0 })
     );
-    assert!(cx.find("chat.composer").unwrap().visible());
 
-    cx.click(topic_row.clone());
+    cx.press("secondary-2");
+    let topic = usize::from(cx.sb.solo().display().to_string() < checkout);
+    assert_eq!(
+        cx.find(("chats.open", topic)).unwrap().description(),
+        Some("Idle · solo")
+    );
+    assert!(cx.find(("chats.open", 2usize)).is_some());
+    assert!(cx.update(|_, cx| chat::find(&checkout, 0, cx).is_none()));
+    cx.update(|w, cx| w.hover(("chats.open", topic + 1), cx));
+    cx.click(("chats.open.end", topic + 1));
+    assert!(cx.find(("chats.open", 2usize)).is_none());
+    assert_eq!(cx.workspace(|w, _| w.session_id().to_string()), "main");
+    cx.click(("chats.open", topic));
     assert!(cx.find("chat.composer").unwrap().visible());
+    assert!(cx.find("doc.chat.1").is_none());
     assert_eq!(cx.find(topic_row).unwrap().selected(), Some(true));
     assert_eq!(cx.workspace(|w, _| w.session_id().to_string()), session);
 }
