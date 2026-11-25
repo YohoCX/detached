@@ -202,7 +202,7 @@ fn metadata(
     id: String,
     path: &Path,
     places: &HashMap<PathBuf, &String>,
-    title: Option<String>,
+    mut title: Option<String>,
     strict_title: bool,
 ) -> Result<Option<Past>> {
     let mut rows = records(open(path)?);
@@ -218,7 +218,6 @@ fn metadata(
     else {
         return Ok(None);
     };
-    let mut title = title.filter(|s| !is_log(s));
     if title.is_none() {
         for row in rows {
             let row = match row {
@@ -263,20 +262,6 @@ fn user(row: &Value) -> Option<&str> {
     (row["type"] == "event_msg" && row["payload"]["type"] == "user_message")
         .then(|| row["payload"]["message"].as_str())
         .flatten()
-        .filter(|s| !is_log(s))
-}
-
-pub(super) fn is_log(text: &str) -> bool {
-    let text = text.trim();
-    if !text.starts_with('{') || text.contains('\n') {
-        return false;
-    }
-    serde_json::from_str::<Value>(text).is_ok_and(|row| {
-        matches!(
-            row["level"].as_str(),
-            Some("trace" | "debug" | "info" | "warn" | "error" | "fatal" | "panic")
-        ) && (row["ts"].is_string() || row["ts"].is_number())
-    })
 }
 
 pub(super) fn transcript(core: &AppState, id: &str) -> Result<Vec<Update>> {

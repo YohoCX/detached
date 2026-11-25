@@ -13,7 +13,9 @@ use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::channel::oneshot;
 use gpui_kit::base::markdown_ast::Node;
-use gpui_kit::base::{MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle};
+use gpui_kit::base::{
+    ElementExt, MarkdownNode, TestSupportExt, TextView, TextViewState, TextViewStyle,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, FontWeight, Global,
@@ -45,6 +47,7 @@ pub struct Markdown {
     breaks: bool,
     chat: bool,
     wide: bool,
+    chat_width: Pixels,
     state: Entity<TextViewState>,
     /// By URL as written; None while loading, or when it is no image.
     images: Arc<HashMap<String, Option<Arc<Image>>>>,
@@ -83,6 +86,7 @@ impl Markdown {
             breaks,
             chat: false,
             wide: false,
+            chat_width: px(0.),
             state: cx.new(|cx| TextViewState::markdown("", cx)),
             images: Arc::default(),
             want,
@@ -258,8 +262,9 @@ impl Render for Markdown {
         let file = matches!(self.links, Links::Repo { .. });
         let this = cx.weak_entity();
         let click = this.clone();
+        let measure = this.clone();
         let view = TextView::new(&self.state)
-            .style(style(file, self.chat, cx))
+            .style(style(file, self.chat, self.chat_width, cx))
             .image_source(self.image_source())
             // In place of the kit's language label, which Monaco's colorized blocks did not have.
             .code_block_actions(|block, _, cx| copy_button(block.code(), cx))
@@ -278,8 +283,19 @@ impl Render for Markdown {
                 false => view,
             };
             return root
-                .when(self.chat && !self.wide, |d| d.max_w(theme::chat::PROSE))
-                .child(view)
+                .when(self.chat && self.wide, |d| {
+                    d.relative().on_prepaint(move |bounds, _, cx| {
+                        measure
+                            .update(cx, |m, cx| {
+                                if m.chat_width != bounds.size.width {
+                                    m.chat_width = bounds.size.width;
+                                    cx.notify();
+                                }
+                            })
+                            .ok();
+                    })
+                })
+                .child(view.when(self.chat, |v| v.max_w(theme::chat::PROSE)))
                 .into_any_element();
         }
         // The column is centered by padding, so the scrollbar stays at the edge.
@@ -403,7 +419,7 @@ fn mermaid(source: &str, dark: bool) -> Diagram {
 
 /// Files in a 14px column with rules under h1 and h2; MR text stays compact; the chat's code on
 /// its own surface in the mono font.
-fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
+fn style(file: bool, chat: bool, chat_width: Pixels, cx: &App) -> TextViewStyle {
     let t = theme::theme(cx);
     let (h1, h2, h3, code) = match file {
         true => (doc::H1, doc::H2, doc::H3, doc::CODE),
@@ -411,7 +427,7 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
         false => (text::TITLE, text::TITLE, text::TITLE, text::SMALL),
     };
     let block = StyleRefinement::default().rounded(radius::ITEM);
-    let (block, inline) = match chat {
+    let (mut block, inline) = match chat {
         // The top padding keeps the first line clear of the Copy button.
         true => (
             block
@@ -429,6 +445,12 @@ fn style(file: bool, chat: bool, cx: &App) -> TextViewStyle {
     let mut table = StyleRefinement::default();
     if chat {
         table.overflow.x = Some(Overflow::Scroll);
+        if chat_width > theme::chat::PROSE {
+            // Scale the containing width so nested blocks stay inside the column.
+            let width = relative(chat_width / theme::chat::PROSE);
+            table = table.w(width);
+            block = block.w(width);
+        }
     }
     TextViewStyle::default()
         .with_foreground(t.fg)

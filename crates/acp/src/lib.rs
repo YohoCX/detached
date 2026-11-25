@@ -1100,9 +1100,7 @@ fn text(c: ContentChunk) -> Option<String> {
 
 fn update(u: SessionUpdate) -> Option<Update> {
     Some(match u {
-        SessionUpdate::UserMessageChunk(c) => {
-            Update::User(text(c).filter(|t| !history::is_log(t))?)
-        }
+        SessionUpdate::UserMessageChunk(c) => Update::User(text(c)?),
         SessionUpdate::AgentMessageChunk(c) => Update::Text(text(c)?),
         SessionUpdate::AgentThoughtChunk(c) => Update::Thought(text(c)?),
         SessionUpdate::ToolCall(t) => Update::Tool(Box::new(Tool {
