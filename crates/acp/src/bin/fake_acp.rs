@@ -158,8 +158,16 @@ fn main() {
                 }
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
+                let home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
                 if method == "session/new" {
-                    reply(json!({"sessionId": sid, "configOptions": config}));
+                    let mut opened = json!({"sessionId": sid});
+                    if !home
+                        .as_ref()
+                        .is_some_and(|p| p.join("fake-no-config").exists())
+                    {
+                        opened["configOptions"] = config;
+                    }
+                    reply(opened);
                 } else {
                     for (kind, text) in [("user", "earlier"), ("agent", "replayed")] {
                         let chunk = json!({"sessionUpdate": format!("{kind}_message_chunk"),
@@ -168,12 +176,18 @@ fn main() {
                     }
                     reply(json!({"configOptions": config}));
                 }
-                if !git.join("no-commands").exists() {
+                let report = home.and_then(|p| fs::read_to_string(p.join("fake-commands")).ok());
+                if !git.join("no-commands").exists() && report.as_deref() != Some("missing") {
+                    let commands = if report.as_deref() == Some("empty") {
+                        json!([])
+                    } else {
+                        json!([{"name": "compact", "description": "Compact the conversation"}])
+                    };
                     update(
                         &out,
                         &sid,
                         json!({"sessionUpdate": "available_commands_update",
-                        "availableCommands": [{"name": "compact", "description": "Compact the conversation"}]}),
+                        "availableCommands": commands}),
                     );
                 }
             }
@@ -262,6 +276,14 @@ fn main() {
                 }
             }
             "session/prompt" => {
+                if let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty())
+                    && let Ok(mut log) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(PathBuf::from(home).join("fake.log"))
+                {
+                    let _ = writeln!(log, "session/prompt");
+                }
                 if let Some(id) = held.take() {
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
                 }

@@ -1,6 +1,6 @@
-//! Core's backend for ACP providers: one adapter process per provider and version, behind a
-//! blocking API over `agent-client-protocol`. Each connection runs on a thread of its own under
-//! `block_on`; no async type and no protocol name leaves this crate, only `backend()`.
+//! Ordinary ACP sessions share adapters by executable and environment. A deadline-bound
+//! capability probe starts a private adapter. Each connection runs on its own thread under `block_on`.
+//! Only the blocking backend interface leaves this crate.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, Weak, mpsc as std_mpsc};
 use std::thread;
+use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
@@ -192,8 +193,7 @@ impl Acp {
         })
     }
 
-    /// Finds the CLI and the adapter, and the adapter of that version, started here unless it
-    /// runs already; with what the user should know of the CLI.
+    /// Selects an adapter and checks its CLI. A probe has its own connection deadline.
     fn adapter(&self, core: &AppState, spec: &Spec) -> Result<(Arc<Live>, Option<String>)> {
         let p = spec.provider;
         let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
@@ -206,7 +206,7 @@ impl Acp {
         let cli = adapters::find_cli(p, setting, &env).ok_or_else(|| missing("CLI"))?;
         let catalog = adapters::stored(&core.data_dir);
         let entry = catalog.as_ref().and_then(|c| c.entry(p.adapter, &version));
-        let has = adapters::cli_version(&cli, &env)?;
+        let has = adapters::cli_version_until(p, &cli, &env, spec.open_deadline)?;
         let note = match adapters::check_cli(p, entry, &has) {
             Cli::Ok => None,
             Cli::Old(need) => {
@@ -247,10 +247,18 @@ impl Acp {
         let spec_proc = proc::Spec {
             program,
             args: vec![],
-            cwd: std::env::temp_dir(),
+            cwd: spec
+                .temporary_dir
+                .as_ref()
+                .map_or_else(std::env::temp_dir, |dir| dir.path().into()),
             env: vars,
+            temporary_dir: spec.temporary_dir.clone(),
         };
-        Ok((self.live(spec_proc)?, note))
+        let live = match spec.open_deadline {
+            Some(deadline) => Arc::new(Live::start(&spec_proc, Some(deadline), None)?),
+            None => self.live(spec_proc)?,
+        };
+        Ok((live, note))
     }
 
     /// The adapter running `spec`'s program, or a new one.
@@ -263,15 +271,8 @@ impl Acp {
         if let Some(live) = slot.upgrade().filter(|l| !l.adapter.gone()) {
             return Ok(live);
         }
-        let demux: Arc<Mutex<Demux>> = Default::default();
-        let to = demux.clone();
-        let adapter = Adapter::start(&spec, move |e| to.lock().unwrap().got(e))?;
         let entry = (Arc::downgrade(&self.adapters), key);
-        let live = Arc::new(Live {
-            adapter,
-            demux,
-            entry,
-        });
+        let live = Arc::new(Live::start(&spec, None, Some(entry))?);
         *slot = Arc::downgrade(&live);
         Ok(live)
     }
@@ -378,26 +379,43 @@ fn codex_home(tmp: &Path, owner: Option<&Path>) -> Result<PathBuf> {
 struct Live {
     adapter: Adapter,
     demux: Arc<Mutex<Demux>>,
-    /// Its slot, which goes with it: an untrusted participant's env is its alone.
-    entry: (Weak<Adapters>, Key),
+    entry: Option<(Weak<Adapters>, Key)>,
 }
 
 impl Drop for Live {
     fn drop(&mut self) {
-        let Some(map) = self.entry.0.upgrade() else {
+        let Some((map, key)) = &self.entry else {
+            return;
+        };
+        let Some(map) = map.upgrade() else {
             return;
         };
         let mut map = map.lock().unwrap();
         // A start that holds the slot puts its own adapter there.
-        let dead = (map.get(&self.entry.1))
-            .is_some_and(|s| s.try_lock().is_ok_and(|w| w.upgrade().is_none()));
+        let dead =
+            (map.get(key)).is_some_and(|s| s.try_lock().is_ok_and(|w| w.upgrade().is_none()));
         if dead {
-            map.remove(&self.entry.1);
+            map.remove(key);
         }
     }
 }
 
 impl Live {
+    fn start(
+        spec: &proc::Spec,
+        deadline: Option<Instant>,
+        entry: Option<(Weak<Adapters>, Key)>,
+    ) -> Result<Self> {
+        let demux: Arc<Mutex<Demux>> = Default::default();
+        let to = demux.clone();
+        let adapter = Adapter::start(spec, deadline, move |e| to.lock().unwrap().got(e))?;
+        Ok(Self {
+            adapter,
+            demux,
+            entry,
+        })
+    }
+
     /// Ends the session `id` whose host tools a second client initialized: its tools are gone.
     fn end(&self, id: &str) {
         let mut demux = self.demux.lock().unwrap();
@@ -753,12 +771,14 @@ struct Adapter {
     eof: Arc<AtomicBool>,
     asked: Arc<AtomicBool>,
     quit: Option<oneshot::Sender<()>>,
+    deadline: Option<Instant>,
 }
 
 impl Adapter {
     /// Spawns the adapter and initializes it; `on_event` runs on the connection's thread.
     fn start(
         spec: &proc::Spec,
+        deadline: Option<Instant>,
         on_event: impl Fn(Event) + Send + Sync + 'static,
     ) -> Result<Adapter> {
         let mut proc = Proc::spawn(spec)?;
@@ -860,7 +880,12 @@ impl Adapter {
                 on_exit(Event::Exited(exit, closing.load(Ordering::SeqCst)));
             })?;
         let fail = |e: String| Error::Other(format!("The adapter did not start: {e}"));
-        let cx = connected.recv().map_err(|e| fail(e.to_string()))?;
+        let cx = match deadline {
+            Some(deadline) => connected
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|e| fail(e.to_string()))?,
+            None => connected.recv().map_err(|e| fail(e.to_string()))?,
+        };
         let mut adapter = Adapter {
             cx,
             version: String::new(),
@@ -870,6 +895,7 @@ impl Adapter {
             eof,
             asked,
             quit: Some(quit),
+            deadline,
         };
         let init = adapter.call(InitializeRequest::new(ProtocolVersion::V1));
         let init = init.map_err(|e| fail(e.to_string()))?;
@@ -882,7 +908,21 @@ impl Adapter {
     }
 
     fn call<R: agent_client_protocol::JsonRpcRequest>(&self, req: R) -> Result<R::Response> {
-        block_on(self.cx.send_request(req).block_task()).map_err(|e| Error::Other(e.to_string()))
+        let request = self.cx.send_request(req);
+        let error = |e: agent_client_protocol::Error| Error::Other(e.to_string());
+        let Some(deadline) = self.deadline else {
+            return block_on(request.block_task()).map_err(error);
+        };
+        let (tx, rx) = std_mpsc::channel();
+        request
+            .on_receiving_result(async move |result| {
+                let _ = tx.send(result);
+                Ok(())
+            })
+            .map_err(error)?;
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|e| Error::Other(e.to_string()))?
+            .map_err(error)
     }
 
     fn new_session(&self, o: &Options) -> Result<Opened> {

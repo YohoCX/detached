@@ -78,6 +78,8 @@ pub struct Spec {
     pub cwd: PathBuf,
     /// The whole env, nothing inherited.
     pub env: Vec<(String, OsString)>,
+    /// Retained until the child is reaped.
+    pub temporary_dir: Option<Arc<tempfile::TempDir>>,
 }
 
 /// A running process; its exit is waited for on a thread of its own.
@@ -129,10 +131,12 @@ impl Proc {
         let (pid, stdin, stdout) = (child.id(), child.stdin.take(), child.stdout.take());
         let exit = Arc::new((Mutex::new(None), Condvar::new()));
         let done = exit.clone();
+        let temporary_dir = spec.temporary_dir.clone();
         thread::spawn(move || {
             let status = child.wait();
             #[cfg(windows)]
             drop(job);
+            drop(temporary_dir);
             let (lock, cvar) = &*done;
             *lock.lock().unwrap() = Some(status.unwrap_or_else(|_| failed()));
             cvar.notify_all();
@@ -332,6 +336,27 @@ mod tests {
         assert_eq!(get("PATH").unwrap(), "/login/bin");
         assert_eq!(get("HOME").unwrap(), "/sandbox/home");
         assert_eq!(get("DETACHED_NEVER_SET_ANYWHERE"), None);
+    }
+
+    #[test]
+    fn a_temporary_directory_stays_until_the_child_exits() {
+        let dir = Arc::new(crate::backend::probe_dir().unwrap());
+        let cwd = dir.path().to_path_buf();
+        let mut proc = Proc::spawn(&Spec {
+            program: crate::testutil::claude::fake(),
+            args: vec![],
+            cwd: cwd.clone(),
+            env: env(&["CLAUDE_CONFIG_DIR"], |k| match k {
+                "CLAUDE_CONFIG_DIR" => Some(cwd.clone().into_os_string()),
+                _ => std::env::var_os(k),
+            }),
+            temporary_dir: Some(dir),
+        })
+        .unwrap();
+        assert!(cwd.is_dir());
+        drop(proc.stdin.take());
+        assert!(proc.wait(Duration::from_secs(10)).unwrap().success());
+        assert!(!cwd.exists());
     }
 
     #[test]

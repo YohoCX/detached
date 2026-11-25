@@ -2,7 +2,7 @@
 //! the loopback responder, whose one reply asks for a Bash call that prints a nonce and writes to
 //! the cwd. It passes when the call ran and its write was denied.
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -10,7 +10,7 @@ use serde_json::json;
 use super::responder::Api;
 use super::{env, start_in, uuid};
 use crate::adapters::CLAUDE;
-use crate::backend::{Event, Kind, Probe, Sandbox, Session as _, Spec};
+use crate::backend::{Event, Kind, Probe, Sandbox, Session as _, Spec, probe_dir};
 use crate::error::{Error, Result};
 use crate::state::AppState;
 
@@ -33,7 +33,7 @@ pub(super) fn run(core: &AppState, wsl: Option<&str>) -> Result<Probe> {
                 .into(),
         ));
     }
-    let dir = tempfile::tempdir()?;
+    let dir = Arc::new(probe_dir()?);
     let tree = dir.path().join("tree");
     std::fs::create_dir_all(&tree)?;
     let nonce = uuid();
@@ -48,6 +48,7 @@ pub(super) fn run(core: &AppState, wsl: Option<&str>) -> Result<Probe> {
         tmp: Some(dir.path().join("tmp")),
         ..Sandbox::default()
     });
+    spec.temporary_dir = Some(dir);
     let mut vars = env(core, &spec);
     vars.retain(|(k, _)| !CLAUDE.env.contains(&k.as_str()) || KEPT.contains(&k.as_str()));
     vars.push(("ANTHROPIC_API_KEY".into(), "sk-ant-detached-probe".into()));

@@ -240,11 +240,10 @@ impl Chat {
                 }
             })
             .or_else(|| {
-                let commands = Preset::read(Settings::get(cx))
+                let choices = Preset::read(Settings::get(cx))
                     .providers
-                    .remove(self.provider.id)?
-                    .commands;
-                (!commands.is_empty()).then_some(commands)
+                    .remove(self.provider.id)?;
+                choices.commands.or_else(|| choices.cli.map(|_| Vec::new()))
             })
     }
 

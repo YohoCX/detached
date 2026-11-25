@@ -1497,5 +1497,7 @@ fn backend(p: &Provider) -> &'static dyn Backend {
     }
 }
 
+pub mod probe;
+
 #[cfg(test)]
 pub(crate) mod tests;

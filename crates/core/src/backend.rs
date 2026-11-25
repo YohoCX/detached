@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +25,18 @@ pub enum Name {
 /// Claude's backend: the user's own `claude`, one per session.
 pub fn direct() -> &'static dyn Backend {
     crate::claude::backend()
+}
+
+pub fn probe_dir() -> Result<tempfile::TempDir> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?)
+    }
+    #[cfg(not(unix))]
+    Ok(tempfile::tempdir()?)
 }
 
 /// A backend: it opens sessions, each with its one stream of events.
@@ -161,6 +174,8 @@ pub struct Spec {
     pub effort: Option<String>,
     /// Ignore unavailable choices in a new chat's preset.
     pub validate_choices: bool,
+    pub open_deadline: Option<Instant>,
+    pub temporary_dir: Option<Arc<tempfile::TempDir>>,
     pub tools: Option<Tools>,
     /// The folder list's skills, of which a backend passes those that load and its agent does not
     /// read itself.
@@ -183,6 +198,8 @@ impl Spec {
             model: None,
             effort: None,
             validate_choices: false,
+            open_deadline: None,
+            temporary_dir: None,
             tools: None,
             skills: vec![],
             wsl: None,
@@ -505,6 +522,40 @@ mod tests {
 
     fn crates() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+    }
+
+    #[test]
+    fn a_probe_uses_a_private_directory() {
+        #[cfg(unix)]
+        if std::env::var_os("DETACHED_TEST_PROBE_UMASK").is_none() {
+            let out = std::process::Command::new("sh")
+                .args(["-c", "umask 000; exec \"$@\"", "sh"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "backend::tests::a_probe_uses_a_private_directory",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("DETACHED_TEST_PROBE_UMASK", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+        let dir = super::probe_dir().unwrap();
+        assert!(dir.path().is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                dir.path().metadata().unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
     }
 
     /// The protocol words in the files under `dir`, tests aside.
