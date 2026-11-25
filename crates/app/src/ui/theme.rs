@@ -714,17 +714,12 @@ mod tests {
     }
 
     #[test]
-    fn slate_tab_outlines_contrast_with_the_tab_and_strip() {
+    fn slate_focused_tab_outline_contrasts_with_the_tab_and_strip() {
         let (light, dark) = pair(&bundled()[DEFAULT], &bundled()).unwrap();
         for (mode, t) in [("light", light), ("dark", dark)] {
-            for (state, edge, fill) in [
-                ("focused", t.selected_ring, t.tab_active),
-                ("unfocused", t.muted, t.tab_unfocused),
-            ] {
-                for bg in [fill, t.panel_bg] {
-                    let ratio = contrast(edge, bg);
-                    assert!(ratio >= 3., "{mode} {state} tab outline is {ratio:.2}:1");
-                }
+            for bg in [t.tab_active, t.panel_bg] {
+                let ratio = contrast(t.selected_ring, bg);
+                assert!(ratio >= 3., "{mode} focused tab outline is {ratio:.2}:1");
             }
         }
     }

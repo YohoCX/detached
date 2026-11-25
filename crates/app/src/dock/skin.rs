@@ -647,14 +647,11 @@ impl TabGroupRenderer for Group {
                 .0
                 .upgrade()
                 .is_some_and(|a| panes::is_focused(a.read(cx), node, cx));
-        let (tab_fill, tab_edge) = if focused {
-            (t.tab_active, t.selected_ring)
+        let tab_fill = if focused {
+            t.tab_active
         } else {
-            (t.tab_unfocused, t.muted)
+            t.tab_unfocused
         };
-        let outline = BoxShadow::new(px(0.), px(0.), tab_edge)
-            .spread_radius(px(1.))
-            .inset();
         let (hover_fill, press_fill) = if pane {
             (t.tab_unfocused, t.tab_active)
         } else {
@@ -739,7 +736,13 @@ impl TabGroupRenderer for Group {
                     .map(|d| match (pane, on) {
                         (true, true) => d
                             .bg(tab_fill)
-                            .shadow(vec![outline.clone()])
+                            .when(focused, |d| {
+                                d.shadow(vec![
+                                    BoxShadow::new(px(0.), px(0.), t.selected_ring)
+                                        .spread_radius(px(1.))
+                                        .inset(),
+                                ])
+                            })
                             .text_color(t.fg)
                             .font_weight(FontWeight::SEMIBOLD),
                         (false, true) => d.bg(t.selected).text_color(t.fg),
