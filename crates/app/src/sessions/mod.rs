@@ -109,56 +109,8 @@ impl List {
 }
 
 impl Render for List {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let collapsed = !shell::side_open(Side::Sessions, window, cx);
-        let w = Workspace::get(cx);
-        let count = dock::archived_tabs(cx).len()
-            + w.sessions().iter().filter(|s| s.archived.is_some()).count();
-        let archived = w.shown() == Some(&Doc::SessionArchive);
-        let archive_button = ui::pressable("sessions.archive")
-            .test_support()
-            .role(Role::Button)
-            .aria_label("Archive")
-            .aria_description(format!("{count} archived"))
-            .aria_selected(archived)
-            .aria_toggled(archived.into())
-            .when(collapsed, |d| {
-                d.tooltip(move |window, cx| {
-                    Tooltip::new(format!("Archive ({count})")).build(window, cx)
-                })
-            })
-            .h(px(32.))
-            .flex_none()
-            .gap(GAP)
-            .px(GAP)
-            .rounded(radius::WIDGET)
-            .hover(|d| d.bg(t.hover))
-            .when(archived, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
-            .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
-            .child(Icon::Archive.size(px(15.)))
-            .when(!collapsed, |d| {
-                d.child("Archive").when(count > 0, |d| {
-                    d.child(
-                        div()
-                            .font_family(ui::theme::mono(cx))
-                            .text_color(t.muted)
-                            .child(count.to_string()),
-                    )
-                })
-            });
-        if collapsed {
-            return shell::side_rail("sessions", cx)
-                .role(Role::List)
-                .aria_label("Sessions")
-                .child(fold_button(true, cx))
-                .when(
-                    provision::page(cx).is_none() && !shell::side_open(Side::Explorer, window, cx),
-                    |d| d.child(shell::explorer_fold_button(cx)),
-                )
-                .child(div().flex_1())
-                .child(archive_button.w(rail::CONTROL).px_0().justify_center());
-        }
         let add = ui::titled_action(
             ui::button("sessions.new", "New session", cx),
             "New session",
@@ -183,7 +135,6 @@ impl Render for List {
             .pl(px(8.))
             .h(px(30.))
             .child(title)
-            .child(fold_button(collapsed, cx))
             .child(add);
         let list = div()
             .id("sessions")
@@ -256,23 +207,49 @@ impl Render for List {
                 .gap(px(4.))
                 .child(header)
                 .child(rows)
-                .child(archive_button),
+                .child(archive_button(false, cx)),
         )
     }
 }
 
-fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
-    ui::titled_action(
-        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx),
-        if collapsed {
-            "Show sessions"
-        } else {
-            "Hide sessions"
-        },
-        "panel.sessions",
-    )
-    .test_support()
-    .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"))
+pub(crate) fn archive_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
+    let t = theme(cx);
+    let w = Workspace::get(cx);
+    let count = dock::archived_tabs(cx).len()
+        + w.sessions().iter().filter(|s| s.archived.is_some()).count();
+    let archived = w.shown() == Some(&Doc::SessionArchive);
+    ui::pressable("sessions.archive")
+        .test_support()
+        .role(Role::Button)
+        .aria_label("Archive")
+        .aria_description(format!("{count} archived"))
+        .aria_selected(archived)
+        .aria_toggled(archived.into())
+        .when(collapsed, |d| {
+            d.tooltip(move |window, cx| {
+                Tooltip::new(format!("Archive ({count})")).build(window, cx)
+            })
+        })
+        .h(px(32.))
+        .flex_none()
+        .gap(GAP)
+        .px(GAP)
+        .rounded(radius::WIDGET)
+        .hover(|d| d.bg(t.hover))
+        .when(archived, |d| d.bg(t.active_bg).shadow(vec![ui::marker(cx)]))
+        .on_click(|_, window, cx| actions::dispatch(window, cx, "session.archive"))
+        .child(Icon::Archive.size(px(15.)))
+        .when(!collapsed, |d| {
+            d.child("Archive").when(count > 0, |d| {
+                d.child(
+                    div()
+                        .font_family(ui::theme::mono(cx))
+                        .text_color(t.muted)
+                        .child(count.to_string()),
+                )
+            })
+        })
+        .when(collapsed, |d| d.w(rail::CONTROL).px_0().justify_center())
 }
 
 pub(crate) fn shared_branch(set: &Workset) -> Option<&str> {

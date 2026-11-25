@@ -1515,7 +1515,7 @@ fn archiving_refuses_a_live_chat_process_and_terminal_on_its_member(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
+fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_the_rail(
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::{px, size};
@@ -1547,7 +1547,8 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
         w.resize(size(px(1000.), px(700.)));
         w.bounds_changed(cx);
     });
-    wait_until(app, |app| bounds(app, "sessions").size.width == px(36.));
+    wait_until(app, |app| app.find("sessions").is_none());
+    assert_eq!(bounds(app, "shell.rail").size.width, px(36.));
     assert!(app.find("session.explorer").is_none());
     assert!(app.find("sessions.rows").is_none());
     app.press("secondary-2");

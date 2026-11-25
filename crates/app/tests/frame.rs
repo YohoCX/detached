@@ -212,21 +212,21 @@ fn cmd_2_folds_the_sessions_list(cx: &mut TestAppContext) {
             .unwrap()
             .to_string()
     };
-    let width = |cx: &mut VisualTestContext| cx.find("sessions").unwrap().bounds().size.width;
-    assert!(
-        cx.find("zone.left").is_none(),
-        "the live frame has no dock toggle"
-    );
+    let bounds = |cx: &mut VisualTestContext| cx.find("sessions.fold").unwrap().bounds();
+    let open = |cx: &mut VisualTestContext| cx.find("sessions").is_some();
+    let fold = bounds(cx);
     assert_eq!(folding(cx), "Hide sessions");
     assert_fold_tip(cx, "sessions.fold", "Hide sessions", "panel.sessions");
-    assert_eq!(width(cx), gpui_kit::px(248.));
+    assert!(open(cx));
     cx.press("secondary-2");
     assert_eq!(folding(cx), "Show sessions");
-    assert_eq!(width(cx), gpui_kit::px(36.));
+    assert!(!open(cx));
+    assert_eq!(bounds(cx), fold);
     assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
     cx.press("secondary-2");
     assert_eq!(folding(cx), "Hide sessions");
-    assert_eq!(width(cx), gpui_kit::px(248.));
+    assert!(open(cx));
+    assert_eq!(bounds(cx), fold);
 }
 
 fn assert_fold_tip(cx: &mut VisualTestContext, id: &'static str, title: &str, action: &str) {

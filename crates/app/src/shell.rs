@@ -1,12 +1,12 @@
 //! The window: the title bar with each vertical's widgets, the dock, the status bar.
 
-use gpui_kit::base::{ObservedElement, Root, TestSupportExt};
+use gpui_kit::base::{Root, TestSupportExt};
 use gpui_kit::component::TitleBar;
 use gpui_kit::{
-    AnyView, AnyWindowHandle, App, AppContext, Context, Div, Entity, FocusHandle, FontWeight,
-    Global, InteractiveElement, IntoElement, ParentElement, Pixels, Render, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowDecorations, WindowOptions, div, point, prelude::FluentBuilder, px, relative, size,
+    AnyView, AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, FontWeight, Global,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement,
+    Styled, Subscription, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions,
+    div, point, prelude::FluentBuilder, px, relative, size,
 };
 
 use crate::dock;
@@ -121,10 +121,11 @@ impl Side {
         }
     }
 
-    fn pane(self, size: &Entity<Size>, width: Option<Pixels>, folded: Pixels) -> Pane {
+    fn pane(self, size: &Entity<Size>, width: Option<Pixels>) -> Pane {
         let (default, min, max) = self.limits();
+        // A zero-width pane still receives drag events after folding.
         ui::pane(self.size_key(), ui::Edge::Right, default, min, max)
-            .with_size(size.clone(), width.unwrap_or(folded), width.is_some())
+            .with_size(size.clone(), width.unwrap_or_default(), width.is_some())
             .h_full()
     }
 
@@ -152,14 +153,7 @@ fn window_columns(window: &Window, cx: &App, minimum: Pixels) -> [Option<Pixels>
 }
 
 pub(crate) fn explorer_fold_gain(window: &Window, cx: &App, minimum: Pixels) -> Option<Pixels> {
-    let [list, files] = window_columns(window, cx, minimum);
-    files.map(|width| {
-        if list.is_some() {
-            width - rail::WIDTH
-        } else {
-            width
-        }
-    })
+    window_columns(window, cx, minimum)[Side::Explorer as usize]
 }
 
 pub(crate) fn side_open(side: Side, window: &Window, cx: &App) -> bool {
@@ -179,20 +173,39 @@ pub(crate) fn toggle_side(side: Side, window: &mut Window, cx: &mut App) {
     set_side(side, !side_open(side, window, cx), window, cx);
 }
 
-pub(crate) fn side_rail(id: &'static str, cx: &App) -> ObservedElement<Stateful<Div>> {
+fn activity_rail(sessions_open: bool, explorer_folded: bool, cx: &App) -> impl IntoElement + use<> {
+    let sessions = ui::titled_action(
+        ui::icon_button("sessions.fold", Icon::PanelLeft.size(rail::ICON), cx),
+        if sessions_open {
+            "Hide sessions"
+        } else {
+            "Show sessions"
+        },
+        "panel.sessions",
+    )
+    .test_support()
+    .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"));
+    let slots = [
+        Some(sessions.into_any_element()),
+        explorer_folded.then(|| explorer_fold_button(cx).into_any_element()),
+        Some(div().flex_1().into_any_element()),
+        (!sessions_open).then(|| crate::sessions::archive_button(true, cx).into_any_element()),
+    ];
     div()
-        .id(id)
+        .id("shell.rail")
         .test_support()
-        .size_full()
+        .w(rail::WIDTH)
+        .flex_none()
         .flex()
         .flex_col()
         .items_center()
         .py(rail::PAD)
         .gap(rail::GAP)
         .bg(theme(cx).window_bg)
+        .children(slots.into_iter().flatten())
 }
 
-pub(crate) fn explorer_fold_button(cx: &App) -> impl IntoElement + use<> {
+fn explorer_fold_button(cx: &App) -> impl IntoElement + use<> {
     let (icon, title, action) = match explorer_mode(cx) {
         ExplorerMode::Files => (Icon::Folder, "Show files", Some("panel.project")),
         ExplorerMode::Changes => (Icon::Changes, "Show changes", Some("panel.changes")),
@@ -295,14 +308,12 @@ impl Shell {
         let width = window.viewport_size().width;
         let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
         let creating = crate::sessions::provision::page(cx).is_some();
-        let reserve = if creating { px(0.) } else { rail::WIDTH };
-        let room = width - minimum - (GAP + px(1.)) * 2.;
+        let room = width - rail::WIDTH - minimum - (GAP + px(1.)) * 2.;
         let list = prefers(Side::Sessions)
-            .then_some(room - reserve)
+            .then_some(room)
             .and_then(|room| Side::Sessions.open_width(list_size.read(cx), room));
-        let list_width = list.unwrap_or(rail::WIDTH);
         let files = (!creating && prefers(Side::Explorer))
-            .then_some(room - list_width)
+            .then_some(room - list.unwrap_or_default())
             .and_then(|room| Side::Explorer.open_width(files_size.read(cx), room));
         [list, files]
     }
@@ -363,30 +374,24 @@ impl Render for Shell {
         let [list_size, files_size] = &self.side_sizes;
         let t = theme(cx);
         let explorer = |cx: &App| {
-            let shared = list.is_none() && files.is_none();
-            // Keep receiving grip drag events after Explorer joins the Sessions rail.
-            let folded = if shared { px(0.) } else { rail::WIDTH };
-            let pane = Side::Explorer.pane(files_size, files, folded);
-            if files.is_some() {
-                pane.child(
-                    div()
-                        .id("session.explorer")
-                        .test_support()
-                        .size_full()
-                        .py(GAP)
-                        .pl(GAP)
-                        .child(
-                            ui::panel(div(), cx)
-                                .size_full()
-                                .overflow_hidden()
-                                .child(self.explorer.clone()),
-                        ),
-                )
-            } else if shared {
-                pane
-            } else {
-                pane.child(side_rail("session.explorer", cx).child(explorer_fold_button(cx)))
-            }
+            Side::Explorer
+                .pane(files_size, files)
+                .when(files.is_some(), |pane| {
+                    pane.child(
+                        div()
+                            .id("session.explorer")
+                            .test_support()
+                            .size_full()
+                            .py(GAP)
+                            .pl(GAP)
+                            .child(
+                                ui::panel(div(), cx)
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .child(self.explorer.clone()),
+                            ),
+                    )
+                })
         };
         div()
             .key_context(keymap::CONTEXT)
@@ -412,10 +417,15 @@ impl Render for Shell {
                     .flex()
                     .flex_1()
                     .min_h_0()
+                    .child(activity_rail(
+                        list.is_some(),
+                        !creating && files.is_none(),
+                        cx,
+                    ))
                     .child(
                         Side::Sessions
-                            .pane(list_size, list, rail::WIDTH)
-                            .child(self.sessions.clone()),
+                            .pane(list_size, list)
+                            .children(list.map(|_| self.sessions.clone())),
                     )
                     .when(!creating, |row| row.child(explorer(cx)))
                     .child(

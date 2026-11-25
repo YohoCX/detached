@@ -126,40 +126,47 @@ fn the_sidebar_grips_resize_independently_and_restore_their_widths(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn folded_columns_share_a_rail_and_keep_their_buttons_aligned(cx: &mut TestAppContext) {
+fn the_activity_rail_keeps_its_position_as_the_columns_fold(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
     let bounds = |app: &mut VisualTestContext, id: &'static str| app.find(id).unwrap().bounds();
 
-    app.click("sessions.fold");
-    let rail = bounds(app, "sessions");
-    let sessions = bounds(app, "sessions.fold");
+    let rail = bounds(app, "shell.rail");
+    let fold = bounds(app, "sessions.fold");
+    let sessions = bounds(app, "sessions");
     let archive = bounds(app, "sessions.archive");
     assert_eq!(rail.size.width, px(36.));
-    assert_eq!(sessions.center().x, rail.center().x);
-    assert_eq!(rail.right(), bounds(app, "session.explorer").left());
+    assert_eq!(rail.left(), px(0.));
+    assert_eq!(fold.center().x, rail.center().x);
+    assert_eq!(rail.right(), sessions.left());
+    assert!(archive.left() >= sessions.left());
 
     app.click("explorer.fold");
     let explorer = bounds(app, "explorer.fold");
-    assert_eq!(bounds(app, "sessions"), rail);
-    assert_eq!(bounds(app, "sessions.fold"), sessions);
-    assert_eq!(explorer.size, sessions.size);
-    assert_eq!(explorer.center().x, sessions.center().x);
-    assert!(explorer.top() >= sessions.bottom());
+    assert_eq!(bounds(app, "shell.rail"), rail);
+    assert_eq!(bounds(app, "sessions.fold"), fold);
+    assert_eq!(explorer.size, fold.size);
+    assert_eq!(explorer.center().x, fold.center().x);
+    assert!(explorer.top() >= fold.bottom());
     assert_eq!(bounds(app, "sessions.archive"), archive);
-    assert_eq!(archive.center().x, rail.center().x);
-    assert!(archive.top() > explorer.bottom());
-    assert_eq!(bounds(app, "shell.center").left(), rail.right() + GAP);
+    assert_eq!(bounds(app, "shell.center").left(), sessions.right() + GAP);
     assert!(app.find("session.explorer").is_none());
 
     app.click("sessions.fold");
-    let rail = bounds(app, "session.explorer");
-    let explorer = bounds(app, "explorer.fold");
-    assert_eq!(rail.size.width, px(36.));
-    assert_eq!(explorer.center().x, rail.center().x);
-    assert_eq!(
-        explorer.top() - rail.top(),
-        sessions.top() - bounds(app, "sessions").top()
-    );
+    let archive = bounds(app, "sessions.archive");
+    assert!(app.find("sessions").is_none());
+    assert_eq!(bounds(app, "shell.rail"), rail);
+    assert_eq!(bounds(app, "sessions.fold"), fold);
+    assert_eq!(bounds(app, "explorer.fold"), explorer);
+    assert_eq!(archive.center().x, rail.center().x);
+    assert!(archive.top() > explorer.bottom());
+    assert_eq!(bounds(app, "shell.center").left(), rail.right() + GAP);
+
+    app.click("sessions.archive");
+    assert!(app.find("sessions.archive.page").is_some());
+
+    app.click("sessions.fold");
+    assert_eq!(bounds(app, "sessions"), sessions);
+    assert_eq!(bounds(app, "sessions.fold"), fold);
 
     app.press("secondary-0");
     app.click("explorer.fold");
@@ -174,29 +181,29 @@ fn folded_columns_share_a_rail_and_keep_their_buttons_aligned(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
-    app.simulate_resize(size(px(1200.), px(900.)));
+    app.simulate_resize(size(px(1236.), px(900.)));
     split_right(app);
     assert_eq!(pane_count(app), 2);
     assert_eq!(width(app, "session.explorer"), px(288.));
     drag(app, "grip.session.explorer", 80.);
-    assert_eq!(width(app, "session.explorer"), px(36.));
+    assert!(app.find("session.explorer").is_none());
     assert_eq!(width(app, "sessions"), px(248.));
 
-    app.simulate_resize(size(px(1300.), px(900.)));
+    app.simulate_resize(size(px(1336.), px(900.)));
     assert_eq!(width(app, "session.explorer"), px(368.));
-    app.simulate_resize(size(px(1200.), px(900.)));
-    assert_eq!(width(app, "session.explorer"), px(36.));
+    app.simulate_resize(size(px(1236.), px(900.)));
+    assert!(app.find("session.explorer").is_none());
     app.click("explorer.fold");
     assert_eq!(width(app, "session.explorer"), px(289.));
     assert!(app.find("grip.session.explorer").is_some());
 
-    app.simulate_resize(size(px(1300.), px(900.)));
+    app.simulate_resize(size(px(1336.), px(900.)));
     assert_eq!(width(app, "session.explorer"), px(368.));
     assert_eq!(pane_count(app), 2);
 
-    app.simulate_resize(size(px(1200.), px(900.)));
+    app.simulate_resize(size(px(1236.), px(900.)));
     drag(app, "grip.session.explorer", 40.);
-    assert_eq!(width(app, "session.explorer"), px(36.));
+    assert!(app.find("session.explorer").is_none());
     app.update(|w, cx| actions::dispatch(w, cx, "panel.project"));
     assert_eq!(width(app, "session.explorer"), px(289.));
     app.simulate_resize(size(px(1300.), px(900.)));
@@ -204,7 +211,7 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn sessions_shows_its_folded_rail_during_a_drag_and_can_reopen(cx: &mut TestAppContext) {
+fn sessions_can_fold_during_a_drag_and_reopen_from_the_rail(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
     app.simulate_resize(size(px(1100.), px(900.)));
     app.click("explorer.fold");
@@ -218,7 +225,7 @@ fn sessions_shows_its_folded_rail_during_a_drag_and_can_reopen(cx: &mut TestAppC
     app.simulate_mouse_down(from, MouseButton::Left, modifiers);
     app.simulate_mouse_move(from + point(px(20.), px(0.)), MouseButton::Left, modifiers);
     app.simulate_mouse_move(to, MouseButton::Left, modifiers);
-    assert_eq!(width(app, "sessions"), px(36.));
+    assert!(app.find("sessions").is_none());
     assert!(app.find("sessions.rows").is_none());
     app.simulate_mouse_up(to, MouseButton::Left, modifiers);
 
@@ -230,7 +237,7 @@ fn sessions_shows_its_folded_rail_during_a_drag_and_can_reopen(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn an_explorer_drag_can_continue_after_it_joins_the_sessions_rail(cx: &mut TestAppContext) {
+fn an_explorer_drag_can_continue_after_it_joins_the_rail(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
     app.simulate_resize(size(px(1100.), px(900.)));
     app.click("sessions.fold");
@@ -262,24 +269,25 @@ fn new_session_can_use_the_space_of_the_hidden_explorer(cx: &mut TestAppContext)
     assert_eq!(pane_count(app), 2);
     app.click("sessions.new");
     assert!(app.find("session.explorer").is_none());
+    assert_eq!(width(app, "shell.rail"), px(36.));
 
-    drag(app, "grip.session.list", 192.);
-    assert_eq!(width(app, "sessions"), px(440.));
+    drag(app, "grip.session.list", 172.);
+    assert_eq!(width(app, "sessions"), px(420.));
     assert!(app.find("sessions.provisional").is_some());
 }
 
 #[gpui_kit::test]
 fn a_new_split_can_use_the_full_width_freed_by_folding_the_explorer(cx: &mut TestAppContext) {
     let app = &mut open_app(cx);
-    app.simulate_resize(size(px(1322.), px(900.)));
-    drag(app, "grip.session.explorer", 112.);
+    app.simulate_resize(size(px(1282.), px(900.)));
+    drag(app, "grip.session.explorer", 32.);
     split_right(app);
     assert_eq!(pane_count(app), 2);
-    assert_eq!(width(app, "session.explorer"), px(400.));
+    assert_eq!(width(app, "session.explorer"), px(320.));
 
     split_right(app);
     assert_eq!(pane_count(app), 3);
-    assert_eq!(width(app, "session.explorer"), px(36.));
+    assert!(app.find("session.explorer").is_none());
 }
 
 #[gpui_kit::test]
@@ -293,7 +301,8 @@ fn a_new_split_can_use_the_explorer_width_when_sessions_is_folded(cx: &mut TestA
 
     split_right(app);
     assert_eq!(pane_count(app), 3);
-    assert_eq!(width(app, "sessions"), px(36.));
+    assert_eq!(width(app, "shell.rail"), px(36.));
+    assert!(app.find("sessions").is_none());
     assert!(app.find("session.explorer").is_none());
 }
 
