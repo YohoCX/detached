@@ -249,7 +249,7 @@ impl Render for FileView {
             None => name,
         };
         let body = match (&self.body, &self.preview) {
-            (Body::Loading, _) => div().into_any_element(),
+            (Body::Loading, _) => ui::loading(cx).id("file.loading").into_any_element(),
             (Body::Text { .. }, Some(preview)) => preview.clone().into_any_element(),
             (Body::Text { .. }, None) => self.code.clone().into_any_element(),
             (Body::Placeholder(msg), _) => ui::placeholder(msg.clone(), cx)

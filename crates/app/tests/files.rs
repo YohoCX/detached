@@ -280,6 +280,17 @@ fn show_diff_focuses_the_diff_only_when_asked(cx: &mut TestAppContext) {
     wait_until(cx, |cx| focused(cx) == Some(true));
 }
 
+#[gpui_kit::test]
+fn the_status_path_goes_when_the_new_session_page_opens(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, layout);
+    let doc = readme(cx);
+    show(cx, doc, false);
+    wait_until(cx, |cx| cx.find("status.path").is_some());
+    cx.press("secondary-n");
+    assert!(cx.find("sessions.provisional").is_some());
+    assert!(cx.find("status.path").is_none());
+}
+
 struct Note;
 
 impl Render for Note {

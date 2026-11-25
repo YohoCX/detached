@@ -527,7 +527,7 @@ impl Render for DiffView {
             self.focus_body(window, cx);
         }
         let body = match &self.body {
-            Body::Loading => div().into_any_element(),
+            Body::Loading => ui::loading(cx).id("diff.loading").into_any_element(),
             Body::Conflict => div()
                 .size_full()
                 .children(self.code.clone())

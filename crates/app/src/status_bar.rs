@@ -60,7 +60,10 @@ impl Render for StatusBar {
                 .child(m.text.clone());
             ui::appear(m.text.clone(), message, 3., ui::motion::BASE)
         });
-        let focused = match w.shown() {
+        let focused = match w
+            .shown()
+            .filter(|_| crate::sessions::provision::page(cx).is_none())
+        {
             Some(Doc::File(loc)) => Some(format!("{}/{}", w.name_of(&loc.repo), loc.path)),
             Some(Doc::Diff(diff)) => Some(format!("{}/{}", w.name_of(&diff.repo), diff.path)),
             _ => None,
@@ -162,6 +165,8 @@ impl Render for StatusBar {
             .when(message.is_none(), |d| {
                 d.children(focused.map(|label| {
                     div()
+                        .id("status.path")
+                        .test_support()
                         .truncate()
                         .min_w_0()
                         .font_family(theme::mono(cx))
