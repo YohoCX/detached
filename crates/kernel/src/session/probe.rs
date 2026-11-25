@@ -98,22 +98,30 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
     if Instant::now() >= deadline {
         return Ok(());
     }
-    Preset::save(core, |preset| {
+    Preset::save_cache(core, |preset| {
         if installed.is_some() && adapter() != installed {
             return;
         }
         let choices = preset.choices(provider.id);
-        choices.models = opened.models;
-        choices.efforts = opened
-            .config
-            .into_iter()
-            .find(|c| c.id == "effort" && choices.models.iter().all(|m| m.efforts.is_empty()))
-            .map_or_else(Vec::new, |c| c.values);
-        choices.account = opened.account;
-        choices.cli = opened.commands.map(|commands| {
-            choices.commands = commands;
-            stamp
-        });
+        let complete = !opened.models.is_empty() && opened.commands.is_some();
+        if !opened.models.is_empty() {
+            choices.models = opened.models;
+        }
+        if let Some(effort) = opened.config.into_iter().find(|c| c.id == "effort")
+            && choices.models.iter().all(|m| m.efforts.is_empty())
+        {
+            choices.efforts = effort.values;
+        }
+        if let Some(account) = opened.account {
+            choices.account = Some(account);
+        }
+        if let Some(commands) = opened.commands {
+            choices.commands = Some(commands);
+        } else if choices.commands.is_none() && choices.cli.is_some() {
+            // Older stamps also marked reports with zero commands.
+            choices.commands = Some(Vec::new());
+        }
+        choices.cli = complete.then_some(stamp);
     })?;
     Ok(())
 }
@@ -121,6 +129,7 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use detached_core::adapters::{CLAUDE, CODEX};
+    use detached_core::backend::Account;
     use gpui::TestAppContext;
 
     use super::*;
@@ -151,7 +160,14 @@ mod tests {
         let choices = &preset.providers[CLAUDE.id];
         assert!(!choices.models.is_empty());
         assert!(choices.efforts.is_empty());
-        assert!(choices.commands.iter().any(|c| c.name == "review"));
+        assert!(
+            choices
+                .commands
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|c| c.name == "review")
+        );
         assert_eq!(choices.account.as_ref().unwrap().plan, "Anthropic API");
         assert_eq!(log(), "initialize\n");
         assert_eq!(run(cx), preset);
@@ -184,22 +200,47 @@ mod tests {
         let choices = &preset.providers[CODEX.id];
         assert!(!choices.models.is_empty());
         assert_eq!(choices.efforts, ["low", "medium", "high"]);
-        assert!(choices.commands.iter().any(|c| c.name == "compact"));
+        assert!(
+            choices
+                .commands
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|c| c.name == "compact")
+        );
         assert_eq!(choices.cli.as_deref(), Some("2.1.400:1.0.0"));
 
+        let account = Account {
+            plan: "Pro".into(),
+            email: None,
+        };
+        Preset::save(&f.core, |p| {
+            p.choices(CODEX.id).account = Some(account.clone())
+        })
+        .unwrap();
         let report = home.path().join("fake-commands");
+        let no_config = home.path().join("fake-no-config");
         detached_acp::testutil::install(&f.core, "1.0.1");
         std::fs::write(&report, "missing").unwrap();
+        std::fs::write(&no_config, "").unwrap();
         let partial = run(cx);
         let partial = &partial.providers[CODEX.id];
         assert_eq!(partial.models, choices.models);
+        assert_eq!(partial.efforts, choices.efforts);
         assert_eq!(partial.commands, choices.commands);
+        assert_eq!(partial.account.as_ref(), Some(&account));
         assert!(partial.cli.is_none());
 
         std::fs::write(report, "empty").unwrap();
+        let partial = run(cx);
+        let partial = &partial.providers[CODEX.id];
+        assert_eq!(partial.commands, Some(vec![]));
+        assert!(partial.cli.is_none());
+
+        std::fs::remove_file(no_config).unwrap();
         let retried = run(cx);
         let retried = &retried.providers[CODEX.id];
-        assert!(retried.commands.is_empty());
+        assert_eq!(retried.commands, Some(vec![]));
         assert_eq!(retried.cli.as_deref(), Some("2.1.400:1.0.1"));
         assert_eq!(std::fs::read_to_string(log).unwrap(), "");
     }

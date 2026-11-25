@@ -85,7 +85,9 @@ pub fn find_git(path: &str) -> Option<PathBuf> {
 
 pub fn which(bin: &str, path: &str) -> Option<PathBuf> {
     let bin = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    // A relative entry would find a binary in whatever folder the app runs from.
     std::env::split_paths(path)
+        .filter(|d| d.is_absolute())
         .map(|d| d.join(&bin))
         .find(|p| p.is_file())
 }

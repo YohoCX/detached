@@ -158,8 +158,16 @@ fn main() {
                 }
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
+                let home = std::env::var_os("CODEX_HOME").map(PathBuf::from);
                 if method == "session/new" {
-                    reply(json!({"sessionId": sid, "configOptions": config}));
+                    let mut opened = json!({"sessionId": sid});
+                    if !home
+                        .as_ref()
+                        .is_some_and(|p| p.join("fake-no-config").exists())
+                    {
+                        opened["configOptions"] = config;
+                    }
+                    reply(opened);
                 } else {
                     for (kind, text) in [("user", "earlier"), ("agent", "replayed")] {
                         let chunk = json!({"sessionUpdate": format!("{kind}_message_chunk"),
@@ -168,9 +176,7 @@ fn main() {
                     }
                     reply(json!({"configOptions": config}));
                 }
-                let report = std::env::var_os("CODEX_HOME").and_then(|home| {
-                    fs::read_to_string(PathBuf::from(home).join("fake-commands")).ok()
-                });
+                let report = home.and_then(|p| fs::read_to_string(p.join("fake-commands")).ok());
                 if !git.join("no-commands").exists() && report.as_deref() != Some("missing") {
                     let commands = if report.as_deref() == Some("empty") {
                         json!([])

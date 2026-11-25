@@ -815,6 +815,7 @@ impl Client {
         }
     }
 
+    // Call off the reader thread, which must dispatch the response.
     fn call(&self, body: Value, timeout: Duration) -> Result<std::result::Result<Value, String>> {
         let (tx, rx) = mpsc::channel();
         self.request(body, move |_, r| _ = tx.send(r));

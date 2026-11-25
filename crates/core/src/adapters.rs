@@ -560,8 +560,7 @@ fn check(provider: &Provider, raised: Option<&Version>, blocked: &[Version], v: 
     }
 }
 
-/// The provider's CLI: the path the settings name, else the first on PATH, else where its
-/// installer puts it.
+/// The configured CLI, the first in an absolute PATH directory, or the installer's default.
 pub fn find_cli(provider: &Provider, setting: Option<&str>, env: &Env) -> Option<PathBuf> {
     if let Some(path) = setting.filter(|s| !s.is_empty()) {
         return Some(PathBuf::from(path)).filter(|p| p.is_file());
@@ -1089,6 +1088,25 @@ mod tests {
             find_cli(&CODEX, None, &env),
             Some(local.join(cli_file(&CODEX)))
         );
+    }
+
+    #[test]
+    fn cli_discovery_skips_relative_path_entries() {
+        let relative = tempfile::tempdir_in(".").unwrap();
+        let absolute = data();
+        let bin = cli_file(&CLAUDE);
+        let relative = Path::new(relative.path().file_name().unwrap());
+        fs::write(relative.join(&bin), "").unwrap();
+        let installed = absolute.path().join(&bin);
+        fs::write(&installed, "").unwrap();
+        let env = Env {
+            path: std::env::join_paths([Path::new(""), relative, absolute.path()])
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            ..Env::default()
+        };
+        assert_eq!(find_cli(&CLAUDE, None, &env), Some(installed));
     }
 
     const LOGINS: [&str; 3] = [

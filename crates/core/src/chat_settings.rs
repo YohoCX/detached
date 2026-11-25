@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::value::MapDeserializer};
 use serde_json::Value;
 
 use crate::adapters::CLAUDE;
@@ -43,8 +43,8 @@ pub struct Choices {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub efforts: Vec<String>,
     /// Commands reported outside any project.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<SlashCommand>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<SlashCommand>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cli: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,22 +100,58 @@ impl Preset {
         let previous = cached.clone();
         edit(cached);
         if *cached != previous {
-            Self::edit(core, |p| edit(p.choices(provider)))?;
+            Self::edit(core, false, |p| edit(p.choices(provider)))?;
         }
         Ok(())
     }
 
     pub fn save(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
         let _guard = SAVE.lock().map_err(|e| Error::Other(e.to_string()))?;
-        Self::edit(core, edit)
+        Self::edit(core, true, edit)
     }
 
-    fn edit(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
+    pub fn save_cache(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
+        let _guard = SAVE.lock().map_err(|e| Error::Other(e.to_string()))?;
+        Self::edit(core, false, edit)
+    }
+
+    fn edit(core: &AppState, recover: bool, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
         core.edit_block(BLOCK, |raw| {
-            let mut preset = raw.map(Self::deserialize).transpose()?.unwrap_or_default();
+            let mut preset = match raw.map(Self::deserialize).transpose() {
+                Ok(preset) => preset.unwrap_or_default(),
+                Err(_) if recover => raw.map_or_else(Self::default, Self::recover),
+                Err(error) => return Err(error.into()),
+            };
             edit(&mut preset);
             Ok(serde_json::to_value(preset)?)
         })
+    }
+
+    fn recover(raw: &Value) -> Self {
+        let Some(mut fields) = raw.as_object().cloned() else {
+            return Self::default();
+        };
+        if fields.get("provider").is_some_and(|v| !v.is_string()) {
+            fields.remove("provider");
+        }
+        if let Some(providers) = fields.get_mut("providers").and_then(Value::as_object_mut) {
+            providers.retain(|_, choices| {
+                let Some(choices) = choices.as_object_mut() else {
+                    return false;
+                };
+                choices.retain(|key, value| {
+                    Choices::deserialize(MapDeserializer::new(std::iter::once((
+                        key.as_str(),
+                        &*value,
+                    ))))
+                    .is_ok()
+                });
+                true
+            });
+        } else {
+            fields.remove("providers");
+        }
+        Self::deserialize(Value::Object(fields)).unwrap_or_default()
     }
 }
 
@@ -149,7 +185,7 @@ mod tests {
         assert_eq!(preset.providers["claude"].mode, None);
         assert_eq!(preset.providers["codex"].mode.as_deref(), Some("agent"));
         let claude = &preset.providers["claude"];
-        assert!(claude.efforts.is_empty() && claude.commands.is_empty());
+        assert!(claude.efforts.is_empty() && claude.commands.is_none());
         assert!(claude.cli.is_none() && claude.account.is_none());
         let raw: Value = saved.block(BLOCK).unwrap();
         assert_eq!(raw["future"], true);
@@ -197,7 +233,7 @@ mod tests {
             ..Model::default()
         };
         assert!(
-            Preset::save(&sb.state, |p| p
+            Preset::save_cache(&sb.state, |p| p
                 .choices("claude")
                 .models
                 .push(model.clone()))
@@ -209,6 +245,34 @@ mod tests {
             Settings::load(&sb.state.config_dir).block::<Value>(BLOCK),
             Some(raw)
         );
+    }
+
+    #[test]
+    fn saving_chat_preferences_defaults_only_the_malformed_fields() {
+        let sb = Sandbox::new();
+        sb.state
+            .set_block(
+                BLOCK,
+                json!({"provider": "codex", "future": true, "providers": {
+                    "claude": {"model": "sonnet", "effort": 7, "future": {"number": 42}},
+                    "codex": {"mode": "agent"}, "broken": false
+                }}),
+            )
+            .unwrap();
+        Preset::save(&sb.state, |p| {
+            p.choices("claude").mode = Some("plan".into())
+        })
+        .unwrap();
+        let saved = Settings::load(&sb.state.config_dir);
+        let preset = saved.block::<Preset>(BLOCK).unwrap();
+        assert_eq!(preset.provider, "codex");
+        assert_eq!(preset.providers["claude"].model.as_deref(), Some("sonnet"));
+        assert_eq!(preset.providers["claude"].effort, None);
+        assert_eq!(preset.providers["claude"].mode.as_deref(), Some("plan"));
+        assert_eq!(preset.providers["codex"].mode.as_deref(), Some("agent"));
+        let raw: Value = saved.block(BLOCK).unwrap();
+        assert_eq!(raw["future"], true);
+        assert_eq!(raw["providers"]["claude"]["future"], json!({"number": 42}));
     }
 
     #[test]

@@ -1544,6 +1544,23 @@ fn slash_lists_the_last_session_s_commands_before_the_first_message(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn slash_hides_the_loading_hint_for_an_empty_provider_command_cache(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        fake(sb, json!({"init_wait": "go"}));
+        sb.state
+            .set_block(
+                chat_settings::BLOCK,
+                json!({"providers": {"claude": {"commands": []}}}),
+            )
+            .unwrap();
+    });
+    cx.input("/");
+    assert!(cx.find("chat.unlisted").is_none());
+    assert!(cx.find(("chat.suggest", 0usize)).is_none());
+    std::fs::write(cx.sb.path("claude/go"), "").unwrap();
+}
+
+#[gpui_kit::test]
 fn slash_suggests_commands_and_at_suggests_files(cx: &mut TestAppContext) {
     let cx = &mut open(cx);
     say(cx, "hello");
@@ -2711,7 +2728,7 @@ fn codex_caches_session_efforts_and_project_commands(cx: &mut TestAppContext) {
     });
     let saved = detached_core::settings::Settings::load(&cx.sb.state.config_dir);
     let preset = Preset::read(&saved);
-    assert!(preset.providers["codex"].commands.is_empty());
+    assert!(preset.providers["codex"].commands.is_none());
 }
 
 #[gpui_kit::test]
