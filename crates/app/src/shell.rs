@@ -14,6 +14,7 @@ use gpui_kit::{
 use crate::dock;
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
+use crate::ui::grip::{Pane, Size};
 use crate::ui::{self, Icon, radius, text, theme};
 use crate::{actions, keymap};
 use kernel::doc::Doc;
@@ -92,13 +93,41 @@ pub(crate) enum Side {
 }
 
 impl Side {
-    fn width(self, open: bool) -> Pixels {
-        px(match (self, open) {
-            (Self::Sessions, true) => 248.,
-            (Self::Sessions, false) => 44.,
-            (Self::Explorer, true) => 264.,
-            (Self::Explorer, false) => 28.,
-        })
+    fn size_key(self) -> &'static str {
+        match self {
+            Self::Sessions => "session.list",
+            Self::Explorer => "session.explorer",
+        }
+    }
+
+    fn limits(self) -> (f32, f32, f32) {
+        match self {
+            Self::Sessions => (248., 208., 480.),
+            Self::Explorer => (264., 248., 520.),
+        }
+    }
+
+    fn folded_width(self) -> Pixels {
+        match self {
+            Self::Sessions => px(44.),
+            Self::Explorer => px(28.),
+        }
+    }
+
+    fn load_size(self, cx: &App) -> Size {
+        Size::load(self.size_key(), self.limits().0, cx)
+    }
+
+    fn open_width(self, size: &Size) -> Pixels {
+        let (_, min, max) = self.limits();
+        size.pixels(min, max)
+    }
+
+    fn pane(self, size: &Entity<Size>, open: bool) -> Pane {
+        let (default, min, max) = self.limits();
+        ui::pane(self.size_key(), ui::Edge::Right, default, min, max)
+            .with_size(size.clone(), (!open).then(|| self.folded_width()))
+            .h_full()
     }
 
     fn key(self, width: Pixels) -> &'static str {
@@ -111,26 +140,49 @@ impl Side {
     }
 }
 
-pub(crate) fn columns_for(window: &Window, cx: &App, minimum: Pixels) -> (bool, bool) {
+const SIDES: [Side; 2] = [Side::Sessions, Side::Explorer];
+
+fn columns(
+    window: &Window,
+    cx: &App,
+    minimum: Pixels,
+    [list_width, files_width]: [Pixels; 2],
+) -> (bool, bool) {
     let width = window.viewport_size().width;
     let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
-    let (mut list, mut files) = (prefers(Side::Sessions), prefers(Side::Explorer));
-    let center = |list, files| width - Side::Sessions.width(list) - Side::Explorer.width(files);
-    if center(list, files) < minimum {
-        files = false;
-        if center(list, files) < minimum {
-            list = false;
-        }
-    }
-    (list, files)
+    let list = prefers(Side::Sessions);
+    let list_width = if list {
+        list_width
+    } else {
+        Side::Sessions.folded_width()
+    };
+    (
+        list && width - list_width - Side::Explorer.folded_width() >= minimum,
+        prefers(Side::Explorer) && width - list_width - files_width >= minimum,
+    )
 }
 
-fn columns(window: &Window, cx: &App) -> (bool, bool) {
-    columns_for(window, cx, dock::minimum_width(cx))
+fn preferred_widths(window: &Window, cx: &App) -> [Pixels; 2] {
+    window.root::<Shell>().flatten().map_or_else(
+        || SIDES.map(|side| side.open_width(&side.load_size(cx))),
+        |shell| shell.read(cx).preferred_widths(cx),
+    )
+}
+
+pub(crate) fn explorer_fold_gain(window: &Window, cx: &App, minimum: Pixels) -> Option<Pixels> {
+    let widths = preferred_widths(window, cx);
+    columns(window, cx, minimum, widths)
+        .1
+        .then(|| widths[1] - Side::Explorer.folded_width())
 }
 
 pub(crate) fn side_open(side: Side, window: &Window, cx: &App) -> bool {
-    let (list, files) = columns(window, cx);
+    let (list, files) = columns(
+        window,
+        cx,
+        dock::minimum_width(cx),
+        preferred_widths(window, cx),
+    );
     match side {
         Side::Sessions => list,
         Side::Explorer => files,
@@ -151,6 +203,7 @@ pub struct Shell {
     branches: Vec<AnyView>,
     sessions: Entity<crate::sessions::List>,
     explorer: AnyView,
+    side_sizes: [Entity<Size>; 2],
     left: Vec<AnyView>,
     center: Vec<AnyView>,
     search: Vec<AnyView>,
@@ -171,7 +224,8 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         dock::new_window(window, cx);
-        let subscriptions = vec![
+        let side_sizes = SIDES.map(|side| cx.new(|cx| side.load_size(cx)));
+        let mut subscriptions = vec![
             // The app's chords need focus inside the shell's key context.
             cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx)),
             cx.observe(&workspace, |_, _, cx| cx.notify()),
@@ -195,6 +249,11 @@ impl Shell {
                 invalidate::set_visible(cx, v.is_visible())
             }),
         ];
+        subscriptions.extend(
+            side_sizes
+                .iter()
+                .map(|size| cx.observe(size, |_, _, cx| cx.notify())),
+        );
         let Slots {
             mut top_bar,
             overlays,
@@ -211,6 +270,7 @@ impl Shell {
             search: bar(TopBar::Search),
             sessions: cx.new(|cx| crate::sessions::List::new(true, cx)),
             explorer: crate::files::explorer(window, cx),
+            side_sizes,
             left,
             center,
             right,
@@ -220,6 +280,10 @@ impl Shell {
             focus,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn preferred_widths(&self, cx: &App) -> [Pixels; 2] {
+        SIDES.map(|side| side.open_width(self.side_sizes[side as usize].read(cx)))
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -352,11 +416,46 @@ impl Render for Shell {
         let live = !Workspace::get(cx).archive();
         let creating = crate::sessions::provision::page(cx).is_some();
         let (list, files) = if live {
-            columns(window, cx)
+            columns(
+                window,
+                cx,
+                dock::minimum_width(cx),
+                self.preferred_widths(cx),
+            )
         } else {
             (false, false)
         };
+        let [list_size, files_size] = &self.side_sizes;
         let t = theme(cx);
+        let explorer = |cx: &App| {
+            let panel = div()
+                .id("session.explorer")
+                .test_support()
+                .size_full()
+                .border_l_1()
+                .border_color(t.line);
+            let panel = if files {
+                panel.child(self.explorer.clone())
+            } else {
+                let (title, action) = if crate::files::showing_changes(cx) {
+                    ("Show changes", "panel.changes")
+                } else {
+                    ("Show files", "panel.project")
+                };
+                panel.pt(px(8.)).child(
+                    ui::titled_action(
+                        ui::icon_button("explorer.fold", Icon::Folder.size(px(14.)), cx)
+                            .h(px(26.))
+                            .min_w(px(26.)),
+                        title,
+                        action,
+                    )
+                    .test_support()
+                    .on_click(|_, w, cx| toggle_side(Side::Explorer, w, cx)),
+                )
+            };
+            Side::Explorer.pane(files_size, files).child(panel)
+        };
         div()
             .key_context(keymap::CONTEXT)
             .track_focus(&self.focus)
@@ -383,48 +482,11 @@ impl Render for Shell {
                     .min_h_0()
                     .when(live, |row| {
                         row.child(
-                            div()
-                                .flex_none()
-                                .w(Side::Sessions.width(list))
-                                .min_h_0()
+                            Side::Sessions
+                                .pane(list_size, list)
                                 .child(self.sessions.clone()),
                         )
-                        .when(!creating, |row| {
-                            row.child(
-                                div()
-                                    .id("session.explorer")
-                                    .test_support()
-                                    .flex_none()
-                                    .w(Side::Explorer.width(files))
-                                    .h_full()
-                                    .min_h_0()
-                                    .when(files, |d| d.child(self.explorer.clone()))
-                                    .when(!files, |d| {
-                                        let (title, action) = if crate::files::showing_changes(cx) {
-                                            ("Show changes", "panel.changes")
-                                        } else {
-                                            ("Show files", "panel.project")
-                                        };
-                                        d.pt(px(8.)).child(
-                                            ui::titled_action(
-                                                ui::icon_button(
-                                                    "explorer.fold",
-                                                    Icon::Folder.size(px(14.)),
-                                                    cx,
-                                                )
-                                                .h(px(26.))
-                                                .min_w(px(26.)),
-                                                title,
-                                                action,
-                                            )
-                                            .test_support()
-                                            .on_click(
-                                                |_, w, cx| toggle_side(Side::Explorer, w, cx),
-                                            ),
-                                        )
-                                    }),
-                            )
-                        })
+                        .when(!creating, |row| row.child(explorer(cx)))
                     })
                     .child(
                         div()

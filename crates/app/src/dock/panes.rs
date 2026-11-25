@@ -307,15 +307,15 @@ fn room(
             .and_then(|p| p.view().downcast::<DocTab>().ok())
             .is_some_and(|t| matches!(t.read(cx).doc, Doc::File(_) | Doc::Diff(_)));
         let whole = size_of(tree(a), Axis::Horizontal, cx).unwrap_or(width);
-        let extra = px(236.);
+        let split_minimum = minimum_with_split(tree(a), Axis::Horizontal, Some(node));
         if width < px(if code { 900. } else { 641. })
-            && shell::columns_for(w, cx, minimum_width(a)).1
-            && whole + extra >= minimum_with_split(tree(a), Axis::Horizontal, Some(node))
+            && shell::explorer_fold_gain(w, cx, minimum_width(a))
+                .is_some_and(|extra| whole + extra >= split_minimum)
         {
             shell::set_side(Explorer, false, w, cx);
             return true;
         }
-        if whole >= minimum_with_split(tree(a), Axis::Horizontal, Some(node)) {
+        if whole >= split_minimum {
             return true;
         }
     } else if size_of(tree(a), Axis::Vertical, cx).unwrap_or(b.size.height)
