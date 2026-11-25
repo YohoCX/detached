@@ -6,12 +6,13 @@ use std::time::{Duration, SystemTime};
 use common::*;
 use detached_app::chat;
 use detached_app::ui::menu;
+use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
 use detached_core::adapters::{BLOCK, CLAUDE, Config};
 use detached_core::chat_settings::{self, Preset};
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
-    AppContext, Role, SharedString, SystemNotificationResponse, TestAppContext, VisualTestContext,
-    px, size,
+    AppContext, Role, ScrollDelta, SharedString, SystemNotificationResponse, TestAppContext,
+    VisualTestContext, point, px, size,
 };
 use kernel::doc::Doc;
 use kernel::repo::Repo;
@@ -473,10 +474,12 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     };
     let composer = cx.find("chat.composer").unwrap().bounds();
     let pane = cx.find("chat").unwrap().bounds();
-    let inset = composer.left() - pane.left();
-    assert!(inset > px(0.) && inset < px(32.));
-    assert_eq!(composer.size.width, new_input.size.width);
-    assert!(composer.size.width <= px(840.));
+    assert_eq!(
+        composer.left() - pane.left(),
+        pane.right() - composer.right()
+    );
+    assert_eq!(composer.size.width, CONVERSATION);
+    assert_eq!(new_input.size.width, CONVERSATION);
     assert_eq!(composer.bottom(), new_input.bottom());
     let last = items(cx).len() - 1;
     let last = cx.find(("chat.item", last)).unwrap().bounds();
@@ -485,9 +488,9 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
     let outgoing = cx.find(("chat.item", 0usize)).unwrap().bounds();
     assert_eq!(outgoing.right(), composer.right());
     assert_eq!(markdown(cx, prose).left(), composer.left());
-    assert!(markdown(cx, prose).size.width < px(800.));
+    assert_eq!(markdown(cx, prose).size.width, PROSE);
     assert_eq!(markdown(cx, row).left(), composer.left());
-    assert_eq!(markdown(cx, row).right(), pane.right() - inset);
+    assert_eq!(markdown(cx, row).right(), composer.right());
 
     cx.update(|w, cx| detached_app::actions::dispatch(w, cx, "pane.splitRight"));
     cx.simulate_resize(size(px(740.), px(900.)));
@@ -501,6 +504,31 @@ fn the_composer_stays_with_its_content_in_empty_and_active_chats(cx: &mut TestAp
         assert!(button.visible(), "{id}");
         assert!(button.bounds().right() <= composer.right(), "{id}");
     }
+}
+
+#[gpui_kit::test]
+fn the_scrolled_transcript_stays_below_the_tab_strip(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
+    say(cx, &format!("say {}last line", "line\n".repeat(60)));
+    wait_for_item(cx, "last line");
+    idle(cx);
+
+    let scroll = |cx: &mut VisualTestContext, dy| {
+        cx.update(|w, cx| {
+            w.scroll("chat.items", ScrollDelta::Pixels(point(px(0.), px(dy))), cx);
+        });
+    };
+    let first = ("chat.item", 0usize);
+    scroll(cx, 4000.);
+    assert!(cx.find(first).unwrap().visible());
+    scroll(cx, -60.);
+    let item = cx.find(first).unwrap();
+    assert!(item.bounds().top() > px(0.));
+    assert!(item.bounds().bottom() <= cx.find("chat.items").unwrap().bounds().top());
+    assert!(!item.visible());
 }
 
 #[gpui_kit::test]
@@ -2513,6 +2541,23 @@ fn a_codex_start_that_crashes_returns_its_message(cx: &mut TestAppContext) {
     wait_for_item(cx, "died at its model");
     assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
     assert!(!items(cx).iter().any(|i| i.starts_with("You:")));
+}
+
+#[gpui_kit::test]
+fn a_multiline_tool_title_fits_in_one_row(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        codex(sb);
+        sb.state
+            .set_block(chat_settings::BLOCK, json!({"provider": "codex"}))
+            .unwrap();
+    });
+    say(cx, "run cat <<'END'\nbody\nEND; say finished");
+    let row = index_of(cx, "execute Run echo cat <<'END'… ok");
+    assert_eq!(
+        cx.find(("chat.item", row)).unwrap().bounds().size.height,
+        px(24.)
+    );
+    wait_for_item(cx, "finished");
 }
 
 #[gpui_kit::test]

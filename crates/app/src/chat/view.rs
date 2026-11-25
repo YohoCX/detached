@@ -1093,8 +1093,6 @@ impl ChatView {
         let t = theme(cx);
         div()
             .flex()
-            .w_full()
-            .max_w(size::CONVERSATION)
             .justify_end()
             .child(
                 self.row(i, format!("You: {text}"))
@@ -1114,6 +1112,10 @@ impl ChatView {
 
     fn item(&self, i: usize, (at, item): (At, &Item), cx: &App) -> AnyElement {
         let t = theme(cx);
+        let first_line = |text: String| match text.split_once('\n') {
+            Some((first, _)) => format!("{}…", first.trim_end()),
+            None => text,
+        };
         let line = |label: String, icon: AnyElement, name: String, detail: String| {
             self.row(i, label)
                 .flex()
@@ -1166,12 +1168,14 @@ impl ChatView {
                 .into_any_element(),
             Item::Tool(tool) if tool.status.as_deref() == Some("denied") => {
                 let icon = div().child(Icon::Close.size(px(12.))).into_any_element();
-                let (name, reason) = (kind(tool), output(tool));
+                let (name, reason) = (kind(tool), first_line(output(tool)));
                 let label = format!("Blocked {name}: {reason}");
                 line(label, icon, format!("Blocked {name}"), reason).into_any_element()
             }
             Item::Tool(tool) => {
                 let (name, detail, output) = (kind(tool), title(tool), output(tool));
+                let file = self.file_of(&name, &detail, cx);
+                let detail = first_line(detail);
                 let state = ok(tool);
                 let icon = match state {
                     None => ui::spinner(t.accent).into_any_element(),
@@ -1197,7 +1201,6 @@ impl ChatView {
                         .child(div().text_color(t.success).child(format!("+{add}")))
                         .child(div().text_color(t.error).child(format!("−{del}")))
                 });
-                let file = self.file_of(&name, &detail, cx);
                 let head = line(label, icon, name, detail)
                     .children(stats)
                     .when(!output.is_empty(), |d| {
@@ -2046,7 +2049,6 @@ impl ChatView {
             .flex_col()
             .gap(px(10.))
             .w_full()
-            .max_w(size::CONVERSATION)
             .children(recent)
             .child(
                 div()
@@ -2247,13 +2249,17 @@ impl Render for ChatView {
         .size_full();
         let transcript = div()
             .id("chat.items")
+            .test_support()
             .flex()
             .flex_col()
+            .items_center()
             .flex_1()
             .min_h_0()
             .px(size::INSET)
             .pt(size::PAD)
             .pb(size::GAP)
+            // GPUI clips vertically here only when both overflow axes are set.
+            .overflow_hidden()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
             .child(div().flex_1())
@@ -2262,11 +2268,15 @@ impl Render for ChatView {
                     .flex()
                     .flex_col()
                     .flex_none()
+                    .w_full()
+                    .max_w(size::CONVERSATION)
                     .min_w_0()
                     .children(items)
                     .children(empty),
             );
         let composer = div()
+            .flex()
+            .justify_center()
             .flex_none()
             .px(size::INSET)
             .pt(size::PAD)

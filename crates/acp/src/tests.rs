@@ -290,6 +290,43 @@ fn history_home() -> (Sandbox, PathBuf) {
 }
 
 #[test]
+fn codex_transcripts_omit_logs_from_messages_and_titles() {
+    let (sb, home) = history_home();
+    let dir = home.join("sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let repo = sb.dir.path().display().to_string();
+    let id = "38d60b10-15d8-4def-a954-2ffb285421d1";
+    let log = r#"{"level":"warn","ts":"2026-11-25T08:24:00Z","message":"retrying"}"#;
+    let prompt = r#"{"level":"warn","question":"What changed?"}"#;
+    let user =
+        |message| json!({"type":"event_msg", "payload":{"type":"user_message", "message":message}});
+    let meta = json!({"type":"session_meta", "payload":{"id":id, "cwd":repo}});
+    std::fs::write(
+        dir.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+        format!("{meta}\n{}\n{}\n{log}\n", user(log), user(prompt)),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("session_index.jsonl"),
+        json!({"id": id, "thread_name": log}).to_string(),
+    )
+    .unwrap();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let history = acp.archive_past(&sb.state, &CODEX, std::slice::from_ref(&repo));
+    assert_eq!(history.chats[0].title, prompt);
+    let shown = acp.transcript(&sb.state, &spec, id).unwrap();
+    assert!(matches!(shown.as_slice(), [Update::User(text), Update::Break] if text == prompt));
+    let replay = |text| {
+        update(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(text)),
+        )))
+    };
+    assert!(replay(log).is_none());
+    assert!(matches!(replay(prompt), Some(Update::User(text)) if text == prompt));
+}
+
+#[test]
 fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
     let (sb, home) = history_home();
     let dir = home.join("sessions/2026/11/23");

@@ -398,6 +398,7 @@ impl Render for Shell {
                                     .w(Side::Explorer.width(files))
                                     .h_full()
                                     .min_h_0()
+                                    .overflow_hidden()
                                     .when(files, |d| d.child(self.explorer.clone()))
                                     .when(!files, |d| {
                                         let (title, action) = if crate::files::showing_changes(cx) {
