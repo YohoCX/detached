@@ -18,8 +18,9 @@ use kernel::blocking;
 use kernel::ui_state;
 use kernel::workspace::Workspace;
 
-pub const DEFAULT: &str = "Slate";
-const BUNDLED: [&str; 4] = [
+pub const DEFAULT: &str = "Indigo";
+const BUNDLED: [&str; 5] = [
+    include_str!("../../themes/indigo.json"),
     include_str!("../../themes/slate.json"),
     include_str!("../../themes/fleet.json"),
     include_str!("../../themes/classic.json"),
@@ -526,7 +527,7 @@ impl Theme {
             self.segment_bg = self.popover_bg;
         }
         let (edge, user, code) = if dark {
-            (0.4, 0.15, 0.65)
+            (0.25, 0.15, 0.65)
         } else {
             (0.37, 0.09, 0.68)
         };
@@ -730,21 +731,21 @@ mod tests {
         assert_eq!(
             surfaces(&light),
             [
-                "#d9dde4", "#ffffff", "#e4e7ec", "#ffffff", "#dbe6f3", "#7f8388", "#dbe6f3",
-                "#e8eff8", "#e5e8ed",
+                "#dddee6", "#ffffff", "#e7e8ed", "#ffffff", "#e6e5fb", "#80828d", "#e6e5fb",
+                "#efeefd", "#e8e9ee",
             ]
         );
         assert_eq!(
             surfaces(&dark),
             [
-                "#070809", "#161a1f", "#2b2e33", "#31353a", "#373e48", "#7d8187", "#2e3d50",
-                "#263241", "#0c0e11",
+                "#0a0a0d", "#18181f", "#2e2e35", "#33333b", "#323340", "#62626f", "#202752",
+                "#2b2c40", "#0f0f13",
             ]
         );
     }
 
     #[test]
-    fn slate_focused_tab_outline_contrasts_with_the_tab_and_strip() {
+    fn the_focused_tab_outline_contrasts_with_the_tab_and_strip() {
         let (light, dark) = pair(&bundled()[DEFAULT], &bundled()).unwrap();
         for (mode, t) in [("light", light), ("dark", dark)] {
             for bg in [t.tab_active, t.panel_bg] {
