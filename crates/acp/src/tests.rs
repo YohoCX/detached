@@ -277,8 +277,7 @@ fn closed(rx: &Receiver<backend::Event>) {
     until(rx, |e| matches!(e, backend::Event::Closed).then_some(()));
 }
 
-#[test]
-fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
+fn history_home() -> (Sandbox, PathBuf) {
     let sb = Sandbox::new();
     let home = sb.path("codex");
     sb.state
@@ -287,6 +286,12 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
         .unwrap()
         .vars
         .push(("CODEX_HOME".into(), home.display().to_string()));
+    (sb, home)
+}
+
+#[test]
+fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
+    let (sb, home) = history_home();
     let dir = home.join("sessions/2026/11/23");
     std::fs::create_dir_all(&dir).unwrap();
     let repo = sb.dir.path().display().to_string();
@@ -329,14 +334,7 @@ fn archive_reads_rollouts_without_an_adapter_or_a_final_newline() {
 
 #[test]
 fn archive_scans_both_folders_and_reports_bad_rollouts_once() {
-    let sb = Sandbox::new();
-    let home = sb.path("codex");
-    sb.state
-        .env
-        .write()
-        .unwrap()
-        .vars
-        .push(("CODEX_HOME".into(), home.display().to_string()));
+    let (sb, home) = history_home();
     let dir = home.join("archived_sessions");
     std::fs::create_dir_all(&dir).unwrap();
     let folders = ["one", "two"].map(|p| sb.path(p).display().to_string());
@@ -898,14 +896,7 @@ fn a_codex_command_s_output_comes_in_pieces_and_shows_whole() {
 
 #[test]
 fn codex_past_lists_rollouts_without_an_adapter() {
-    let sb = Sandbox::new();
-    let home = sb.path("codex");
-    sb.state
-        .env
-        .write()
-        .unwrap()
-        .vars
-        .push(("CODEX_HOME".into(), home.display().to_string()));
+    let (sb, home) = history_home();
     let repo = sb.dir.path().display().to_string();
     let other = sb.path("other").display().to_string();
     let id = |n| format!("00000000-0000-0000-0000-{n:012}");
@@ -946,16 +937,102 @@ fn codex_past_lists_rollouts_without_an_adapter() {
     assert_eq!(past[0].title, "Earlier");
     assert_eq!(past[0].cwd.as_deref(), Some(repo.as_str()));
     assert!(past[0].modified > past[1].modified);
+    let archived = acp.transcript(&sb.state, &spec, &id(5)).unwrap();
+    assert!(matches!(&archived[..], [Update::User(text), Update::Break] if text == "Earlier"));
     assert!(acp.adapters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn codex_past_reports_failed_scans_and_keeps_partial_results() {
+    let (sb, home) = history_home();
+    let repo = sb.dir.path().display().to_string();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let good = "00000000-0000-0000-0000-000000000001";
+    let bad = "00000000-0000-0000-0000-000000000002";
+    let sessions = home.join("sessions");
+    let rollout = |id| sessions.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl"));
+    let past = || acp.past(&sb.state, &spec);
+    chat_index::created(&sb.state, good, CODEX.id).unwrap();
+
+    assert!(past().unwrap().is_empty());
+    std::fs::write(&home, "").unwrap();
+    assert!(past().unwrap_err().to_string().contains("not a directory"));
+    std::fs::remove_file(&home).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(&sessions, "").unwrap();
+    assert!(past().unwrap_err().to_string().contains("sessions"));
+    std::fs::remove_file(&sessions).unwrap();
+    std::fs::create_dir(&sessions).unwrap();
+
+    std::fs::write(rollout(bad).with_extension("jsonl.zst"), "bad frame").unwrap();
+    assert!(past().unwrap().is_empty());
+    let archived = acp.archive_past(&sb.state, &CODEX, std::slice::from_ref(&repo));
+    assert!(archived.errors[0].contains(bad));
+    chat_index::created(&sb.state, bad, CODEX.id).unwrap();
+    assert!(past().unwrap_err().to_string().contains(bad));
+    let meta = json!({"type": "session_meta", "payload": {"cwd": repo}});
+    std::fs::write(rollout(good), format!("{meta}\n")).unwrap();
+    let chats = past().unwrap();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].id, good);
+}
+
+#[test]
+fn codex_past_keeps_a_chat_when_title_lookup_hits_the_record_limit() {
+    let (sb, home) = history_home();
+    let repo = sb.dir.path().display().to_string();
+    let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    let acp = Acp::default();
+    let id = "00000000-0000-0000-0000-000000000001";
+    chat_index::created(&sb.state, id, CODEX.id).unwrap();
+    let dir = home.join("sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let meta = json!({"type": "session_meta", "payload": {"cwd": repo}});
+    let event = json!({"type": "event_msg", "payload": {"type": "user_message",
+        "message": "x".repeat(8 * 1024 * 1024)}});
+    std::fs::write(
+        dir.join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+        format!("{meta}\n{event}\n"),
+    )
+    .unwrap();
+
+    let chats = acp.past(&sb.state, &spec).unwrap();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(
+        (chats[0].id.as_str(), chats[0].title.as_str()),
+        (id, "Untitled")
+    );
+    let archived = acp.archive_past(&sb.state, &CODEX, &[repo]);
+    assert!(archived.chats.is_empty());
+    assert_eq!(archived.errors.len(), 1);
+    assert!(archived.errors[0].contains("8 MiB"));
+    assert!(
+        acp.transcript(&sb.state, &spec, id)
+            .unwrap_err()
+            .to_string()
+            .contains("8 MiB")
+    );
 }
 
 #[test]
 fn codex_delete_archives_its_session() {
     let (acp, sb) = (Acp::default(), codex());
-    let (_open, _rx, opened) = codex_chat(&acp, &sb);
+    let (open, rx, opened) = codex_chat(&acp, &sb);
+    open.prompt("say hello").unwrap();
+    assert_eq!(said(&rx), "hello");
     let repo = sb.dir.path().display().to_string();
     let spec = Spec::new(&CODEX, &repo, Kind::Chat);
+    chat_index::created(&sb.state, &opened.id, CODEX.id).unwrap();
+    let past = acp.past(&sb.state, &spec).unwrap();
+    assert_eq!(
+        (&past[0].id, past[0].title.as_str()),
+        (&opened.id, "say hello")
+    );
     acp.delete(&sb.state, &spec, &opened.id).unwrap();
+    assert!(acp.past(&sb.state, &spec).unwrap().is_empty());
+    let archived = acp.transcript(&sb.state, &spec, &opened.id).unwrap();
+    assert!(matches!(&archived[..], [Update::User(text), Update::Break] if text == "say hello"));
     let file = sb.path("codex-home/fake-sessions.json");
     let sessions: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
     assert_eq!(sessions[0]["sessionId"], opened.id);

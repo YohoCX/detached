@@ -203,8 +203,8 @@ becomes a switcher.
   gains a flattened map of unknown fields, as `Workspace` does.
 - A workspace's chats are the transcripts of its chats' folders and the index's entries with this
   workspace. Other transcripts of a project's CLI folder are the archive's (§7).
-- Resume passes the same `Spec`; delete and the archive flag are as now. Codex: `session/list`
-  narrowed to the host's index.
+- Resume passes the same `Spec`. Delete and the archive flag work as before. The Codex chat picker
+  reads active rollouts from disk and lists the sessions in the host's index for the checkout.
 - `Doc::Chat { workspace, chat, project }`: `chat` the id Detached makes at creation (a workspace
   chat's folder name), `project` the pin or none. The chats global is keyed by `chat`, so a tab
   restored at boot rebuilds the chat in its place, with its sources; `fresh` reuses an untouched

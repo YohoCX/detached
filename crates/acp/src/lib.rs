@@ -58,9 +58,13 @@ impl Backend for Acp {
         if known.is_empty() {
             return Ok(vec![]);
         }
-        let mut chats = history::past(core, std::slice::from_ref(&spec.repo), false).chats;
-        chats.retain(|chat| known.contains_key(&chat.id));
-        Ok(chats)
+        let history = history::past(core, std::slice::from_ref(&spec.repo), Some(&known));
+        if history.chats.is_empty()
+            && let Some(error) = history.errors.into_iter().next()
+        {
+            return Err(Error::Other(error));
+        }
+        Ok(history.chats)
     }
 
     fn archive_past(
@@ -69,7 +73,7 @@ impl Backend for Acp {
         _provider: &'static detached_core::adapters::Provider,
         folders: &[String],
     ) -> backend::History {
-        history::past(core, folders, true)
+        history::past(core, folders, None)
     }
 
     fn transcript(&self, core: &AppState, _spec: &Spec, id: &str) -> Result<Vec<Update>> {

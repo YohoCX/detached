@@ -29,11 +29,12 @@
 //! `agent` on `gpt-5.5`, a load replays one prior turn (`earlier`, `replayed`) on `gpt-5.5-mini`; a
 //! close ends the turn first. Set to the model `die`, it exits with code 3 before it answers. On
 //! stdin's EOF it exits 1 with `EPIPE`. Its version is its folder's name. With `CODEX_HOME` set it
-//! keeps its sessions in `fake-sessions.json` there, which `session/list` reads, titled by their
-//! first prompt, and `session/delete` archives.
+//! writes rollouts and keeps an index in `fake-sessions.json` for `session/list`.
 
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -121,14 +122,14 @@ fn main() {
                 "authMethods": [],
             })),
             "session/new" | "session/load" => {
-                let sid = match params["sessionId"].as_str() {
+                let load = method == "session/load";
+                let sid = match params["sessionId"].as_str().filter(|_| load) {
                     Some(s) => s.to_string(),
                     None => {
                         next += 1;
-                        format!("fake-{}-{next}", std::process::id())
+                        format!("{:08x}-0000-4000-8000-{next:012x}", std::process::id())
                     }
                 };
-                let load = method == "session/load";
                 let s = Session {
                     cwd: params["cwd"].as_str().unwrap_or_default().into(),
                     params: params.clone(),
@@ -139,6 +140,13 @@ fn main() {
                 };
                 if !load {
                     listed(|all| all.push(json!({"sessionId": sid, "cwd": s.cwd})));
+                    if let Some(path) = rollout(&sid, "sessions")
+                        && path.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
+                    {
+                        let meta =
+                            json!({"type": "session_meta", "payload": {"id": sid, "cwd": s.cwd}});
+                        let _ = fs::write(path, format!("{meta}\n"));
+                    }
                 }
                 let config = config(&s);
                 sessions.lock().unwrap().insert(sid.clone(), s);
@@ -182,10 +190,16 @@ fn main() {
                 reply(json!({"sessions": mine.collect::<Vec<_>>()}));
             }
             "session/delete" => {
-                let sid = params["sessionId"].clone();
+                let sid = params["sessionId"].as_str().unwrap_or_default();
                 listed(|all| {
                     for s in all.iter_mut().filter(|s| s["sessionId"] == sid) {
                         s["archived"] = json!(true);
+                        if let (Some(from), Some(to)) =
+                            (rollout(sid, "sessions"), rollout(sid, "archived_sessions"))
+                            && to.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
+                        {
+                            let _ = fs::rename(from, to);
+                        }
                     }
                 });
                 reply(json!({}));
@@ -254,6 +268,13 @@ fn main() {
                     if let Some(s) = s.filter(|s| s["title"].is_null()) {
                         s["title"] = json!(text);
                         s["updatedAt"] = json!("2026-11-17T10:00:00.000Z");
+                        if let Some(path) = rollout(&sid, "sessions")
+                            && let Ok(mut file) = OpenOptions::new().append(true).open(path)
+                        {
+                            let event = json!({"type": "event_msg", "payload": {
+                                "type": "user_message", "message": text}});
+                            let _ = writeln!(file, "{event}");
+                        }
                     }
                 });
                 let (cancel, cancelled) = mpsc::channel();
@@ -310,6 +331,15 @@ const MODELS: &[(&str, &str)] = &[("gpt-5.5", "GPT-5.5"), ("gpt-5.5-mini", "GPT-
 const EFFORTS: &[&str] = &["low", "medium", "high"];
 /// The host's line for a woken turn.
 const WAKE: &str = "You have new messages";
+
+fn rollout(id: &str, folder: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(folder)
+            .join(format!("rollout-2026-11-23T12-00-00-{id}.jsonl")),
+    )
+}
 
 /// Runs `f` on the sessions `CODEX_HOME` keeps, and keeps what it leaves.
 fn listed(f: impl FnOnce(&mut Vec<Value>)) {
