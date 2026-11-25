@@ -7,8 +7,8 @@ use common::*;
 use detached_app::chat;
 use detached_app::ui::menu;
 use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
-use detached_core::adapters::{BLOCK, CLAUDE, Config};
-use detached_core::backend::Tool;
+use detached_core::adapters::{BLOCK, CLAUDE, CODEX, Config};
+use detached_core::backend::{Model, Tool};
 use detached_core::chat_settings::{self, Preset};
 use gpui_kit::base::test_support::texts;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
@@ -51,6 +51,38 @@ fn open_seeded(cx: &mut TestAppContext, seed: impl FnOnce(&Sandbox)) -> TestApp 
     app.workspace(|w, cx| w.set_current(Some(solo), cx));
     new_chat(&mut app);
     app
+}
+
+fn warm(sb: &Sandbox) {
+    Preset::save(&sb.state, |preset| {
+        preset.choices("claude").models = ["default", "haiku", "sonnet", "opus", "old"]
+            .map(|id| Model {
+                value: id.into(),
+                resolved: Some(format!("claude-{id}-9")),
+                label: id.into(),
+                auto: id != "old",
+                efforts: if id == "old" {
+                    vec![]
+                } else {
+                    vec!["low".into(), "high".into()]
+                },
+            })
+            .into();
+        let codex = preset.choices("codex");
+        codex.models = [
+            ("gpt-5.5", "GPT-5.5"),
+            ("gpt-5.5-mini", "GPT-5.5 mini"),
+            ("die", "Die"),
+        ]
+        .map(|(id, name)| Model {
+            value: id.into(),
+            label: name.into(),
+            ..Model::default()
+        })
+        .into();
+        codex.efforts = ["low", "medium", "high"].map(String::from).into();
+    })
+    .unwrap();
 }
 
 /// `fake_claude`'s settings: its account, limits, context and what it lacks.
@@ -220,6 +252,45 @@ fn turning_off_a_provider_keeps_its_open_chat_and_blocks_new_ones(cx: &mut TestA
     wait_for_item(cx, "After disabling");
 }
 
+#[gpui_kit::test]
+fn disabling_the_selected_provider_keeps_the_first_message_in_the_composer(
+    cx: &mut TestAppContext,
+) {
+    let cx = &mut open_seeded(cx, codex);
+    cx.click("chat.provider.pick");
+    wait_until(cx, |cx| {
+        description(cx, ("chat.agent", 1usize)).as_deref() == Some("Logged in")
+    });
+    cx.click(("chat.agent", 1usize));
+    cx.input("hello");
+
+    cx.update(|_, cx| detached_app::settings::open(cx, "agents"));
+    cx.click("agents.codex.enabled");
+    wait_until(cx, |cx| {
+        cx.settings(|s| {
+            s.block::<Config>(BLOCK)
+                .is_some_and(|config| !config.shows(&CODEX))
+        })
+    });
+    cx.update(|_, cx| detached_app::settings::close(cx));
+    assert_eq!(label(cx, "chat.name").as_deref(), Some("Codex"));
+    cx.click("chat.input");
+    cx.press("enter");
+    assert_eq!(composer(cx).value(), Some("hello"));
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+    assert!(cx.activity(|a, _| {
+        a.message
+            .as_ref()
+            .is_some_and(|m| m.text.contains("Select an enabled provider"))
+    }));
+
+    cx.click("chat.provider.pick");
+    cx.click(("chat.agent", 0usize));
+    assert_eq!(label(cx, "chat.name").as_deref(), Some(CLAUDE.name));
+    cx.click("chat.send");
+    wait_for_item(cx, "said hello");
+}
+
 /// A catalog whose floor for `claude` is `min`, as the last fetch stored it.
 fn floor(sb: &Sandbox, min: &str) {
     let catalog = json!({"serial": 1, "adapters": [], "cli": [{"name": "claude", "min_cli": min}]});
@@ -291,7 +362,76 @@ fn enter_does_not_send_an_empty_message_or_during_a_turn(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
-fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut TestAppContext) {
+fn an_opened_chat_starts_nothing_until_the_first_message(cx: &mut TestAppContext) {
+    let mut app = open_seeded(cx, |sb| {
+        codex(sb);
+        warm(sb);
+    });
+    let no_session = |cx: &mut VisualTestContext| {
+        settle(cx);
+        cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+    };
+    no_session(&mut app);
+    pick(&mut app, "chat.model", "haiku");
+    assert_eq!(
+        description(&mut app, "chat.model").as_deref(),
+        Some("haiku")
+    );
+    no_session(&mut app);
+
+    app.update(|_, cx| detached_app::settings::open(cx, "chat"));
+    app.click("chat.defaults.claude.model");
+    app.click("option:opus");
+    app.click("chat.defaults.save");
+    wait_until(&mut app, |cx| {
+        cx.settings(|s| Preset::read(s).providers["claude"].model.as_deref() == Some("opus"))
+    });
+    app.update(|_, cx| detached_app::settings::close(cx));
+    assert_eq!(
+        description(&mut app, "chat.model").as_deref(),
+        Some("haiku")
+    );
+    no_session(&mut app);
+
+    app.click("chat.provider.pick");
+    wait_until(&mut app, |cx| {
+        description(cx, ("chat.agent", 1usize)).as_deref() == Some("Logged in")
+    });
+    app.click(("chat.agent", 1usize));
+    assert_eq!(label(&mut app, "chat.name").as_deref(), Some("Codex"));
+    no_session(&mut app);
+
+    let repo = app.sb.solo().display().to_string();
+    app.update(|_, cx| {
+        chat::find(&repo, 0, cx)
+            .unwrap()
+            .update(cx, |s, cx| s.reset(cx));
+    });
+    assert_eq!(description(&mut app, "chat.model").as_deref(), Some("opus"));
+    no_session(&mut app);
+
+    app.workspace(|w, cx| w.show(Doc::Mr { repo, number: 1 }, cx));
+    assert!(app.find("chat").is_none());
+    no_session(&mut app);
+    back_to_chat(&mut app);
+    assert!(app.find("chat").is_some());
+    no_session(&mut app);
+
+    app.update(|w, _| w.remove_window());
+    settle(&app);
+    let mut restarted = TestAppContext::single();
+    let cx = &mut boot_app(&mut restarted, &app.sb);
+    wait_until(cx, |cx| cx.find("chat").is_some());
+    assert_eq!(label(cx, "doc.chat").as_deref(), Some("New chat"));
+    no_session(cx);
+    cx.click("chat.input");
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 1));
+}
+
+#[gpui_kit::test]
+fn the_bar_shows_the_cached_plan_and_live_limits_after_send(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
         let limits = json!({
             "five_hour": {"utilization": 34, "resets_at": "2099-01-01T00:00:00Z"},
@@ -313,6 +453,7 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         label(cx, "chat.provider").as_deref() == Some("Claude Pro")
     });
     assert!(cx.find("chat.limit.Week").is_none());
+    say(cx, "hello");
     std::fs::write(cx.sb.path("claude/go"), "").unwrap();
     wait_until(cx, |cx| {
         label(cx, "chat.provider").as_deref() == Some("Claude Max")
@@ -324,6 +465,8 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         })
     });
     wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
+    wait_for_item(cx, "said hello");
+    idle(cx);
     let track = cx.update(|w, _| w.within("chat.limit.Week").try_find("chat.meter.fill"));
     assert!(track.is_none(), "the bar's Week is text alone");
     assert!(cx.find("chat.limit.5h").is_none());
@@ -345,7 +488,6 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         Some("Week 83% left")
     );
     assert!(cx.find("chat.limits").is_none());
-    assert!(items(cx).is_empty(), "no message was needed");
     cx.press("escape");
 
     // Narrower, Week leaves the bar before Model does and shows in More with its track.
@@ -376,10 +518,11 @@ fn the_bar_shows_the_provider_and_what_is_left_of_the_plan_on_open(cx: &mut Test
         json!({"rate_limits": null}),
         json!({"lacks": ["get_usage"]}),
     ] {
-        say(cx, "hello");
-        wait_for_item(cx, "said hello");
         fake(&cx.sb, fake_json);
         new_chat(cx);
+        say(cx, "hello");
+        wait_for_item(cx, "said hello");
+        idle(cx);
         cx.click("chat.more");
         wait_until(cx, |cx| {
             label(cx, "chat.limits").as_deref() == Some("No plan limits reported")
@@ -432,11 +575,11 @@ fn the_provider_menu_is_anchored_lists_disabled_agents_and_locks_after_send(
 #[gpui_kit::test]
 fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
+        warm(sb);
         let limits = json!({"seven_day": {"utilization": 17}});
         fake(sb, json!({"rate_limits": limits}));
     });
     cx.simulate_resize(size(px(1400.), px(900.)));
-    wait_until(cx, |cx| label(cx, "chat.limit.Week").is_some());
     for (id, title, value) in [
         ("chat.model", "Model", "Default"),
         ("chat.effort", "Effort", "Default"),
@@ -445,6 +588,9 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
         assert_eq!(label(cx, id).as_deref(), Some(title));
         assert_eq!(description(cx, id).as_deref(), Some(value), "{id}");
     }
+    say(cx, "hello");
+    wait_for_item(cx, "said hello");
+    idle(cx);
     for (width, week, model) in [
         (1400., true, true),
         (1270., false, true),
@@ -575,7 +721,7 @@ fn the_scrolled_transcript_stays_below_the_tab_strip(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_narrow_composer_moves_model_and_effort_into_more(cx: &mut TestAppContext) {
-    let cx = &mut open(cx);
+    let cx = &mut open_seeded(cx, warm);
     cx.simulate_resize(size(px(1400.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.model").is_some());
     // The side zones keep their widths: the chat gets 548px, its composer 508px.
@@ -759,12 +905,12 @@ fn auto_is_armed_again_after_a_model_switch(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_mode_picked_while_the_session_starts_is_the_one_it_runs_in(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| fake(sb, json!({"init_wait": "go"})));
+    say(cx, "model");
     pick(cx, "chat.mode", "Plan");
     let mode = cx
         .find("chat.mode")
         .and_then(|e| e.description().map(String::from));
     assert_eq!(mode.as_deref(), Some("Plan"));
-    say(cx, "model");
     std::fs::write(cx.sb.path("claude/go"), "").unwrap();
     wait_for_item(cx, "default ");
     assert!(
@@ -836,6 +982,9 @@ fn the_chats_plus_opens_another_chat_beside_and_ending_one_stops_its_session(
     );
     let tip = format!("{} · solo", CLAUDE.name);
     assert_eq!(description(cx, "doc.chat"), Some(tip));
+    say(cx, "again");
+    wait_for_item(cx, "said again");
+    idle(cx);
     let second = id(cx, 1);
     let dir = cx.sb.path("claude");
     let live = |id: &str| dir.join(format!("{id}.live"));
@@ -1116,6 +1265,26 @@ fn saving_the_current_chat_as_default_persists_its_choices(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn saving_a_blank_chat_as_default_drops_effort_the_model_does_not_support(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        warm(sb);
+        Preset::save(&sb.state, |p| {
+            p.choices(CLAUDE.id).effort = Some("high".into());
+        })
+        .unwrap();
+    });
+    assert_eq!(description(cx, "chat.effort").as_deref(), Some("high"));
+    pick(cx, "chat.model", "old (no auto)");
+    assert!(cx.find("chat.effort").is_none());
+    pick(cx, "chat.more", "Save as default");
+    wait_until(cx, |cx| {
+        cx.settings(|s| Preset::read(s).providers[CLAUDE.id].model.as_deref() == Some("old"))
+    });
+    assert!(cx.settings(|s| Preset::read(s).providers[CLAUDE.id].effort.is_none()));
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+}
+
+#[gpui_kit::test]
 fn new_chat_entries_use_the_preset_without_copying_the_current_chat(cx: &mut TestAppContext) {
     let cx = &mut open_seeded(cx, |sb| {
         sb.state
@@ -1137,9 +1306,8 @@ fn new_chat_entries_use_the_preset_without_copying_the_current_chat(cx: &mut Tes
         wait_for_item(cx, "opus · High · Done in ");
         idle(cx);
     };
-    let blank = id(cx, 0);
     new(cx);
-    assert_eq!(id(cx, 0), blank);
+    assert!(cx.find("doc.chat").is_some());
     assert!(cx.find("doc.chat.1").is_none());
     say(cx, "model; effort");
     check(cx);
@@ -1162,14 +1330,8 @@ fn new_chat_entries_use_the_preset_without_copying_the_current_chat(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
-    cx: &mut TestAppContext,
-) {
-    let cx = &mut open(cx);
-    let first = id(cx, 0);
-    wait_until(cx, |cx| {
-        cx.settings(|s| !Preset::read(s).models("claude").is_empty())
-    });
+fn settings_chat_applies_to_an_untouched_blank_tab(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, warm);
     cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
     for (field, option) in [
         ("chat.defaults.claude.model", "option:opus"),
@@ -1189,12 +1351,12 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
         })
     });
     cx.update(|_, cx| detached_app::settings::close(cx));
-    new_chat(cx);
     wait_until(cx, |cx| {
         description(cx, "chat.model").as_deref() == Some("opus")
     });
-    assert_ne!(id(cx, 0), first);
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
     assert!(cx.find("doc.chat.1").is_none());
+    cx.click("chat.input");
     say(cx, "model; effort");
     wait_for_item(cx, "opus plan");
     wait_for_item(cx, "effort high");
@@ -1253,7 +1415,9 @@ fn a_preset_model_that_drops_auto_shows_and_saves_the_current_mode(cx: &mut Test
             )
             .unwrap();
     });
-    id(cx, 0);
+    say(cx, "model");
+    wait_for_item(cx, "old default");
+    idle(cx);
     assert_eq!(description(cx, "chat.mode").as_deref(), Some("Manual"));
     pick(cx, "chat.more", "Save as default");
     wait_until(cx, |cx| {
@@ -1676,6 +1840,26 @@ fn a_restore_the_files_moved_on_from_restores_nothing_and_plans_again(cx: &mut T
 }
 
 const HOOK: &str = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}"#;
+
+#[gpui_kit::test]
+fn a_trust_save_failure_before_send_reports_a_status_error(cx: &mut TestAppContext) {
+    let cx = &mut open_seeded(cx, |sb| {
+        let settings = sb.solo().join(".claude");
+        std::fs::create_dir_all(&settings).unwrap();
+        std::fs::write(settings.join("settings.json"), HOOK).unwrap();
+        std::fs::create_dir_all(sb.state.config_dir.join("agent-trust.json.tmp")).unwrap();
+    });
+    wait_until(cx, |cx| cx.find("chat.trust.accept").is_some());
+    cx.click("chat.trust.accept");
+    wait_until(cx, |cx| {
+        cx.activity(|a, _| {
+            a.message
+                .as_ref()
+                .is_some_and(|m| m.error && m.text.starts_with("Cannot save the trust"))
+        })
+    });
+    cx.update(|_, cx| assert_eq!(kernel::session::all(cx).count(), 0));
+}
 
 #[gpui_kit::test]
 fn the_repo_s_settings_load_once_trusted_and_a_change_asks_again(cx: &mut TestAppContext) {
@@ -2782,6 +2966,8 @@ fn the_composer_offers_cached_efforts_until_live_configuration_arrives(cx: &mut 
     assert!(menu_item(cx, "high").is_some());
     assert!(menu_item(cx, "medium").is_none());
     cx.press("escape");
+    cx.click("chat.input");
+    say(cx, "say hello");
     drop(gate);
     wait_until(cx, |cx| {
         description(cx, "chat.effort").as_deref() == Some("medium")
@@ -2792,7 +2978,8 @@ fn the_composer_offers_cached_efforts_until_live_configuration_arrives(cx: &mut 
                 == ["low", "medium", "high"]
         })
     });
-    cx.click("chat.input");
+    wait_for_item(cx, "hello");
+    idle(cx);
     say(cx, "no-effort");
     wait_for_item(cx, "effort withdrawn");
     idle(cx);
@@ -2916,17 +3103,9 @@ fn an_empty_chat_switch_uses_the_new_provider_s_preset(cx: &mut TestAppContext) 
                 }}),
             )
             .unwrap();
+        warm(sb);
     });
     assert_eq!(label(cx, "chat.name").as_deref(), Some("Codex"));
-    let repo = cx.sb.solo().display().to_string();
-    wait_until(cx, |cx| {
-        cx.update(|_, cx| {
-            let chat = chat::find(&repo, 0, cx).unwrap();
-            chat.read(cx)
-                .current()
-                .is_some_and(|s| s.read(cx).state != Run::Starting)
-        })
-    });
     assert_eq!(
         description(cx, "chat.model").as_deref(),
         Some("GPT-5.5 mini"),

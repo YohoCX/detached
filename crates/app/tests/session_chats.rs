@@ -212,13 +212,14 @@ fn resumed_chats_skip_replay_and_show_the_queued_prompt(cx: &mut TestAppContext)
         chat::new_chat(repo.clone(), cx);
         let chat = chat::find(&repo, 0, cx).unwrap();
         let older = chat.update(cx, |chat, cx| {
-            chat.ensure(cx);
+            chat.send("first prompt".into(), cx);
             chat.current().unwrap().clone()
         });
-        let first = Item::User("first prompt".into());
-        older.update(cx, |run, cx| {
+        let first = older.update(cx, |run, cx| {
+            let first = Item::User(run.queued.take().unwrap());
             run.items.push(first.clone());
             run.end(cx);
+            first
         });
         chat.update(cx, |chat, cx| chat.send("queued-search".into(), cx));
         let note = Item::Note("resume note".into());
