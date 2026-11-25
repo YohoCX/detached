@@ -168,6 +168,26 @@ fn the_empty_state_adds_folders_and_creates_default(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_main_checkouts_menu_adds_a_folder(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        repo(sb, "app");
+        sb.clone_pair("extra");
+    });
+    cx.click("session.more");
+    let item = (0usize..)
+        .map_while(|i| cx.find(("menu.item", i)))
+        .position(|row| row.label() == Some("Add a folder…"))
+        .expect("the Add a folder menu item");
+    cx.click(("menu.item", item));
+    let extra = cx.sb.path("extra");
+    cx.simulate_path_prompt_response(|o| {
+        assert!(o.directories && o.multiple && !o.files);
+        Some(vec![extra])
+    });
+    wait_until(cx, |cx| cx.workspace(|w, _| w.session_repos().len() == 2));
+}
+
+#[gpui_kit::test]
 fn forge_repos_listed_with_the_seeded_upstreams(cx: &mut TestAppContext) {
     let (mut app, forge, seed) = open_forge(cx);
     let cx = &mut app;
@@ -454,10 +474,10 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
     let label = |cx: &mut VisualTestContext, id: &'static str| {
         cx.find(id).unwrap().label().unwrap().to_string()
     };
-    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    assert_eq!(label(cx, "sync.fetch"), "Fetch");
     cx.click("sync.fetch");
     wait_until(cx, |cx| label(cx, "sync.fetch") == "1/2");
-    assert_eq!(label(cx, "sync.pull"), "Pull All…");
+    assert_eq!(label(cx, "sync.pull"), "Pull…");
     cx.click("sync.pull");
     cx.click("sync.fetch");
     let ops = cx.activity(|s, _| s.ops.iter().map(|o| o.id).collect::<Vec<_>>());
@@ -466,7 +486,7 @@ fn the_bulk_buttons_count_while_a_sync_runs_and_start_no_second_one(cx: &mut Tes
 
     cx.activity(|_, cx| Activity::cancel_op(ops[0], cx));
     says(cx, "Fetched 1 of 2 repositories", true);
-    assert_eq!(label(cx, "sync.fetch"), "Fetch All");
+    assert_eq!(label(cx, "sync.fetch"), "Fetch");
     let n = cx.activity(|s, _| s.notices.last().cloned()).unwrap();
     let text = (n.title.as_str(), n.body.as_deref());
     assert_eq!(text, ("Fetch all: 1 not updated", Some("hang: cancelled")));

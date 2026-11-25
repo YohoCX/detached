@@ -248,6 +248,19 @@ pub fn titled(b: Stateful<Div>, title: impl Into<SharedString>) -> Stateful<Div>
         .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
 }
 
+pub fn titled_action(
+    b: Stateful<Div>,
+    title: impl Into<SharedString>,
+    action: &'static str,
+) -> Stateful<Div> {
+    let title = title.into();
+    b.role(Role::Button)
+        .aria_label(title.clone())
+        .tooltip(move |window, cx| {
+            Tooltip::new(crate::keymap::tip(&title, action, cx)).build(window, cx)
+        })
+}
+
 /// An 18px titled icon button, shown only while its `HOVER` group is hovered; in a `hover_slot` it
 /// takes no width until then.
 pub fn hover_button(

@@ -1474,6 +1474,44 @@ fn explorer_roots_leave_the_common_branch_in_the_session_header(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn the_changes_switch_counts_only_the_current_sessions_changes(cx: &mut TestAppContext) {
+    use detached_core::sessions;
+
+    let mut id = String::new();
+    let mut app = open_app_with(cx, |sb| {
+        let outside = repo(sb, "outside");
+        write(&outside, [("one.txt", "dirty\n"), ("two.txt", "dirty\n")]);
+        let trees = ["api", "web"].map(|name| {
+            let repo = repo(sb, name);
+            let tree = sb.path(&format!("{name}-tree"));
+            let path = tree.display().to_string();
+            sb.git(&repo, &["worktree", "add", "-b", "work", &path]);
+            if name == "web" {
+                write(&tree, [("dirty.txt", "dirty\n")]);
+            }
+            path
+        });
+        let ws = &sb.state.get_settings().workspaces[0].id;
+        id = sessions::adopt(&sb.state, ws, "Work", &trees).unwrap().id;
+    });
+    let has_count = |cx: &mut VisualTestContext, count| {
+        cx.find("tree.changes")
+            .is_some_and(|e| e.description() == Some(count))
+    };
+    assert!(has_count(&mut app, "2"));
+    app.workspace(|w, cx| w.switch_session(&id, cx));
+    wait_until(&mut app, |cx| has_count(cx, "1"));
+
+    let tree = detached_core::os::canonical(&app.sb.path("web-tree")).unwrap();
+    std::fs::remove_file(tree.join("dirty.txt")).unwrap();
+    let path = tree.display().to_string();
+    app.update(|_, cx| invalidate::status(cx, &path).detach());
+    wait_until(&mut app, |cx| has_count(cx, "0"));
+    app.workspace(|w, cx| w.switch_session(sessions::MAIN, cx));
+    wait_until(&mut app, |cx| has_count(cx, "2"));
+}
+
+#[gpui_kit::test]
 fn the_ref_field_browses_a_ref_shows_a_bad_ones_error_and_goes_back_with_the_cross(
     cx: &mut TestAppContext,
 ) {

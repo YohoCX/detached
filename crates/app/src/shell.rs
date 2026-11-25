@@ -400,8 +400,13 @@ impl Render for Shell {
                                     .min_h_0()
                                     .when(files, |d| d.child(self.explorer.clone()))
                                     .when(!files, |d| {
+                                        let (title, action) = if crate::files::showing_changes(cx) {
+                                            ("Show changes", "panel.changes")
+                                        } else {
+                                            ("Show files", "panel.project")
+                                        };
                                         d.pt(px(8.)).child(
-                                            ui::titled(
+                                            ui::titled_action(
                                                 ui::icon_button(
                                                     "explorer.fold",
                                                     Icon::Folder.size(px(14.)),
@@ -409,7 +414,8 @@ impl Render for Shell {
                                                 )
                                                 .h(px(26.))
                                                 .min_w(px(26.)),
-                                                "Show files",
+                                                title,
+                                                action,
                                             )
                                             .test_support()
                                             .on_click(
