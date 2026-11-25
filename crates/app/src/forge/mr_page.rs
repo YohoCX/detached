@@ -31,6 +31,7 @@ use crate::ui::{self, Edge, Icon, radius, text, theme};
 use crate::util::{ago, ago_text, base_name, dir_name, status_of, when};
 use kernel::activity::Activity;
 use kernel::blocking;
+use kernel::settings::Settings;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -70,6 +71,7 @@ struct Ready {
 pub struct MrPage {
     pub(super) read_only: bool,
     repo: String,
+    remote: Option<String>,
     number: u64,
     tab: Tab,
     mr: Option<MergeRequest>,
@@ -100,6 +102,10 @@ pub struct MrPage {
 }
 
 impl MrPage {
+    pub(super) fn matches_remote(&self, cx: &App) -> bool {
+        Settings::get(cx).mr_remotes.get(&self.repo) == self.remote.as_ref()
+    }
+
     /// None until the MR loads.
     pub fn title(&self) -> Option<&str> {
         self.mr.as_ref().map(bare_title)
@@ -123,9 +129,11 @@ impl MrPage {
         let hint = "Review comment, required to request changes";
         let review = cx.new(|cx| TextareaState::new(window, cx).rows(2).placeholder(hint));
         let typed = cx.subscribe(&review, |_, _, _: &InputEvent, cx| cx.notify());
+        let remote = Settings::get(cx).mr_remotes.get(&repo).cloned();
         let mut this = MrPage {
             read_only,
             repo,
+            remote,
             number,
             tab: Tab::Overview,
             mr: None,

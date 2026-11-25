@@ -112,6 +112,14 @@ impl DocKind for MrDocs {
             mr.read(cx).raise(cx);
         }
     }
+
+    fn replace(&self, view: &AnyView, old: &Doc, new: &Doc, _: &mut Window, cx: &mut App) -> bool {
+        old == new
+            && view
+                .clone()
+                .downcast::<MrPage>()
+                .is_ok_and(|mr| mr.read(cx).matches_remote(cx))
+    }
 }
 
 /// A job's log.

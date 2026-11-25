@@ -330,20 +330,18 @@ impl MonitoredRepo {
         self.base.as_ref()?.comparison.loaded(cx)
     }
 
+    pub(super) fn mr_lookup<'a>(&self, cx: &'a App) -> Option<&'a Resource<Option<MergeRequest>>> {
+        self.branch.as_ref()?.mr.loaded(cx)
+    }
+
     pub(super) fn mr<'a>(&self, cx: &'a App) -> Option<Option<&'a MergeRequest>> {
-        let r = self.branch.as_ref()?.mr.loaded(cx)?;
+        let r = self.mr_lookup(cx)?;
         let value = r.value.as_ref().filter(|_| r.error.is_none())?;
         Some(value.as_ref().filter(|m| m.state == MrState::Open))
     }
 
-    pub(super) fn latest<'a>(&self, cx: &'a App) -> Option<&'a Pipeline> {
-        self.branch
-            .as_ref()?
-            .latest
-            .read(cx)
-            .value
-            .as_ref()?
-            .as_ref()
+    pub(super) fn latest<'a>(&self, cx: &'a App) -> Option<&'a Resource<Option<Pipeline>>> {
+        Some(self.branch.as_ref()?.latest.read(cx))
     }
 
     fn failed<'a>(&self, cx: &'a App) -> Vec<(&'a MergeRequest, &'a Pipeline)> {

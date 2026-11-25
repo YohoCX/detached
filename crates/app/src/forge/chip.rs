@@ -92,9 +92,9 @@ impl MrChip {
         }
     }
 
-    /// The MR, Some(None) when there is none; None while unknown or failing with nothing loaded.
     fn mr(&self, cx: &App) -> Option<Option<MergeRequest>> {
-        self.mr.as_ref()?.read(cx).value.clone()
+        let r = self.mr.as_ref()?.read(cx);
+        r.value.clone().filter(|_| r.error.is_none())
     }
 
     fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -103,7 +103,7 @@ impl MrChip {
             return Activity::global(cx).update(cx, |a, cx| a.say(text, false, cx));
         };
         if let Some(Some(m)) = self.mr(cx) {
-            return show_mr(cx, repo, m.number);
+            return show_mr(cx, window, repo, m.number);
         }
         let (core, r) = (core(cx), repo.clone());
         // A repo off any forge gets a hint, not an error.
@@ -135,7 +135,7 @@ impl MrChip {
         cx.notify();
     }
 
-    fn create(&mut self, cx: &mut Context<Self>) {
+    fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(repo), Some(f)) = (self.repo.clone(), self.form.as_mut()) else {
             return;
         };
@@ -150,16 +150,16 @@ impl MrChip {
         cx.notify();
         let (core, r) = (core(cx), repo.clone());
         let done = blocking::run(cx, move || api::create_mr(&core, &r, &input));
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let done = done.await;
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 match done {
                     Ok(m) => {
                         this.form = None;
                         if let Some(mr) = &this.mr {
                             mr.refresh(cx);
                         }
-                        show_mr(cx, repo, m.number);
+                        show_mr(cx, window, repo, m.number);
                     }
                     Err(e) => {
                         if let Some(f) = &mut this.form {
@@ -196,7 +196,7 @@ impl MrChip {
             .bg(t.selected)
             .hover(|s| s.shadow(vec![glow]))
             .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(move |_, _, cx| show_mr(cx, repo.clone(), n))
+            .on_click(move |_, w, cx| show_mr(cx, w, repo.clone(), n))
             .child(Icon::Mr.size(px(14.)))
             .child(div().font_weight(FontWeight::BOLD).child(number(m)))
             .child(div().min_w_0().truncate().child(bare_title(m).to_string()))
@@ -308,7 +308,7 @@ impl MrChip {
                             .text_color(t.primary_fg)
                             .when(!can, |b| b.opacity(0.5))
                             .when(can, |b| {
-                                b.on_click(cx.listener(|this, _, _, cx| this.create(cx)))
+                                b.on_click(cx.listener(|this, _, w, cx| this.create(w, cx)))
                             }),
                     ),
             );
@@ -365,6 +365,14 @@ impl Render for MrChip {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !Workspace::get(cx).archive() && self.form.is_none() {
             return div().hidden().into_any_element();
+        }
+        if let Some(error) = self.mr.as_ref().and_then(|r| r.read(cx).error.clone())
+            && self.form.is_none()
+        {
+            return crate::ui::page::labeled("mr.chip.error", "MR unavailable")
+                .text_color(theme(cx).error)
+                .tooltip(move |w, cx| Tooltip::new(error.clone()).build(w, cx))
+                .into_any_element();
         }
         let Some(mr) = self.mr(cx).or_else(|| self.form.as_ref().map(|_| None)) else {
             return div().hidden().into_any_element();

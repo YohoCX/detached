@@ -1,7 +1,7 @@
 //! What the MR list, chip and page share.
 
 use detached_core::types::{MergeRequest, Provider};
-use gpui_kit::App;
+use gpui_kit::{App, Window};
 
 use crate::files::Links;
 use kernel::doc::{DocRef, Location};
@@ -44,8 +44,10 @@ pub fn bare_title(mr: &MergeRequest) -> &str {
 }
 
 /// Records and shows the MR page.
-pub fn show_mr(cx: &mut App, repo: String, number: u64) {
-    nav::open(cx, location(repo, number));
+pub fn show_mr(cx: &mut App, window: &mut Window, repo: String, number: u64) {
+    let loc = location(repo, number);
+    nav::visit(cx, &loc);
+    crate::dock::show(loc.into(), window, cx);
 }
 
 pub(super) fn location(repo: String, number: u64) -> Location {

@@ -1,5 +1,6 @@
 use detached_core::types::RepoInfo;
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{TestSupportExt, TestTextExt};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
@@ -28,14 +29,21 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
         Some(Err(_)) => "Status unavailable".into(),
         None => "Loading status…".into(),
     };
-    let base = match monitor.base(cx).map(|r| (&r.error, &r.value)) {
-        Some((Some(_), _)) => "Base unavailable".into(),
+    let (base, base_error) = match monitor.base(cx).map(|r| (&r.error, &r.value)) {
+        Some((Some(e), _)) => ("Base unavailable".into(), Some(e.clone())),
         Some((None, Some(b))) => match &b.comparison {
-            Ok(c) => format!("Base {} · ↑{} ↓{}", b.reference, c.ahead, c.behind),
-            Err(_) => format!("Base {} · comparison unavailable", b.reference),
+            Ok(c) => (
+                format!("Base {} · ↑{} ↓{}", b.reference, c.ahead, c.behind),
+                None,
+            ),
+            Err(e) => (
+                format!("Base {} · comparison unavailable", b.reference),
+                Some(e.to_string()),
+            ),
         },
-        _ => "Loading base…".into(),
+        _ => ("Loading base…".into(), None),
     };
+    let mr_error = monitor.mr_lookup(cx).and_then(|r| r.error.as_ref());
     let upstream = status
         .and_then(|s| s.as_ref().ok())
         .map(|s| match s.upstream.as_deref() {
@@ -64,7 +72,7 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
                 .text_color(t.accent)
                 .hover(|d| d.bg(t.hover))
                 .child(div().min_w_0().truncate().child(label))
-                .on_click(move |_, _, cx| forge::show_mr(cx, path.clone(), number))
+                .on_click(move |_, w, cx| forge::show_mr(cx, w, path.clone(), number))
         } else {
             ui::quiet_button(("overview.repo.createMr", index), "Create MR", cx)
                 .test_support()
@@ -107,17 +115,44 @@ pub(super) fn row(index: usize, repo: &RepoInfo, monitor: &MonitoredRepo, cx: &A
                 .gap_x(GAP * 2.)
                 .text_size(text::BODY)
                 .text_color(t.muted)
-                .child(labeled(("overview.repo.base", index), base))
+                .child(labeled(("overview.repo.base", index), base).when_some(
+                    base_error,
+                    |d, e| {
+                        d.tooltip(move |w, cx| {
+                            let e = e.clone();
+                            Tooltip::element(move |_, _| e.clone().test_text(e.clone()))
+                                .build(w, cx)
+                        })
+                    },
+                ))
                 .when_some(upstream, |d, label| {
                     d.child(labeled(("overview.repo.upstream", index), label))
                 })
                 .when_some(mr, |d, mr| d.child(mr))
-                .when_some(monitor.latest(cx), |d, p| {
-                    let label = format!("Pipeline #{} · {}", p.id, forge::name(&p.status));
+                .when_some(mr_error, |d, e| {
                     d.child(
-                        labeled(("overview.repo.pipeline", index), label)
-                            .text_color(forge::color(&p.status, cx)),
+                        labeled(("overview.repo.mrError", index), format!("MR: {e}"))
+                            .text_color(t.error),
                     )
+                })
+                .when_some(monitor.latest(cx), |d, r| {
+                    if let Some(e) = &r.error {
+                        d.child(
+                            labeled(
+                                ("overview.repo.pipelineError", index),
+                                format!("Pipeline: {e}"),
+                            )
+                            .text_color(t.error),
+                        )
+                    } else if let Some(Some(p)) = &r.value {
+                        let label = format!("Pipeline #{} · {}", p.id, forge::name(&p.status));
+                        d.child(
+                            labeled(("overview.repo.pipeline", index), label)
+                                .text_color(forge::color(&p.status, cx)),
+                        )
+                    } else {
+                        d
+                    }
                 }),
         )
         .into_any_element()
