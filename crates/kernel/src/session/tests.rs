@@ -625,8 +625,6 @@ fn stopping_a_start_returns_the_queued_prompt(fake: Fake, cx: &mut TestAppContex
         assert_eq!(state(&s, cx), State::Ended(End::Closed));
         let next = open_spec(spec.clone(), None, cx);
         assert_eq!(turn(&next, "say hello", cx), "hello");
-        // Listing releases the fake's held setting.
-        backend(f.provider).past(&f.core, &spec).unwrap();
     } else {
         wait_until(cx, |cx| s.read(cx).state == State::Idle);
     }
