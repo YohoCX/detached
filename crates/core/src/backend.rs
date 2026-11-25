@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::hash::{BuildHasher, RandomState};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -161,6 +162,7 @@ pub struct Spec {
     pub effort: Option<String>,
     /// Ignore unavailable choices in a new chat's preset.
     pub validate_choices: bool,
+    pub open_deadline: Option<Instant>,
     pub tools: Option<Tools>,
     /// The folder list's skills, of which a backend passes those that load and its agent does not
     /// read itself.
@@ -183,6 +185,7 @@ impl Spec {
             model: None,
             effort: None,
             validate_choices: false,
+            open_deadline: None,
             tools: None,
             skills: vec![],
             wsl: None,

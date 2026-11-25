@@ -75,6 +75,7 @@ fn main() {
         } else {
             kernel::update::start(cx);
             kernel::agents::start(cx);
+            kernel::session::probe::start(cx).detach();
         }
         cx.activate(true);
     });

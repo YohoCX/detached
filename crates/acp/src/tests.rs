@@ -34,7 +34,7 @@ fn spec(cwd: &Path) -> proc::Spec {
 
 fn start(cwd: &Path) -> (Adapter, Receiver<Event>, String) {
     let (tx, rx) = mpsc::channel();
-    let adapter = Adapter::start(&spec(cwd), move |e| _ = tx.send(e)).unwrap();
+    let adapter = Adapter::start(&spec(cwd), None, move |e| _ = tx.send(e)).unwrap();
     let options = Options {
         cwd: cwd.into(),
         ..Default::default()

@@ -11,7 +11,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Days, NaiveDate};
 pub use semver::Version;
@@ -576,31 +576,37 @@ pub fn find_cli(provider: &Provider, setting: Option<&str>, env: &Env) -> Option
 
 /// The version `exe --version` prints.
 pub fn cli_version(exe: &Path, env: &Env) -> Result<Version> {
-    let out = crate::os::group(&mut Command::new(exe))
-        .arg("--version")
-        .env("PATH", &env.path)
-        .envs(env.vars.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::null())
-        .output()?;
+    cli_version_until(exe, env, None)
+}
+
+pub fn cli_version_until(exe: &Path, env: &Env, deadline: Option<Instant>) -> Result<Version> {
+    let mut cmd = cli_command(exe, env, &["--version"]);
+    let out = match deadline {
+        Some(deadline) => cli_probe(&mut cmd, deadline.saturating_duration_since(Instant::now()))?,
+        None => cmd.output()?,
+    };
     parse_version(&String::from_utf8_lossy(&out.stdout))
         .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
 }
 
-fn cli_probe(exe: &Path, env: &Env, args: &[&str]) -> Result<Output> {
-    let child = crate::os::group(&mut Command::new(exe))
+fn cli_command(exe: &Path, env: &Env, args: &[&str]) -> Command {
+    let mut cmd = Command::new(exe);
+    crate::os::group(&mut cmd)
         .args(args)
         .env("PATH", &env.path)
         .envs(env.vars.iter().map(|(k, v)| (k, v)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stdin(Stdio::null());
+    cmd
+}
+
+fn cli_probe(cmd: &mut Command, timeout: Duration) -> Result<Output> {
+    let child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(child.wait_with_output());
     });
-    Ok(rx.recv_timeout(Duration::from_secs(5)).map_err(|err| {
+    Ok(rx.recv_timeout(timeout).map_err(|err| {
         if err == mpsc::RecvTimeoutError::Timeout {
             thread::spawn(move || crate::os::kill(pid, false));
         }
@@ -625,7 +631,7 @@ pub fn login_status(provider: &Provider, cli: &Path, env: &Env) -> LoginStatus {
         "codex" => &["login", "status"],
         _ => return LoginStatus::Unknown,
     };
-    match cli_probe(cli, env, args) {
+    match cli_probe(&mut cli_command(cli, env, args), Duration::from_secs(5)) {
         Ok(out) => parse_login_status(provider, out.status.code(), &out.stdout, &out.stderr),
         Err(_) => LoginStatus::Unknown,
     }

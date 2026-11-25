@@ -117,7 +117,13 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
-        Some("--version") => return println!(concat!("{} (Claude", " Code)"), VERSION),
+        Some("--version") => {
+            let version = std::fs::read_to_string(config_dir().join("fake-version"));
+            return println!(
+                concat!("{} (Claude", " Code)"),
+                version.as_deref().map_or(VERSION, str::trim)
+            );
+        }
         Some("auth") if args[1..] == ["status", "--json"] => {
             let logged_out = config_dir().join("fake-logged-out").is_file();
             println!("{}", json!({"loggedIn": !logged_out}));
@@ -197,6 +203,7 @@ fn main() {
         };
         match v["type"].as_str().unwrap_or_default() {
             "user" => {
+                log("user");
                 if let Some(ack) = effort_ack.take() {
                     send(&out, ack);
                 }
@@ -232,6 +239,7 @@ fn main() {
                 let ok = match subtype {
                     _ if s.lacks.iter().any(|l| l == subtype) => None,
                     "initialize" => {
+                        log("initialize");
                         s.hooks = r["hooks"]["ConfigChange"].is_array();
                         s.mcp = r["sdkMcpServers"].is_array();
                         Some(initialize(&s))
@@ -317,6 +325,17 @@ fn main() {
         let _ = handle.join();
     }
     quit(0);
+}
+
+fn log(event: &str) {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty())
+        && let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(dir).join("fake.log"))
+    {
+        let _ = writeln!(log, "{event}");
+    }
 }
 
 fn initialize(s: &Shared) -> Value {

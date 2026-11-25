@@ -324,7 +324,7 @@ fn start_in(
             let cli = adapters::find_cli(p, setting, &core.env()).ok_or_else(|| {
                 Error::Other(format!("{} has no CLI: see the Agents page", p.name))
             })?;
-            let has = adapters::cli_version(&cli, &core.env())?;
+            let has = adapters::cli_version_until(&cli, &core.env(), spec.open_deadline)?;
             (cli.into_os_string(), has)
         }
     };
@@ -379,7 +379,11 @@ fn start_in(
     if spec.tools.is_some() {
         init["sdkMcpServers"] = json!([SERVER]);
     }
-    let init = match live.0.call(init) {
+    let wait = || {
+        spec.open_deadline
+            .map_or(WAIT, |d| d.saturating_duration_since(Instant::now()))
+    };
+    let init = match live.0.call(init, wait()) {
         Ok(Ok(init)) => init,
         // Refused, or answered in something other than frames: it speaks another protocol.
         Ok(Err(e)) => return Err(unsupported(p, catalog.as_ref(), &has, e)),
@@ -394,7 +398,7 @@ fn start_in(
             if !spec.validate_choices
                 || live
                     .0
-                    .call(json!({"subtype": "set_model", "model": m}))?
+                    .call(json!({"subtype": "set_model", "model": m}), wait())?
                     .is_ok()
             {
                 m.as_str()
@@ -413,7 +417,8 @@ fn start_in(
     let mut effort = spec.effort.as_deref().unwrap_or_default();
     if spec.validate_choices
         && !effort.is_empty()
-        && (!efforts.iter().any(|e| e == effort) || live.0.call(effort_request(effort))?.is_err())
+        && (!efforts.iter().any(|e| e == effort)
+            || live.0.call(effort_request(effort), wait())?.is_err())
     {
         effort = "";
     }
@@ -809,11 +814,10 @@ impl Client {
         }
     }
 
-    /// A request's answer, success or refusal, within `WAIT`; never on the reader's thread.
-    fn call(&self, body: Value) -> Result<std::result::Result<Value, String>> {
+    fn call(&self, body: Value, timeout: Duration) -> Result<std::result::Result<Value, String>> {
         let (tx, rx) = mpsc::channel();
         self.request(body, move |_, r| _ = tx.send(r));
-        rx.recv_timeout(WAIT).map_err(|_| {
+        rx.recv_timeout(timeout).map_err(|_| {
             Error::Other(format!(
                 "claude did not start: {}",
                 last(&self.proc.stderr())

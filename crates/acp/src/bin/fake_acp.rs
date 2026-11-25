@@ -262,6 +262,14 @@ fn main() {
                 }
             }
             "session/prompt" => {
+                if let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty())
+                    && let Ok(mut log) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(PathBuf::from(home).join("fake.log"))
+                {
+                    let _ = writeln!(log, "session/prompt");
+                }
                 if let Some(id) = held.take() {
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}}));
                 }
