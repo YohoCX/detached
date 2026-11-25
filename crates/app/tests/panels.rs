@@ -4,7 +4,9 @@ use common::*;
 use detached_app::{actions, dock, shell};
 use gpui_kit::base::dock::PaneRef;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{Pixels, TestAppContext, VisualTestContext, point, px, size};
+use gpui_kit::{
+    Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext, point, px, size,
+};
 use kernel::ui_state;
 
 fn width(app: &mut VisualTestContext, id: &'static str) -> Pixels {
@@ -91,7 +93,63 @@ fn a_wider_explorer_folds_to_make_room_for_existing_splits(cx: &mut TestAppConte
 
     app.simulate_resize(size(px(1300.), px(900.)));
     assert_eq!(width(app, "session.explorer"), px(344.));
+    app.simulate_resize(size(px(1200.), px(900.)));
+    assert_eq!(width(app, "session.explorer"), px(28.));
+    app.click("explorer.fold");
+    assert_eq!(width(app, "session.explorer"), px(311.));
+    assert!(app.find("grip.session.explorer").is_some());
+
+    app.simulate_resize(size(px(1300.), px(900.)));
+    assert_eq!(width(app, "session.explorer"), px(344.));
     assert_eq!(pane_count(app), 2);
+
+    app.simulate_resize(size(px(1200.), px(900.)));
+    drag(app, "grip.session.explorer", 40.);
+    assert_eq!(width(app, "session.explorer"), px(28.));
+    app.update(|w, cx| actions::dispatch(w, cx, "panel.project"));
+    assert_eq!(width(app, "session.explorer"), px(311.));
+    app.simulate_resize(size(px(1300.), px(900.)));
+    assert_eq!(width(app, "session.explorer"), px(351.));
+}
+
+#[gpui_kit::test]
+fn sessions_shows_its_folded_rail_during_a_drag_and_can_reopen(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    app.simulate_resize(size(px(1100.), px(900.)));
+    app.click("explorer.fold");
+    split_right(app);
+    assert_eq!(pane_count(app), 2);
+    assert!(app.find("sessions.rows").is_some());
+
+    let from = app.find("grip.session.list").unwrap().bounds().center();
+    let to = from + point(px(216.), px(0.));
+    let modifiers = Modifiers::none();
+    app.simulate_mouse_down(from, MouseButton::Left, modifiers);
+    app.simulate_mouse_move(from + point(px(20.), px(0.)), MouseButton::Left, modifiers);
+    app.simulate_mouse_move(to, MouseButton::Left, modifiers);
+    assert_eq!(width(app, "sessions"), px(44.));
+    assert!(app.find("sessions.rows").is_none());
+    app.simulate_mouse_up(to, MouseButton::Left, modifiers);
+
+    app.click("sessions.fold");
+    assert_eq!(width(app, "sessions"), px(431.));
+    assert!(app.find("sessions.rows").is_some());
+    app.simulate_resize(size(px(1200.), px(900.)));
+    assert_eq!(width(app, "sessions"), px(464.));
+}
+
+#[gpui_kit::test]
+fn new_session_can_use_the_space_of_the_hidden_explorer(cx: &mut TestAppContext) {
+    let app = &mut open_app(cx);
+    app.simulate_resize(size(px(1100.), px(900.)));
+    split_right(app);
+    assert_eq!(pane_count(app), 2);
+    app.click("sessions.new");
+    assert!(app.find("session.explorer").is_none());
+
+    drag(app, "grip.session.list", 192.);
+    assert_eq!(width(app, "sessions"), px(440.));
+    assert!(app.find("sessions.provisional").is_some());
 }
 
 #[gpui_kit::test]

@@ -1,7 +1,7 @@
 //! The window: the title bar with each vertical's widgets, the dock, the status bar.
 
-use gpui_kit::base::TestSupportExt;
 use gpui_kit::base::dock::DockPlacement;
+use gpui_kit::base::{Root, TestSupportExt};
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -118,15 +118,26 @@ impl Side {
         Size::load(self.size_key(), self.limits().0, cx)
     }
 
-    fn open_width(self, size: &Size) -> Pixels {
+    fn open_width(self, size: &Size, room: Pixels) -> Option<Pixels> {
         let (_, min, max) = self.limits();
-        size.pixels(min, max)
+        let preferred = size.pixels(min, max);
+        if preferred <= room {
+            Some(preferred)
+        } else if size.fit_to_room && px(min) <= room {
+            Some(room)
+        } else {
+            None
+        }
     }
 
-    fn pane(self, size: &Entity<Size>, open: bool) -> Pane {
+    fn pane(self, size: &Entity<Size>, width: Option<Pixels>) -> Pane {
         let (default, min, max) = self.limits();
         ui::pane(self.size_key(), ui::Edge::Right, default, min, max)
-            .with_size(size.clone(), (!open).then(|| self.folded_width()))
+            .with_size(
+                size.clone(),
+                width.unwrap_or_else(|| self.folded_width()),
+                width.is_some(),
+            )
             .h_full()
     }
 
@@ -142,55 +153,32 @@ impl Side {
 
 const SIDES: [Side; 2] = [Side::Sessions, Side::Explorer];
 
-fn columns(
-    window: &Window,
-    cx: &App,
-    minimum: Pixels,
-    [list_width, files_width]: [Pixels; 2],
-) -> (bool, bool) {
-    let width = window.viewport_size().width;
-    let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
-    let list = prefers(Side::Sessions);
-    let list_width = if list {
-        list_width
-    } else {
-        Side::Sessions.folded_width()
-    };
-    (
-        list && width - list_width - Side::Explorer.folded_width() >= minimum,
-        prefers(Side::Explorer) && width - list_width - files_width >= minimum,
-    )
+fn shell(window: &Window, cx: &App) -> Option<Entity<Shell>> {
+    let root = window.root::<Root>()??;
+    root.read(cx).view().clone().downcast().ok()
 }
 
-fn preferred_widths(window: &Window, cx: &App) -> [Pixels; 2] {
-    window.root::<Shell>().flatten().map_or_else(
-        || SIDES.map(|side| side.open_width(&side.load_size(cx))),
-        |shell| shell.read(cx).preferred_widths(cx),
-    )
+fn window_columns(window: &Window, cx: &App, minimum: Pixels) -> [Option<Pixels>; 2] {
+    shell(window, cx).map_or([None; 2], |shell| {
+        shell.read(cx).columns(window, cx, minimum)
+    })
 }
 
 pub(crate) fn explorer_fold_gain(window: &Window, cx: &App, minimum: Pixels) -> Option<Pixels> {
-    let widths = preferred_widths(window, cx);
-    columns(window, cx, minimum, widths)
-        .1
-        .then(|| widths[1] - Side::Explorer.folded_width())
+    window_columns(window, cx, minimum)[Side::Explorer as usize]
+        .map(|width| width - Side::Explorer.folded_width())
 }
 
 pub(crate) fn side_open(side: Side, window: &Window, cx: &App) -> bool {
-    let (list, files) = columns(
-        window,
-        cx,
-        dock::minimum_width(cx),
-        preferred_widths(window, cx),
-    );
-    match side {
-        Side::Sessions => list,
-        Side::Explorer => files,
-    }
+    window_columns(window, cx, dock::minimum_width(cx))[side as usize].is_some()
 }
 
 pub(crate) fn set_side(side: Side, open: bool, window: &mut Window, cx: &mut App) {
     ui_state::set(side.key(window.viewport_size().width), open, cx);
+    if let Some(shell) = shell(window, cx) {
+        let size = shell.read(cx).side_sizes[side as usize].clone();
+        size.update(cx, |size, _| size.fit_to_room = open);
+    }
     window.refresh();
 }
 
@@ -282,8 +270,28 @@ impl Shell {
         }
     }
 
-    fn preferred_widths(&self, cx: &App) -> [Pixels; 2] {
-        SIDES.map(|side| side.open_width(self.side_sizes[side as usize].read(cx)))
+    fn columns(&self, window: &Window, cx: &App, minimum: Pixels) -> [Option<Pixels>; 2] {
+        if Workspace::get(cx).archive() {
+            return [None; 2];
+        }
+        let [list_size, files_size] = &self.side_sizes;
+        let width = window.viewport_size().width;
+        let prefers = |side: Side| ui_state::get(side.key(width), cx).unwrap_or(width >= px(1100.));
+        let creating = crate::sessions::provision::page(cx).is_some();
+        let rail = if creating {
+            px(0.)
+        } else {
+            Side::Explorer.folded_width()
+        };
+        let room = width - minimum;
+        let list = prefers(Side::Sessions)
+            .then_some(room - rail)
+            .and_then(|room| Side::Sessions.open_width(list_size.read(cx), room));
+        let list_width = list.unwrap_or_else(|| Side::Sessions.folded_width());
+        let files = (!creating && prefers(Side::Explorer))
+            .then_some(room - list_width)
+            .and_then(|room| Side::Explorer.open_width(files_size.read(cx), room));
+        [list, files]
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -415,16 +423,7 @@ impl Render for Shell {
         let dock = dock::area(window, cx);
         let live = !Workspace::get(cx).archive();
         let creating = crate::sessions::provision::page(cx).is_some();
-        let (list, files) = if live {
-            columns(
-                window,
-                cx,
-                dock::minimum_width(cx),
-                self.preferred_widths(cx),
-            )
-        } else {
-            (false, false)
-        };
+        let [list, files] = self.columns(window, cx, dock::minimum_width(cx));
         let [list_size, files_size] = &self.side_sizes;
         let t = theme(cx);
         let explorer = |cx: &App| {
@@ -434,7 +433,7 @@ impl Render for Shell {
                 .size_full()
                 .border_l_1()
                 .border_color(t.line);
-            let panel = if files {
+            let panel = if files.is_some() {
                 panel.child(self.explorer.clone())
             } else {
                 let (title, action) = if crate::files::showing_changes(cx) {

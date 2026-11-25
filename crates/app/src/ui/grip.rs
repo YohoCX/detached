@@ -26,8 +26,7 @@ pub struct Pane {
     size: f32,
     min: f32,
     max: f32,
-    state: Option<Entity<Size>>,
-    folded: Option<Pixels>,
+    state: Option<(Entity<Size>, Pixels, bool)>,
     base: Div,
 }
 
@@ -40,7 +39,6 @@ pub fn pane(key: &'static str, edge: Edge, size: f32, min: f32, max: f32) -> Pan
         min,
         max: max.max(min),
         state: None,
-        folded: None,
         base: div(),
     }
 }
@@ -57,6 +55,7 @@ impl Render for Dragging {
 
 pub(crate) struct Size {
     preferred: f32,
+    pub(crate) fit_to_room: bool,
     grab: (Pixels, Option<Pixels>),
 }
 
@@ -66,6 +65,7 @@ impl Size {
             preferred: ui_state::get::<f32>(&format!("size.{key}"), cx)
                 .filter(|s| *s > 0.)
                 .unwrap_or(default),
+            fit_to_room: false,
             grab: (px(0.), None),
         }
     }
@@ -76,9 +76,8 @@ impl Size {
 }
 
 impl Pane {
-    pub(crate) fn with_size(mut self, state: Entity<Size>, folded: Option<Pixels>) -> Self {
-        self.state = Some(state);
-        self.folded = folded;
+    pub(crate) fn with_size(mut self, state: Entity<Size>, width: Pixels, open: bool) -> Self {
+        self.state = Some((state, width, open));
         self
     }
 }
@@ -92,13 +91,12 @@ impl RenderOnce for Pane {
             max,
             ..
         } = self;
-        let size = self.state.unwrap_or_else(|| {
-            window.use_keyed_state(key, cx, |_, cx| Size::load(key, self.size, cx))
+        let (size, extent, show_grip) = self.state.unwrap_or_else(|| {
+            let size = window.use_keyed_state(key, cx, |_, cx| Size::load(key, self.size, cx));
+            let extent = size.read(cx).pixels(min, max);
+            (size, extent, true)
         });
         let id = size.entity_id();
-        let extent = self
-            .folded
-            .unwrap_or_else(|| size.read(cx).pixels(min, max));
         let axis = if edge == Edge::Top {
             Axis::Vertical
         } else {
@@ -160,10 +158,11 @@ impl RenderOnce for Pane {
                     let from = *from.get_or_insert(e.bounds.size.along(axis));
                     let delta = e.event.position.along(axis) - *at;
                     s.preferred = f32::from(from + delta * sign).round().clamp(min, max);
+                    s.fit_to_room = false;
                     cx.notify();
                 });
             })
-            .children(self.folded.is_none().then_some(grip))
+            .children(show_grip.then_some(grip))
     }
 }
 
