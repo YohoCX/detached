@@ -737,11 +737,14 @@ impl TabGroupRenderer for Group {
                         (true, true) => d
                             .bg(tab_fill)
                             .when(focused, |d| {
-                                d.shadow(vec![
-                                    BoxShadow::new(px(0.), px(0.), t.selected_ring)
-                                        .spread_radius(px(1.))
-                                        .inset(),
-                                ])
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .rounded(radius::KBD)
+                                        .border_1()
+                                        .border_color(t.selected_ring),
+                                )
                             })
                             .text_color(t.fg)
                             .font_weight(FontWeight::SEMIBOLD),
