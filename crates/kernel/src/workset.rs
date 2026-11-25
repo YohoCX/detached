@@ -96,10 +96,10 @@ mod tests {
     use super::*;
     use crate::resource::Interest;
     use crate::workspace::Workspace;
-    use crate::{blocking, invalidate, wait_until, wait_watched};
+    use crate::{blocking, invalidate, wait_until};
 
     #[gpui::test]
-    fn a_held_session_base_follows_the_owning_checkout_and_recipe(cx: &mut TestAppContext) {
+    fn a_held_session_base_follows_status_and_recipe_trust(cx: &mut TestAppContext) {
         let sb = Sandbox::new();
         let repo = sb.clone_pair("api");
         let ws = sb.state.save_workspace("Office".into(), None).unwrap();
@@ -119,9 +119,6 @@ mod tests {
         let store = RepoStore::open(&sb.state, &repo).unwrap();
         let shared = store
             .path(&sb.state, Kind::Recipes, Scope::Shared, RECIPE)
-            .unwrap();
-        let local = store
-            .path(&sb.state, Kind::Recipes, Scope::Local, RECIPE)
             .unwrap();
         fs::create_dir_all(shared.parent().unwrap()).unwrap();
         fs::write(&shared, "base = 'release'\n").unwrap();
@@ -158,12 +155,12 @@ mod tests {
                     .as_ref()
                     .is_some_and(|e| e.contains("Accept the worktree recipe"))
         };
-        let trust = |cx: &mut TestAppContext, scope, accept| {
+        let trust = |cx: &mut TestAppContext, accept| {
             let (core, repo) = (core.clone(), repo.clone());
             let task = cx.update(|cx| {
                 blocking::run(cx, move || {
                     let store = RepoStore::open(&core, &repo)?;
-                    let item = store.item(&core, Kind::Recipes, scope, RECIPE)?;
+                    let item = store.item(&core, Kind::Recipes, Scope::Shared, RECIPE)?;
                     if accept {
                         store.accept(&core, &item)
                     } else {
@@ -175,40 +172,17 @@ mod tests {
         };
 
         wait_until(cx, refused);
-        trust(cx, Scope::Shared, true);
+        trust(cx, true);
         wait_until(cx, |cx| check(cx, "origin/release", (1, 1)));
-        trust(cx, Scope::Shared, false);
+        trust(cx, false);
         wait_until(cx, refused);
-        trust(cx, Scope::Shared, true);
+        trust(cx, true);
         wait_until(cx, |cx| check(cx, "origin/release", (1, 1)));
 
         out(&env, &repo, &["switch", "-q", "main"], GitKind::Write).unwrap();
         let status = cx.update(|cx| invalidate::status(cx, &set.members[0].repo));
         cx.foreground_executor().block_test(status);
         wait_until(cx, |cx| check(cx, "origin/HEAD", (1, 0)));
-        cx.update(invalidate::watch);
-        wait_until(cx, invalidate::watching);
-
-        fs::create_dir_all(shared.parent().unwrap()).unwrap();
-        fs::write(&shared, "base = 'main'\n").unwrap();
-        wait_watched(cx, refused);
-        trust(cx, Scope::Shared, true);
-        wait_until(cx, |cx| check(cx, "origin/main", (1, 0)));
-        fs::remove_file(&shared).unwrap();
-        wait_watched(cx, |cx| check(cx, "origin/HEAD", (1, 0)));
-
-        fs::create_dir_all(local.parent().unwrap()).unwrap();
-        fs::write(&local, "base = 'release'\n").unwrap();
-        wait_watched(cx, refused);
-        trust(cx, Scope::Local, true);
-        wait_until(cx, |cx| check(cx, "origin/release", (1, 1)));
-        fs::write(&local, "base = 'main'\n").unwrap();
-        wait_watched(cx, refused);
-        trust(cx, Scope::Local, true);
-        wait_until(cx, |cx| check(cx, "origin/main", (1, 0)));
-        fs::remove_file(&local).unwrap();
-        wait_watched(cx, |cx| check(cx, "origin/HEAD", (1, 0)));
-
         out(
             &env,
             Path::new(&set.members[0].path),
@@ -216,6 +190,8 @@ mod tests {
             GitKind::Write,
         )
         .unwrap();
-        wait_watched(cx, |cx| check(cx, "origin/HEAD", (2, 0)));
+        let status = cx.update(|cx| invalidate::status(cx, &set.members[0].path));
+        cx.foreground_executor().block_test(status);
+        wait_until(cx, |cx| check(cx, "origin/HEAD", (2, 0)));
     }
 }

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::council::{fix, run};
 use crate::error::{Error, Result};
+use crate::git::runner::{Kind, out};
 use crate::git::worktree;
 use crate::paths::directories;
 use crate::settings::FileProblem;
@@ -73,10 +74,17 @@ pub enum Stage {
 
 impl Member {
     pub fn base_ref(&self, core: &AppState) -> Result<String> {
+        let repo = Path::new(&self.repo);
         if let Some(base) = &self.base {
+            if base.starts_with("origin/") {
+                let remote = format!("refs/remotes/{base}");
+                let args = ["show-ref", "--verify", "--quiet", &remote];
+                if out(&core.env(), repo, &args, Kind::Read).is_ok() {
+                    return Ok(remote);
+                }
+            }
             return Ok(base.clone());
         }
-        let repo = Path::new(&self.repo);
         match worktree::recipe(core, repo)?.base {
             Some(base) => worktree::recipe_base(&core.env(), repo, &base),
             None => Ok("refs/remotes/origin/HEAD".into()),

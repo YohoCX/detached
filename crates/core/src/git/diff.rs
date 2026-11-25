@@ -682,8 +682,27 @@ mod tests {
         let env = sb.state.env();
         sb.git(&work, &["branch", "origin/dev"]);
         sb.git(&work, &["tag", "origin/main"]);
+        sb.git(
+            &work,
+            &[
+                "update-ref",
+                "refs/remotes/origin/release",
+                "refs/heads/main",
+            ],
+        );
+        sb.git(
+            &work,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/release",
+            ],
+        );
         let c = compare_base(&env, &work, None).unwrap();
-        assert_eq!((c.base.as_str(), c.ahead, c.behind), ("origin/main", 2, 1));
+        assert_eq!(
+            (c.base.as_str(), c.ahead, c.behind),
+            ("origin/release", 2, 0)
+        );
         let rev = Side::Rev { rev: c.merge_base };
         let mut paths: Vec<String> = list_changes(&env, &work, &rev, &Side::Worktree)
             .unwrap()

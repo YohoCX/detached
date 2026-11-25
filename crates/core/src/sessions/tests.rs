@@ -86,6 +86,30 @@ fn session_base_reads_the_current_recipe_and_prefers_the_member_override() {
 }
 
 #[test]
+fn session_base_prefers_a_remote_branch_over_a_same_named_tag_for_legacy_overrides() {
+    let (sb, ws, repo, path) = setup();
+    let mut set = adopt(&sb.state, &ws, "Renewal", std::slice::from_ref(&path)).unwrap();
+    let member = &mut set.members[0];
+    let head = sb.commit(Path::new(&path), "work", "checkout\n", "checkout work");
+    sb.git(&repo, &["tag", "origin/release", &head]);
+    member.base = Some("origin/release".into());
+    assert_eq!(member.base_ref(&sb.state).unwrap(), "origin/release");
+
+    sb.git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", "HEAD"],
+    );
+    assert_eq!(
+        member.base_ref(&sb.state).unwrap(),
+        "refs/remotes/origin/release"
+    );
+    let base = crate::api::compare_session_base(&sb.state, member).unwrap();
+    assert_eq!(base.reference, "origin/release");
+    let cmp = base.comparison.unwrap();
+    assert_eq!((cmp.ahead, cmp.behind), (1, 0));
+}
+
+#[test]
 fn session_base_keeps_its_ref_when_origin_head_is_missing() {
     let (sb, ws, repo, path) = setup();
     let set = adopt(&sb.state, &ws, "Renewal", &[path]).unwrap();

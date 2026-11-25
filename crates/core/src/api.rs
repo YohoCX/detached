@@ -228,6 +228,7 @@ pub struct SessionBase {
     pub comparison: Result<CompareBase>,
 }
 
+/// Base selection errors return directly. Git comparison errors accompany the selected ref.
 pub fn compare_session_base(s: &AppState, member: &crate::sessions::Member) -> Result<SessionBase> {
     let base = member.base_ref(s)?;
     let reference = base.trim_start_matches("refs/remotes/").to_owned();
