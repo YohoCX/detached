@@ -872,6 +872,10 @@ impl ChatView {
     /// Lays out each whole text once, and drops what is gone.
     fn lay_out(&mut self, cx: &mut Context<Self>) {
         let chat = self.session.read(cx);
+        let links = Links::Agent {
+            folder: chat.repo.clone().into(),
+            rev: None,
+        };
         let mut whole = vec![];
         for s in &chat.sessions {
             let (id, s) = (s.entity_id(), s.read(cx));
@@ -888,7 +892,7 @@ impl ChatView {
         for (key, text) in whole {
             let md = match texts.remove(&key) {
                 Some((was, md)) if was == text => md,
-                _ => cx.new(|cx| Markdown::new(text.clone(), Links::Agent, true, cx).chat()),
+                _ => cx.new(|cx| Markdown::new(text.clone(), links.clone(), true, cx).chat()),
             };
             self.texts.insert(key, (text, md));
         }

@@ -9,7 +9,7 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::git::arg;
-use crate::git::runner::{Kind, out};
+use crate::git::runner::{Kind, Opts, out, run};
 use crate::git::status;
 use crate::types::{FileChange, FileEntry};
 
@@ -53,6 +53,18 @@ pub(super) fn working_path(repo: &Path, path: &Path) -> bool {
 
 pub fn working_file(repo: &Path, path: &str) -> bool {
     working_path(repo, Path::new(path)) && !checkout(&repo.join(path))
+}
+
+pub fn revision_file(env: &Env, repo: &Path, rev: &str, path: &str) -> Result<bool> {
+    let spec = format!("{}:{path}", arg(rev)?);
+    let got = run(
+        env,
+        repo,
+        &["cat-file", "-t", &spec],
+        Kind::Read,
+        Opts::default(),
+    )?;
+    Ok(got.code == 0 && got.stdout.trim_ascii() == b"blob")
 }
 
 /// Working-tree files (None) or the files at `rev`, sorted.

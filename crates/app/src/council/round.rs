@@ -334,7 +334,10 @@ impl RunView {
             &f.id,
             cx,
         );
-        let links = Links::Agent;
+        let links = Links::Agent {
+            folder: self.repo.clone().into(),
+            rev: range.as_ref().map(|(_, head)| head.clone()),
+        };
         let body = format!(
             "{}\n\n{}",
             f.body,

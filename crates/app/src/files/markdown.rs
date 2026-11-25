@@ -1,14 +1,18 @@
 //! Markdown on the kit's TextView: repo files with their images and links, MR text, mermaid.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::ops::Range;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use base64::Engine;
-use detached_core::api;
+use detached_core::error::{Error, Result as CoreResult};
+use detached_core::git::files::{revision_file, slashed, working_file};
 use detached_core::state::AppState;
+use detached_core::{api, os};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::channel::oneshot;
@@ -31,7 +35,9 @@ use super::api::{Links, Location, open};
 use super::code::fence_language;
 use crate::ui::theme::{self, doc, radius, text, theme};
 use crate::ui::{self, Icon};
+use kernel::activity::{Activity, Level, Notice};
 use kernel::blocking;
+use kernel::workspace::Workspace;
 
 type Diagram = Result<Arc<Image>, SharedString>;
 type Fetched = Option<Arc<Image>>;
@@ -222,14 +228,17 @@ impl Markdown {
                 }
                 cx.notify();
             });
+        } else if let Links::Agent { folder, rev } = &self.links {
+            open_agent_link(&url, folder, rev.clone(), cx).detach();
         } else if let Links::Repo { repo, rev, path } = &self.links
             && !url.is_empty()
             && !has_scheme(&url)
+            && let Some(path) = repo_path(&url, path)
         {
             let loc = Location {
                 repo: repo.clone(),
                 rev: rev.clone(),
-                path: repo_path(&url, path),
+                path,
                 line: None,
                 doc: None,
             };
@@ -540,7 +549,7 @@ fn prepare(text: &str, links: &Links, breaks: bool) -> (String, bool) {
                     (at..at, "\\".to_string())
                 }));
             }
-            Node::Html(h) if matches!(links, Links::Agent) => {
+            Node::Html(h) if matches!(links, Links::Agent { .. }) => {
                 edits.push((span, agent_html(&h.value)));
             }
             Node::Code(c) => edits.extend(fence(text, span, c.lang.as_deref())),
@@ -724,8 +733,8 @@ fn image_url(links: &Links, url: &str) -> Option<String> {
         u.starts_with("https:") || u.starts_with("data:")
     };
     match links {
-        Links::Agent => None,
-        Links::Repo { path, .. } if !has_scheme(url) => Some(repo_path(url, path)),
+        Links::Agent { .. } => None,
+        Links::Repo { path, .. } if !has_scheme(url) => repo_path(url, path),
         Links::Repo { .. } => secure(url).then(|| url.into()),
         Links::Forge {
             project_url,
@@ -831,13 +840,274 @@ fn has_scheme(url: &str) -> bool {
         })
 }
 
-/// A relative or root-relative link in the file at `from` as a repo path, without query and
-/// anchor.
-fn repo_path(url: &str, from: &str) -> String {
-    let joined = Url::parse(&format!("file:///{from}")).and_then(|base| base.join(url));
-    let path = joined.map(|u| u.path().to_string()).unwrap_or_default();
-    let path = path.strip_prefix('/').unwrap_or(&path);
-    percent_decode_str(path).decode_utf8_lossy().into_owned()
+enum AgentFile {
+    Repo(Location),
+    External(PathBuf),
+}
+
+fn network_path(path: &[u8]) -> bool {
+    matches!(path, [b'/' | b'\\', b'/' | b'\\', ..]) || path.starts_with(br"\??\")
+}
+
+#[cfg(windows)]
+fn unsafe_windows_path(path: &Path) -> bool {
+    use std::io::ErrorKind;
+
+    let Ok(path) = std::path::absolute(path) else {
+        return true;
+    };
+    if network_path(path.as_os_str().as_encoded_bytes()) {
+        return true;
+    }
+    // Preserve dots and spaces at the end of intermediate names.
+    let mut verbatim = OsString::from(r"\\?\");
+    verbatim.push(path);
+    let path = Path::new(&verbatim).components().as_path();
+    let prefixes: Vec<_> = path.ancestors().collect();
+    for prefix in prefixes.into_iter().rev() {
+        match prefix.symlink_metadata() {
+            // Windows reports junctions as symlinks here.
+            Ok(meta) if meta.is_symlink() => return true,
+            Ok(_) => {}
+            Err(e) => return e.kind() != ErrorKind::NotFound,
+        }
+    }
+    false
+}
+
+fn local_path(url: &str) -> Option<PathBuf> {
+    let bytes: Vec<_> = percent_decode_str(url).collect();
+    if bytes.is_empty() || bytes.contains(&0) {
+        return None;
+    }
+    let path = if url
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("file://"))
+    {
+        let (host, _) = url[7..].split_once('/')?;
+        if (!host.is_empty() && !host.eq_ignore_ascii_case("localhost"))
+            || network_path(&bytes[7 + host.len()..])
+        {
+            return None;
+        }
+        let uri = Url::parse(url).ok()?;
+        if uri.has_host() {
+            return None;
+        }
+        uri.to_file_path().ok()?
+    } else {
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(bytes))
+        };
+        #[cfg(not(unix))]
+        let path = PathBuf::from(String::from_utf8(bytes).ok()?);
+        if has_scheme(url) && !path.is_absolute() {
+            return None;
+        }
+        path
+    };
+    (!network_path(path.as_os_str().as_encoded_bytes())).then_some(path)
+}
+
+fn review_path(path: &Path) -> Option<OsString> {
+    let mut parts = Vec::new();
+    for part in path.components() {
+        match part {
+            Component::Normal(name) => parts.push(name),
+            Component::CurDir => {}
+            Component::ParentDir if parts.pop().is_some() => {}
+            _ => return None,
+        }
+    }
+    Some(parts.join(OsStr::new("/")))
+}
+
+fn agent_file(
+    url: &str,
+    folder: &Path,
+    repos: &[String],
+    review: Option<(&AppState, &str)>,
+) -> CoreResult<Option<AgentFile>> {
+    let (url, anchor) = url.split_once('#').unwrap_or((url, ""));
+    let line = anchor.strip_prefix('L').and_then(|n| n.parse().ok());
+    let (url, suffix) = url
+        .rsplit_once(':')
+        .and_then(|(path, n)| n.parse().ok().map(|line| (path, Some(line))))
+        .unwrap_or((url, None));
+    let line = line.or(suffix);
+    let Some(path) = local_path(url) else {
+        return Ok(None);
+    };
+    let location = |repo, rev, path| {
+        AgentFile::Repo(Location {
+            repo,
+            rev,
+            path,
+            line,
+            doc: None,
+        })
+    };
+    if let Some((core, rev)) = review
+        && let Some(relative) = review_path(&path)
+    {
+        if network_path(folder.as_os_str().as_encoded_bytes()) {
+            return Ok(None);
+        }
+        #[cfg(windows)]
+        if unsafe_windows_path(folder) {
+            return Ok(None);
+        }
+        if let (Some(repo), Some(path)) = (folder.to_str(), relative.to_str())
+            && revision_file(&core.env(), folder, rev, path)?
+        {
+            return Ok(Some(location(
+                repo.to_owned(),
+                Some(rev.to_owned()),
+                path.to_owned(),
+            )));
+        }
+        return Err(Error::Other(format!(
+            "File not found at {rev}: {}",
+            path.display()
+        )));
+    }
+
+    let path = folder.join(path);
+    if network_path(path.as_os_str().as_encoded_bytes()) {
+        return Ok(None);
+    }
+    #[cfg(windows)]
+    if unsafe_windows_path(&path) {
+        return Ok(None);
+    }
+    let real =
+        os::canonical(&path).map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
+    if network_path(real.as_os_str().as_encoded_bytes()) {
+        return Ok(None);
+    }
+    if !real.is_file() {
+        return Err(Error::Other(format!("Not a file: {}", path.display())));
+    }
+    let repo = repos
+        .iter()
+        .filter_map(|repo| {
+            if network_path(repo.as_bytes()) {
+                return None;
+            }
+            let root = Path::new(repo);
+            #[cfg(windows)]
+            if unsafe_windows_path(root) {
+                return None;
+            }
+            let root = os::canonical(root).ok()?;
+            let relative = real.strip_prefix(&root).ok()?;
+            let path = slashed(relative.to_str()?);
+            working_file(&root, &path).then_some((repo, path, relative.components().count()))
+        })
+        .min_by_key(|(_, _, depth)| *depth);
+    Ok(Some(match repo {
+        Some((repo, path, _)) => location(repo.clone(), None, path),
+        None => AgentFile::External(real),
+    }))
+}
+
+fn is_data(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase);
+    matches!(
+        ext.as_deref(),
+        Some("json" | "jsonl" | "txt" | "md" | "csv" | "tsv" | "log" | "yaml" | "yml" | "toml")
+            | Some("xml" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
+            | Some("xlsx" | "xls" | "docx" | "doc" | "pptx")
+            | Some("odt" | "ods" | "rtf" | "numbers" | "pages" | "key")
+    )
+}
+
+fn open_agent_link(url: &str, folder: &Path, rev: Option<String>, cx: &mut App) -> Task<()> {
+    let workspace = Workspace::get(cx);
+    let origin = (
+        workspace.id().map(str::to_owned),
+        workspace.session_id().to_owned(),
+        workspace.archive(),
+    );
+    let repos: Vec<_> = workspace
+        .session_checkouts()
+        .iter()
+        .chain(workspace.repos())
+        .map(|r| r.path.clone())
+        .collect();
+    let (url, folder) = (url.to_owned(), folder.to_owned());
+    let core = kernel::core(cx).clone();
+    let job = blocking::run(cx, move || {
+        agent_file(
+            &url,
+            &folder,
+            &repos,
+            rev.as_deref().map(|rev| (&*core, rev)),
+        )
+    });
+    cx.spawn(async move |cx| {
+        let result = job.await;
+        let external = cx.update(|cx| {
+            let current = Workspace::get(cx);
+            if (current.id(), current.session_id(), current.archive())
+                != (origin.0.as_deref(), origin.1.as_str(), origin.2)
+            {
+                return None;
+            }
+            match result {
+                Ok(Some(AgentFile::Repo(loc))) => open(cx, loc),
+                Ok(Some(AgentFile::External(path))) => {
+                    return Some(blocking::run(cx, move || {
+                        if is_data(&path) {
+                            os::open_path(&path)
+                        } else {
+                            os::reveal_path(&path)
+                        }
+                    }));
+                }
+                Ok(None) => {}
+                Err(e) => link_error(e, cx),
+            }
+            None
+        });
+        if let Some(job) = external
+            && let Err(e) = job.await
+        {
+            cx.update(|cx| link_error(e, cx));
+        }
+    })
+}
+
+fn link_error(error: Error, cx: &mut App) {
+    Activity::global(cx).update(cx, |a, cx| {
+        a.notify(
+            Notice {
+                level: Level::Error,
+                title: "Could not open file link".into(),
+                body: Some(error.to_string()),
+                ..Notice::default()
+            },
+            cx,
+        );
+    });
+}
+
+fn repo_path(url: &str, from: &str) -> Option<String> {
+    let joined = Url::parse(&format!("file:///{from}"))
+        .ok()?
+        .join(url)
+        .ok()?;
+    if joined.has_host() || network_path(url.as_bytes()) {
+        return None;
+    }
+    let path = joined.path().strip_prefix('/')?;
+    let path = percent_decode_str(path).decode_utf8().ok()?;
+    (!network_path(path.as_bytes())).then(|| path.into_owned())
 }
 
 /// GitLab uploads under the project, other root-relative URLs under the base URL, relative ones
@@ -914,6 +1184,13 @@ mod tests {
             repo: "/r".into(),
             rev: None,
             path: path.into(),
+        }
+    }
+
+    fn agent() -> Links {
+        Links::Agent {
+            folder: "/r".into(),
+            rev: None,
         }
     }
 
@@ -994,33 +1271,31 @@ mod tests {
 
     #[test]
     fn agent_drops_hidden_html_before_escaping() {
-        assert_eq!(prepare("<script>hidden</script>", &Links::Agent, false), "");
+        let links = agent();
+        assert_eq!(prepare("<script>hidden</script>", &links, false), "");
         assert_eq!(
-            prepare(
-                "<div>visible<script>hidden</script></div>",
-                &Links::Agent,
-                false
-            ),
+            prepare("<div>visible<script>hidden</script></div>", &links, false),
             "&lt;div&gt;visible&lt;/div&gt;"
         );
         assert_eq!(
-            prepare("`<script>hidden</script>`", &Links::Agent, false),
+            prepare("`<script>hidden</script>`", &links, false),
             "`<script>hidden</script>`"
         );
     }
 
     #[test]
     fn agent_images_are_links_and_never_load() {
+        let links = agent();
         for url in [
             "https://example.invalid/a.png",
             "http://example.invalid/a.png",
             "data:image/png;base64,abc",
             "a.png",
         ] {
-            assert_eq!(image_url(&Links::Agent, url), None);
+            assert_eq!(image_url(&links, url), None);
         }
         let source = "![inline](https://example.invalid/a.png)\n\n![reference][r]\n\n[r]: https://example.invalid/b.png\n\n<img src=\"https://example.invalid/c.png\">";
-        let text = prepare(source, &Links::Agent, true);
+        let text = prepare(source, &links, true);
         assert!(!text.contains("!["), "{text}");
         assert!(!text.contains("<img"), "{text}");
         assert!(text.contains("https://example.invalid/a.png"));
@@ -1035,6 +1310,258 @@ mod tests {
         for (raw, want) in html {
             assert_eq!(agent_html(raw), want, "{raw}");
         }
+    }
+
+    #[test]
+    fn agent_file_links_resolve_in_the_deepest_repo_and_keep_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let folder = repo.join("docs");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("a b.txt");
+        std::fs::write(&file, "text").unwrap();
+        std::fs::write(folder.join("Dockerfile"), "text").unwrap();
+        let repos = [dir.path(), &repo].map(|p| p.to_str().unwrap().to_owned());
+        let uri = Url::from_file_path(&file).unwrap();
+        let localhost = uri.as_str().replacen("file://", "file://localhost", 1);
+        let urls = [
+            ("a%20b.txt:2".into(), "a b.txt", 2),
+            (format!("{}#L3", file.display()), "a b.txt", 3),
+            (format!("{uri}#L4"), "a b.txt", 4),
+            (format!("{uri}:5"), "a b.txt", 5),
+            ("Dockerfile:6".into(), "Dockerfile", 6),
+            (format!("{localhost}#L7"), "a b.txt", 7),
+        ];
+        for (url, path, line) in urls {
+            let Some(AgentFile::Repo(loc)) = agent_file(&url, &folder, &repos, None).unwrap()
+            else {
+                panic!("{url} should open in the repo");
+            };
+            assert_eq!(loc.repo, repos[1]);
+            assert_eq!(loc.path, format!("docs/{path}"));
+            assert_eq!(loc.line, Some(line));
+        }
+    }
+
+    #[test]
+    fn agent_file_links_distinguish_external_missing_and_unsupported_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let file = dir.path().join("repo-outside.json");
+        std::fs::write(&file, "{}").unwrap();
+        let repos = [repo.to_str().unwrap().to_owned()];
+        let Some(AgentFile::External(path)) =
+            agent_file("../repo-outside.json", &repo, &repos, None).unwrap()
+        else {
+            panic!("the file should open externally");
+        };
+        assert_eq!(path, os::canonical(&file).unwrap());
+        assert!(agent_file("missing.json", &repo, &repos, None).is_err());
+        for url in [
+            "",
+            "#heading",
+            "javascript:alert(1)",
+            "//host/file",
+            "file://host/file",
+        ] {
+            assert!(
+                agent_file(url, &repo, &repos, None).unwrap().is_none(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_file_links_open_external_documents_as_data() {
+        for ext in [
+            "json", "XLSX", "xls", "docx", "doc", "pptx", "odt", "ods", "rtf", "numbers", "pages",
+            "key",
+        ] {
+            assert!(is_data(&Path::new("report").with_extension(ext)), "{ext}");
+        }
+        for ext in ["exe", "bat", "cmd", "ps1", "sh", "app"] {
+            assert!(!is_data(&Path::new("report").with_extension(ext)), "{ext}");
+        }
+    }
+
+    #[test]
+    fn agent_file_links_reject_network_paths_during_parsing() {
+        for url in [
+            r"\\host.invalid\share\file.txt",
+            r"/\host.invalid/share/file.txt",
+            "//host.invalid/share/file.txt",
+            "%5c%5Chost.invalid%5cshare%5cfile.txt",
+            "%2F%2fhost.invalid/share/file.txt",
+            "file://host.invalid/share/file.txt",
+            "file://localhost//host.invalid/share/file.txt",
+            "file://localhost/%5chost.invalid/share/file.txt",
+            "FILE:////host.invalid/share/file.txt",
+            "file:///%5chost.invalid/share/file.txt",
+            "file:///%2Fhost.invalid/share/file.txt",
+            r"\\?\C:\file.txt",
+            r"\\.\C:\file.txt",
+        ] {
+            assert!(local_path(url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn agent_file_links_refuse_directory_links_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("report.json"), "{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, dir.path().join("alias")).unwrap();
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/D", "/C", "mklink", "/J", "alias", "target"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let file = agent_file("alias/report.json", dir.path(), &[], None).unwrap();
+        assert_eq!(file.is_none(), cfg!(windows));
+        let repos = [dir.path().join("alias").to_str().unwrap().to_owned()];
+        let file = agent_file("target/report.json", dir.path(), &repos, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(matches!(file, AgentFile::Repo(_)), cfg!(unix));
+    }
+
+    #[test]
+    fn agent_file_links_treat_nested_checkouts_and_git_metadata_as_external() {
+        let sb = detached_core::git::testutil::Sandbox::new();
+        let repo = sb.dir.path();
+        sb.git(repo, &["init", "-q"]);
+        let nested = repo.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        sb.git(&nested, &["init", "-q"]);
+        std::fs::write(nested.join("README.md"), "nested").unwrap();
+        let repos = [repo.to_str().unwrap().to_owned()];
+        for url in ["nested/README.md", ".git/config"] {
+            let Some(AgentFile::External(path)) = agent_file(url, repo, &repos, None).unwrap()
+            else {
+                panic!("{url} should use external handling");
+            };
+            assert_eq!(path, os::canonical(&repo.join(url)).unwrap());
+        }
+    }
+
+    #[test]
+    fn agent_file_links_never_substitute_non_utf8_filename_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let uri = Url::from_directory_path(repo).unwrap();
+        let encoded_uri = format!("{uri}a%FF.txt");
+        let urls = ["a%FF.txt", &encoded_uri];
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = OsStr::from_bytes(b"a\xff.txt");
+            std::fs::write(repo.join("a\u{fffd}.txt"), "different").unwrap();
+            let repos = [repo.to_str().unwrap().to_owned()];
+            for url in urls {
+                assert_eq!(local_path(url).unwrap().file_name(), Some(name));
+                assert!(agent_file(url, repo, &repos, None).is_err());
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let original = repo.join(name);
+                std::fs::write(&original, "original").unwrap();
+                for url in urls {
+                    let Some(AgentFile::External(path)) =
+                        agent_file(url, repo, &repos, None).unwrap()
+                    else {
+                        panic!("{url} must preserve the original native filename");
+                    };
+                    assert_eq!(path, os::canonical(&original).unwrap());
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        for url in urls {
+            assert!(local_path(url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn agent_file_links_use_the_review_tree_for_relative_paths() {
+        let sb = detached_core::git::testutil::Sandbox::new();
+        let repo = sb.dir.path();
+        sb.git(repo, &["init", "-q"]);
+        let rev = sb.commit(repo, "reviewed.txt", "reviewed", "review");
+        std::fs::rename(repo.join("reviewed.txt"), repo.join("local.txt")).unwrap();
+        let review = Some((&sb.state, rev.as_str()));
+        let Some(AgentFile::Repo(loc)) =
+            agent_file("./docs/../reviewed.txt:7", repo, &[], review).unwrap()
+        else {
+            panic!("the file should open from the review tree");
+        };
+        assert_eq!(loc.rev, Some(rev.clone()));
+        assert_eq!(loc.path, "reviewed.txt");
+        assert_eq!(loc.line, Some(7));
+        let error = agent_file("local.txt", repo, &[], review).err().unwrap();
+        assert!(error.to_string().contains("local.txt"));
+    }
+
+    #[gpui_kit::test]
+    fn agent_file_links_leave_the_new_session_preview_alone(cx: &mut TestAppContext) {
+        use detached_core::git::testutil::Sandbox;
+        use kernel::doc::Doc;
+        use kernel::workspace::Event;
+
+        let sb = Sandbox::new();
+        let repo = sb.path("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sb.git(&repo, &["init", "-q"]);
+        sb.commit(&repo, "README.md", "readme", "initial");
+        api::add_folder(&sb.state, None, repo.to_str().unwrap().into()).unwrap();
+        api::assign_ids(&sb.state).unwrap();
+        let ready = cx.update(|cx| {
+            kernel::init(Arc::new(sb.state), cx);
+            let (tx, rx) = oneshot::channel();
+            let mut tx = Some(tx);
+            cx.subscribe(&Workspace::global(cx), move |_, event, _| {
+                if matches!(event, Event::Switched)
+                    && let Some(tx) = tx.take()
+                {
+                    tx.send(()).unwrap();
+                }
+            })
+            .detach();
+            rx
+        });
+        cx.executor().allow_parking();
+        cx.foreground_executor().block_test(ready).unwrap();
+        let preview = Doc::from(Location {
+            repo: repo.display().to_string(),
+            path: "preview.txt".into(),
+            rev: None,
+            line: None,
+            doc: None,
+        });
+        let job = cx.update(|cx| {
+            let w = Workspace::get(cx);
+            assert_eq!(w.repos().len(), 1);
+            let ws = w.id().unwrap().to_owned();
+            let other = serde_json::from_value(serde_json::json!({
+                "id": "other", "name": "Other", "members": [], "created": 0
+            }))
+            .unwrap();
+            let job = open_agent_link("README.md", &repo, None, cx);
+            Workspace::global(cx).update(cx, |w, cx| {
+                w.session_adopted(&ws, other, cx);
+                assert_eq!(w.session_id(), "other");
+                w.set_shown(Some(preview.clone()), cx);
+            });
+            job
+        });
+        cx.foreground_executor().block_test(job);
+        cx.read(|cx| assert_eq!(Workspace::get(cx).shown(), Some(&preview)));
     }
 
     #[test]
@@ -1091,17 +1618,34 @@ mod tests {
 
     #[test]
     fn resolves_repo_links_and_heading_anchors() {
-        assert_eq!(repo_path("b.md#part", "docs/a.md"), "docs/b.md");
         assert_eq!(
-            repo_path("../src/x%20y.ts?plain=1", "docs/a.md"),
-            "src/x y.ts"
+            repo_path("b.md#part", "docs/a.md").as_deref(),
+            Some("docs/b.md")
         );
-        assert_eq!(repo_path("/LICENSE", "docs/deep/a.md"), "LICENSE");
+        assert_eq!(
+            repo_path("../src/x%20y.ts?plain=1", "docs/a.md").as_deref(),
+            Some("src/x y.ts")
+        );
+        assert_eq!(
+            repo_path("/LICENSE", "docs/deep/a.md").as_deref(),
+            Some("LICENSE")
+        );
         assert_eq!(slug(" Install & Run: v2_beta "), "install--run-v2_beta");
         assert_eq!(slug("Привет, мир"), "привет-мир");
         let md = "# Guide\n\ntext\n\n## Install & Run\n";
         assert_eq!(heading(md, "install--run"), Some((2, 15..31)));
         assert_eq!(heading(md, "nope"), None);
+    }
+
+    #[test]
+    fn repo_markdown_paths_reject_decoded_network_prefixes_and_invalid_utf8() {
+        for url in [
+            r"\\localhost\share\file.txt",
+            "/%2f%2fhost/share/file.txt",
+            "a%ff.txt",
+        ] {
+            assert!(repo_path(url, "docs/a.md").is_none(), "{url}");
+        }
     }
 
     #[gpui_kit::test]
