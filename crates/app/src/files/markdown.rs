@@ -827,6 +827,32 @@ fn network_path(path: &[u8]) -> bool {
     matches!(path, [b'/' | b'\\', b'/' | b'\\', ..]) || path.starts_with(br"\??\")
 }
 
+#[cfg(windows)]
+fn unsafe_windows_path(path: &Path) -> bool {
+    use std::io::ErrorKind;
+
+    let Ok(path) = std::path::absolute(path) else {
+        return true;
+    };
+    if network_path(path.as_os_str().as_encoded_bytes()) {
+        return true;
+    }
+    // Preserve dots and spaces at the end of intermediate names.
+    let mut verbatim = OsString::from(r"\\?\");
+    verbatim.push(path);
+    let path = Path::new(&verbatim).components().as_path();
+    let prefixes: Vec<_> = path.ancestors().collect();
+    for prefix in prefixes.into_iter().rev() {
+        match prefix.symlink_metadata() {
+            // Windows reports junctions as symlinks here.
+            Ok(meta) if meta.is_symlink() => return true,
+            Ok(_) => {}
+            Err(e) => return e.kind() != ErrorKind::NotFound,
+        }
+    }
+    false
+}
+
 fn local_path(url: &str) -> Option<PathBuf> {
     let bytes: Vec<_> = percent_decode_str(url).collect();
     if bytes.is_empty() || bytes.contains(&0) {
@@ -836,7 +862,10 @@ fn local_path(url: &str) -> Option<PathBuf> {
         .get(..7)
         .is_some_and(|s| s.eq_ignore_ascii_case("file://"))
     {
-        if !url[7..].starts_with('/') || network_path(&bytes[7..]) {
+        let (host, _) = url[7..].split_once('/')?;
+        if (!host.is_empty() && !host.eq_ignore_ascii_case("localhost"))
+            || network_path(&bytes[7 + host.len()..])
+        {
             return None;
         }
         let uri = Url::parse(url).ok()?;
@@ -904,6 +933,10 @@ fn agent_file(
         if network_path(folder.as_os_str().as_encoded_bytes()) {
             return Ok(None);
         }
+        #[cfg(windows)]
+        if unsafe_windows_path(folder) {
+            return Ok(None);
+        }
         if let (Some(repo), Some(path)) = (folder.to_str(), relative.to_str())
             && revision_file(&core.env(), folder, rev, path)?
         {
@@ -923,6 +956,10 @@ fn agent_file(
     if network_path(path.as_os_str().as_encoded_bytes()) {
         return Ok(None);
     }
+    #[cfg(windows)]
+    if unsafe_windows_path(&path) {
+        return Ok(None);
+    }
     let real =
         os::canonical(&path).map_err(|e| Error::Other(format!("{}: {e}", path.display())))?;
     if network_path(real.as_os_str().as_encoded_bytes()) {
@@ -937,7 +974,12 @@ fn agent_file(
             if network_path(repo.as_bytes()) {
                 return None;
             }
-            let root = os::canonical(Path::new(repo)).ok()?;
+            let root = Path::new(repo);
+            #[cfg(windows)]
+            if unsafe_windows_path(root) {
+                return None;
+            }
+            let root = os::canonical(root).ok()?;
             let relative = real.strip_prefix(&root).ok()?;
             let path = slashed(relative.to_str()?);
             working_file(&root, &path).then_some((repo, path, relative.components().count()))
@@ -958,6 +1000,8 @@ fn is_data(path: &Path) -> bool {
         ext.as_deref(),
         Some("json" | "jsonl" | "txt" | "md" | "csv" | "tsv" | "log" | "yaml" | "yml" | "toml")
             | Some("xml" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
+            | Some("xlsx" | "xls" | "docx" | "doc" | "pptx")
+            | Some("odt" | "ods" | "rtf" | "numbers" | "pages" | "key")
     )
 }
 
@@ -1257,12 +1301,14 @@ mod tests {
         std::fs::write(folder.join("Dockerfile"), "text").unwrap();
         let repos = [dir.path(), &repo].map(|p| p.to_str().unwrap().to_owned());
         let uri = Url::from_file_path(&file).unwrap();
+        let localhost = uri.as_str().replacen("file://", "file://localhost", 1);
         let urls = [
             ("a%20b.txt:2".into(), "a b.txt", 2),
             (format!("{}#L3", file.display()), "a b.txt", 3),
             (format!("{uri}#L4"), "a b.txt", 4),
             (format!("{uri}:5"), "a b.txt", 5),
             ("Dockerfile:6".into(), "Dockerfile", 6),
+            (format!("{localhost}#L7"), "a b.txt", 7),
         ];
         for (url, path, line) in urls {
             let Some(AgentFile::Repo(loc)) = agent_file(&url, &folder, &repos, None).unwrap()
@@ -1305,6 +1351,19 @@ mod tests {
     }
 
     #[test]
+    fn agent_file_links_open_external_documents_as_data() {
+        for ext in [
+            "json", "XLSX", "xls", "docx", "doc", "pptx", "odt", "ods", "rtf", "numbers", "pages",
+            "key",
+        ] {
+            assert!(is_data(&Path::new("report").with_extension(ext)), "{ext}");
+        }
+        for ext in ["exe", "bat", "cmd", "ps1", "sh", "app"] {
+            assert!(!is_data(&Path::new("report").with_extension(ext)), "{ext}");
+        }
+    }
+
+    #[test]
     fn agent_file_links_reject_network_paths_during_parsing() {
         for url in [
             r"\\host.invalid\share\file.txt",
@@ -1313,7 +1372,8 @@ mod tests {
             "%5c%5Chost.invalid%5cshare%5cfile.txt",
             "%2F%2fhost.invalid/share/file.txt",
             "file://host.invalid/share/file.txt",
-            "file://localhost/share/file.txt",
+            "file://localhost//host.invalid/share/file.txt",
+            "file://localhost/%5chost.invalid/share/file.txt",
             "FILE:////host.invalid/share/file.txt",
             "file:///%5chost.invalid/share/file.txt",
             "file:///%2Fhost.invalid/share/file.txt",
@@ -1322,6 +1382,32 @@ mod tests {
         ] {
             assert!(local_path(url).is_none(), "{url}");
         }
+    }
+
+    #[test]
+    fn agent_file_links_refuse_directory_links_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("report.json"), "{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, dir.path().join("alias")).unwrap();
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("cmd")
+                .args(["/D", "/C", "mklink", "/J", "alias", "target"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let file = agent_file("alias/report.json", dir.path(), &[], None).unwrap();
+        assert_eq!(file.is_none(), cfg!(windows));
+        let repos = [dir.path().join("alias").to_str().unwrap().to_owned()];
+        let file = agent_file("target/report.json", dir.path(), &repos, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(matches!(file, AgentFile::Repo(_)), cfg!(unix));
     }
 
     #[test]

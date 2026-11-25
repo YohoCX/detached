@@ -57,6 +57,7 @@ pub struct DiffOptions {
 /// Where a markdown text's relative links and images resolve.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Links {
+    /// `folder` is the chat working directory and must be the repo root when `rev` is set.
     Agent {
         folder: PathBuf,
         rev: Option<String>,
