@@ -1,6 +1,6 @@
 use gpui_kit::base::TestSupportExt;
 use gpui_kit::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Role,
+    AnyElement, App, InteractiveElement, IntoElement, ParentElement, Role, SharedString,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
 };
 use kernel::doc::Doc;
@@ -41,7 +41,7 @@ pub(super) fn block(cx: &App) -> impl IntoElement + use<> {
                 ),
         )
         .when(rows.is_empty(), |d| {
-            let note = "No chats in this session";
+            let note = "No open chats in this session.";
             d.child(
                 div()
                     .id("overview.chats.empty")
@@ -70,11 +70,15 @@ fn row(i: usize, tab: chat::Tab, cx: &App) -> AnyElement {
         .and_then(|chat| chat.topic(cx))
         .map_or_else(|| "New chat".into(), util::first_line);
     let preview = chat.and_then(|chat| {
-        chat.feed(cx).into_iter().rev().find_map(|(_, item)| {
-            let (Item::User(message) | Item::Text(message)) = item else {
-                return None;
-            };
-            message.lines().map(str::trim).find(|line| !line.is_empty())
+        let snippet = |message: &str| {
+            let line = message.trim_start().lines().next()?;
+            Some(SharedString::from(util::clip(line.trim_end(), 256)))
+        };
+        chat.queued(cx).and_then(snippet).or_else(|| {
+            chat.feed(cx).rev().find_map(|(_, item)| match item {
+                Item::User(message) | Item::Text(message) => snippet(message),
+                _ => None,
+            })
         })
     });
     let doc = Doc::Chat { repo, n };
@@ -96,7 +100,6 @@ fn row(i: usize, tab: chat::Tab, cx: &App) -> AnyElement {
                 .text_size(text::BODY)
                 .child(div().truncate().child(format!("{title} · {place}")))
                 .children(preview.map(|preview| {
-                    let preview = preview.to_owned();
                     div()
                         .id(("overview.chats.preview", i))
                         .test_support()

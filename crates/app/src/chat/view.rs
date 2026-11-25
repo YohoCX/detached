@@ -174,7 +174,7 @@ impl ChatView {
         let repo = session.read(cx).repo.clone();
         let past = Interest::view(kernel::session::past_of(p, &repo, cx), cx);
         scroll.scroll_to_bottom();
-        let seen = session.read(cx).feed(cx).len();
+        let seen = session.read(cx).feed(cx).count();
         ChatView {
             session,
             input,
@@ -854,7 +854,7 @@ impl ChatView {
     /// The items, with each run of tool calls folded into one group.
     fn feed(&self, cx: &App) -> Vec<AnyElement> {
         let chat = self.session.read(cx);
-        let feed = chat.feed(cx);
+        let feed: Vec<_> = chat.feed(cx).collect();
         let tool = |it: &Item| matches!(it, Item::Tool(t) if t.status.as_deref() != Some("denied"));
         // Widest before a turn (None past the end is the queued message), tight between actions
         // and above a turn's end.
@@ -939,8 +939,8 @@ impl ChatView {
                 }
             }
         }
-        if let Some(text) = chat.current().and_then(|s| s.read(cx).queued.clone()) {
-            push(feed.len(), self.user(feed.len(), text, cx));
+        if let Some(text) = chat.queued(cx) {
+            push(feed.len(), self.user(feed.len(), text.to_owned(), cx));
         }
         out
     }
