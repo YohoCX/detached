@@ -37,7 +37,7 @@ fn archive_uses_the_live_center_and_keeps_the_shell(cx: &mut TestAppContext) {
             "session.explorer",
             "search.pill",
             "sync.pull",
-            "top.settings",
+            "rail.settings",
         ] {
             assert!(w.find(id).visible(), "{id}");
         }

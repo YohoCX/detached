@@ -14,7 +14,7 @@ use crate::files::{ExplorerMode, explorer_mode};
 use crate::notices::Notices;
 use crate::status_bar::StatusBar;
 use crate::ui::grip::{Pane, Size};
-use crate::ui::theme::{control, rail};
+use crate::ui::theme::rail;
 use crate::ui::{self, GAP, Icon, text, theme};
 use crate::{actions, keymap};
 use kernel::workspace::{Event, Workspace};
@@ -189,7 +189,8 @@ fn activity_rail(sessions_open: bool, explorer_folded: bool, cx: &App) -> impl I
         Some(sessions.into_any_element()),
         explorer_folded.then(|| explorer_fold_button(cx).into_any_element()),
         Some(div().flex_1().into_any_element()),
-        (!sessions_open).then(|| crate::sessions::archive_button(true, cx).into_any_element()),
+        Some(crate::sessions::archive_button(cx).into_any_element()),
+        Some(settings_button(cx).into_any_element()),
     ];
     div()
         .id("shell.rail")
@@ -349,16 +350,14 @@ impl Shell {
                     .child(div().flex_1())
                     .children(self.search.iter().cloned())
                     .child(div().flex_1())
-                    .children(self.right.iter().cloned())
-                    .child(div().flex_none().w(px(1.)).h(px(16.)).mx(px(4.)).bg(t.line))
-                    .child(bar_button(cx)),
+                    .children(self.right.iter().cloned()),
             )
     }
 }
 
-fn bar_button(cx: &App) -> impl IntoElement + use<> {
+fn settings_button(cx: &App) -> impl IntoElement + use<> {
     ui::titled_action(
-        ui::icon_button("top.settings", Icon::Gear.size(control::ICON), cx),
+        ui::icon_button("rail.settings", Icon::Gear.size(rail::ICON), cx),
         "Settings",
         "app.settings",
     )
