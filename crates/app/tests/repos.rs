@@ -455,7 +455,13 @@ fn fetch_update_and_prune_run_on_the_current_repo_and_say_how_it_went(cx: &mut T
     cx.click(id);
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.fetch")));
     says(cx, "app: Fetched", false);
-    cx.press("secondary-t");
+    cx.press("secondary-shift-a");
+    cx.input("update project");
+    wait_until(cx, |cx| {
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|row| row.label() == Some("Update Project (Pull)"))
+    });
+    cx.press("enter");
     says(cx, "app: Up to date", false);
     assert!(cx.update(|w, cx| actions::run(w, cx, "vcs.prune")));
     says(cx, "app: pruned stale remote branches", false);

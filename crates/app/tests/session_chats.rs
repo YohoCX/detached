@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use detached_app::{chat, dock, terminal::Terminals};
+use detached_app::{actions, chat, dock};
 use detached_core::{adapters, sessions};
 use gpui_kit::base::dock::{DockAreaState, PanelInfo, PanelState};
 use gpui_kit::test::TestWindowExt;
@@ -12,15 +12,12 @@ use kernel::ui_state;
 use serde_json::json;
 
 fn toggle_chats(cx: &mut VisualTestContext) {
-    assert!(cx.find("tab.chats").is_none());
-    cx.press("secondary-2");
-    assert!(cx.find("tab.chats").is_some());
-    cx.press("secondary-2");
-    assert!(cx.find("tab.chats").is_none());
+    cx.update(|w, cx| actions::dispatch(w, cx, "panel.chats"));
+    settle(cx);
 }
 
 #[gpui_kit::test]
-fn cmd_2_toggles_chats_from_the_session_and_from_a_terminal(cx: &mut TestAppContext) {
+fn the_palette_opens_chats_without_an_agent_provider(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         repo(sb, "shell");
         sb.state
@@ -37,20 +34,18 @@ fn cmd_2_toggles_chats_from_the_session_and_from_a_terminal(cx: &mut TestAppCont
     assert!(cx.update(|_, cx| chat::providers(cx).is_empty()));
     cx.press("secondary-n");
     assert!(cx.find("sessions.provisional").unwrap().visible());
-    toggle_chats(cx);
-    assert!(cx.find("sessions.provisional").is_none());
-
-    cx.press("alt-f12");
+    assert!(cx.find("tab.chats").is_none());
+    cx.press("secondary-shift-a");
+    cx.input("chats");
     wait_until(cx, |cx| {
-        cx.update(|w, cx| {
-            Terminals::global(cx)
-                .read(cx)
-                .docked
-                .iter()
-                .any(|s| s.read(cx).focus.is_focused(w))
-        })
+        cx.find(("palette.row", 0usize))
+            .is_some_and(|row| row.label() == Some("Chats"))
     });
+    cx.press("enter");
+    assert!(cx.find("tab.chats").is_some());
+    assert!(cx.find("sessions.provisional").is_none());
     toggle_chats(cx);
+    assert!(cx.find("tab.chats").is_none());
 }
 
 fn adopted(sb: &Sandbox) -> sessions::Workset {
@@ -438,12 +433,12 @@ fn session_rows_show_open_chats_and_their_highest_priority_state(cx: &mut TestAp
         cx.find(row(1)).unwrap().description(),
         Some("Waiting · solo")
     );
-    cx.press("secondary-2");
+    toggle_chats(cx);
     assert_eq!(
         cx.find(("chats.group", 0usize)).unwrap().label(),
         Some("solo")
     );
-    cx.press("secondary-2");
+    toggle_chats(cx);
 
     cx.click(row(1));
     assert_eq!(cx.find(row(1)).unwrap().selected(), Some(true));
@@ -477,7 +472,7 @@ fn chats_dismiss_the_finished_new_session_page(cx: &mut TestAppContext) {
     let repo = cx.workspace(|w, _| w.session_current().unwrap().to_string());
     let row = SharedString::from(format!("sessions.chat.{repo}.0"));
     cx.update(|_, cx| chat::new_chat(repo, cx));
-    for name in ["From keyboard", "From sidebar"] {
+    for name in ["From Chats action", "From sidebar"] {
         cx.press("secondary-n");
         cx.input(name);
         cx.click(("sessions.repository", 0usize));
@@ -490,8 +485,8 @@ fn chats_dismiss_the_finished_new_session_page(cx: &mut TestAppContext) {
             cx.find("sessions.openCreated")
                 .is_some_and(|open| open.disabled().is_none())
         });
-        if name == "From keyboard" {
-            cx.press("secondary-2");
+        if name == "From Chats action" {
+            toggle_chats(cx);
             assert!(cx.find("tab.chats").unwrap().visible());
         } else {
             cx.click(row.clone());
@@ -562,7 +557,7 @@ fn restored_background_chat_tabs_appear_before_their_views_are_built(cx: &mut Te
         Some(Doc::Chat { repo: main, n: 0 })
     );
 
-    cx.press("secondary-2");
+    toggle_chats(cx);
     let topic = usize::from(cx.sb.solo().display().to_string() < checkout);
     assert_eq!(
         cx.find(("chats.open", topic)).unwrap().description(),

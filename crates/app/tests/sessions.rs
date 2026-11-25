@@ -1550,7 +1550,7 @@ fn the_live_columns_keep_eleven_members_above_the_archive_and_fold_to_rails(
     wait_until(app, |app| bounds(app, "sessions").size.width == px(36.));
     assert!(app.find("session.explorer").is_none());
     assert!(app.find("sessions.rows").is_none());
-    app.press("secondary-b");
+    app.press("secondary-2");
     wait_until(app, |app| {
         app.find(SharedString::from(members[10].clone())).is_some()
     });

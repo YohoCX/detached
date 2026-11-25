@@ -203,7 +203,7 @@ fn open_forge_seeds_the_fake_from_the_forge_repos(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
+fn cmd_2_folds_the_sessions_list(cx: &mut TestAppContext) {
     let cx = &mut open_app(cx);
     let folding = |cx: &mut VisualTestContext| {
         cx.find("sessions.fold")
@@ -220,11 +220,11 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
     assert_eq!(folding(cx), "Hide sessions");
     assert_fold_tip(cx, "sessions.fold", "Hide sessions", "panel.sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
-    cx.press("secondary-b");
+    cx.press("secondary-2");
     assert_eq!(folding(cx), "Show sessions");
     assert_eq!(width(cx), gpui_kit::px(36.));
     assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
-    cx.press("secondary-b");
+    cx.press("secondary-2");
     assert_eq!(folding(cx), "Hide sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
 }

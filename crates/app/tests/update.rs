@@ -219,7 +219,7 @@ fn restart_now_names_the_live_chats_and_shells_first(cx: &mut TestAppContext) {
         talked.update(cx, |s, _| s.topic = Some("fix the login".into()));
         chat::session("/x/web", 0, cx);
     });
-    cx.press("alt-f12");
+    cx.press("secondary-t");
     wait_until(cx, |cx| cx.update(|_, cx| !terminal::live(cx).is_empty()));
     page(cx);
     // PowerShell retitles its tab after it starts; the warning names the shells at the click.

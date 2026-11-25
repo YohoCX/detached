@@ -28,7 +28,7 @@ pub const CONTEXT: &str = "Detached";
 /// Around the viewer's read-only editor, where the app's chords beat the editor's own.
 pub const VIEWER: &str = "Viewer";
 
-/// Append-only, in the order bindings are tried.
+/// Default chords in the order bindings are tried.
 pub const DEFAULTS: &[(&str, &str)] = &[
     ("search.everywhere", "Double Shift"),
     ("file.goto", "Cmd+Shift+O"),
@@ -40,17 +40,16 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("nav.forward", "Cmd+]"),
     ("panel.project", "Cmd+1"),
     ("session.new", "Cmd+N"),
-    ("vcs.update", "Cmd+T"),
     ("vcs.popup", "Ctrl+V"),
     ("diff.show", "Cmd+D"),
     ("diff.next", "F7"),
     ("diff.prev", "Shift+F7"),
     ("app.settings", "Cmd+,"),
     ("panel.log", "Cmd+9"),
-    ("panel.terminal", "Alt+F12"),
+    ("panel.terminal", "Cmd+T"),
     ("tabs.next", "Cmd+Shift+]"),
     ("tabs.prev", "Cmd+Shift+["),
-    ("panel.sessions", "Cmd+B"),
+    ("panel.sessions", "Cmd+2"),
     ("panel.changes", "Cmd+0"),
     ("session.switch", "Cmd+K"),
     ("session.next", "Cmd+Alt+]"),
@@ -76,7 +75,6 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("pane.focusDown", "Cmd+Alt+Down"),
     ("pane.resizeDown", "Ctrl+Cmd+Down"),
     ("tab.moveDown", "Cmd+Alt+Shift+Down"),
-    ("panel.chats", "Cmd+2"),
 ];
 
 /// Chords kept free for actions that do not exist yet.

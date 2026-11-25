@@ -190,7 +190,7 @@ fn a_narrow_log_keeps_the_subject_over_long_refs_and_drops_the_author(cx: &mut T
         sb.git(&solo, &["branch", &format!("feature/{long}")]);
         sb.git(&solo, &["tag", &format!("v1-{long}")]);
     });
-    cx.press("secondary-b");
+    cx.press("secondary-2");
     cx.press("secondary-1");
     toggle_log(cx);
     wait_for_status(cx, "4 commits");
@@ -716,7 +716,7 @@ fn the_selection_survives_a_refresh_by_sha(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn the_side_panel_resizes_within_its_range_and_keeps_its_width(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, layout);
-    cx.press("secondary-b");
+    cx.press("secondary-2");
     cx.press("secondary-1");
     toggle_log(cx);
     wait_for_status(cx, "3 commits");
