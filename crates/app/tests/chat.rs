@@ -491,7 +491,7 @@ fn the_bar_shows_the_cached_plan_and_live_limits_after_send(cx: &mut TestAppCont
     cx.press("escape");
 
     // Narrower, Week leaves the bar before Model does and shows in More with its track.
-    cx.simulate_resize(size(px(1270.), px(900.)));
+    cx.simulate_resize(size(px(1306.), px(900.)));
     wait_until(cx, |cx| cx.find("chat.limit.Week").is_none());
     assert!(cx.find("chat.model").is_some());
     cx.click("chat.more");
@@ -592,9 +592,9 @@ fn the_pickers_are_titled_and_send_stays_in_the_card_at_any_width(cx: &mut TestA
     wait_for_item(cx, "said hello");
     idle(cx);
     for (width, week, model) in [
-        (1400., true, true),
-        (1270., false, true),
-        (1180., false, false),
+        (1436., true, true),
+        (1306., false, true),
+        (1216., false, false),
     ] {
         cx.simulate_resize(size(px(width), px(900.)));
         wait_until(cx, |cx| {
