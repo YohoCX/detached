@@ -10,7 +10,7 @@ use std::str::Chars;
 use detached_core::git::files::{self as git_files, TreeSettings};
 use detached_core::sessions::MemberState;
 use detached_core::types::{FileChange, FileEntry};
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
@@ -593,6 +593,30 @@ impl Tree {
                     cx.notify();
                 }))
         };
+        let changes_mode = mode("tree.changes", "Changes", true)
+            .aria_label("Changes")
+            .when(self.live, |d| {
+                let mut seen = HashSet::new();
+                let count = Workspace::get(cx)
+                    .session_repos()
+                    .iter()
+                    .try_fold(0, |total, repo| {
+                        let repo = Repo::get(cx, &repo.path)?;
+                        if seen.insert(repo.path.as_str()) {
+                            Some(total + repo.status()?.changes.len())
+                        } else {
+                            Some(total)
+                        }
+                    });
+                d.when_some(count, |d, count| {
+                    let count = count.to_string();
+                    d.aria_description(count.clone()).gap(ui::GAP / 2.).child(
+                        div()
+                            .text_color(t.muted)
+                            .child(count.clone().test_text(count)),
+                    )
+                })
+            });
         let modes = div()
             .flex()
             .flex_none()
@@ -611,7 +635,7 @@ impl Tree {
                         d.bg(t.segment_bg).rounded(ui::radius::SEGMENT)
                     })
                     .child(mode("tree.files", "Files", false))
-                    .child(mode("tree.changes", "Changes", true)),
+                    .child(changes_mode),
             )
             .child(div().flex_1())
             .child(
@@ -623,6 +647,12 @@ impl Tree {
                 .test_support(),
             )
             .when(self.live, |d| {
+                let fold = ui::icon_button("explorer.fold", Icon::PanelLeft.size(px(14.)), cx);
+                let fold = if changes {
+                    ui::titled(fold, "Hide explorer")
+                } else {
+                    ui::titled_action(fold, "Hide files", "panel.project")
+                };
                 d.when(self.key.is_some() && !changes, |d| {
                     d.child(
                         ui::titled(
@@ -638,12 +668,8 @@ impl Tree {
                     )
                 })
                 .child(
-                    ui::titled(
-                        ui::icon_button("explorer.fold", Icon::PanelLeft.size(px(14.)), cx),
-                        "Hide files",
-                    )
-                    .test_support()
-                    .on_click(|_, w, cx| shell::toggle_side(Column::Explorer, w, cx)),
+                    fold.test_support()
+                        .on_click(|_, w, cx| shell::toggle_side(Column::Explorer, w, cx)),
                 )
             });
         let back = ui::icon_button("tree.back", Icon::Close.size(px(12.)), cx)

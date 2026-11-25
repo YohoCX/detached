@@ -226,6 +226,7 @@ pub fn danger_button(
 
 // GPUI takes one hover style per element, so each button sets its own.
 pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    let label = label.into();
     pressable(id)
         .h(px(28.))
         .px(px(14.))
@@ -234,7 +235,7 @@ pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Statefu
         .text_size(text::SMALL)
         .font_weight(FontWeight::SEMIBOLD)
         .active(|s| s.opacity(0.75))
-        .child(label.into())
+        .child(label.clone().test_text(label))
 }
 
 /// The group a row names with `.group(HOVER)` to show its `hover_button`s.
@@ -248,6 +249,20 @@ pub fn titled(b: Stateful<Div>, title: impl Into<SharedString>) -> Stateful<Div>
         .tooltip(move |window, cx| {
             let title = title.clone();
             Tooltip::element(move |_, _| title.clone().test_text(title.clone())).build(window, cx)
+        })
+}
+
+pub fn titled_action(
+    b: Stateful<Div>,
+    title: impl Into<SharedString>,
+    action: &'static str,
+) -> Stateful<Div> {
+    let title = title.into();
+    b.role(Role::Button)
+        .aria_label(title.clone())
+        .tooltip(move |window, cx| {
+            let tip = SharedString::from(crate::keymap::tip(&title, action, cx));
+            Tooltip::element(move |_, _| tip.clone().test_text(tip.clone())).build(window, cx)
         })
 }
 

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use detached_core::sessions::MAIN;
 use detached_core::types::{InProgress, RepoInfo, RepoStatus};
 use gpui_kit::base::{ElementExt, ObservedElement, TestSupportExt, TestTextExt};
@@ -112,9 +114,15 @@ impl Overview {
         };
         let mut summary = Vec::new();
         if rows.iter().all(|row| row.status().is_some()) {
-            let statuses = rows.iter().filter_map(Checkout::status);
-            let files: usize = statuses.clone().map(|s| s.changes.len()).sum();
-            let behind = statuses.filter(|s| s.behind > 0).count();
+            let mut seen = HashSet::new();
+            let (files, behind) = rows
+                .iter()
+                .filter_map(|row| row.repo)
+                .filter(|r| seen.insert(r.path.as_str()))
+                .filter_map(Repo::status)
+                .fold((0, 0), |(files, behind), s| {
+                    (files + s.changes.len(), behind + usize::from(s.behind > 0))
+                });
             if files > 0 {
                 let unit = if files == 1 { "file" } else { "files" };
                 summary.push(format!("{files} changed {unit}"));
@@ -127,11 +135,13 @@ impl Overview {
         let title = div()
             .child(heading("overview.repositories", "Checkout status", cx))
             .when(!summary.is_empty(), |d| {
+                let summary = summary.join(" · ");
                 d.child(
                     div()
+                        .id("overview.checkoutSummary")
                         .text_size(text::BODY)
                         .text_color(t.muted)
-                        .child(summary.join(" · ")),
+                        .child(summary.clone().test_text(summary)),
                 )
             });
         let header = columns(

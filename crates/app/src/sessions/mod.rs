@@ -256,13 +256,14 @@ fn fold_button(collapsed: bool, cx: &App) -> impl IntoElement + use<> {
     } else {
         Icon::PanelLeft
     };
-    ui::titled(
+    ui::titled_action(
         ui::icon_button("sessions.fold", icon.size(px(14.)), cx).size(px(26.)),
         if collapsed {
             "Show sessions"
         } else {
             "Hide sessions"
         },
+        "panel.sessions",
     )
     .test_support()
     .on_click(|_, w, cx| actions::dispatch(w, cx, "panel.sessions"))
@@ -284,16 +285,12 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
     let count = set.map_or(w.session_repos().len(), |s| s.members.len());
     let branch = set.and_then(shared_branch).map(String::from);
     let name = w.session_name().to_string();
-    let summary = match (main, count) {
-        (_, 0) => "No repositories yet".into(),
-        (true, 1) => "1 repository on its own branch".into(),
-        (true, n) => format!("{n} repositories on their own branches"),
-        (false, n) => repo_count(n),
-    };
     let mut menu = ui::DrawnMenu::default().item("Overview", |w, cx| {
         dock::open_doc(Doc::SessionOverview, true, w, cx)
     });
-    if !main {
+    if main {
+        menu = menu.item("Add a folder…", |_, cx| crate::repos::add_folders(cx));
+    } else {
         menu = menu.item("Rename session…", |w, cx| {
             actions::dispatch(w, cx, "session.rename")
         });
@@ -353,7 +350,7 @@ pub(crate) fn header(window: &mut Window, cx: &mut App) -> impl IntoElement + us
                 .truncate()
                 .text_size(text::SMALL)
                 .text_color(t.muted)
-                .child(summary),
+                .children((count == 0).then_some("No repositories yet")),
         )
         .when(!main && actions::find("session.addRepo").is_some(), |d| {
             d.child(

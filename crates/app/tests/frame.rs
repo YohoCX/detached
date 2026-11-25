@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
+use detached_app::keymap;
 use detached_app::ui::GAP;
 use detached_core::api;
 use detached_core::types::{FileChange, VerifyResult};
@@ -216,13 +217,50 @@ fn cmd_b_folds_the_sessions_list(cx: &mut TestAppContext) {
         "the live frame has no dock toggle"
     );
     assert_eq!(folding(cx), "Hide sessions");
+    assert_fold_tip(cx, "sessions.fold", "Hide sessions", "panel.sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Show sessions");
     assert_eq!(width(cx), gpui_kit::px(44.));
+    assert_fold_tip(cx, "sessions.fold", "Show sessions", "panel.sessions");
     cx.press("secondary-b");
     assert_eq!(folding(cx), "Hide sessions");
     assert_eq!(width(cx), gpui_kit::px(248.));
+}
+
+fn assert_fold_tip(cx: &mut VisualTestContext, id: &'static str, title: &str, action: &str) {
+    cx.update(|w, cx| w.hover(id, cx));
+    settle(cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    settle(cx);
+    cx.update(|w, cx| {
+        w.render_frame(cx);
+        let chord = keymap::chord_for(action, cx);
+        assert!(!chord.is_empty());
+        assert!(
+            texts(w).iter().any(|t| {
+                t.visible()
+                    && t.path().contains(&"tooltip-popup".into())
+                    && t.text().starts_with(title)
+                    && t.text().contains(&chord)
+            }),
+            "missing tooltip for {title} with {chord}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn the_explorer_fold_tooltip_shows_the_configured_chord(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let keymap = r#"{"panel.project":"Cmd+Shift+1","panel.changes":"Cmd+Shift+0"}"#;
+        std::fs::write(sb.state.config_dir.join("keymap.json"), keymap).unwrap();
+    });
+    assert_fold_tip(cx, "explorer.fold", "Hide files", "panel.project");
+    cx.click("explorer.fold");
+    assert_fold_tip(cx, "explorer.fold", "Show files", "panel.project");
+    cx.press("secondary-shift-0");
+    cx.click("explorer.fold");
+    assert_fold_tip(cx, "explorer.fold", "Show changes", "panel.changes");
 }
 
 #[gpui_kit::test]
