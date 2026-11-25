@@ -168,12 +168,20 @@ fn main() {
                     }
                     reply(json!({"configOptions": config}));
                 }
-                if !git.join("no-commands").exists() {
+                let report = std::env::var_os("CODEX_HOME").and_then(|home| {
+                    fs::read_to_string(PathBuf::from(home).join("fake-commands")).ok()
+                });
+                if !git.join("no-commands").exists() && report.as_deref() != Some("missing") {
+                    let commands = if report.as_deref() == Some("empty") {
+                        json!([])
+                    } else {
+                        json!([{"name": "compact", "description": "Compact the conversation"}])
+                    };
                     update(
                         &out,
                         &sid,
                         json!({"sessionUpdate": "available_commands_update",
-                        "availableCommands": [{"name": "compact", "description": "Compact the conversation"}]}),
+                        "availableCommands": commands}),
                     );
                 }
             }

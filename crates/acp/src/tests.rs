@@ -29,6 +29,7 @@ fn spec(cwd: &Path) -> proc::Spec {
         args: vec![],
         cwd: cwd.into(),
         env: proc::env(&[], |k| std::env::var_os(k)),
+        temporary_dir: None,
     }
 }
 
@@ -461,6 +462,21 @@ fn an_adapter_s_exit_ends_only_its_own_sessions_and_a_shutdown_quietly() {
         .got(Event::Exited(exit, true));
     let e = new_rx.recv_timeout(wait()).unwrap();
     assert!(matches!(e, backend::Event::Closed));
+}
+
+#[test]
+fn a_capability_probe_uses_a_private_adapter() {
+    let (acp, sb) = (Acp::default(), sandbox());
+    let (chat, _rx) = open(&acp, &sb, None);
+    let dir = Arc::new(backend::probe_dir().unwrap());
+    let mut spec = Spec::new(&CODEX, dir.path().to_str().unwrap(), Kind::Chat);
+    spec.open_deadline = Some(Instant::now() + wait());
+    spec.trusted = true;
+    spec.temporary_dir = Some(dir);
+    let probe = acp.start(&sb.state, &spec, None, Box::new(|_| {})).unwrap();
+    let (next, _rx) = open(&acp, &sb, None);
+    assert!(!Arc::ptr_eq(&chat.live, &probe.live));
+    assert!(Arc::ptr_eq(&chat.live, &next.live));
 }
 
 /// A chat with the host's tools, which record each call, and its tools' URL as its agent got it.

@@ -1,6 +1,6 @@
-//! Core's backend for ACP providers: one adapter process per provider and version, behind a
-//! blocking API over `agent-client-protocol`. Each connection runs on a thread of its own under
-//! `block_on`; no async type and no protocol name leaves this crate, only `backend()`.
+//! Ordinary ACP sessions share adapters by executable and environment. A deadline-bound
+//! capability probe starts a private adapter. Each connection runs on its own thread under `block_on`.
+//! Only the blocking backend interface leaves this crate.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -193,8 +193,7 @@ impl Acp {
         })
     }
 
-    /// Finds the CLI and the adapter, and the adapter of that version, started here unless it
-    /// runs already; with what the user should know of the CLI.
+    /// Selects an adapter and checks its CLI. A probe has its own connection deadline.
     fn adapter(&self, core: &AppState, spec: &Spec) -> Result<(Arc<Live>, Option<String>)> {
         let p = spec.provider;
         let config: adapters::Config = core.get_settings().block(BLOCK).unwrap_or_default();
@@ -207,7 +206,7 @@ impl Acp {
         let cli = adapters::find_cli(p, setting, &env).ok_or_else(|| missing("CLI"))?;
         let catalog = adapters::stored(&core.data_dir);
         let entry = catalog.as_ref().and_then(|c| c.entry(p.adapter, &version));
-        let has = adapters::cli_version_until(&cli, &env, spec.open_deadline)?;
+        let has = adapters::cli_version_until(p, &cli, &env, spec.open_deadline)?;
         let note = match adapters::check_cli(p, entry, &has) {
             Cli::Ok => None,
             Cli::Old(need) => {
@@ -248,8 +247,12 @@ impl Acp {
         let spec_proc = proc::Spec {
             program,
             args: vec![],
-            cwd: std::env::temp_dir(),
+            cwd: spec
+                .temporary_dir
+                .as_ref()
+                .map_or_else(std::env::temp_dir, |dir| dir.path().into()),
             env: vars,
+            temporary_dir: spec.temporary_dir.clone(),
         };
         let live = match spec.open_deadline {
             Some(deadline) => Arc::new(Live::start(&spec_proc, Some(deadline), None)?),

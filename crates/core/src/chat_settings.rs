@@ -100,14 +100,22 @@ impl Preset {
         let previous = cached.clone();
         edit(cached);
         if *cached != previous {
-            core.change_block(BLOCK, |p: &mut Self| edit(p.choices(provider)))?;
+            Self::edit(core, |p| edit(p.choices(provider)))?;
         }
         Ok(())
     }
 
     pub fn save(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
         let _guard = SAVE.lock().map_err(|e| Error::Other(e.to_string()))?;
-        core.change_block(BLOCK, edit)
+        Self::edit(core, edit)
+    }
+
+    fn edit(core: &AppState, edit: impl FnOnce(&mut Self)) -> Result<Settings> {
+        core.edit_block(BLOCK, |raw| {
+            let mut preset = raw.map(Self::deserialize).transpose()?.unwrap_or_default();
+            edit(&mut preset);
+            Ok(serde_json::to_value(preset)?)
+        })
     }
 }
 
@@ -174,6 +182,33 @@ mod tests {
         Preset::remember(&sb.state, "claude", sonnet.clone(), None, None).unwrap();
         assert_ne!(sb.state.revision(), revision);
         assert_eq!(models(&sb.state.get_settings()), sonnet);
+    }
+
+    #[test]
+    fn cache_writes_keep_a_malformed_chat_block_intact() {
+        let sb = Sandbox::new();
+        let raw = json!({"provider": "codex", "future": true, "providers": {
+            "codex": {"mode": "agent"}, "claude": {"model": "sonnet", "effort": 7}
+        }});
+        sb.state.set_block(BLOCK, &raw).unwrap();
+        let revision = sb.state.revision();
+        let model = Model {
+            value: "opus".into(),
+            ..Model::default()
+        };
+        assert!(
+            Preset::save(&sb.state, |p| p
+                .choices("claude")
+                .models
+                .push(model.clone()))
+            .is_err()
+        );
+        assert!(Preset::remember(&sb.state, "claude", vec![model], None, None).is_err());
+        assert_eq!(sb.state.revision(), revision);
+        assert_eq!(
+            Settings::load(&sb.state.config_dir).block::<Value>(BLOCK),
+            Some(raw)
+        );
     }
 
     #[test]

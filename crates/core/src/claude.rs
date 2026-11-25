@@ -324,7 +324,7 @@ fn start_in(
             let cli = adapters::find_cli(p, setting, &core.env()).ok_or_else(|| {
                 Error::Other(format!("{} has no CLI: see the Agents page", p.name))
             })?;
-            let has = adapters::cli_version_until(&cli, &core.env(), spec.open_deadline)?;
+            let has = adapters::cli_version_until(p, &cli, &core.env(), spec.open_deadline)?;
             (cli.into_os_string(), has)
         }
     };
@@ -370,6 +370,7 @@ fn start_in(
         args,
         cwd,
         env,
+        temporary_dir: spec.temporary_dir.clone(),
     })?;
     let live = Live::run(proc, spec, plugin)?;
     let mut init = json!({"subtype": "initialize"});

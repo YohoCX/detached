@@ -1,22 +1,24 @@
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use detached_core::adapters::{self, Config, PROVIDERS, Provider};
-use detached_core::backend::{Event, Kind, Name, Spec, Update};
+use detached_core::backend::{Event, Kind, Name, Spec, Update, probe_dir};
 use detached_core::chat_settings::Preset;
 use detached_core::error::{Error, Result};
 use detached_core::state::AppState;
 use gpui::{App, Task};
 
 pub fn start(cx: &App) -> Task<()> {
-    let probes = PROVIDERS.map(|provider| {
-        let core = crate::core(cx).clone();
-        crate::blocking::run(cx, move || {
-            let _ = refresh(&core, provider);
-        })
-    });
+    let probes = PROVIDERS.map(|provider| start_provider(cx, provider));
     cx.spawn(async move |_| {
         futures::future::join_all(probes).await;
+    })
+}
+
+pub(crate) fn start_provider(cx: &App, provider: &'static Provider) -> Task<()> {
+    let core = crate::core(cx).clone();
+    crate::blocking::run(cx, move || {
+        let _ = refresh(&core, provider);
     })
 }
 
@@ -32,18 +34,20 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
     let Some(cli) = adapters::find_cli(provider, path, &env) else {
         return Ok(());
     };
-    let version = adapters::cli_version_until(&cli, &env, Some(deadline))?;
-    let stamp = match provider.backend {
-        Name::Direct => version.to_string(),
-        Name::Acp => {
-            let installed = adapters::installed(&core.data_dir, provider.adapter);
-            let Some(adapter) = installed.current else {
-                return Ok(());
-            };
-            format!("{version}:{adapter}")
-        }
+    let adapter = || adapters::installed(&core.data_dir, provider.adapter).current;
+    let installed = match provider.backend {
+        Name::Direct => None,
+        Name::Acp => match adapter() {
+            Some(version) => Some(version),
+            None => return Ok(()),
+        },
     };
-    let preset = Preset::read(&settings);
+    let version = adapters::cli_version_until(provider, &cli, &env, Some(deadline))?;
+    let stamp = installed.as_ref().map_or_else(
+        || version.to_string(),
+        |adapter| format!("{version}:{adapter}"),
+    );
+    let preset = Preset::read(&core.get_settings());
     if preset
         .providers
         .get(provider.id)
@@ -52,7 +56,7 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
         return Ok(());
     }
 
-    let dir = tempfile::tempdir()?;
+    let dir = probe_dir()?;
     let folder = dir
         .path()
         .to_str()
@@ -60,6 +64,7 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
     let mut spec = Spec::new(provider, folder, Kind::Chat);
     spec.trusted = true;
     spec.open_deadline = Some(deadline);
+    spec.temporary_dir = Some(Arc::new(dir));
     let (tx, rx) = mpsc::channel();
     let session = super::backend(provider).open(
         core,
@@ -94,6 +99,9 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
         return Ok(());
     }
     Preset::save(core, |preset| {
+        if installed.is_some() && adapter() != installed {
+            return;
+        }
         let choices = preset.choices(provider.id);
         choices.models = opened.models;
         choices.efforts = opened
@@ -101,9 +109,11 @@ fn refresh(core: &AppState, provider: &'static Provider) -> Result<()> {
             .into_iter()
             .find(|c| c.id == "effort" && choices.models.iter().all(|m| m.efforts.is_empty()))
             .map_or_else(Vec::new, |c| c.values);
-        choices.commands = opened.commands.unwrap_or_default();
         choices.account = opened.account;
-        choices.cli = Some(stamp);
+        choices.cli = opened.commands.map(|commands| {
+            choices.commands = commands;
+            stamp
+        });
     })?;
     Ok(())
 }
@@ -159,7 +169,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let log = home.path().join("fake.log");
         std::fs::write(&log, "").unwrap();
-        let _f = boot_on(
+        let f = boot_on(
             cx,
             &cli,
             &[("CODEX_HOME", home.path().to_str().unwrap())],
@@ -176,6 +186,21 @@ mod tests {
         assert_eq!(choices.efforts, ["low", "medium", "high"]);
         assert!(choices.commands.iter().any(|c| c.name == "compact"));
         assert_eq!(choices.cli.as_deref(), Some("2.1.400:1.0.0"));
+
+        let report = home.path().join("fake-commands");
+        detached_acp::testutil::install(&f.core, "1.0.1");
+        std::fs::write(&report, "missing").unwrap();
+        let partial = run(cx);
+        let partial = &partial.providers[CODEX.id];
+        assert_eq!(partial.models, choices.models);
+        assert_eq!(partial.commands, choices.commands);
+        assert!(partial.cli.is_none());
+
+        std::fs::write(report, "empty").unwrap();
+        let retried = run(cx);
+        let retried = &retried.providers[CODEX.id];
+        assert!(retried.commands.is_empty());
+        assert_eq!(retried.cli.as_deref(), Some("2.1.400:1.0.1"));
         assert_eq!(std::fs::read_to_string(log).unwrap(), "");
     }
 }

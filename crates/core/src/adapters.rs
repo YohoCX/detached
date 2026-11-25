@@ -575,12 +575,17 @@ pub fn find_cli(provider: &Provider, setting: Option<&str>, env: &Env) -> Option
 }
 
 /// The version `exe --version` prints.
-pub fn cli_version(exe: &Path, env: &Env) -> Result<Version> {
-    cli_version_until(exe, env, None)
+pub fn cli_version(provider: &Provider, exe: &Path, env: &Env) -> Result<Version> {
+    cli_version_until(provider, exe, env, None)
 }
 
-pub fn cli_version_until(exe: &Path, env: &Env, deadline: Option<Instant>) -> Result<Version> {
-    let mut cmd = cli_command(exe, env, &["--version"]);
+pub fn cli_version_until(
+    provider: &Provider,
+    exe: &Path,
+    env: &Env,
+    deadline: Option<Instant>,
+) -> Result<Version> {
+    let mut cmd = cli_command(provider, exe, env, &["--version"]);
     let out = match deadline {
         Some(deadline) => cli_probe(&mut cmd, deadline.saturating_duration_since(Instant::now()))?,
         None => cmd.output()?,
@@ -589,12 +594,12 @@ pub fn cli_version_until(exe: &Path, env: &Env, deadline: Option<Instant>) -> Re
         .ok_or_else(|| Error::Other(format!("{} printed no version", exe.display())))
 }
 
-fn cli_command(exe: &Path, env: &Env, args: &[&str]) -> Command {
+fn cli_command(provider: &Provider, exe: &Path, env: &Env, args: &[&str]) -> Command {
     let mut cmd = Command::new(exe);
     crate::os::group(&mut cmd)
         .args(args)
-        .env("PATH", &env.path)
-        .envs(env.vars.iter().map(|(k, v)| (k, v)))
+        .env_clear()
+        .envs(crate::proc::env(provider.env, crate::proc::parent(env)))
         .stdin(Stdio::null());
     cmd
 }
@@ -631,7 +636,10 @@ pub fn login_status(provider: &Provider, cli: &Path, env: &Env) -> LoginStatus {
         "codex" => &["login", "status"],
         _ => return LoginStatus::Unknown,
     };
-    match cli_probe(&mut cli_command(cli, env, args), Duration::from_secs(5)) {
+    match cli_probe(
+        &mut cli_command(provider, cli, env, args),
+        Duration::from_secs(5),
+    ) {
         Ok(out) => parse_login_status(provider, out.status.code(), &out.stdout, &out.stderr),
         Err(_) => LoginStatus::Unknown,
     }
@@ -718,6 +726,53 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn version_checks_use_the_provider_environment() {
+        const CHILD: &str = "DETACHED_TEST_VERSION_ENV";
+        let path = "adapters::tests::version_checks_use_the_provider_environment";
+        if std::env::var_os(CHILD).is_none() {
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args([path, "--exact", "--nocapture"])
+                .env(CHILD, "1")
+                .env("GITHUB_TOKEN", "inherited-test-value")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+
+        let cli = crate::testutil::claude::fake();
+        let dir = data();
+        let log = dir.path().join("fake-version-env");
+        fs::write(&log, "").unwrap();
+        fs::write(dir.path().join("fake-version"), "2.1.401").unwrap();
+        let env = Env {
+            path: dir.path().display().to_string(),
+            vars: vec![
+                ("CLAUDE_CONFIG_DIR".into(), dir.path().display().to_string()),
+                ("CODEX_HOME".into(), dir.path().display().to_string()),
+            ],
+            ..Env::default()
+        };
+        let until = Instant::now() + Duration::from_secs(10);
+        assert_eq!(
+            cli_version_until(&CLAUDE, &cli, &env, Some(until)).unwrap(),
+            v("2.1.401")
+        );
+        let names = fs::read_to_string(log).unwrap();
+        assert!(names.lines().any(|name| name == "PATH"));
+        assert!(names.lines().any(|name| name == "CLAUDE_CONFIG_DIR"));
+        assert!(
+            !names
+                .lines()
+                .any(|name| matches!(name, "GITHUB_TOKEN" | "CODEX_HOME"))
+        );
     }
 
     fn put(data: &Path, entry: &Entry) -> Result<Installed> {
@@ -1055,7 +1110,7 @@ mod tests {
         let cli = testutil::fake_cli(d.path(), "2.1.400");
         let env = Env::default();
         let found = find_cli(&CLAUDE, cli.to_str(), &env).unwrap();
-        let version = cli_version(&found, &env).unwrap();
+        let version = cli_version(&CLAUDE, &found, &env).unwrap();
         assert_eq!(check_own_cli(&CLAUDE, Some(&catalog), &version), Cli::Ok);
         assert!(login(&CLAUDE, &found).ends_with("/login"));
     }

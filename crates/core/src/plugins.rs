@@ -252,6 +252,7 @@ pub fn spec(state: &AppState, p: &Plugin, cmd: Cmd, cwd: &Path) -> Result<proc::
         args: argv[1..].iter().map(OsString::from).collect(),
         cwd: cwd.into(),
         env,
+        temporary_dir: None,
     })
 }
 

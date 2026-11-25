@@ -128,7 +128,7 @@ fn scan(core: &AppState) -> Scan {
                 .shows(p)
                 .then(|| adapters::find_cli(p, setting, &env));
             let cli = cli.flatten().map(|path| {
-                let version = adapters::cli_version(&path, &env).ok();
+                let version = adapters::cli_version(p, &path, &env).ok();
                 let login = version.as_ref().map_or(LoginStatus::Unknown, |_| {
                     adapters::login_status(p, &path, &env)
                 });
@@ -209,8 +209,7 @@ impl Agents {
         .detach();
     }
 
-    /// Fetches the catalog, then updates each listed provider's installed adapter that has a version
-    /// out of its cool-down. It never runs a CLI: one that hangs would leave `checking` stuck.
+    /// Fetches the catalog and schedules updates for installed adapters past their cool-down.
     pub fn check(&mut self, cx: &mut Context<Self>) {
         if self.checking {
             return;
@@ -313,6 +312,7 @@ impl Agents {
                     row.state = match done {
                         Ok(kept) => {
                             row.installed = kept;
+                            crate::session::probe::start_provider(cx, row.provider).detach();
                             State::Idle
                         }
                         Err(Error::Cancelled) => State::Idle,
@@ -387,8 +387,9 @@ impl Agents {
 
 #[cfg(test)]
 mod tests {
-    use detached_core::adapters::testutil::Fixture;
+    use detached_core::adapters::testutil::{Fixture, Member};
     use detached_core::adapters::{CLAUDE, CODEX, Config};
+    use detached_core::chat_settings::Preset;
     use gpui::TestAppContext;
 
     use super::*;
@@ -459,5 +460,37 @@ mod tests {
         f.publish(3, &[f.entry(CODEX.adapter, "0.2.5")]);
         check(cx);
         assert_eq!(version(CODEX.id, cx).as_deref(), Some("0.2.0"));
+    }
+
+    #[gpui::test]
+    fn adapter_updates_and_rollbacks_refresh_a_warm_chat_cache(cx: &mut TestAppContext) {
+        let fake = detached_acp::testutil::fake();
+        let home = tempfile::tempdir().unwrap();
+        let _fixture = crate::session::tests::boot_on(
+            cx,
+            &fake,
+            &[("CODEX_HOME", home.path().to_str().unwrap())],
+            &CODEX,
+            |core| detached_acp::testutil::install(core, "1.0.0"),
+        );
+        let task = cx.read(|cx| crate::session::probe::start_provider(cx, &CODEX));
+        cx.executor().allow_parking();
+        cx.foreground_executor().block_test(task);
+        let stamp = |cx: &App| {
+            Preset::read(&crate::core(cx).get_settings()).providers[CODEX.id]
+                .cli
+                .clone()
+        };
+        assert_eq!(cx.read(stamp).as_deref(), Some("2.1.400:1.0.0"));
+        let f = Fixture::new();
+        let exe = format!("{}{}", CODEX.adapter, std::env::consts::EXE_SUFFIX);
+        let adapter = Member::file(&exe, &std::fs::read(fake).unwrap());
+        f.publish(1, &[f.entry_with(CODEX.adapter, "1.0.1", &[adapter])]);
+        let agents = cx.read(Agents::global);
+        agents.update(cx, |a, _| (a.url, a.key) = (f.url(), f.key.clone()));
+        check(cx);
+        wait_until(cx, |cx| stamp(cx).as_deref() == Some("2.1.400:1.0.1"));
+        agents.update(cx, |a, cx| a.rollback(CODEX.id, cx));
+        wait_until(cx, |cx| stamp(cx).as_deref() == Some("2.1.400:1.0.0"));
     }
 }

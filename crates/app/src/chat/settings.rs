@@ -1,12 +1,13 @@
 use detached_core::adapters::Provider;
 use detached_core::backend::Model;
 use detached_core::chat_settings::Preset;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::{
-    AnyView, App, AppContext, Context, IntoElement, ParentElement, Render, Role, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
-    px,
+    AnyView, App, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    Role, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px,
 };
 use kernel::activity::Activity;
 use kernel::{blocking, settings::Settings};
@@ -295,12 +296,14 @@ impl Page {
     }
 
     fn choices(&self, f: &Fields, preset: &Preset, cx: &App) -> impl IntoElement + use<> {
-        let id = |key| SharedString::from(format!("chat.defaults.{}.{key}", f.p.id));
+        let id = |key: &str| SharedString::from(format!("chat.defaults.{}.{key}", f.p.id));
         let mode = value(&f.picks[2], cx);
         let mode = f.p.modes.iter().find(|m| m.0 == mode).map(|m| m.2.into());
-        let none = format!("Models are listed after the first chat with {}.", f.p.name);
         let details = [
-            preset.models(f.p.id).is_empty().then(|| none.into()),
+            preset
+                .models(f.p.id)
+                .is_empty()
+                .then(|| "No models reported yet.".into()),
             None,
             mode,
         ];
@@ -311,7 +314,12 @@ impl Page {
         ];
         let rows = rows.into_iter().zip(&f.picks).zip(details);
         let rows = rows.map(|(((key, label), pick), detail)| {
-            item(label, detail, cx).child(div().w(TAB_TITLE).child(select(pick, id(key), cx)))
+            item(label, detail.clone(), cx)
+                .id(id(&format!("{key}.row")))
+                .test_support()
+                .aria_label(label)
+                .when_some(detail, |row, detail| row.aria_description(detail))
+                .child(div().w(TAB_TITLE).child(select(pick, id(key), cx)))
         });
         card(Some(f.p.name), None, rows, cx)
     }

@@ -1201,7 +1201,7 @@ fn settings_chat_applies_to_an_untouched_blank_tab_the_next_time_it_is_opened(
 }
 
 #[gpui_kit::test]
-fn settings_chat_lists_models_only_after_the_first_chat(cx: &mut TestAppContext) {
+fn settings_chat_reports_an_empty_model_cache_and_keeps_the_saved_model(cx: &mut TestAppContext) {
     let cx = &mut open_app_with(cx, |sb| {
         let saved = json!({"providers": {"claude": {"model": "mine"}}});
         sb.state.set_block(chat_settings::BLOCK, saved).unwrap();
@@ -1209,6 +1209,10 @@ fn settings_chat_lists_models_only_after_the_first_chat(cx: &mut TestAppContext)
     cx.update(|_, cx| detached_app::settings::open(cx, "chat"));
     settle(cx);
     assert!(cx.find("chat.defaults.save").is_some());
+    assert_eq!(
+        description(cx, "chat.defaults.claude.model.row").as_deref(),
+        Some("No models reported yet.")
+    );
     cx.click("chat.defaults.claude.model");
     assert!(cx.find("option:Provider default").is_some());
     assert!(cx.find("option:mine").is_some(), "the saved model stays");

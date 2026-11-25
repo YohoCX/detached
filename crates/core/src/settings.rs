@@ -260,11 +260,22 @@ impl AppState {
         name: &str,
         edit: impl FnOnce(&mut T),
     ) -> Result<Settings> {
+        self.edit_block(name, |raw| {
+            let mut block = raw.and_then(|v| T::deserialize(v).ok()).unwrap_or_default();
+            edit(&mut block);
+            Ok(serde_json::to_value(block)?)
+        })
+    }
+
+    pub(crate) fn edit_block(
+        &self,
+        name: &str,
+        edit: impl FnOnce(Option<&Value>) -> Result<Value>,
+    ) -> Result<Settings> {
         check_block_name(name)?;
         self.update(|s| {
-            let mut block = s.block::<T>(name).unwrap_or_default();
-            edit(&mut block);
-            s.other.insert(name.into(), serde_json::to_value(block)?);
+            let block = edit(s.other.get(name))?;
+            s.other.insert(name.into(), block);
             Ok(())
         })
     }

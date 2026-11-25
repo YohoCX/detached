@@ -118,7 +118,13 @@ fn main() {
     match args.first().map(String::as_str) {
         // The real CLI's own suffix, split so the UI scan does not count it.
         Some("--version") => {
-            let version = std::fs::read_to_string(config_dir().join("fake-version"));
+            let config = config_dir();
+            let log = config.join("fake-version-env");
+            if log.is_file() {
+                let names = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned());
+                std::fs::write(log, names.collect::<Vec<_>>().join("\n")).unwrap();
+            }
+            let version = std::fs::read_to_string(config.join("fake-version"));
             return println!(
                 concat!("{} (Claude", " Code)"),
                 version.as_deref().map_or(VERSION, str::trim)
