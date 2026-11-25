@@ -1,4 +1,4 @@
-//! Fetch and pull, one repo or many, with an outcome in each repo's row; prune; Fetch All and Pull All.
+//! Fetch, pull and prune, with per-repository outcomes.
 
 use std::fmt::Display;
 use std::sync::Arc;
@@ -127,7 +127,6 @@ pub(crate) fn pull(repo: String, expected: RepoStatus, cx: &mut App) {
     sync(Kind::Pull, repo, Some(expected), cx);
 }
 
-/// Fetches or pulls one repo and says how it went; Fetch All and Pull All stay enabled meanwhile.
 pub fn sync_one(kind: Kind, repo: String, cx: &mut App) {
     sync(kind, repo, None, cx);
 }
@@ -287,7 +286,6 @@ fn sync_session(kind: Kind, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-/// A running Fetch All or Pull All, or one of a folder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bulk {
     pub kind: Kind,
@@ -295,7 +293,7 @@ pub struct Bulk {
     pub total: usize,
 }
 
-/// Fetch All and Pull All, for the top bar's right slot.
+/// Sync targets the current session in live views and the whole workspace in Archive.
 pub fn sync_buttons(cx: &mut App) -> AnyView {
     cx.new(|cx| {
         let (workspace, state) = (Workspace::global(cx), State::global(cx));
@@ -330,7 +328,8 @@ impl Render for SyncButtons {
             let progress = bulk.filter(|b| b.kind == kind);
             let label = match progress {
                 Some(b) => format!("{}/{}", b.done, b.total),
-                None if live && kind == Kind::Pull => "Pull…".into(),
+                None if !live => format!("{verb} All"),
+                None if kind == Kind::Pull => "Pull…".into(),
                 None => verb.into(),
             };
             let action = match kind {

@@ -1480,35 +1480,71 @@ fn the_changes_switch_counts_only_the_current_sessions_changes(cx: &mut TestAppC
     let mut id = String::new();
     let mut app = open_app_with(cx, |sb| {
         let outside = repo(sb, "outside");
-        write(&outside, [("one.txt", "dirty\n"), ("two.txt", "dirty\n")]);
+        write(
+            &outside,
+            [
+                ("one.txt", "dirty\n"),
+                ("two.txt", "dirty\n"),
+                ("three.txt", "dirty\n"),
+            ],
+        );
         let trees = ["api", "web"].map(|name| {
             let repo = repo(sb, name);
             let tree = sb.path(&format!("{name}-tree"));
             let path = tree.display().to_string();
             sb.git(&repo, &["worktree", "add", "-b", "work", &path]);
-            if name == "web" {
-                write(&tree, [("dirty.txt", "dirty\n")]);
-            }
+            write(&tree, [("dirty.txt", "dirty\n")]);
             path
         });
         let ws = &sb.state.get_settings().workspaces[0].id;
         id = sessions::adopt(&sb.state, ws, "Work", &trees).unwrap().id;
     });
-    let has_count = |cx: &mut VisualTestContext, count| {
+    assert_changes_count(&mut app, "3");
+    app.workspace(|w, cx| w.switch_session(&id, cx));
+    assert_changes_count(&mut app, "2");
+
+    for (name, count) in [("web-tree", "1"), ("api-tree", "0")] {
+        let tree = detached_core::os::canonical(&app.sb.path(name)).unwrap();
+        std::fs::remove_file(tree.join("dirty.txt")).unwrap();
+        app.update(|_, cx| invalidate::status(cx, &tree.to_string_lossy()).detach());
+        assert_changes_count(&mut app, count);
+    }
+    app.workspace(|w, cx| w.switch_session(sessions::MAIN, cx));
+    assert_changes_count(&mut app, "3");
+}
+
+fn assert_changes_count(cx: &mut VisualTestContext, count: &str) {
+    wait_until(cx, |cx| {
         cx.find("tree.changes")
             .is_some_and(|e| e.description() == Some(count))
-    };
-    assert!(has_count(&mut app, "2"));
-    app.workspace(|w, cx| w.switch_session(&id, cx));
-    wait_until(&mut app, |cx| has_count(cx, "1"));
+    });
+    assert!(
+        painted(cx, count)
+            .iter()
+            .any(|t| { t.visible() && t.path().contains(&ElementId::from("tree.changes")) })
+    );
+}
 
-    let tree = detached_core::os::canonical(&app.sb.path("web-tree")).unwrap();
-    std::fs::remove_file(tree.join("dirty.txt")).unwrap();
-    let path = tree.display().to_string();
-    app.update(|_, cx| invalidate::status(cx, &path).detach());
-    wait_until(&mut app, |cx| has_count(cx, "0"));
-    app.workspace(|w, cx| w.switch_session(sessions::MAIN, cx));
-    wait_until(&mut app, |cx| has_count(cx, "2"));
+#[gpui_kit::test]
+fn checkout_aliases_count_once_in_the_changes_badge_and_overview(cx: &mut TestAppContext) {
+    let cx = &mut open_app_with(cx, |sb| {
+        let repo = repo(sb, "app");
+        write(&repo, [("dirty.txt", "dirty\n")]);
+        let alias = repo.join("../app").display().to_string();
+        detached_core::api::add_folder(&sb.state, None, alias).unwrap();
+    });
+    cx.workspace(|w, _| {
+        let repos = w.session_repos();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(w.repo(&repos[0].path), w.repo(&repos[1].path));
+    });
+    assert_eq!(cx.find("tree.changes").unwrap().description(), Some("1"));
+    assert_changes_count(cx, "1");
+    assert!(painted(cx, "1 changed file").iter().any(|t| {
+        t.visible()
+            && t.path()
+                .contains(&ElementId::from("overview.checkoutSummary"))
+    }));
 }
 
 #[gpui_kit::test]

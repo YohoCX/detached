@@ -16,7 +16,7 @@ pub mod tree;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui_kit::base::TestSupportExt;
+use gpui_kit::base::{TestSupportExt, TestTextExt};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -226,6 +226,7 @@ pub fn danger_button(
 
 // GPUI takes one hover style per element, so each button sets its own.
 pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    let label = label.into();
     pressable(id)
         .h(px(28.))
         .px(px(14.))
@@ -234,7 +235,7 @@ pub fn pill(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Statefu
         .text_size(text::SMALL)
         .font_weight(FontWeight::SEMIBOLD)
         .active(|s| s.opacity(0.75))
-        .child(label.into())
+        .child(label.clone().test_text(label))
 }
 
 /// The group a row names with `.group(HOVER)` to show its `hover_button`s.
@@ -257,7 +258,8 @@ pub fn titled_action(
     b.role(Role::Button)
         .aria_label(title.clone())
         .tooltip(move |window, cx| {
-            Tooltip::new(crate::keymap::tip(&title, action, cx)).build(window, cx)
+            let tip = SharedString::from(crate::keymap::tip(&title, action, cx));
+            Tooltip::element(move |_, _| tip.clone().test_text(tip.clone())).build(window, cx)
         })
 }
 
