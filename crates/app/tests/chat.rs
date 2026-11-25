@@ -9,6 +9,7 @@ use detached_app::ui::menu;
 use detached_app::ui::theme::chat::{CONVERSATION, PROSE};
 use detached_core::adapters::{BLOCK, CLAUDE, Config};
 use detached_core::chat_settings::{self, Preset};
+use gpui_kit::base::test_support::texts;
 use gpui_kit::test::{ElementSnapshot, TestWindowExt};
 use gpui_kit::{
     AppContext, Role, ScrollDelta, SharedString, SystemNotificationResponse, TestAppContext,
@@ -2396,6 +2397,31 @@ fn an_agent_reply_s_images_are_links_and_nothing_is_fetched(cx: &mut TestAppCont
     idle(cx);
     cx.update(|w, cx| w.render_frame(cx));
     assert_eq!(*asked.lock().unwrap(), Vec::<String>::new());
+}
+
+#[gpui_kit::test]
+fn clicking_an_agent_reply_s_file_link_opens_its_tab_on_the_linked_line(cx: &mut TestAppContext) {
+    let cx = &mut open(cx);
+    let repo = cx.sb.solo().display().to_string();
+    say(cx, "say [Open the readme](README.md#L2)");
+    idle(cx);
+    let link = |cx: &mut VisualTestContext| {
+        cx.update(|w, cx| {
+            w.render_frame(cx);
+            texts(w)
+                .into_iter()
+                .find(|t| t.visible() && t.text() == "Open the readme")
+                .map(|t| t.bounds())
+        })
+    };
+    wait_until(cx, |cx| link(cx).is_some());
+    let b = link(cx).unwrap();
+    let origin = cx.find("markdown").unwrap().bounds().origin;
+    let at = point(b.left() + px(3.), b.center().y) - origin;
+    cx.update(|w, cx| w.click_at("markdown", at, cx));
+    wait_until(cx, |cx| cx.find("doc.file.README.md").is_some());
+    assert!(cx.workspace(|w, _| matches!(w.shown(), Some(Doc::File(loc))
+        if loc.repo == repo && loc.path == "README.md" && loc.line == Some(2))));
 }
 
 #[gpui_kit::test]

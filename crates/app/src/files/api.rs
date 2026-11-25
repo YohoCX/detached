@@ -1,5 +1,6 @@
 //! What other verticals call to show files, diffs and markdown.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{AnyView, App, Window};
@@ -56,7 +57,7 @@ pub struct DiffOptions {
 /// Where a markdown text's relative links and images resolve.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Links {
-    Agent,
+    Agent(PathBuf),
     /// A file at `rev` (None is the working tree).
     Repo {
         repo: String,
